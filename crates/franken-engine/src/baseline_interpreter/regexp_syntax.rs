@@ -1757,57 +1757,35 @@ pub(super) fn property_escape_count(pattern: &str) -> usize {
 
 /// Early errors of a `u` or `v` pattern that Annex B relaxes without them
 /// (ES2020 22.2.1, B.1.4): outside a class, a `{` that starts no quantifier
-/// `{n}` / `{n,}` / `{n,m}` and a lone `}` or `]`; and with `u`, a class
-/// range with a class escape (`\d`, `\p{..}`, ...) at either end. Both
-/// RegExp routes accept these as literals, so `/x{/u`, `/a]/u` and
-/// `/[\d-z]/u` compiled (bd-9vouw.401). `None` leaves the pattern to the
-/// other checks.
+/// `{n}` / `{n,}` / `{n,m}` and a lone `}` or `]`; an escape outside the
+/// `u` grammar (`unicode_escape`); and with `u`, a class range with a class
+/// escape (`\d`, `\p{..}`, ...) at either end. Both RegExp routes accept
+/// these as literals, so `/x{/u`, `/a]/u`, `/[\d-z]/u` and `/\a/u`
+/// compiled (bd-9vouw.401). `None` leaves the pattern to the other checks.
 pub(super) fn unicode_mode_syntax_error(pattern: &str, unicode_sets: bool) -> Option<&'static str> {
     let chars: Vec<char> = pattern.chars().collect();
     let len = chars.len();
-    // The index past a braced escape body (`\p{..}`, `\u{..}`) or a group
-    // name (`\k<..>`) whose opener is at `open`.
-    let past_closing = |open: usize, closer: char| {
-        chars[open + 1..]
-            .iter()
-            .position(|&c| c == closer)
-            .map_or(len, |offset| open + offset + 2)
-    };
-    // With `u` an IdentityEscape is a SyntaxCharacter or `/` (and `-` in a
-    // class): letters (`\a`, `\e`) belong to the escape grammar the other
-    // checks parse, so only other characters are judged here.
-    let identity_escape_allowed = |escaped: char, in_class: bool| {
-        escaped.is_ascii_alphanumeric()
-            || "^$\\.*+?()[]{}|/".contains(escaped)
-            || (in_class && escaped == '-')
-    };
+    let groups = capture_group_count(&chars);
     // One class atom at `index` with `u`: its end and whether it is a class
-    // escape, which cannot end a range; `None` for an invalid escape.
-    let class_atom = |index: usize| -> Option<(usize, bool)> {
-        if chars[index] != '\\' || index + 1 >= len {
-            return Some((index + 1, false));
+    // escape, which cannot end a range.
+    let class_atom = |index: usize| -> Result<(usize, bool), &'static str> {
+        if chars[index] != '\\' {
+            return Ok((index + 1, false));
         }
-        Some(match chars[index + 1] {
-            'p' | 'P' if chars.get(index + 2) == Some(&'{') => (past_closing(index + 2, '}'), true),
-            'u' if chars.get(index + 2) == Some(&'{') => (past_closing(index + 2, '}'), false),
-            'd' | 'D' | 's' | 'S' | 'w' | 'W' => (index + 2, true),
-            escaped if !identity_escape_allowed(escaped, true) => return None,
-            _ => (index + 2, false),
-        })
+        let end = unicode_escape(&chars, index, true, groups)?;
+        let is_class = matches!(
+            chars.get(index + 1),
+            Some('d' | 'D' | 's' | 'S' | 'w' | 'W' | 'p' | 'P')
+        );
+        Ok((end, is_class))
     };
     let mut index = 0;
     while let Some(&c) = chars.get(index) {
         match c {
-            '\\' => {
-                index = match (chars.get(index + 1), chars.get(index + 2)) {
-                    (Some('p' | 'P' | 'u'), Some('{')) => past_closing(index + 2, '}'),
-                    (Some('k'), Some('<')) => past_closing(index + 2, '>'),
-                    (Some(&escaped), _) if !identity_escape_allowed(escaped, false) => {
-                        return Some("Invalid escape");
-                    }
-                    _ => index + 2,
-                };
-            }
+            '\\' => match unicode_escape(&chars, index, false, groups) {
+                Ok(end) => index = end,
+                Err(message) => return Some(message),
+            },
             '[' if unicode_sets => {
                 // `v` classes nest; their own check is unicode_sets_class_error.
                 let mut depth = 0usize;
@@ -1833,12 +1811,14 @@ pub(super) fn unicode_mode_syntax_error(pattern: &str, unicode_sets: bool) -> Op
                     index += 1;
                 }
                 while index < len && chars[index] != ']' {
-                    let Some((end, is_class)) = class_atom(index) else {
-                        return Some("Invalid class escape");
+                    let (end, is_class) = match class_atom(index) {
+                        Ok(atom) => atom,
+                        Err(message) => return Some(message),
                     };
                     if chars.get(end) == Some(&'-') && end + 1 < len && chars[end + 1] != ']' {
-                        let Some((range_end, range_is_class)) = class_atom(end + 1) else {
-                            return Some("Invalid class escape");
+                        let (range_end, range_is_class) = match class_atom(end + 1) {
+                            Ok(atom) => atom,
+                            Err(message) => return Some(message),
                         };
                         if is_class || range_is_class {
                             return Some("Invalid character class");
@@ -1872,6 +1852,115 @@ pub(super) fn unicode_mode_syntax_error(pattern: &str, unicode_sets: bool) -> Op
         }
     }
     None
+}
+
+/// The number of capturing groups: `(` not followed by `?`, and `(?<name>`.
+fn capture_group_count(chars: &[char]) -> usize {
+    let mut count = 0;
+    let mut index = 0;
+    let mut in_class = false;
+    while let Some(&c) = chars.get(index) {
+        if c == '\\' {
+            index += 2;
+            continue;
+        }
+        if in_class {
+            in_class = c != ']';
+        } else if c == '[' {
+            in_class = true;
+        } else if c == '('
+            && (chars.get(index + 1) != Some(&'?')
+                || (chars.get(index + 2) == Some(&'<')
+                    && chars
+                        .get(index + 3)
+                        .is_some_and(|c| !matches!(c, '=' | '!'))))
+        {
+            count += 1;
+        }
+        index += 1;
+    }
+    count
+}
+
+/// The escape at `chars[index]` (a backslash) under `u` (ES2020 22.2.1
+/// AtomEscape and ClassEscape with [U]): the index past it, or its early
+/// error. Letters are only the grammar's escapes; `\c` needs an ASCII
+/// letter, `\x` two hex digits, `\u` four or a braced code point,
+/// `\k<..>` a name (not in a class), `\0` no digit after it, `\1`.. a group
+/// that exists (not in a class); any other escaped character is a
+/// SyntaxCharacter or `/` (or `-` in a class).
+fn unicode_escape(
+    chars: &[char],
+    index: usize,
+    in_class: bool,
+    groups: usize,
+) -> Result<usize, &'static str> {
+    let Some(&escaped) = chars.get(index + 1) else {
+        return Err("\\ at end of pattern");
+    };
+    let next = index + 2;
+    // A `\k` or `\p` that ends the pattern has no `open + 1`.
+    let closing = |open: usize, closer: char| {
+        chars
+            .get(open + 1..)?
+            .iter()
+            .position(|&c| c == closer)
+            .map(|offset| open + 1 + offset)
+    };
+    let hex = |from: usize, count: usize| {
+        chars
+            .get(from..from + count)
+            .is_some_and(|digits| digits.iter().all(char::is_ascii_hexdigit))
+    };
+    match escaped {
+        'f' | 'n' | 'r' | 't' | 'v' | 'd' | 'D' | 's' | 'S' | 'w' | 'W' | 'b' => Ok(next),
+        'B' if in_class => Err("Invalid class escape"),
+        'B' => Ok(next),
+        'c' if chars.get(next).is_some_and(char::is_ascii_alphabetic) => Ok(next + 1),
+        'c' => Err("Invalid unicode escape"),
+        'k' if in_class => Err("Invalid escape"),
+        'k' => match (chars.get(next), closing(next, '>')) {
+            (Some('<'), Some(close)) if close > next + 1 => Ok(close + 1),
+            _ => Err("Invalid named reference"),
+        },
+        'p' | 'P' => match (chars.get(next), closing(next, '}')) {
+            (Some('{'), Some(close)) => Ok(close + 1),
+            _ => Err("Invalid property name"),
+        },
+        'u' if chars.get(next) == Some(&'{') => {
+            let close = closing(next, '}').ok_or("Invalid Unicode escape")?;
+            let body: String = chars[next + 1..close].iter().collect();
+            let code_point = (!body.is_empty() && body.chars().all(|c| c.is_ascii_hexdigit()))
+                .then(|| u32::from_str_radix(&body, 16).ok())
+                .flatten();
+            match code_point {
+                Some(value) if value <= 0x10_FFFF => Ok(close + 1),
+                _ => Err("Invalid Unicode escape"),
+            }
+        }
+        'u' if hex(next, 4) => Ok(next + 4),
+        'u' => Err("Invalid Unicode escape"),
+        'x' if hex(next, 2) => Ok(next + 2),
+        'x' => Err("Invalid escape"),
+        '0' if chars.get(next).is_some_and(char::is_ascii_digit) => Err("Invalid decimal escape"),
+        '0' => Ok(next),
+        '1'..='9' if in_class => Err("Invalid class escape"),
+        '1'..='9' => {
+            let end = next
+                + chars[next..]
+                    .iter()
+                    .take_while(|c| c.is_ascii_digit())
+                    .count();
+            let number: String = chars[index + 1..end].iter().collect();
+            match number.parse::<usize>() {
+                Ok(group) if group <= groups => Ok(end),
+                _ => Err("Invalid escape"),
+            }
+        }
+        c if c.is_ascii_alphanumeric() => Err("Invalid escape"),
+        c if "^$\\.*+?()[]{}|/".contains(c) || (in_class && c == '-') => Ok(next),
+        _ => Err("Invalid escape"),
+    }
 }
 
 /// The early error of a class under the `v` flag (ES2024 22.2.1): an
@@ -2165,6 +2254,252 @@ mod tests {
                 CLASS_ESCAPES.contains(c),
                 "{class:?}"
             );
+        }
+    }
+
+    /// bd-9vouw.401: escapes under `u` (AtomEscape and ClassEscape [U]): letters
+    /// only as the grammar's escapes, `\c`/`\x`/`\u` complete, `\0` without a
+    /// digit after it, `\1`.. only for a group that exists and never in a
+    /// class. Verdicts are Node v22.2.0's `new RegExp(pattern, "u")`; the
+    /// existence of a `\k<name>` group is left to the other checks.
+    #[test]
+    fn unicode_mode_escapes_bd_9vouw_401() {
+        for pattern in [
+            r#"\!"#,
+            r#"[\!]"#,
+            r#"\""#,
+            r#"[\"]"#,
+            r#"\#"#,
+            r#"[\#]"#,
+            r#"\%"#,
+            r#"[\%]"#,
+            r#"\&"#,
+            r#"[\&]"#,
+            r#"\'"#,
+            r#"[\']"#,
+            r#"\,"#,
+            r#"[\,]"#,
+            r#"\-"#,
+            r#"\1"#,
+            r#"[\1]"#,
+            r#"\2"#,
+            r#"[\2]"#,
+            r#"\3"#,
+            r#"[\3]"#,
+            r#"\4"#,
+            r#"[\4]"#,
+            r#"\5"#,
+            r#"[\5]"#,
+            r#"\6"#,
+            r#"[\6]"#,
+            r#"\7"#,
+            r#"[\7]"#,
+            r#"\8"#,
+            r#"[\8]"#,
+            r#"\9"#,
+            r#"[\9]"#,
+            r#"\:"#,
+            r#"[\:]"#,
+            r#"\;"#,
+            r#"[\;]"#,
+            r#"\<"#,
+            r#"[\<]"#,
+            r#"\="#,
+            r#"[\=]"#,
+            r#"\>"#,
+            r#"[\>]"#,
+            r#"\@"#,
+            r#"[\@]"#,
+            r#"\A"#,
+            r#"[\A]"#,
+            r#"[\B]"#,
+            r#"\C"#,
+            r#"[\C]"#,
+            r#"\E"#,
+            r#"[\E]"#,
+            r#"\F"#,
+            r#"[\F]"#,
+            r#"\G"#,
+            r#"[\G]"#,
+            r#"\H"#,
+            r#"[\H]"#,
+            r#"\I"#,
+            r#"[\I]"#,
+            r#"\J"#,
+            r#"[\J]"#,
+            r#"\K"#,
+            r#"[\K]"#,
+            r#"\L"#,
+            r#"[\L]"#,
+            r#"\M"#,
+            r#"[\M]"#,
+            r#"\N"#,
+            r#"[\N]"#,
+            r#"\O"#,
+            r#"[\O]"#,
+            r#"\P"#,
+            r#"[\P]"#,
+            r#"\Q"#,
+            r#"[\Q]"#,
+            r#"\R"#,
+            r#"[\R]"#,
+            r#"\T"#,
+            r#"[\T]"#,
+            r#"\U"#,
+            r#"[\U]"#,
+            r#"\V"#,
+            r#"[\V]"#,
+            r#"\X"#,
+            r#"[\X]"#,
+            r#"\Y"#,
+            r#"[\Y]"#,
+            r#"\Z"#,
+            r#"[\Z]"#,
+            r#"\_"#,
+            r#"[\_]"#,
+            r#"\`"#,
+            r#"[\`]"#,
+            r#"\a"#,
+            r#"[\a]"#,
+            r#"\c"#,
+            r#"[\c]"#,
+            r#"\e"#,
+            r#"[\e]"#,
+            r#"\g"#,
+            r#"[\g]"#,
+            r#"\h"#,
+            r#"[\h]"#,
+            r#"\i"#,
+            r#"[\i]"#,
+            r#"\j"#,
+            r#"[\j]"#,
+            r#"\k"#,
+            r#"[\k]"#,
+            r#"\l"#,
+            r#"[\l]"#,
+            r#"\m"#,
+            r#"[\m]"#,
+            r#"\o"#,
+            r#"[\o]"#,
+            r#"\p"#,
+            r#"[\p]"#,
+            r#"\q"#,
+            r#"[\q]"#,
+            r#"\u"#,
+            r#"[\u]"#,
+            r#"\x"#,
+            r#"[\x]"#,
+            r#"\y"#,
+            r#"[\y]"#,
+            r#"\z"#,
+            r#"[\z]"#,
+            r#"\~"#,
+            r#"[\~]"#,
+            r#"\c"#,
+            r#"\c1"#,
+            r#"\k"#,
+            r#"[\k]"#,
+            r#"\p"#,
+            r#"\u"#,
+            r#"\u12"#,
+            r#"\u{110000}"#,
+            r#"\u{}"#,
+            r#"\x"#,
+            r#"\x4"#,
+            r#"\00"#,
+            r#"\01"#,
+            r#"\1"#,
+            r#"(a)\2"#,
+            r#"[\1]"#,
+            r#"(?:a)\1"#,
+            r#"(?=a)\1"#,
+            r#"[(]\1"#,
+            r#"\(\1"#,
+            r#"[\B]"#,
+            r#"(a)\10"#,
+        ] {
+            assert!(
+                unicode_mode_syntax_error(pattern, false).is_some(),
+                "{pattern}"
+            );
+        }
+        for pattern in [
+            r#"\$"#,
+            r#"[\$]"#,
+            r#"\("#,
+            r#"[\(]"#,
+            r#"\)"#,
+            r#"[\)]"#,
+            r#"\*"#,
+            r#"[\*]"#,
+            r#"\+"#,
+            r#"[\+]"#,
+            r#"[\-]"#,
+            r#"\."#,
+            r#"[\.]"#,
+            r#"\/"#,
+            r#"[\/]"#,
+            r#"\0"#,
+            r#"[\0]"#,
+            r#"\?"#,
+            r#"[\?]"#,
+            r#"\B"#,
+            r#"\D"#,
+            r#"[\D]"#,
+            r#"\S"#,
+            r#"[\S]"#,
+            r#"\W"#,
+            r#"[\W]"#,
+            r#"\["#,
+            r#"[\[]"#,
+            r#"\\"#,
+            r#"[\\]"#,
+            r#"\]"#,
+            r#"[\]]"#,
+            r#"\^"#,
+            r#"[\^]"#,
+            r#"\b"#,
+            r#"[\b]"#,
+            r#"\d"#,
+            r#"[\d]"#,
+            r#"\f"#,
+            r#"[\f]"#,
+            r#"\n"#,
+            r#"[\n]"#,
+            r#"\r"#,
+            r#"[\r]"#,
+            r#"\s"#,
+            r#"[\s]"#,
+            r#"\t"#,
+            r#"[\t]"#,
+            r#"\v"#,
+            r#"[\v]"#,
+            r#"\w"#,
+            r#"[\w]"#,
+            r#"\{"#,
+            r#"[\{]"#,
+            r#"\|"#,
+            r#"[\|]"#,
+            r#"\}"#,
+            r#"[\}]"#,
+            r#"\cA"#,
+            r#"[\cA]"#,
+            r#"(?<a>x)\k<a>"#,
+            r#"\p{L}"#,
+            r#"\u1234"#,
+            r#"\u{1F600}"#,
+            r#"\x41"#,
+            r#"\0"#,
+            r#"[\0]"#,
+            r#"(a)\1"#,
+            r#"(a)(b)\2"#,
+            r#"(?<n>a)\1"#,
+            r#"[\b]"#,
+            r#"\b"#,
+            r#"\B"#,
+            r#"(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)\10"#,
+        ] {
+            assert_eq!(unicode_mode_syntax_error(pattern, false), None, "{pattern}");
         }
     }
 

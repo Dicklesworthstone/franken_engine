@@ -6883,7 +6883,25 @@ fn parse_primary_expression(
                 context,
             ));
         }
-        return Ok(Expression::Identifier(canonicalize_identifier(expression)));
+        let name = canonicalize_identifier(expression);
+        // A reserved word spelled with a unicode escape is still reserved
+        // (ES2020 11.6.2, 12.1.1): `await` in an async function and
+        // `yield` in a generator or strict code are SyntaxErrors, not
+        // references (bd-9vouw.394).
+        if expression.contains('\\')
+            && (is_unconditional_reserved_keyword(&name)
+                || (name == "await" && context.await_context)
+                || (name == "yield" && (context.yield_context || context.strict_mode))
+                || (context.strict_mode && is_strict_mode_reserved_word(&name)))
+        {
+            return Err(ParseError::new(
+                ParseErrorCode::InvalidSyntax,
+                format!("keyword `{name}` must not contain escaped characters"),
+                context.source_label.to_string(),
+                Some(*span),
+            ));
+        }
+        return Ok(Expression::Identifier(name));
     }
 
     if is_unseparated_expression_sequence(expression) {

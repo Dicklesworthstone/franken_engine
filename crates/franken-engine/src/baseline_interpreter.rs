@@ -38540,6 +38540,19 @@ impl InterpreterCore {
             .module_state
             .retained_program_bytes
             .saturating_add(retained_program_bytes);
+        // ES2020 26.3.1: a namespace's @@toStringTag is "Module", neither
+        // writable, enumerable nor configurable (bd-9vouw.399).
+        let tag = RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id());
+        self.set_object_runtime_property(namespace_object, tag.clone(), Value::str("Module"))?;
+        self.set_own_property_attributes(
+            namespace_object,
+            &tag,
+            PropertyAttributes {
+                writable: false,
+                enumerable: false,
+                configurable: false,
+            },
+        )?;
         Ok(namespace_object)
     }
 

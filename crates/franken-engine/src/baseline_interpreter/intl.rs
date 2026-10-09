@@ -65,9 +65,8 @@ const RELATIVE_TIME_UNITS: [&str; 8] = [
 
 /// NumberFormat options the formatter has no support for, with the value
 /// that leaves formatting unchanged (a present default is accepted).
-const NUMBER_FORMAT_DEFAULTED_OPTIONS: [(&str, &str); 9] = [
+const NUMBER_FORMAT_DEFAULTED_OPTIONS: [(&str, &str); 8] = [
     ("notation", "standard"),
-    ("signDisplay", "auto"),
     ("currencyDisplay", "symbol"),
     ("currencySign", "standard"),
     ("minimumIntegerDigits", "1"),
@@ -540,15 +539,52 @@ impl InterpreterCore {
                 return Err(Self::intl_refusal(SERVICE, format!("option {key}")));
             }
         }
-        for key in [
-            "unit",
-            "minimumSignificantDigits",
-            "maximumSignificantDigits",
-        ] {
-            if !matches!(self.intl_option(module, options, key)?, Value::Undefined) {
-                return Err(Self::intl_refusal(SERVICE, format!("option {key}")));
-            }
+        if !matches!(self.intl_option(module, options, "unit")?, Value::Undefined) {
+            return Err(Self::intl_refusal(SERVICE, "option unit".to_string()));
         }
+        // ECMA-402 SetNumberFormatDigitOptions: either bound of the
+        // significant digits brings in the other's default (1 and 21), and
+        // with roundingPriority "auto" they replace the fraction digits
+        // (bd-9vouw.463).
+        let mut significant = [None, None];
+        for (slot, key) in significant
+            .iter_mut()
+            .zip(["minimumSignificantDigits", "maximumSignificantDigits"])
+        {
+            let value = self.intl_option(module, options, key)?;
+            if matches!(value, Value::Undefined) {
+                continue;
+            }
+            let number = self.intl_to_number(module, value)?;
+            if !(1.0..=21.0).contains(&number) {
+                return Err(InterpreterError::RangeError {
+                    message: format!("{key} value is out of range."),
+                });
+            }
+            *slot = Some(number.floor() as u32);
+        }
+        let significant_digits = match significant {
+            [None, None] => None,
+            [minimum, maximum] => {
+                let (minimum, maximum) = (minimum.unwrap_or(1), maximum.unwrap_or(21));
+                if minimum > maximum {
+                    return Err(InterpreterError::RangeError {
+                        message: "maximumSignificantDigits value is out of range.".to_string(),
+                    });
+                }
+                Some((minimum, maximum))
+            }
+        };
+        let sign_display = self
+            .intl_string_option(
+                module,
+                options,
+                "signDisplay",
+                &["auto", "never", "always", "exceptZero", "negative"],
+                SERVICE,
+            )?
+            .and_then(|name| number_locale::SignDisplay::from_name(&name))
+            .unwrap_or_default();
         let locale_style = match style.as_str() {
             "decimal" => number_locale::NumberLocaleStyle::Decimal,
             "percent" => number_locale::NumberLocaleStyle::Percent,
@@ -565,6 +601,8 @@ impl InterpreterCore {
         };
         let mut parsed = number_locale::NumberLocaleOptions {
             style: locale_style,
+            significant_digits,
+            sign_display,
             ..Default::default()
         };
         for (key, slot) in [
@@ -623,13 +661,27 @@ impl InterpreterCore {
             resolved.push(("currencyDisplay", Value::str("symbol")));
             resolved.push(("currencySign", Value::str("standard")));
         }
+        resolved.push(("minimumIntegerDigits", Value::Int(1)));
+        match parsed.significant_digits {
+            Some((minimum_significant, maximum_significant)) => resolved.extend([
+                (
+                    "minimumSignificantDigits",
+                    Value::Int(i64::from(minimum_significant)),
+                ),
+                (
+                    "maximumSignificantDigits",
+                    Value::Int(i64::from(maximum_significant)),
+                ),
+            ]),
+            None => resolved.extend([
+                ("minimumFractionDigits", Value::Int(i64::from(minimum))),
+                ("maximumFractionDigits", Value::Int(i64::from(maximum))),
+            ]),
+        }
         resolved.extend([
-            ("minimumIntegerDigits", Value::Int(1)),
-            ("minimumFractionDigits", Value::Int(i64::from(minimum))),
-            ("maximumFractionDigits", Value::Int(i64::from(maximum))),
             ("useGrouping", use_grouping),
             ("notation", Value::str("standard")),
-            ("signDisplay", Value::str("auto")),
+            ("signDisplay", Value::str(parsed.sign_display.name())),
             ("roundingIncrement", Value::Int(1)),
             ("roundingMode", Value::str("halfExpand")),
             ("roundingPriority", Value::str("auto")),
@@ -1551,12 +1603,17 @@ fn intl_number_options_from_lookup(
         Some(Value::Int(value)) => u32::try_from(value).ok(),
         _ => None,
     };
+    let significant_digits =
+        digits("minimumSignificantDigits").zip(digits("maximumSignificantDigits"));
     (
         string("locale"),
         number_locale::NumberLocaleOptions {
             style,
             minimum_fraction_digits: digits("minimumFractionDigits"),
             maximum_fraction_digits: digits("maximumFractionDigits"),
+            significant_digits,
+            sign_display: number_locale::SignDisplay::from_name(&string("signDisplay"))
+                .unwrap_or_default(),
             use_grouping: !matches!(lookup("useGrouping"), Some(Value::Bool(false))),
         },
     )

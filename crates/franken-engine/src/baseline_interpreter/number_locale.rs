@@ -18,6 +18,45 @@ pub(super) enum NumberLocaleStyle {
     Currency(String),
 }
 
+/// When a sign is written (`signDisplay`, ECMA-402 15.5.11); "zero" is the
+/// rounded value, so `-0.0004` is a negative zero.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(super) enum SignDisplay {
+    /// `-` for negative numbers and negative zero.
+    #[default]
+    Auto,
+    Never,
+    /// `+` or `-` on every number, zero included.
+    Always,
+    /// `+` or `-`, but none on zero or NaN.
+    ExceptZero,
+    /// `-` for negative numbers other than zero.
+    Negative,
+}
+
+impl SignDisplay {
+    pub(super) fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "auto" => Self::Auto,
+            "never" => Self::Never,
+            "always" => Self::Always,
+            "exceptZero" => Self::ExceptZero,
+            "negative" => Self::Negative,
+            _ => return None,
+        })
+    }
+
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Never => "never",
+            Self::Always => "always",
+            Self::ExceptZero => "exceptZero",
+            Self::Negative => "negative",
+        }
+    }
+}
+
 /// The options toLocaleString honors; `None` fraction digits take the
 /// style's defaults (ECMA-402 SetNumberFormatDigitOptions).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,6 +64,11 @@ pub(super) struct NumberLocaleOptions {
     pub(super) style: NumberLocaleStyle,
     pub(super) minimum_fraction_digits: Option<u32>,
     pub(super) maximum_fraction_digits: Option<u32>,
+    /// Minimum and maximum significant digits (1..=21). When present they
+    /// decide the rounding and the fraction digits are not used
+    /// (roundingPriority "auto"), as in ICU.
+    pub(super) significant_digits: Option<(u32, u32)>,
+    pub(super) sign_display: SignDisplay,
     pub(super) use_grouping: bool,
 }
 
@@ -34,6 +78,8 @@ impl Default for NumberLocaleOptions {
             style: NumberLocaleStyle::Decimal,
             minimum_fraction_digits: None,
             maximum_fraction_digits: None,
+            significant_digits: None,
+            sign_display: SignDisplay::Auto,
             use_grouping: true,
         }
     }
@@ -288,6 +334,7 @@ pub(super) fn format_number_locale(
         maximum,
     } = layout_and_digits(locale, options)?;
     let negative = value.is_sign_negative() && !value.is_nan();
+    let mut rounded_zero = false;
     let body = if value.is_nan() {
         "NaN".to_string()
     } else if value.is_infinite() {
@@ -298,7 +345,13 @@ pub(super) fn format_number_locale(
         } else {
             0
         };
-        let (integer, fraction) = round_half_expand(value.abs(), shift, minimum, maximum);
+        let (integer, fraction) = match options.significant_digits {
+            Some((minimum_significant, maximum_significant)) => {
+                round_significant(value.abs(), shift, minimum_significant, maximum_significant)
+            }
+            None => round_half_expand(value.abs(), shift, minimum, maximum),
+        };
+        rounded_zero = integer.bytes().chain(fraction.bytes()).all(|b| b == b'0');
         let integer = if !options.use_grouping {
             integer
         } else if symbols.indian_grouping {
@@ -312,8 +365,90 @@ pub(super) fn format_number_locale(
             format!("{integer}{}{fraction}", symbols.decimal)
         }
     };
-    let sign = if negative { "-" } else { "" };
+    let sign = match options.sign_display {
+        SignDisplay::Auto if negative => "-",
+        SignDisplay::Auto | SignDisplay::Never => "",
+        SignDisplay::Always if negative => "-",
+        SignDisplay::Always => "+",
+        SignDisplay::ExceptZero if value.is_nan() || rounded_zero => "",
+        SignDisplay::ExceptZero if negative => "-",
+        SignDisplay::ExceptZero => "+",
+        SignDisplay::Negative if negative && !rounded_zero => "-",
+        SignDisplay::Negative => "",
+    };
     Ok(format!("{sign}{prefix}{body}{suffix}"))
+}
+
+/// The integer and fraction digits of `magnitude` times 10^`shift`, rounded
+/// half-expand to at most `maximum` significant digits and shown with at
+/// least `minimum` (ECMA-402 ToRawPrecision), from its shortest round-trip
+/// decimal form: `1234.5678` to 3 is `1230`, `0.0004` with at least 3 is
+/// `0.000400`, zero with at least 3 is `0.00`.
+fn round_significant(magnitude: f64, shift: usize, minimum: u32, maximum: u32) -> (String, String) {
+    let text = format!("{magnitude}");
+    let (integer, fraction) = text.split_once('.').unwrap_or((&text, ""));
+    let mut digits: Vec<u8> = integer
+        .bytes()
+        .chain(fraction.bytes())
+        .map(|b| b - b'0')
+        .collect();
+    let mut point = integer.len() + shift;
+    while digits.len() < point {
+        digits.push(0);
+    }
+    let to_text = |slice: &[u8]| {
+        slice
+            .iter()
+            .map(|d| char::from(b'0' + d))
+            .collect::<String>()
+    };
+    let Some(first) = digits.iter().position(|&d| d != 0) else {
+        let zeros = minimum.saturating_sub(1) as usize;
+        return ("0".to_string(), "0".repeat(zeros));
+    };
+    let keep = first + maximum as usize;
+    if digits.len() > keep {
+        let round_up = digits[keep] >= 5;
+        digits.truncate(keep);
+        if round_up {
+            let mut index = keep;
+            loop {
+                if index == 0 {
+                    digits.insert(0, 1);
+                    point += 1;
+                    break;
+                }
+                index -= 1;
+                if digits[index] == 9 {
+                    digits[index] = 0;
+                } else {
+                    digits[index] += 1;
+                    break;
+                }
+            }
+        }
+    }
+    while digits.len() < point {
+        digits.push(0);
+    }
+    let integer = to_text(&digits[..point]);
+    let integer = integer.trim_start_matches('0');
+    let integer = if integer.is_empty() { "0" } else { integer }.to_string();
+    let mut fraction = to_text(&digits[point..]);
+    let shown = |integer: &str, fraction: &str| {
+        if integer == "0" {
+            fraction.trim_start_matches('0').len()
+        } else {
+            integer.len() + fraction.len()
+        }
+    };
+    while fraction.ends_with('0') && shown(&integer, &fraction) > minimum as usize {
+        fraction.pop();
+    }
+    while shown(&integer, &fraction) < minimum as usize {
+        fraction.push('0');
+    }
+    (integer, fraction)
 }
 
 /// The integer and fraction digits of `magnitude` times 10^`shift`, from its
@@ -535,5 +670,86 @@ mod tests {
                 "{locale} must be refused"
             );
         }
+    }
+
+    #[test]
+    fn sign_display_and_significant_digits_match_icu() {
+        // Node v22.2.0 (ICU), en-US (bd-9vouw.463).
+        let fmt = |value: f64, options: NumberLocaleOptions| {
+            format_number_locale(value, Some("en-US"), &options).expect("format")
+        };
+        let sign = |display: SignDisplay| NumberLocaleOptions {
+            sign_display: display,
+            ..NumberLocaleOptions::default()
+        };
+        let sig = |minimum: u32, maximum: u32| NumberLocaleOptions {
+            significant_digits: Some((minimum, maximum)),
+            ..NumberLocaleOptions::default()
+        };
+        let cases: [(f64, NumberLocaleOptions, &str); 37] = [
+            (0.0, sign(SignDisplay::Always), "+0"),
+            (-0.0, sign(SignDisplay::Always), "-0"),
+            (1.0, sign(SignDisplay::Always), "+1"),
+            (0.0004, sign(SignDisplay::Always), "+0"),
+            (-0.0004, sign(SignDisplay::Always), "-0"),
+            (f64::NAN, sign(SignDisplay::Always), "+NaN"),
+            (f64::INFINITY, sign(SignDisplay::Always), "+∞"),
+            (-1.0, sign(SignDisplay::Never), "1"),
+            (f64::NEG_INFINITY, sign(SignDisplay::Never), "∞"),
+            (0.0, sign(SignDisplay::ExceptZero), "0"),
+            (-0.0004, sign(SignDisplay::ExceptZero), "0"),
+            (1.0, sign(SignDisplay::ExceptZero), "+1"),
+            (f64::NAN, sign(SignDisplay::ExceptZero), "NaN"),
+            (f64::NEG_INFINITY, sign(SignDisplay::ExceptZero), "-∞"),
+            (-0.0, sign(SignDisplay::Negative), "0"),
+            (-1.0, sign(SignDisplay::Negative), "-1"),
+            (-0.0004, sign(SignDisplay::Negative), "0"),
+            (-0.0004, sign(SignDisplay::Auto), "-0"),
+            (1234.5678, sig(1, 3), "1,230"),
+            (123456.0, sig(1, 3), "123,000"),
+            (0.000123456, sig(1, 3), "0.000123"),
+            (99.95, sig(1, 3), "100"),
+            (999.95, sig(1, 3), "1,000"),
+            (0.0004, sig(1, 3), "0.0004"),
+            (0.0, sig(3, 21), "0.00"),
+            (1.0, sig(3, 21), "1.00"),
+            (0.0004, sig(3, 21), "0.000400"),
+            (1234.5678, sig(3, 21), "1,234.5678"),
+            (1234.5678, sig(2, 4), "1,235"),
+            (123456.0, sig(2, 4), "123,500"),
+            (0.000123456, sig(2, 4), "0.0001235"),
+            (999.95, sig(2, 4), "1,000"),
+            (0.0, sig(2, 4), "0.0"),
+            (-0.0, sig(2, 4), "-0.0"),
+            (1234.5678, sig(1, 1), "1,000"),
+            (99.95, sig(1, 1), "100"),
+            (99.95, sig(2, 4), "99.95"),
+        ];
+        for (value, options, expected) in cases {
+            assert_eq!(fmt(value, options.clone()), expected, "{value} {options:?}");
+        }
+        let percent = NumberLocaleOptions {
+            style: NumberLocaleStyle::Percent,
+            significant_digits: Some((1, 2)),
+            ..NumberLocaleOptions::default()
+        };
+        assert_eq!(fmt(0.0004, percent.clone()), "0.04%");
+        assert_eq!(fmt(1234.5678, percent), "120,000%");
+        let dollars = |significant_digits, sign_display| NumberLocaleOptions {
+            style: NumberLocaleStyle::Currency("USD".to_string()),
+            significant_digits,
+            sign_display,
+            ..NumberLocaleOptions::default()
+        };
+        assert_eq!(
+            fmt(1234.5678, dollars(Some((1, 2)), SignDisplay::Auto)),
+            "$1,200"
+        );
+        assert_eq!(
+            fmt(0.000123456, dollars(Some((1, 2)), SignDisplay::Auto)),
+            "$0.00012"
+        );
+        assert_eq!(fmt(1.0, dollars(None, SignDisplay::Always)), "+$1.00");
+        assert_eq!(fmt(-0.0, dollars(None, SignDisplay::Always)), "-$0.00");
     }
 }

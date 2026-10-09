@@ -51,37 +51,137 @@ pub(super) enum NumberLocaleError {
 struct LocaleSymbols {
     group: char,
     decimal: char,
-    /// Whether percent and currency layouts are known for the locale.
+    /// Whether the percent layout (`26%`) is known for the locale.
     english_layout: bool,
+    /// `12,34,567`: three digits, then pairs (en-IN).
+    indian_grouping: bool,
+    /// How the locale writes the currencies the engine formats, if its
+    /// currency layout (`-$1,234.50`) is known.
+    currencies: Option<CurrencySymbols>,
 }
 
-fn locale_symbols(locale: Option<&str>) -> Result<LocaleSymbols, NumberLocaleError> {
-    let tag = locale.unwrap_or("en-US");
-    let language = tag.split(['-', '_']).next().unwrap_or(tag);
-    match language.to_ascii_lowercase().as_str() {
-        "en" | "ja" | "zh" | "ko" => Ok(LocaleSymbols {
-            group: ',',
-            decimal: '.',
-            english_layout: true,
-        }),
-        "de" => Ok(LocaleSymbols {
-            group: '.',
-            decimal: ',',
-            english_layout: false,
-        }),
-        _ => Err(NumberLocaleError::Unsupported(format!(
-            "locale {tag:?} (formatted locales: en, ja, zh, ko, de)"
-        ))),
+/// The symbols CLDR (Node v22.2.0's ICU) gives USD, EUR, GBP and JPY in a
+/// locale group whose currency layout is `<sign><symbol><number>`.
+#[derive(Clone, Copy)]
+enum CurrencySymbols {
+    /// en, en-US, en-PH: `$ € £ ¥`.
+    UnitedStates,
+    /// en-GB and most English regions, zh, zh-CN, zh-SG, ko: `US$ € £ JP¥`.
+    International,
+    /// en-IN: `$ € £ JP¥`.
+    India,
+    /// ja: `$ € £ ￥`.
+    Japan,
+    /// zh-TW, zh-HK, zh-Hant: `US$ € £ ¥`.
+    TraditionalChinese,
+}
+
+impl CurrencySymbols {
+    fn symbol(self, code: &str) -> Option<&'static str> {
+        use CurrencySymbols::{India, International, Japan, TraditionalChinese, UnitedStates};
+        Some(match (code, self) {
+            ("USD", UnitedStates | India | Japan) => "$",
+            ("USD", International | TraditionalChinese) => "US$",
+            ("EUR", _) => "€",
+            ("GBP", _) => "£",
+            ("JPY", UnitedStates | TraditionalChinese) => "¥",
+            ("JPY", International | India) => "JP¥",
+            ("JPY", Japan) => "￥",
+            _ => return None,
+        })
     }
 }
 
-/// Symbol and fraction digits of the currencies the engine formats.
-fn currency_layout(code: &str) -> Option<(&'static str, u32)> {
+/// The language, script and region subtags of a BCP 47 tag (`zh-Hant-TW`),
+/// and whether it carries a Unicode `nu` (numbering system) keyword.
+fn locale_subtags(tag: &str) -> (String, Option<String>, Option<String>, bool) {
+    let mut subtags = tag.split(['-', '_']);
+    let language = subtags.next().unwrap_or_default().to_ascii_lowercase();
+    let (mut script, mut region) = (None, None);
+    let mut numbering = false;
+    let mut in_extension = false;
+    for subtag in subtags {
+        if subtag.len() == 1 {
+            in_extension = true;
+            continue;
+        }
+        if in_extension {
+            numbering |= subtag.eq_ignore_ascii_case("nu");
+        } else if subtag.len() == 4 && subtag.bytes().all(|b| b.is_ascii_alphabetic()) {
+            script.get_or_insert_with(|| subtag.to_ascii_lowercase());
+        } else if (subtag.len() == 2 && subtag.bytes().all(|b| b.is_ascii_alphabetic()))
+            || (subtag.len() == 3 && subtag.bytes().all(|b| b.is_ascii_digit()))
+        {
+            region.get_or_insert_with(|| subtag.to_ascii_uppercase());
+        }
+    }
+    (language, script, region, numbering)
+}
+
+/// The locales whose number symbols the engine knows, region by region:
+/// a region of a known language that writes numbers differently (en-CH
+/// `1’234’567.891`, en-DE and de-AT, de-CH) is refused rather than
+/// formatted as the language's default (bd-9vouw.462). Values are Node
+/// v22.2.0's (ICU).
+fn locale_symbols(locale: Option<&str>) -> Result<LocaleSymbols, NumberLocaleError> {
+    let tag = locale.unwrap_or("en-US");
+    let (language, script, region, numbering) = locale_subtags(tag);
+    let unsupported = || {
+        NumberLocaleError::Unsupported(format!(
+            "locale {tag:?} (formatted: en and its regions US GB AU CA NZ IE SG HK PH NG KE \
+             ZA IN 150 MY PK JM 001; ja; zh; ko; de, de-DE, de-LU, de-BE, de-IT)"
+        ))
+    };
+    if numbering {
+        return Err(unsupported());
+    }
+    let english_like = |currencies| LocaleSymbols {
+        group: ',',
+        decimal: '.',
+        english_layout: true,
+        indian_grouping: false,
+        currencies,
+    };
+    use CurrencySymbols::{India, International, Japan, TraditionalChinese, UnitedStates};
+    match (language.as_str(), region.as_deref()) {
+        ("en", None | Some("US" | "PH")) => Ok(english_like(Some(UnitedStates))),
+        (
+            "en",
+            Some(
+                "GB" | "CA" | "NZ" | "IE" | "SG" | "HK" | "NG" | "KE" | "ZA" | "MY" | "PK" | "JM"
+                | "001",
+            ),
+        ) => Ok(english_like(Some(International))),
+        // en-AU writes `USD 1,234.50` and en-150 `1,234.50 US$`: numbers
+        // and percent as in English, currency refused.
+        ("en", Some("AU" | "150")) => Ok(english_like(None)),
+        ("en", Some("IN")) => Ok(LocaleSymbols {
+            indian_grouping: true,
+            ..english_like(Some(India))
+        }),
+        ("ja", None | Some("JP")) => Ok(english_like(Some(Japan))),
+        ("zh", Some("TW" | "HK")) => Ok(english_like(Some(TraditionalChinese))),
+        ("zh", None) if script.as_deref() == Some("hant") => {
+            Ok(english_like(Some(TraditionalChinese)))
+        }
+        ("zh", None | Some("CN" | "SG")) => Ok(english_like(Some(International))),
+        ("ko", None | Some("KR" | "KP")) => Ok(english_like(Some(International))),
+        ("de", None | Some("DE" | "LU" | "BE" | "IT")) => Ok(LocaleSymbols {
+            group: '.',
+            decimal: ',',
+            english_layout: false,
+            indian_grouping: false,
+            currencies: None,
+        }),
+        _ => Err(unsupported()),
+    }
+}
+
+/// Fraction digits of the currencies the engine formats.
+fn currency_digits(code: &str) -> Option<u32> {
     match code {
-        "USD" => Some(("$", 2)),
-        "EUR" => Some(("€", 2)),
-        "GBP" => Some(("£", 2)),
-        "JPY" => Some(("¥", 0)),
+        "USD" | "EUR" | "GBP" => Some(2),
+        "JPY" => Some(0),
         _ => None,
     }
 }
@@ -112,22 +212,29 @@ fn layout_and_digits(
     options: &NumberLocaleOptions,
 ) -> Result<NumberLayout, NumberLocaleError> {
     let symbols = locale_symbols(locale)?;
+    let unsupported_style = || {
+        NumberLocaleError::Unsupported(format!(
+            "style {:?} for locale {:?}",
+            options.style,
+            locale.unwrap_or("en-US")
+        ))
+    };
     let (prefix, suffix, default_min, default_max) = match &options.style {
         NumberLocaleStyle::Decimal => ("", "", 0, 3),
-        NumberLocaleStyle::Percent | NumberLocaleStyle::Currency(_) if !symbols.english_layout => {
-            return Err(NumberLocaleError::Unsupported(format!(
-                "style {:?} for locale {:?}",
-                options.style,
-                locale.unwrap_or("en-US")
-            )));
+        NumberLocaleStyle::Percent if !symbols.english_layout => {
+            return Err(unsupported_style());
         }
         NumberLocaleStyle::Percent => ("", "%", 0, 0),
         NumberLocaleStyle::Currency(code) => {
-            let (symbol, digits) = currency_layout(code).ok_or_else(|| {
+            let digits = currency_digits(code).ok_or_else(|| {
                 NumberLocaleError::Unsupported(format!(
                     "currency {code:?} (formatted currencies: USD, EUR, GBP, JPY)"
                 ))
             })?;
+            let symbol = symbols
+                .currencies
+                .and_then(|currencies| currencies.symbol(code))
+                .ok_or_else(unsupported_style)?;
             (symbol, "", digits, digits)
         }
     };
@@ -192,10 +299,12 @@ pub(super) fn format_number_locale(
             0
         };
         let (integer, fraction) = round_half_expand(value.abs(), shift, minimum, maximum);
-        let integer = if options.use_grouping {
-            group_digits(&integer, symbols.group)
-        } else {
+        let integer = if !options.use_grouping {
             integer
+        } else if symbols.indian_grouping {
+            group_digits_indian(&integer, symbols.group)
+        } else {
+            group_digits(&integer, symbols.group)
         };
         if fraction.is_empty() {
             integer
@@ -274,6 +383,25 @@ fn group_digits(integer: &str, separator: char) -> String {
         }
         out.push(digit);
     }
+    out
+}
+
+/// `1234567` → `12,34,567`: the last three digits, then groups of two
+/// (Indian grouping, en-IN).
+fn group_digits_indian(integer: &str, separator: char) -> String {
+    if integer.len() <= 3 {
+        return integer.to_string();
+    }
+    let (head, tail) = integer.split_at(integer.len() - 3);
+    let mut out = String::with_capacity(integer.len() + integer.len() / 2);
+    for (index, digit) in head.chars().enumerate() {
+        if index > 0 && (head.len() - index).is_multiple_of(2) {
+            out.push(separator);
+        }
+        out.push(digit);
+    }
+    out.push(separator);
+    out.push_str(tail);
     out
 }
 
@@ -364,5 +492,48 @@ mod tests {
             format_number_locale(1.0, Some("de-DE"), &percent),
             Err(NumberLocaleError::Unsupported(_))
         ));
+    }
+
+    #[test]
+    fn regions_and_currencies_follow_icu_or_are_refused() {
+        // Node v22.2.0 (ICU) values (bd-9vouw.462).
+        let default = NumberLocaleOptions::default;
+        let currency = |code: &str| NumberLocaleOptions {
+            style: NumberLocaleStyle::Currency(code.to_string()),
+            ..NumberLocaleOptions::default()
+        };
+        assert_eq!(with(1234567.891, "en-IN", default()), "12,34,567.891");
+        assert_eq!(with(-123.0, "en-IN", default()), "-123");
+        assert_eq!(with(1234567.891, "en-GB", default()), "1,234,567.891");
+        assert_eq!(with(1234567.891, "de-LU", default()), "1.234.567,891");
+        assert_eq!(with(1234567.891, "zh-Hant-TW", default()), "1,234,567.891");
+        assert_eq!(with(-1234.5, "en-GB", currency("USD")), "-US$1,234.50");
+        assert_eq!(with(-1234.5, "en-GB", currency("JPY")), "-JP¥1,235");
+        assert_eq!(with(-1234.5, "en-PH", currency("USD")), "-$1,234.50");
+        assert_eq!(with(-1234.5, "en-IN", currency("JPY")), "-JP¥1,235");
+        assert_eq!(with(-1234.5, "ja-JP", currency("JPY")), "-￥1,235");
+        assert_eq!(with(-1234.5, "zh-CN", currency("USD")), "-US$1,234.50");
+        assert_eq!(with(-1234.5, "zh-TW", currency("JPY")), "-¥1,235");
+        assert_eq!(with(-1234.5, "zh-Hant", currency("JPY")), "-¥1,235");
+        assert_eq!(with(-1234.5, "ko-KR", currency("GBP")), "-£1,234.50");
+        for (locale, options) in [
+            ("en-CH", default()),
+            ("en-DE", default()),
+            ("en-SE", default()),
+            ("de-AT", default()),
+            ("de-CH", default()),
+            ("en-US-u-nu-arab", default()),
+            ("en-AU", currency("USD")),
+            ("en-150", currency("EUR")),
+            ("de-DE", currency("EUR")),
+        ] {
+            assert!(
+                matches!(
+                    format_number_locale(1.0, Some(locale), &options),
+                    Err(NumberLocaleError::Unsupported(_))
+                ),
+                "{locale} must be refused"
+            );
+        }
     }
 }

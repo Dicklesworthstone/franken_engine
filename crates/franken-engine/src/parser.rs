@@ -5016,6 +5016,20 @@ fn parse_statement_inner(
             span,
         }));
     }
+    // `debugger;` (ES2020 13.16) does nothing when no debugger is attached,
+    // as the empty statement does. It was read as a reference to a variable
+    // named `debugger` and threw a ReferenceError (bd-9vouw.452).
+    let trimmed_statement = statement.trim();
+    if trimmed_statement == "debugger"
+        || trimmed_statement
+            .strip_suffix(';')
+            .is_some_and(|keyword| keyword.trim_end() == "debugger")
+    {
+        return Ok(Statement::Block(BlockStatement {
+            body: Vec::new(),
+            span,
+        }));
+    }
     if starts_import_declaration(statement) {
         if goal == ParseGoal::Script {
             return Err(ParseError::new(
@@ -7313,7 +7327,7 @@ fn parse_primary_expression(
         }
         // An operator keyword with nothing to operate on is no expression:
         // `throw;` read as a reference to a variable named `throw`
-        // (bd-9vouw.402). (`debugger;` also lands here and is a statement.)
+        // (bd-9vouw.402).
         if matches!(
             expression,
             "throw" | "typeof" | "void" | "delete" | "new" | "in" | "instanceof"
@@ -7325,8 +7339,9 @@ fn parse_primary_expression(
             ));
         }
         // Nor is any other reserved word a reference (`case = 1`,
-        // `else = 1`, bd-9vouw.427); `debugger;`, the statement, ends here.
-        if is_unconditional_reserved_keyword(&name) && name != "debugger" {
+        // `else = 1`, bd-9vouw.427), `(debugger)` included: the statement
+        // `debugger;` is parsed before expressions (bd-9vouw.452).
+        if is_unconditional_reserved_keyword(&name) {
             return Err(invalid_syntax_error(
                 "a reserved word cannot be an identifier reference",
                 span,
@@ -19002,6 +19017,26 @@ mod tests {
                 .parse(source, ParseGoal::Script)
                 .unwrap_or_else(|err| panic!("`{source}` must parse: {}", err.message));
         }
+    }
+
+    // bd-9vouw.452: `debugger` is a statement, parsed before expressions;
+    // as an expression it is a reserved word.
+    #[test]
+    fn debugger_is_a_statement_and_no_expression() {
+        let parser = CanonicalEs2020Parser;
+        for source in ["debugger;", "debugger", "if (x) debugger;", "l: debugger;"] {
+            let tree = parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|err| panic!("`{source}` must parse: {}", err.message));
+            assert!(
+                !format!("{tree:?}").contains("Identifier(\"debugger\")"),
+                "`{source}` must not reference a variable `debugger`"
+            );
+        }
+        let err = parser
+            .parse("(debugger);", ParseGoal::Script)
+            .expect_err("`(debugger)` is a SyntaxError");
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax, "{}", err.message);
     }
 
     #[test]

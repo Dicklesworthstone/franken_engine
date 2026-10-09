@@ -13375,6 +13375,173 @@ fn has_use_strict_directive(source: &str) -> bool {
     }
 }
 
+/// ES2020 13.2.1, 13.12.1 and 13.15.1: the let, const, class and function
+/// declarations directly in a block, in a switch's case clauses or in a
+/// try, catch or finally block are its lexically declared names. A second
+/// declaration of one of them is a SyntaxError unless both are plain
+/// function declarations in non-strict code (B.3.3.4), and so are a `var`
+/// of the same name anywhere in the block (nested blocks and loop heads
+/// included, nested functions not) and a catch parameter of that name.
+/// Returns the first name in conflict.
+fn block_lexical_redeclaration<'a>(
+    statements: impl Iterator<Item = &'a Statement> + Clone,
+    strict: bool,
+    catch_parameter: Option<&str>,
+) -> Option<String> {
+    // Each lexically declared name, and whether every declaration of it so
+    // far is a plain function declaration.
+    let mut lexical: BTreeMap<&str, bool> = BTreeMap::new();
+    for mut statement in statements.clone() {
+        while let Statement::Labeled(labeled) = statement {
+            statement = &labeled.body;
+        }
+        let declared: Vec<(&str, bool)> = match statement {
+            Statement::FunctionDeclaration(function) => function
+                .name
+                .as_deref()
+                .map(|name| (name, !function.is_async && !function.is_generator))
+                .into_iter()
+                .collect(),
+            Statement::ClassDeclaration(class) => class
+                .name
+                .as_deref()
+                .map(|name| (name, false))
+                .into_iter()
+                .collect(),
+            Statement::VariableDeclaration(declaration)
+                if declaration.kind != VariableDeclarationKind::Var =>
+            {
+                declaration
+                    .declarations
+                    .iter()
+                    .flat_map(|declarator| declarator.pattern.binding_names())
+                    .map(|name| (name, false))
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
+        for (name, plain_function) in declared {
+            if let Some(previous_plain_function) = lexical.insert(name, plain_function)
+                && (strict || !(plain_function && previous_plain_function))
+            {
+                return Some(name.to_string());
+            }
+        }
+    }
+    if lexical.is_empty() {
+        return None;
+    }
+    if let Some(parameter) = catch_parameter
+        && lexical.contains_key(parameter)
+    {
+        return Some(parameter.to_string());
+    }
+    let mut var_names = BTreeSet::new();
+    for statement in statements {
+        collect_var_declared_names(statement, &mut var_names);
+    }
+    var_names
+        .into_iter()
+        .find(|name| lexical.contains_key(name.as_str()))
+}
+
+/// VarDeclaredNames of one statement (ES2020 13.1.5): its `var`
+/// declarations, nested blocks, clauses and loop heads included, nested
+/// functions and classes not.
+fn collect_var_declared_names(statement: &Statement, names: &mut BTreeSet<String>) {
+    match statement {
+        Statement::VariableDeclaration(declaration)
+            if declaration.kind == VariableDeclarationKind::Var =>
+        {
+            for declarator in &declaration.declarations {
+                names.extend(
+                    declarator
+                        .pattern
+                        .binding_names()
+                        .into_iter()
+                        .map(str::to_string),
+                );
+            }
+        }
+        Statement::Block(block) => {
+            for nested in &block.body {
+                collect_var_declared_names(nested, names);
+            }
+        }
+        Statement::If(if_statement) => {
+            collect_var_declared_names(&if_statement.consequent, names);
+            if let Some(alternate) = &if_statement.alternate {
+                collect_var_declared_names(alternate, names);
+            }
+        }
+        Statement::For(for_statement) => {
+            if let Some(init) = &for_statement.init {
+                collect_var_declared_names(init, names);
+            }
+            collect_var_declared_names(&for_statement.body, names);
+        }
+        Statement::ForIn(ForInStatement {
+            binding,
+            binding_kind,
+            body,
+            ..
+        })
+        | Statement::ForOf(ForOfStatement {
+            binding,
+            binding_kind,
+            body,
+            ..
+        }) => {
+            if *binding_kind == Some(VariableDeclarationKind::Var) {
+                names.extend(binding.binding_names().into_iter().map(str::to_string));
+            }
+            collect_var_declared_names(body, names);
+        }
+        Statement::While(WhileStatement { body, .. })
+        | Statement::DoWhile(DoWhileStatement { body, .. })
+        | Statement::With(WithStatement { body, .. })
+        | Statement::Labeled(LabeledStatement { body, .. }) => {
+            collect_var_declared_names(body, names);
+        }
+        Statement::TryCatch(try_statement) => {
+            for nested in &try_statement.block.body {
+                collect_var_declared_names(nested, names);
+            }
+            if let Some(handler) = &try_statement.handler {
+                for nested in &handler.body.body {
+                    collect_var_declared_names(nested, names);
+                }
+            }
+            if let Some(finalizer) = &try_statement.finalizer {
+                for nested in &finalizer.body {
+                    collect_var_declared_names(nested, names);
+                }
+            }
+        }
+        Statement::Switch(switch_statement) => {
+            for case in &switch_statement.cases {
+                for nested in &case.consequent {
+                    collect_var_declared_names(nested, names);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn block_redeclaration_error(
+    name: &str,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseError {
+    ParseError::new(
+        ParseErrorCode::InvalidSyntax,
+        format!("identifier '{name}' has already been declared in this block"),
+        context.source_label.to_string(),
+        Some(span.clone()),
+    )
+}
+
 fn parse_block_statement(
     statement: &str,
     goal: ParseGoal,
@@ -13390,6 +13557,9 @@ fn parse_block_statement(
         )
     })?;
     let body = parse_body_statements(inner, goal, &span, context)?;
+    if let Some(name) = block_lexical_redeclaration(body.iter(), context.strict_mode, None) {
+        return Err(block_redeclaration_error(&name, &span, context));
+    }
     Ok(Statement::Block(BlockStatement { body, span }))
 }
 
@@ -14464,6 +14634,9 @@ fn parse_try_catch_statement(
         )
     })?;
     let try_body = parse_body_statements(try_inner, goal, &span, context)?;
+    if let Some(name) = block_lexical_redeclaration(try_body.iter(), context.strict_mode, None) {
+        return Err(block_redeclaration_error(&name, &span, context));
+    }
     let try_block = BlockStatement {
         body: try_body,
         span: span.clone(),
@@ -14519,6 +14692,11 @@ fn parse_try_catch_statement(
             )
         })?;
         let mut catch_body = parse_body_statements(catch_inner, goal, &span, context)?;
+        if let Some(name) =
+            block_lexical_redeclaration(catch_body.iter(), context.strict_mode, param.as_deref())
+        {
+            return Err(block_redeclaration_error(&name, &span, context));
+        }
         if let Some(pattern) = destructured_parameter {
             let binding = format!("let {pattern} = {CATCH_PATTERN_PARAMETER};");
             let mut prologue = parse_body_statements(&binding, goal, &span, context)?;
@@ -14553,6 +14731,11 @@ fn parse_try_catch_statement(
                 )
             })?;
         let finally_body = parse_body_statements(finally_inner, goal, &span, context)?;
+        if let Some(name) =
+            block_lexical_redeclaration(finally_body.iter(), context.strict_mode, None)
+        {
+            return Err(block_redeclaration_error(&name, &span, context));
+        }
         (
             Some(BlockStatement {
                 body: finally_body,
@@ -14669,6 +14852,13 @@ fn parse_switch_statement(
         }
     }
 
+    if let Some(name) = block_lexical_redeclaration(
+        cases.iter().flat_map(|case| case.consequent.iter()),
+        context.strict_mode,
+        None,
+    ) {
+        return Err(block_redeclaration_error(&name, &span, context));
+    }
     Ok(Statement::Switch(SwitchStatement {
         discriminant,
         cases,

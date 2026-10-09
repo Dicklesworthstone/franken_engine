@@ -318,5 +318,11 @@
   EventEmitter.EventEmitter = EventEmitter;
   EventEmitter.once = once;
   EventEmitter.on = on;
+  // Node's constant statics (bd-9vouw.210): a native emitter's default
+  // maximum is 10. errorMonitor is the key Node gives listeners that see
+  // 'error' first; the native emitter does not dispatch to it yet.
+  EventEmitter.defaultMaxListeners = 10;
+  EventEmitter.errorMonitor = Symbol('events.errorMonitor');
+  EventEmitter.captureRejections = false;
   return EventEmitter;
 })()

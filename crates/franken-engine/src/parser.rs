@@ -7473,6 +7473,50 @@ fn raw_expression_early_error(expression: &str) -> Option<&'static str> {
             return Some("keyword `async` must not contain escaped characters");
         }
     }
+    // Two operands with no operator between them: a number or a plain name,
+    // then a name (`1 method(){}`, a class field's initializer running into
+    // the next element on its line, bd-9vouw.450).
+    let mut tokens = expression.splitn(2, char::is_whitespace);
+    let first = tokens.next().unwrap_or("");
+    let second = tokens.next().unwrap_or("").trim_start();
+    let operand_word = |word: &str| {
+        is_identifier(word)
+            && !is_unconditional_reserved_keyword(word)
+            && !matches!(
+                word,
+                "async" | "await" | "yield" | "let" | "get" | "set" | "static" | "of" | "as"
+            )
+    };
+    let second_word_end = second
+        .find(|ch: char| !is_identifier_continue(ch))
+        .unwrap_or(second.len());
+    let numeric = |word: &str| {
+        parse_bigint_numeric_literal(word).is_some()
+            || parse_i64_numeric_literal(word).is_some()
+            || parse_f64_numeric_literal(word).is_some()
+    };
+    if (operand_word(first) || numeric(first))
+        && second.starts_with(is_identifier_start)
+        && !matches!(
+            &second[..second_word_end],
+            "in" | "instanceof" | "of" | "as"
+        )
+    {
+        return Some("two expressions with no operator between them");
+    }
+    // A call followed by a block (`gen() {}`): a method definition outside a
+    // class or object literal, as a field initializer running into the next
+    // line reads `x = 42` newline `*gen() {}` (bd-9vouw.450).
+    if let Some(open) = expression.find('(') {
+        let head = expression[..open].trim_end();
+        if !head.is_empty()
+            && head.split('.').all(operand_word)
+            && extract_balanced(&expression[open..], '(', ')')
+                .is_some_and(|(_, after)| after.trim_start().starts_with('{'))
+        {
+            return Some("a call cannot be followed by a block");
+        }
+    }
     let mut quotes = QuoteState::default();
     let mut chars = expression.char_indices().peekable();
     while let Some((index, ch)) = chars.next() {
@@ -16978,8 +17022,11 @@ fn split_class_field_asi(text: &str) -> (&str, Option<&str>) {
                     ])
                     || head.ends_with("++")
                     || head.ends_with("--");
+                // After an initializer a `*` multiplies: `x = 42` newline
+                // `*gen() {}` gets no semicolon and is a SyntaxError
+                // (bd-9vouw.450), unlike `x` newline `*gen() {}` above.
                 let tail_starts_element = tail.chars().next().is_some_and(|c| {
-                    c.is_alphanumeric() || matches!(c, '_' | '$' | '#' | '*' | '\'' | '"')
+                    c.is_alphanumeric() || matches!(c, '_' | '$' | '#' | '\'' | '"')
                 }) && !starts_with_keyword(tail, "in")
                     && !starts_with_keyword(tail, "instanceof");
                 if head_is_complete && tail_starts_element {
@@ -18801,6 +18848,37 @@ mod tests {
             "var o = {p: 1}; (o.p)++; ++(o.p);",
             "function* g() { var x = 0; yield x++; }",
             "var x = 1; ((x))--;",
+        ] {
+            parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|err| panic!("`{source}` must parse: {}", err.message));
+        }
+    }
+
+    // bd-9vouw.450: a class field's initializer gets no semicolon before a
+    // `*` on the next line, nor before another element on its own line.
+    #[test]
+    fn class_field_initializers_do_not_end_before_a_star_or_on_their_line() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "class C {\n  x = 42\n  *gen() {}\n}",
+            "class C {\n  x = 42\n  y = 1\n  *gen() {}\n}",
+            "class C {\n  field = 1 method(){}\n}",
+        ] {
+            let err = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err(&format!("`{source}` must be a SyntaxError"));
+            assert_eq!(
+                err.code,
+                ParseErrorCode::InvalidSyntax,
+                "wrong code for `{source}`: {}",
+                err.message
+            );
+        }
+        for source in [
+            "class C {\n  x\n  *gen() {}\n}",
+            "class C {\n  x = 42;\n  *gen() {}\n}",
+            "var obj = {};\nclass C {\n  x = obj\n  ['lol'] = 42\n}",
         ] {
             parser
                 .parse(source, ParseGoal::Script)

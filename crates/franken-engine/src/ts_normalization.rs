@@ -1349,7 +1349,8 @@ fn find_import_export_statement_end(source: &str, start: usize) -> Option<usize>
 
 fn rewrite_type_only_import_export_statement(statement: &str) -> Option<String> {
     let start = statement.find(|ch: char| !ch.is_ascii_whitespace())?;
-    if starts_with_keyword(statement, start, "import") {
+    let is_import = starts_with_keyword(statement, start, "import");
+    if is_import {
         let after_import = next_code_token_index(statement, start + "import".len())?;
         if starts_with_keyword(statement, after_import, "type")
             && import_type_keyword_uses_type_only_syntax(statement, after_import)
@@ -1369,7 +1370,30 @@ fn rewrite_type_only_import_export_statement(statement: &str) -> Option<String> 
         return None;
     }
 
-    let brace_start = find_top_level_char(statement, start, '{')?;
+    // Only an import or export clause lists specifiers: `export { ... }`,
+    // `import { ... }`, `import Default, { ... }`. The first brace of any
+    // other statement is a declaration's body or an object literal
+    // (`export interface Q { type: string }`, `export const o = { type: 1 }`),
+    // whose `type:` member was dropped as a type-only specifier
+    // (bd-9vouw.433).
+    let keyword_len = if is_import {
+        "import".len()
+    } else {
+        "export".len()
+    };
+    let first = next_code_token_index(statement, start + keyword_len)?;
+    let brace_start = if statement[first..].starts_with('{') {
+        first
+    } else if is_import
+        && let Some(default_end) = skip_identifier(statement, first)
+        && let Some(comma) = next_code_token_index(statement, default_end)
+        && statement[comma..].starts_with(',')
+    {
+        next_code_token_index(statement, comma + 1)
+            .filter(|brace| statement[*brace..].starts_with('{'))?
+    } else {
+        return None;
+    };
     let brace_end = find_matching_delimiter(statement, brace_start, '{', '}')?;
     let (runtime_specifiers, removed_any) =
         filter_runtime_named_specifiers(&statement[brace_start + 1..brace_end]);
@@ -4281,6 +4305,22 @@ abstract class Base { }"#;
         let source = "import type, { keep } from \"pkg\";";
         let result = elide_type_only_imports(source);
         assert_eq!(result, source);
+    }
+
+    /// bd-9vouw.433: only an import or export clause lists specifiers; a
+    /// `type:` member of a declaration body or an object literal is kept.
+    #[test]
+    fn elide_type_only_imports_leaves_declaration_bodies_and_object_literals() {
+        for source in [
+            "export const config = { type: \"json\", n: 1 };",
+            "export interface Q { type: string; n: number }",
+            "export default { type: \"a\" };",
+            "export function f(o = { type: 1 }) { return o; }",
+            "export class K { type = 1; }",
+            "import Default, { type } from \"pkg\";",
+        ] {
+            assert_eq!(elide_type_only_imports(source), source, "{source}");
+        }
     }
 
     #[test]

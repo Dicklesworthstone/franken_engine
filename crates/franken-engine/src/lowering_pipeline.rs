@@ -12081,6 +12081,15 @@ fn lower_ir2_to_ir3_with_input_hash(
                             annotated_body_ops.get(op_index + 1).map(|next| &next.inner),
                             Some(Ir1Op::Pop | Ir1Op::Discard)
                         );
+                    // The function's own self-captured name in a sloppy body:
+                    // the assignment (`f = 1`, `f += 1`, `f++`) evaluates as
+                    // usual and its store is ignored, as in the StoreBinding
+                    // arm (bd-9vouw.331).
+                    let ignored_self_name_store = fn_self_capture
+                        && fn_sloppy
+                        && fv_id_to_name
+                            .get(binding_id)
+                            .is_some_and(|name| fn_name.as_deref() == Some(name.as_str()));
                     if let Some(name) = fv_id_to_name
                         .get(binding_id)
                         .or_else(|| runtime_local_id_to_name.get(binding_id))
@@ -12090,10 +12099,12 @@ fn lower_ir2_to_ir3_with_input_hash(
                         // `x++`/`x--` evaluate to the old value (bd-9vouw.119).
                         let mut postfix_value = None;
                         let result = if *operator == AssignmentOperator::Assign {
-                            ir3.instructions.push(Ir3Instruction::StoreScoped {
-                                src,
-                                name_pool_index: pool_idx,
-                            });
+                            if !ignored_self_name_store {
+                                ir3.instructions.push(Ir3Instruction::StoreScoped {
+                                    src,
+                                    name_pool_index: pool_idx,
+                                });
+                            }
                             src
                         } else if matches!(
                             operator,
@@ -12123,14 +12134,17 @@ fn lower_ir2_to_ir3_with_input_hash(
                                 ir3.instructions.push(instr);
                                 (result, result)
                             };
-                            ir3.instructions.push(Ir3Instruction::StoreScoped {
-                                src: result,
-                                name_pool_index: pool_idx,
-                            });
+                            if !ignored_self_name_store {
+                                ir3.instructions.push(Ir3Instruction::StoreScoped {
+                                    src: result,
+                                    name_pool_index: pool_idx,
+                                });
+                            }
                             postfix_value = Some(value);
                             result
                         };
-                        if let Some(child_name) = child_capture_id_to_name.get(binding_id)
+                        if !ignored_self_name_store
+                            && let Some(child_name) = child_capture_id_to_name.get(binding_id)
                             && child_name != name
                         {
                             let child_pool_idx =

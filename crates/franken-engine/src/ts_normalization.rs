@@ -1583,6 +1583,15 @@ fn next_code_scan_char(
                 }
 
                 let index = *cursor;
+                // A regular expression literal is one code token: a quote or
+                // bracket inside it opens nothing (bd-9vouw.436).
+                if bytes[index] == b'/'
+                    && slash_starts_regex(&source[..index])
+                    && let Some(end) = regex_literal_end(source, index)
+                {
+                    *cursor = end;
+                    return Some((index, '/'));
+                }
                 let ch = source[index..]
                     .chars()
                     .next()
@@ -1809,6 +1818,17 @@ where
                     }
                 }
 
+                // A regular expression literal is copied whole: a quote in
+                // it (`/[<>:"|?*]/u`) opened a string that hid the rest of
+                // the file from every rewrite (bd-9vouw.436).
+                if bytes[index] == b'/'
+                    && slash_starts_regex(&output)
+                    && let Some(end) = regex_literal_end(source, index)
+                {
+                    output.push_str(&source[index..end]);
+                    index = end;
+                    continue;
+                }
                 let ch = source[index..]
                     .chars()
                     .next()
@@ -1916,6 +1936,61 @@ where
 
 fn is_identifier_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || matches!(ch, '_' | '$')
+}
+
+/// Whether a `/` after `preceding` (the code before it) starts a regular
+/// expression literal rather than a division: what precedes it cannot end
+/// an operand (the start, an operator or opening punctuation, or a keyword
+/// such as `return`).
+fn slash_starts_regex(preceding: &str) -> bool {
+    let preceding = preceding.trim_end();
+    let Some(last) = preceding.chars().next_back() else {
+        return true;
+    };
+    if is_identifier_char(last) {
+        let word_start = preceding
+            .char_indices()
+            .rev()
+            .find(|(_, ch)| !is_identifier_char(*ch))
+            .map_or(0, |(index, ch)| index + ch.len_utf8());
+        return matches!(
+            &preceding[word_start..],
+            "return"
+                | "typeof"
+                | "case"
+                | "do"
+                | "else"
+                | "in"
+                | "instanceof"
+                | "new"
+                | "delete"
+                | "void"
+                | "throw"
+                | "yield"
+                | "await"
+                | "of"
+        );
+    }
+    !matches!(last, ')' | ']' | '"' | '\'' | '`' | '.') && !last.is_alphanumeric()
+}
+
+/// The end of the regular expression literal whose `/` is at `start`, or
+/// `None` when a line ends first (then the `/` was not one).
+fn regex_literal_end(source: &str, start: usize) -> Option<usize> {
+    let mut in_class = false;
+    let mut escaped = false;
+    for (offset, ch) in source[start + 1..].char_indices() {
+        match ch {
+            '\n' | '\r' | '\u{2028}' | '\u{2029}' => return None,
+            _ if escaped => escaped = false,
+            '\\' => escaped = true,
+            '[' => in_class = true,
+            ']' => in_class = false,
+            '/' if !in_class => return Some(start + 1 + offset + 1),
+            _ => {}
+        }
+    }
+    None
 }
 
 fn has_token_boundary_before(source: &str, index: usize) -> bool {
@@ -4305,6 +4380,28 @@ abstract class Base { }"#;
         let source = "import type, { keep } from \"pkg\";";
         let result = elide_type_only_imports(source);
         assert_eq!(result, source);
+    }
+
+    /// bd-9vouw.436: a quote inside a regular expression literal opens no
+    /// string, so the declarations after it are still erased; a division
+    /// stays a division.
+    #[test]
+    fn regex_literals_with_quotes_do_not_hide_later_type_declarations() {
+        let source = "const R = /[<>:\"|?*]/u;\nconst S = /it's/;\nconst half = 10 / 2;\ntype Entry = { a: boolean };\ninterface Shape { b: number }\nconst n = R.test('x') ? half : 2;";
+        let output = normalize_typescript_to_es2020(
+            source,
+            &TsNormalizationConfig::default(),
+            "trace",
+            "decision",
+            "policy",
+        )
+        .expect("regex literals should not break normalization");
+        let normalized = &output.normalized_source;
+        assert!(!normalized.contains("type Entry"), "{normalized}");
+        assert!(!normalized.contains("interface Shape"), "{normalized}");
+        assert!(normalized.contains("/[<>:\"|?*]/u"), "{normalized}");
+        assert!(normalized.contains("/it's/"), "{normalized}");
+        assert!(normalized.contains("10 / 2"), "{normalized}");
     }
 
     /// bd-9vouw.433: only an import or export clause lists specifiers; a

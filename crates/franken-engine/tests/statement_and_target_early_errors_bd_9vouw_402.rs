@@ -25,6 +25,9 @@ t("arrow-target", "() => ({}) = 1;");
 t("parenthesized-array-target", "var a; ([a]) = [1];");
 t("for-in-rest-comma", "var x; for ([...x,] in [[]]) ;");
 t("var-rest-comma", "var [...x,] = [];");
+t("lone-increment", "++;");
+t("lone-decrement", "--;");
+t("postfix-after-newline", "var x = 0;\nx\n++;");
 console.log(out.join(" | "));
 var ok = [];
 function v(name, src) {
@@ -67,7 +70,7 @@ console.log(out3.join(" | "));
     assert_eq!(
         lines,
         [
-            "throw-newline!SyntaxError | throw-empty!SyntaxError | unterminated-comment!SyntaxError | hashbang-in-body!SyntaxError | hashbang-in-block!SyntaxError | strict-array-arguments!SyntaxError | strict-object-eval!SyntaxError | parenthesized-object-target!SyntaxError | arrow-target!SyntaxError | parenthesized-array-target!SyntaxError | for-in-rest-comma!SyntaxError | var-rest-comma!SyntaxError",
+            "throw-newline!SyntaxError | throw-empty!SyntaxError | unterminated-comment!SyntaxError | hashbang-in-body!SyntaxError | hashbang-in-block!SyntaxError | strict-array-arguments!SyntaxError | strict-object-eval!SyntaxError | parenthesized-object-target!SyntaxError | arrow-target!SyntaxError | parenthesized-array-target!SyntaxError | for-in-rest-comma!SyntaxError | var-rest-comma!SyntaxError | lone-increment!SyntaxError | lone-decrement!SyntaxError | postfix-after-newline!SyntaxError",
             "else-next-line=2 | else-after-semicolon=3 | do-while-before-else=ab | throw-same-line=4 | closed-comment=5 | parenthesized-name-target=6 | member-of-literal-target=7 | strict-default-reads-arguments=0 | rest-last=1:2,3 | trailing-comma-no-rest=17",
             "template-then-newline-else=b | regex-then-newline-else=r | call-semicolon-else=1 | nested-if-else=2 | block-else=3 | empty-consequent-else=4 | comment-newline-else=5 | block-comment-newline-else=6 | arrow-block-semicolon-else=7",
         ]

@@ -7019,6 +7019,20 @@ fn parse_primary_expression(
         ));
     }
 
+    // Unary operators with no operand: `++;` read as `+(+)` with a deferred
+    // raw `+`, so `x` newline `++;` ran (bd-9vouw.402).
+    if !expression.is_empty()
+        && expression
+            .bytes()
+            .all(|byte| matches!(byte, b'+' | b'-' | b'!' | b'~'))
+    {
+        return Err(invalid_syntax_error(
+            "a unary operator needs an operand",
+            span,
+            context,
+        ));
+    }
+
     // Private names (`#x in o`, `o.#x`) were parsed above; any other `#`
     // starts no expression, such as a `#!` line inside a body, which only
     // the first line of a source may be (bd-9vouw.402).

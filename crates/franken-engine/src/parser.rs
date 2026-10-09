@@ -2970,6 +2970,15 @@ fn strip_comments_to_whitespace_with(text: &str, html_comments: bool) -> (String
                 push_blanked(&mut out, ch);
                 trailing_identifier_closed = true;
             }
+            // So are VT, NBSP and the other Zs spaces, which the scanners
+            // after this pass do not count as white space either:
+            // `x<VT>=<VT>1` and `function<TAB><PS>w(<FF>)<NBSP>{}` did not
+            // parse (bd-9vouw.459). Blanked byte for byte outside literals;
+            // U+0085 is no ECMAScript white space.
+            ch if ch != '\u{85}' && ch.is_whitespace() && !is_ecmascript_line_terminator(ch) => {
+                push_blanked(&mut out, ch);
+                trailing_identifier_closed = true;
+            }
             ch if ch.is_ascii_alphabetic() || ch == '_' || ch == '$' => {
                 out.push(ch);
                 if trailing_identifier_closed {
@@ -19163,6 +19172,23 @@ mod tests {
         parser
             .parse(source, ParseGoal::Script)
             .unwrap_or_else(|err| panic!("fields-asi-5 must parse: {}", err.message));
+    }
+
+    // bd-9vouw.459: every ECMAScript WhiteSpace separates tokens, not only
+    // the ASCII ones (Test262 assignment/white-space.js and
+    // function/line-terminator.js).
+    #[test]
+    fn non_ascii_white_space_separates_tokens() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "var x;\nx\u{b}=\u{b}1;\nx\u{a0}=\u{a0}2;\nx\u{3000}=\u{3000}3;",
+            "function\t\u{2029}w(\u{c})\u{a0}{\n}\nw();",
+        ] {
+            let tree = parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|err| panic!("`{source}` must parse: {}", err.message));
+            assert!(tree.body.len() >= 2, "{tree:?}");
+        }
     }
 
     #[test]

@@ -79,6 +79,14 @@ fn temp_module_root(prefix: &str) -> PathBuf {
 /// Drive real JS source through the full lowering + execution pipeline and
 /// return the interpreter for direct inspection of its recorder state.
 fn run_to_core(trace_id: &str, source: &str) -> InterpreterCore {
+    run_to_core_with_config(trace_id, source, interpreter_config(&[]))
+}
+
+fn run_to_core_with_config(
+    trace_id: &str,
+    source: &str,
+    config: InterpreterConfig,
+) -> InterpreterCore {
     let parser = CanonicalEs2020Parser;
     let tree = parser
         .parse(source, ParseGoal::Script)
@@ -88,7 +96,7 @@ fn run_to_core(trace_id: &str, source: &str) -> InterpreterCore {
     let ir2 = lower_ir1_to_ir2(&ir1.module).expect("ir1 -> ir2 should lower");
     let ir3 = lower_ir2_to_ir3(&ir2.module).expect("ir2 -> ir3 should lower");
 
-    let mut core = make_core(trace_id);
+    let mut core = InterpreterCore::new(config, trace_id);
     let _ = core
         .execute(&ir3.module)
         .expect("source should execute cleanly");
@@ -657,7 +665,16 @@ fn incident_trace_with_telemetry_recorder_carries_retention_evidence() {
 #[test]
 fn builtin_hostcalls_past_a_full_channel_are_counted_drops() {
     let source = "var s = 0; for (var i = 0; i < 9000; i++) { s += Math.max(i, 1); }";
-    let first = run_to_core("trace-full-channel", source);
+    // The loop runs about 200,000 instructions (a CallMethod of Math.max
+    // and 22 more per iteration), past the 100,000 quickjs default budget
+    // the other cores here use, so it never ran (bd-9vouw.348 committed it
+    // unbuilt). The budget is not what this test checks.
+    let config = || {
+        let mut config = interpreter_config(&[]);
+        config.instruction_budget = 1_000_000;
+        config
+    };
+    let first = run_to_core_with_config("trace-full-channel", source, config());
     let telemetry = first.hostcall_telemetry();
     let capacity = telemetry.len();
     assert_eq!(
@@ -673,7 +690,7 @@ fn builtin_hostcalls_past_a_full_channel_are_counted_drops() {
         "every builtin call is retained or counted: {capacity} retained, {} dropped",
         drops.channel_full
     );
-    let second = run_to_core("trace-full-channel", source);
+    let second = run_to_core_with_config("trace-full-channel", source, config());
     assert_eq!(second.hostcall_telemetry().drop_counts(), drops);
     assert_eq!(second.hostcall_telemetry().records(), telemetry.records());
 }

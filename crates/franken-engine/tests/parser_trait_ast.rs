@@ -1774,7 +1774,7 @@ fn parser_strict_and_module_code_reject_legacy_decimal_escapes_bd_xcqzp() {
         let error = parser
             .parse(source, ParseGoal::Script)
             .expect_err("strict Script code must reject legacy decimal escapes");
-        assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+        assert_eq!(error.code, ParseErrorCode::InvalidSyntax, "{source:?}");
     }
 
     parser
@@ -1794,7 +1794,7 @@ fn parser_strict_and_module_code_reject_legacy_decimal_escapes_bd_xcqzp() {
         let error = parser
             .parse(source, ParseGoal::Module)
             .expect_err("Module code must reject legacy decimal escapes");
-        assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+        assert_eq!(error.code, ParseErrorCode::InvalidSyntax, "{source:?}");
     }
 
     parser

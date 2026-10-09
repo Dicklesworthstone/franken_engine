@@ -6124,7 +6124,7 @@ fn parse_contextual_static_property_key(
             .map(Expression::StringLiteral)
             .ok_or_else(|| {
                 ParseError::new(
-                    ParseErrorCode::UnsupportedSyntax,
+                    ParseErrorCode::InvalidSyntax,
                     format!("invalid quoted {construct} property key: `{source}`"),
                     context.source_label.to_string(),
                     Some(span.clone()),
@@ -6630,7 +6630,11 @@ fn parse_primary_expression(
             })
             .is_some();
         if !valid {
-            return Err(unsupported_expression_syntax_error(
+            // Every string literal parse_quoted_expression_string refuses is
+            // invalid (an unterminated literal, a malformed \x/\u escape, a
+            // legacy octal or \8/\9 escape in strict code): a SyntaxError
+            // (bd-9vouw.420).
+            return Err(invalid_syntax_error(
                 "unterminated or malformed string literal",
                 span,
                 context,
@@ -7677,7 +7681,7 @@ fn parse_template_literal(
             // cases 4 and 5).
             if !tagged && let Err(message) = validate_template_escape_sequence(bytes, i) {
                 return Err(ParseError::new(
-                    ParseErrorCode::UnsupportedSyntax,
+                    ParseErrorCode::InvalidSyntax,
                     message,
                     context.source_label.to_string(),
                     Some(span.clone()),
@@ -17579,7 +17583,7 @@ mod tests {
             let error = parser
                 .parse(source, ParseGoal::Script)
                 .expect_err("strict Script code must reject legacy decimal escapes");
-            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+            assert_eq!(error.code, ParseErrorCode::InvalidSyntax, "{source:?}");
         }
 
         parser
@@ -17599,7 +17603,7 @@ mod tests {
             let error = parser
                 .parse(source, ParseGoal::Module)
                 .expect_err("Module code is strict and must reject legacy decimal escapes");
-            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+            assert_eq!(error.code, ParseErrorCode::InvalidSyntax, "{source:?}");
         }
 
         parser
@@ -17978,7 +17982,7 @@ mod tests {
         let err = parser
             .parse("var x = \"unterminated", ParseGoal::Script)
             .expect_err("unterminated string literal must fail-closed");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     }
 
     #[test]
@@ -24289,7 +24293,7 @@ process.exit(attackSucceeded ? 0 : 1);"#,
         let err = parser
             .parse(r"const s = `octal \01 escape`", ParseGoal::Script)
             .expect_err("legacy octal escape should fail");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     }
 
     #[test]
@@ -24300,7 +24304,7 @@ process.exit(attackSucceeded ? 0 : 1);"#,
         let err = parser
             .parse(r"const s = `bad \9 escape`", ParseGoal::Script)
             .expect_err("non-octal decimal escape should fail");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     }
 
     #[test]
@@ -24330,7 +24334,7 @@ process.exit(attackSucceeded ? 0 : 1);"#,
         let err = parser
             .parse(r"const s = `bad unicode \u{XYZ}`", ParseGoal::Script)
             .expect_err("non-hex \\u{...} escape should fail");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     }
 
     #[test]
@@ -24340,7 +24344,7 @@ process.exit(attackSucceeded ? 0 : 1);"#,
         let err = parser
             .parse(r"const s = `over \u{110000} max`", ParseGoal::Script)
             .expect_err("out-of-range code point should fail");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     }
 
     #[test]
@@ -24350,7 +24354,7 @@ process.exit(attackSucceeded ? 0 : 1);"#,
         let err = parser
             .parse(r"const s = `bad hex \xZZ here`", ParseGoal::Script)
             .expect_err("non-hex \\xNN escape should fail");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     }
 
     #[test]

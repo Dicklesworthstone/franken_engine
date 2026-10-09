@@ -61712,7 +61712,12 @@ impl InterpreterCore {
             if Some(current) == object_prototype {
                 return !self.virtual_own_property_deleted(current, &key);
             }
-            match object.prototype {
+            // An implicit link is followed (%Array.prototype% for an array,
+            // then %Object.prototype%), so a redefined or deleted
+            // Object.prototype.__proto__ is seen (bd-9vouw.284); an
+            // unallocated %Object.prototype% is pristine, an explicit null
+            // ends the chain without the accessor.
+            match self.observable_prototype_link(object, current) {
                 Some(next) => current = next,
                 None => return !object.is_null_prototype,
             }

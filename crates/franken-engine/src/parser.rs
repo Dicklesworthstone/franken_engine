@@ -2121,6 +2121,12 @@ struct ParseExecutionContext<'a> {
     pattern_depth: u64,
     /// Whether the current parsing context is in strict mode.
     strict_mode: bool,
+    /// Code whose `this` is the script's: a Script's top-level code and the
+    /// arrow functions in it (bd-9vouw.417). That `this` is the global
+    /// object, in strict code too (ES2020 15.1.10 ScriptEvaluation), so its
+    /// reads convert as sloppy ones do. A module's top-level `this` is
+    /// undefined and a function's is its call's.
+    script_this: bool,
     /// True only while parsing an object concise method (or a lexically nested
     /// arrow). Bare `super` remains invalid; this admits only `super.x` and
     /// `super[x]` where the resulting closure receives a [[HomeObject]].
@@ -4130,6 +4136,7 @@ fn parse_source(
         statement_depth: 0,
         pattern_depth: 0,
         strict_mode: goal == ParseGoal::Module,
+        script_this: goal == ParseGoal::Script,
         super_property_allowed: false,
         await_context: goal == ParseGoal::Module,
         yield_context: false,
@@ -6690,7 +6697,7 @@ fn parse_primary_expression(
         return Ok(Expression::UndefinedLiteral);
     }
     if expression == "this" {
-        return Ok(if context.strict_mode {
+        return Ok(if context.strict_mode && !context.script_this {
             Expression::This
         } else {
             Expression::SloppyThis
@@ -15465,6 +15472,7 @@ fn parse_function_expression_with_super(
     let saved_super_property_allowed = context.super_property_allowed;
     context.super_property_allowed = super_property_allowed;
     let saved_super_call = std::mem::replace(&mut context.super_call, SuperCallContext::Forbidden);
+    let saved_script_this = std::mem::replace(&mut context.script_this, false);
     let parsed = with_function_context(is_async, is_generator, context, |context| {
         with_function_strict_mode(body_src, false, context, |context| {
             let params = parse_arrow_params(params_src, span, context)?;
@@ -15479,6 +15487,7 @@ fn parse_function_expression_with_super(
     });
     context.super_property_allowed = saved_super_property_allowed;
     context.super_call = saved_super_call;
+    context.script_this = saved_script_this;
     let (params, body_stmts, strict) = parsed?;
 
     Ok(Expression::Function {
@@ -15868,6 +15877,7 @@ fn parse_class_static_block(
     context.super_property_allowed = true;
     let saved_super_call =
         std::mem::replace(&mut context.super_call, SuperCallContext::ClassElement);
+    let saved_script_this = std::mem::replace(&mut context.script_this, false);
     let parsed = with_function_context(false, false, context, |context| {
         let saved_static_block_await = std::mem::replace(&mut context.static_block_await, true);
         let parsed = with_function_strict_mode(body_src, true, context, |context| {
@@ -15878,6 +15888,7 @@ fn parse_class_static_block(
     });
     context.super_property_allowed = saved_super_property_allowed;
     context.super_call = saved_super_call;
+    context.script_this = saved_script_this;
     let body = parsed?;
     // ES2022 15.7.1 ClassStaticBlockBody early errors: no `return`, no
     // `break`/`continue` that leaves the block, and (as for a field
@@ -16254,6 +16265,7 @@ fn parse_class_body_members(
             SuperCallContext::Forbidden
         };
         let saved_super_call = std::mem::replace(&mut context.super_call, super_call);
+        let saved_script_this = std::mem::replace(&mut context.script_this, false);
         let parsed = with_function_context(is_async, is_generator, context, |context| {
             with_function_strict_mode(body_src, true, context, |context| {
                 let params = parse_arrow_params(params_src, span, context)?;
@@ -16268,6 +16280,7 @@ fn parse_class_body_members(
         });
         context.super_property_allowed = saved_super_property_allowed;
         context.super_call = saved_super_call;
+        context.script_this = saved_script_this;
         let (params, body_stmts) = parsed?;
 
         methods.push(MethodDefinition {
@@ -16641,8 +16654,10 @@ fn parse_class_field(
             Some(source) if !source.is_empty() => {
                 let saved_super_call =
                     std::mem::replace(&mut context.super_call, SuperCallContext::ClassElement);
+                let saved_script_this = std::mem::replace(&mut context.script_this, false);
                 let value = parse_expression(source, span, context, 1);
                 context.super_call = saved_super_call;
+                context.script_this = saved_script_this;
                 Some(value?)
             }
             Some(_) => return Err(malformed(context)),
@@ -16961,6 +16976,7 @@ fn parse_function_declaration(
         .transpose()?;
     let goal = ParseGoal::Script; // Function bodies use script goal.
     let saved_super_call = std::mem::replace(&mut context.super_call, SuperCallContext::Forbidden);
+    let saved_script_this = std::mem::replace(&mut context.script_this, false);
     let parsed = with_function_context(is_async, is_generator, context, |context| {
         with_function_strict_mode(body_src, false, context, |context| {
             let params = parse_arrow_params(params_src, &span, context)?;
@@ -16974,6 +16990,7 @@ fn parse_function_declaration(
         })
     });
     context.super_call = saved_super_call;
+    context.script_this = saved_script_this;
     let (params, body_stmts, strict) = parsed?;
 
     Ok(Statement::FunctionDeclaration(FunctionDeclaration {
@@ -21901,6 +21918,7 @@ mod tests {
             statement_depth: 0,
             pattern_depth: 0,
             strict_mode: false,
+            script_this: true,
             super_property_allowed: false,
             await_context: false,
             yield_context: false,
@@ -22361,16 +22379,48 @@ mod tests {
     }
 
     /// `this` is sloppy in a script and strict in a module or after a
-    /// "use strict" directive (bd-9vouw.118).
+    /// "use strict" directive (bd-9vouw.118), except that a script's
+    /// top-level `this`, its arrows' included, is the global object even in
+    /// strict code, which the SloppyThis conversion yields (bd-9vouw.417).
     #[test]
     fn this_expression() {
+        fn returned(statement: &Statement) -> &Expression {
+            match statement {
+                Statement::Return(ReturnStatement {
+                    argument: Some(argument),
+                    ..
+                }) => argument,
+                other => panic!("expected return, got {other:?}"),
+            }
+        }
         let tree = parse_script("this");
         assert!(matches!(first_expr(&tree), Expression::SloppyThis));
         let strict = parse_script("'use strict'; this");
         assert!(matches!(
             &strict.body[1],
-            Statement::Expression(statement) if matches!(statement.expression, Expression::This)
+            Statement::Expression(statement)
+                if matches!(statement.expression, Expression::SloppyThis)
         ));
+        let strict_arrow = parse_script("'use strict'; () => this");
+        let Statement::Expression(statement) = &strict_arrow.body[1] else {
+            panic!("expected an expression statement");
+        };
+        let Expression::ArrowFunction { body, .. } = &statement.expression else {
+            panic!("expected an arrow, got {:?}", statement.expression);
+        };
+        assert!(matches!(
+            body,
+            ArrowBody::Expression(expression) if matches!(**expression, Expression::SloppyThis)
+        ));
+        let strict_function = parse_script("'use strict'; function f() { return this; }");
+        let Statement::FunctionDeclaration(function) = &strict_function.body[1] else {
+            panic!("expected a function declaration");
+        };
+        assert!(matches!(returned(&function.body.body[0]), Expression::This));
+        let module = CanonicalEs2020Parser
+            .parse("this", ParseGoal::Module)
+            .expect("parse should succeed");
+        assert!(matches!(first_expr(&module), Expression::This));
     }
 
     #[test]

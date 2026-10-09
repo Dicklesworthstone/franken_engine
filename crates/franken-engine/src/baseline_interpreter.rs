@@ -6279,13 +6279,6 @@ const GENERATED_REALM_OBJECT_GLOBALS: [&str; 8] = [
     "global",
 ];
 
-/// Name of a first-class static builtin, or `None` if `tag` is not one the
-/// shared lowering tables can produce. `None` is also the dispatch guard: a
-/// `StaticHostcall` value whose tag does not resolve here is never executed.
-/// Seed-tracked slot (in `builtin_prototypes`) of the top-level `this` object
-/// (bd-9vouw.47). Not a builtin name, so no prototype lookup ever matches it.
-const TOP_LEVEL_THIS_KEY: &str = "<top-level this>";
-
 /// Seed-tracked slot (in `builtin_prototypes`) of the `require('buffer')`
 /// module object (bd-9vouw.193), so every require returns the same object.
 const BUFFER_MODULE_KEY: &str = "<module buffer>";
@@ -105241,14 +105234,11 @@ impl InterpreterCore {
         if let Some(context) = &self.active_cjs_context {
             return Ok((Value::Object(context.exports_object), Label::Public));
         }
-        if let Some(object) = self.builtin_prototypes.get(TOP_LEVEL_THIS_KEY) {
-            return Ok((Value::Object(*object), Label::Public));
-        }
-        let object = self.alloc_object_with_prototype(None)?;
-        self.mutate_builtin_prototypes(|prototypes| {
-            prototypes.insert(TOP_LEVEL_THIS_KEY.to_string(), object);
-        });
-        Ok((Value::Object(object), Label::Public))
+        // Top-level code (bd-9vouw.417): a module's `this` is undefined
+        // (ES2020 15.2.1.17.4 GetThisBinding). A script's is the global
+        // object, which the parser's SloppyThis conversion makes of this
+        // undefined for every top-level script read, its arrows' included.
+        Ok((Value::Undefined, Label::Public))
     }
 
     fn clone_closure_lexical_this_binding(

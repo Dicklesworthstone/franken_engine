@@ -4945,6 +4945,17 @@ fn parse_statement_inner(
         || statement.starts_with("return(")
         || keyword_followed_by_expression_start(statement, "return")
     {
+        // A module's top-level statement list is not a function body, so a
+        // `return` among its statements is a SyntaxError (ES2020 15.2.1.1;
+        // a CommonJS file's top level is, and keeps it) (bd-9vouw.392).
+        if goal == ParseGoal::Module && context.statement_depth == 1 {
+            return Err(ParseError::new(
+                ParseErrorCode::InvalidSyntax,
+                "a return statement may not appear at the top level of a module",
+                context.source_label.to_string(),
+                Some(span),
+            ));
+        }
         return self::parse_return_statement(statement, span, context);
     }
     if statement.starts_with("throw ")
@@ -5194,6 +5205,20 @@ fn parse_import(
     })?;
 
     let clause = parse_import_binding_clause(binding_raw.trim(), source_label, &span)?;
+    // Module code is strict: `eval` and `arguments` cannot be bound
+    // (ES2020 12.1.1), as an import binding either (bd-9vouw.392).
+    if let Some(name) = clause
+        .binding_names()
+        .into_iter()
+        .find(|name| matches!(*name, "eval" | "arguments"))
+    {
+        return Err(ParseError::new(
+            ParseErrorCode::InvalidSyntax,
+            format!("`{name}` cannot be an import binding in strict module code"),
+            source_label.to_string(),
+            Some(span),
+        ));
+    }
     let source_text = strip_import_attributes(source_raw.trim(), source_label, &span)?;
     let source = parse_quoted_string(source_text).ok_or_else(|| {
         ParseError::new(

@@ -14589,6 +14589,61 @@ fn split_for_header(header: &str) -> Option<(&str, &str, &str)> {
     ))
 }
 
+/// Whether `text` has an `in` operator outside every bracket, string,
+/// template and regular expression literal, and outside the middle branch of
+/// a conditional (`c ? a in b : d`, which is AssignmentExpression[+In]):
+/// `a in b`, but not `(a in b)`, `o.in`, `{ in: 1 }`, `'in'` or a name such
+/// as `inner`.
+fn has_top_level_in_operator(text: &str) -> bool {
+    let is_word_byte = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'$' || b >= 0x80;
+    let bytes = text.as_bytes();
+    let mut depth: i64 = 0;
+    let mut open_conditionals = 0usize;
+    let mut quotes = QuoteState::default();
+    let mut last_significant = 0u8;
+    for (i, &b) in bytes.iter().enumerate() {
+        if quotes.active() {
+            quotes.advance(b);
+            continue;
+        }
+        if b == b'/' && quotes.open_regex_at(text, i) {
+            last_significant = b'/';
+            continue;
+        }
+        match b {
+            b'\'' | b'"' | b'`' => {
+                quotes.open(b);
+            }
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            // A conditional's `?`, not `??` or `?.` (`a?.5:b` is one).
+            b'?' if depth == 0
+                && bytes.get(i + 1) != Some(&b'?')
+                && (i == 0 || bytes[i - 1] != b'?')
+                && !(bytes.get(i + 1) == Some(&b'.')
+                    && !bytes.get(i + 2).is_some_and(u8::is_ascii_digit)) =>
+            {
+                open_conditionals += 1;
+            }
+            b':' if depth == 0 && open_conditionals > 0 => open_conditionals -= 1,
+            b'i' if depth == 0
+                && open_conditionals == 0
+                && bytes.get(i + 1) == Some(&b'n')
+                && !bytes.get(i + 2).is_some_and(|&next| is_word_byte(next))
+                && (i == 0 || !is_word_byte(bytes[i - 1]))
+                && last_significant != b'.' =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+        if !b.is_ascii_whitespace() {
+            last_significant = b;
+        }
+    }
+    false
+}
+
 fn parse_for_statement(
     statement: &str,
     goal: ParseGoal,
@@ -14649,6 +14704,16 @@ fn parse_for_statement(
         ));
     };
 
+    // The initializer is an Expression[~In] / declaration list[~In] (ES2020
+    // 13.7.4): an `in` operator in it must be parenthesized
+    // (`for ('' in {} ? 0 : 0; ;)`, bd-9vouw.446).
+    if has_top_level_in_operator(init_src) {
+        return Err(invalid_syntax_error(
+            "an `in` operator in a for statement's initializer must be parenthesized",
+            &span,
+            context,
+        ));
+    }
     let init = if init_src.is_empty() {
         None
     } else if let Some(kind) = parse_variable_declaration_kind(init_src) {
@@ -14725,6 +14790,12 @@ fn try_parse_for_in_of(
     let Some((keyword, split_pos)) = find_for_in_of_keyword(header) else {
         return Ok(None);
     };
+    // Two top-level `;` make a C-style header whatever its first clause
+    // holds: `for (a in arr;1;)` read as a for-in over the "expression"
+    // `arr;1;`, which threw only when the loop ran (bd-9vouw.446).
+    if split_for_header(header).is_some() {
+        return Ok(None);
+    }
 
     let lhs = header[..split_pos].trim();
     let rhs = header[split_pos + keyword.len()..].trim();
@@ -14847,6 +14918,15 @@ fn try_parse_for_in_of(
         // (strict `let`, which `for (let in o)` reaches) is an early error
         // (bd-9vouw.233).
         reject_reserved_identifier_reference(name, span, context)?;
+    } else if matches!(binding, BindingPattern::AssignmentPattern { .. }) {
+        // A for-in/of target is a LeftHandSideExpression: `for (a = 0 in o)`
+        // assigns nothing (only Annex B's `var` head has an initializer,
+        // bd-9vouw.446).
+        return Err(invalid_syntax_error(
+            "a for-in/of target cannot have an initializer",
+            span,
+            context,
+        ));
     }
 
     let body_src = rest.trim();
@@ -18490,6 +18570,48 @@ mod tests {
             "var \\u{61}b = 1;\n\\u{61}b;",
             "var a = [1];\na\n  .map(String);",
             "var s = 'line\\\nbreak';",
+        ] {
+            parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|err| panic!("`{source}` must parse: {}", err.message));
+        }
+    }
+
+    // bd-9vouw.446: a C-style for header's initializer is [~In], a header
+    // with two top-level `;` is never a for-in, and a for-in/of target has no
+    // initializer outside Annex B's sloppy `var` head.
+    #[test]
+    fn for_headers_reject_bare_in_initializers_and_target_initializers() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "for (a in arr;1;) { break; }",
+            "for (var a in arr;1;) { break; }",
+            "for (1 in arr;1;) { break; }",
+            "for ('' in {} ? 0 : 0; false; ) ;",
+            "for (true ? 0 : 0 in {}; false; ) ;",
+            "var a; for (a = 0 in {});",
+        ] {
+            let err = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err(&format!("`{source}` must be a SyntaxError"));
+            assert_eq!(
+                err.code,
+                ParseErrorCode::InvalidSyntax,
+                "wrong code for `{source}`: {}",
+                err.message
+            );
+        }
+        for source in [
+            "for (true ? '' in o : p; false; ) ;",
+            "for (var k = ('a' in o); false;) ;",
+            "for (var f = function () { return 'a' in o; }; false;) ;",
+            "for (var q = {in: 1}; false;) ;",
+            "for (a.in = 0; false;) ;",
+            "for (var s = 'in', inner = 1; false;) ;",
+            "for (var x = a ?? b; false;) ;",
+            "for (var a = 0 in {});",
+            "for (var k in o) ;",
+            "for (; 'a' in o; ) break;",
         ] {
             parser
                 .parse(source, ParseGoal::Script)

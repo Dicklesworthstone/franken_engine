@@ -2577,7 +2577,20 @@ fn line_ends_with_update_operator(line: &str) -> bool {
     if !matches!(last, '+' | '-') {
         return false;
     }
-    tail.chars().rev().take_while(|ch| *ch == last).count() % 2 == 0
+    if tail.chars().rev().take_while(|ch| *ch == last).count() % 2 != 0 {
+        return false;
+    }
+    // Only a postfix update (right after an operand on this line) ends the
+    // line. A `++` / `--` with no operand before it (alone on its line, or
+    // after an operator) is a prefix of the next line's operand: no line
+    // terminator may precede a postfix operator (ES2020 11.9.1), so
+    // `x\n++\ny` is `x; ++y` and `z = x\n+\n++\ny` is `z = x + ++y`
+    // (bd-9vouw.391).
+    tail.trim_end_matches(last)
+        .trim_end()
+        .chars()
+        .last()
+        .is_some_and(|ch| is_identifier_continue(ch) || matches!(ch, ')' | ']' | '\'' | '"' | '`'))
 }
 
 fn merge_logical_lines_requires_continuation(

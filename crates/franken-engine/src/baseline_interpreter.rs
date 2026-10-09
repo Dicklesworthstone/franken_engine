@@ -399,6 +399,9 @@ const PROXY_TYPE_TAG: &str = "Proxy";
 const READABLE_BRAND: &str = "Readable";
 /// The brand of a JSON.rawJSON result, its [[IsRawJSON]] slot (bd-9vouw.380).
 const RAW_JSON_BRAND: &str = "RawJSON";
+/// The failure reason a module record keeps for invalid source, so a later
+/// import throws the same SyntaxError (bd-9vouw.389).
+const MODULE_SYNTAX_ERROR_REASON_PREFIX: &str = "SyntaxError: ";
 const PROXY_TARGET_SLOT: &str = "__proxy_target";
 const PROXY_HANDLER_SLOT: &str = "__proxy_handler";
 const PROXY_REVOKED_SLOT: &str = "__proxy_revoked";
@@ -38769,9 +38772,18 @@ impl InterpreterCore {
                 }
                 ModuleRuntimeStatus::Evaluating | ModuleRuntimeStatus::Evaluated => None,
                 ModuleRuntimeStatus::Failed(reason) => {
-                    return Err(InterpreterError::ModuleEvaluationFailed {
-                        specifier: resolved.to_string(),
-                        reason: reason.clone(),
+                    // A module whose source was invalid fails every import
+                    // with its SyntaxError again (bd-9vouw.389).
+                    let reason = reason.clone();
+                    let syntax_message = reason
+                        .strip_prefix(MODULE_SYNTAX_ERROR_REASON_PREFIX)
+                        .map(str::to_string);
+                    return Err(match syntax_message {
+                        Some(message) => self.throw_js_error("SyntaxError", message),
+                        None => InterpreterError::ModuleEvaluationFailed {
+                            specifier: resolved.to_string(),
+                            reason,
+                        },
                     });
                 }
             };
@@ -38819,7 +38831,6 @@ impl InterpreterCore {
         ) {
             Ok(syntax_tree) => syntax_tree,
             Err(error) => {
-                self.fail_module_record(resolved, &error.to_string());
                 return Err(
                     if matches!(
                         error.code,
@@ -38828,8 +38839,9 @@ impl InterpreterCore {
                             | ParseErrorCode::InvalidClassElementName
                             | ParseErrorCode::InvalidSyntax
                     ) {
-                        self.throw_js_error("SyntaxError", error.message.clone())
+                        self.fail_module_with_syntax_error(resolved, error.message.clone())
                     } else {
+                        self.fail_module_record(resolved, &error.to_string());
                         InterpreterError::ModuleParseFailed {
                             specifier: resolved.to_string(),
                             error: error.to_string(),
@@ -38868,15 +38880,17 @@ impl InterpreterCore {
         let lowering_output = match lowered {
             Ok(lowering_output) => lowering_output,
             Err(error) => {
-                self.fail_module_record(resolved, &error.to_string());
                 return Err(match error {
                     crate::lowering_pipeline::LoweringPipelineError::SemanticViolation(
                         violation,
-                    ) => self.throw_js_error("SyntaxError", violation.to_string()),
-                    error => InterpreterError::ModuleLoweringFailed {
-                        specifier: resolved.to_string(),
-                        error: error.to_string(),
-                    },
+                    ) => self.fail_module_with_syntax_error(resolved, violation.to_string()),
+                    error => {
+                        self.fail_module_record(resolved, &error.to_string());
+                        InterpreterError::ModuleLoweringFailed {
+                            specifier: resolved.to_string(),
+                            error: error.to_string(),
+                        }
+                    }
                 });
             }
         };
@@ -38971,6 +38985,21 @@ impl InterpreterCore {
         if let Some(record) = self.module_state.modules.get_mut(resolved) {
             record.status = ModuleRuntimeStatus::Failed(reason.to_string());
         }
+    }
+
+    /// Fail a module whose source is invalid: its record remembers the
+    /// SyntaxError, which this import and every later one throws
+    /// (bd-9vouw.389).
+    fn fail_module_with_syntax_error(
+        &mut self,
+        resolved: &str,
+        message: String,
+    ) -> InterpreterError {
+        self.fail_module_record(
+            resolved,
+            &format!("{MODULE_SYNTAX_ERROR_REASON_PREFIX}{message}"),
+        );
+        self.throw_js_error("SyntaxError", message)
     }
 
     /// Whether `module` was lowered under the bounded-imports contract

@@ -38893,6 +38893,35 @@ impl InterpreterCore {
             (true, false) => Self::json_es_module_source(&source)?,
             (false, _) => source,
         };
+        // An imported TypeScript file (`.ts`, `.tsx`, `.mts`, `.cts`) is
+        // normalized as an entry file is: the parser reads JavaScript, so a
+        // type annotation or `export interface` failed the import as
+        // unsupported syntax (bd-9vouw.430). A file of declarations only
+        // is empty once its types are erased: a module with no code and no
+        // exports.
+        let source = if !is_json
+            && crate::ts_normalization::source_label_has_typescript_extension(resolved)
+        {
+            match crate::ts_normalization::prepare_source_entry_for_public_entrypoints(
+                &source,
+                resolved,
+                &self.trace_id,
+                "module-import",
+                "baseline_interpreter",
+            ) {
+                Ok(prepared) => prepared.prepared_source,
+                Err(crate::ts_normalization::TsNormalizationError::EmptySource) => String::new(),
+                Err(error) => {
+                    self.fail_module_record(resolved, &error.to_string());
+                    return Err(InterpreterError::ModuleParseFailed {
+                        specifier: resolved.to_string(),
+                        error: error.to_string(),
+                    });
+                }
+            }
+        } else {
+            source
+        };
         let parser_source = ParserSource {
             label: resolved.to_string(),
             text: source,
@@ -38913,6 +38942,15 @@ impl InterpreterCore {
             &self.config.module_parser_options,
         ) {
             Ok(syntax_tree) => syntax_tree,
+            // An empty file, or one holding only comments, white space or
+            // TypeScript declarations, is a module with no code and no
+            // exports, which Node and Bun load (bd-9vouw.430); the parser
+            // reports it as an empty source.
+            Err(error) if error.code == ParseErrorCode::EmptySource => crate::ast::SyntaxTree {
+                goal: parse_goal,
+                body: Vec::new(),
+                span: crate::ast::SourceSpan::new(0, 0, 1, 1, 1, 1),
+            },
             Err(error) => {
                 return Err(
                     // InvalidGoal: an import or export declaration in a

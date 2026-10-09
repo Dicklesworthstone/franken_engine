@@ -921,7 +921,7 @@ fn normalize_newlines(source: &str) -> String {
     source.replace("\r\n", "\n").replace('\r', "\n")
 }
 
-fn source_label_has_typescript_extension(source_label: &str) -> bool {
+pub(crate) fn source_label_has_typescript_extension(source_label: &str) -> bool {
     let lower = source_label.trim().to_ascii_lowercase();
     [".ts", ".tsx", ".mts", ".cts"]
         .iter()

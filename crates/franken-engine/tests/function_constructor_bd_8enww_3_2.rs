@@ -40,9 +40,11 @@ fn function_constructor_accepts_zero_args_and_empty_body() {
 
 #[test]
 fn function_constructor_invalid_parameters_fail_with_source_context() {
+    // A SyntaxError the program can catch, as in Node (bd-9vouw.424), that
+    // names the offending parameter source.
     let err = eval_error(r#"new Function("x-", "return x;");"#);
-    assert!(err.contains("<function-constructor>"), "{err}");
-    assert!(err.contains("parse") || err.contains("lower"), "{err}");
+    assert!(err.contains("SyntaxError"), "{err}");
+    assert!(err.contains("`x-`"), "{err}");
 }
 
 #[test]

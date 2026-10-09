@@ -57,8 +57,8 @@
       "family_id": "adversarial.import.unquoted_source",
       "goal": "module",
       "source": "import dep from pkg",
-      "expected_parse_error": "unsupported_syntax",
-      "expected_diagnostic_code": "FE-PARSER-DIAG-UNSUPPORTED-SYNTAX-0001",
+      "expected_parse_error": "invalid_syntax",
+      "expected_diagnostic_code": "FE-PARSER-DIAG-INVALID-SYNTAX-0001",
       "severity": "error",
       "provenance_tag": "corpus.adversarial.import_unquoted_source.v1"
     }

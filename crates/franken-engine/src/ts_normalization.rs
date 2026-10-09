@@ -631,7 +631,7 @@ pub fn normalize_typescript_to_es2020(
     decisions.push(build_decision(
         "enum_lowering",
         enum_lowered != current,
-        "Simple enum declarations lowered to ES2020 object freeze forms.",
+        "Enum declarations lowered to TypeScript's enum objects (numeric members map back to names).",
     ));
     current = enum_lowered;
 
@@ -2444,74 +2444,318 @@ fn parse_class_declaration_name(class_declaration: &str) -> Option<String> {
     }
 }
 
+/// TypeScript `enum` declarations (also `const enum` and `export enum`;
+/// `declare enum` is ambient and erased) lowered to the object TypeScript
+/// itself emits (bd-9vouw.413): `var E; (function (__enum) { ... })(E ||
+/// (E = {}));`, a plain mutable object whose numeric members also map back
+/// from value to name (`E[E.A] === "A"`), and whose declarations merge.
+/// Members count up from the previous numeric value at run time, so they
+/// may follow a computed initializer, and each member is a local constant
+/// of the enum body, so an initializer can name an earlier member (`AB = A
+/// | B`). A declaration starts a line and may span lines; the replacement
+/// keeps the source's line count. The earlier lowering handled a whole enum
+/// on one line only and emitted a frozen object without the reverse
+/// mapping; a multi-line enum stayed as is and failed when it ran.
 fn lower_simple_enums(source: &str) -> String {
-    let mut out = Vec::<String>::new();
-
-    for line in source.lines() {
-        let trimmed = line.trim();
-        if !trimmed.starts_with("enum ") {
-            out.push(line.to_string());
-            continue;
-        }
-
-        let Some(rest) = trimmed.strip_prefix("enum ") else {
-            out.push(line.to_string());
-            continue;
-        };
-        let Some(brace_start) = rest.find('{') else {
-            out.push(line.to_string());
-            continue;
-        };
-        let Some(brace_end) = rest.rfind('}') else {
-            out.push(line.to_string());
-            continue;
-        };
-
-        let enum_name = rest[..brace_start].trim();
-        let body = rest[brace_start + 1..brace_end].trim();
-        if enum_name.is_empty() {
-            out.push(line.to_string());
-            continue;
-        }
-
-        let mut entries = Vec::<String>::new();
-        let mut numeric_counter = 0i64;
-
-        for raw_member in body.split(',') {
-            let member = raw_member.trim();
-            if member.is_empty() {
-                continue;
+    let mut out = String::with_capacity(source.len() + 64);
+    let mut cursor = 0;
+    while cursor < source.len() {
+        let line_end = source[cursor..]
+            .find('\n')
+            .map_or(source.len(), |offset| cursor + offset);
+        let line = &source[cursor..line_end];
+        if let Some(head) = enum_declaration_head(line)
+            && let Some(close) = matching_enum_brace(source, cursor + head.brace_offset)
+        {
+            let span = &source[cursor..=close];
+            let body = &source[cursor + head.brace_offset + 1..close];
+            if !head.declare {
+                out.push_str(&line[..line.len() - line.trim_start().len()]);
+                out.push_str(&enum_emission(&head, body));
             }
-
-            if let Some((name, value)) = member.split_once('=') {
-                let key = name.trim();
-                let value_trimmed = value.trim();
-                if key.is_empty() {
-                    continue;
-                }
-                entries.push(format!("{key}: {value_trimmed}"));
-                if let Ok(parsed) = value_trimmed.parse::<i64>() {
-                    numeric_counter = parsed.saturating_add(1);
-                }
-            } else {
-                let key = member;
-                entries.push(format!("{key}: {numeric_counter}"));
-                numeric_counter = numeric_counter.saturating_add(1);
-            }
-        }
-
-        if entries.is_empty() {
-            out.push(line.to_string());
+            out.extend(std::iter::repeat_n('\n', span.matches('\n').count()));
+            cursor = close + 1;
             continue;
         }
-
-        out.push(format!(
-            "const {enum_name} = Object.freeze({{{}}});",
-            entries.join(", ")
-        ));
+        let next = (line_end + 1).min(source.len());
+        out.push_str(&source[cursor..next]);
+        cursor = next;
     }
+    out
+}
 
-    out.join("\n")
+struct EnumDeclarationHead<'a> {
+    export: bool,
+    declare: bool,
+    name: &'a str,
+    brace_offset: usize,
+}
+
+/// `[export] [declare] [const] enum Name {` at the start of `line`.
+fn enum_declaration_head(line: &str) -> Option<EnumDeclarationHead<'_>> {
+    let mut rest = line.trim_start();
+    let mut take = |keyword: &str| {
+        let after = rest.strip_prefix(keyword)?;
+        after.starts_with(char::is_whitespace).then(|| {
+            rest = after.trim_start();
+        })
+    };
+    let export = take("export").is_some();
+    let declare = take("declare").is_some();
+    let _ = take("const");
+    take("enum")?;
+    let name_len = rest
+        .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '$'))
+        .unwrap_or(rest.len());
+    let name = &rest[..name_len];
+    if name.is_empty() || name.starts_with(|ch: char| ch.is_ascii_digit()) {
+        return None;
+    }
+    let after_name = &rest[name_len..];
+    if !after_name.trim_start().starts_with('{') {
+        return None;
+    }
+    let brace_offset = line.len() - after_name.trim_start().len();
+    Some(EnumDeclarationHead {
+        export,
+        declare,
+        name,
+        brace_offset,
+    })
+}
+
+/// The index of the `}` closing the `{` at `open`, skipping strings,
+/// template literals and comments.
+fn matching_enum_brace(source: &str, open: usize) -> Option<usize> {
+    let bytes = source.as_bytes();
+    let mut depth = 0usize;
+    let mut index = open;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'{' => depth += 1,
+            b'}' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            quote @ (b'\'' | b'"' | b'`') => {
+                index += 1;
+                while index < bytes.len() && bytes[index] != quote {
+                    if bytes[index] == b'\\' {
+                        index += 1;
+                    }
+                    index += 1;
+                }
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'/') => {
+                while index < bytes.len() && bytes[index] != b'\n' {
+                    index += 1;
+                }
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                index += 2;
+                while index + 1 < bytes.len() && !(bytes[index] == b'*' && bytes[index + 1] == b'/')
+                {
+                    index += 1;
+                }
+                index += 1;
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    None
+}
+
+/// The members of an enum body: (name as written, initializer), split at
+/// top-level commas with comments removed.
+fn enum_members(body: &str) -> Vec<(String, Option<String>)> {
+    let mut members = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0i32;
+    let mut chars = body.chars().peekable();
+    let finish = |text: &mut String, members: &mut Vec<(String, Option<String>)>| {
+        let member = text.trim();
+        if !member.is_empty() {
+            let (name, initializer) = match top_level_equals(member) {
+                Some(at) => (
+                    member[..at].trim().to_string(),
+                    Some(member[at + 1..].trim().to_string()),
+                ),
+                None => (member.to_string(), None),
+            };
+            members.push((name, initializer));
+        }
+        text.clear();
+    };
+    while let Some(ch) = chars.next() {
+        match ch {
+            '/' if chars.peek() == Some(&'/') => {
+                for next in chars.by_ref() {
+                    if next == '\n' {
+                        break;
+                    }
+                }
+                current.push(' ');
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut previous = ' ';
+                for next in chars.by_ref() {
+                    if previous == '*' && next == '/' {
+                        break;
+                    }
+                    previous = next;
+                }
+                current.push(' ');
+            }
+            '\'' | '"' | '`' => {
+                current.push(ch);
+                while let Some(next) = chars.next() {
+                    current.push(next);
+                    if next == '\\' {
+                        if let Some(escaped) = chars.next() {
+                            current.push(escaped);
+                        }
+                    } else if next == ch {
+                        break;
+                    }
+                }
+            }
+            '(' | '[' | '{' => {
+                depth += 1;
+                current.push(ch);
+            }
+            ')' | ']' | '}' => {
+                depth -= 1;
+                current.push(ch);
+            }
+            ',' if depth == 0 => finish(&mut current, &mut members),
+            _ => current.push(ch),
+        }
+    }
+    finish(&mut current, &mut members);
+    members
+}
+
+/// The index of a member's `=` (not part of `==`, `===`, `<=`, `>=`, `!=`
+/// or `=>`) outside brackets and quotes.
+fn top_level_equals(member: &str) -> Option<usize> {
+    let bytes = member.as_bytes();
+    let mut depth = 0i32;
+    let mut quote = None;
+    for (index, &byte) in bytes.iter().enumerate() {
+        if let Some(open) = quote {
+            if byte == open && bytes[index - 1] != b'\\' {
+                quote = None;
+            }
+            continue;
+        }
+        match byte {
+            b'\'' | b'"' | b'`' => quote = Some(byte),
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b'=' if depth == 0
+                && bytes.get(index + 1) != Some(&b'=')
+                && bytes.get(index + 1) != Some(&b'>')
+                && !matches!(
+                    index.checked_sub(1).map(|i| bytes[i]),
+                    Some(b'=' | b'!' | b'<' | b'>')
+                ) =>
+            {
+                return Some(index);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn enum_emission(head: &EnumDeclarationHead<'_>, body: &str) -> String {
+    let name = head.name;
+    let mut code = format!(
+        "{}var {name}; (function (__enum) {{ let __enum_next = 0;",
+        if head.export { "export " } else { "" }
+    );
+    for (member, initializer) in enum_members(body) {
+        let key = if member.starts_with(['"', '\'']) {
+            member.clone()
+        } else {
+            format!("\"{member}\"")
+        };
+        let value = initializer.unwrap_or_else(|| "__enum_next".to_string());
+        code.push_str(&format!(
+            " {{ const __value = ({value}); __enum[{key}] = __value; if (typeof __value === \"number\") {{ __enum[__value] = {key}; __enum_next = __value + 1; }} }}"
+        ));
+        let identifier = !member.starts_with(['"', '\''])
+            && member
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '$')
+            && !member.starts_with(|ch: char| ch.is_ascii_digit())
+            && !is_enum_member_reserved(&member);
+        if identifier {
+            code.push_str(&format!(" const {member} = __enum[{key}];"));
+        }
+    }
+    code.push_str(&format!(" }})({name} || ({name} = {{}}));"));
+    code
+}
+
+/// Reserved words cannot be the local constant of a member of that name
+/// (the member itself is still created).
+fn is_enum_member_reserved(name: &str) -> bool {
+    matches!(
+        name,
+        "break"
+            | "case"
+            | "catch"
+            | "class"
+            | "const"
+            | "continue"
+            | "debugger"
+            | "default"
+            | "delete"
+            | "do"
+            | "else"
+            | "enum"
+            | "export"
+            | "extends"
+            | "false"
+            | "finally"
+            | "for"
+            | "function"
+            | "if"
+            | "import"
+            | "in"
+            | "instanceof"
+            | "new"
+            | "null"
+            | "return"
+            | "super"
+            | "switch"
+            | "this"
+            | "throw"
+            | "true"
+            | "try"
+            | "typeof"
+            | "var"
+            | "void"
+            | "while"
+            | "with"
+            | "yield"
+            | "let"
+            | "static"
+            | "implements"
+            | "interface"
+            | "package"
+            | "private"
+            | "protected"
+            | "public"
+            | "await"
+            | "arguments"
+            | "eval"
+    )
 }
 
 fn lower_constructor_parameter_properties(source: &str) -> String {
@@ -2833,13 +3077,24 @@ const value: number = 1;
         )
         .expect("normalization should pass");
 
+        // TypeScript's enum object (bd-9vouw.413): a var initialized by an
+        // IIFE, members counting from the previous numeric value.
         assert!(
             output
                 .normalized_source
-                .contains("const Status = Object.freeze(")
+                .contains("var Status; (function (__enum) {")
         );
-        assert!(output.normalized_source.contains("Ready: 0"));
-        assert!(output.normalized_source.contains("Busy"));
+        assert!(
+            output
+                .normalized_source
+                .contains("const __value = (__enum_next); __enum[\"Ready\"] = __value;")
+        );
+        assert!(
+            output
+                .normalized_source
+                .contains("const __value = (3); __enum[\"Busy\"] = __value;")
+        );
+        assert!(!output.normalized_source.contains("Object.freeze"));
     }
 
     #[test]
@@ -3588,8 +3843,17 @@ abstract class Base { }"#;
             "p",
         )
         .expect("operation should succeed for valid inputs");
-        assert!(output.normalized_source.contains("Up: 10"));
-        assert!(output.normalized_source.contains("Down: 11"));
+        // `Down` counts on from `Up` at run time (bd-9vouw.413).
+        assert!(
+            output
+                .normalized_source
+                .contains("const __value = (10); __enum[\"Up\"] = __value;")
+        );
+        assert!(
+            output
+                .normalized_source
+                .contains("const __value = (__enum_next); __enum[\"Down\"] = __value;")
+        );
     }
 
     #[test]
@@ -3618,8 +3882,33 @@ abstract class Base { }"#;
             "p",
         )
         .expect("operation should succeed for valid inputs");
-        // Empty body → entries is empty → line passes through
-        assert!(output.normalized_source.contains("enum Empty"));
+        // An empty enum is still an (empty) enum object (bd-9vouw.413).
+        assert!(
+            output
+                .normalized_source
+                .contains("var Empty; (function (__enum)")
+        );
+        assert!(!output.normalized_source.contains("enum Empty"));
+    }
+
+    /// bd-9vouw.413: a multi-line enum (the usual formatting) is lowered
+    /// too, the replacement keeps the line count, `declare enum` is erased
+    /// and `const enum` and `export enum` are lowered like `enum`.
+    #[test]
+    fn multi_line_declare_const_and_export_enums_bd_9vouw_413() {
+        let source = "enum Color {\n  Red,\n  Green = 5, // five\n}\ndeclare enum A { X }\nconst enum B { Y = 1 << 1 }\nexport enum C { Z }\nconsole.log(Color.Green);";
+        let lowered = lower_simple_enums(source);
+        assert_eq!(lowered.lines().count(), source.lines().count(), "{lowered}");
+        assert!(
+            lowered.starts_with("var Color; (function (__enum) {"),
+            "{lowered}"
+        );
+        assert!(lowered.contains("const __value = (5); __enum[\"Green\"] = __value;"));
+        assert!(!lowered.contains("enum A"), "{lowered}");
+        assert!(lowered.contains("var B; (function (__enum)"));
+        assert!(lowered.contains("const __value = (1 << 1); __enum[\"Y\"]"));
+        assert!(lowered.contains("export var C; (function (__enum)"));
+        assert!(lowered.ends_with("console.log(Color.Green);"));
     }
 
     #[test]
@@ -3633,9 +3922,17 @@ abstract class Base { }"#;
             "p",
         )
         .expect("operation should succeed for valid inputs");
-        assert!(output.normalized_source.contains("Object.freeze"));
-        assert!(output.normalized_source.contains(r#"Red: "RED""#));
-        assert!(output.normalized_source.contains(r#"Blue: "BLUE""#));
+        // String members keep their values; only numbers map back.
+        assert!(
+            output
+                .normalized_source
+                .contains(r#"const __value = ("RED"); __enum["Red"] = __value;"#)
+        );
+        assert!(
+            output
+                .normalized_source
+                .contains(r#"const __value = ("BLUE"); __enum["Blue"] = __value;"#)
+        );
     }
 
     // --- Constructor parameter property edge cases ---

@@ -1944,6 +1944,7 @@ fn lower_ir0_to_ir1_on_current_stack(
             }
             Statement::Export(export) => match &export.kind {
                 ExportKind::Default(expression) => {
+                    let start = ir1.ops.len();
                     lower_expression_to_ir1(
                         expression,
                         &mut ir1.ops,
@@ -1954,6 +1955,9 @@ fn lower_ir0_to_ir1_on_current_stack(
                         &mut label_counter,
                         &mut op_spans,
                     )?;
+                    // ES2020 15.2.3.11: an anonymous function, class or arrow
+                    // exported as default is named "default" (bd-9vouw.386).
+                    name_anonymous_function_definition(&mut ir1.ops, start, expression, "default");
                     let binding_name =
                         make_internal_binding_name("default_export", synthetic_export_index);
                     synthetic_export_index = synthetic_export_index.saturating_add(1);

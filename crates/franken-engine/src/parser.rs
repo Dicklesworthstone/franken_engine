@@ -2896,6 +2896,9 @@ fn strip_comments_to_whitespace_with(text: &str, html_comments: bool) -> (String
             // ZERO WIDTH NO-BREAK SPACE is WhiteSpace (ES2020 11.2), but
             // Rust's trimming and splitting do not treat it as white space,
             // so outside literals it is blanked like a comment (bd-9vouw.407).
+            // A byte order mark before a hashbang is kept: merge_logical_lines
+            // skips a `#!` first line after it (bd-21nbg).
+            '\u{feff}' if out.is_empty() && text.starts_with("\u{feff}#!") => out.push(ch),
             '\u{feff}' => {
                 push_blanked(&mut out, ch);
                 trailing_identifier_closed = true;

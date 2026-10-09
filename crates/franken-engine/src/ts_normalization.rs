@@ -2836,7 +2836,16 @@ fn lower_constructor_parameter_properties(source: &str) -> String {
         let body_open =
             after_close + (source[after_close..].len() - source[after_close..].trim_start().len());
         if source.as_bytes().get(body_open) != Some(&b'{') {
-            return None;
+            // A constructor without a body (a signature) keeps the stripped
+            // parameter list and ends its member with `;`, as the line-based
+            // lowering this replaced did.
+            output.push_str(&source[index..=open]);
+            output.push_str(&parameters);
+            output.push(')');
+            if source.as_bytes().get(body_open) != Some(&b';') {
+                output.push(';');
+            }
+            return Some(after_close);
         }
         let body_close = matching_close(source, body_open, b'{', b'}')?;
         let insert_at =
@@ -3457,7 +3466,9 @@ export const version = 1;
             vec![
                 "  function run() { return 1; }".to_string(),
                 "  ns.run = run;".to_string(),
-                "  ns.version = 1;".to_string(),
+                // The member is a local of the namespace body too
+                // (bd-9vouw.416).
+                "  ns.version = 1; const version = ns.version;".to_string(),
             ]
         );
     }

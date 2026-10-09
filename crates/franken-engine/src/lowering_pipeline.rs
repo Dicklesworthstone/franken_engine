@@ -7147,6 +7147,20 @@ fn lower_statement_to_ir1_with_flow(
             ops.push(Ir1Op::Jump { label_id });
         }
         Statement::Labeled(labeled) => {
+            // ES2020 13.13.1: a label nested inside a statement with the same
+            // label is an early error (`L: { L: 0; }`); function bodies start
+            // a fresh label context (bd-9vouw.392).
+            if label_ctx.resolve(&labeled.label).is_some()
+                || label_ctx.pending.contains(&labeled.label)
+            {
+                return Err(LoweringPipelineError::SemanticViolation(
+                    SemanticError::new(
+                        SemanticErrorCode::DuplicateLabel,
+                        Some(labeled.label.clone()),
+                        Some(labeled.span),
+                    ),
+                ));
+            }
             // §14.13. A label on an iteration statement (directly or through
             // nested labels) binds to that loop's break+continue targets — so
             // accumulate it in `pending` and let the loop body lowering bind

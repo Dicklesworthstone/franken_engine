@@ -31415,7 +31415,7 @@ impl InterpreterCore {
             )?;
             return Ok(decoded.map(|decoded| {
                 let units = match &decoded {
-                    Value::Str(text) => text.encode_utf16().count(),
+                    Value::Str(text) => text.utf16_len(),
                     _ => 0,
                 };
                 (decoded, units)
@@ -75446,7 +75446,7 @@ impl InterpreterCore {
             return Ok(Value::str(""));
         }
 
-        let Some(unit) = string_val.encode_utf16().nth(index as usize) else {
+        let Some(unit) = string_val.code_unit_at(index as usize) else {
             return Ok(Value::str(""));
         };
         // A surrogate half stays a real lone-surrogate string value
@@ -75464,7 +75464,7 @@ impl InterpreterCore {
             return Ok(Value::Float(Float64::new(f64::NAN)));
         }
 
-        match string_val.encode_utf16().nth(index as usize) {
+        match string_val.code_unit_at(index as usize) {
             Some(unit) => Ok(Value::Int(i64::from(unit))),
             None => Ok(Value::Float(Float64::new(f64::NAN))),
         }

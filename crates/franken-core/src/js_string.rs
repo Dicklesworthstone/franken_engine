@@ -195,10 +195,34 @@ impl JsString {
     }
 
     /// The ECMAScript `length` of the string: its UTF-16 code-unit count.
+    /// Well-formed text is counted from its UTF-8 bytes without decoding:
+    /// ASCII is one unit per byte, otherwise every byte that starts a
+    /// character is one unit and a four-byte lead (a supplementary
+    /// character) one more. `s.length` decoded the whole string each time,
+    /// so a loop reading it over a long string was quadratic (bd-9vouw.403).
     pub fn utf16_len(&self) -> usize {
         match &self.units {
             Some(units) => units.len(),
-            None => self.utf8.encode_utf16().count(),
+            None if self.utf8.is_ascii() => self.utf8.len(),
+            None => self.utf8.bytes().fold(0, |count, byte| {
+                count + usize::from(byte & 0xC0 != 0x80) + usize::from(byte >= 0xF0)
+            }),
+        }
+    }
+
+    /// The UTF-16 code unit at `unit_index`, or `None` out of range. When
+    /// the text up to that index is ASCII the unit is the byte there, found
+    /// without decoding the prefix (bd-9vouw.403).
+    pub fn code_unit_at(&self, unit_index: usize) -> Option<u16> {
+        match &self.units {
+            Some(units) => units.get(unit_index).copied(),
+            None => {
+                let bytes = self.utf8.as_bytes();
+                match bytes.get(..=unit_index) {
+                    Some(prefix) if prefix.is_ascii() => Some(u16::from(bytes[unit_index])),
+                    _ => self.utf8.encode_utf16().nth(unit_index),
+                }
+            }
         }
     }
 
@@ -228,6 +252,13 @@ impl JsString {
     /// supplementary code point; an unpaired surrogate yields its own code
     /// unit value; out of range yields `None`. (bd-rdnhc)
     pub fn code_point_at(&self, unit_index: usize) -> Option<u32> {
+        // An ASCII unit is never half of a surrogate pair (bd-9vouw.403).
+        if self.units.is_none()
+            && let Some(prefix) = self.utf8.as_bytes().get(..=unit_index)
+            && prefix.is_ascii()
+        {
+            return Some(u32::from(prefix[unit_index]));
+        }
         let mut units = self.encode_utf16().skip(unit_index);
         let first = units.next()?;
         if is_high_surrogate(first)
@@ -1194,6 +1225,51 @@ mod tests {
     }
 
     // --- ES-semantics helpers (bd-rdnhc) ----------------------------------
+
+    /// bd-9vouw.403: the byte-counting `utf16_len` and the ASCII-prefix
+    /// `code_unit_at` / `code_point_at` agree with decoding the units, for
+    /// ASCII, two- and three-byte, supplementary and lone-surrogate text, at
+    /// every index and one past the end.
+    #[test]
+    fn fast_unit_access_matches_decoding_bd_9vouw_403() {
+        let samples = [
+            JsString::empty(),
+            JsString::from("abc"),
+            JsString::from("h\u{e9}llo"),
+            JsString::from("\u{65e5}\u{672c}\u{8a9e}"),
+            JsString::from("a\u{1f600}b"),
+            JsString::from("\u{1f600}"),
+            JsString::from("abc\u{e9}xyz"),
+            JsString::from_code_units(&[0x61, 0xD800, 0x62]),
+            JsString::from_code_units(&[0xDC00]),
+        ];
+        for sample in samples {
+            let units: Vec<u16> = sample.encode_utf16().collect();
+            assert_eq!(sample.utf16_len(), units.len(), "{sample:?}");
+            for index in 0..=units.len() {
+                assert_eq!(
+                    sample.code_unit_at(index),
+                    units.get(index).copied(),
+                    "{sample:?} {index}"
+                );
+                let decoded = {
+                    let mut rest = units.iter().copied().skip(index);
+                    rest.next().map(|first| match rest.next() {
+                        Some(second)
+                            if (0xD800..0xDC00).contains(&first)
+                                && (0xDC00..0xE000).contains(&second) =>
+                        {
+                            0x10000
+                                + ((u32::from(first) - 0xD800) << 10)
+                                + (u32::from(second) - 0xDC00)
+                        }
+                        _ => u32::from(first),
+                    })
+                };
+                assert_eq!(sample.code_point_at(index), decoded, "{sample:?} {index}");
+            }
+        }
+    }
 
     #[test]
     fn code_point_at_is_unit_indexed_and_combines_pairs() {

@@ -15884,6 +15884,10 @@ impl InterpreterCore {
     /// SetMutableBinding of a global-object binding, and the property a
     /// sloppy write to an unresolvable name creates: an ordinary [[Set]] that
     /// stores the written value's label on the property, as SetProperty does.
+    /// In strict code a binding the right-hand side deleted is a
+    /// ReferenceError and a [[Set]] that fails (a non-writable property, a
+    /// getter without a setter) a TypeError (ES2020 8.1.1.2.5 steps 1-5,
+    /// bd-9vouw.466).
     fn put_global_object_name(
         &mut self,
         module: Option<&Ir3Module>,
@@ -15891,8 +15895,14 @@ impl InterpreterCore {
         name: &str,
         value: Value,
         label: &Label,
+        strict: bool,
     ) -> Result<(), InterpreterError> {
         let key = RuntimePropertyKey::String(JsString::from(name));
+        if strict && !self.proxy_aware_has_runtime_property(module, global, &key, 0)? {
+            return Err(InterpreterError::UndefinedBinding {
+                name: name.to_string(),
+            });
+        }
         if let Some(module) = module {
             self.run_pre_runtime_property_access_hook(module, global, &key)?;
         }
@@ -15920,6 +15930,12 @@ impl InterpreterCore {
         if !committed || !owns_property {
             // A non-writable property or an inherited setter keeps no own value.
             self.set_own_runtime_property_label(global, &key, &previous_label)?;
+        }
+        if strict && !committed {
+            return Err(InterpreterError::TypeError {
+                expected: "writable global property".to_string(),
+                got: format!("the global object's read-only `{name}`"),
+            });
         }
         Ok(())
     }
@@ -16074,7 +16090,8 @@ impl InterpreterCore {
             return Ok(());
         }
 
-        self.put_realm_runtime_name_labeled(module, name, value, label)
+        // Sloppy code: the write creates the global property.
+        self.put_realm_runtime_name_labeled(module, name, value, label, false)
     }
 
     /// Execute `delete name` for an identifier without a source lexical
@@ -16145,7 +16162,7 @@ impl InterpreterCore {
     }
 
     fn put_realm_runtime_name(&mut self, name: &str, value: Value) -> Result<(), InterpreterError> {
-        self.put_realm_runtime_name_labeled(None, name, value, &Label::Public)
+        self.put_realm_runtime_name_labeled(None, name, value, &Label::Public, false)
     }
 
     fn put_realm_runtime_name_labeled(
@@ -16154,6 +16171,7 @@ impl InterpreterCore {
         name: &str,
         value: Value,
         label: &Label,
+        strict: bool,
     ) -> Result<(), InterpreterError> {
         // Write the realm global object directly. If RHS code created or
         // replaced this property after the Reference was captured, it is still
@@ -16166,7 +16184,7 @@ impl InterpreterCore {
         // of it (`x = 1; globalThis.x`), readable through the fallback in
         // LoadName.
         if let Some(global) = self.name_resolving_global_object() {
-            return self.put_global_object_name(module, global, name, value, label);
+            return self.put_global_object_name(module, global, name, value, label, strict);
         }
 
         let previous_scope_bytes = self.scope_chain_memory_bytes();
@@ -16223,7 +16241,7 @@ impl InterpreterCore {
         {
             // A property of the global object is a binding, in strict code
             // too (`globalThis.x = 1; x = 2`).
-            self.put_realm_runtime_name_labeled(module, name, value, label)
+            self.put_realm_runtime_name_labeled(module, name, value, label, strict)
         } else {
             self.put_unresolvable_runtime_name(module, name, value, label, strict)
         }
@@ -16303,7 +16321,7 @@ impl InterpreterCore {
                                 .to_string(),
                     });
                 }
-                self.put_realm_runtime_name_labeled(module, name, value, label)
+                self.put_realm_runtime_name_labeled(module, name, value, label, strict)
             }
             RuntimeNameReference::Unresolvable => {
                 self.put_unresolvable_runtime_name(module, name, value, label, strict)

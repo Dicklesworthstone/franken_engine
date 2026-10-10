@@ -801,8 +801,17 @@ mod streaming_decoder_tests {
         )
         .unwrap()
         .ir3;
-        let mut core =
-            InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "decoder-carry-label");
+        // The grants a program's execution has: without HeapAllocate the
+        // allocation helpers refuse before the label checks below.
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]
+        .into_iter()
+        .collect();
+        let mut core = InterpreterCore::new(config, "decoder-carry-label");
         let decoder = core
             .construct_text_decoder(None, RegRange { start: 0, count: 0 })
             .unwrap();

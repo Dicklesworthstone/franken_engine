@@ -715,7 +715,21 @@ mod resource_tests {
     use super::*;
 
     fn runtime() -> InterpreterCore {
-        InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "clone-resource")
+        InterpreterCore::new(heap_test_config(), "clone-resource")
+    }
+
+    /// The grants a program's execution has: without HeapAllocate every
+    /// allocation helper refuses, and these tests never reached their checks.
+    fn heap_test_config() -> InterpreterConfig {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]
+        .into_iter()
+        .collect();
+        config
     }
 
     fn state() -> CloneState {

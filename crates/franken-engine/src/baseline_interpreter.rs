@@ -101031,7 +101031,10 @@ impl InterpreterCore {
                     .saturating_mul(2),
             )
         };
-        Self::estimate_string_bytes(text).saturating_add(malformed_utf16_bytes)
+        // retained_bytes does not join a concatenation; estimating
+        // through &str would (bd-9vouw.468).
+        text.retained_bytes(MEMORY_ESTIMATE_STRING_BASE_BYTES)
+            .saturating_add(malformed_utf16_bytes)
     }
 
     fn estimate_value_bytes(value: &Value) -> u64 {
@@ -111995,6 +111998,51 @@ mod shared_binding_cell_accounting_tests_bd_sblaq {
         assert_eq!(result.value, Value::Int(2998));
         assert!(core.argument_overflow.is_empty());
         assert_eq!(core.argument_overflow_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    /// bd-9vouw.468: strings built by long concatenations (appends, prepends,
+    /// a read between appends, a node shared by both operands, object and
+    /// array members) are concatenation nodes, charged for their nodes and
+    /// pieces, and the incremental estimate equals the full walk whether or
+    /// not they were joined.
+    #[test]
+    fn concatenation_nodes_keep_memory_accounting_exact_bd_9vouw_468() {
+        let module = lower_script_bd_9vouw_31(
+            "let s = ''; for (let i = 0; i < 3000; i++) s += 'abcdefg';\
+             let t = ''; for (let i = 0; i < 300; i++) t = 'h\\u00e9' + t;\
+             let u = ''; for (let i = 0; i < 300; i++) { u += 'x' + i; u.charCodeAt(0); }\
+             const both = s + s; const o = { s, both }; const kept = [s, t, u];\
+             const sum = s.length + t.length + u.length + both.length + o.s.length\
+               + kept.length + o.both.length;\
+             if (sum !== 127693 || kept[2].slice(-6) !== '98x299') throw new Error('got ' + sum);\
+             s;",
+        );
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]);
+        config.instruction_budget = 10_000_000;
+        let mut core = InterpreterCore::new(config, "bd-9vouw-468");
+        let result = core.execute(&module).expect("concatenation program runs");
+        let Value::Str(text) = &result.value else {
+            panic!(
+                "completion value should be the string, got {:?}",
+                result.value
+            );
+        };
+        assert_eq!(text.len(), 21_000);
+        assert!(text.concat_parts().nodes >= 1, "{:?}", text.concat_parts());
+        // Its nodes are charged beyond what one buffer of its bytes costs.
+        assert!(
+            text.retained_bytes(MEMORY_ESTIMATE_STRING_BASE_BYTES)
+                > MEMORY_ESTIMATE_STRING_BASE_BYTES + 21_000
+        );
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()

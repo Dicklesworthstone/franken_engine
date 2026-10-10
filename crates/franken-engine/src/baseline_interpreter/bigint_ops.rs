@@ -793,6 +793,108 @@ mod tests {
         assert_eq!(as_int_n(0, &huge).as_deref(), Ok("0"));
     }
 
+    /// Runs the real production helpers, not the independent JS/Python models.
+    /// This is a primitive-level A/B measurement, not an end-to-end V8 claim.
+    #[test]
+    #[ignore = "manual timing: run with --release --ignored --nocapture"]
+    fn benchmark_bigint_hot_paths() {
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        assert!(!cfg!(debug_assertions), "benchmark requires --release");
+
+        fn measure<T>(iterations: u32, operation: &mut impl FnMut() -> T) -> u128 {
+            for _ in 0..100 {
+                let _ = black_box(operation());
+            }
+            let start = Instant::now();
+            for _ in 0..iterations {
+                let _ = black_box(operation());
+            }
+            start.elapsed().as_nanos() / u128::from(iterations)
+        }
+
+        fn report<T: PartialEq + std::fmt::Debug>(
+            label: &str,
+            iterations: u32,
+            mut baseline: impl FnMut() -> T,
+            mut optimized: impl FnMut() -> T,
+        ) {
+            assert_eq!(baseline(), optimized(), "{label} semantic mismatch");
+            let mut before = [0; 7];
+            let mut after = [0; 7];
+            for sample in 0..7 {
+                // Alternate ordering to reduce systematic warmup/clock bias.
+                if sample % 2 == 0 {
+                    before[sample] = measure(iterations, &mut baseline);
+                    after[sample] = measure(iterations, &mut optimized);
+                } else {
+                    after[sample] = measure(iterations, &mut optimized);
+                    before[sample] = measure(iterations, &mut baseline);
+                }
+            }
+            before.sort_unstable();
+            after.sort_unstable();
+            eprintln!(
+                "{label}: baseline={} ns/op optimized={} ns/op (7-sample medians)",
+                before[3], after[3]
+            );
+        }
+
+        for (label, op, left, right) in [
+            ("multiply", BigIntBinaryOp::Mul, "1234567", "7654321"),
+            ("bitmask", BigIntBinaryOp::And, "123456789012345", "65535"),
+            ("shift", BigIntBinaryOp::Shl, "1234567", "17"),
+            ("power", BigIntBinaryOp::Exp, "7", "20"),
+        ] {
+            report(
+                label,
+                10_000,
+                || binary_arbitrary_precision(black_box(op), black_box(left), black_box(right)),
+                || binary(black_box(op), black_box(left), black_box(right)),
+            );
+        }
+        let left = "9".repeat(4096);
+        let right = format!("1{left}");
+        report(
+            "compare-4096-digits",
+            100,
+            || parse(black_box(&left)).cmp(&parse(black_box(&right))),
+            || compare(black_box(&left), black_box(&right)),
+        );
+
+        // Reproduce the old 64-bit conversion paths as the timing baseline.
+        fn old_uint64(text: &str) -> String {
+            let modulus = BigInt::from(1u8) << 64u32;
+            let remainder = parse(text) % &modulus;
+            if remainder.sign() == Sign::Minus {
+                (remainder + modulus).to_string()
+            } else {
+                remainder.to_string()
+            }
+        }
+        fn old_int64(text: &str) -> String {
+            let unsigned = parse(&old_uint64(text));
+            if unsigned >= BigInt::from(1u8) << 63u32 {
+                (unsigned - (BigInt::from(1u8) << 64u32)).to_string()
+            } else {
+                unsigned.to_string()
+            }
+        }
+        report(
+            "asUintN-64",
+            10_000,
+            || old_uint64(black_box("-123456789")),
+            || as_uint_n(black_box(64), black_box("-123456789")).unwrap(),
+        );
+        report(
+            "asIntN-64",
+            10_000,
+            || old_int64(black_box("-123456789")),
+            || as_int_n(black_box(64), black_box("-123456789")).unwrap(),
+        );
+    }
+
     #[test]
     fn string_integer_grammar_and_canonical_signs() {
         for (source, expected) in [
@@ -907,7 +1009,7 @@ mod tests {
         for (base, exponent, expected) in [
             ("0", even, "0"),
             ("1", odd, "1"),
-            ("-1", even, "-1"),
+            ("-1", even, "1"),
             ("-1", odd, "-1"),
             ("0", "0", "1"),
         ] {

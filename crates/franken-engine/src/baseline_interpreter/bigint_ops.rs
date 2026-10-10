@@ -80,13 +80,7 @@ pub(super) fn binary(op: BigIntBinaryOp, left: &str, right: &str) -> Result<Stri
 /// JS error: the arbitrary-precision path must still compute the exact value.
 /// Every admitted result fits in 128 bits, well below MAX_BIGINT_BITS.
 fn small_binary(op: BigIntBinaryOp, left: &str, right: &str) -> Option<Result<String, BigIntError>> {
-    if matches!(
-        op,
-        BigIntBinaryOp::Exp | BigIntBinaryOp::Shl | BigIntBinaryOp::Shr
-    )
-        || left.len() > 40
-        || right.len() > 40
-    {
+    if left.len() > 40 || right.len() > 40 {
         return None;
     }
     let x = left.parse::<i128>().ok()?;
@@ -104,9 +98,47 @@ fn small_binary(op: BigIntBinaryOp, left: &str, right: &str) -> Option<Result<St
         BigIntBinaryOp::And => x & y,
         BigIntBinaryOp::Or => x | y,
         BigIntBinaryOp::Xor => x ^ y,
-        BigIntBinaryOp::Exp | BigIntBinaryOp::Shl | BigIntBinaryOp::Shr => return None,
+        BigIntBinaryOp::Exp if y < 0 => return Some(Err(BigIntError::NegativeExponent)),
+        BigIntBinaryOp::Exp if y == 0 => 1,
+        BigIntBinaryOp::Exp if x == 0 || x == 1 => x,
+        BigIntBinaryOp::Exp if x == -1 => {
+            if y & 1 == 0 {
+                1
+            } else {
+                -1
+            }
+        }
+        BigIntBinaryOp::Exp => x.checked_pow(u32::try_from(y).ok()?)?,
+        BigIntBinaryOp::Shl => small_shift(x, y, true)?,
+        BigIntBinaryOp::Shr => small_shift(x, y, false)?,
     };
     Some(Ok(value.to_string()))
+}
+
+/// A negative BigInt shift count reverses the direction. Rust's checked_shl
+/// only checks the count, not lost value bits, so a left shift also requires
+/// the arithmetic right-shift round trip to preserve the original operand.
+fn small_shift(value: i128, amount: i128, mut left: bool) -> Option<i128> {
+    if value == 0 {
+        return Some(0);
+    }
+    if amount < 0 {
+        left = !left;
+    }
+    let amount = amount.unsigned_abs();
+    if amount >= 128 {
+        return if left {
+            None
+        } else {
+            Some(if value < 0 { -1 } else { 0 })
+        };
+    }
+    let amount = amount as u32; // Proven below the native width above.
+    if !left {
+        return Some(value >> amount);
+    }
+    let shifted = value << amount;
+    ((shifted >> amount) == value).then_some(shifted)
 }
 
 fn binary_arbitrary_precision(
@@ -407,12 +439,46 @@ pub(super) fn to_string_radix(text: &str, radix: u32) -> String {
     parse(text).to_str_radix(radix)
 }
 
+/// Width conversion without allocating a magnitude for machine-sized input.
+/// The shifts here deliberately discard bits: unlike BigInt <<, asIntN and
+/// asUintN are specified as modular truncations, not unbounded arithmetic.
+fn small_width(bits: u64, text: &str, signed: bool) -> Option<String> {
+    if text.len() > 40 {
+        return None;
+    }
+    let value = text.parse::<i128>().ok()?;
+    if bits == 0 {
+        return Some("0".to_string());
+    }
+    if signed {
+        if bits >= 128 {
+            return Some(value.to_string());
+        }
+        let shift = (128 - bits) as u32;
+        return Some(((value << shift) >> shift).to_string());
+    }
+    if bits > 128 {
+        return (value >= 0).then(|| value.to_string());
+    }
+    // Casting to u128 supplies exactly the modulo-2^128 representation.
+    let unsigned = value as u128;
+    let narrowed = if bits == 128 {
+        unsigned
+    } else {
+        unsigned & ((1u128 << bits) - 1)
+    };
+    Some(narrowed.to_string())
+}
+
 /// BigInt.asUintN(bits, value): `value` modulo 2^bits.
 pub(super) fn as_uint_n(bits: u64, text: &str) -> Result<String, BigIntError> {
-    let value = parse(text);
     if bits == 0 {
         return Ok("0".to_string());
     }
+    if let Some(value) = small_width(bits, text, false) {
+        return Ok(value);
+    }
+    let value = parse(text);
     if bits > MAX_BIGINT_BITS {
         // Non-negative values already fit; a negative one would need 2^bits.
         return if value.sign() == Sign::Minus {
@@ -420,6 +486,11 @@ pub(super) fn as_uint_n(bits: u64, text: &str) -> Result<String, BigIntError> {
         } else {
             Ok(value.to_string())
         };
+    }
+    // Most typed-width conversions already fit. Do not materialize 2^bits
+    // (up to a million-bit allocation) just to return a small positive value.
+    if value.sign() != Sign::Minus && value.bits() <= bits {
+        return Ok(value.to_string());
     }
     let modulus = BigInt::from(1u8) << bits;
     let remainder = value % &modulus;
@@ -435,16 +506,26 @@ pub(super) fn as_int_n(bits: u64, text: &str) -> Result<String, BigIntError> {
     if bits == 0 {
         return Ok("0".to_string());
     }
-    if bits > MAX_BIGINT_BITS {
-        // |value| < 2^MAX_BIGINT_BITS <= 2^(bits-1): already in range.
-        return Ok(parse(text).to_string());
+    if let Some(value) = small_width(bits, text, true) {
+        return Ok(value);
     }
-    let unsigned = parse(&as_uint_n(bits, text)?);
+    let value = parse(text);
+    if bits > MAX_BIGINT_BITS || value.bits() < bits {
+        // |value| < 2^(bits-1): neither sign needs truncation. The exact
+        // negative endpoint -2^(bits-1) is handled by the general path below.
+        // Oversized widths retain the existing already-in-range behavior.
+        return Ok(value.to_string());
+    }
+    // Keep the computation in binary form. The former asUintN -> decimal
+    // String -> parse round-trip formatted and reparsed a potentially huge
+    // intermediate, and could construct the same modulus twice.
+    let modulus = BigInt::from(1u8) << bits;
     let half = BigInt::from(1u8) << (bits - 1);
-    bounded(if unsigned >= half {
-        unsigned - (BigInt::from(1u8) << bits)
-    } else {
-        unsigned
+    let remainder = value % &modulus;
+    bounded(match remainder.sign() {
+        Sign::Minus if remainder.magnitude() > half.magnitude() => remainder + modulus,
+        Sign::Plus if remainder >= half => remainder - modulus,
+        _ => remainder,
     })
 }
 
@@ -520,8 +601,12 @@ mod tests {
                 Some(Err(BigIntError::DivisionByZero))
             );
         }
-        for op in [BigIntBinaryOp::Exp, BigIntBinaryOp::Shl, BigIntBinaryOp::Shr] {
-            assert_eq!(small_binary(op, "2", "3"), None);
+        for (op, expected) in [
+            (BigIntBinaryOp::Exp, "8"),
+            (BigIntBinaryOp::Shl, "16"),
+            (BigIntBinaryOp::Shr, "0"),
+        ] {
+            assert_eq!(small_binary(op, "2", "3"), Some(Ok(expected.to_string())));
         }
         let huge = "9".repeat(100);
         assert_eq!(small_binary(BigIntBinaryOp::Sub, &huge, "1"), None);
@@ -601,6 +686,111 @@ mod tests {
                 assert_eq!(compare_with_number(integer, number), expected);
             }
         }
+    }
+
+    #[test]
+    fn native_shifts_preserve_direction_sign_and_overflow_fallbacks() {
+        for value in [i128::MIN, i128::MIN + 1, -129, -1, 0, 1, 127, i128::MAX] {
+            for amount in [
+                i128::MIN, -129, -128, -127, -64, -1, 0, 1, 63, 64, 126, 127, 128, 129,
+                i128::MAX,
+            ] {
+                for op in [BigIntBinaryOp::Shl, BigIntBinaryOp::Shr] {
+                    let left = value.to_string();
+                    let right = amount.to_string();
+                    assert_eq!(
+                        binary(op, &left, &right),
+                        binary_arbitrary_precision(op, &left, &right),
+                        "{left} {op:?} {right}"
+                    );
+                }
+            }
+        }
+        assert_eq!(small_shift(1, 127, true), None);
+        assert_eq!(small_shift(-1, 127, true), Some(i128::MIN));
+        assert_eq!(small_shift(i128::MIN, 1, true), None);
+        assert_eq!(small_shift(-3, 1, false), Some(-2));
+    }
+
+    #[test]
+    fn native_powers_fall_back_without_losing_the_high_sign_bit() {
+        for (base, exponent) in [("2", "127"), ("2", "128"), ("-2", "127"), ("2", "-1")] {
+            assert_eq!(
+                binary(BigIntBinaryOp::Exp, base, exponent),
+                binary_arbitrary_precision(BigIntBinaryOp::Exp, base, exponent)
+            );
+        }
+        assert_eq!(small_binary(BigIntBinaryOp::Exp, "2", "127"), None);
+        assert_eq!(
+            small_binary(BigIntBinaryOp::Exp, "-2", "127"),
+            Some(Ok(i128::MIN.to_string()))
+        );
+    }
+
+    #[test]
+    fn native_width_lane_handles_full_width_and_unsigned_high_bit() {
+        assert_eq!(small_width(8, "255", true).as_deref(), Some("-1"));
+        assert_eq!(small_width(8, "-129", true).as_deref(), Some("127"));
+        assert_eq!(small_width(8, "-1", false).as_deref(), Some("255"));
+        assert_eq!(small_width(128, "-1", false), Some(u128::MAX.to_string()));
+        assert_eq!(
+            small_width(128, &i128::MIN.to_string(), true),
+            Some(i128::MIN.to_string())
+        );
+        assert_eq!(small_width(129, "-1", false), None);
+        assert_eq!(small_width(u64::MAX, "-1", false), None);
+    }
+
+    #[test]
+    fn width_conversions_match_modular_reference_at_signed_boundaries() {
+        for bits in [1u64, 2, 7, 8, 31, 32, 63, 64, 127, 128, 129, 256] {
+            let modulus = BigInt::from(1u8) << bits;
+            let half = BigInt::from(1u8) << (bits - 1);
+            for delta in -1i32..=1 {
+                for value in [
+                    &modulus + delta,
+                    -&modulus + delta,
+                    &half + delta,
+                    -&half + delta,
+                    BigInt::from(delta),
+                ] {
+                    let text = value.to_string();
+                    let mut unsigned = &value % &modulus;
+                    if unsigned.sign() == Sign::Minus {
+                        unsigned += &modulus;
+                    }
+                    let signed = if unsigned >= half {
+                        &unsigned - &modulus
+                    } else {
+                        unsigned.clone()
+                    };
+                    assert_eq!(as_uint_n(bits, &text), Ok(unsigned.to_string()));
+                    assert_eq!(as_int_n(bits, &text), Ok(signed.to_string()));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn already_fitting_values_do_not_need_a_width_sized_modulus() {
+        for bits in [64, 128, MAX_BIGINT_BITS, MAX_BIGINT_BITS + 1, u64::MAX] {
+            for text in ["0", "1", "42", "9223372036854775807"] {
+                assert_eq!(as_uint_n(bits, text).as_deref(), Ok(text));
+                assert_eq!(as_int_n(bits, text).as_deref(), Ok(text));
+            }
+            for text in ["-1", "-42", "-9223372036854775807"] {
+                assert_eq!(as_int_n(bits, text).as_deref(), Ok(text));
+            }
+        }
+        // Retain the negative unsigned width cap rather than constructing an
+        // unbounded two's-complement magnitude on the fast path.
+        assert_eq!(
+            as_uint_n(MAX_BIGINT_BITS + 1, "-1"),
+            Err(BigIntError::TooLarge)
+        );
+        let huge = "9".repeat(8192);
+        assert_eq!(as_uint_n(0, &huge).as_deref(), Ok("0"));
+        assert_eq!(as_int_n(0, &huge).as_deref(), Ok("0"));
     }
 
     #[test]
@@ -717,7 +907,7 @@ mod tests {
         for (base, exponent, expected) in [
             ("0", even, "0"),
             ("1", odd, "1"),
-            ("-1", even, "1"),
+            ("-1", even, "-1"),
             ("-1", odd, "-1"),
             ("0", "0", "1"),
         ] {

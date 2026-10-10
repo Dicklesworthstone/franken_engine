@@ -15573,51 +15573,57 @@ fn lower_expression_to_ir1(
         _ => None,
     };
     let op_start = ops.len();
-    let lowered_by_stack_bounded_helper = try_lower_net_expression_to_ir1(
-        expression,
-        ops,
-        bindings,
-        binding_lookup,
-        binding_index,
-        root_scope_id,
-        label_counter,
-        span_table,
-    )? || try_lower_arrow_expression_to_ir1(
-        expression,
-        ops,
-        bindings,
-        binding_lookup,
-        binding_index,
-        root_scope_id,
-    )? || try_lower_simple_binary_expression_to_ir1(
-        expression,
-        ops,
-        bindings,
-        binding_lookup,
-        binding_index,
-        root_scope_id,
-        label_counter,
-        span_table,
-    )? || try_lower_logical_expression_to_ir1(
-        expression,
-        ops,
-        bindings,
-        binding_lookup,
-        binding_index,
-        root_scope_id,
-        label_counter,
-        span_table,
-    )? || try_lower_optional_chain_to_ir1(
-        expression,
-        false,
-        ops,
-        bindings,
-        binding_lookup,
-        binding_index,
-        root_scope_id,
-        label_counter,
-        span_table,
-    )?;
+    let lowered_by_stack_bounded_helper =
+        try_lower_environment_read_to_ir1(expression, ops, binding_lookup)
+            || try_lower_net_expression_to_ir1(
+                expression,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                label_counter,
+                span_table,
+            )?
+            || try_lower_arrow_expression_to_ir1(
+                expression,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+            )?
+            || try_lower_simple_binary_expression_to_ir1(
+                expression,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                label_counter,
+                span_table,
+            )?
+            || try_lower_logical_expression_to_ir1(
+                expression,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                label_counter,
+                span_table,
+            )?
+            || try_lower_optional_chain_to_ir1(
+                expression,
+                false,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                label_counter,
+                span_table,
+            )?;
     if !lowered_by_stack_bounded_helper {
         lower_expression_to_ir1_inner(
             expression,
@@ -15641,6 +15647,70 @@ fn lower_expression_to_ir1(
         }
     }
     Ok(())
+}
+
+/// Admit only a named read of the unshadowed ambient environment. A read is
+/// an explicit EnvRead HostCall, not an ambient grant: it cannot authorize
+/// possession of `process`, enumeration of `process.env`, or another process
+/// member that happens to share the old EnvRead ambient classification.
+fn try_lower_environment_read_to_ir1(
+    expression: &Expression,
+    ops: &mut Vec<Ir1Op>,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    fn is_environment_object(
+        expression: &Expression,
+        binding_lookup: &BTreeMap<String, BindingId>,
+    ) -> bool {
+        let Expression::Member {
+            object,
+            property,
+            computed,
+            ..
+        } = expression
+        else {
+            return false;
+        };
+        !*computed
+            && matches!(object.as_ref(), Expression::Identifier(name)
+                if name == "process" && !has_source_lexical_binding(binding_lookup, name))
+            && well_formed_static_name(property) == Some("env")
+    }
+
+    let (name, capability) = match expression {
+        Expression::Member {
+            object,
+            property,
+            computed,
+            ..
+        } if is_environment_object(object, binding_lookup) => {
+            let name = if *computed {
+                well_formed_string_literal(property)
+            } else {
+                well_formed_static_name(property)
+            };
+            (name, "env:read")
+        }
+        Expression::Binary {
+            operator: BinaryOperator::In,
+            left,
+            right,
+        } if is_environment_object(right, binding_lookup) => {
+            (well_formed_string_literal(left), "env:has")
+        }
+        _ => return false,
+    };
+    let Some(name) = name else {
+        return false;
+    };
+    ops.push(Ir1Op::LoadLiteral {
+        value: Ir1Literal::String(name.into()),
+    });
+    ops.push(Ir1Op::HostCall {
+        capability: capability.to_string(),
+        arg_count: 1,
+    });
+    true
 }
 
 /// ES2020 IsAnonymousFunctionDefinition (14.1.12): an anonymous function,
@@ -23218,19 +23288,6 @@ fn is_require_querystring_module_initializer(
 /// recognizer (an alias is confirmed only by a usage the call arm will really
 /// intercept). `decode`/`encode` are Node's documented aliases of
 /// `parse`/`stringify`.
-/// The `querystring` methods in Node v22's key order (without
-/// `unescapeBuffer`, which the facade has no HostCall for), each with a
-/// [`querystring_method_capability`]: the members of the runtime
-/// `require('querystring')` module object (bd-9vouw.439).
-pub(crate) const QUERYSTRING_METHOD_NAMES: [&str; 6] = [
-    "unescape",
-    "escape",
-    "stringify",
-    "encode",
-    "parse",
-    "decode",
-];
-
 pub(crate) fn querystring_method_capability(method: &str) -> Option<&'static str> {
     match method {
         "parse" | "decode" => Some("builtin:QuerystringParse"),
@@ -23240,6 +23297,17 @@ pub(crate) fn querystring_method_capability(method: &str) -> Option<&'static str
         _ => None,
     }
 }
+
+/// Supported querystring exports, in Node's enumeration order. The aliases
+/// share their canonical native function values in the realm module (bd-305gi).
+pub(crate) const QUERYSTRING_METHOD_NAMES: [&str; 6] = [
+    "unescape",
+    "escape",
+    "stringify",
+    "encode",
+    "parse",
+    "decode",
+];
 
 /// bd-qmy52: true when `expr` IS the querystring module object at lowering
 /// time — a sentinel-recorded require-binding alias or the inline
@@ -32086,7 +32154,7 @@ fn hostcall_exception_is_operand_derived(
                 | FlowValueShape::FreshAggregate
                 | FlowValueShape::CallableContainer
                 | FlowValueShape::OwnKeyArray)),
-        "builtin:ArrayIsArrayFunction" => inputs.is_empty(),
+        "builtin:ArrayIsArrayFunction" | "builtin:QuerystringModule" => inputs.is_empty(),
         // bd-9vouw.17: materializes an engine-owned builtin function value.
         _ if capability.starts_with(STATIC_VALUE_CAPABILITY_PREFIX) => inputs.is_empty(),
         _ if capability.starts_with("builtin:instanceof:") => true,
@@ -40779,68 +40847,72 @@ mod tests {
 
     #[test]
     fn object_keys_join_keeps_finite_own_key_provenance_bd_n8eta() {
-        for (
-            name,
-            source,
-            expected_querystring_parse,
-            expected_querystring_stringify,
-            expected_console_count,
-        ) in [
+        let literal = |value: &str| Ir1Op::LoadLiteral {
+            value: Ir1Literal::String(value.into()),
+        };
+        // Authenticate the pure native operation in IR itself. The first-class
+        // querystring module is mutable across files, so reading a method from
+        // its factory result cannot vouch for this native-call contract.
+        for (name, object_ops) in [
             (
-                "querystring_0010",
-                "const qs = require('querystring'); const value = { foo: 'bar', baz: 'qux' }; console.log(Object.keys(value).join(',')); console.log(qs.stringify(value));",
-                false,
-                true,
-                2,
+                "literal",
+                vec![
+                    literal("foo"),
+                    literal("bar"),
+                    literal("baz"),
+                    literal("qux"),
+                    Ir1Op::NewObject { count: 2 },
+                ],
             ),
             (
-                "querystring_0013",
-                "const qs = require('querystring'); const o = qs.parse('foo=bar&abc=xyz'); console.log(Object.keys(o).join(','), o.foo, o.abc);",
-                true,
-                false,
-                1,
+                "querystring_parse",
+                vec![
+                    literal("foo=bar&baz=qux"),
+                    Ir1Op::HostCall {
+                        capability: "builtin:QuerystringParse".to_string(),
+                        arg_count: 1,
+                    },
+                ],
             ),
         ] {
-            let tree = crate::parser_api_stability::parse_script(source)
-                .unwrap_or_else(|error| panic!("parse {name}: {error}"));
-            let ir0 = Ir0Module::from_syntax_tree(tree, format!("{name}_bd_n8eta.js"));
-            let ir1 = lower_ir0_to_ir1(&ir0)
-                .unwrap_or_else(|error| panic!("lower {name} to IR1: {error}"))
-                .module;
-
-            assert!(
-                ir1.ops.iter().any(|op| matches!(op,
-                    Ir1Op::HostCall { capability, arg_count: 1 }
-                        if capability == "builtin:ObjectKeys"
-                )),
-                "{name} must retain the Object.keys operation"
+            let mut native = Ir1Module::new(
+                ContentHash::compute(name.as_bytes()),
+                format!("native_own_keys_{name}_bd_n8eta.js"),
             );
-            assert_eq!(
-                ir1.ops.iter().any(|op| matches!(op,
-                    Ir1Op::HostCall { capability, .. }
-                        if capability == "builtin:QuerystringParse"
-                )),
-                expected_querystring_parse,
-                "{name} querystring parse lowering"
-            );
-            assert_eq!(
-                ir1.ops.iter().any(|op| matches!(op,
-                    Ir1Op::HostCall { capability, .. }
-                        if capability == "builtin:QuerystringStringify"
-                )),
-                expected_querystring_stringify,
-                "{name} querystring stringify lowering"
-            );
-            assert!(
-                ir1.ops.iter().any(|op| matches!(op,
-                    Ir1Op::GetProperty { key: Ir1PropertyKey::Static(key) }
-                        if key.as_str() == Some("join")
-                )),
-                "{name} must retain the Array.prototype.join observation"
-            );
-
-            let ir2 = lower_ir1_to_ir2(&ir1)
-                .unwrap_or_else(|error| panic!("lower {name} to IR2: {error}"))
+            native.ops = object_ops;
+            native.ops.extend([
+                Ir1Op::StoreBinding { binding_id: 0 },
+                Ir1Op::Pop,
+                Ir1Op::LoadBinding { binding_id: 0 },
+                Ir1Op::HostCall {
+                    capability: "builtin:ObjectKeys".to_string(),
+                    arg_count: 1,
+                },
+                Ir1Op::StoreBinding { binding_id: 1 },
+                Ir1Op::GetProperty {
+                    key: Ir1PropertyKey::Static("join".into()),
+                },
+                Ir1Op::LoadBinding { binding_id: 1 },
+                literal(","),
+                Ir1Op::CallMethod { arg_count: 1 },
+                Ir1Op::HostCall {
+                    capability: "console:log".to_string(),
+                    arg_count: 1,
+                },
+                Ir1Op::Pop,
+                Ir1Op::LoadBinding { binding_id: 0 },
+                Ir1Op::HostCall {
+                    capability: "builtin:QuerystringStringify".to_string(),
+                    arg_count: 1,
+                },
+                Ir1Op::HostCall {
+                    capability: "console:log".to_string(),
+                    arg_count: 1,
+                },
+                Ir1Op::Return,
+            ]);
+            let ir2 = lower_ir1_to_ir2(&native)
+                .unwrap_or_else(|error| panic!("native {name} flow: {error}"))
                 .module;
             let console_flows = ir2
                 .ops
@@ -40852,33 +40924,15 @@ mod tests {
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            assert_eq!(
-                console_flows.len(),
-                expected_console_count,
-                "{name} console flow count"
-            );
+            assert_eq!(console_flows.len(), 2, "native {name}");
             for console_flow in console_flows {
-                assert_eq!(console_flow.data_label, Label::Public, "{name}");
-                assert!(
-                    !console_flow.declassification_required,
-                    "{name} must not require a TopSecret-to-Internal declassification"
-                );
+                assert_eq!(console_flow.data_label, Label::Public, "native {name}");
+                assert!(!console_flow.declassification_required, "native {name}");
             }
-
-            // HybridRouter.eval denies at build_ir2_flow_proof_artifact, not
-            // at IR2 annotation. Pin the live 0010/0013 sources through that
-            // same lattice check under the trusted-eval grant.
-            let eval_context = LoweringContext::new(
-                format!("eval-hybrid-{name}"),
-                format!("eval-decision-{name}"),
-                "eval-policy-hybrid",
-            )
-            .with_ambient_authority_grant(AmbientAuthorityGrant::TrustedProcessShape);
-            if let Err(error) = build_ir2_flow_proof_artifact(&ir2, &eval_context) {
-                panic!("{name} must lower without UnauthorizedFlow: {error}");
-            }
-            lower_ir0_to_ir3(&ir0, &eval_context).unwrap_or_else(|error| {
-                panic!("{name} eval-equivalent IR0→IR3 must succeed: {error}")
+            let context =
+                LoweringContext::new("native-keys", "native-keys-decision", "native-keys-policy");
+            build_ir2_flow_proof_artifact(&ir2, &context).unwrap_or_else(|error| {
+                panic!("native {name} requires no declassification: {error}")
             });
         }
 
@@ -40939,6 +40993,111 @@ mod tests {
             ),
             "unknown Object.keys must keep the TopSecret→Internal fail-closed proof"
         );
+    }
+
+    #[test]
+    fn querystring_first_class_source_keeps_mutable_method_provenance_bd_305gi() {
+        for (name, source, expected_querystring_method, expected_console_labels) in [
+            (
+                "querystring_0010",
+                "const qs = require('querystring'); const value = { foo: 'bar', baz: 'qux' }; console.log(Object.keys(value).join(',')); console.log(qs.stringify(value));",
+                "stringify",
+                vec![Label::Public, Label::Internal],
+            ),
+            (
+                "querystring_0013",
+                "const qs = require('querystring'); const o = qs.parse('foo=bar&abc=xyz'); console.log(Object.keys(o).join(','), o.foo, o.abc);",
+                "parse",
+                vec![Label::Internal],
+            ),
+        ] {
+            let tree = crate::parser_api_stability::parse_script(source)
+                .unwrap_or_else(|error| panic!("parse {name}: {error}"));
+            let ir0 = Ir0Module::from_syntax_tree(tree, format!("{name}_bd_n8eta.js"));
+            let ir1 = lower_ir0_to_ir1(&ir0)
+                .unwrap_or_else(|error| panic!("lower {name} to IR1: {error}"))
+                .module;
+
+            assert!(
+                ir1.ops.iter().any(|op| matches!(op,
+                    Ir1Op::HostCall { capability, arg_count: 1 }
+                        if capability == "builtin:ObjectKeys"
+                )),
+                "{name} must retain the Object.keys operation"
+            );
+            // bd-305gi: querystring's first-class object replaces the direct
+            // call recognizer. Read the actual, potentially replaced method.
+            // A sibling module may have installed a closure or getter; the
+            // factory cannot authenticate immutable native members.
+            assert!(
+                ir1.ops.iter().any(|op| matches!(op,
+                    Ir1Op::HostCall { capability, arg_count: 0 }
+                        if capability == "builtin:QuerystringModule"
+                )),
+                "{name} must materialize the querystring module"
+            );
+            assert!(
+                ir1.ops.iter().any(|op| matches!(op,
+                    Ir1Op::GetProperty { key: Ir1PropertyKey::Static(key) }
+                        if key.as_str() == Some(expected_querystring_method)
+                )),
+                "{name} must observe the querystring method property"
+            );
+            assert!(
+                ir1.ops.iter().any(|op| matches!(op,
+                    Ir1Op::GetProperty { key: Ir1PropertyKey::Static(key) }
+                        if key.as_str() == Some("join")
+                )),
+                "{name} must retain the Array.prototype.join observation"
+            );
+
+            let ir2 = lower_ir1_to_ir2(&ir1)
+                .unwrap_or_else(|error| panic!("lower {name} to IR2: {error}"))
+                .module;
+            let console_flows = ir2
+                .ops
+                .iter()
+                .filter_map(|op| match &op.inner {
+                    Ir1Op::HostCall { capability, .. } if capability == "console:log" => {
+                        op.flow.as_ref()
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                console_flows.len(),
+                expected_console_labels.len(),
+                "{name} console flow count"
+            );
+            for (console_flow, expected_label) in
+                console_flows.into_iter().zip(expected_console_labels)
+            {
+                assert_eq!(console_flow.data_label, expected_label, "{name}");
+                assert!(
+                    !console_flow.declassification_required,
+                    "{name} must not require a TopSecret-to-Internal declassification"
+                );
+            }
+
+            // These source programs introduce no confidential source. Their
+            // dynamic method results remain conservatively Internal; the
+            // native-call Public contract is tested separately above.
+            // HybridRouter.eval denies at build_ir2_flow_proof_artifact, not
+            // at IR2 annotation. Pin the live 0010/0013 sources through that
+            // same lattice check under the trusted-eval grant.
+            let eval_context = LoweringContext::new(
+                format!("eval-hybrid-{name}"),
+                format!("eval-decision-{name}"),
+                "eval-policy-hybrid",
+            )
+            .with_ambient_authority_grant(AmbientAuthorityGrant::TrustedProcessShape);
+            if let Err(error) = build_ir2_flow_proof_artifact(&ir2, &eval_context) {
+                panic!("{name} must lower without UnauthorizedFlow: {error}");
+            }
+            lower_ir0_to_ir3(&ir0, &eval_context).unwrap_or_else(|error| {
+                panic!("{name} eval-equivalent IR0→IR3 must succeed: {error}")
+            });
+        }
     }
 
     #[test]
@@ -51166,14 +51325,14 @@ mod tests {
     }
 
     #[test]
-    fn bd_xewby_trusted_eval_still_denies_process_env_value_read() {
-        // Defense in depth: even a trusted eval may not read env VALUES; the
-        // `process.env` member carries `EnvRead`, which the shape grant excludes.
+    fn bd_xewby_trusted_eval_still_denies_process_env_possession() {
+        // Named reads lower to a runtime EnvRead capability gate (bd-omckp),
+        // but the trusted shape grant still cannot expose the env object.
         let error = lower_script_with_grant_bd_xewby(
-            "process.env.PATH;\n",
+            "process.env;\n",
             AmbientAuthorityGrant::TrustedProcessShape,
         )
-        .expect_err("trusted eval must still reject an env value read");
+        .expect_err("trusted eval must still reject possession of the env object");
         assert!(
             matches!(
                 error,

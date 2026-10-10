@@ -126,6 +126,7 @@ use frankenengine_extension_host::host_effect_journal::InMemoryHostEffectJournal
 use frankenengine_extension_host::host_io::{
     FsDirEntry, FsMetaResult, FsMetadata, FsOperation, HostIoError, HostIoExceptionProvenance,
     HostIoOutcome, HostIoProvider, HostIoRecorder, SANDBOXED_HOST_IO_MAX_RANDOM_BYTES_PER_REQUEST,
+    validate_environment_name,
 };
 use frankenengine_extension_host::process_spawn::{
     ProcessExit, ProcessLaunch, ProcessSignal, ProcessSpawnError, ProcessSpawnProvider,
@@ -147,8 +148,8 @@ use crate::engine_object_id::{EngineObjectId, ObjectDomain, SchemaId, derive_id}
 use crate::hash_tiers::ContentHash;
 use crate::hostcall_effects_migration::{
     InterpreterTimerOutcome, InterpreterTimerRequest, PROCESS_SPAWN_EXECUTABLE_NOT_FOUND_CODE,
-    TimerEffectAuthority, TimerEffectPermit, TimerOperation, create_fs_effect,
-    create_handler_stack_from_profile_with_effect_providers,
+    TimerEffectAuthority, TimerEffectPermit, TimerOperation, create_env_read_effect,
+    create_fs_effect, create_handler_stack_from_profile_with_effect_providers,
     create_handler_stack_from_profile_with_host_io, create_interpreter_timer_effect,
     create_interpreter_timer_handler_stack, create_network_effect, create_network_host_io_request,
     create_process_spawn_effect, create_random_read_effect,
@@ -1138,6 +1139,7 @@ pub(crate) fn capability_gate_key(tag: &str) -> &str {
         | "builtin:CryptoRandomUUID"
         | "builtin:CryptoRandomInt"
         | "builtin:CryptoRandomFillSync" => "random_read",
+        "env:read" | "env:has" => "env_read",
         _ => tag,
     }
 }
@@ -1966,7 +1968,11 @@ fn check_hostcall_capability_gate(
     capability_tag: &str,
     instruction_index: u32,
 ) -> Result<bool, InterpreterError> {
-    let capability_tag = capability_gate_key(capability_tag);
+    // Keep the operation spelling for the live hook: an exact witness denial
+    // of env:read must still match even though its authority/evidence key is
+    // env_read. Canonical authority decisions remain independent of that tag.
+    let operation_tag = capability_tag;
+    let capability_tag = capability_gate_key(operation_tag);
     // bd-9vouw.76: a language operation encoded as a HostCall needs no
     // authority. Recording its constant `allowed` decision per call grew the
     // witness and decision log by one entry per destructuring step.
@@ -1991,6 +1997,27 @@ fn check_hostcall_capability_gate(
     // who controls the `HostCall` capability string cannot inflate the
     // witness or decision log with a multi-megabyte payload per call.
     let recordable_tag = recordable_capability_tag(capability_tag);
+
+    // Observe the actual authority decision before dispatch, including calls
+    // through builtin values and ApplyHostCall. Property/call hooks alone do
+    // not cover these paths. A capability denial remains the primary error;
+    // the hook cannot grant authority or suppress its denial evidence.
+    let hook_action = interpreter.hook.as_ref().map(|hook| {
+        let recordable_operation = recordable_capability_tag(operation_tag);
+        hook.pre_hostcall(
+            &HookContext {
+                extension_id: interpreter
+                    .config
+                    .extension_id
+                    .clone()
+                    .unwrap_or_else(|| "extension:current".to_string()),
+                instruction_count: interpreter.instructions_executed,
+                current_ip: instruction_index as usize,
+            },
+            recordable_operation.as_ref(),
+            !capability_denied,
+        )
+    });
 
     if capability_denied {
         interpreter
@@ -2020,6 +2047,10 @@ fn check_hostcall_capability_gate(
         return Err(InterpreterError::CapabilityDenied {
             capability: recordable_tag.into_owned(),
         });
+    }
+
+    if let Some(action) = hook_action {
+        interpreter.enforce_hook_action(action)?;
     }
 
     // bd-9vouw.83: an effect-free hostcall in a loop (`JSON.stringify`,
@@ -6295,8 +6326,8 @@ const BUFFER_MODULE_KEY: &str = "<module buffer>";
 /// Seed-tracked slot of the `require('os')` module object (bd-9vouw.204).
 const OS_MODULE_KEY: &str = "<module os>";
 
-/// Seed-tracked slot of the `require('querystring')` module object
-/// (bd-9vouw.439).
+/// Seed-tracked slot of the realm's querystring module (bd-305gi), shared by
+/// the lowering factory and runtime CommonJS requests.
 const QUERYSTRING_MODULE_KEY: &str = "<module querystring>";
 
 /// Seed-tracked slot of the `require('url')` module object (bd-9vouw.224).
@@ -6758,6 +6789,24 @@ fn static_hostcall_owner_and_name(tag: &str) -> Option<(&'static str, &'static s
         .or_else(|| (tag == "builtin:Eval").then_some(("globalThis", "eval")))
         // `require('events').once` (bd-9vouw.210).
         .or_else(|| (tag == "builtin:EventsOnce").then_some(("events", "once")))
+        // querystring's native methods, including the parse/decode and
+        // stringify/encode identity aliases (bd-305gi).
+        .or_else(|| {
+            crate::lowering_pipeline::QUERYSTRING_METHOD_NAMES
+                .iter()
+                .copied()
+                .find(|name| {
+                    crate::lowering_pipeline::querystring_method_capability(name) == Some(tag)
+                })
+                .map(|name| {
+                    let name = match name {
+                        "escape" => "qsEscape",
+                        "unescape" => "qsUnescape",
+                        name => name,
+                    };
+                    ("querystring", name)
+                })
+        })
         // The legacy members of `require('url')` (bd-9vouw.224).
         .or(match tag {
             "builtin:UrlFileUrlToPath" => Some(("url", "fileURLToPath")),
@@ -11981,6 +12030,13 @@ pub trait InterpreterHook: Send + Sync {
     fn pre_allocation(&self, ctx: &HookContext, kind: AllocKind, size_hint: usize) -> HookAction;
 
     fn pre_import(&self, ctx: &HookContext, specifier: &str) -> HookAction;
+
+    /// Observe the live capability decision before any hostcall effect.
+    /// `allowed` reports the existing capability membrane; returning Allow
+    /// never overrides a denial. Non-Allow stops an authorized dispatch.
+    fn pre_hostcall(&self, _ctx: &HookContext, _capability: &str, _allowed: bool) -> HookAction {
+        HookAction::Allow
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -18319,6 +18375,9 @@ impl InterpreterCore {
         capability: &str,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
+        if matches!(capability, "env:read" | "env:has") {
+            return self.dispatch_environment_hostcall(capability, args);
+        }
         // bd-3894s slice (2b): the `net:request` egress is handled by a single
         // shared seam — [`Self::perform_net_request_effect`] — used by BOTH the
         // immediate `http.get`/`fetch` forms (which reach here as a `net:request`
@@ -18860,9 +18919,9 @@ impl InterpreterCore {
     /// resolves `.write`/`.end` to their receiver-aware builtins
     /// ([`Self::collection_prototype_method`]); `.end()` performs the deferred
     /// egress via [`Self::perform_net_request_effect`]. The hostcall capability gate
-    /// already authorized `NetworkEgress` for the `net:client_request` tag at this
-    /// call site, so the later `.end()` egress is pre-authorized at the engine
-    /// capability layer.
+    /// authorizes construction through `net:client_request`. The later `.end()`
+    /// checks `net:request` again before changing request state or dispatching,
+    /// so a live containment decision can stop the deferred effect.
     fn dispatch_client_request_create(
         &mut self,
         args: RegRange,
@@ -39591,25 +39650,26 @@ impl InterpreterCore {
         Ok(Value::Object(object))
     }
 
-    /// `require('querystring')` (bd-9vouw.439): Node's querystring module
-    /// over the querystring facade's own HostCalls (pure string work), as
-    /// for os. The facade lowers the member calls of a program-level alias
-    /// in the program body only, so a function that read the alias saw
-    /// undefined, and an alias read only in functions left a require that
-    /// found no module. `decode` and `encode` are `parse` and `stringify`,
-    /// as in Node.
+    /// querystring's supported native methods as ordinary mutable properties.
+    /// Caching in the realm's traced prototype roots keeps module and function
+    /// identity stable across literal, dynamic and cross-file require calls.
+    /// Calling an extracted method still enters `call_static_hostcall`, which
+    /// checks the caller's Builtin capability and joins its operand labels.
     fn querystring_core_module(&mut self) -> Result<Value, InterpreterError> {
         if let Some(object) = self.builtin_prototypes.get(QUERYSTRING_MODULE_KEY) {
             return Ok(Value::Object(*object));
         }
-        let members = crate::lowering_pipeline::QUERYSTRING_METHOD_NAMES.map(|name| {
-            let tag = crate::lowering_pipeline::querystring_method_capability(name)
-                .expect("QUERYSTRING_METHOD_NAMES names are all in the facade table");
-            (
-                name,
-                Value::BuiltinFunction(BuiltinFunction::static_hostcall(tag)),
-            )
-        });
+        let members: Vec<(&str, Value)> = crate::lowering_pipeline::QUERYSTRING_METHOD_NAMES
+            .iter()
+            .map(|&name| {
+                let tag = crate::lowering_pipeline::querystring_method_capability(name)
+                    .expect("querystring module exports have native capability tags");
+                (
+                    name,
+                    Value::BuiltinFunction(BuiltinFunction::static_hostcall(tag)),
+                )
+            })
+            .collect();
         let object = self.alloc_object_with_properties(&members)?;
         self.mutate_builtin_prototypes(|prototypes| {
             prototypes.insert(QUERYSTRING_MODULE_KEY.to_string(), object);
@@ -44581,6 +44641,16 @@ impl InterpreterCore {
                         got: receiver.type_name().to_string(),
                     });
                 };
+                if self.heap.get(req_id.0 as usize).is_none_or(|request| {
+                    matches!(request.properties.get("__ended"), Some(Value::Bool(true)))
+                }) {
+                    return Ok(Value::Undefined);
+                }
+                // Construction authorized a request object, not a future
+                // effect. Recheck the live membrane before appending the final
+                // chunk or consuming the request so containment preserves a
+                // retryable prefix and cannot publish to the host provider.
+                check_hostcall_capability_gate(self, "net:request", self.ip as u32)?;
                 let end_label =
                     self.writable_invocation_label_with_receiver(args, receiver_register)?;
                 // bd-3894s slice (2d): `req.end([data][, cb])` — a trailing closure is
@@ -51618,11 +51688,10 @@ impl InterpreterCore {
                         // writable `ClientRequest` object here WITHOUT egressing —
                         // the body is accumulated via `req.write`/`req.end` and the
                         // deferred egress fires from `.end()`. The capability gate
-                        // above already authorized NetworkEgress at creation time
-                        // (`net:client_request` maps to NetworkEgress), so the
-                        // deferred `.end()` egress is pre-authorized at the engine
-                        // capability layer; the per-endpoint SSRF policy still
-                        // applies at `.end()` via the sandboxed provider.
+                        // above authorizes construction through NetworkEgress.
+                        // The deferred `.end()` checks the live `net:request`
+                        // gate again before mutation or egress, followed by the
+                        // provider's endpoint policy at dispatch.
                         self.dispatch_client_request_create(args)?
                     }
                     HostcallDispatchBinding::HostIo => {
@@ -87847,6 +87916,63 @@ impl InterpreterCore {
             .ok_or(())
     }
 
+    /// Read a bounded, explicit snapshot value through the same provider and
+    /// effect journal as every other host read. Missing provider authority is
+    /// an error, never a fabricated absent variable.
+    fn dispatch_environment_hostcall(
+        &mut self,
+        capability: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let denied = || InterpreterError::CapabilityDenied {
+            capability: RuntimeCapability::EnvRead.to_string(),
+        };
+        if !self
+            .config
+            .granted_capabilities
+            .contains(&RuntimeCapability::EnvRead)
+        {
+            return Err(denied());
+        }
+        if args.count != 1 {
+            return Err(InterpreterError::TypeError {
+                expected: "one environment variable name".to_string(),
+                got: format!("{} argument(s)", args.count),
+            });
+        }
+        let Value::Str(name) = self.read_reg(args.start)? else {
+            return Err(InterpreterError::TypeError {
+                expected: "an environment variable name string".to_string(),
+                got: "non-string environment variable name".to_string(),
+            });
+        };
+        let name = name.as_str().ok_or_else(denied)?;
+        validate_environment_name(name).map_err(|_| denied())?;
+        let provider = self.host_io.clone().ok_or_else(denied)?;
+        let effect = create_env_read_effect(name.to_string());
+        let mut stack = create_handler_stack_from_profile_with_effect_providers(
+            &CapabilityProfile::full(),
+            Some(provider),
+            self.host_io_recorder.clone(),
+            self.process_spawn.clone(),
+            None,
+            self.host_effect_journal.clone(),
+        );
+        let result = stack.handle_effect(effect.as_ref()).map_err(|_| denied())?;
+        let value = result.downcast::<Option<String>>().map_err(|_| denied())?;
+        if capability == "env:has" {
+            Ok(Value::Bool(value.is_some()))
+        } else {
+            match value {
+                Some(value) => {
+                    self.check_string_limit(value.len())?;
+                    Ok(Value::str(value))
+                }
+                None => Ok(Value::Undefined),
+            }
+        }
+    }
+
     fn require_random_read_capability(&self) -> Result<(), InterpreterError> {
         if self
             .config
@@ -93274,9 +93400,18 @@ impl InterpreterCore {
             }
 
             // Node `querystring` builtins (bd-qmy52): pure-compute parse/
-            // stringify/escape/unescape, dispatched from the lowering's
-            // querystring-module member-call interception. No host effect;
+            // stringify/escape/unescape, shared by first-class querystring
+            // module methods and direct hostcalls. No host effect;
             // semantics pinned against bun 1.3.14.
+            "builtin:QuerystringModule" => {
+                if args.count != 0 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "zero querystring module factory arguments".to_string(),
+                        got: format!("{} argument(s)", args.count),
+                    });
+                }
+                self.querystring_core_module()
+            }
             "builtin:QuerystringParse" => {
                 let input = self
                     .builtin_optional_arg(args, 0)?
@@ -119635,8 +119770,10 @@ mod async_runtime_tests_current {
                     }),
                     HostIoRequest::NetworkSend { .. }
                     | HostIoRequest::NetworkRecv { .. }
-                    | HostIoRequest::NetworkRequest { .. } => Err(HostIoError::Denied {
-                        reason: "network is outside the entropy fixture".to_string(),
+                    | HostIoRequest::NetworkRequest { .. }
+                    | HostIoRequest::EnvRead { .. } => Err(HostIoError::Denied {
+                        reason: "network and environment are outside the entropy fixture"
+                            .to_string(),
                     }),
                 }
             }
@@ -119850,6 +119987,9 @@ mod async_runtime_tests_current {
                     }
                     HostIoRequest::NetworkRequest { .. } => Ok(HostIoResponse::NetworkRequest {
                         response: Vec::new(),
+                    }),
+                    HostIoRequest::EnvRead { .. } => Err(HostIoError::Denied {
+                        reason: "environment is outside the filesystem fixture".to_string(),
                     }),
                 }
             }
@@ -122751,6 +122891,9 @@ mod async_runtime_tests_current {
                     | HostIoRequest::NetworkRequest { .. } => Err(HostIoError::Denied {
                         reason: "ssrf: endpoint blocked by policy".to_string(),
                     }),
+                    HostIoRequest::EnvRead { .. } => Err(HostIoError::Denied {
+                        reason: "environment is outside the network fixture".to_string(),
+                    }),
                     HostIoRequest::FsRead { .. } => {
                         Ok(HostIoResponse::FsRead { bytes: Vec::new() })
                     }
@@ -122839,6 +122982,9 @@ mod async_runtime_tests_current {
                     | HostIoRequest::NetworkRecv { .. }
                     | HostIoRequest::NetworkRequest { .. } => Err(HostIoError::Io {
                         detail: "TLS send to 127.0.0.1:443: invalid peer certificate".to_string(),
+                    }),
+                    HostIoRequest::EnvRead { .. } => Err(HostIoError::Denied {
+                        reason: "environment is outside the network fixture".to_string(),
                     }),
                     HostIoRequest::FsRead { .. } => {
                         Ok(HostIoResponse::FsRead { bytes: Vec::new() })

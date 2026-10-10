@@ -2945,7 +2945,7 @@ mod tests {
         // 13.5: an ExpressionStatement may start with `let` not followed by
         // `[`), a runtime ReferenceError as in Node, so the parse refusal is
         // a missing initializer.
-        for source in ["let x = ;", "break;", "process.env.SECRET;"] {
+        for source in ["let x = ;", "break;", "process.env;"] {
             let prepare_error = HybridRouter::prepare_eval(source)
                 .expect_err("frontend refusal must occur while preparing");
             let mut one_shot_router = HybridRouter::default();

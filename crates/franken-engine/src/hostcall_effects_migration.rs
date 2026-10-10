@@ -24,8 +24,9 @@ use frankenengine_extension_host::host_effect_journal::{
     HostEffectJournalError, HostEffectJournalMode, InMemoryHostEffectJournal,
 };
 use frankenengine_extension_host::host_io::{
-    FsOperation, HostIoCapability, HostIoError, HostIoProvider, HostIoRecorder, HostIoRequest,
-    HostIoResponse, SANDBOXED_HOST_IO_MAX_BYTES,
+    ENVIRONMENT_VALUE_MAX_BYTES, FsOperation, HostIoCapability, HostIoError, HostIoProvider,
+    HostIoRecorder, HostIoRequest, HostIoResponse, SANDBOXED_HOST_IO_MAX_BYTES,
+    validate_environment_name,
 };
 use frankenengine_extension_host::process_spawn::{
     PROCESS_SPAWN_CANONICALIZE_EXECUTABLE_NOT_FOUND_OPERATION,
@@ -90,8 +91,10 @@ impl Effect for FsHostcallEffect {
             HostIoCapability::NetworkSend | HostIoCapability::NetworkRecv => {
                 unreachable!("filesystem operations cannot require a network capability")
             }
-            HostIoCapability::RandomRead => {
-                unreachable!("filesystem operations cannot require random-read authority")
+            HostIoCapability::RandomRead | HostIoCapability::EnvRead => {
+                unreachable!(
+                    "filesystem operations cannot require entropy or environment authority"
+                )
             }
         }
     }
@@ -103,8 +106,10 @@ impl Effect for FsHostcallEffect {
             HostIoCapability::NetworkSend | HostIoCapability::NetworkRecv => {
                 unreachable!("filesystem operations cannot require a network capability")
             }
-            HostIoCapability::RandomRead => {
-                unreachable!("filesystem operations cannot require random-read authority")
+            HostIoCapability::RandomRead | HostIoCapability::EnvRead => {
+                unreachable!(
+                    "filesystem operations cannot require entropy or environment authority"
+                )
             }
         }
     }
@@ -181,6 +186,33 @@ impl Effect for RandomReadHostcallEffect {
 
     fn parameter_type_id(&self) -> TypeId {
         TypeId::of::<u64>()
+    }
+}
+
+/// Read a single explicitly supplied environment name through the shared
+/// provider and globally ordered replay journal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnvReadHostcallEffect {
+    pub name: String,
+}
+
+impl Effect for EnvReadHostcallEffect {
+    type Output = ();
+
+    fn effect_name(&self) -> &'static str {
+        "hostcall:env:read"
+    }
+
+    fn required_capabilities(&self) -> EffectCapabilities {
+        EffectCapabilities::runtime([RuntimeCapability::EnvRead])
+    }
+
+    fn parameters(&self) -> Box<dyn Any + Send + Sync> {
+        Box::new(self.name.clone())
+    }
+
+    fn parameter_type_id(&self) -> TypeId {
+        TypeId::of::<String>()
     }
 }
 
@@ -645,6 +677,20 @@ impl FullCapsHandler {
             (HostIoRequest::RandomRead { .. }, Ok(_)) => Err(HostIoError::SandboxViolation {
                 detail: "random-read provider returned an incompatible response kind".to_string(),
             }),
+            (HostIoRequest::EnvRead { .. }, Ok(HostIoResponse::EnvRead { value })) => {
+                if value.as_ref().is_some_and(|value| {
+                    value.len() > ENVIRONMENT_VALUE_MAX_BYTES || value.contains('\0')
+                }) {
+                    return Err(HostIoError::SandboxViolation {
+                        detail: "environment provider returned an invalid or oversized value"
+                            .to_string(),
+                    });
+                }
+                Ok(HostIoResponse::EnvRead { value })
+            }
+            (HostIoRequest::EnvRead { .. }, Ok(_)) => Err(HostIoError::SandboxViolation {
+                detail: "environment provider returned an incompatible response kind".to_string(),
+            }),
             (_, outcome) => outcome,
         }
     }
@@ -704,9 +750,23 @@ impl FullCapsHandler {
                     byte_len: *byte_len,
                 })
             }
+            "hostcall:env:read" => {
+                let name = effect.parameters().downcast::<String>().map_err(|_| {
+                    EffectError::InvalidParameters {
+                        effect_name: effect.effect_name().to_string(),
+                        reason: "Expected an environment variable name".to_string(),
+                    }
+                })?;
+                validate_environment_name(&name).map_err(|_| EffectError::InvalidParameters {
+                    effect_name: effect.effect_name().to_string(),
+                    reason: "Environment variable name is invalid or exceeds the byte limit"
+                        .to_string(),
+                })?;
+                Ok(HostIoRequest::EnvRead { name: *name })
+            }
             other => Err(EffectError::InvalidParameters {
                 effect_name: other.to_string(),
-                reason: "not an fs/network/random hostcall".to_string(),
+                reason: "not an fs/network/random/environment hostcall".to_string(),
             }),
         }
     }
@@ -722,6 +782,7 @@ impl FullCapsHandler {
             // interpreter, which parses them into a JS response object.
             HostIoResponse::NetworkRequest { response } => EffectResult::new(response.clone()),
             HostIoResponse::RandomRead { bytes } => EffectResult::new(bytes.clone()),
+            HostIoResponse::EnvRead { value } => EffectResult::new(value.clone()),
         }
     }
 }
@@ -998,7 +1059,8 @@ impl Handler for FullCapsHandler {
             "hostcall:fs:read"
             | "hostcall:fs:write"
             | "hostcall:network"
-            | "hostcall:random:read" => {
+            | "hostcall:random:read"
+            | "hostcall:env:read" => {
                 // bd-6wc97 / bd-6wc97.1 decision: EXPLICIT-DENY by design.
                 // There is no real in-engine fs/network executor (only
                 // `MockFsHandler`); routing to host `std::fs`/sockets would be a
@@ -1597,11 +1659,30 @@ pub fn create_random_read_effect(byte_len: u64) -> Box<dyn ErasedEffect> {
     Box::new(RandomReadHostcallEffect { byte_len })
 }
 
+#[must_use]
+pub fn create_env_read_effect(name: String) -> Box<dyn ErasedEffect> {
+    Box::new(EnvReadHostcallEffect { name })
+}
+
 pub fn create_effect_from_hostcall_tag(
     tag: &str,
     args: &[String],
 ) -> Result<Box<dyn ErasedEffect>, EffectError> {
     match tag {
+        "env:read" | "env:has" => {
+            let [name] = args else {
+                return Err(EffectError::InvalidParameters {
+                    effect_name: tag.to_string(),
+                    reason: "Expected exactly one environment variable name".to_string(),
+                });
+            };
+            validate_environment_name(name).map_err(|_| EffectError::InvalidParameters {
+                effect_name: tag.to_string(),
+                reason: "Environment variable name is invalid or exceeds the byte limit"
+                    .to_string(),
+            })?;
+            Ok(create_env_read_effect(name.clone()))
+        }
         tag if tag.starts_with("console:") => {
             let method = tag.strip_prefix("console:").unwrap_or("log");
             let effect = ConsoleHostcallEffect {
@@ -2143,6 +2224,11 @@ mod tests {
                 HostIoRequest::RandomRead { byte_len } => HostIoResponse::RandomRead {
                     bytes: vec![0xa5; *byte_len as usize],
                 },
+                HostIoRequest::EnvRead { .. } => {
+                    return Err(HostIoError::Denied {
+                        reason: "this fixture has no environment snapshot".to_string(),
+                    });
+                }
             })
         }
     }

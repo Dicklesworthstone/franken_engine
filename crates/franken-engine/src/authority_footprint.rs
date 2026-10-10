@@ -659,9 +659,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ambient_env_read_is_span_accurate_with_minimal_capability() {
-        // Known ambient-authority read: process.env.SECRET_KEY on line 2.
-        let source = "const greeting = \"hello\";\nconst secret = process.env.SECRET_KEY;\n";
+    fn ambient_env_possession_is_span_accurate_with_minimal_capability() {
+        // Possession of the raw environment stays denied; named reads are
+        // explicit EnvRead hostcalls (bd-omckp).
+        let source = "const greeting = \"hello\";\nconst secret = process.env;\n";
         let report = analyze_authority_footprint(source, "fixture.js", ParseGoal::Script);
 
         assert!(
@@ -788,10 +789,10 @@ mod tests {
             "category-defining",
         ];
         let sources = [
-            "const secret = process.env.SECRET_KEY;\n", // ambient violation
-            "const a = 1;\nconst b = a + 2;\n",         // clean
-            "const x = \"unterminated;\n",              // fail-closed
-            "const fs = require(\"fs\");\n",            // ambient (fs)
+            "const secret = process.env;\n",    // ambient possession violation
+            "const a = 1;\nconst b = a + 2;\n", // clean
+            "const x = \"unterminated;\n",      // fail-closed
+            "const fs = require(\"fs\");\n",    // ambient (fs)
         ];
         for source in sources {
             let report = analyze_authority_footprint(source, "f.js", ParseGoal::Script);
@@ -818,11 +819,8 @@ mod tests {
     fn completeness_and_confidence_markers_are_explicit() {
         // Ambient violation → analysis is bounded at the first violation, and
         // the finding is a definite (enforcer-mirrored) determination.
-        let ambient = analyze_authority_footprint(
-            "const secret = process.env.TOKEN;\n",
-            "f.js",
-            ParseGoal::Script,
-        );
+        let ambient =
+            analyze_authority_footprint("const secret = process.env;\n", "f.js", ParseGoal::Script);
         assert_eq!(
             ambient.analysis_completeness,
             AnalysisCompleteness::BoundedAtFirstViolation

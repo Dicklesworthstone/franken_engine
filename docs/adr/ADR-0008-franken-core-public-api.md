@@ -823,6 +823,25 @@ matches retain fallback arms and remain source-compatible. The sibling
 match site. Exact IR1/IR2/IR3 serde and canonical-wire tests pin the new unit
 variant.
 
+### Contained execution witness schema checkpoint (`bd-9vouw.7`)
+
+IR4 adds `ExecutionOutcome::Contained` for execution interrupted by an in-flight
+security decision. Serde encodes the new unit variant as `"Contained"`; the
+canonical outcome is `"contained"`. Older readers cannot decode this outcome,
+so core advances IR `0.13.0` to `0.15.0`, skipping the engine-owned `0.14.x`
+wire, and engine advances IR `0.14.0` to `0.16.0`, skipping the core-owned
+`0.15.x` wire. Matching IR4 enum tags do not make the otherwise divergent core
+and engine IR contracts interchangeable.
+
+Readers retain their previously supported owned minors for the four existing
+outcomes. IR4 linkage verification rejects `Contained` when its header claims a
+schema before that crate's introduction version, including historical headers
+with the maximum patch value. Core explicitly rejects peer-owned `0.14.x`, and
+engine explicitly rejects peer-owned `0.15.x`, in addition to their existing
+skipped minors. Future minors remain unsupported. Both the outcome and schema
+header participate in the canonical witness hash, so relabeling either changes
+the artifact's identity. Neither Cargo package version changes.
+
 ## Cross-Crate Compatibility Matrix
 
 | Consumer or peer | Current relation | Compatibility rule |

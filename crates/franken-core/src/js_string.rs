@@ -95,7 +95,7 @@ const WTF16_MAP_KEY: &str = "$wtf16";
 ///
 /// See the module docs for the canonical invariant and the equality /
 /// ordering / serialization contracts.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct JsString {
     /// UTF-8 projection. Exact when `shape` is `WellFormed`; the
     /// `String::from_utf16_lossy` projection otherwise.
@@ -114,6 +114,21 @@ enum Shape {
     WellFormed { utf16_len: usize },
     /// The exact code units, at least one of them an unpaired surrogate.
     Exact(Arc<[u16]>),
+}
+
+// Preserve the historical Debug shape (`utf8`, `units`): the cached length
+// is derived metadata, not an observable.
+impl fmt::Debug for JsString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let units = match &self.shape {
+            Shape::WellFormed { .. } => None,
+            Shape::Exact(units) => Some(units),
+        };
+        f.debug_struct("JsString")
+            .field("utf8", &self.utf8)
+            .field("units", &units)
+            .finish()
+    }
 }
 
 impl JsString {
@@ -192,12 +207,17 @@ impl JsString {
     /// reachable through `Deref`, so UTF-16-indexing call sites observe the
     /// real code units (including lone surrogates) rather than the lossy
     /// projection's units.
+    #[inline]
     pub fn encode_utf16(&self) -> CodeUnits<'_> {
         CodeUnits {
             inner: match &self.shape {
+                Shape::WellFormed { .. } if self.is_ascii_text() => {
+                    CodeUnitsInner::Ascii(self.utf8.as_bytes().iter())
+                }
                 Shape::WellFormed { .. } => CodeUnitsInner::WellFormed(self.utf8.encode_utf16()),
                 Shape::Exact(units) => CodeUnitsInner::Exact(units.iter().copied()),
             },
+            remaining: self.utf16_len(),
         }
     }
 
@@ -290,12 +310,27 @@ impl JsString {
         }
     }
 
+    /// Whether every exact code unit is ASCII, without scanning the backing.
+    /// Every non-ASCII scalar (or projected lone surrogate) uses more UTF-8
+    /// bytes than UTF-16 units, so equality of the lengths is sufficient.
+    /// This intentionally shadows `str::is_ascii` reached through Deref.
+    #[inline]
+    pub fn is_ascii(&self) -> bool {
+        self.is_ascii_text()
+    }
+
     /// ES string concatenation over exact code units. When both operands are
     /// well-formed this is a plain UTF-8 concatenation (the pre-existing fast
     /// path); otherwise the exact unit sequences are joined and re-normalized,
     /// which heals a trailing high surrogate against a leading low surrogate
     /// into the supplementary code point.
     pub fn concat(&self, other: &JsString) -> JsString {
+        if self.utf16_len() == 0 {
+            return other.clone();
+        }
+        if other.utf16_len() == 0 {
+            return self.clone();
+        }
         if let (Shape::WellFormed { utf16_len: left }, Shape::WellFormed { utf16_len: right }) =
             (&self.shape, &other.shape)
         {
@@ -353,7 +388,11 @@ impl JsString {
     /// single-unit element rather than the U+FFFD projection. For well-formed
     /// content this is exactly the per-`char` split. (bd-rdnhc)
     pub fn code_point_elements(&self) -> Vec<JsString> {
-        let units = self.code_units_vec();
+        // Stream UTF-8 scalars directly, or borrow the existing exact backing.
+        // Neither case needs a temporary UTF-16 copy of the entire string.
+        let Shape::Exact(units) = &self.shape else {
+            return self.utf8.chars().map(Self::from).collect();
+        };
         let mut elements = Vec::new();
         let mut index = 0;
         while index < units.len() {
@@ -379,6 +418,9 @@ impl JsString {
     /// U+1F600 sorts *below* U+FF5A here (0xD83D < 0xFF5A) but above it under
     /// code-point order. (bd-rdnhc)
     pub fn utf16_cmp(&self, other: &JsString) -> std::cmp::Ordering {
+        if self.is_ascii() && other.is_ascii() {
+            return self.utf8.cmp(&other.utf8);
+        }
         self.encode_utf16().cmp(other.encode_utf16())
     }
 
@@ -390,16 +432,37 @@ impl JsString {
     ///
     /// Matching takes O(n + m) work and O(m) scratch for n haystack units
     /// and m needle units; the haystack is never materialized as a vector.
+    /// Well-formed strings use native byte search without UTF-16 or
+    /// failure-table allocation. Only lone-surrogate inputs need KMP.
     pub fn utf16_index_of(&self, needle: &JsString, from: usize) -> Option<usize> {
         let haystack_len = self.utf16_len();
         let from = from.min(haystack_len);
-        let needle_units = needle.code_units_vec();
-        if needle_units.is_empty() {
+        let needle_len = needle.utf16_len();
+        if needle_len == 0 {
             return Some(from);
         }
-        if needle_units.len() > haystack_len - from {
+        if needle_len > haystack_len - from {
             return None;
         }
+        if self.is_ascii() {
+            if !needle.is_ascii() {
+                return None;
+            }
+            // Every byte boundary is a code-unit boundary in ASCII.
+            return self.utf8[from..]
+                .find(needle.utf8.as_ref())
+                .map(|index| from + index);
+        }
+        if self.is_well_formed() && needle.is_well_formed() {
+            // A well-formed needle cannot begin at the low half of a pair.
+            // Round a split starting position up to the next scalar boundary.
+            let (byte_start, unit_start) = utf8_search_boundary(&self.utf8, from, true);
+            let suffix = &self.utf8[byte_start..];
+            return suffix
+                .find(needle.utf8.as_ref())
+                .map(|index| unit_start + suffix[..index].encode_utf16().count());
+        }
+        let needle_units = needle.code_units_vec();
         search_utf16_units(self.encode_utf16().skip(from), &needle_units, false)
             .map(|index| from + index)
     }
@@ -408,22 +471,80 @@ impl JsString {
     /// `needle`'s exact unit sequence occurs (ES `String.prototype.lastIndexOf`
     /// grain). An empty needle matches at `min(from, length)`. (bd-rdnhc)
     ///
-    /// Uses the same linear-time, needle-sized-scratch matcher as indexOf,
-    /// retaining overlapping matches while streaming the allowed prefix.
+    /// Uses native reverse byte search for well-formed strings, or the
+    /// linear-time, needle-sized-scratch matcher for lone-surrogate inputs.
+    /// Both retain overlaps and bound the match's start, not its end, by `from`.
     pub fn utf16_last_index_of(&self, needle: &JsString, from: usize) -> Option<usize> {
         let haystack_len = self.utf16_len();
-        let needle_units = needle.code_units_vec();
-        if needle_units.is_empty() {
+        let needle_len = needle.utf16_len();
+        if needle_len == 0 {
             return Some(from.min(haystack_len));
         }
-        if needle_units.len() > haystack_len {
+        if needle_len > haystack_len {
             return None;
         }
-        let start = from.min(haystack_len - needle_units.len());
-        // start <= haystack_len - needle_units.len(), so this cannot overflow.
-        let end = start + needle_units.len();
+        let start = from.min(haystack_len - needle_len);
+        // start <= haystack_len - needle_len, so this cannot overflow.
+        let end = start + needle_len;
+        if self.is_ascii() {
+            if !needle.is_ascii() {
+                return None;
+            }
+            return self.utf8[..end].rfind(needle.utf8.as_ref());
+        }
+        if self.is_well_formed() && needle.is_well_formed() {
+            if from >= haystack_len - needle_len {
+                // The usual unbounded reverse search needs no forward scan
+                // to locate `from`. Count from the nearer end of the match.
+                return self.utf8.rfind(needle.utf8.as_ref()).map(|index| {
+                    if index <= self.utf8.len() / 2 {
+                        self.utf8[..index].encode_utf16().count()
+                    } else {
+                        haystack_len - self.utf8[index..].encode_utf16().count()
+                    }
+                });
+            }
+            let (byte_start, unit_start) = utf8_search_boundary(&self.utf8, from, false);
+            // Include the whole needle for a match starting at byte_start.
+            // Clamp without overflow, then round the end DOWN: every actual
+            // UTF-8 match already ends at a scalar boundary. This excludes no
+            // permitted match, and no match can start later than byte_start.
+            let mut byte_end = byte_start + needle.utf8.len().min(self.utf8.len() - byte_start);
+            while !self.utf8.is_char_boundary(byte_end) {
+                byte_end -= 1;
+            }
+            return self.utf8[..byte_end]
+                .rfind(needle.utf8.as_ref())
+                .map(|index| unit_start - self.utf8[index..byte_start].encode_utf16().count());
+        }
+        let needle_units = needle.code_units_vec();
         search_utf16_units(self.encode_utf16().take(end), &needle_units, true)
     }
+}
+
+/// Map a UTF-16 position in well-formed UTF-8 to a scalar boundary. An
+/// astral scalar straddling `position` rounds up for indexOf and down for
+/// lastIndexOf. Return both coordinates so callers do not rescan the prefix.
+fn utf8_search_boundary(text: &str, position: usize, round_up: bool) -> (usize, usize) {
+    if position == 0 {
+        return (0, 0);
+    }
+    let mut units = 0;
+    for (byte, ch) in text.char_indices() {
+        if units == position {
+            return (byte, units);
+        }
+        let next = units + ch.len_utf16();
+        if next > position {
+            return if round_up {
+                (byte + ch.len_utf8(), next)
+            } else {
+                (byte, units)
+            };
+        }
+        units = next;
+    }
+    (text.len(), units)
 }
 
 /// KMP over exact code units. Only the needle and its failure function need
@@ -537,8 +658,11 @@ impl From<Arc<str>> for JsString {
 
 impl From<char> for JsString {
     fn from(value: char) -> Self {
+        // Avoid a temporary heap-allocated String for a single code point.
+        let mut buffer = [0_u8; 4];
+        let text: &str = value.encode_utf8(&mut buffer);
         Self {
-            utf8: Arc::from(value.to_string()),
+            utf8: Arc::from(text),
             shape: Shape::WellFormed {
                 utf16_len: value.len_utf16(),
             },
@@ -568,10 +692,12 @@ impl PartialEq<&str> for JsString {
 #[derive(Clone)]
 pub struct CodeUnits<'a> {
     inner: CodeUnitsInner<'a>,
+    remaining: usize,
 }
 
 #[derive(Clone)]
 enum CodeUnitsInner<'a> {
+    Ascii(std::slice::Iter<'a, u8>),
     WellFormed(std::str::EncodeUtf16<'a>),
     Exact(std::iter::Copied<std::slice::Iter<'a, u16>>),
 }
@@ -579,20 +705,75 @@ enum CodeUnitsInner<'a> {
 impl Iterator for CodeUnits<'_> {
     type Item = u16;
 
+    #[inline]
     fn next(&mut self) -> Option<u16> {
-        match &mut self.inner {
+        let unit = match &mut self.inner {
+            CodeUnitsInner::Ascii(iter) => iter.next().copied().map(u16::from),
             CodeUnitsInner::WellFormed(iter) => iter.next(),
             CodeUnitsInner::Exact(iter) => iter.next(),
+        };
+        self.remaining -= usize::from(unit.is_some());
+        unit
+    }
+
+    #[inline]
+    fn nth(&mut self, n: usize) -> Option<u16> {
+        if n >= self.remaining {
+            // Exhaust without decoding, even for usize::MAX. Replacing the
+            // inner iterator also keeps subsequent next/fold/last consistent.
+            self.inner = CodeUnitsInner::Ascii(b"".iter());
+            self.remaining = 0;
+            return None;
+        }
+        let unit = match &mut self.inner {
+            CodeUnitsInner::Ascii(iter) => iter.nth(n).copied().map(u16::from),
+            CodeUnitsInner::WellFormed(iter) => iter.nth(n),
+            CodeUnitsInner::Exact(iter) => iter.nth(n),
+        };
+        // n < remaining, so n + 1 cannot overflow.
+        self.remaining -= n + 1;
+        unit
+    }
+
+    #[inline]
+    fn count(self) -> usize {
+        self.remaining
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+
+    fn last(self) -> Option<u16> {
+        match self.inner {
+            CodeUnitsInner::Ascii(mut iter) => iter.next_back().copied().map(u16::from),
+            CodeUnitsInner::WellFormed(iter) => iter.last(),
+            CodeUnitsInner::Exact(mut iter) => iter.next_back(),
         }
     }
 
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        match &self.inner {
-            CodeUnitsInner::WellFormed(iter) => iter.size_hint(),
-            CodeUnitsInner::Exact(iter) => iter.size_hint(),
+    fn fold<B, F>(self, init: B, mut f: F) -> B
+    where
+        F: FnMut(B, u16) -> B,
+    {
+        // Dispatch once for streaming consumers rather than once per unit.
+        match self.inner {
+            CodeUnitsInner::Ascii(iter) => iter.fold(init, |acc, &byte| f(acc, u16::from(byte))),
+            CodeUnitsInner::WellFormed(iter) => iter.fold(init, f),
+            CodeUnitsInner::Exact(iter) => iter.fold(init, f),
         }
     }
 }
+
+impl ExactSizeIterator for CodeUnits<'_> {
+    #[inline]
+    fn len(&self) -> usize {
+        self.remaining
+    }
+}
+
+impl std::iter::FusedIterator for CodeUnits<'_> {}
 
 impl fmt::Debug for CodeUnits<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

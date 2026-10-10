@@ -39,7 +39,10 @@
 //! realm's Buffer, atob, btoa and Blob, so `require('buffer').Buffer`,
 //! safer-buffer's key copy and a destructured `{ Buffer }` load; the script
 //! goal refused every such form as a file read. No filesystem/module-load
-//! authority is introduced. The filesystem facade shares these hooks through
+//! authority is introduced. `querystring` (bd-305gi) uses the native module
+//! factory also used by dynamic CommonJS `require`, so literal, deferred and
+//! dynamic requests share one realm-owned object and the same native methods.
+//! The filesystem facade shares these hooks through
 //! `fs_module`; its methods retain their native fs:read/fs:write checks.
 //! Other specifiers and `require` as a value keep their existing authority checks.
 
@@ -80,6 +83,7 @@ const STRING_DECODER_MODULE_BINDING: &str = "%string_decoder_module";
 const VM_MODULE_BINDING: &str = "%vm_module";
 const STREAM_MODULE_BINDING: &str = "%stream_module";
 const BUFFER_MODULE_BINDING: &str = "%buffer_module";
+const QUERYSTRING_MODULE_BINDING: &str = "%querystring_module";
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum PureModule {
@@ -90,6 +94,7 @@ enum PureModule {
     StringDecoder,
     Vm,
     Buffer,
+    Querystring,
     // After Events and StringDecoder: its declaration reads theirs.
     Stream,
 }
@@ -104,6 +109,7 @@ impl PureModule {
             Self::StringDecoder => STRING_DECODER_MODULE_BINDING,
             Self::Vm => VM_MODULE_BINDING,
             Self::Buffer => BUFFER_MODULE_BINDING,
+            Self::Querystring => QUERYSTRING_MODULE_BINDING,
             Self::Stream => STREAM_MODULE_BINDING,
         }
     }
@@ -128,6 +134,7 @@ pub(super) fn intrinsic_capability(name: &str) -> Option<&'static str> {
         "%TimersPromisesSetImmediate" => Some("builtin:TimersPromisesSetImmediate"),
         "%TimersPromisesSetInterval" => Some("builtin:TimersPromisesSetInterval"),
         "%StreamNextTick" => Some("builtin:ProcessNextTick"),
+        "%QuerystringModule" => Some("builtin:QuerystringModule"),
         _ => fs_module::intrinsic_capability(name),
     }
 }
@@ -141,6 +148,12 @@ const TIMERS_SOURCE: &str = include_str!("timers_module.js");
 const STRING_DECODER_SOURCE: &str = include_str!("string_decoder_module.js");
 const STREAM_SOURCE: &str = include_str!("stream_module.js");
 const BUFFER_SOURCE: &str = include_str!("buffer_module.js");
+// The factory reads no guest globals and returns the realm's cached module.
+// Its methods are native callable values, not wrappers with separate identities.
+const QUERYSTRING_SOURCE: &str = "__franken_querystring_module()";
+
+const QUERYSTRING_PLACEHOLDERS: [(&str, &str); 1] =
+    [("__franken_querystring_module", "%QuerystringModule")];
 
 const TIMERS_PLACEHOLDERS: [(&str, &str); 3] = [
     ("__franken_timers_timeout", "%TimersPromisesSetTimeout"),
@@ -231,6 +244,8 @@ fn builtin_require_member(expression: &Expression) -> Option<(PureModule, Option
         Some((PureModule::Vm, None))
     } else if *specifier == "buffer" || *specifier == "node:buffer" {
         Some((PureModule::Buffer, None))
+    } else if *specifier == "querystring" || *specifier == "node:querystring" {
+        Some((PureModule::Querystring, None))
     } else if *specifier == "stream" || *specifier == "node:stream" {
         Some((PureModule::Stream, None))
     } else if *specifier == "stream/promises" || *specifier == "node:stream/promises" {
@@ -375,6 +390,7 @@ pub(super) fn is_module_declaration(statement: &Statement) -> bool {
                     || name == ASSERT_MODULE_BINDING || name == TIMERS_MODULE_BINDING
                     || name == STRING_DECODER_MODULE_BINDING || name == VM_MODULE_BINDING
                     || name == STREAM_MODULE_BINDING
+                    || name == QUERYSTRING_MODULE_BINDING
             )
     )
 }
@@ -667,6 +683,7 @@ fn parse_module_source(module: PureModule) -> Result<Expression, LoweringPipelin
         PureModule::StringDecoder => ("franken:string_decoder", STRING_DECODER_SOURCE),
         PureModule::Vm => ("franken:vm", VM_SOURCE),
         PureModule::Buffer => ("franken:buffer", BUFFER_SOURCE),
+        PureModule::Querystring => ("franken:querystring", QUERYSTRING_SOURCE),
         PureModule::Stream => ("franken:stream", STREAM_SOURCE),
     };
     let parse_failed = || LoweringPipelineError::InvariantViolation {
@@ -703,6 +720,7 @@ fn module_source(
         PureModule::StringDecoder => &STRING_DECODER_GLOBALS,
         PureModule::Vm => &VM_GLOBALS,
         PureModule::Buffer => &BUFFER_GLOBALS,
+        PureModule::Querystring => &[],
         PureModule::Stream => &STREAM_GLOBALS,
     };
     let mut renamer = ModuleRenamer {
@@ -729,6 +747,7 @@ impl Walk for ModuleRenamer {
                 .chain(ASSERT_PLACEHOLDERS.iter())
                 .chain(TIMERS_PLACEHOLDERS.iter())
                 .chain(STREAM_PLACEHOLDERS.iter())
+                .chain(QUERYSTRING_PLACEHOLDERS.iter())
                 .find(|(placeholder, _)| placeholder == name)
             {
                 *name = (*intrinsic).to_string();
@@ -1077,6 +1096,51 @@ mod events_tests {
             rewrite_util_requires(&tree)
                 .expect("import binding")
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn querystring_rewrite_preserves_shadowed_require_and_dynamic_authority_bd_305gi() {
+        for source in [
+            "function f(require) { return require('querystring'); }",
+            "{ const require = f; require('node:querystring'); }",
+            "try { throw f; } catch (require) { require('querystring'); }",
+            "for (const require of values) require('querystring');",
+            "const name = 'querystring'; require(name);",
+            "require('querystring/unknown');",
+            "const load = require; load('querystring');",
+        ] {
+            let tree = parse(source, ParseGoal::Script);
+            assert!(
+                rewrite_util_requires(&tree).expect(source).is_none(),
+                "{source}"
+            );
+        }
+        let tree = parse(
+            "const qs = require('querystring'); function nested() { return require('node:querystring'); }",
+            ParseGoal::Script,
+        );
+        let rewritten = rewrite_util_requires(&tree)
+            .expect("rewrite")
+            .expect("literal querystring requests");
+        assert_eq!(rewritten.body.len(), tree.body.len() + 1);
+        assert!(is_module_declaration(&rewritten.body[0]));
+        assert!(
+            rewrite_util_requires(&rewritten)
+                .expect("second pass")
+                .is_none()
+        );
+        assert_eq!(
+            super::tests::free_names(
+                &mut module_source(&BTreeSet::new(), PureModule::Querystring)
+                    .expect("factory expression"),
+            ),
+            BTreeSet::from(["%QuerystringModule".to_string()])
+        );
+        assert_eq!(intrinsic_capability("__franken_querystring_module"), None);
+        assert_eq!(
+            intrinsic_capability("%QuerystringModule"),
+            Some("builtin:QuerystringModule")
         );
     }
 

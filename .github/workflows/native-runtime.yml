@@ -7,8 +7,13 @@ on:
       - 'crates/franken-core/**'
       - 'crates/franken-engine/src/checkpoint.rs'
       - 'crates/franken-engine/src/execution_orchestrator.rs'
+      - 'crates/franken-engine/src/guardplane_adapter.rs'
+      - 'crates/franken-engine/src/ir_contract.rs'
       - 'crates/franken-engine/src/bin/franken_shipped_path_parity.rs'
       - 'crates/franken-engine/tests/orchestrator_execution_budgets.rs'
+      - 'crates/franken-engine/tests/execution_orchestrator.rs'
+      - 'crates/franken-engine/tests/guardplane_adapter_integration.rs'
+      - 'crates/franken-engine/tests/ir_contract_integration.rs'
       - 'crates/franken-engine/tests/orchestrator_live_revocation.rs'
       - 'crates/franken-engine/tests/work_scope_revocation.rs'
       - 'crates/franken-engine/src/baseline_interpreter*'
@@ -23,6 +28,13 @@ on:
       - 'crates/franken-engine/tests/promise_reaction_label_conformance.rs'
       - 'crates/franken-engine/tests/gc_reclaim_bd_9vouw_57.rs'
       - 'crates/franken-engine/tests/reflect_*.rs'
+      - 'crates/franken-engine/tests/querystring_os_builtin_bd_qmy52.rs'
+      - 'crates/franken-engine/tests/js_string*.rs'
+      - 'crates/franken-engine/tests/fixtures/string_hotpaths/**'
+      - 'crates/franken-engine/tests/environment_hostcalls.rs'
+      - 'crates/franken-extension-host/src/host_io.rs'
+      - 'crates/franken-extension-host/src/host_io/**'
+      - 'crates/franken-extension-host/tests/environment_snapshot.rs'
       - '.github/workflows/native-runtime.yml'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -32,6 +44,72 @@ permissions:
   contents: read
 
 jobs:
+  boundary-regressions:
+    name: Native runtime boundary regressions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      RUSTUP_TOOLCHAIN: nightly-2026-09-21
+      CARGO_BUILD_JOBS: '1'
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust
+        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+      - name: Execute querystring and OS regressions
+        run: |
+          set -o pipefail
+          cargo test --locked -p frankenengine-engine --no-default-features \
+            --test querystring_os_builtin_bd_qmy52 \
+            -- --nocapture --test-threads=1 2>&1 | tee boundary-querystring-tests.log
+      - name: Execute shared string metadata and search regressions
+        if: always()
+        run: |
+          set -o pipefail
+          cargo test --locked --no-fail-fast -p frankenengine-core \
+            --test js_string_hotpaths --test js_string_native_fastpaths \
+            -- --nocapture --test-threads=1 2>&1 | tee boundary-shared-string-tests.log
+      - name: Execute string source-to-runtime regressions
+        if: always()
+        run: |
+          set -o pipefail
+          cargo test --locked --no-fail-fast -p frankenengine-engine --no-default-features \
+            --test js_string_integration --test js_string_hotpath_integration \
+            -- --nocapture --test-threads=1 2>&1 | tee boundary-string-runtime-tests.log
+      - name: Execute environment snapshot provider regressions
+        if: always()
+        run: |
+          set -o pipefail
+          cargo test --locked -p frankenengine-extension-host \
+            --test environment_snapshot \
+            -- --nocapture --test-threads=1 2>&1 | tee boundary-environment-snapshot-tests.log
+      - name: Execute environment hostcall and replay regressions
+        if: always()
+        run: |
+          set -o pipefail
+          cargo test --locked --no-fail-fast -p frankenengine-engine --no-default-features \
+            --test environment_hostcalls --test package_intake_integration \
+            -- --nocapture --test-threads=1 2>&1 | tee boundary-environment-hostcall-tests.log
+      - name: Execute live guardplane containment regressions
+        if: always()
+        run: |
+          set -o pipefail
+          cargo test --locked --no-fail-fast -p frankenengine-engine --no-default-features \
+            --test guardplane_adapter_integration --test execution_orchestrator \
+            --test ir_contract_integration \
+            bd_9vouw_7 -- --nocapture --test-threads=1 2>&1 | tee boundary-guardplane-tests.log
+      - name: Retain complete boundary test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-boundary-regressions
+          path: boundary-*-tests.log
+          retention-days: 7
   reflection:
     name: Native reflection and confidentiality
     runs-on: ubuntu-latest

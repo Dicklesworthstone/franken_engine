@@ -28,10 +28,10 @@ fn stdout_of(output: &Output) -> String {
 fn check_reports_span_accurate_ambient_authority_read() {
     let dir = tempdir().expect("tempdir");
     let fixture = dir.path().join("ext.js");
-    // `process.env.SECRET_KEY` is the ambient-authority read, on line 2.
+    // Possessing `process.env` is the ambient-authority read, on line 2.
     fs::write(
         &fixture,
-        "const greeting = \"hello\";\nconst secret = process.env.SECRET_KEY;\n",
+        "const greeting = \"hello\";\nconst secret = process.env;\n",
     )
     .expect("write fixture");
 
@@ -86,7 +86,7 @@ fn check_reports_span_accurate_ambient_authority_read() {
 fn check_json_output_is_deterministic() {
     let dir = tempdir().expect("tempdir");
     let fixture = dir.path().join("ext.js");
-    fs::write(&fixture, "const secret = process.env.TOKEN;\n").expect("write fixture");
+    fs::write(&fixture, "const secret = process.env;\n").expect("write fixture");
 
     let first = run_check(&[fixture.to_str().unwrap(), "--format", "json"]);
     let second = run_check(&[fixture.to_str().unwrap(), "--format", "json"]);
@@ -100,7 +100,7 @@ fn check_json_output_is_deterministic() {
 fn check_writes_content_addressed_bundle() {
     let dir = tempdir().expect("tempdir");
     let fixture = dir.path().join("ext.js");
-    fs::write(&fixture, "const secret = process.env.TOKEN;\n").expect("write fixture");
+    fs::write(&fixture, "const secret = process.env;\n").expect("write fixture");
     let bundle = dir.path().join("bundle");
 
     let output = run_check(&[

@@ -565,6 +565,10 @@ pub(super) const BUILTIN_FUNCTION_LENGTHS: &[(&str, &str, u8)] = &[
     ("globalThis", "setTimeout", 5),
     ("globalThis", "structuredClone", 0),
     ("globalThis", "unescape", 1),
+    ("querystring", "parse", 4),
+    ("querystring", "qsEscape", 1),
+    ("querystring", "qsUnescape", 2),
+    ("querystring", "stringify", 4),
 ];
 
 /// `length` of the built-in `owner.key`, if the table lists it.

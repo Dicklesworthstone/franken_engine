@@ -24,7 +24,76 @@ struct JsonParseRecord {
     value: Value,
     source: Option<JsString>,
     elements: Vec<Option<JsonParseRecord>>,
-    entries: Vec<(JsString, Option<JsonParseRecord>)>,
+    entries: Vec<JsonParseRecordEntry>,
+}
+
+/// Source order is retained only to select the final textual duplicate.
+/// Guest enumeration order comes from the heap, never from this index.
+struct JsonParseRecordEntry {
+    key: JsString,
+    ordinal: usize,
+    record: Option<JsonParseRecord>,
+}
+
+impl JsonParseRecord {
+    /// Index once, without allocating sorting scratch. Sorting by the unique
+    /// textual ordinal makes last-duplicate selection independent of sort
+    /// stability. Building and consuming a wide record now takes O(n log n)
+    /// key comparisons rather than two quadratic sequences of linear scans.
+    fn finish_entries(&mut self) {
+        self.entries.sort_unstable_by(|left, right| {
+            left.key
+                .cmp(&right.key)
+                .then(left.ordinal.cmp(&right.ordinal))
+        });
+        self.entries.dedup_by(|later, retained| {
+            if later.key != retained.key {
+                return false;
+            }
+            // dedup_by removes `later`; keep its newer source record in the
+            // retained slot before the overwritten record is dropped.
+            std::mem::swap(later, retained);
+            true
+        });
+    }
+
+    fn take_entry(&mut self, key: &JsString) -> Option<JsonParseRecord> {
+        let index = self
+            .entries
+            .binary_search_by(|entry| entry.key.cmp(key))
+            .ok()?;
+        self.entries[index].record.take()
+    }
+}
+
+/// End of a primitive token in already-validated JSON, not a JSON validator.
+/// The source-record pass needs the original spelling, not another decoded
+/// string or binary64 conversion. Escaped quotes are skipped as code units;
+/// UTF-16 content, including lone surrogates, is never projected through UTF-8.
+fn json_primitive_source_end(units: &[u16], start: usize) -> usize {
+    let mut end = start.min(units.len());
+    if units.get(end) == Some(&0x22) {
+        end += 1;
+        while end < units.len() {
+            let unit = units[end];
+            end += 1;
+            if unit == 0x22 {
+                return end;
+            }
+            if unit == 0x5C && end < units.len() {
+                // This skips an escaped quote or backslash. For a unicode
+                // escape, its hex digits contain neither and are scanned next.
+                end += 1;
+            }
+        }
+        return end;
+    }
+    while end < units.len()
+        && !matches!(units[end], 0x09 | 0x0A | 0x0D | 0x20 | 0x2C | 0x5D | 0x7D)
+    {
+        end += 1;
+    }
+    end
 }
 
 impl InterpreterCore {
@@ -214,27 +283,24 @@ impl InterpreterCore {
                     *pos += 1;
                     let child = self.json_parsed_child(&record.value, &key);
                     let child = self.json_parse_record(units, pos, child, charged)?;
-                    // A repeated key keeps its last entry, the one the object
-                    // holds.
-                    if let Some(entry) = record
-                        .entries
-                        .iter_mut()
-                        .find(|(existing, _)| *existing == key)
-                    {
-                        entry.1 = Some(child);
-                    } else {
-                        let bytes = Self::estimate_js_string_bytes(&key).saturating_add(
-                            std::mem::size_of::<(JsString, JsonParseRecord)>() as u64,
-                        );
-                        self.json_reserve_temporary(bytes)?;
-                        *charged += bytes;
-                        record.entries.push((key, Some(child)));
-                    }
+                    // Stage in source order, including duplicates, then index
+                    // once. Charge every staged entry, even if deduplication
+                    // later drops it; no sorting scratch allocation is needed.
+                    let bytes = Self::estimate_js_string_bytes(&key)
+                        .saturating_add(std::mem::size_of::<JsonParseRecordEntry>() as u64);
+                    self.json_reserve_temporary(bytes)?;
+                    *charged += bytes;
+                    record.entries.push(JsonParseRecordEntry {
+                        key,
+                        ordinal: record.entries.len(),
+                        record: Some(child),
+                    });
                     Self::json_skip_ws(units, pos);
                     if units.get(*pos) == Some(&0x2C) {
                         *pos += 1;
                     }
                 }
+                record.finish_entries();
             }
             Some(0x5B) => {
                 *pos += 1;
@@ -257,20 +323,9 @@ impl InterpreterCore {
                     }
                 }
             }
-            first => {
-                match first {
-                    Some(0x22) => {
-                        Self::json_parse_string(units, pos);
-                    }
-                    Some(0x2D | 0x30..=0x39) => {
-                        Self::json_parse_number(units, pos);
-                    }
-                    Some(0x74 | 0x6E) => *pos += 4,
-                    Some(0x66) => *pos += 5,
-                    _ => *pos = units.len(),
-                }
-                let end = (*pos).min(units.len());
-                let source = JsString::from_code_units(&units[start.min(end)..end]);
+            _ => {
+                *pos = json_primitive_source_end(units, start);
+                let source = JsString::from_code_units(&units[start.min(*pos)..*pos]);
                 let bytes = Self::estimate_js_string_bytes(&source);
                 self.json_reserve_temporary(bytes)?;
                 *charged += bytes;
@@ -793,10 +848,7 @@ impl InterpreterCore {
                         let child = frame
                             .record
                             .as_mut()
-                            .and_then(|record| {
-                                record.entries.iter_mut().find(|(entry, _)| *entry == key)
-                            })
-                            .and_then(|(_, child)| child.take());
+                            .and_then(|record| record.take_entry(&key));
                         next = Some((*object, key, child));
                         *index += 1;
                         continue;
@@ -971,6 +1023,271 @@ mod tests {
     fn parse(core: &mut InterpreterCore, input: Value) -> Result<Value, InterpreterError> {
         core.set_register(0, input)?;
         core.dispatch_builtin_hostcall("builtin:JsonParse", RegRange { start: 0, count: 1 }, None)
+    }
+
+    fn parse_record(core: &mut InterpreterCore, text: &str) -> (JsonParseRecord, u64) {
+        let units: Vec<u16> = text.encode_utf16().collect();
+        let value = core.json_parse_document(&units).unwrap();
+        let mut charged = 0;
+        let mut pos = 0;
+        let record = core
+            .json_parse_record(&units, &mut pos, value, &mut charged)
+            .unwrap();
+        assert_eq!(pos, units.len());
+        (record, charged)
+    }
+
+    #[test]
+    fn source_record_index_keeps_final_duplicate_and_consumes_once() {
+        let mut core = core();
+        let (mut record, charged) = parse_record(
+            &mut core,
+            r#"{"z":0,"a":1.00,"middle":3,"a":2e0,"z":-0}"#,
+        );
+        assert_eq!(record.entries.len(), 3);
+        for (key, source) in [("z", "-0"), ("middle", "3"), ("a", "2e0")] {
+            let key = JsString::from(key);
+            let child = record.take_entry(&key).expect("parsed key");
+            assert_eq!(child.source.as_ref().and_then(JsString::as_str), Some(source));
+            assert!(record.take_entry(&key).is_none());
+        }
+        assert!(record.take_entry(&JsString::from("missing")).is_none());
+        let Value::Object(id) = record.value else {
+            panic!("object expected");
+        };
+        assert_eq!(
+            core.heap[id.0 as usize].properties.exact_keys(),
+            vec![
+                JsString::from("z"),
+                JsString::from("a"),
+                JsString::from("middle")
+            ]
+        );
+        drop(record);
+        core.json_release_temporary(charged);
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+    }
+
+    #[test]
+    fn source_record_index_distinguishes_exact_surrogate_keys() {
+        let mut core = core();
+        let (mut record, charged) = parse_record(
+            &mut core,
+            r#"{"\ud800":1,"\ud801":2,"\ufffd":3,"\ud800":4.00}"#,
+        );
+        assert_eq!(record.entries.len(), 3);
+        for (unit, source) in [(0xD800, "4.00"), (0xD801, "2"), (0xFFFD, "3")] {
+            let child = record
+                .take_entry(&JsString::from_code_units(&[unit]))
+                .expect("distinct exact key");
+            assert_eq!(child.source.as_ref().and_then(JsString::as_str), Some(source));
+        }
+        drop(record);
+        core.json_release_temporary(charged);
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+    }
+
+    #[test]
+    fn source_record_index_handles_wide_reverse_ordered_objects() {
+        let mut core = core();
+        let width = 2048;
+        let entries: Vec<String> = (0..width)
+            .rev()
+            .map(|index| format!("\"k{index:04}\":{index}"))
+            .collect();
+        let text = format!("{{{}}}", entries.join(","));
+        let (mut record, charged) = parse_record(&mut core, &text);
+        assert_eq!(record.entries.len(), width);
+        assert!(record.entries.windows(2).all(|pair| pair[0].key < pair[1].key));
+        // Use a different order from both the source and the sorted index.
+        for index in (0..width).step_by(2).chain((1..width).step_by(2)) {
+            let child = record
+                .take_entry(&JsString::from(format!("k{index:04}")))
+                .expect("indexed key");
+            assert_eq!(child.value, Value::Int(index as i64));
+            assert_eq!(child.source, Some(JsString::from(index.to_string())));
+        }
+        assert!(record.entries.iter().all(|entry| entry.record.is_none()));
+        drop(record);
+        core.json_release_temporary(charged);
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+    }
+
+    #[test]
+    fn source_record_index_memory_refusal_releases_all_staged_scratch() {
+        let mut core = core();
+        let units: Vec<u16> = r#"{"a":1,"b":2,"a":3}"#.encode_utf16().collect();
+        let value = core.json_parse_document(&units).unwrap();
+        let baseline = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes =
+            baseline + std::mem::size_of::<JsonParseRecord>() as u64;
+        let mut charged = 0;
+        let result = core.json_parse_record(&units, &mut 0, value, &mut charged);
+        assert!(matches!(
+            result,
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(charged > 0);
+        core.json_release_temporary(charged);
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+        assert!(core.pending_exception.is_none());
+    }
+
+    #[test]
+    fn source_spans_preserve_literal_spellings_and_delimiters() {
+        for literal in [
+            "0",
+            "-0",
+            "1.00",
+            "2e0",
+            "-1.25e-300",
+            "1e400",
+            "true",
+            "false",
+            "null",
+            r#""""#,
+            r#""plain""#,
+            r#""a\"b\\c\n\uD800""#,
+            r#""😀""#,
+        ] {
+            for prefix in ["", "  ", "\r\n\t"] {
+                for suffix in ["", ",", "]", "}", "\r\n\t "] {
+                    let units: Vec<u16> = format!("{prefix}{literal}{suffix}")
+                        .encode_utf16()
+                        .collect();
+                    let start = prefix.encode_utf16().count();
+                    assert_eq!(
+                        json_primitive_source_end(&units, start),
+                        start + literal.encode_utf16().count(),
+                        "{prefix:?} {literal:?} {suffix:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn source_spans_keep_escaped_quotes_and_exact_utf16_units() {
+        let units = [0x22, 0xD800, 0x5C, 0x22, 0xD801, 0x22, 0x2C];
+        assert_eq!(json_primitive_source_end(&units, 0), 6);
+        let text = JsString::from_code_units(&units[..6]);
+        let mut core = core();
+        let parsed = core.json_parse_document(&units[..6]).unwrap();
+        let mut charged = 0;
+        let mut pos = 0;
+        let record = core
+            .json_parse_record(&units[..6], &mut pos, parsed, &mut charged)
+            .unwrap();
+        assert_eq!(pos, 6);
+        assert_eq!(record.source, Some(text));
+        drop(record);
+        core.json_release_temporary(charged);
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+    }
+
+    #[test]
+    fn source_spans_bound_invalid_offsets_without_revalidating_json() {
+        assert_eq!(json_primitive_source_end(&[], usize::MAX), 0);
+        assert_eq!(json_primitive_source_end(&[0x22, 0x5C], 0), 2);
+        assert_eq!(json_primitive_source_end(&[0x22, 0x5C], usize::MAX), 2);
+        // Syntax acceptance still belongs to the original parser.
+        let mut core = core();
+        assert!(matches!(
+            parse(&mut core, Value::str("1e+")),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+    }
+
+    fn execute_reviver_source(source: &str) -> Value {
+        let parser = crate::parser::CanonicalEs2020Parser;
+        let tree = parser
+            .parse_with_options(
+                source,
+                ParseGoal::Script,
+                &crate::parser::ParserOptions::default(),
+            )
+            .unwrap();
+        let ir0 = crate::ir_contract::Ir0Module::from_syntax_tree(
+            tree,
+            "json-reviver-index.js".to_string(),
+        );
+        let context = crate::lowering_pipeline::LoweringContext::new(
+            "json-reviver-trace".to_string(),
+            "json-reviver-decision".to_string(),
+            "json-reviver-policy".to_string(),
+        );
+        let lowering = crate::lowering_pipeline::lower_ir0_to_ir3(&ir0, &context).unwrap();
+        let mut core = core();
+        let result = core.execute(&lowering.ir3).unwrap();
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert!(core.active_inline_callback_context_label.is_none());
+        result.value
+    }
+
+    #[test]
+    fn json_reviver_source_keeps_enumeration_order_and_final_duplicates() {
+        assert_eq!(
+            execute_reviver_source(
+                r#"
+                var seen = [];
+                JSON.parse('{"z":0,"10":1,"2":2,"a":1.00,"a":2e0}',
+                    function(key, value, context) {
+                        seen.push(key + ':' + context.source);
+                        return value;
+                    });
+                seen.join('|');
+                "#,
+            ),
+            Value::str("2:2|10:1|z:0|a:2e0|:undefined")
+        );
+    }
+
+    #[test]
+    fn json_reviver_source_is_omitted_for_replaced_values() {
+        assert_eq!(
+            execute_reviver_source(
+                r#"
+                var seen = [];
+                JSON.parse('{"a":1,"b":2,"c":{"x":3}}',
+                    function(key, value, context) {
+                        if (key === 'a') {
+                            this.b = 9;
+                            this.c = { x: 3 };
+                        }
+                        seen.push(key + ':' + context.source);
+                        return value;
+                    });
+                seen.join('|');
+                "#,
+            ),
+            Value::str("a:1|b:undefined|x:undefined|c:undefined|:undefined")
+        );
+    }
+
+    #[test]
+    fn json_reviver_source_survives_reentrant_parse() {
+        assert_eq!(
+            execute_reviver_source(
+                r#"
+                var seen = [];
+                JSON.parse('{"a":1.00,"b":2e0}',
+                    function(key, value, context) {
+                        seen.push(key + ':' + context.source);
+                        if (key === 'a') {
+                            JSON.parse('3.00', function(k, v, c) {
+                                seen.push('inner:' + c.source);
+                                return v;
+                            });
+                        }
+                        return value;
+                    });
+                seen.join('|');
+                "#,
+            ),
+            Value::str("a:1.00|inner:3.00|b:2e0|:undefined")
+        );
     }
 
     #[test]
@@ -1151,7 +1468,7 @@ mod tests {
                 assert_eq!(core.own_property_label(*child, "length"), input_label);
             }
         }
-        assert_eq!(core.object_mutation_labels.get(&root), Some(&input_label));
+        assert_eq!(core.object_mutation_labels.get(&root), Some(input_label.clone()).as_ref());
         assert_eq!(core.pending_hostcall_result_label, Some(input_label));
         assert_eq!(core.active_inline_callback_context_label, Some(caller));
         assert_eq!(core.json_parse_temporary_bytes, 0);

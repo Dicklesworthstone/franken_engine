@@ -307,10 +307,14 @@ pub enum GuardplaneOperation {
     Import {
         specifier: String,
     },
+    Hostcall {
+        capability: String,
+        allowed: bool,
+    },
 }
 
 impl GuardplaneOperation {
-    fn capability_label(&self) -> &'static str {
+    fn capability_label(&self) -> &str {
         match self {
             Self::PropertyAccess { .. } | Self::SymbolPropertyAccess { .. } => "object.property",
             Self::Call { .. } => "function.call",
@@ -322,6 +326,7 @@ impl GuardplaneOperation {
                 AllocKind::RegExp => "alloc.regexp",
             },
             Self::Import { .. } => "module.import",
+            Self::Hostcall { capability, .. } => capability,
         }
     }
 
@@ -386,6 +391,15 @@ impl GuardplaneOperation {
                     400_000
                 }
             }
+            // Possessing authority is not evidence of abuse. A real denied
+            // attempt is evidence, regardless of the spelling of its tag.
+            Self::Hostcall { allowed, .. } => {
+                if *allowed {
+                    0
+                } else {
+                    MILLION
+                }
+            }
         }
     }
 
@@ -401,6 +415,7 @@ impl GuardplaneOperation {
             // Relative imports are ordinary; a suspicious specifier carries
             // its own signal through `suspicion_millionths`.
             Self::Import { .. } => 60_000_000,
+            Self::Hostcall { .. } => 60_000_000,
         };
         let burst_penalty = i64::try_from(suspicious_index.saturating_sub(1))
             .unwrap_or(i64::MAX)
@@ -414,6 +429,7 @@ impl GuardplaneOperation {
             Self::Call { .. } => "call",
             Self::Allocation { .. } => "allocation",
             Self::Import { .. } => "import",
+            Self::Hostcall { .. } => "hostcall",
         }
     }
 }
@@ -681,8 +697,7 @@ impl GuardplaneAdapter {
     /// too, so per-operation evidence reports a neutral breadth of one.
     fn build_evidence(&self, operation: &GuardplaneOperation, suspicious_index: u64) -> Evidence {
         let suspicion_millionths = operation.suspicion_millionths();
-        let capability_penalty_millionths =
-            self.capability_penalty_millionths(operation.capability_label());
+        let capability_penalty_millionths = self.capability_penalty_millionths(operation);
 
         let resource_score_millionths =
             (suspicion_millionths / 2 + capability_penalty_millionths / 3).clamp(0, MILLION);
@@ -713,11 +728,35 @@ impl GuardplaneAdapter {
         }
     }
 
-    fn capability_penalty_millionths(&self, capability_label: &str) -> i64 {
+    fn hostcall_is_witness_denied(&self, capability: &str) -> bool {
+        if self.context.denied_capabilities.is_empty() {
+            return false;
+        }
+        self.context.denied_capabilities.contains(capability)
+            || crate::capability::hostcall_registry_row(capability)
+                .and_then(|row| row.authority)
+                .is_some_and(|authority| {
+                    self.context
+                        .denied_capabilities
+                        .contains(&authority.to_string())
+                })
+    }
+
+    fn capability_penalty_millionths(&self, operation: &GuardplaneOperation) -> i64 {
         if !self.context.witness_declared() {
             return 0;
         }
-        if self.context.denied_capabilities.contains(capability_label) {
+        let capability_label = operation.capability_label();
+        // Only real hostcalls have an authenticated registry authority. Accept
+        // both an exact operation tag (fs:write) and its authority (fs_write),
+        // without reinterpreting property/callee/import witness heuristics.
+        let denied = match operation {
+            GuardplaneOperation::Hostcall { capability, .. } => {
+                self.hostcall_is_witness_denied(capability)
+            }
+            _ => self.context.denied_capabilities.contains(capability_label),
+        };
+        if denied {
             return 900_000;
         }
         if is_runtime_capability_label(capability_label)
@@ -838,6 +877,32 @@ impl InterpreterHook for GuardplaneAdapter {
             ctx,
             GuardplaneOperation::Import {
                 specifier: specifier.to_string(),
+            },
+        )
+    }
+
+    fn pre_hostcall(&self, ctx: &HookContext, capability: &str, allowed: bool) -> HookAction {
+        // Native guest computations have no external effect. Their ordinary
+        // calls must not expand the risk transcript once per loop iteration.
+        // Real denials and explicitly denied witness capabilities still reach
+        // the adapter, including pure builtin calls. Witness declarations are
+        // evidence only; they cannot turn the live `allowed` bit into a grant.
+        if allowed
+            && !self.hostcall_is_witness_denied(capability)
+            && crate::capability::hostcall_registry_row(capability).is_some_and(|row| {
+                matches!(
+                    row.authority,
+                    None | Some(crate::capability::RuntimeCapability::Builtin)
+                )
+            })
+        {
+            return HookAction::Allow;
+        }
+        self.evaluate_operation(
+            ctx,
+            GuardplaneOperation::Hostcall {
+                capability: capability.to_string(),
+                allowed,
             },
         )
     }

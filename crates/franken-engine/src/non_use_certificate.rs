@@ -778,6 +778,7 @@ fn map_host_capability(capability: HostIoCapability) -> RuntimeCapability {
             RuntimeCapability::NetworkEgress
         }
         HostIoCapability::RandomRead => RuntimeCapability::RandomRead,
+        HostIoCapability::EnvRead => RuntimeCapability::EnvRead,
     }
 }
 
@@ -818,6 +819,7 @@ fn host_effect_target(request: &HostIoRequest) -> (String, u64, Option<String>) 
             Some(ContentHash::compute(payload).to_hex()),
         ),
         HostIoRequest::RandomRead { byte_len } => ("os-csprng".to_string(), *byte_len, None),
+        HostIoRequest::EnvRead { name } => (format!("environment:{name}"), 0, None),
     }
 }
 

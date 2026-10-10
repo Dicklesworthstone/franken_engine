@@ -182,13 +182,13 @@ fn build_full_pipeline() -> (Ir0Module, Ir1Module, Ir2Module, Ir3Module, Ir4Modu
 fn schema_version_current_values() {
     let v = IrSchemaVersion::CURRENT;
     assert_eq!(v.major, 0);
-    assert_eq!(v.minor, 14);
+    assert_eq!(v.minor, 16);
     assert_eq!(v.patch, 0);
 }
 
 #[test]
 fn schema_version_display() {
-    assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.14.0");
+    assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.16.0");
     let custom = IrSchemaVersion {
         major: 2,
         minor: 3,
@@ -277,7 +277,107 @@ fn schema_version_0120_accepts_engine_history_but_rejects_core_owned_minors_bd_g
     verify_schema_version(&header(12)).expect("current minor must be accepted");
     let error = verify_schema_version(&header(13)).expect_err("future minor must be rejected");
     assert_eq!(error.code, IrErrorCode::SchemaVersionMismatch);
-    assert!(error.message.contains("0.14.0"));
+    assert!(error.message.contains("0.16.0"));
+}
+
+#[test]
+fn contained_ir4_roundtrip_binds_outcome_and_schema_bd_9vouw_7() {
+    let ir3_hash = ContentHash::compute(b"contained-ir4-roundtrip");
+    let mut witness = Ir4Module::new(ir3_hash, "contained.js");
+    witness.outcome = ExecutionOutcome::Contained;
+
+    let json = serde_json::to_value(&witness).unwrap();
+    assert_eq!(json["outcome"], "Contained");
+    assert_eq!(
+        json["header"]["schema_version"],
+        serde_json::json!({"major": 0, "minor": 16, "patch": 0})
+    );
+    let restored: Ir4Module = serde_json::from_value(json).unwrap();
+    assert_eq!(restored, witness);
+    assert_eq!(restored.canonical_bytes(), witness.canonical_bytes());
+    assert_eq!(restored.content_hash(), witness.content_hash());
+    verify_ir4_linkage(&restored, &ir3_hash).expect("current contained witness must verify");
+
+    let mut completed = restored.clone();
+    completed.outcome = ExecutionOutcome::Completed;
+    assert_ne!(completed.content_hash(), restored.content_hash());
+}
+
+#[test]
+fn contained_ir4_rejects_schema_downgrade_and_retains_legacy_outcomes_bd_9vouw_7() {
+    let ir3_hash = ContentHash::compute(b"contained-ir4-downgrade");
+    let mut witness = Ir4Module::new(ir3_hash, "contained.js");
+    witness.outcome = ExecutionOutcome::Contained;
+    let current_hash = witness.content_hash();
+
+    for minor in [1, 2, 3, 4, 6, 7, 12, 14] {
+        for patch in [0, u32::MAX] {
+            witness.header.schema_version = IrSchemaVersion {
+                major: 0,
+                minor,
+                patch,
+            };
+            let json = serde_json::to_string(&witness).unwrap();
+            let restored: Ir4Module = serde_json::from_str(&json).unwrap();
+            verify_schema_version(&restored.header)
+                .expect("historical owned minor must remain readable");
+            let error = verify_ir4_linkage(&restored, &ir3_hash)
+                .expect_err("an old schema cannot advertise the new contained outcome");
+            assert_eq!(error.code, IrErrorCode::SchemaVersionMismatch);
+            assert_eq!(error.level, IrLevel::Ir4);
+            assert!(
+                error
+                    .message
+                    .contains("contained IR4 outcomes require schema 0.16.0")
+            );
+            assert!(
+                error
+                    .message
+                    .contains(&restored.header.schema_version.to_string())
+            );
+            assert_ne!(restored.content_hash(), current_hash);
+
+            for outcome in [
+                ExecutionOutcome::Completed,
+                ExecutionOutcome::Exception,
+                ExecutionOutcome::Timeout,
+                ExecutionOutcome::Halted,
+            ] {
+                let mut legacy = restored.clone();
+                legacy.outcome = outcome;
+                verify_ir4_linkage(&legacy, &ir3_hash)
+                    .expect("existing outcomes remain valid with historical owned schemas");
+            }
+        }
+    }
+}
+
+#[test]
+fn contained_ir4_rejects_peer_schema_versions_bd_9vouw_7() {
+    let ir3_hash = ContentHash::compute(b"contained-ir4-peer");
+    for (minor, reason) in [
+        (15, "skipped engine minor"),
+        (17, "unsupported future minor"),
+    ] {
+        for patch in [0, u32::MAX] {
+            let mut witness = Ir4Module::new(ir3_hash, "peer.js");
+            witness.header.schema_version = IrSchemaVersion {
+                major: 0,
+                minor,
+                patch,
+            };
+            for outcome in [ExecutionOutcome::Completed, ExecutionOutcome::Contained] {
+                witness.outcome = outcome;
+                let json = serde_json::to_string(&witness).unwrap();
+                let restored: Ir4Module = serde_json::from_str(&json).unwrap();
+                let error = verify_ir4_linkage(&restored, &ir3_hash)
+                    .expect_err("overlapping IR4 shapes do not make peer wires compatible");
+                assert_eq!(error.code, IrErrorCode::SchemaVersionMismatch);
+                assert_eq!(error.level, IrLevel::Ir4);
+                assert!(error.message.contains(reason));
+            }
+        }
+    }
 }
 
 // ============================================================================

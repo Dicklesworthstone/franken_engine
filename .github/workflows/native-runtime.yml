@@ -7,8 +7,13 @@ on:
       - 'crates/franken-core/**'
       - 'crates/franken-engine/src/checkpoint.rs'
       - 'crates/franken-engine/src/execution_orchestrator.rs'
+      - 'crates/franken-engine/src/guardplane_adapter.rs'
+      - 'crates/franken-engine/src/ir_contract.rs'
       - 'crates/franken-engine/src/bin/franken_shipped_path_parity.rs'
       - 'crates/franken-engine/tests/orchestrator_execution_budgets.rs'
+      - 'crates/franken-engine/tests/execution_orchestrator.rs'
+      - 'crates/franken-engine/tests/guardplane_adapter_integration.rs'
+      - 'crates/franken-engine/tests/ir_contract_integration.rs'
       - 'crates/franken-engine/tests/orchestrator_live_revocation.rs'
       - 'crates/franken-engine/tests/work_scope_revocation.rs'
       - 'crates/franken-engine/src/baseline_interpreter*'
@@ -74,6 +79,14 @@ jobs:
           cargo test --locked -p frankenengine-engine --no-default-features \
             --test environment_hostcalls \
             -- --nocapture --test-threads=1 2>&1 | tee boundary-environment-hostcall-tests.log
+      - name: Execute live guardplane containment regressions
+        if: always()
+        run: |
+          set -o pipefail
+          cargo test --locked --no-fail-fast -p frankenengine-engine --no-default-features \
+            --test guardplane_adapter_integration --test execution_orchestrator \
+            --test ir_contract_integration \
+            bd_9vouw_7 -- --nocapture --test-threads=1 2>&1 | tee boundary-guardplane-tests.log
       - name: Retain complete boundary test output
         if: always()
         uses: actions/upload-artifact@v4

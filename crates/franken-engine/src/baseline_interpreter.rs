@@ -1945,7 +1945,11 @@ fn check_hostcall_capability_gate(
     capability_tag: &str,
     instruction_index: u32,
 ) -> Result<bool, InterpreterError> {
-    let capability_tag = capability_gate_key(capability_tag);
+    // Keep the operation spelling for the live hook: an exact witness denial
+    // of env:read must still match even though its authority/evidence key is
+    // env_read. Canonical authority decisions remain independent of that tag.
+    let operation_tag = capability_tag;
+    let capability_tag = capability_gate_key(operation_tag);
     // bd-9vouw.76: a language operation encoded as a HostCall needs no
     // authority. Recording its constant `allowed` decision per call grew the
     // witness and decision log by one entry per destructuring step.
@@ -1970,6 +1974,27 @@ fn check_hostcall_capability_gate(
     // who controls the `HostCall` capability string cannot inflate the
     // witness or decision log with a multi-megabyte payload per call.
     let recordable_tag = recordable_capability_tag(capability_tag);
+
+    // Observe the actual authority decision before dispatch, including calls
+    // through builtin values and ApplyHostCall. Property/call hooks alone do
+    // not cover these paths. A capability denial remains the primary error;
+    // the hook cannot grant authority or suppress its denial evidence.
+    let hook_action = interpreter.hook.as_ref().map(|hook| {
+        let recordable_operation = recordable_capability_tag(operation_tag);
+        hook.pre_hostcall(
+            &HookContext {
+                extension_id: interpreter
+                    .config
+                    .extension_id
+                    .clone()
+                    .unwrap_or_else(|| "extension:current".to_string()),
+                instruction_count: interpreter.instructions_executed,
+                current_ip: instruction_index as usize,
+            },
+            recordable_operation.as_ref(),
+            !capability_denied,
+        )
+    });
 
     if capability_denied {
         interpreter
@@ -1999,6 +2024,10 @@ fn check_hostcall_capability_gate(
         return Err(InterpreterError::CapabilityDenied {
             capability: recordable_tag.into_owned(),
         });
+    }
+
+    if let Some(action) = hook_action {
+        interpreter.enforce_hook_action(action)?;
     }
 
     // bd-9vouw.83: an effect-free hostcall in a loop (`JSON.stringify`,
@@ -11707,6 +11736,13 @@ pub trait InterpreterHook: Send + Sync {
     fn pre_allocation(&self, ctx: &HookContext, kind: AllocKind, size_hint: usize) -> HookAction;
 
     fn pre_import(&self, ctx: &HookContext, specifier: &str) -> HookAction;
+
+    /// Observe the live capability decision before any hostcall effect.
+    /// `allowed` reports the existing capability membrane; returning Allow
+    /// never overrides a denial. Non-Allow stops an authorized dispatch.
+    fn pre_hostcall(&self, _ctx: &HookContext, _capability: &str, _allowed: bool) -> HookAction {
+        HookAction::Allow
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -18563,9 +18599,9 @@ impl InterpreterCore {
     /// resolves `.write`/`.end` to their receiver-aware builtins
     /// ([`Self::collection_prototype_method`]); `.end()` performs the deferred
     /// egress via [`Self::perform_net_request_effect`]. The hostcall capability gate
-    /// already authorized `NetworkEgress` for the `net:client_request` tag at this
-    /// call site, so the later `.end()` egress is pre-authorized at the engine
-    /// capability layer.
+    /// authorizes construction through `net:client_request`. The later `.end()`
+    /// checks `net:request` again before changing request state or dispatching,
+    /// so a live containment decision can stop the deferred effect.
     fn dispatch_client_request_create(
         &mut self,
         args: RegRange,
@@ -44059,6 +44095,16 @@ impl InterpreterCore {
                         got: receiver.type_name().to_string(),
                     });
                 };
+                if self.heap.get(req_id.0 as usize).is_none_or(|request| {
+                    matches!(request.properties.get("__ended"), Some(Value::Bool(true)))
+                }) {
+                    return Ok(Value::Undefined);
+                }
+                // Construction authorized a request object, not a future
+                // effect. Recheck the live membrane before appending the final
+                // chunk or consuming the request so containment preserves a
+                // retryable prefix and cannot publish to the host provider.
+                check_hostcall_capability_gate(self, "net:request", self.ip as u32)?;
                 let end_label =
                     self.writable_invocation_label_with_receiver(args, receiver_register)?;
                 // bd-3894s slice (2d): `req.end([data][, cb])` — a trailing closure is
@@ -50907,11 +50953,10 @@ impl InterpreterCore {
                         // writable `ClientRequest` object here WITHOUT egressing —
                         // the body is accumulated via `req.write`/`req.end` and the
                         // deferred egress fires from `.end()`. The capability gate
-                        // above already authorized NetworkEgress at creation time
-                        // (`net:client_request` maps to NetworkEgress), so the
-                        // deferred `.end()` egress is pre-authorized at the engine
-                        // capability layer; the per-endpoint SSRF policy still
-                        // applies at `.end()` via the sandboxed provider.
+                        // above authorizes construction through NetworkEgress.
+                        // The deferred `.end()` checks the live `net:request`
+                        // gate again before mutation or egress, followed by the
+                        // provider's endpoint policy at dispatch.
                         self.dispatch_client_request_create(args)?
                     }
                     HostcallDispatchBinding::HostIo => {

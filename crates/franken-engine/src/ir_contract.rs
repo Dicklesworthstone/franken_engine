@@ -31,6 +31,9 @@ pub struct IrSchemaVersion {
 }
 
 impl IrSchemaVersion {
+    /// `0.16.0` adds the explicit `Contained` execution outcome to serialized
+    /// IR4 witnesses. Engine minor `0.15.0` is intentionally skipped because it
+    /// identifies the incompatible native `franken-core` IR wire.
     /// `0.14.0` adds explicit object-method definition operations to serialized
     /// IR1, IR2, and IR3. Engine minor `0.13.0` is intentionally skipped because
     /// it identifies the incompatible native `franken-core` object-method wire.
@@ -49,7 +52,7 @@ impl IrSchemaVersion {
     /// lone-surrogate values use `$wtf16`.
     pub const CURRENT: Self = Self {
         major: 0,
-        minor: 14,
+        minor: 16,
         patch: 0,
     };
 
@@ -2961,6 +2964,8 @@ pub enum ExecutionOutcome {
     Timeout,
     /// Terminated by explicit halt instruction.
     Halted,
+    /// Interrupted by an in-flight security decision before normal completion.
+    Contained,
 }
 
 impl ExecutionOutcome {
@@ -2970,6 +2975,7 @@ impl ExecutionOutcome {
             Self::Exception => "exception",
             Self::Timeout => "timeout",
             Self::Halted => "halted",
+            Self::Contained => "contained",
         }
     }
 }
@@ -3234,6 +3240,18 @@ pub fn verify_ir3_specialization(module: &Ir3Module) -> Result<(), IrError> {
 /// Verify that an IR4 witness is consistent with the IR3 module it was produced from.
 pub fn verify_ir4_linkage(witness: &Ir4Module, ir3_hash: &ContentHash) -> Result<(), IrError> {
     verify_schema_version(&witness.header)?;
+    if witness.outcome == ExecutionOutcome::Contained
+        && witness.header.schema_version < CONTAINED_OUTCOME_SCHEMA_VERSION
+    {
+        return Err(IrError::new(
+            IrErrorCode::SchemaVersionMismatch,
+            format!(
+                "contained IR4 outcomes require schema {}, provided {}",
+                CONTAINED_OUTCOME_SCHEMA_VERSION, witness.header.schema_version
+            ),
+            IrLevel::Ir4,
+        ));
+    }
     if &witness.executed_ir3_hash != ir3_hash {
         return Err(IrError::new(
             IrErrorCode::WitnessIntegrityViolation,
@@ -3305,11 +3323,11 @@ pub fn verify_schema_version(header: &IrHeader) -> Result<(), IrError> {
         ));
     }
 
-    // Engine 0.5.0, 0.8.0 through 0.11.0, and 0.13.0 never existed: those numeric
+    // Engine 0.5.0, 0.8.0 through 0.11.0, 0.13.0, and 0.15.0 never existed: those numeric
     // versions belong to incompatible native franken-core IR shapes. Accepting
     // one here would let a peer artifact pass the version gate whenever it
     // happened to use only overlapping enum variants.
-    if provided.major == 0 && matches!(provided.minor, 5 | 8 | 9 | 10 | 11 | 13) {
+    if provided.major == 0 && matches!(provided.minor, 5 | 8 | 9 | 10 | 11 | 13 | 15) {
         return Err(IrError::new(
             IrErrorCode::SchemaVersionMismatch,
             format!(
@@ -3334,6 +3352,12 @@ pub fn verify_schema_version(header: &IrHeader) -> Result<(), IrError> {
 
     Ok(())
 }
+
+const CONTAINED_OUTCOME_SCHEMA_VERSION: IrSchemaVersion = IrSchemaVersion {
+    major: 0,
+    minor: 16,
+    patch: 0,
+};
 
 const DERIVED_CONSTRUCTOR_SCHEMA_VERSION: IrSchemaVersion = IrSchemaVersion {
     major: 0,
@@ -3702,7 +3726,7 @@ mod tests {
 
     #[test]
     fn schema_version_display() {
-        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.14.0");
+        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.16.0");
     }
 
     #[test]
@@ -4520,6 +4544,7 @@ mod tests {
         assert_eq!(ExecutionOutcome::Exception.as_str(), "exception");
         assert_eq!(ExecutionOutcome::Timeout.as_str(), "timeout");
         assert_eq!(ExecutionOutcome::Halted.as_str(), "halted");
+        assert_eq!(ExecutionOutcome::Contained.as_str(), "contained");
     }
 
     #[test]
@@ -5024,6 +5049,7 @@ mod tests {
             ExecutionOutcome::Exception,
             ExecutionOutcome::Timeout,
             ExecutionOutcome::Halted,
+            ExecutionOutcome::Contained,
         ] {
             let json = serde_json::to_string(&outcome).expect("serialize derived Serialize");
             let restored: ExecutionOutcome =
@@ -5924,6 +5950,7 @@ mod tests {
             ExecutionOutcome::Exception,
             ExecutionOutcome::Timeout,
             ExecutionOutcome::Halted,
+            ExecutionOutcome::Contained,
         ];
         let mut strs = std::collections::BTreeSet::new();
         for o in &outcomes {
@@ -5963,7 +5990,7 @@ mod tests {
     fn schema_version_current_value() {
         let v = IrSchemaVersion::CURRENT;
         assert_eq!(v.major, 0);
-        assert_eq!(v.minor, 14);
+        assert_eq!(v.minor, 16);
         assert_eq!(v.patch, 0);
     }
 
@@ -6812,7 +6839,7 @@ mod tests {
 
     #[test]
     fn verify_schema_version_accepts_historical_minor_versions_bd_lfq44() {
-        for minor in [1, 2, 3, 4, 6, 7] {
+        for minor in [1, 2, 3, 4, 6, 7, 12, 14] {
             let header = IrHeader {
                 schema_version: IrSchemaVersion {
                     major: IrSchemaVersion::CURRENT.major,
@@ -6826,14 +6853,14 @@ mod tests {
 
             assert!(
                 verify_schema_version(&header).is_ok(),
-                "engine 0.12 readers retain compatibility with 0.{minor} artifacts"
+                "engine 0.16 readers retain compatibility with 0.{minor} artifacts"
             );
         }
     }
 
     #[test]
     fn verify_schema_version_rejects_skipped_core_owned_minors_bd_0k19b() {
-        for minor in [5, 8, 9, 10, 11] {
+        for minor in [5, 8, 9, 10, 11, 13, 15] {
             let header = IrHeader {
                 schema_version: IrSchemaVersion {
                     major: 0,
@@ -6916,7 +6943,7 @@ mod tests {
 
         // Verify error message contains specific version numbers
         assert!(err.message.contains("99.88.77"));
-        assert!(err.message.contains("0.14.0")); // current version
+        assert!(err.message.contains("0.16.0")); // current version
 
         // Verify error can be displayed and contains IR level
         let display = err.to_string();

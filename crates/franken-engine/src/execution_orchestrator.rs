@@ -3800,10 +3800,14 @@ impl ExecutionOrchestrator {
     ) -> Result<Ir4Module, OrchestratorError> {
         debug_assert_eq!(ir3_hash, ir3.content_hash());
         let mut witness = Ir4Module::new(ir3_hash, source_label);
-        // The interpreter returned `Ok`, so the program ran to completion;
-        // uncaught exceptions, timeouts, and cancellation all surface as
-        // `Err(InterpreterError)` and never reach this seal.
-        witness.outcome = ExecutionOutcome::Completed;
+        // Lanes also return `Ok` when an instruction hook interrupts the
+        // program, preserving its prefix and requested containment action.
+        // Bind that distinction into the witness hash; an interrupted prefix
+        // must never certify normal completion.
+        witness.outcome = match exec.requested_hook_action.as_ref() {
+            None | Some(HookAction::Allow) => ExecutionOutcome::Completed,
+            Some(_) => ExecutionOutcome::Contained,
+        };
         witness.events = exec.witness_events.clone();
         witness.hostcall_decisions = exec.hostcall_decisions.clone();
         witness.instructions_executed = exec.instructions_executed;
@@ -4658,6 +4662,13 @@ impl ExecutionOrchestrator {
             GuardplaneOperation::Import { specifier } => {
                 builder =
                     builder.meta("guardplane_import_specifier".to_string(), specifier.clone());
+            }
+            GuardplaneOperation::Hostcall {
+                capability,
+                allowed,
+            } => {
+                builder = builder.meta("guardplane_hostcall_capability", capability.clone());
+                builder = builder.meta("guardplane_hostcall_allowed", allowed.to_string());
             }
         }
 
@@ -5641,6 +5652,7 @@ fn guardplane_operation_label(operation: &GuardplaneOperation) -> &'static str {
         GuardplaneOperation::Call { .. } => "call",
         GuardplaneOperation::Allocation { .. } => "allocation",
         GuardplaneOperation::Import { .. } => "import",
+        GuardplaneOperation::Hostcall { .. } => "hostcall",
     }
 }
 
@@ -5663,6 +5675,12 @@ fn guardplane_operation_witness_value(operation: &GuardplaneOperation) -> String
             format!("allocation kind={kind:?} size_hint={size_hint}")
         }
         GuardplaneOperation::Import { specifier } => format!("import specifier={specifier}"),
+        GuardplaneOperation::Hostcall {
+            capability,
+            allowed,
+        } => {
+            format!("hostcall capability={capability} allowed={allowed}")
+        }
     }
 }
 

@@ -405,6 +405,45 @@ impl<V> OrderedStringMap<V> {
         self.array_entries.remove(&last).map(|(_, value)| value)
     }
 
+    /// `Array.prototype.unshift` on an array whose index keys are exactly
+    /// `0..len`: the items take indices `0..items.len()` and every existing
+    /// value moves up by that count; only the new top indices get new keys.
+    /// Returns the items back, changing nothing, unless the index keys are
+    /// exactly `0..len` and the new length stays within the array index
+    /// range (bd-9vouw.472).
+    pub fn unshift_dense_index_values(&mut self, len: u32, items: Vec<V>) -> Result<(), Vec<V>> {
+        let Some(new_len) = u32::try_from(items.len())
+            .ok()
+            .and_then(|count| len.checked_add(count))
+        else {
+            return Err(items);
+        };
+        let mut keys = self.array_entries.keys();
+        if self.array_entries.len() != len as usize
+            || (len > 0
+                && (keys.next() != Some(&0)
+                    || keys.next_back().is_some_and(|index| *index != len - 1)))
+        {
+            return Err(items);
+        }
+        let count = items.len();
+        for (index, item) in (len..new_len).zip(items) {
+            self.array_entries.insert(index, (index.to_string(), item));
+        }
+        // The items were appended; rotating every value right by `count`
+        // (reverse all, then each part) brings them to the front.
+        let mut values: Vec<&mut V> = self
+            .array_entries
+            .values_mut()
+            .map(|(_, value)| value)
+            .collect();
+        reverse_values(&mut values);
+        let (front, back) = values.split_at_mut(count);
+        reverse_values(front);
+        reverse_values(back);
+        Ok(())
+    }
+
     /// Insert or replace a value.
     ///
     /// New canonical array indices join the numeric index set. New ordinary
@@ -1506,6 +1545,16 @@ impl<V> IntoIterator for ExactOrderedStringMap<V> {
 
 fn exact_canonical_array_index(key: &JsString) -> Option<u32> {
     key.as_str().and_then(canonical_array_index)
+}
+
+/// Reverse the values behind `slots` in place (the slots stay where they
+/// are; their values swap).
+fn reverse_values<V>(slots: &mut [&mut V]) {
+    let len = slots.len();
+    for low in 0..len / 2 {
+        let (front, back) = slots.split_at_mut(len - 1 - low);
+        std::mem::swap(&mut *front[low], &mut *back[0]);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3902,6 +3951,53 @@ mod tests {
         assert_eq!(single.shift_dense_index_values(1), Some('a'));
         assert!(!single.has_index_keys());
         assert_eq!(single.len(), 0);
+    }
+
+    #[test]
+    fn unshift_dense_index_values_prepends_and_keeps_keys_bd_9vouw_472() {
+        let mut map = OrderedStringMap::new();
+        map.insert("tag".to_string(), -1);
+        for index in 0..4 {
+            map.insert(index.to_string(), 10 * index);
+        }
+        assert_eq!(map.unshift_dense_index_values(4, vec![7, 8, 9]), Ok(()));
+        let entries: Vec<(String, i32)> = map
+            .iter()
+            .map(|(key, value)| (key.clone(), *value))
+            .collect();
+        let expected: Vec<(String, i32)> = [7, 8, 9, 0, 10, 20, 30]
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| (index.to_string(), value))
+            .chain([("tag".to_string(), -1)])
+            .collect();
+        assert_eq!(entries, expected);
+        assert_eq!(map.get("6"), Some(&30));
+
+        // One item onto an empty array, then onto a one-element array.
+        let mut empty = OrderedStringMap::new();
+        assert_eq!(empty.unshift_dense_index_values(0, vec!['b']), Ok(()));
+        assert_eq!(empty.unshift_dense_index_values(1, vec!['a']), Ok(()));
+        assert_eq!(empty.index_values().collect::<String>(), "ab");
+
+        // A wrong count or a hole hands the items back and changes nothing.
+        let before = map.clone();
+        assert_eq!(map.unshift_dense_index_values(6, vec![1]), Err(vec![1]));
+        assert_eq!(
+            map.unshift_dense_index_values(8, vec![1, 2]),
+            Err(vec![1, 2])
+        );
+        assert_eq!(map, before);
+        map.remove("2");
+        let holed = map.clone();
+        assert_eq!(map.unshift_dense_index_values(7, vec![5]), Err(vec![5]));
+        assert_eq!(map, holed);
+        // Past the last array index: refused.
+        let mut top = OrderedStringMap::new();
+        assert_eq!(
+            top.unshift_dense_index_values(u32::MAX, vec![1]),
+            Err(vec![1])
+        );
     }
 
     #[test]

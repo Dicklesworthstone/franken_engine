@@ -1,11 +1,13 @@
-//! bd-9vouw.472: Array.prototype.shift on a dense array moves the values inside
-//! the property carrier instead of a generic [[Get]]/[[Set]] per element. This
-//! pins what programs observe to Node v22.2.0 on both paths: a 3,000-element
-//! queue drained by shift, mixed element values, push and index writes after a
-//! shift (the dense cache), named properties, a single element, shift then
-//! unshift on a 2,000-element array and a BFS (the fast path); holes, an element
-//! inherited from Array.prototype, frozen, sealed and non-writable-length
-//! arrays and an array-like receiver (the generic path).
+//! bd-9vouw.472: Array.prototype.shift and unshift on a dense array move the
+//! values inside the property carrier instead of a generic [[Get]]/[[Set]] per
+//! element. This pins what programs observe to Node v22.2.0 on both paths. Fast
+//! path: a 3,000-element queue drained by shift, mixed element values, push and
+//! index writes after a shift and after an unshift (the dense cache), named
+//! properties, a single element, shift then unshift on a 2,000-element array, a
+//! BFS, 2,000 unshifts, unshift of several items, onto an empty array and of
+//! none, and a deque mixing unshift, push and shift. Generic path: holes, an
+//! element inherited from Array.prototype, frozen, sealed, non-extensible and
+//! non-writable-length arrays and an array-like receiver.
 
 use std::process::Command;
 
@@ -58,6 +60,29 @@ while (queue.length) {
   adj[u].forEach(function (w) { if (!(w in dist)) { dist[w] = dist[u] + 1; queue.push(w); } });
 }
 console.log(Object.keys(dist).length, dist[499], dist[250]);
+var u = [];
+for (var ui = 0; ui < 2000; ui++) u.unshift(ui);
+console.log(u.length, u[0], u[1999], u.indexOf(1000), u.unshift(), u.length);
+var m = [3, 4];
+console.log(m.unshift(1, 2), JSON.stringify(m), m.unshift("a", "b", "c"), m.join(""));
+var e = [];
+console.log(e.unshift("x"), e[0], e.length, JSON.stringify(e));
+var up = [2];
+up.unshift(1);
+up.push(3);
+up[up.length] = 4;
+console.log(JSON.stringify(up), up.length, up.lastIndexOf(4));
+var dq = [];
+for (var d = 0; d < 300; d++) { if (d % 3 === 0) dq.unshift(d); else dq.push(d); if (d % 5 === 0) dq.shift(); }
+console.log(dq.length, dq[0], dq[dq.length - 1], dq.slice(0, 4).join(","));
+var nx = Object.preventExtensions([1]);
+try { nx.unshift(0); console.log("no error"); } catch (err) { console.log(err.constructor.name, nx.length, nx[0]); }
+var su = Object.seal([1, 2]);
+try { su.unshift(0); console.log("no error"); } catch (err) { console.log(err.constructor.name, su.length); }
+var fu = Object.freeze([1]);
+try { fu.unshift(0); console.log("no error"); } catch (err) { console.log(err.constructor.name, fu.length); }
+var hu = [1, , 3];
+console.log(hu.unshift(0), hu.length, 2 in hu, JSON.stringify(hu));
 "#;
 
 const EXPECTED: &[&str] = &[
@@ -74,10 +99,19 @@ const EXPECTED: &[&str] = &[
     "only 0 [] undefined 0",
     "1001 front s1000 s1998 s1999 s999 s1998,s1999",
     "300 undefined undefined",
+    "2000 1999 0 999 2000 2000",
+    "4 [1,2,3,4] 7 abc1234",
+    "1 x 1 [\"x\"]",
+    "[1,2,3,4] 4 3",
+    "240 297 299 297,291,282,276",
+    "TypeError 1 1",
+    "TypeError 2",
+    "TypeError 1",
+    "4 4 false [0,1,null,3]",
 ];
 
 #[test]
-fn array_shift_matches_node_on_both_paths() {
+fn array_shift_and_unshift_match_node_on_both_paths() {
     let root = tempfile::tempdir().expect("temp dir");
     let entry = root
         .path()

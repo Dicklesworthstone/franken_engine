@@ -1,8 +1,9 @@
 //! BigInt arithmetic (ES2020 6.1.6.2, 7.1.13-14, 20.2) over the canonical
 //! decimal text that [`Value::BigInt`](super::Value) carries (bd-9vouw.54).
 //!
-//! `num-bigint` does the arithmetic; the value representation stays decimal
-//! text, so hashing, serialization and `===` are unchanged. String conversion
+//! Checked machine-integer arithmetic handles small values; `num-bigint` is
+//! the exact overflow fallback. The representation stays decimal text, so
+//! hashing, serialization and `===` are unchanged. String conversion
 //! bounds significant input before allocating a magnitude, and arithmetic
 //! results above [`MAX_BIGINT_BITS`] are refused before decimal formatting.
 
@@ -68,6 +69,51 @@ fn is_zero(value: &BigInt) -> bool {
 
 /// `left op right` for two BigInts.
 pub(super) fn binary(op: BigIntBinaryOp, left: &str, right: &str) -> Result<String, BigIntError> {
+    if let Some(result) = small_binary(op, left, right) {
+        return result;
+    }
+    binary_arbitrary_precision(op, left, right)
+}
+
+/// Avoid allocating two BigInts and their result for common counter, mask,
+/// and integer-arithmetic operations. Checked overflow is a tier miss, not a
+/// JS error: the arbitrary-precision path must still compute the exact value.
+/// Every admitted result fits in 128 bits, well below MAX_BIGINT_BITS.
+fn small_binary(op: BigIntBinaryOp, left: &str, right: &str) -> Option<Result<String, BigIntError>> {
+    if matches!(
+        op,
+        BigIntBinaryOp::Exp | BigIntBinaryOp::Shl | BigIntBinaryOp::Shr
+    )
+        || left.len() > 40
+        || right.len() > 40
+    {
+        return None;
+    }
+    let x = left.parse::<i128>().ok()?;
+    let y = right.parse::<i128>().ok()?;
+    let value = match op {
+        BigIntBinaryOp::Sub => x.checked_sub(y)?,
+        BigIntBinaryOp::Mul => x.checked_mul(y)?,
+        BigIntBinaryOp::Div | BigIntBinaryOp::Rem if y == 0 => {
+            return Some(Err(BigIntError::DivisionByZero));
+        }
+        // MIN / -1 (and MIN % -1) must fall back, never panic or wrap.
+        BigIntBinaryOp::Div => x.checked_div(y)?,
+        BigIntBinaryOp::Rem => x.checked_rem(y)?,
+        // Sign extension makes these identical to unbounded two's complement.
+        BigIntBinaryOp::And => x & y,
+        BigIntBinaryOp::Or => x | y,
+        BigIntBinaryOp::Xor => x ^ y,
+        BigIntBinaryOp::Exp | BigIntBinaryOp::Shl | BigIntBinaryOp::Shr => return None,
+    };
+    Some(Ok(value.to_string()))
+}
+
+fn binary_arbitrary_precision(
+    op: BigIntBinaryOp,
+    left: &str,
+    right: &str,
+) -> Result<String, BigIntError> {
     let x = parse(left);
     let y = parse(right);
     let result = match op {
@@ -202,9 +248,47 @@ pub(super) fn bitwise_not(text: &str) -> String {
     (-parse(text) - BigInt::from(1u8)).to_string()
 }
 
-/// Order of two BigInts.
+/// Borrow the sign and significant decimal digits without allocating limbs.
+/// Validation preserves the old parser fallback for non-decimal internal
+/// values; leading zeroes and signed zero do not affect numeric ordering.
+fn decimal_parts(text: &str) -> Option<(bool, &str)> {
+    let (negative, digits) = match text.strip_prefix('-') {
+        Some(digits) => (true, digits),
+        None => (false, text.strip_prefix('+').unwrap_or(text)),
+    };
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let digits = digits.trim_start_matches('0');
+    Some((negative && !digits.is_empty(), digits))
+}
+
+/// Order of two BigInts, with no heap allocation for decimal operands.
 pub(super) fn compare(left: &str, right: &str) -> Ordering {
-    parse(left).cmp(&parse(right))
+    if left == right {
+        return Ordering::Equal;
+    }
+    let (Some((left_negative, left_digits)), Some((right_negative, right_digits))) =
+        (decimal_parts(left), decimal_parts(right))
+    else {
+        return parse(left).cmp(&parse(right));
+    };
+    if left_negative != right_negative {
+        return if left_negative {
+            Ordering::Less
+        } else {
+            Ordering::Greater
+        };
+    }
+    let magnitude = left_digits
+        .len()
+        .cmp(&right_digits.len())
+        .then_with(|| left_digits.cmp(right_digits));
+    if left_negative {
+        magnitude.reverse()
+    } else {
+        magnitude
+    }
 }
 
 /// Order of a BigInt against a Number, exactly (ES2020 7.2.13 steps 3-4 and
@@ -222,8 +306,8 @@ pub(super) fn compare_with_number(bigint: &str, number: f64) -> Option<Ordering>
     }
     let floor = number.floor();
     // `{:.0}` prints an integral f64's exact decimal expansion.
-    let floor_value = parse(&format!("{floor:.0}"));
-    match parse(bigint).cmp(&floor_value) {
+    let floor_value = format!("{floor:.0}");
+    match compare(bigint, &floor_value) {
         // Equal to floor(n): less than n when n has a fraction.
         Ordering::Equal if number > floor => Some(Ordering::Less),
         ordering => Some(ordering),
@@ -367,6 +451,157 @@ pub(super) fn as_int_n(bits: u64, text: &str) -> Result<String, BigIntError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn small_binary_matches_arbitrary_precision_at_machine_boundaries() {
+        let values = [
+            i128::MIN,
+            i128::MIN + 1,
+            -(1i128 << 64),
+            -65536,
+            -129,
+            -128,
+            -1,
+            0,
+            1,
+            127,
+            128,
+            65536,
+            1i128 << 64,
+            i128::MAX - 1,
+            i128::MAX,
+        ];
+        for op in [
+            BigIntBinaryOp::Sub,
+            BigIntBinaryOp::Mul,
+            BigIntBinaryOp::Div,
+            BigIntBinaryOp::Rem,
+            BigIntBinaryOp::And,
+            BigIntBinaryOp::Or,
+            BigIntBinaryOp::Xor,
+        ] {
+            for x in values {
+                for y in values {
+                    let left = x.to_string();
+                    let right = y.to_string();
+                    assert_eq!(
+                        binary(op, &left, &right),
+                        binary_arbitrary_precision(op, &left, &right),
+                        "{left} {op:?} {right}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn machine_overflow_is_a_fallback_not_a_javascript_error() {
+        let min = i128::MIN.to_string();
+        let max = i128::MAX.to_string();
+        for (op, left, right) in [
+            (BigIntBinaryOp::Div, min.as_str(), "-1"),
+            (BigIntBinaryOp::Rem, min.as_str(), "-1"),
+            (BigIntBinaryOp::Sub, min.as_str(), "1"),
+            (BigIntBinaryOp::Mul, max.as_str(), "2"),
+        ] {
+            assert_eq!(small_binary(op, left, right), None);
+            assert_eq!(
+                binary(op, left, right),
+                binary_arbitrary_precision(op, left, right)
+            );
+        }
+        assert_eq!(
+            small_binary(BigIntBinaryOp::Mul, "6", "7"),
+            Some(Ok("42".to_string()))
+        );
+        for op in [BigIntBinaryOp::Div, BigIntBinaryOp::Rem] {
+            assert_eq!(
+                small_binary(op, "1", "0"),
+                Some(Err(BigIntError::DivisionByZero))
+            );
+        }
+        for op in [BigIntBinaryOp::Exp, BigIntBinaryOp::Shl, BigIntBinaryOp::Shr] {
+            assert_eq!(small_binary(op, "2", "3"), None);
+        }
+        let huge = "9".repeat(100);
+        assert_eq!(small_binary(BigIntBinaryOp::Sub, &huge, "1"), None);
+        assert_eq!(
+            binary(BigIntBinaryOp::Sub, &huge, "1"),
+            binary_arbitrary_precision(BigIntBinaryOp::Sub, &huge, "1")
+        );
+    }
+
+    #[test]
+    fn borrowed_decimal_comparison_matches_the_parser() {
+        let mut values: Vec<String> = [
+            "", "+", "-", "-0", "+000", "000", "0", "+001", "1", "-1",
+            "9", "10", "-9", "-10", "1_0", "invalid", "１２", "1.5",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        values.extend((-128i32..=128).map(|value| value.to_string()));
+        let long = "9".repeat(8192);
+        values.extend([
+            i128::MIN.to_string(),
+            i128::MAX.to_string(),
+            format!("-{long}"),
+            format!("1{long}"),
+            long,
+        ]);
+        // Parse once per operand in the oracle rather than once per pair.
+        let parsed: Vec<BigInt> = values.iter().map(|value| parse(value)).collect();
+        for (i, left) in values.iter().enumerate() {
+            for (j, right) in values.iter().enumerate() {
+                assert_eq!(compare(left, right), parsed[i].cmp(&parsed[j]));
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_number_comparison_keeps_exact_rounding_and_special_values() {
+        let integers = [
+            "-9007199254740993", "-2", "-1", "0", "1", "2", "9007199254740993",
+        ];
+        let numbers = [
+            f64::NEG_INFINITY,
+            -9007199254740992.0,
+            -1.5,
+            -1.0,
+            -f64::from_bits(1),
+            -0.0,
+            0.0,
+            f64::from_bits(1),
+            1.0,
+            1.5,
+            9007199254740992.0,
+            f64::MAX,
+            f64::INFINITY,
+            f64::NAN,
+        ];
+        for integer in integers {
+            for number in numbers {
+                let expected = if number.is_nan() {
+                    None
+                } else if number.is_infinite() {
+                    Some(if number.is_sign_negative() {
+                        Ordering::Greater
+                    } else {
+                        Ordering::Less
+                    })
+                } else {
+                    let floor = number.floor();
+                    let ordering = parse(integer).cmp(&parse(&format!("{floor:.0}")));
+                    Some(if ordering == Ordering::Equal && number > floor {
+                        Ordering::Less
+                    } else {
+                        ordering
+                    })
+                };
+                assert_eq!(compare_with_number(integer, number), expected);
+            }
+        }
+    }
 
     #[test]
     fn string_integer_grammar_and_canonical_signs() {

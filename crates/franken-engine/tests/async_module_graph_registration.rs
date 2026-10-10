@@ -7,10 +7,16 @@ pub use frankenengine_engine::module_live_binding;
 pub use frankenengine_engine::object_model;
 pub use frankenengine_engine::promise_model;
 
+// The three source files are compiled into this test binary a second time
+// (the engine crate exports them as public modules); the items this test
+// does not use are dead in this copy.
+#[allow(dead_code)]
 #[path = "../src/async_module_graph.rs"]
 mod async_module_graph;
+#[allow(dead_code)]
 #[path = "../src/async_module_promise_bridge.rs"]
 mod async_module_promise_bridge;
+#[allow(dead_code)]
 #[path = "../src/async_module_scheduler.rs"]
 mod async_module_scheduler;
 

@@ -6,6 +6,7 @@
 //!   was read as part of the initializer above it;
 //! - a call's type arguments in an initializer (`new Map<K, V>()`) ended it
 //!   at their comma.
+//!
 //! 8 of 734 real-world .ts files on this machine failed with "malformed
 //! class field": 2 the first way, 6 the second. Expected output is Bun
 //! 1.4.2's.

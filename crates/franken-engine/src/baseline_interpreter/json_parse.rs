@@ -24,7 +24,46 @@ struct JsonParseRecord {
     value: Value,
     source: Option<JsString>,
     elements: Vec<Option<JsonParseRecord>>,
-    entries: Vec<(JsString, Option<JsonParseRecord>)>,
+    entries: Vec<JsonParseRecordEntry>,
+}
+
+/// Source order is retained only to select the final textual duplicate.
+/// Guest enumeration order comes from the heap, never from this index.
+struct JsonParseRecordEntry {
+    key: JsString,
+    ordinal: usize,
+    record: Option<JsonParseRecord>,
+}
+
+impl JsonParseRecord {
+    /// Index once, without allocating sorting scratch. Sorting by the unique
+    /// textual ordinal makes last-duplicate selection independent of sort
+    /// stability. Building and consuming a wide record now takes O(n log n)
+    /// key comparisons rather than two quadratic sequences of linear scans.
+    fn finish_entries(&mut self) {
+        self.entries.sort_unstable_by(|left, right| {
+            left.key
+                .cmp(&right.key)
+                .then(left.ordinal.cmp(&right.ordinal))
+        });
+        self.entries.dedup_by(|later, retained| {
+            if later.key != retained.key {
+                return false;
+            }
+            // dedup_by removes `later`; keep its newer source record in the
+            // retained slot before the overwritten record is dropped.
+            std::mem::swap(later, retained);
+            true
+        });
+    }
+
+    fn take_entry(&mut self, key: &JsString) -> Option<JsonParseRecord> {
+        let index = self
+            .entries
+            .binary_search_by(|entry| entry.key.cmp(key))
+            .ok()?;
+        self.entries[index].record.take()
+    }
 }
 
 impl InterpreterCore {
@@ -214,27 +253,24 @@ impl InterpreterCore {
                     *pos += 1;
                     let child = self.json_parsed_child(&record.value, &key);
                     let child = self.json_parse_record(units, pos, child, charged)?;
-                    // A repeated key keeps its last entry, the one the object
-                    // holds.
-                    if let Some(entry) = record
-                        .entries
-                        .iter_mut()
-                        .find(|(existing, _)| *existing == key)
-                    {
-                        entry.1 = Some(child);
-                    } else {
-                        let bytes = Self::estimate_js_string_bytes(&key).saturating_add(
-                            std::mem::size_of::<(JsString, JsonParseRecord)>() as u64,
-                        );
-                        self.json_reserve_temporary(bytes)?;
-                        *charged += bytes;
-                        record.entries.push((key, Some(child)));
-                    }
+                    // Stage in source order, including duplicates, then index
+                    // once. Charge every staged entry, even if deduplication
+                    // later drops it; no sorting scratch allocation is needed.
+                    let bytes = Self::estimate_js_string_bytes(&key)
+                        .saturating_add(std::mem::size_of::<JsonParseRecordEntry>() as u64);
+                    self.json_reserve_temporary(bytes)?;
+                    *charged += bytes;
+                    record.entries.push(JsonParseRecordEntry {
+                        key,
+                        ordinal: record.entries.len(),
+                        record: Some(child),
+                    });
                     Self::json_skip_ws(units, pos);
                     if units.get(*pos) == Some(&0x2C) {
                         *pos += 1;
                     }
                 }
+                record.finish_entries();
             }
             Some(0x5B) => {
                 *pos += 1;
@@ -793,10 +829,7 @@ impl InterpreterCore {
                         let child = frame
                             .record
                             .as_mut()
-                            .and_then(|record| {
-                                record.entries.iter_mut().find(|(entry, _)| *entry == key)
-                            })
-                            .and_then(|(_, child)| child.take());
+                            .and_then(|record| record.take_entry(&key));
                         next = Some((*object, key, child));
                         *index += 1;
                         continue;
@@ -971,6 +1004,108 @@ mod tests {
     fn parse(core: &mut InterpreterCore, input: Value) -> Result<Value, InterpreterError> {
         core.set_register(0, input)?;
         core.dispatch_builtin_hostcall("builtin:JsonParse", RegRange { start: 0, count: 1 }, None)
+    }
+
+    fn parse_record(core: &mut InterpreterCore, text: &str) -> (JsonParseRecord, u64) {
+        let units: Vec<u16> = text.encode_utf16().collect();
+        let value = core.json_parse_document(&units).unwrap();
+        let mut charged = 0;
+        let mut pos = 0;
+        let record = core
+            .json_parse_record(&units, &mut pos, value, &mut charged)
+            .unwrap();
+        assert_eq!(pos, units.len());
+        (record, charged)
+    }
+
+    #[test]
+    fn source_record_index_keeps_final_duplicate_and_consumes_once() {
+        let mut core = core();
+        let (mut record, charged) = parse_record(
+            &mut core,
+            r#"{"z":0,"a":1.00,"middle":3,"a":2e0,"z":-0}"#,
+        );
+        assert_eq!(record.entries.len(), 3);
+        for (key, source) in [("z", "-0"), ("middle", "3"), ("a", "2e0")] {
+            let key = JsString::from(key);
+            let child = record.take_entry(&key).expect("parsed key");
+            assert_eq!(child.source.as_ref().and_then(JsString::as_str), Some(source));
+            assert!(record.take_entry(&key).is_none());
+        }
+        assert!(record.take_entry(&JsString::from("missing")).is_none());
+        let Value::Object(id) = record.value else {
+            panic!("object expected");
+        };
+        assert_eq!(
+            core.heap[id.0 as usize].properties.exact_keys(),
+            vec![JsString::from("z"), JsString::from("a"), JsString::from("middle")]
+        );
+        drop(record);
+        core.json_release_temporary(charged);
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+    }
+
+    #[test]
+    fn source_record_index_distinguishes_exact_surrogate_keys() {
+        let mut core = core();
+        let (mut record, charged) = parse_record(
+            &mut core,
+            r#"{"\ud800":1,"\ud801":2,"\ufffd":3,"\ud800":4.00}"#,
+        );
+        assert_eq!(record.entries.len(), 3);
+        for (unit, source) in [(0xD800, "4.00"), (0xD801, "2"), (0xFFFD, "3")] {
+            let child = record
+                .take_entry(&JsString::from_code_units(&[unit]))
+                .expect("distinct exact key");
+            assert_eq!(child.source.as_ref().and_then(JsString::as_str), Some(source));
+        }
+        drop(record);
+        core.json_release_temporary(charged);
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+    }
+
+    #[test]
+    fn source_record_index_handles_wide_reverse_ordered_objects() {
+        let mut core = core();
+        let width = 2048;
+        let entries: Vec<String> = (0..width)
+            .rev()
+            .map(|index| format!("\"k{index:04}\":{index}"))
+            .collect();
+        let text = format!("{{{}}}", entries.join(","));
+        let (mut record, charged) = parse_record(&mut core, &text);
+        assert_eq!(record.entries.len(), width);
+        assert!(record.entries.windows(2).all(|pair| pair[0].key < pair[1].key));
+        // Use a different order from both the source and the sorted index.
+        for index in (0..width).step_by(2).chain((1..width).step_by(2)) {
+            let child = record
+                .take_entry(&JsString::from(format!("k{index:04}")))
+                .expect("indexed key");
+            assert_eq!(child.value, Value::Int(index as i64));
+            assert_eq!(child.source, Some(JsString::from(index.to_string())));
+        }
+        assert!(record.entries.iter().all(|entry| entry.record.is_none()));
+        drop(record);
+        core.json_release_temporary(charged);
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+    }
+
+    #[test]
+    fn source_record_index_memory_refusal_releases_all_staged_scratch() {
+        let mut core = core();
+        let units: Vec<u16> = r#"{"a":1,"b":2,"a":3}"#.encode_utf16().collect();
+        let value = core.json_parse_document(&units).unwrap();
+        let baseline = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes =
+            baseline + std::mem::size_of::<JsonParseRecord>() as u64;
+        let mut charged = 0;
+        let result = core.json_parse_record(&units, &mut 0, value, &mut charged);
+        assert!(matches!(result, Err(InterpreterError::MemoryBudgetExceeded { .. })));
+        assert!(charged > 0);
+        core.json_release_temporary(charged);
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+        assert!(core.pending_exception.is_none());
     }
 
     #[test]

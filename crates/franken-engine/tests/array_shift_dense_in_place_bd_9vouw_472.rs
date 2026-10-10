@@ -1,13 +1,16 @@
-//! bd-9vouw.472: Array.prototype.shift and unshift on a dense array move the
-//! values inside the property carrier instead of a generic [[Get]]/[[Set]] per
-//! element. This pins what programs observe to Node v22.2.0 on both paths. Fast
-//! path: a 3,000-element queue drained by shift, mixed element values, push and
-//! index writes after a shift and after an unshift (the dense cache), named
-//! properties, a single element, shift then unshift on a 2,000-element array, a
-//! BFS, 2,000 unshifts, unshift of several items, onto an empty array and of
-//! none, and a deque mixing unshift, push and shift. Generic path: holes, an
-//! element inherited from Array.prototype, frozen, sealed, non-extensible and
-//! non-writable-length arrays and an array-like receiver.
+//! bd-9vouw.472: Array.prototype.shift, unshift and splice on a dense array move
+//! the values inside the property carrier instead of a generic [[Get]]/[[Set]]
+//! per element. This pins what programs observe to Node v22.2.0 on both paths.
+//! Fast path: a 3,000-element queue drained by shift, mixed element values,
+//! push and index writes after a shift, an unshift and a splice (the dense
+//! cache), named properties, a single element, shift then unshift on a
+//! 2,000-element array, a BFS, 2,000 unshifts, unshift of several items, onto an
+//! empty array and of none, a deque mixing unshift, push and shift, 500
+//! middle-element splices, splices that grow, shrink and keep the length, splice
+//! without a delete count, with a negative start and with no arguments, and a
+//! subclass receiver (its removed array comes from @@species). Generic path:
+//! holes, an element inherited from Array.prototype, frozen, sealed,
+//! non-extensible and non-writable-length arrays and an array-like receiver.
 
 use std::process::Command;
 
@@ -83,6 +86,33 @@ var fu = Object.freeze([1]);
 try { fu.unshift(0); console.log("no error"); } catch (err) { console.log(err.constructor.name, fu.length); }
 var hu = [1, , 3];
 console.log(hu.unshift(0), hu.length, 2 in hu, JSON.stringify(hu));
+var sp = [];
+for (var si = 0; si < 1000; si++) sp.push(si);
+var got = [];
+while (sp.length > 500) got.push(sp.splice(sp.length >> 1, 1)[0]);
+console.log(sp.length, got.length, got[0], got[499], sp[0], sp[499], sp[250]);
+var r = [1, 2, 3, 4, 5];
+console.log(JSON.stringify(r.splice(1, 2, "a", "b", "c")), JSON.stringify(r), r.length);
+var r2 = [1, 2, 3, 4, 5, 6];
+console.log(JSON.stringify(r2.splice(1, 4, "x")), JSON.stringify(r2), r2.length);
+var r3 = [1, 2, 3];
+console.log(JSON.stringify(r3.splice(1)), JSON.stringify(r3), JSON.stringify([1, 2, 3, 4].splice(-2, 1)), JSON.stringify([1, 2].splice()));
+class MyArr extends Array {}
+var ma = MyArr.from([1, 2, 3]);
+var res = ma.splice(0, 1);
+console.log(res instanceof MyArr, res.length, ma.length, ma[0]);
+var sq = [1, 2, 3];
+sq.splice(1, 1);
+sq.push(9);
+sq[sq.length] = 10;
+console.log(JSON.stringify(sq), sq.length);
+var hs = [1, , 3, 4];
+console.log(JSON.stringify(hs.splice(0, 1)), JSON.stringify(hs), 0 in hs, hs.length);
+var fs = Object.freeze([1, 2]);
+try { fs.splice(0, 1); console.log("no error"); } catch (err) { console.log(err.constructor.name, fs.length); }
+var ns = Object.preventExtensions([1, 2, 3]);
+console.log(JSON.stringify(ns.splice(0, 1)), JSON.stringify(ns));
+try { ns.splice(0, 0, "grow"); console.log("no error"); } catch (err) { console.log(err.constructor.name, ns.length); }
 "#;
 
 const EXPECTED: &[&str] = &[
@@ -108,10 +138,20 @@ const EXPECTED: &[&str] = &[
     "TypeError 2",
     "TypeError 1",
     "4 4 false [0,1,null,3]",
+    "500 500 500 250 0 999 750",
+    "[2,3] [1,\"a\",\"b\",\"c\",4,5] 6",
+    "[2,3,4,5] [1,\"x\",6] 3",
+    "[2,3] [1] [3] []",
+    "true 1 2 2",
+    "[1,3,9,10] 4",
+    "[1] [null,3,4] false 3",
+    "TypeError 2",
+    "[1] [2,3]",
+    "TypeError 2",
 ];
 
 #[test]
-fn array_shift_and_unshift_match_node_on_both_paths() {
+fn array_shift_unshift_and_splice_match_node_on_both_paths() {
     let root = tempfile::tempdir().expect("temp dir");
     let entry = root
         .path()

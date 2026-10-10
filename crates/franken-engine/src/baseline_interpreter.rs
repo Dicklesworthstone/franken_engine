@@ -43789,6 +43789,9 @@ impl InterpreterCore {
                     None => 0,
                 };
                 let delete_count = match self.builtin_number_arg(module, args, 1)? {
+                    // Step 8: with no start at all, nothing is deleted;
+                    // `[1, 2].splice()` emptied the array.
+                    None if args.count == 0 => 0,
                     None => len - start,
                     Some(value) => {
                         let raw = Self::value_as_integer(&value);
@@ -43806,6 +43809,26 @@ impl InterpreterCore {
                     items.push(self.builtin_arg(args, k)?.unwrap_or(Value::Undefined));
                     k += 1;
                 }
+                let items =
+                    match self.splice_dense_array_in_place(arr_id, len, start, delete_count, items)? {
+                        Ok(removed) => {
+                            let removed_len = removed.len();
+                            for (i, element) in removed.into_iter().enumerate() {
+                                self.create_data_property_or_throw(
+                                    removed_arr,
+                                    i.to_string(),
+                                    element,
+                                )?;
+                            }
+                            self.set_object_property(
+                                removed_arr,
+                                "length".to_string(),
+                                Value::Int(i64::try_from(removed_len).unwrap_or(i64::MAX)),
+                            )?;
+                            return Ok(Value::Object(removed_arr));
+                        }
+                        Err(items) => items,
+                    };
                 // `None` is a hole: it moves as a hole (steps 15-16 delete
                 // its target) and stays a hole in the removed array (step 11).
                 let mut elements: Vec<Option<Value>> = self.element_buffer(len)?;
@@ -77324,6 +77347,107 @@ impl InterpreterCore {
         self.refresh_dense_length_cache(array_id, new_len, true);
         self.gc_write_barrier(array_id);
         Ok(Ok(new_len))
+    }
+
+    /// `Array.prototype.splice` on an array `dense_array_moves_are_plain`
+    /// admits (and that is extensible when it grows): the deleted values
+    /// leave, the items take their place and the values after them move
+    /// inside the property carrier, entries changing only at the top. The
+    /// estimate changes by exactly the top keys added or removed and the
+    /// values exchanged, checked against the memory budget before anything
+    /// changes. Returns the deleted values in order, or the items back with
+    /// nothing changed when the array does not qualify (bd-9vouw.472).
+    fn splice_dense_array_in_place(
+        &mut self,
+        array_id: ObjectId,
+        len: usize,
+        start: usize,
+        delete_count: usize,
+        items: Vec<Value>,
+    ) -> Result<Result<Vec<Value>, Vec<Value>>, InterpreterError> {
+        let as_u32 = |count: usize| u32::try_from(count).ok();
+        let (Some(len_u32), Some(start_u32), Some(delete_u32)) =
+            (as_u32(len), as_u32(start), as_u32(delete_count))
+        else {
+            return Ok(Err(items));
+        };
+        let Some(new_len) = len
+            .checked_sub(delete_count)
+            .and_then(|kept| kept.checked_add(items.len()))
+            .filter(|new_len| as_u32(*new_len).is_some())
+        else {
+            return Ok(Err(items));
+        };
+        if start.checked_add(delete_count).is_none_or(|end| end > len)
+            || !self.dense_array_moves_are_plain(array_id, len)?
+            || (new_len > len && !self.heap[array_id.0 as usize].extensible())
+        {
+            return Ok(Err(items));
+        }
+        for item in &items {
+            validate_symbol_value(&self.symbol_state, item).map_err(|got| {
+                InterpreterError::TypeError {
+                    expected: "resolved Symbol value".to_string(),
+                    got,
+                }
+            })?;
+        }
+        // The estimate is a sum over entries: an entry is its key's part
+        // (the entry with an undefined value, which costs nothing) plus its
+        // value's bytes. Keys change only at the top; values are exchanged.
+        let heap_index = array_id.0 as usize;
+        let key_bytes = |index: usize| {
+            Self::estimate_property_entry_bytes(&index.to_string(), &Value::Undefined)
+        };
+        let properties = &self.heap[heap_index].properties;
+        let deleted_value_bytes =
+            Self::saturating_sum((start..start + delete_count).map(|index| {
+                u32::try_from(index)
+                    .ok()
+                    .and_then(|index| properties.get_index(index))
+                    .map_or(0, Self::estimate_value_bytes)
+            }));
+        let added_bytes = Self::saturating_sum((len..new_len).map(key_bytes)).saturating_add(
+            Self::saturating_sum(items.iter().map(Self::estimate_value_bytes)),
+        );
+        let removed_bytes =
+            Self::saturating_sum((new_len..len).map(key_bytes)).saturating_add(deleted_value_bytes);
+        let requested_bytes = self
+            .estimated_memory_bytes
+            .saturating_add(added_bytes)
+            .saturating_sub(removed_bytes);
+        if added_bytes > removed_bytes
+            && self
+                .memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
+        {
+            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
+        }
+        let outcome = self.mutate_heap(|heap| {
+            heap[heap_index]
+                .properties
+                .splice_dense_index_values(len_u32, start_u32, delete_u32, items)
+        });
+        let removed = match outcome {
+            Ok(removed) => removed,
+            Err(items) => return Ok(Err(items)),
+        };
+        self.estimated_memory_bytes = requested_bytes;
+        if new_len != len {
+            let shrunk_by_one = new_len + 1 == len
+                && self.set_array_length_after_dense_tail_removal(
+                    array_id,
+                    len,
+                    new_len,
+                    &new_len.to_string(),
+                )?;
+            if !shrunk_by_one {
+                let new_len_int = i64::try_from(new_len).unwrap_or(i64::MAX);
+                self.set_object_property(array_id, "length".to_string(), Value::Int(new_len_int))?;
+                self.refresh_dense_length_cache(array_id, new_len, true);
+            }
+        }
+        self.gc_write_barrier(array_id);
+        Ok(Ok(removed))
     }
 
     /// Re-establish the dense-length cache after a contiguous in-place array
@@ -112294,6 +112418,39 @@ mod shared_binding_cell_accounting_tests_bd_sblaq {
             core.unshift_dense_array_in_place(frozen, 2, vec![Value::Int(0)])
                 .expect("unshift"),
             Err(vec![Value::Int(0)])
+        );
+        assert_eq!(core.heap[frozen.0 as usize].properties, before);
+
+        // The in-place splice: shrink by two, then grow by one.
+        assert_eq!(
+            core.splice_dense_array_in_place(queue, 251, 1, 3, vec![Value::str("s")])
+                .expect("splice"),
+            Ok(vec![Value::Int(1), Value::str("v251"), Value::str("v252")])
+        );
+        assert_eq!(core.array_like_length(queue).expect("length"), 249);
+        let queue_properties = &core.heap[queue.0 as usize].properties;
+        assert_eq!(queue_properties.get("1"), Some(&Value::str("s")));
+        assert_eq!(queue_properties.get("2"), Some(&Value::str("v253")));
+        assert_eq!(queue_properties.get("249"), None);
+        assert_eq!(
+            core.splice_dense_array_in_place(queue, 249, 0, 0, vec![Value::Int(7)])
+                .expect("splice"),
+            Ok(Vec::new())
+        );
+        assert_eq!(core.array_like_length(queue).expect("length"), 250);
+        assert_eq!(
+            core.heap[queue.0 as usize].properties.get("0"),
+            Some(&Value::Int(7))
+        );
+        assert_eq!(core.heap[queue.0 as usize].cached_dense_length, Some(250));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        assert_eq!(
+            core.splice_dense_array_in_place(frozen, 2, 0, 1, Vec::new())
+                .expect("splice"),
+            Err(Vec::new())
         );
         assert_eq!(core.heap[frozen.0 as usize].properties, before);
     }

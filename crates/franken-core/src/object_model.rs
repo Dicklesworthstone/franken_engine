@@ -444,6 +444,84 @@ impl<V> OrderedStringMap<V> {
         Ok(())
     }
 
+    /// `Array.prototype.splice` on an array whose index keys are exactly
+    /// `0..len`: the `delete_count` values from `start` are removed and
+    /// returned in order, the items take their place, and the values after
+    /// them move by the difference; entries are added or removed only at
+    /// the top. Returns the items back, changing nothing, unless the index
+    /// keys are exactly `0..len`, `start + delete_count <= len` and the new
+    /// length stays within the array index range (bd-9vouw.472).
+    pub fn splice_dense_index_values(
+        &mut self,
+        len: u32,
+        start: u32,
+        delete_count: u32,
+        mut items: Vec<V>,
+    ) -> Result<Vec<V>, Vec<V>> {
+        let Some(deleted_end) = start.checked_add(delete_count).filter(|end| *end <= len) else {
+            return Err(items);
+        };
+        let Some(new_len) = u32::try_from(items.len())
+            .ok()
+            .and_then(|count| (len - delete_count).checked_add(count))
+        else {
+            return Err(items);
+        };
+        let mut keys = self.array_entries.keys();
+        if self.array_entries.len() != len as usize
+            || (len > 0
+                && (keys.next() != Some(&0)
+                    || keys.next_back().is_some_and(|index| *index != len - 1)))
+        {
+            return Err(items);
+        }
+        let replaced = items.len().min(delete_count as usize);
+        let extra = items.split_off(replaced);
+        // The first items take the first deleted slots.
+        let mut removed: Vec<V> = self
+            .array_entries
+            .range_mut(start..deleted_end)
+            .zip(items)
+            .map(|((_, (_, value)), item)| std::mem::replace(value, item))
+            .collect();
+        let rotated_from = start + replaced as u32;
+        if new_len > len {
+            // Growing: the extra items become the top entries, then rotate
+            // them right, past the values after the deleted range.
+            for (index, item) in (len..new_len).zip(extra) {
+                self.array_entries.insert(index, (index.to_string(), item));
+            }
+            let mut values: Vec<&mut V> = self
+                .array_entries
+                .range_mut(rotated_from..new_len)
+                .map(|(_, (_, value))| value)
+                .collect();
+            let moved = (new_len - len) as usize;
+            reverse_values(&mut values);
+            let (front, back) = values.split_at_mut(moved);
+            reverse_values(front);
+            reverse_values(back);
+        } else if new_len < len {
+            // Shrinking: rotate the deleted values not replaced to the top,
+            // then remove those entries.
+            let mut values: Vec<&mut V> = self
+                .array_entries
+                .range_mut(rotated_from..len)
+                .map(|(_, (_, value))| value)
+                .collect();
+            let surplus = (len - new_len) as usize;
+            let (front, back) = values.split_at_mut(surplus);
+            reverse_values(front);
+            reverse_values(back);
+            reverse_values(&mut values);
+            removed.extend(
+                (new_len..len)
+                    .filter_map(|index| self.array_entries.remove(&index).map(|(_, value)| value)),
+            );
+        }
+        Ok(removed)
+    }
+
     /// Insert or replace a value.
     ///
     /// New canonical array indices join the numeric index set. New ordinary
@@ -3996,6 +4074,73 @@ mod tests {
         let mut top = OrderedStringMap::new();
         assert_eq!(
             top.unshift_dense_index_values(u32::MAX, vec![1]),
+            Err(vec![1])
+        );
+    }
+
+    #[test]
+    fn splice_dense_index_values_matches_vec_splice_bd_9vouw_472() {
+        for len in 0..7u32 {
+            for start in 0..=len {
+                for delete_count in 0..=(len - start) {
+                    for count in 0..5i32 {
+                        let mut map = OrderedStringMap::new();
+                        map.insert("tag".to_string(), -1);
+                        let mut model: Vec<i32> = (0..len as i32).map(|value| value * 10).collect();
+                        for (index, value) in model.iter().enumerate() {
+                            map.insert(index.to_string(), *value);
+                        }
+                        let items: Vec<i32> = (0..count).map(|value| 100 + value).collect();
+                        let removed = map
+                            .splice_dense_index_values(len, start, delete_count, items.clone())
+                            .expect("dense index keys");
+                        let range = start as usize..(start + delete_count) as usize;
+                        let expected_removed: Vec<i32> = model.splice(range, items).collect();
+                        let case =
+                            format!("len {len} start {start} delete {delete_count} items {count}");
+                        assert_eq!(removed, expected_removed, "{case}");
+                        let entries: Vec<(String, i32)> = map
+                            .iter()
+                            .map(|(key, value)| (key.clone(), *value))
+                            .collect();
+                        let expected: Vec<(String, i32)> = model
+                            .iter()
+                            .enumerate()
+                            .map(|(index, value)| (index.to_string(), *value))
+                            .chain([("tag".to_string(), -1)])
+                            .collect();
+                        assert_eq!(entries, expected, "{case}");
+                    }
+                }
+            }
+        }
+
+        // A range past the end, a wrong count, a hole or a length past the
+        // last index hands the items back and changes nothing.
+        let mut map = OrderedStringMap::new();
+        for index in 0..4 {
+            map.insert(index.to_string(), index);
+        }
+        let before = map.clone();
+        assert_eq!(
+            map.splice_dense_index_values(4, 3, 2, vec![9]),
+            Err(vec![9])
+        );
+        assert_eq!(
+            map.splice_dense_index_values(5, 0, 1, vec![9]),
+            Err(vec![9])
+        );
+        assert_eq!(map, before);
+        map.remove("1");
+        let holed = map.clone();
+        assert_eq!(
+            map.splice_dense_index_values(4, 0, 1, vec![9]),
+            Err(vec![9])
+        );
+        assert_eq!(map, holed);
+        let mut top = OrderedStringMap::<i32>::new();
+        assert_eq!(
+            top.splice_dense_index_values(u32::MAX, u32::MAX, 0, vec![1]),
             Err(vec![1])
         );
     }

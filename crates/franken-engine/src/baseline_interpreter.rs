@@ -62058,10 +62058,16 @@ impl InterpreterCore {
         }
         let mut output = String::with_capacity(input.len());
         let mut last = 0usize;
+        // The replacer's position (UTF-16) is counted on from the previous
+        // match (matches come in order) and its string argument is made
+        // once: decoding the prefix and copying the subject per call made a
+        // callback replace over a long string quadratic (bd-9vouw.480).
+        let mut position_cursor = (0usize, 0usize);
+        let subject_value = callable.then(|| Value::str(input));
         for (start, end, groups) in matches {
             output.push_str(&input[last..start]);
             let matched = &input[start..end];
-            let replacement = if callable {
+            let replacement = if let Some(subject_value) = &subject_value {
                 let mut arguments = Vec::with_capacity(groups.len() + 3);
                 arguments.push(Value::str(matched));
                 arguments.extend(
@@ -62069,9 +62075,11 @@ impl InterpreterCore {
                         .iter()
                         .map(|group| group.clone().map_or(Value::Undefined, Value::str)),
                 );
-                let offset = input[..start].encode_utf16().count();
+                let (cursor_byte, cursor_units) = position_cursor;
+                let offset = cursor_units + input[cursor_byte..start].encode_utf16().count();
+                position_cursor = (start, offset);
                 arguments.push(Value::Int(i64::try_from(offset).unwrap_or(i64::MAX)));
-                arguments.push(Value::str(input));
+                arguments.push(subject_value.clone());
                 // ES2020 21.2.5.8 step 14.l: with named groups the replacer
                 // also receives the groups object, as its last argument.
                 if group_names.iter().any(Option::is_some) {

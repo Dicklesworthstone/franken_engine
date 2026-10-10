@@ -23018,7 +23018,7 @@ fn is_require_querystring_module_initializer(
 /// recognizer (an alias is confirmed only by a usage the call arm will really
 /// intercept). `decode`/`encode` are Node's documented aliases of
 /// `parse`/`stringify`.
-fn querystring_method_capability(method: &str) -> Option<&'static str> {
+pub(crate) fn querystring_method_capability(method: &str) -> Option<&'static str> {
     match method {
         "parse" | "decode" => Some("builtin:QuerystringParse"),
         "stringify" | "encode" => Some("builtin:QuerystringStringify"),
@@ -23027,6 +23027,17 @@ fn querystring_method_capability(method: &str) -> Option<&'static str> {
         _ => None,
     }
 }
+
+/// Supported querystring exports, in Node's enumeration order. The aliases
+/// share their canonical native function values in the realm module (bd-305gi).
+pub(crate) const QUERYSTRING_METHOD_NAMES: [&str; 6] = [
+    "unescape",
+    "escape",
+    "stringify",
+    "encode",
+    "parse",
+    "decode",
+];
 
 /// bd-qmy52: true when `expr` IS the querystring module object at lowering
 /// time — a sentinel-recorded require-binding alias or the inline
@@ -31873,7 +31884,7 @@ fn hostcall_exception_is_operand_derived(
                 | FlowValueShape::FreshAggregate
                 | FlowValueShape::CallableContainer
                 | FlowValueShape::OwnKeyArray)),
-        "builtin:ArrayIsArrayFunction" => inputs.is_empty(),
+        "builtin:ArrayIsArrayFunction" | "builtin:QuerystringModule" => inputs.is_empty(),
         // bd-9vouw.17: materializes an engine-owned builtin function value.
         _ if capability.starts_with(STATIC_VALUE_CAPABILITY_PREFIX) => inputs.is_empty(),
         _ if capability.starts_with("builtin:instanceof:") => true,
@@ -40489,25 +40500,17 @@ mod tests {
 
     #[test]
     fn object_keys_join_keeps_finite_own_key_provenance_bd_n8eta() {
-        for (
-            name,
-            source,
-            expected_querystring_parse,
-            expected_querystring_stringify,
-            expected_console_count,
-        ) in [
+        for (name, source, expected_querystring_method, expected_console_count) in [
             (
                 "querystring_0010",
                 "const qs = require('querystring'); const value = { foo: 'bar', baz: 'qux' }; console.log(Object.keys(value).join(',')); console.log(qs.stringify(value));",
-                false,
-                true,
+                "stringify",
                 2,
             ),
             (
                 "querystring_0013",
                 "const qs = require('querystring'); const o = qs.parse('foo=bar&abc=xyz'); console.log(Object.keys(o).join(','), o.foo, o.abc);",
-                true,
-                false,
+                "parse",
                 1,
             ),
         ] {
@@ -40525,21 +40528,22 @@ mod tests {
                 )),
                 "{name} must retain the Object.keys operation"
             );
-            assert_eq!(
+            // bd-305gi: querystring's first-class object replaces the direct
+            // call recognizer. Preserve the same public-data flow assertions
+            // below while reading the actual, potentially replaced method.
+            assert!(
                 ir1.ops.iter().any(|op| matches!(op,
-                    Ir1Op::HostCall { capability, .. }
-                        if capability == "builtin:QuerystringParse"
+                    Ir1Op::HostCall { capability, arg_count: 0 }
+                        if capability == "builtin:QuerystringModule"
                 )),
-                expected_querystring_parse,
-                "{name} querystring parse lowering"
+                "{name} must materialize the querystring module"
             );
-            assert_eq!(
+            assert!(
                 ir1.ops.iter().any(|op| matches!(op,
-                    Ir1Op::HostCall { capability, .. }
-                        if capability == "builtin:QuerystringStringify"
+                    Ir1Op::GetProperty { key: Ir1PropertyKey::Static(key) }
+                        if key.as_str() == Some(expected_querystring_method)
                 )),
-                expected_querystring_stringify,
-                "{name} querystring stringify lowering"
+                "{name} must observe the querystring method property"
             );
             assert!(
                 ir1.ops.iter().any(|op| matches!(op,

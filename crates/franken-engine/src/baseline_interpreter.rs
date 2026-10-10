@@ -6244,6 +6244,10 @@ const BUFFER_MODULE_KEY: &str = "<module buffer>";
 /// Seed-tracked slot of the `require('os')` module object (bd-9vouw.204).
 const OS_MODULE_KEY: &str = "<module os>";
 
+/// Seed-tracked slot of the realm's querystring module (bd-305gi), shared by
+/// the lowering factory and runtime CommonJS requests.
+const QUERYSTRING_MODULE_KEY: &str = "<module querystring>";
+
 /// Seed-tracked slot of the `require('url')` module object (bd-9vouw.224).
 const URL_MODULE_KEY: &str = "<module url>";
 
@@ -6703,6 +6707,24 @@ fn static_hostcall_owner_and_name(tag: &str) -> Option<(&'static str, &'static s
         .or_else(|| (tag == "builtin:Eval").then_some(("globalThis", "eval")))
         // `require('events').once` (bd-9vouw.210).
         .or_else(|| (tag == "builtin:EventsOnce").then_some(("events", "once")))
+        // querystring's native methods, including the parse/decode and
+        // stringify/encode identity aliases (bd-305gi).
+        .or_else(|| {
+            crate::lowering_pipeline::QUERYSTRING_METHOD_NAMES
+                .iter()
+                .copied()
+                .find(|name| {
+                    crate::lowering_pipeline::querystring_method_capability(name) == Some(tag)
+                })
+                .map(|name| {
+                    let name = match name {
+                        "escape" => "qsEscape",
+                        "unescape" => "qsUnescape",
+                        name => name,
+                    };
+                    ("querystring", name)
+                })
+        })
         // The legacy members of `require('url')` (bd-9vouw.224).
         .or(match tag {
             "builtin:UrlFileUrlToPath" => Some(("url", "fileURLToPath")),
@@ -39080,6 +39102,33 @@ impl InterpreterCore {
         Ok(Value::Object(object))
     }
 
+    /// querystring's supported native methods as ordinary mutable properties.
+    /// Caching in the realm's traced prototype roots keeps module and function
+    /// identity stable across literal, dynamic and cross-file require calls.
+    /// Calling an extracted method still enters `call_static_hostcall`, which
+    /// checks the caller's Builtin capability and joins its operand labels.
+    fn querystring_core_module(&mut self) -> Result<Value, InterpreterError> {
+        if let Some(object) = self.builtin_prototypes.get(QUERYSTRING_MODULE_KEY) {
+            return Ok(Value::Object(*object));
+        }
+        let members: Vec<(&str, Value)> = crate::lowering_pipeline::QUERYSTRING_METHOD_NAMES
+            .iter()
+            .map(|&name| {
+                let tag = crate::lowering_pipeline::querystring_method_capability(name)
+                    .expect("querystring module exports have native capability tags");
+                (
+                    name,
+                    Value::BuiltinFunction(BuiltinFunction::static_hostcall(tag)),
+                )
+            })
+            .collect();
+        let object = self.alloc_object_with_properties(&members)?;
+        self.mutate_builtin_prototypes(|prototypes| {
+            prototypes.insert(QUERYSTRING_MODULE_KEY.to_string(), object);
+        });
+        Ok(Value::Object(object))
+    }
+
     /// `require('events')` (bd-9vouw.210): as in Node, the EventEmitter
     /// constructor itself, whose own properties hold `EventEmitter` (itself),
     /// `once`, `defaultMaxListeners` and `errorMonitor`. The events facade
@@ -39151,6 +39200,9 @@ impl InterpreterCore {
         }
         if matches!(specifier, "os" | "node:os") {
             return self.os_core_module();
+        }
+        if matches!(specifier, "querystring" | "node:querystring") {
+            return self.querystring_core_module();
         }
         if matches!(specifier, "events" | "node:events") {
             return self.events_core_module(module);
@@ -91835,9 +91887,18 @@ impl InterpreterCore {
             }
 
             // Node `querystring` builtins (bd-qmy52): pure-compute parse/
-            // stringify/escape/unescape, dispatched from the lowering's
-            // querystring-module member-call interception. No host effect;
+            // stringify/escape/unescape, shared by first-class querystring
+            // module methods and direct hostcalls. No host effect;
             // semantics pinned against bun 1.3.14.
+            "builtin:QuerystringModule" => {
+                if args.count != 0 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "zero querystring module factory arguments".to_string(),
+                        got: format!("{} argument(s)", args.count),
+                    });
+                }
+                self.querystring_core_module()
+            }
             "builtin:QuerystringParse" => {
                 let input = self
                     .builtin_optional_arg(args, 0)?

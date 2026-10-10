@@ -23,6 +23,7 @@ on:
       - 'crates/franken-engine/tests/promise_reaction_label_conformance.rs'
       - 'crates/franken-engine/tests/gc_reclaim_bd_9vouw_57.rs'
       - 'crates/franken-engine/tests/reflect_*.rs'
+      - 'crates/franken-engine/tests/querystring_os_builtin_bd_qmy52.rs'
       - '.github/workflows/native-runtime.yml'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -32,6 +33,36 @@ permissions:
   contents: read
 
 jobs:
+  boundary-regressions:
+    name: Native runtime boundary regressions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      RUSTUP_TOOLCHAIN: nightly-2026-09-21
+      CARGO_BUILD_JOBS: '1'
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust
+        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+      - name: Execute querystring and OS regressions
+        run: |
+          set -o pipefail
+          cargo test --locked -p frankenengine-engine --no-default-features \
+            --test querystring_os_builtin_bd_qmy52 \
+            -- --nocapture --test-threads=1 2>&1 | tee boundary-querystring-tests.log
+      - name: Retain complete boundary test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-boundary-regressions
+          path: boundary-*-tests.log
+          retention-days: 7
   reflection:
     name: Native reflection and confidentiality
     runs-on: ubuntu-latest

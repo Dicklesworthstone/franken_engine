@@ -1,14 +1,15 @@
 //! bd-qmy52: `require('querystring')` and `require('os')` as pure-compute
 //! builtins.
 //!
-//! The lowering pipeline recognizes `const qs = require('querystring')` /
-//! `const os = require('os')` bindings that are actually USED as a recognized
-//! builtin (usage-gated exactly like the fs/http/path aliases), elides the
-//! require declaration, and rewrites member calls to `builtin:Querystring*` /
-//! `builtin:Os*` hostcalls. The deterministic `os` property constants
+//! querystring is a first-class realm module (bd-305gi): its extracted,
+//! destructured and deferred methods call the same `builtin:Querystring*`
+//! hostcalls as the original direct-call facade. The lowering pipeline still
+//! recognizes `const os = require('os')` bindings used as an os builtin,
+//! elides that declaration and rewrites calls to `builtin:Os*` hostcalls.
+//! The deterministic `os` property constants
 //! (`os.EOL`, `os.devNull`) lower to string literals and `os.constants` to a
 //! 0-arg `builtin:OsConstants` hostcall allocating the nested
-//! `{ signals, errno, priority }` object. Bare/unused aliases keep the
+//! `{ signals, errno, priority }` object. Bare/unused os aliases keep the
 //! ambient-authority denial (fail-closed contract pinned below).
 //!
 //! The `os` builtins return FIXED engine-contained values (the engine has no
@@ -18,6 +19,11 @@
 //! `franken_node/crates/franken-node/tests/fixtures/compat_corpus/{querystring,os}/`.
 
 use frankenengine_engine::HybridRouter;
+use frankenengine_engine::ast::ParseGoal;
+use frankenengine_engine::baseline_interpreter::LaneChoice;
+use frankenengine_engine::execution_orchestrator::{
+    ExecutionOrchestrator, ExtensionPackage, LabFixtureExecutionOrchestratorExt, OrchestratorConfig,
+};
 
 /// Evaluate `src` and return the console output messages joined by newlines
 /// (one line per `console.log`, args joined by single spaces — matching bun).
@@ -739,14 +745,12 @@ fn os_spread_call_routes_through_reflect_apply() {
 // -------------------------------------------------------------------------
 
 #[test]
-fn unused_querystring_alias_keeps_ambient_denial() {
-    // The fail-closed contract (mirror of the fs/path usage gates): a
-    // bare/unused `const qs = require('querystring')` is NOT recognized, so
-    // the require call still hits the ambient-authority lowering denial.
-    let err = eval_err("const qs = require('querystring');\nconsole.log('reached');");
-    assert!(
-        err.contains("ambient authority violation"),
-        "expected ambient-authority denial for unused querystring alias, got: {err}"
+fn unused_querystring_alias_loads_without_filesystem_authority_bd_305gi() {
+    // bd-305gi replaces the old syntactic usage gate: loading a pure module
+    // is valid even when the program only detects its presence.
+    assert_eq!(
+        eval_console("const qs = require('querystring');\nconsole.log('reached');"),
+        "reached"
     );
 }
 
@@ -760,15 +764,12 @@ fn unused_os_alias_keeps_ambient_denial() {
 }
 
 #[test]
-fn querystring_usage_only_inside_function_body_stays_fail_closed() {
-    // Function bodies are opaque to the usage scan (fail-closed): a usage
-    // reachable only through a function body does NOT confirm the alias.
-    let err = eval_err(
-        "const qs = require('querystring');\nfunction f() { return qs.escape('a b'); }\nconsole.log(f());",
-    );
-    assert!(
-        err.contains("ambient authority violation"),
-        "expected ambient-authority denial for function-body-only usage, got: {err}"
+fn querystring_usage_inside_function_body_uses_the_module_bd_305gi() {
+    assert_eq!(
+        eval_console(
+            "const qs = require('querystring');\nfunction f() { return qs.escape('a b'); }\nconsole.log(f());",
+        ),
+        "a%20b"
     );
 }
 
@@ -785,17 +786,167 @@ fn os_usage_only_inside_function_body_stays_fail_closed() {
 
 #[test]
 fn unrecognized_method_does_not_confirm_the_aliases() {
-    // `qs.notAMethod` / `os.notAMethod` are outside the recognized sets; with
-    // no other usage the aliases stay unconfirmed and the requires denied.
-    let err = eval_err("const qs = require('querystring');\nconsole.log(qs.notAMethod('x'));");
-    assert!(
-        err.contains("ambient authority violation"),
-        "expected ambient-authority denial for unrecognized-method-only usage, got: {err}"
+    // querystring is an ordinary module: an absent method throws TypeError
+    // at invocation, so feature detection and catch handlers can work.
+    assert_eq!(
+        eval_console(
+            "const qs = require('querystring'); try { qs.notAMethod('x'); } \
+             catch (error) { console.log(error instanceof TypeError); }",
+        ),
+        "true"
     );
+    // os still uses the pre-existing syntactic facade.
     let err = eval_err("const os = require('os');\nconsole.log(os.notAMethod());");
     assert!(
         err.contains("ambient authority violation"),
         "expected ambient-authority denial for unrecognized-method-only usage, got: {err}"
+    );
+}
+
+#[test]
+fn querystring_module_values_and_detached_methods_work_bd_305gi() {
+    assert_eq!(
+        eval_console(
+            r#"
+                const qs = require('querystring');
+                const { parse, stringify, escape, unescape } = require('node:querystring');
+                const alias = qs;
+                function invoke(fn, value) { return fn(value); }
+                console.log(typeof qs, typeof parse, alias === require('node:querystring'));
+                console.log(qs.parse === qs.decode, qs.stringify === qs.encode);
+                console.log(parse.name, parse.length, stringify.name, stringify.length,
+                    escape.name, escape.length, unescape.name, unescape.length);
+                console.log(parse('a=one&a=two').a.join(','));
+                console.log(stringify({ a: ['one', 'two'], b: 'a b' }));
+                console.log(invoke(escape, 'a b'), unescape('a%20b'));
+                const key = 'escape';
+                console.log(qs[key]('x+y'));
+            "#,
+        ),
+        "object function true\ntrue true\nparse 4 stringify 4 qsEscape 1 qsUnescape 2\none,two\na=one&a=two&b=a%20b\na%20b a b\nx%2By"
+    );
+}
+
+#[test]
+fn querystring_methods_observe_property_mutation_bd_305gi() {
+    assert_eq!(
+        eval_console(
+            r#"
+                const qs = require('querystring');
+                const original = qs.escape;
+                qs.escape = value => 'wrapped:' + original(value);
+                console.log(qs.escape('a b'));
+                console.log(require('node:querystring').escape('c d'));
+                delete qs.escape;
+                console.log(typeof qs.escape, original('e f'));
+            "#,
+        ),
+        "wrapped:a%20b\nwrapped:c%20d\nundefined e%20f"
+    );
+}
+
+fn run_querystring_commonjs(
+    source: &str,
+    sibling: Option<&str>,
+    lane: LaneChoice,
+    builtin: bool,
+) -> Result<Vec<String>, String> {
+    let root = tempfile::tempdir().expect("module root");
+    let entry = root.path().join("entry.cjs");
+    std::fs::write(&entry, source).expect("entry source");
+    if let Some(source) = sibling {
+        std::fs::write(root.path().join("sibling.cjs"), source).expect("sibling source");
+    }
+    let mut capabilities = vec![
+        "vm_dispatch".to_string(),
+        "heap_allocate".to_string(),
+        "console".to_string(),
+        "module_load".to_string(),
+    ];
+    if builtin {
+        capabilities.push("builtin".to_string());
+    }
+    let package = ExtensionPackage {
+        extension_id: "querystring-module-values".to_string(),
+        source: source.to_string(),
+        source_file: Some(entry.display().to_string()),
+        module_root: Some(root.path().display().to_string()),
+        capabilities,
+        version: "1.0.0".to_string(),
+        metadata: Default::default(),
+    };
+    ExecutionOrchestrator::new(OrchestratorConfig {
+        force_lane: Some(lane),
+        parse_goal: ParseGoal::Script,
+        commonjs_entry: true,
+        ..OrchestratorConfig::default()
+    })
+    .execute(&package)
+    .map(|result| {
+        result
+            .console_output
+            .into_iter()
+            .map(|entry| entry.message)
+            .collect()
+    })
+    .map_err(|error| format!("{error:?}"))
+}
+
+#[test]
+fn querystring_dynamic_require_shares_realm_module_across_files_bd_305gi() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let lines = run_querystring_commonjs(
+            r#"
+                const qs = require('querystring');
+                const name = 'node:querystring';
+                const dynamic = require(name);
+                const sibling = require('./sibling.cjs');
+                console.log(qs === dynamic, qs === sibling, qs.parse === sibling.decode);
+                console.log(qs.marker, sibling.stringify({ a: 'b c' }));
+                const load = require;
+                console.log(load('querystring') === qs);
+            "#,
+            Some(
+                "const name = 'querystring'; const qs = require(name); \
+                 qs.marker = 'from-sibling'; module.exports = qs;",
+            ),
+            lane,
+            true,
+        )
+        .unwrap_or_else(|error| panic!("{lane:?}: {error}"));
+        assert_eq!(
+            lines,
+            ["true true true", "from-sibling a=b%20c", "true"],
+            "{lane:?}"
+        );
+    }
+}
+
+#[test]
+fn querystring_dynamic_methods_keep_the_builtin_capability_gate_bd_305gi() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let error = run_querystring_commonjs(
+            "const name = 'querystring'; const parse = require(name).parse; parse('a=1');",
+            None,
+            lane,
+            false,
+        )
+        .expect_err("extracting a method must not grant Builtin authority");
+        assert!(error.contains("CapabilityDenied"), "{lane:?}: {error}");
+        assert!(
+            error.contains("builtin:QuerystringParse"),
+            "{lane:?}: {error}"
+        );
+    }
+}
+
+#[test]
+fn querystring_detached_methods_do_not_declassify_secret_inputs_bd_305gi() {
+    let error =
+        eval_err("const escape = require('querystring').escape; console.log(escape('password'));");
+    assert!(
+        error.contains("unauthorized flow") || error.contains("IFC") || error.contains("ifc"),
+        "secret-bearing transformed text must remain denied at the console: {error}"
     );
 }
 

@@ -21,6 +21,12 @@
 //!
 //! The interpreter heap routes only through `HybridRouter` (a bare lane does
 //! not surface console output), so every case drives the public router API.
+//!
+//! Since the collector (bd-9vouw.57) the heap-object ceiling counts LIVE
+//! objects, so a loop of short-lived objects no longer trips it (`frankenctl
+//! run --help`: "--max-heap-objects caps live heap objects"). The loops below
+//! keep every object alive in an array, which keeps all three properties
+//! meaningful (bd-9vouw.483).
 
 use frankenengine_engine::{EngineMemoryBudget, HybridRouter};
 
@@ -29,12 +35,12 @@ use frankenengine_engine::{EngineMemoryBudget, HybridRouter};
 /// isolates the heap-object budget as the variable under test.
 const HIGH_INSTRUCTION_BUDGET: u64 = 2_000_000_000;
 
-/// A corpus-shaped loop that allocates one short-lived object per iteration
-/// (only ~1 is ever live) and prints a deterministic observable. The iteration
-/// count exceeds the 100_000 deterministic heap-object default so the
-/// append-only heap crosses the ceiling.
-const OBJECT_LOOP_SOURCE: &str = "var n=0; var i=0; \
-     while(i<110000){ var obj={a:i,b:i+1}; n=n+1; i=i+1; } \
+/// A corpus-shaped loop that allocates one object per iteration and keeps
+/// every one of them alive, and prints a deterministic observable. The
+/// iteration count exceeds the 100_000 deterministic heap-object default, so
+/// the live heap crosses the ceiling.
+const OBJECT_LOOP_SOURCE: &str = "var n=0; var i=0; var keep=[]; \
+     while(i<110000){ keep.push({a:i,b:i+1}); n=n+1; i=i+1; } \
      console.log(n);";
 
 fn console_text(outcome: &frankenengine_engine::EvalOutcome) -> String {
@@ -93,8 +99,8 @@ fn memory_budget_override_is_honored_in_both_directions() {
     // than a no-op: the SAME 100-object program fails under a tight override and
     // succeeds under a generous one. Stays well under the 100_000-instruction
     // default, so the default instruction budget suffices here.
-    const SMALL_LOOP: &str = "var n=0; var i=0; \
-         while(i<100){ var obj={a:i}; n=n+1; i=i+1; } \
+    const SMALL_LOOP: &str = "var n=0; var i=0; var keep=[]; \
+         while(i<100){ keep.push({a:i}); n=n+1; i=i+1; } \
          console.log(n);";
 
     let mut tight_router = HybridRouter::default();

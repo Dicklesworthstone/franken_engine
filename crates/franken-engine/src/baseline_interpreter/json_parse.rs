@@ -88,8 +88,7 @@ fn json_primitive_source_end(units: &[u16], start: usize) -> usize {
         }
         return end;
     }
-    while end < units.len()
-        && !matches!(units[end], 0x09 | 0x0A | 0x0D | 0x20 | 0x2C | 0x5D | 0x7D)
+    while end < units.len() && !matches!(units[end], 0x09 | 0x0A | 0x0D | 0x20 | 0x2C | 0x5D | 0x7D)
     {
         end += 1;
     }
@@ -1040,15 +1039,16 @@ mod tests {
     #[test]
     fn source_record_index_keeps_final_duplicate_and_consumes_once() {
         let mut core = core();
-        let (mut record, charged) = parse_record(
-            &mut core,
-            r#"{"z":0,"a":1.00,"middle":3,"a":2e0,"z":-0}"#,
-        );
+        let (mut record, charged) =
+            parse_record(&mut core, r#"{"z":0,"a":1.00,"middle":3,"a":2e0,"z":-0}"#);
         assert_eq!(record.entries.len(), 3);
         for (key, source) in [("z", "-0"), ("middle", "3"), ("a", "2e0")] {
             let key = JsString::from(key);
             let child = record.take_entry(&key).expect("parsed key");
-            assert_eq!(child.source.as_ref().and_then(JsString::as_str), Some(source));
+            assert_eq!(
+                child.source.as_ref().and_then(JsString::as_str),
+                Some(source)
+            );
             assert!(record.take_entry(&key).is_none());
         }
         assert!(record.take_entry(&JsString::from("missing")).is_none());
@@ -1080,7 +1080,10 @@ mod tests {
             let child = record
                 .take_entry(&JsString::from_code_units(&[unit]))
                 .expect("distinct exact key");
-            assert_eq!(child.source.as_ref().and_then(JsString::as_str), Some(source));
+            assert_eq!(
+                child.source.as_ref().and_then(JsString::as_str),
+                Some(source)
+            );
         }
         drop(record);
         core.json_release_temporary(charged);
@@ -1098,7 +1101,12 @@ mod tests {
         let text = format!("{{{}}}", entries.join(","));
         let (mut record, charged) = parse_record(&mut core, &text);
         assert_eq!(record.entries.len(), width);
-        assert!(record.entries.windows(2).all(|pair| pair[0].key < pair[1].key));
+        assert!(
+            record
+                .entries
+                .windows(2)
+                .all(|pair| pair[0].key < pair[1].key)
+        );
         // Use a different order from both the source and the sorted index.
         for index in (0..width).step_by(2).chain((1..width).step_by(2)) {
             let child = record
@@ -1468,7 +1476,10 @@ mod tests {
                 assert_eq!(core.own_property_label(*child, "length"), input_label);
             }
         }
-        assert_eq!(core.object_mutation_labels.get(&root), Some(input_label.clone()).as_ref());
+        assert_eq!(
+            core.object_mutation_labels.get(&root),
+            Some(input_label.clone()).as_ref()
+        );
         assert_eq!(core.pending_hostcall_result_label, Some(input_label));
         assert_eq!(core.active_inline_callback_context_label, Some(caller));
         assert_eq!(core.json_parse_temporary_bytes, 0);

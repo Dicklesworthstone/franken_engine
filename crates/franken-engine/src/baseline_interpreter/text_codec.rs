@@ -272,6 +272,9 @@ impl InterpreterCore {
                     // Decoders from older heap snapshots have no pending bytes.
                     _ => DecodeState::default(),
                 };
+                // Whether this call finishes what an earlier streaming call
+                // left buffered (incomplete bytes, the BOM decision).
+                let carried = state.streaming;
                 // Incomplete bytes and the BOM decision carry information into
                 // later calls. Admit that provenance before publishing state;
                 // a public suffix must not declassify a secret prefix.
@@ -289,6 +292,17 @@ impl InterpreterCore {
                     expected: format!("valid {encoding} data"),
                     got: format!("The encoded data was not valid for encoding {encoding}"),
                 })?;
+                // The text such a call returns depends on the buffered bytes,
+                // so it carries the decoder's provenance, not only this
+                // call's arguments: "\u20ac" from a secret E2 82 and a public
+                // AC was Public.
+                if carried && let Some(state_label) = self.object_mutation_labels.get(&decoder) {
+                    let pending = self
+                        .pending_hostcall_result_label
+                        .as_ref()
+                        .map_or_else(|| state_label.clone(), |pending| pending.join(state_label));
+                    self.replace_pending_hostcall_result_label(Some(pending))?;
+                }
                 Ok(Value::Str(JsString::from_code_units(&units)))
             }
             _ => Err(InterpreterError::TypeError {

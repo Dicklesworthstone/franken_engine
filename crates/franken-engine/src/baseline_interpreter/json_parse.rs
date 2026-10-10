@@ -66,6 +66,36 @@ impl JsonParseRecord {
     }
 }
 
+/// End of a primitive token in already-validated JSON, not a JSON validator.
+/// The source-record pass needs the original spelling, not another decoded
+/// string or binary64 conversion. Escaped quotes are skipped as code units;
+/// UTF-16 content, including lone surrogates, is never projected through UTF-8.
+fn json_primitive_source_end(units: &[u16], start: usize) -> usize {
+    let mut end = start.min(units.len());
+    if units.get(end) == Some(&0x22) {
+        end += 1;
+        while end < units.len() {
+            let unit = units[end];
+            end += 1;
+            if unit == 0x22 {
+                return end;
+            }
+            if unit == 0x5C && end < units.len() {
+                // This skips an escaped quote or backslash. For a unicode
+                // escape, its hex digits contain neither and are scanned next.
+                end += 1;
+            }
+        }
+        return end;
+    }
+    while end < units.len()
+        && !matches!(units[end], 0x09 | 0x0A | 0x0D | 0x20 | 0x2C | 0x5D | 0x7D)
+    {
+        end += 1;
+    }
+    end
+}
+
 impl InterpreterCore {
     pub(super) fn json_parse_builtin(
         &mut self,
@@ -293,20 +323,9 @@ impl InterpreterCore {
                     }
                 }
             }
-            first => {
-                match first {
-                    Some(0x22) => {
-                        Self::json_parse_string(units, pos);
-                    }
-                    Some(0x2D | 0x30..=0x39) => {
-                        Self::json_parse_number(units, pos);
-                    }
-                    Some(0x74 | 0x6E) => *pos += 4,
-                    Some(0x66) => *pos += 5,
-                    _ => *pos = units.len(),
-                }
-                let end = (*pos).min(units.len());
-                let source = JsString::from_code_units(&units[start.min(end)..end]);
+            _ => {
+                *pos = json_primitive_source_end(units, start);
+                let source = JsString::from_code_units(&units[start.min(*pos)..*pos]);
                 let bytes = Self::estimate_js_string_bytes(&source);
                 self.json_reserve_temporary(bytes)?;
                 *charged += bytes;
@@ -1038,7 +1057,11 @@ mod tests {
         };
         assert_eq!(
             core.heap[id.0 as usize].properties.exact_keys(),
-            vec![JsString::from("z"), JsString::from("a"), JsString::from("middle")]
+            vec![
+                JsString::from("z"),
+                JsString::from("a"),
+                JsString::from("middle")
+            ]
         );
         drop(record);
         core.json_release_temporary(charged);
@@ -1100,12 +1123,171 @@ mod tests {
             baseline + std::mem::size_of::<JsonParseRecord>() as u64;
         let mut charged = 0;
         let result = core.json_parse_record(&units, &mut 0, value, &mut charged);
-        assert!(matches!(result, Err(InterpreterError::MemoryBudgetExceeded { .. })));
+        assert!(matches!(
+            result,
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
         assert!(charged > 0);
         core.json_release_temporary(charged);
         assert_eq!(core.json_parse_temporary_bytes, 0);
         assert_eq!(core.estimated_memory_bytes(), baseline);
         assert!(core.pending_exception.is_none());
+    }
+
+    #[test]
+    fn source_spans_preserve_literal_spellings_and_delimiters() {
+        for literal in [
+            "0",
+            "-0",
+            "1.00",
+            "2e0",
+            "-1.25e-300",
+            "1e400",
+            "true",
+            "false",
+            "null",
+            r#""""#,
+            r#""plain""#,
+            r#""a\"b\\c\n\uD800""#,
+            r#""😀""#,
+        ] {
+            for prefix in ["", "  ", "\r\n\t"] {
+                for suffix in ["", ",", "]", "}", "\r\n\t "] {
+                    let units: Vec<u16> = format!("{prefix}{literal}{suffix}")
+                        .encode_utf16()
+                        .collect();
+                    let start = prefix.encode_utf16().count();
+                    assert_eq!(
+                        json_primitive_source_end(&units, start),
+                        start + literal.encode_utf16().count(),
+                        "{prefix:?} {literal:?} {suffix:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn source_spans_keep_escaped_quotes_and_exact_utf16_units() {
+        let units = [0x22, 0xD800, 0x5C, 0x22, 0xD801, 0x22, 0x2C];
+        assert_eq!(json_primitive_source_end(&units, 0), 6);
+        let text = JsString::from_code_units(&units[..6]);
+        let mut core = core();
+        let parsed = core.json_parse_document(&units[..6]).unwrap();
+        let mut charged = 0;
+        let mut pos = 0;
+        let record = core
+            .json_parse_record(&units[..6], &mut pos, parsed, &mut charged)
+            .unwrap();
+        assert_eq!(pos, 6);
+        assert_eq!(record.source, Some(text));
+        drop(record);
+        core.json_release_temporary(charged);
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+    }
+
+    #[test]
+    fn source_spans_bound_invalid_offsets_without_revalidating_json() {
+        assert_eq!(json_primitive_source_end(&[], usize::MAX), 0);
+        assert_eq!(json_primitive_source_end(&[0x22, 0x5C], 0), 2);
+        assert_eq!(json_primitive_source_end(&[0x22, 0x5C], usize::MAX), 2);
+        // Syntax acceptance still belongs to the original parser.
+        let mut core = core();
+        assert!(matches!(
+            parse(&mut core, Value::str("1e+")),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+    }
+
+    fn execute_reviver_source(source: &str) -> Value {
+        let parser = crate::parser::CanonicalEs2020Parser;
+        let tree = parser
+            .parse_with_options(
+                source,
+                ParseGoal::Script,
+                &crate::parser::ParserOptions::default(),
+            )
+            .unwrap();
+        let ir0 = crate::ir_contract::Ir0Module::from_syntax_tree(
+            tree,
+            "json-reviver-index.js".to_string(),
+        );
+        let context = crate::lowering_pipeline::LoweringContext::new(
+            "json-reviver-trace".to_string(),
+            "json-reviver-decision".to_string(),
+            "json-reviver-policy".to_string(),
+        );
+        let lowering = crate::lowering_pipeline::lower_ir0_to_ir3(&ir0, &context).unwrap();
+        let mut core = core();
+        let result = core.execute(&lowering.ir3).unwrap();
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert!(core.active_inline_callback_context_label.is_none());
+        result.value
+    }
+
+    #[test]
+    fn json_reviver_source_keeps_enumeration_order_and_final_duplicates() {
+        assert_eq!(
+            execute_reviver_source(
+                r#"
+                var seen = [];
+                JSON.parse('{"z":0,"10":1,"2":2,"a":1.00,"a":2e0}',
+                    function(key, value, context) {
+                        seen.push(key + ':' + context.source);
+                        return value;
+                    });
+                seen.join('|');
+                "#,
+            ),
+            Value::str("2:2|10:1|z:0|a:2e0|:undefined")
+        );
+    }
+
+    #[test]
+    fn json_reviver_source_is_omitted_for_replaced_values() {
+        assert_eq!(
+            execute_reviver_source(
+                r#"
+                var seen = [];
+                JSON.parse('{"a":1,"b":2,"c":{"x":3}}',
+                    function(key, value, context) {
+                        if (key === 'a') {
+                            this.b = 9;
+                            this.c = { x: 3 };
+                        }
+                        seen.push(key + ':' + context.source);
+                        return value;
+                    });
+                seen.join('|');
+                "#,
+            ),
+            Value::str("a:1|b:undefined|x:undefined|c:undefined|:undefined")
+        );
+    }
+
+    #[test]
+    fn json_reviver_source_survives_reentrant_parse() {
+        assert_eq!(
+            execute_reviver_source(
+                r#"
+                var seen = [];
+                JSON.parse('{"a":1.00,"b":2e0}',
+                    function(key, value, context) {
+                        seen.push(key + ':' + context.source);
+                        if (key === 'a') {
+                            JSON.parse('3.00', function(k, v, c) {
+                                seen.push('inner:' + c.source);
+                                return v;
+                            });
+                        }
+                        return value;
+                    });
+                seen.join('|');
+                "#,
+            ),
+            Value::str("a:1.00|inner:3.00|b:2e0|:undefined")
+        );
     }
 
     #[test]
@@ -1286,7 +1468,7 @@ mod tests {
                 assert_eq!(core.own_property_label(*child, "length"), input_label);
             }
         }
-        assert_eq!(core.object_mutation_labels.get(&root), Some(&input_label));
+        assert_eq!(core.object_mutation_labels.get(&root), Some(input_label.clone()).as_ref());
         assert_eq!(core.pending_hostcall_result_label, Some(input_label));
         assert_eq!(core.active_inline_callback_context_label, Some(caller));
         assert_eq!(core.json_parse_temporary_bytes, 0);

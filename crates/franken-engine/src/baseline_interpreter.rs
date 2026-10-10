@@ -59841,6 +59841,15 @@ impl InterpreterCore {
                 };
                 format!("Cannot {action} properties of {got}")
             }
+            // JSON.stringify of a cycle: Node's first line, which code
+            // matching on "circular structure" reads. Node goes on to name
+            // the property path that closes the circle; that path can carry
+            // labeled keys, so it stays out of the message.
+            InterpreterError::TypeError { expected, got }
+                if expected == "acyclic JSON value" && got == "circular structure" =>
+            {
+                "Converting circular structure to JSON".to_string()
+            }
             _ => err.to_string(),
         };
         let prototype = self.ensure_builtin_prototype(name)?;

@@ -117,9 +117,9 @@ fn execute(
 fn lower(source: &str) -> Result<Ir3Module, LoweringPipelineError> {
     let tree = CanonicalEs2020Parser
         .parse_with_options(
-            &ParserSource {
-                source,
-                source_label: Some("environment-hostcalls.js"),
+            ParserSource {
+                label: "environment-hostcalls.js".to_string(),
+                text: source.to_string(),
             },
             ParseGoal::Script,
             &ParserOptions::default(),

@@ -29,6 +29,8 @@ on:
       - 'crates/franken-engine/tests/gc_reclaim_bd_9vouw_57.rs'
       - 'crates/franken-engine/tests/reflect_*.rs'
       - 'crates/franken-engine/tests/querystring_os_builtin_bd_qmy52.rs'
+      - 'crates/franken-engine/tests/js_string*.rs'
+      - 'crates/franken-engine/tests/fixtures/string_hotpaths/**'
       - 'crates/franken-engine/tests/environment_hostcalls.rs'
       - 'crates/franken-extension-host/src/host_io.rs'
       - 'crates/franken-extension-host/src/host_io/**'
@@ -65,6 +67,20 @@ jobs:
           cargo test --locked -p frankenengine-engine --no-default-features \
             --test querystring_os_builtin_bd_qmy52 \
             -- --nocapture --test-threads=1 2>&1 | tee boundary-querystring-tests.log
+      - name: Execute shared string metadata and search regressions
+        if: always()
+        run: |
+          set -o pipefail
+          cargo test --locked --no-fail-fast -p frankenengine-core \
+            --test js_string_hotpaths --test js_string_native_fastpaths \
+            -- --nocapture --test-threads=1 2>&1 | tee boundary-shared-string-tests.log
+      - name: Execute string source-to-runtime regressions
+        if: always()
+        run: |
+          set -o pipefail
+          cargo test --locked --no-fail-fast -p frankenengine-engine --no-default-features \
+            --test js_string_integration --test js_string_hotpath_integration \
+            -- --nocapture --test-threads=1 2>&1 | tee boundary-string-runtime-tests.log
       - name: Execute environment snapshot provider regressions
         if: always()
         run: |

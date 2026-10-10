@@ -21,8 +21,8 @@ fn expect_true(label: &str, source: &str) {
         format!("decision-string-hotpath-{label}"),
         format!("policy-string-hotpath-{label}"),
     );
-    let lowering = lower_ir0_to_ir3(&ir0, &ctx)
-        .unwrap_or_else(|err| panic!("{label} should lower: {err:?}"));
+    let lowering =
+        lower_ir0_to_ir3(&ir0, &ctx).unwrap_or_else(|err| panic!("{label} should lower: {err:?}"));
     let mut config = InterpreterConfig::quickjs_defaults();
     config.granted_capabilities = BTreeSet::from([
         RuntimeCapability::VmDispatch,
@@ -49,5 +49,21 @@ fn unicode_surrogate_indexing_and_healing_remain_exact() {
     expect_true(
         "unicode-indexing",
         include_str!("fixtures/string_hotpaths/unicode_indexing.js"),
+    );
+}
+
+#[test]
+fn search_fast_paths_and_unicode_fallback_match_code_unit_oracle() {
+    expect_true(
+        "search-boundaries",
+        include_str!("fixtures/string_hotpaths/search_boundaries.js"),
+    );
+}
+
+#[test]
+fn code_point_iteration_preserves_exact_units_and_relational_order() {
+    expect_true(
+        "code-point-iteration",
+        include_str!("fixtures/string_hotpaths/code_point_iteration.js"),
     );
 }

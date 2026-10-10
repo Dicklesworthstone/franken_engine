@@ -236,6 +236,12 @@ impl JsString {
     /// which heals a trailing high surrogate against a leading low surrogate
     /// into the supplementary code point.
     pub fn concat(&self, other: &JsString) -> JsString {
+        if self.utf16_length == 0 {
+            return other.clone();
+        }
+        if other.utf16_length == 0 {
+            return self.clone();
+        }
         if self.units.is_none() && other.units.is_none() {
             let mut text = String::with_capacity(self.utf8.len() + other.utf8.len());
             text.push_str(&self.utf8);
@@ -276,7 +282,11 @@ impl JsString {
     /// single-unit element rather than the U+FFFD projection. For well-formed
     /// content this is exactly the per-`char` split. (bd-rdnhc)
     pub fn code_point_elements(&self) -> Vec<JsString> {
-        let units = self.code_units_vec();
+        // Stream UTF-8 scalars directly, or borrow the existing exact backing.
+        // Neither case needs a temporary UTF-16 copy of the entire string.
+        let Some(units) = self.units.as_deref() else {
+            return self.utf8.chars().map(Self::from).collect();
+        };
         let mut elements = Vec::new();
         let mut index = 0;
         while index < units.len() {
@@ -302,6 +312,9 @@ impl JsString {
     /// U+1F600 sorts *below* U+FF5A here (0xD83D < 0xFF5A) but above it under
     /// code-point order. (bd-rdnhc)
     pub fn utf16_cmp(&self, other: &JsString) -> std::cmp::Ordering {
+        if self.is_ascii() && other.is_ascii() {
+            return self.utf8.cmp(&other.utf8);
+        }
         self.encode_utf16().cmp(other.encode_utf16())
     }
 
@@ -313,16 +326,37 @@ impl JsString {
     ///
     /// Matching takes O(n + m) work and O(m) scratch for n haystack units
     /// and m needle units; the haystack is never materialized as a vector.
+    /// Well-formed strings use native byte search without UTF-16 or
+    /// failure-table allocation. Only lone-surrogate inputs need KMP.
     pub fn utf16_index_of(&self, needle: &JsString, from: usize) -> Option<usize> {
         let haystack_len = self.utf16_len();
         let from = from.min(haystack_len);
-        let needle_units = needle.code_units_vec();
-        if needle_units.is_empty() {
+        let needle_len = needle.utf16_len();
+        if needle_len == 0 {
             return Some(from);
         }
-        if needle_units.len() > haystack_len - from {
+        if needle_len > haystack_len - from {
             return None;
         }
+        if self.is_ascii() {
+            if !needle.is_ascii() {
+                return None;
+            }
+            // Every byte boundary is a code-unit boundary in ASCII.
+            return self.utf8[from..]
+                .find(needle.utf8.as_ref())
+                .map(|index| from + index);
+        }
+        if self.is_well_formed() && needle.is_well_formed() {
+            // A well-formed needle cannot begin at the low half of a pair.
+            // Round a split starting position up to the next scalar boundary.
+            let (byte_start, unit_start) = utf8_search_boundary(&self.utf8, from, true);
+            let suffix = &self.utf8[byte_start..];
+            return suffix
+                .find(needle.utf8.as_ref())
+                .map(|index| unit_start + suffix[..index].encode_utf16().count());
+        }
+        let needle_units = needle.code_units_vec();
         search_utf16_units(self.encode_utf16().skip(from), &needle_units, false)
             .map(|index| from + index)
     }
@@ -331,22 +365,80 @@ impl JsString {
     /// `needle`'s exact unit sequence occurs (ES `String.prototype.lastIndexOf`
     /// grain). An empty needle matches at `min(from, length)`. (bd-rdnhc)
     ///
-    /// Uses the same linear-time, needle-sized-scratch matcher as indexOf,
-    /// retaining overlapping matches while streaming the allowed prefix.
+    /// Uses native reverse byte search for well-formed strings, or the
+    /// linear-time, needle-sized-scratch matcher for lone-surrogate inputs.
+    /// Both retain overlaps and bound the match's start, not its end, by `from`.
     pub fn utf16_last_index_of(&self, needle: &JsString, from: usize) -> Option<usize> {
         let haystack_len = self.utf16_len();
-        let needle_units = needle.code_units_vec();
-        if needle_units.is_empty() {
+        let needle_len = needle.utf16_len();
+        if needle_len == 0 {
             return Some(from.min(haystack_len));
         }
-        if needle_units.len() > haystack_len {
+        if needle_len > haystack_len {
             return None;
         }
-        let start = from.min(haystack_len - needle_units.len());
-        // start <= haystack_len - needle_units.len(), so this cannot overflow.
-        let end = start + needle_units.len();
+        let start = from.min(haystack_len - needle_len);
+        // start <= haystack_len - needle_len, so this cannot overflow.
+        let end = start + needle_len;
+        if self.is_ascii() {
+            if !needle.is_ascii() {
+                return None;
+            }
+            return self.utf8[..end].rfind(needle.utf8.as_ref());
+        }
+        if self.is_well_formed() && needle.is_well_formed() {
+            if from >= haystack_len - needle_len {
+                // The usual unbounded reverse search needs no forward scan
+                // to locate `from`. Count from the nearer end of the match.
+                return self.utf8.rfind(needle.utf8.as_ref()).map(|index| {
+                    if index <= self.utf8.len() / 2 {
+                        self.utf8[..index].encode_utf16().count()
+                    } else {
+                        haystack_len - self.utf8[index..].encode_utf16().count()
+                    }
+                });
+            }
+            let (byte_start, unit_start) = utf8_search_boundary(&self.utf8, from, false);
+            // Include the whole needle for a match starting at byte_start.
+            // Clamp without overflow, then round the end DOWN: every actual
+            // UTF-8 match already ends at a scalar boundary. This excludes no
+            // permitted match, and no match can start later than byte_start.
+            let mut byte_end = byte_start + needle.utf8.len().min(self.utf8.len() - byte_start);
+            while !self.utf8.is_char_boundary(byte_end) {
+                byte_end -= 1;
+            }
+            return self.utf8[..byte_end]
+                .rfind(needle.utf8.as_ref())
+                .map(|index| unit_start - self.utf8[index..byte_start].encode_utf16().count());
+        }
+        let needle_units = needle.code_units_vec();
         search_utf16_units(self.encode_utf16().take(end), &needle_units, true)
     }
+}
+
+/// Map a UTF-16 position in well-formed UTF-8 to a scalar boundary. An
+/// astral scalar straddling `position` rounds up for indexOf and down for
+/// lastIndexOf. Return both coordinates so callers do not rescan the prefix.
+fn utf8_search_boundary(text: &str, position: usize, round_up: bool) -> (usize, usize) {
+    if position == 0 {
+        return (0, 0);
+    }
+    let mut units = 0;
+    for (byte, ch) in text.char_indices() {
+        if units == position {
+            return (byte, units);
+        }
+        let next = units + ch.len_utf16();
+        if next > position {
+            return if round_up {
+                (byte + ch.len_utf8(), next)
+            } else {
+                (byte, units)
+            };
+        }
+        units = next;
+    }
+    (text.len(), units)
 }
 
 /// KMP over exact code units. Only the needle and its failure function need

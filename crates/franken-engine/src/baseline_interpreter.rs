@@ -42806,6 +42806,9 @@ impl InterpreterCore {
                 if len == 0 {
                     return Ok(Value::Undefined);
                 }
+                if let Some(first) = self.shift_dense_array_in_place(arr_id, len)? {
+                    return Ok(first);
+                }
                 let was_dense = self.array_cache_is_dense(arr_id);
                 let first = self
                     .array_index_get(Some(module), arr_id, 0)?
@@ -77170,6 +77173,74 @@ impl InterpreterCore {
         });
         self.gc_write_barrier(array_id);
         Ok(true)
+    }
+
+    /// `Array.prototype.shift` on a dense array whose per-element steps
+    /// observe nothing: no hole (the dense cache matches the visible length),
+    /// no accessor element, no attribute on an index or on `length`, no IFC
+    /// label on an index, not frozen, not a typed array, no exact-only key.
+    /// The generic algorithm's [[Get]] and [[Set]] per element then only move
+    /// data values down one index, so the values move inside the property
+    /// carrier instead; the last index entry goes with its exact estimate and
+    /// `length` is written without the shrink scan. Returns the shifted
+    /// value, or `None` with nothing changed when the array does not qualify
+    /// (bd-9vouw.472).
+    fn shift_dense_array_in_place(
+        &mut self,
+        array_id: ObjectId,
+        len: usize,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let (Ok(len_u32), Some(last)) = (u32::try_from(len), len.checked_sub(1)) else {
+            return Ok(None);
+        };
+        if !self.array_cache_matches_visible_length(array_id, len) {
+            return Ok(None);
+        }
+        let heap_index = array_id.0 as usize;
+        let Some(object) = self.heap.get(heap_index) else {
+            return Err(InterpreterError::ObjectNotFound { id: array_id.0 });
+        };
+        let attributed = object.property_attributes.keys().any(|key| match key {
+            RuntimePropertyKey::String(name) => name.as_str().is_some_and(|name| {
+                name == "length" || Self::canonical_array_index_key(name).is_some()
+            }),
+            RuntimePropertyKey::Symbol(_) => false,
+        });
+        if attributed
+            || object.is_frozen
+            || object.typed_array.is_some()
+            || object.properties.exact_len() != object.properties.len()
+            || object.property_labels.has_index_keys()
+            || object
+                .properties
+                .index_values()
+                .any(|value| matches!(value, Value::Accessor { .. }))
+        {
+            return Ok(None);
+        }
+        let Some(first) = object.properties.get_index(0) else {
+            return Ok(None);
+        };
+        let last_key = last.to_string();
+        // Moved, the carrier has lost exactly the entry `last_key` holding
+        // the first value: the estimate is a sum over entries.
+        let removed_bytes = Self::estimate_property_entry_bytes(&last_key, first);
+        let mut shifted = None;
+        self.mutate_heap(|heap| {
+            shifted = heap[heap_index]
+                .properties
+                .shift_dense_index_values(len_u32);
+        });
+        let Some(shifted) = shifted else {
+            return Ok(None);
+        };
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(removed_bytes);
+        if !self.set_array_length_after_dense_tail_removal(array_id, len, last, &last_key)? {
+            let new_len = i64::try_from(last).unwrap_or(i64::MAX);
+            self.set_object_property(array_id, "length".to_string(), Value::Int(new_len))?;
+            self.refresh_dense_length_cache(array_id, last, true);
+        }
+        Ok(Some(shifted))
     }
 
     /// Re-establish the dense-length cache after a contiguous in-place array
@@ -112047,6 +112118,74 @@ mod shared_binding_cell_accounting_tests_bd_sblaq {
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
         );
+    }
+
+    /// bd-9vouw.472: the in-place shift takes a dense array (and the
+    /// program's shift loop leaves the estimate exact); an array with a hole
+    /// or a frozen array is refused, unchanged, for the generic algorithm.
+    #[test]
+    fn dense_shift_moves_values_in_place_with_exact_accounting_bd_9vouw_472() {
+        let module = lower_script_bd_9vouw_31(
+            "const q = []; for (let i = 0; i < 500; i++) q.push('v' + i);\
+             let s = ''; for (let i = 0; i < 250; i++) s += q.shift();\
+             const holed = [1, , 3, 4]; holed.shift();\
+             const frozen = Object.freeze([1, 2]);\
+             if (q.length !== 250 || q[0] !== 'v250' || s.slice(0, 6) !== 'v0v1v2') throw new Error('q');\
+             if (holed.length !== 3 || 0 in holed || holed[2] !== 4) throw new Error('holed');\
+             [q, holed, frozen];",
+        );
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]);
+        config.instruction_budget = 10_000_000;
+        let mut core = InterpreterCore::new(config, "bd-9vouw-472");
+        let result = core.execute(&module).expect("shift program runs");
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        let Value::Object(arrays) = result.value else {
+            panic!("completion value should be an array");
+        };
+        let element = |core: &InterpreterCore, index: &str| match core.heap[arrays.0 as usize]
+            .properties
+            .get(index)
+        {
+            Some(Value::Object(id)) => *id,
+            other => panic!("element {index}: {other:?}"),
+        };
+        let (queue, holed, frozen) = (
+            element(&core, "0"),
+            element(&core, "1"),
+            element(&core, "2"),
+        );
+        assert_eq!(
+            core.shift_dense_array_in_place(queue, 250).expect("shift"),
+            Some(Value::str("v250"))
+        );
+        assert_eq!(core.array_like_length(queue).expect("length"), 249);
+        assert_eq!(
+            core.heap[queue.0 as usize].properties.get("0"),
+            Some(&Value::str("v251"))
+        );
+        assert_eq!(core.heap[queue.0 as usize].properties.get("249"), None);
+        assert_eq!(core.heap[queue.0 as usize].cached_dense_length, Some(249));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        for (refused, len) in [(holed, 3), (frozen, 2)] {
+            let before = core.heap[refused.0 as usize].properties.clone();
+            assert_eq!(
+                core.shift_dense_array_in_place(refused, len)
+                    .expect("shift"),
+                None
+            );
+            assert_eq!(core.heap[refused.0 as usize].properties, before);
+        }
     }
 
     /// bd-9vouw.31: drive the cold-cell ledger through every transition a real

@@ -367,6 +367,44 @@ impl<V> OrderedStringMap<V> {
         self.array_entries.get(&index).map(|(_, value)| value)
     }
 
+    /// The values under canonical array index keys, in index order.
+    pub fn index_values(&self) -> impl Iterator<Item = &V> {
+        self.array_entries.values().map(|(_, value)| value)
+    }
+
+    /// True when any canonical array index key is present.
+    pub fn has_index_keys(&self) -> bool {
+        !self.array_entries.is_empty()
+    }
+
+    /// `Array.prototype.shift` on an array whose index keys are exactly
+    /// `0..len`: every value moves down one index while each entry keeps its
+    /// key, and the entry `len - 1` is removed. Returns the value that was at
+    /// index 0. Returns `None`, changing nothing, unless the index keys are
+    /// exactly `0..len`. One swap per element, where re-setting each element
+    /// through a key built per write cost an allocation each (bd-9vouw.472).
+    pub fn shift_dense_index_values(&mut self, len: u32) -> Option<V> {
+        let last = len.checked_sub(1)?;
+        // Keys are unique and sorted: `len` of them from 0 to `last` are
+        // exactly 0..len.
+        let mut keys = self.array_entries.keys();
+        if self.array_entries.len() != len as usize
+            || keys.next() != Some(&0)
+            || keys.next_back().is_some_and(|index| *index != last)
+        {
+            return None;
+        }
+        let mut values = self.array_entries.values_mut().map(|(_, value)| value);
+        // Swapping each value with its predecessor walks index 0's value to
+        // the last entry.
+        let mut previous = values.next()?;
+        for current in values {
+            std::mem::swap(previous, current);
+            previous = current;
+        }
+        self.array_entries.remove(&last).map(|(_, value)| value)
+    }
+
     /// Insert or replace a value.
     ///
     /// New canonical array indices join the numeric index set. New ordinary
@@ -3820,6 +3858,50 @@ mod tests {
 
     fn str_val(s: &str) -> JsValue {
         JsValue::str(s)
+    }
+
+    #[test]
+    fn shift_dense_index_values_moves_values_and_keeps_keys_bd_9vouw_472() {
+        let mut map = OrderedStringMap::new();
+        map.insert("tag".to_string(), -1);
+        for index in 0..5 {
+            map.insert(index.to_string(), 10 * index);
+        }
+        assert!(map.has_index_keys());
+        assert_eq!(map.shift_dense_index_values(5), Some(0));
+        let entries: Vec<(String, i32)> = map
+            .iter()
+            .map(|(key, value)| (key.clone(), *value))
+            .collect();
+        assert_eq!(
+            entries,
+            [("0", 10), ("1", 20), ("2", 30), ("3", 40), ("tag", -1)]
+                .map(|(key, value)| (key.to_string(), value))
+        );
+        assert_eq!(map.get("3"), Some(&40));
+        assert_eq!(map.get_index(4), None);
+        assert_eq!(
+            map.index_values().copied().collect::<Vec<_>>(),
+            [10, 20, 30, 40]
+        );
+
+        // A count that is not exactly the index keys, or a hole, changes
+        // nothing.
+        let before = map.clone();
+        assert_eq!(map.shift_dense_index_values(5), None);
+        assert_eq!(map.shift_dense_index_values(3), None);
+        assert_eq!(map.shift_dense_index_values(0), None);
+        map.remove("1");
+        let holed = map.clone();
+        assert_eq!(map.shift_dense_index_values(3), None);
+        assert_eq!(map, holed);
+        assert_ne!(map, before);
+
+        let mut single = OrderedStringMap::new();
+        single.insert("0".to_string(), 'a');
+        assert_eq!(single.shift_dense_index_values(1), Some('a'));
+        assert!(!single.has_index_keys());
+        assert_eq!(single.len(), 0);
     }
 
     #[test]

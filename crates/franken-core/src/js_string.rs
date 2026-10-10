@@ -2300,6 +2300,67 @@ mod tests {
         );
     }
 
+    /// StringIndexOf and lastIndexOf's grain, by brute force over units.
+    fn reference_index_of(
+        haystack: &[u16],
+        needle: &[u16],
+        from: usize,
+        last: bool,
+    ) -> Option<usize> {
+        let fits = |start: usize| haystack.get(start..start + needle.len()) == Some(needle);
+        if last {
+            let top = from.min(haystack.len().checked_sub(needle.len())?);
+            (0..=top).rev().find(|start| fits(*start))
+        } else {
+            let from = from.min(haystack.len());
+            (from..=haystack.len()).find(|start| fits(*start))
+        }
+    }
+
+    #[test]
+    fn ascii_index_of_searches_bytes_and_matches_units_bd_9vouw_475() {
+        let haystacks = [
+            JsString::from("abcabcabc"),
+            JsString::from(""),
+            JsString::from("a"),
+            JsString::from("x".repeat(600)).concat(&JsString::from("needle,".repeat(300))),
+        ];
+        let needles = [
+            JsString::from(""),
+            JsString::from("abc"),
+            JsString::from("c"),
+            JsString::from("bca"),
+            JsString::from("abcabcabcd"),
+            JsString::from("needle,"),
+            JsString::from("x,"),
+            JsString::from("\u{e9}"),
+            JsString::from_code_units(&[0x61, HIGH]),
+        ];
+        for haystack in &haystacks {
+            assert!(haystack.is_ascii());
+            let units: Vec<u16> = haystack.encode_utf16().collect();
+            for needle in &needles {
+                let needle_units: Vec<u16> = needle.encode_utf16().collect();
+                for from in [0, 1, 2, 3, 5, 7, 8, 9, 10, 599, 600, 601, 2700, 99_999] {
+                    assert_eq!(
+                        haystack.utf16_index_of(needle, from),
+                        reference_index_of(&units, &needle_units, from, false),
+                        "indexOf {needle:?} from {from} in {} units",
+                        units.len()
+                    );
+                    assert_eq!(
+                        haystack.utf16_last_index_of(needle, from),
+                        reference_index_of(&units, &needle_units, from, true),
+                        "lastIndexOf {needle:?} from {from} in {} units",
+                        units.len()
+                    );
+                }
+            }
+        }
+        assert!(!JsString::from("\u{e9}").is_ascii());
+        assert!(!JsString::from_code_units(&[HIGH]).is_ascii());
+    }
+
     #[test]
     fn concatenations_with_lone_surrogates_stay_exact_bd_9vouw_468() {
         let long = "a".repeat(2_000);

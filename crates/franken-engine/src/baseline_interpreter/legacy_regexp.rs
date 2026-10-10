@@ -15,8 +15,11 @@ use super::*;
 /// The realm's last successful RegExp match.
 #[derive(Debug, Clone)]
 pub(super) struct LegacyRegExpMatch {
-    input: String,
-    /// Byte spans in `input`: the whole match, then each capture group.
+    /// Shared with the matched string when it is one already, so an exec
+    /// loop does not copy its whole input per match (bd-9vouw.475).
+    input: JsString,
+    /// Byte spans in `input`'s UTF-8 projection: the whole match, then each
+    /// capture group.
     spans: Vec<Option<(usize, usize)>>,
     label: Option<Label>,
 }
@@ -53,11 +56,21 @@ impl InterpreterCore {
         input: &str,
         spans: &[Option<(usize, usize)>],
     ) {
+        self.record_legacy_regexp_match_shared(&JsString::from(input), spans);
+    }
+
+    /// Record a match of `input`, sharing the string instead of copying it;
+    /// spans are byte offsets in its UTF-8 projection.
+    pub(super) fn record_legacy_regexp_match_shared(
+        &mut self,
+        input: &JsString,
+        spans: &[Option<(usize, usize)>],
+    ) {
         if spans.first().is_none_or(Option::is_none) {
             return;
         }
         self.legacy_regexp_match = Some(LegacyRegExpMatch {
-            input: input.to_string(),
+            input: input.clone(),
             spans: spans.to_vec(),
             label: None,
         });
@@ -94,7 +107,7 @@ impl InterpreterCore {
         };
         let (start, end) = record.spans[0].unwrap_or((0, 0));
         let value = match key {
-            "input" | "$_" => record.input.as_str(),
+            "input" | "$_" => record.input.as_utf8_projection(),
             "lastMatch" | "$&" => text(record.spans.first()),
             "lastParen" | "$+" if record.spans.len() > 1 => text(record.spans.last()),
             "lastParen" | "$+" => "",

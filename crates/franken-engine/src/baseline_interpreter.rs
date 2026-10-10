@@ -41890,8 +41890,11 @@ impl InterpreterCore {
                 // runs an object argument's @@toPrimitive, toString or valueOf
                 // (bd-9vouw.213: is-regex tells a RegExp by an exec that must
                 // throw from its argument's toString).
+                // ToString keeping the string itself (shared, lone surrogates
+                // included): the UTF-8 text copied the whole subject on every
+                // exec of a loop (bd-9vouw.475).
                 let input = if self.regexp_source_flags_from_value(&receiver).is_some() {
-                    Value::str(self.builtin_arg_text(Some(module), args, 0)?)
+                    Value::Str(self.builtin_arg_js_text(Some(module), args, 0)?)
                 } else {
                     Value::Undefined
                 };
@@ -45735,7 +45738,9 @@ impl InterpreterCore {
                         got: receiver.type_name().to_string(),
                     });
                 }
-                let input = Value::str(self.builtin_arg_text(Some(module), args, 0)?);
+                // ToString keeping the string itself, as exec takes it
+                // (bd-9vouw.475).
+                let input = Value::Str(self.builtin_arg_js_text(Some(module), args, 0)?);
                 if let Some(exec) = self.regexp_user_exec(module, &receiver)? {
                     let label = self.join_arg_range_label(args)?;
                     let result =
@@ -61664,7 +61669,7 @@ impl InterpreterCore {
         // ES2020 21.1.3.11 step 3: any other value is `new RegExp(value)`.
         let regex = self.compile_regexp_pattern(&self.regexp_create_source(pattern), "")?;
         Ok(self
-            .regexp_exec_at(&regex, input, 0, false, false)?
+            .regexp_exec_at(&regex, &JsString::from(input), 0, false, false)?
             .map_or(Value::Null, |(result, _)| result))
     }
 
@@ -79421,33 +79426,50 @@ impl InterpreterCore {
     /// `groups`, and with the `d` flag `indices` (ES2022 MakeIndicesArray:
     /// each capture's UTF-16 `[start, end]` or undefined, and `groups`),
     /// plus the match's end byte offset.
+    /// RegExpBuiltinExec's match and result object for `subject` from byte
+    /// offset `start` of its UTF-8 projection. An ASCII subject's byte
+    /// offsets are its UTF-16 offsets, and the subject is the result's
+    /// `input` and the legacy statics' input as it is, shared, not copied:
+    /// an exec loop over a long string decoded and copied the whole string
+    /// per match (bd-9vouw.475).
     fn regexp_exec_at(
         &mut self,
         regex: &CompiledRegExp,
-        input: &str,
+        subject: &JsString,
         start: usize,
         sticky: bool,
         has_indices: bool,
     ) -> Result<Option<(Value, usize)>, InterpreterError> {
+        let input = subject.as_utf8_projection();
+        let ascii = subject.is_ascii();
         let Some(spans) = regex.captures_at(input, start, sticky)? else {
             return Ok(None);
         };
         let Some((whole_start, whole_end)) = spans[0] else {
             return Ok(None);
         };
-        self.record_legacy_regexp_match(input, &spans);
+        self.record_legacy_regexp_match_shared(subject, &spans);
         let group_value = |span: Option<(usize, usize)>| {
             span.map_or(Value::Undefined, |(from, to)| Value::str(&input[from..to]))
         };
         let values: Vec<Value> = spans.iter().map(|span| group_value(*span)).collect();
         let result = self.alloc_array_from_values(&values)?;
-        let index = input[..whole_start].encode_utf16().count();
+        let utf16_offset = |offset: usize| {
+            if ascii {
+                offset
+            } else {
+                input[..offset].encode_utf16().count()
+            }
+        };
+        let index = utf16_offset(whole_start);
         self.set_object_property(
             result,
             "index".to_string(),
             Value::Int(i64::try_from(index).unwrap_or(i64::MAX)),
         )?;
-        self.set_object_property(result, "input".to_string(), Value::str(input))?;
+        // `input` is the subject itself (ES2020 21.2.5.2.2 step 22), lone
+        // surrogates included; it was the U+FFFD projection.
+        self.set_object_property(result, "input".to_string(), Value::Str(subject.clone()))?;
         let named: Vec<(String, Value)> = regex
             .group_names()
             .into_iter()
@@ -79469,11 +79491,8 @@ impl InterpreterCore {
         };
         self.set_object_property(result, "groups".to_string(), groups)?;
         if has_indices {
-            let utf16 = |offset: usize| {
-                Value::Int(
-                    i64::try_from(input[..offset].encode_utf16().count()).unwrap_or(i64::MAX),
-                )
-            };
+            let utf16 =
+                |offset: usize| Value::Int(i64::try_from(utf16_offset(offset)).unwrap_or(i64::MAX));
             let mut pairs = Vec::with_capacity(spans.len());
             for span in &spans {
                 pairs.push(match span {
@@ -79945,7 +79964,15 @@ impl InterpreterCore {
                 got: receiver.type_name().to_string(),
             });
         };
-        let text = self.value_to_string(input);
+        // A string subject is used as it is (shared); copying it, counting
+        // its units and mapping lastIndex from its start made each exec of
+        // a loop over a long string cost the whole string (bd-9vouw.475).
+        let subject = match input {
+            Value::Str(text) => text.clone(),
+            other => JsString::from(self.value_to_string(other)),
+        };
+        let text = subject.as_utf8_projection();
+        let ascii = subject.is_ascii();
         let regex = self.compile_regexp_pattern(&source, &flags)?;
         let sticky = flags.contains('y');
         let tracks_last_index = sticky || flags.contains('g');
@@ -79954,12 +79981,15 @@ impl InterpreterCore {
             (true, Some(number)) => Self::to_length_index(number),
             (true, None) => self.regexp_last_index_start(regexp_id),
         };
-        let length = text.encode_utf16().count();
-        let found = if last_index > length {
+        let found = if last_index > subject.utf16_len() {
             None
         } else {
-            let start = Self::utf16_index_to_byte_offset(&text, last_index);
-            self.regexp_exec_at(&regex, &text, start, sticky, flags.contains('d'))?
+            let start = if ascii {
+                last_index
+            } else {
+                Self::utf16_index_to_byte_offset(text, last_index)
+            };
+            self.regexp_exec_at(&regex, &subject, start, sticky, flags.contains('d'))?
         };
         match found {
             None => {
@@ -79970,7 +80000,12 @@ impl InterpreterCore {
             }
             Some((result, end)) => {
                 if tracks_last_index {
-                    self.set_regexp_last_index(regexp_id, text[..end].encode_utf16().count())?;
+                    let end_units = if ascii {
+                        end
+                    } else {
+                        text[..end].encode_utf16().count()
+                    };
+                    self.set_regexp_last_index(regexp_id, end_units)?;
                 }
                 Ok(result)
             }

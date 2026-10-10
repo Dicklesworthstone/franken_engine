@@ -7,7 +7,7 @@ use std::sync::{
     Arc, Barrier,
     atomic::{AtomicUsize, Ordering},
 };
-use std::task::{Context, Poll, Wake, Waker};
+use std::task::{Context, Poll, Waker};
 
 use WasmBoundaryValue::I32;
 use frankenengine_engine::capability::RuntimeCapability::{Builtin, VmDispatch};
@@ -154,12 +154,8 @@ fn exhausted(error: WasmNumericVmError, requested: u64, available: u64) {
     );
 }
 
-struct Noop;
-impl Wake for Noop {
-    fn wake(self: Arc<Self>) {}
-}
 fn waker() -> Waker {
-    Waker::from(Arc::new(Noop))
+    Waker::noop().clone()
 }
 fn quantum() -> NonZeroU64 {
     NonZeroU64::new(1).unwrap()

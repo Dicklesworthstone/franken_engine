@@ -91,7 +91,7 @@ const WTF16_MAP_KEY: &str = "$wtf16";
 ///
 /// See the module docs for the canonical invariant and the equality /
 /// ordering / serialization contracts.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct JsString {
     /// UTF-8 projection. Exact when `units` is `None`; the
     /// `String::from_utf16_lossy` projection otherwise.
@@ -99,6 +99,20 @@ pub struct JsString {
     /// Exact UTF-16 code units, present iff the content contains at least
     /// one unpaired surrogate.
     units: Option<Arc<[u16]>>,
+    /// Immutable, constructor-derived metadata; not part of the wire format.
+    /// This always equals `encode_utf16().count()`. Equality with the UTF-8
+    /// byte length also identifies ASCII without rescanning the string.
+    utf16_length: usize,
+}
+
+// Preserve the historical Debug shape: derived metadata is not an observable.
+impl fmt::Debug for JsString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("JsString")
+            .field("utf8", &self.utf8)
+            .field("units", &self.units)
+            .finish()
+    }
 }
 
 impl JsString {
@@ -107,6 +121,7 @@ impl JsString {
         Self {
             utf8: Arc::from(""),
             units: None,
+            utf16_length: 0,
         }
     }
 
@@ -119,10 +134,12 @@ impl JsString {
             Ok(text) => Self {
                 utf8: Arc::from(text),
                 units: None,
+                utf16_length: units.len(),
             },
             Err(_) => Self {
                 utf8: Arc::from(String::from_utf16_lossy(units)),
                 units: Some(Arc::from(units)),
+                utf16_length: units.len(),
             },
         }
     }
@@ -155,12 +172,15 @@ impl JsString {
     /// reachable through `Deref`, so UTF-16-indexing call sites observe the
     /// real code units (including lone surrogates) rather than the lossy
     /// projection's units.
+    #[inline]
     pub fn encode_utf16(&self) -> CodeUnits<'_> {
         CodeUnits {
             inner: match &self.units {
+                None if self.is_ascii() => CodeUnitsInner::Ascii(self.utf8.as_bytes().iter()),
                 None => CodeUnitsInner::WellFormed(self.utf8.encode_utf16()),
                 Some(units) => CodeUnitsInner::Exact(units.iter().copied()),
             },
+            remaining: self.utf16_length,
         }
     }
 
@@ -195,11 +215,19 @@ impl JsString {
     }
 
     /// The ECMAScript `length` of the string: its UTF-16 code-unit count.
+    /// This is O(1), including for non-ASCII and lone-surrogate strings.
+    #[inline]
     pub fn utf16_len(&self) -> usize {
-        match &self.units {
-            Some(units) => units.len(),
-            None => self.utf8.encode_utf16().count(),
-        }
+        self.utf16_length
+    }
+
+    /// Whether every exact code unit is ASCII, without scanning the backing.
+    /// Every non-ASCII scalar (or projected lone surrogate) uses more UTF-8
+    /// bytes than UTF-16 units, so equality of the lengths is sufficient.
+    /// This intentionally shadows `str::is_ascii` reached through Deref.
+    #[inline]
+    pub fn is_ascii(&self) -> bool {
+        self.utf16_length == self.utf8.len()
     }
 
     /// ES string concatenation over exact code units. When both operands are
@@ -215,6 +243,7 @@ impl JsString {
             return Self {
                 utf8: Arc::from(text),
                 units: None,
+                utf16_length: self.utf16_length + other.utf16_length,
             };
         }
         let mut units: Vec<u16> = Vec::with_capacity(self.utf16_len() + other.utf16_len());
@@ -413,46 +442,43 @@ impl fmt::Display for JsString {
 
 impl From<&str> for JsString {
     fn from(value: &str) -> Self {
-        Self {
-            utf8: Arc::from(value),
-            units: None,
-        }
+        Self::from(Arc::<str>::from(value))
     }
 }
 
 impl From<String> for JsString {
     fn from(value: String) -> Self {
-        Self {
-            utf8: Arc::from(value),
-            units: None,
-        }
+        Self::from(Arc::<str>::from(value))
     }
 }
 
 impl From<Arc<str>> for JsString {
     fn from(value: Arc<str>) -> Self {
+        let utf16_length = value.encode_utf16().count();
         Self {
             utf8: value,
             units: None,
+            utf16_length,
         }
     }
 }
 
 impl From<char> for JsString {
     fn from(value: char) -> Self {
+        // Avoid a temporary heap-allocated String for a single code point.
+        let mut buffer = [0_u8; 4];
+        let text: &str = value.encode_utf8(&mut buffer);
         Self {
-            utf8: Arc::from(value.to_string()),
+            utf8: Arc::from(text),
             units: None,
+            utf16_length: value.len_utf16(),
         }
     }
 }
 
 impl From<&String> for JsString {
     fn from(value: &String) -> Self {
-        Self {
-            utf8: Arc::from(value.as_str()),
-            units: None,
-        }
+        Self::from(value.as_str())
     }
 }
 
@@ -472,10 +498,12 @@ impl PartialEq<&str> for JsString {
 #[derive(Clone)]
 pub struct CodeUnits<'a> {
     inner: CodeUnitsInner<'a>,
+    remaining: usize,
 }
 
 #[derive(Clone)]
 enum CodeUnitsInner<'a> {
+    Ascii(std::slice::Iter<'a, u8>),
     WellFormed(std::str::EncodeUtf16<'a>),
     Exact(std::iter::Copied<std::slice::Iter<'a, u16>>),
 }
@@ -483,20 +511,75 @@ enum CodeUnitsInner<'a> {
 impl Iterator for CodeUnits<'_> {
     type Item = u16;
 
+    #[inline]
     fn next(&mut self) -> Option<u16> {
-        match &mut self.inner {
+        let unit = match &mut self.inner {
+            CodeUnitsInner::Ascii(iter) => iter.next().copied().map(u16::from),
             CodeUnitsInner::WellFormed(iter) => iter.next(),
             CodeUnitsInner::Exact(iter) => iter.next(),
+        };
+        self.remaining -= usize::from(unit.is_some());
+        unit
+    }
+
+    #[inline]
+    fn nth(&mut self, n: usize) -> Option<u16> {
+        if n >= self.remaining {
+            // Exhaust without decoding, even for usize::MAX. Replacing the
+            // inner iterator also keeps subsequent next/fold/last consistent.
+            self.inner = CodeUnitsInner::Ascii(b"".iter());
+            self.remaining = 0;
+            return None;
+        }
+        let unit = match &mut self.inner {
+            CodeUnitsInner::Ascii(iter) => iter.nth(n).copied().map(u16::from),
+            CodeUnitsInner::WellFormed(iter) => iter.nth(n),
+            CodeUnitsInner::Exact(iter) => iter.nth(n),
+        };
+        // n < remaining, so n + 1 cannot overflow.
+        self.remaining -= n + 1;
+        unit
+    }
+
+    #[inline]
+    fn count(self) -> usize {
+        self.remaining
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+
+    fn last(self) -> Option<u16> {
+        match self.inner {
+            CodeUnitsInner::Ascii(mut iter) => iter.next_back().copied().map(u16::from),
+            CodeUnitsInner::WellFormed(iter) => iter.last(),
+            CodeUnitsInner::Exact(mut iter) => iter.next_back(),
         }
     }
 
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        match &self.inner {
-            CodeUnitsInner::WellFormed(iter) => iter.size_hint(),
-            CodeUnitsInner::Exact(iter) => iter.size_hint(),
+    fn fold<B, F>(self, init: B, mut f: F) -> B
+    where
+        F: FnMut(B, u16) -> B,
+    {
+        // Dispatch once for streaming consumers rather than once per unit.
+        match self.inner {
+            CodeUnitsInner::Ascii(iter) => iter.fold(init, |acc, &byte| f(acc, u16::from(byte))),
+            CodeUnitsInner::WellFormed(iter) => iter.fold(init, f),
+            CodeUnitsInner::Exact(iter) => iter.fold(init, f),
         }
     }
 }
+
+impl ExactSizeIterator for CodeUnits<'_> {
+    #[inline]
+    fn len(&self) -> usize {
+        self.remaining
+    }
+}
+
+impl std::iter::FusedIterator for CodeUnits<'_> {}
 
 impl fmt::Debug for CodeUnits<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

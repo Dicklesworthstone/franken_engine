@@ -15412,51 +15412,57 @@ fn lower_expression_to_ir1(
         _ => None,
     };
     let op_start = ops.len();
-    let lowered_by_stack_bounded_helper = try_lower_net_expression_to_ir1(
-        expression,
-        ops,
-        bindings,
-        binding_lookup,
-        binding_index,
-        root_scope_id,
-        label_counter,
-        span_table,
-    )? || try_lower_arrow_expression_to_ir1(
-        expression,
-        ops,
-        bindings,
-        binding_lookup,
-        binding_index,
-        root_scope_id,
-    )? || try_lower_simple_binary_expression_to_ir1(
-        expression,
-        ops,
-        bindings,
-        binding_lookup,
-        binding_index,
-        root_scope_id,
-        label_counter,
-        span_table,
-    )? || try_lower_logical_expression_to_ir1(
-        expression,
-        ops,
-        bindings,
-        binding_lookup,
-        binding_index,
-        root_scope_id,
-        label_counter,
-        span_table,
-    )? || try_lower_optional_chain_to_ir1(
-        expression,
-        false,
-        ops,
-        bindings,
-        binding_lookup,
-        binding_index,
-        root_scope_id,
-        label_counter,
-        span_table,
-    )?;
+    let lowered_by_stack_bounded_helper =
+        try_lower_environment_read_to_ir1(expression, ops, binding_lookup)
+            || try_lower_net_expression_to_ir1(
+                expression,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                label_counter,
+                span_table,
+            )?
+            || try_lower_arrow_expression_to_ir1(
+                expression,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+            )?
+            || try_lower_simple_binary_expression_to_ir1(
+                expression,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                label_counter,
+                span_table,
+            )?
+            || try_lower_logical_expression_to_ir1(
+                expression,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                label_counter,
+                span_table,
+            )?
+            || try_lower_optional_chain_to_ir1(
+                expression,
+                false,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                label_counter,
+                span_table,
+            )?;
     if !lowered_by_stack_bounded_helper {
         lower_expression_to_ir1_inner(
             expression,
@@ -15480,6 +15486,70 @@ fn lower_expression_to_ir1(
         }
     }
     Ok(())
+}
+
+/// Admit only a named read of the unshadowed ambient environment. A read is
+/// an explicit EnvRead HostCall, not an ambient grant: it cannot authorize
+/// possession of `process`, enumeration of `process.env`, or another process
+/// member that happens to share the old EnvRead ambient classification.
+fn try_lower_environment_read_to_ir1(
+    expression: &Expression,
+    ops: &mut Vec<Ir1Op>,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    fn is_environment_object(
+        expression: &Expression,
+        binding_lookup: &BTreeMap<String, BindingId>,
+    ) -> bool {
+        let Expression::Member {
+            object,
+            property,
+            computed,
+            ..
+        } = expression
+        else {
+            return false;
+        };
+        !*computed
+            && matches!(object.as_ref(), Expression::Identifier(name)
+                if name == "process" && !has_source_lexical_binding(binding_lookup, name))
+            && well_formed_static_name(property) == Some("env")
+    }
+
+    let (name, capability) = match expression {
+        Expression::Member {
+            object,
+            property,
+            computed,
+            ..
+        } if is_environment_object(object, binding_lookup) => {
+            let name = if *computed {
+                well_formed_string_literal(property)
+            } else {
+                well_formed_static_name(property)
+            };
+            (name, "env:read")
+        }
+        Expression::Binary {
+            operator: BinaryOperator::In,
+            left,
+            right,
+        } if is_environment_object(right, binding_lookup) => {
+            (well_formed_string_literal(left), "env:has")
+        }
+        _ => return false,
+    };
+    let Some(name) = name else {
+        return false;
+    };
+    ops.push(Ir1Op::LoadLiteral {
+        value: Ir1Literal::String(name.into()),
+    });
+    ops.push(Ir1Op::HostCall {
+        capability: capability.to_string(),
+        arg_count: 1,
+    });
+    true
 }
 
 /// ES2020 IsAnonymousFunctionDefinition (14.1.12): an anonymous function,
@@ -50880,14 +50950,14 @@ mod tests {
     }
 
     #[test]
-    fn bd_xewby_trusted_eval_still_denies_process_env_value_read() {
-        // Defense in depth: even a trusted eval may not read env VALUES; the
-        // `process.env` member carries `EnvRead`, which the shape grant excludes.
+    fn bd_xewby_trusted_eval_still_denies_process_env_possession() {
+        // Named reads lower to a runtime EnvRead capability gate (bd-omckp),
+        // but the trusted shape grant still cannot expose the env object.
         let error = lower_script_with_grant_bd_xewby(
-            "process.env.PATH;\n",
+            "process.env;\n",
             AmbientAuthorityGrant::TrustedProcessShape,
         )
-        .expect_err("trusted eval must still reject an env value read");
+        .expect_err("trusted eval must still reject possession of the env object");
         assert!(
             matches!(
                 error,

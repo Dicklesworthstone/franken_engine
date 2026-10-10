@@ -24,6 +24,10 @@ on:
       - 'crates/franken-engine/tests/gc_reclaim_bd_9vouw_57.rs'
       - 'crates/franken-engine/tests/reflect_*.rs'
       - 'crates/franken-engine/tests/querystring_os_builtin_bd_qmy52.rs'
+      - 'crates/franken-engine/tests/environment_hostcalls.rs'
+      - 'crates/franken-extension-host/src/host_io.rs'
+      - 'crates/franken-extension-host/src/host_io/**'
+      - 'crates/franken-extension-host/tests/environment_snapshot.rs'
       - '.github/workflows/native-runtime.yml'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -56,6 +60,20 @@ jobs:
           cargo test --locked -p frankenengine-engine --no-default-features \
             --test querystring_os_builtin_bd_qmy52 \
             -- --nocapture --test-threads=1 2>&1 | tee boundary-querystring-tests.log
+      - name: Execute environment snapshot provider regressions
+        if: always()
+        run: |
+          set -o pipefail
+          cargo test --locked -p frankenengine-extension-host \
+            --test environment_snapshot \
+            -- --nocapture --test-threads=1 2>&1 | tee boundary-environment-snapshot-tests.log
+      - name: Execute environment hostcall and replay regressions
+        if: always()
+        run: |
+          set -o pipefail
+          cargo test --locked -p frankenengine-engine --no-default-features \
+            --test environment_hostcalls \
+            -- --nocapture --test-threads=1 2>&1 | tee boundary-environment-hostcall-tests.log
       - name: Retain complete boundary test output
         if: always()
         uses: actions/upload-artifact@v4

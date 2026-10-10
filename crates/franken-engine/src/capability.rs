@@ -350,6 +350,11 @@ pub fn hostcall_registry_row(tag: &str) -> Option<HostcallRegistryRow<'_>> {
             result_contract_for_authority(RuntimeCapability::ProcessSpawn),
             HostcallDispatchBinding::ProcessSpawn,
         ),
+        "env:read" | "env:has" => (
+            Some(RuntimeCapability::EnvRead),
+            result_contract_for_authority(RuntimeCapability::EnvRead),
+            HostcallDispatchBinding::HostIo,
+        ),
         "net:client_request" => (
             Some(RuntimeCapability::NetworkEgress),
             result_contract_for_authority(RuntimeCapability::NetworkEgress),

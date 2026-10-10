@@ -165,6 +165,7 @@ fn runtime_capability_for_host_io(capability: HostIoCapability) -> RuntimeCapabi
             RuntimeCapability::NetworkEgress
         }
         HostIoCapability::RandomRead => RuntimeCapability::RandomRead,
+        HostIoCapability::EnvRead => RuntimeCapability::EnvRead,
     }
 }
 

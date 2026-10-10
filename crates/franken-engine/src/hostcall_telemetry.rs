@@ -139,7 +139,7 @@ impl HostcallType {
             Self::NetworkSend
         } else if tag == "process_spawn" {
             Self::ProcessSpawn
-        } else if tag == "env_read" {
+        } else if matches!(tag, "env_read" | "env:read" | "env:has") {
             Self::EnvRead
         } else if tag == "heap_allocate" {
             Self::MemAlloc

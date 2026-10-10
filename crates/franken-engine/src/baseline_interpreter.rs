@@ -126,6 +126,7 @@ use frankenengine_extension_host::host_effect_journal::InMemoryHostEffectJournal
 use frankenengine_extension_host::host_io::{
     FsDirEntry, FsMetaResult, FsMetadata, FsOperation, HostIoError, HostIoExceptionProvenance,
     HostIoOutcome, HostIoProvider, HostIoRecorder, SANDBOXED_HOST_IO_MAX_RANDOM_BYTES_PER_REQUEST,
+    validate_environment_name,
 };
 use frankenengine_extension_host::process_spawn::{
     ProcessExit, ProcessLaunch, ProcessSignal, ProcessSpawnError, ProcessSpawnProvider,
@@ -147,8 +148,8 @@ use crate::engine_object_id::{EngineObjectId, ObjectDomain, SchemaId, derive_id}
 use crate::hash_tiers::ContentHash;
 use crate::hostcall_effects_migration::{
     InterpreterTimerOutcome, InterpreterTimerRequest, PROCESS_SPAWN_EXECUTABLE_NOT_FOUND_CODE,
-    TimerEffectAuthority, TimerEffectPermit, TimerOperation, create_fs_effect,
-    create_handler_stack_from_profile_with_effect_providers,
+    TimerEffectAuthority, TimerEffectPermit, TimerOperation, create_env_read_effect,
+    create_fs_effect, create_handler_stack_from_profile_with_effect_providers,
     create_handler_stack_from_profile_with_host_io, create_interpreter_timer_effect,
     create_interpreter_timer_handler_stack, create_network_effect, create_network_host_io_request,
     create_process_spawn_effect, create_random_read_effect,
@@ -1115,6 +1116,7 @@ pub(crate) fn capability_gate_key(tag: &str) -> &str {
         | "builtin:CryptoRandomUUID"
         | "builtin:CryptoRandomInt"
         | "builtin:CryptoRandomFillSync" => "random_read",
+        "env:read" | "env:has" => "env_read",
         _ => tag,
     }
 }
@@ -18017,6 +18019,9 @@ impl InterpreterCore {
         capability: &str,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
+        if matches!(capability, "env:read" | "env:has") {
+            return self.dispatch_environment_hostcall(capability, args);
+        }
         // bd-3894s slice (2b): the `net:request` egress is handled by a single
         // shared seam — [`Self::perform_net_request_effect`] — used by BOTH the
         // immediate `http.get`/`fetch` forms (which reach here as a `net:request`
@@ -86460,6 +86465,63 @@ impl InterpreterCore {
             .ok_or(())
     }
 
+    /// Read a bounded, explicit snapshot value through the same provider and
+    /// effect journal as every other host read. Missing provider authority is
+    /// an error, never a fabricated absent variable.
+    fn dispatch_environment_hostcall(
+        &mut self,
+        capability: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let denied = || InterpreterError::CapabilityDenied {
+            capability: RuntimeCapability::EnvRead.to_string(),
+        };
+        if !self
+            .config
+            .granted_capabilities
+            .contains(&RuntimeCapability::EnvRead)
+        {
+            return Err(denied());
+        }
+        if args.count != 1 {
+            return Err(InterpreterError::TypeError {
+                expected: "one environment variable name".to_string(),
+                got: format!("{} argument(s)", args.count),
+            });
+        }
+        let Value::Str(name) = self.read_reg(args.start)? else {
+            return Err(InterpreterError::TypeError {
+                expected: "an environment variable name string".to_string(),
+                got: "non-string environment variable name".to_string(),
+            });
+        };
+        let name = name.as_str().ok_or_else(denied)?;
+        validate_environment_name(name).map_err(|_| denied())?;
+        let provider = self.host_io.clone().ok_or_else(denied)?;
+        let effect = create_env_read_effect(name.to_string());
+        let mut stack = create_handler_stack_from_profile_with_effect_providers(
+            &CapabilityProfile::full(),
+            Some(provider),
+            self.host_io_recorder.clone(),
+            self.process_spawn.clone(),
+            None,
+            self.host_effect_journal.clone(),
+        );
+        let result = stack.handle_effect(effect.as_ref()).map_err(|_| denied())?;
+        let value = result.downcast::<Option<String>>().map_err(|_| denied())?;
+        if capability == "env:has" {
+            Ok(Value::Bool(value.is_some()))
+        } else {
+            match value {
+                Some(value) => {
+                    self.check_string_limit(value.len())?;
+                    Ok(Value::str(value))
+                }
+                None => Ok(Value::Undefined),
+            }
+        }
+    }
+
     fn require_random_read_capability(&self) -> Result<(), InterpreterError> {
         if self
             .config
@@ -118227,8 +118289,10 @@ mod async_runtime_tests_current {
                     }),
                     HostIoRequest::NetworkSend { .. }
                     | HostIoRequest::NetworkRecv { .. }
-                    | HostIoRequest::NetworkRequest { .. } => Err(HostIoError::Denied {
-                        reason: "network is outside the entropy fixture".to_string(),
+                    | HostIoRequest::NetworkRequest { .. }
+                    | HostIoRequest::EnvRead { .. } => Err(HostIoError::Denied {
+                        reason: "network and environment are outside the entropy fixture"
+                            .to_string(),
                     }),
                 }
             }
@@ -118442,6 +118506,9 @@ mod async_runtime_tests_current {
                     }
                     HostIoRequest::NetworkRequest { .. } => Ok(HostIoResponse::NetworkRequest {
                         response: Vec::new(),
+                    }),
+                    HostIoRequest::EnvRead { .. } => Err(HostIoError::Denied {
+                        reason: "environment is outside the filesystem fixture".to_string(),
                     }),
                 }
             }
@@ -121264,6 +121331,9 @@ mod async_runtime_tests_current {
                     | HostIoRequest::NetworkRequest { .. } => Err(HostIoError::Denied {
                         reason: "ssrf: endpoint blocked by policy".to_string(),
                     }),
+                    HostIoRequest::EnvRead { .. } => Err(HostIoError::Denied {
+                        reason: "environment is outside the network fixture".to_string(),
+                    }),
                     HostIoRequest::FsRead { .. } => {
                         Ok(HostIoResponse::FsRead { bytes: Vec::new() })
                     }
@@ -121352,6 +121422,9 @@ mod async_runtime_tests_current {
                     | HostIoRequest::NetworkRecv { .. }
                     | HostIoRequest::NetworkRequest { .. } => Err(HostIoError::Io {
                         detail: "TLS send to 127.0.0.1:443: invalid peer certificate".to_string(),
+                    }),
+                    HostIoRequest::EnvRead { .. } => Err(HostIoError::Denied {
+                        reason: "environment is outside the network fixture".to_string(),
                     }),
                     HostIoRequest::FsRead { .. } => {
                         Ok(HostIoResponse::FsRead { bytes: Vec::new() })

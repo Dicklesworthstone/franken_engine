@@ -387,8 +387,10 @@ fn replace_all_with_a_string_needle_is_charged() {
 
 #[test]
 fn match_all_charges_the_instruction_budget() {
+    // matchAll is lazy (bd-9vouw.476): each `next` runs, and charges, one
+    // native exec, so consuming the 5,000 matches is what exhausts the budget.
     let error = HybridRouter::default()
-        .eval_with_instruction_budget("'a'.repeat(5000).matchAll(/a/g); 1", 2_000)
+        .eval_with_instruction_budget("[...'a'.repeat(5000).matchAll(/a/g)].length", 2_000)
         .map(|outcome| outcome.value)
         .map_err(|error| format!("{error:?}"))
         .expect_err("5,000 native exec iterations exceed a 2,000-instruction budget");

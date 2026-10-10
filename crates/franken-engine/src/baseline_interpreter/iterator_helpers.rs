@@ -26,12 +26,15 @@ pub(super) const ITERATOR_HELPER_PROTOTYPE: &str = "%IteratorHelperPrototype%";
 /// %WrapForValidIteratorPrototype%: what `Iterator.from` wraps an iterator
 /// that does not inherit from %IteratorPrototype% in.
 pub(super) const WRAP_FOR_VALID_ITERATOR_PROTOTYPE: &str = "%WrapForValidIteratorPrototype%";
+/// %RegExpStringIteratorPrototype% (ES2020 21.2.7.1): the prototype of the
+/// iterator String.prototype.matchAll returns (bd-9vouw.476).
+pub(super) const REGEXP_STRING_ITERATOR_PROTOTYPE: &str = "%RegExpStringIteratorPrototype%";
 
 /// (specifier, owner, name) of each built-in: the specifier names the
 /// `IteratorHelperMethod` builtin, the owner and name give its `name` and
 /// `length` (builtin_function_lengths). %IteratorPrototype%'s methods are in
 /// Node's own-key order.
-pub(super) const ITERATOR_HELPER_METHODS: [(&str, &str, &str); 16] = [
+pub(super) const ITERATOR_HELPER_METHODS: [(&str, &str, &str); 17] = [
     ("Iterator.from", "Iterator", "from"),
     ("Iterator.prototype.reduce", "Iterator.prototype", "reduce"),
     (
@@ -68,6 +71,11 @@ pub(super) const ITERATOR_HELPER_METHODS: [(&str, &str, &str); 16] = [
         WRAP_FOR_VALID_ITERATOR_PROTOTYPE,
         "return",
     ),
+    (
+        "RegExpStringIterator.next",
+        REGEXP_STRING_ITERATOR_PROTOTYPE,
+        "next",
+    ),
 ];
 
 const KIND_SLOT: &str = "__iteratorHelperKind";
@@ -93,6 +101,21 @@ pub(super) const ITERATOR_HELPER_SLOT_KEYS: [&str; 10] = [
     INNER_NEXT_SLOT,
     DONE_SLOT,
     RUNNING_SLOT,
+];
+
+/// A matchAll iterator's slots: the RegExp it runs (a private clone), the
+/// subject, whether the RegExp is full-Unicode, and whether it is done.
+const RSI_REGEXP_SLOT: &str = "__regexpStringIteratorRegExp";
+const RSI_STRING_SLOT: &str = "__regexpStringIteratorString";
+const RSI_UNICODE_SLOT: &str = "__regexpStringIteratorUnicode";
+const RSI_DONE_SLOT: &str = "__regexpStringIteratorDone";
+
+/// Hidden from own-key enumeration and reflection (`own_property_visible`).
+pub(super) const REGEXP_STRING_ITERATOR_SLOT_KEYS: [&str; 4] = [
+    RSI_REGEXP_SLOT,
+    RSI_STRING_SLOT,
+    RSI_UNICODE_SLOT,
+    RSI_DONE_SLOT,
 ];
 
 /// A wrapper made by `Iterator.from` carries this kind.
@@ -144,6 +167,7 @@ impl InterpreterCore {
                 self.iterator_from(module, object)
             }
             "IteratorHelper.next" => self.iterator_helper_next(module, &receiver),
+            "RegExpStringIterator.next" => self.regexp_string_iterator_next(&receiver),
             "IteratorHelper.return" => self.iterator_helper_return(module, &receiver),
             "WrapForValidIterator.next" => {
                 let wrapper = self.iterator_helper_receiver(&receiver, true, "next")?;
@@ -216,6 +240,97 @@ impl InterpreterCore {
             ),
             got: receiver.type_name().to_string(),
         })
+    }
+
+    /// CreateRegExpStringIterator(R, S, global, fullUnicode) (ES2020
+    /// 21.2.7.1) for a global `regexp`: each `next` runs one exec, so only
+    /// the match being consumed is alive (bd-9vouw.476).
+    pub(super) fn create_regexp_string_iterator(
+        &mut self,
+        regexp: ObjectId,
+        subject: JsString,
+        full_unicode: bool,
+    ) -> Result<Value, InterpreterError> {
+        let prototype = self.ensure_builtin_prototype(REGEXP_STRING_ITERATOR_PROTOTYPE)?;
+        let iterator = self.alloc_object_with_prototype(Some(prototype))?;
+        self.iterator_helper_set(iterator, RSI_REGEXP_SLOT, Value::Object(regexp))?;
+        self.iterator_helper_set(iterator, RSI_STRING_SLOT, Value::Str(subject))?;
+        self.iterator_helper_set(iterator, RSI_UNICODE_SLOT, Value::Bool(full_unicode))?;
+        self.iterator_helper_set(iterator, RSI_DONE_SLOT, Value::Bool(false))?;
+        self.hide_internal_slots(iterator, &REGEXP_STRING_ITERATOR_SLOT_KEYS)?;
+        Ok(Value::Object(iterator))
+    }
+
+    /// %RegExpStringIteratorPrototype%.next (ES2020 21.2.7.1.1): the next
+    /// match, or done once exec finds none. An empty match moves lastIndex on
+    /// (AdvanceStringIndex), or the next exec would find it again.
+    fn regexp_string_iterator_next(&mut self, receiver: &Value) -> Result<Value, InterpreterError> {
+        let iterator = match receiver {
+            Value::Object(id)
+                if self
+                    .heap
+                    .get(id.0 as usize)
+                    .is_some_and(|object| object.properties.contains_key(RSI_REGEXP_SLOT)) =>
+            {
+                *id
+            }
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "a RegExp String Iterator for next".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        if matches!(
+            self.iterator_helper_slot(iterator, RSI_DONE_SLOT)?,
+            Value::Bool(true)
+        ) {
+            return self.alloc_iterator_result_object(None);
+        }
+        let regexp = self.iterator_helper_slot(iterator, RSI_REGEXP_SLOT)?;
+        let subject = self.iterator_helper_slot(iterator, RSI_STRING_SLOT)?;
+        // Each exec costs what the guest `re.exec(s)` it stands for would:
+        // one instruction of the run's budget.
+        self.charge_property_copy_work()?;
+        let result = self.regexp_prototype_exec(regexp.clone(), &subject)?;
+        let Value::Object(result_id) = result else {
+            self.iterator_helper_set(iterator, RSI_DONE_SLOT, Value::Bool(true))?;
+            return self.alloc_iterator_result_object(None);
+        };
+        let empty_match = matches!(
+            self.heap
+                .get(result_id.0 as usize)
+                .and_then(|object| object.properties.get("0")),
+            Some(Value::Str(matched)) if matched.is_empty()
+        );
+        if empty_match && let (Value::Object(regexp_id), Value::Str(text)) = (&regexp, &subject) {
+            let this_index = match self
+                .heap
+                .get(regexp_id.0 as usize)
+                .and_then(|object| object.properties.get("lastIndex"))
+            {
+                Some(Value::Int(index)) => usize::try_from(*index).unwrap_or(0),
+                _ => 0,
+            };
+            let full_unicode = matches!(
+                self.iterator_helper_slot(iterator, RSI_UNICODE_SLOT)?,
+                Value::Bool(true)
+            );
+            let surrogate_pair = full_unicode
+                && text
+                    .code_unit_at(this_index)
+                    .is_some_and(|unit| (0xD800..=0xDBFF).contains(&unit))
+                && text
+                    .code_unit_at(this_index + 1)
+                    .is_some_and(|unit| (0xDC00..=0xDFFF).contains(&unit));
+            let next = this_index + if surrogate_pair { 2 } else { 1 };
+            self.set_object_property(
+                *regexp_id,
+                "lastIndex".to_string(),
+                Value::Int(i64::try_from(next).unwrap_or(i64::MAX)),
+            )?;
+        }
+        self.alloc_iterator_result_object(Some(result))
     }
 
     fn iterator_helper_slot(&self, id: ObjectId, slot: &str) -> Result<Value, InterpreterError> {

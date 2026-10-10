@@ -1052,6 +1052,9 @@ fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
         iterator_helpers::WRAP_FOR_VALID_ITERATOR_PROTOTYPE => {
             Some(iterator_helpers::WRAP_FOR_VALID_ITERATOR_PROTOTYPE)
         }
+        iterator_helpers::REGEXP_STRING_ITERATOR_PROTOTYPE => {
+            Some(iterator_helpers::REGEXP_STRING_ITERATOR_PROTOTYPE)
+        }
         ARRAY_ITERATOR_PROTOTYPE => Some(ARRAY_ITERATOR_PROTOTYPE),
         MAP_ITERATOR_PROTOTYPE => Some(MAP_ITERATOR_PROTOTYPE),
         SET_ITERATOR_PROTOTYPE => Some(SET_ITERATOR_PROTOTYPE),
@@ -26320,7 +26323,11 @@ impl InterpreterCore {
             .is_some_and(|object| Self::binary_slot_key(object, key));
         // The internal slots of events, targets and signals (bd-9vouw.170).
         let event_slot = event_target::EVENT_FAMILY_SLOT_KEYS.contains(&key);
-        !(writable_view || binary_slot || event_slot)
+        // Iterator helpers' and matchAll iterators' slots: Reflect.ownKeys of
+        // `[].values().map(f)` listed ten of them (bd-9vouw.476).
+        let iterator_slot = iterator_helpers::ITERATOR_HELPER_SLOT_KEYS.contains(&key)
+            || iterator_helpers::REGEXP_STRING_ITERATOR_SLOT_KEYS.contains(&key);
+        !(writable_view || binary_slot || event_slot || iterator_slot)
     }
 
     /// Whether `key` is one of the heap entries through which `object`, a
@@ -61859,12 +61866,12 @@ impl InterpreterCore {
     /// ES2020 21.1.3.12 String.prototype.matchAll: an iterator over every
     /// match of a global RegExp (a RegExp without `g` is a TypeError; any
     /// other pattern becomes `new RegExp(pattern, "g")`), each result shaped
-    /// like RegExp.prototype.exec's (index, input, groups). It ran on a
-    /// private clone, so the argument's own `lastIndex` is untouched; an empty
-    /// match advances the clone by one. It was missing ("expected function,
-    /// got undefined"). No-claim: the matches are collected when matchAll is
-    /// called (the spec's %RegExpStringIteratorPrototype% is lazy), and the
-    /// iterator is an array iterator.
+    /// like RegExp.prototype.exec's (index, input, groups). It runs on a
+    /// private clone, so the argument's own `lastIndex` is untouched, and
+    /// lazily: the %RegExpStringIteratorPrototype% iterator runs one exec per
+    /// `next` (they were all collected up front, so 5,000 matches of a 34 KB
+    /// string were all alive at once and exceeded the memory budget,
+    /// bd-9vouw.476). An empty match advances the clone by AdvanceStringIndex.
     fn string_match_all_value(
         &mut self,
         input: &JsString,
@@ -61896,43 +61903,10 @@ impl InterpreterCore {
                 (source, "g".to_string(), Value::Int(0))
             }
         };
+        let full_unicode = flags.contains('u') || flags.contains('v');
         let clone = self.alloc_regexp_object(source, flags)?;
         self.set_object_property(clone, "lastIndex".to_string(), last_index)?;
-        let subject = Value::Str(input.clone());
-        let mut results = Vec::new();
-        // Each iteration either ends or moves lastIndex forward, so the loop
-        // is bounded by the input length; the bound is a backstop.
-        for _ in 0..=input.len().saturating_add(1) {
-            // Every native exec here costs what the equivalent guest
-            // `while (re.exec(s))` iteration would: one instruction of the
-            // run's budget, so the eager loop cannot outlast it
-            // (franken_engine#2 follow-up).
-            self.charge_property_copy_work()?;
-            let result = self.regexp_prototype_exec(Value::Object(clone), &subject)?;
-            let Value::Object(result_id) = result else {
-                break;
-            };
-            let empty_match = matches!(
-                self.heap
-                    .get(result_id.0 as usize)
-                    .and_then(|object| object.properties.get("0")),
-                Some(Value::Str(matched)) if matched.is_empty()
-            );
-            if empty_match {
-                let next = match self
-                    .heap
-                    .get(clone.0 as usize)
-                    .and_then(|object| object.properties.get("lastIndex"))
-                {
-                    Some(Value::Int(index)) => index.saturating_add(1),
-                    _ => 1,
-                };
-                self.set_object_property(clone, "lastIndex".to_string(), Value::Int(next))?;
-            }
-            results.push(result);
-        }
-        let array = self.alloc_array_from_values(&results)?;
-        self.array_prototype_iterator_for_receiver(Value::Object(array), "values")
+        self.create_regexp_string_iterator(clone, input.clone(), full_unicode)
     }
 
     /// ES2020 21.1.3.18 String.prototype.search: the index of the first
@@ -108333,7 +108307,8 @@ impl InterpreterCore {
             | SET_ITERATOR_PROTOTYPE
             | GENERATOR_PROTOTYPE
             | iterator_helpers::ITERATOR_HELPER_PROTOTYPE
-            | iterator_helpers::WRAP_FOR_VALID_ITERATOR_PROTOTYPE => {
+            | iterator_helpers::WRAP_FOR_VALID_ITERATOR_PROTOTYPE
+            | iterator_helpers::REGEXP_STRING_ITERATOR_PROTOTYPE => {
                 Some(self.ensure_builtin_prototype(ITERATOR_PROTOTYPE)?)
             }
             "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError" | "EvalError"
@@ -108678,7 +108653,8 @@ impl InterpreterCore {
                 return Ok(());
             }
             iterator_helpers::ITERATOR_HELPER_PROTOTYPE
-            | iterator_helpers::WRAP_FOR_VALID_ITERATOR_PROTOTYPE => {
+            | iterator_helpers::WRAP_FOR_VALID_ITERATOR_PROTOTYPE
+            | iterator_helpers::REGEXP_STRING_ITERATOR_PROTOTYPE => {
                 let members = iterator_helpers::ITERATOR_HELPER_METHODS
                     .iter()
                     .filter(|(_, owner, _)| *owner == canonical)
@@ -108701,7 +108677,11 @@ impl InterpreterCore {
                 if canonical == iterator_helpers::WRAP_FOR_VALID_ITERATOR_PROTOTYPE {
                     return Ok(());
                 }
-                ("Iterator Helper", Vec::new(), None)
+                if canonical == iterator_helpers::REGEXP_STRING_ITERATOR_PROTOTYPE {
+                    ("RegExp String Iterator", Vec::new(), None)
+                } else {
+                    ("Iterator Helper", Vec::new(), None)
+                }
             }
             ARRAY_ITERATOR_PROTOTYPE => (
                 "Array Iterator",

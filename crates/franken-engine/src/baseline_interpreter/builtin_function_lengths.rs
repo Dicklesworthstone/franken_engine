@@ -8,6 +8,7 @@
 pub(super) const BUILTIN_FUNCTION_LENGTHS: &[(&str, &str, u8)] = &[
     ("%IteratorHelperPrototype%", "next", 0),
     ("%IteratorHelperPrototype%", "return", 0),
+    ("%RegExpStringIteratorPrototype%", "next", 0),
     ("%WrapForValidIteratorPrototype%", "next", 0),
     ("%WrapForValidIteratorPrototype%", "return", 0),
     ("AbortController.prototype", "abort", 0),

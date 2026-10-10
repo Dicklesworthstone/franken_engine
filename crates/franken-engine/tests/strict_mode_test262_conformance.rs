@@ -382,14 +382,11 @@ mod tests {
     /// These are genuine strict-mode enforcement gaps (octal literals, `delete`
     /// of identifiers, duplicate params, undeclared assignment) surfaced by the
     /// audit; closing them is tracked under the bd-bg9l1 epic.
-    const KNOWN_STRICT_MODE_GAPS: &[&str] = &[
-        "ES2020-11.8.3-octal-literal-function-strict",
-        "ES2020-11.8.3-octal-literal-global-strict",
-        "ES2020-12.5.4.2-delete-identifier-function-strict",
-        "ES2020-12.5.4.2-delete-identifier-global-strict",
-        "ES2020-14.1.2-duplicate-param-function-strict",
-        "ES2020-14.1.2-duplicate-param-global-strict",
-    ];
+    // Every gap this list named is closed: strict `delete identifier` and
+    // duplicate parameters were SyntaxErrors at main a31192a04 (gate58's
+    // binary), legacy octal literals since landing 59 (gate59e's), as in
+    // Node v22.2.0. A gap that reopens fails the matrix test below.
+    const KNOWN_STRICT_MODE_GAPS: &[&str] = &[];
 
     fn eval_value_bd_0k19b(source: &str) -> String {
         let mut engine = HybridRouter::default();

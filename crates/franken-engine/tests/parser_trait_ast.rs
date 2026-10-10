@@ -121,7 +121,8 @@ fn parser_rejects_keyword_module_import_bindings() {
     let error = parser
         .parse("import { run as for } from \"pkg\";", ParseGoal::Module)
         .expect_err("module import binding with keyword local name must fail");
-    assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
+    // An early SyntaxError, as in Node, since bd-9vouw.429.
+    assert_eq!(error.code, ParseErrorCode::InvalidSyntax);
 }
 
 #[test]

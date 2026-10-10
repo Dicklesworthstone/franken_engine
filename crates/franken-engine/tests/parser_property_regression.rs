@@ -313,7 +313,9 @@ fn regression_failure_catalog_has_stable_error_codes() {
             3_u64,
             "import x from pkg",
             ParseGoal::Module,
-            ParseErrorCode::UnsupportedSyntax,
+            // An unquoted specifier is an early SyntaxError, as in Node,
+            // since bd-9vouw.429.
+            ParseErrorCode::InvalidSyntax,
         ),
         (
             4_u64,

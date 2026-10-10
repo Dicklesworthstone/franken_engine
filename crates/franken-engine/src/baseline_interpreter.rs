@@ -43832,41 +43832,56 @@ impl InterpreterCore {
                         }
                         Err(items) => items,
                     };
-                // `None` is a hole: it moves as a hole (steps 15-16 delete
-                // its target) and stays a hole in the removed array (step 11).
-                let mut elements: Vec<Option<Value>> = self.element_buffer(len)?;
-                let mut moved_hole = false;
-                for i in 0..len {
-                    let element = self.array_index_get(Some(module), arr_id, i)?;
-                    moved_hole |= element.is_none();
-                    elements.push(element);
+                // ES2020 23.1.3.28 steps 11-18 in their order, so a Set or
+                // DeletePropertyOrThrow that throws (a sealed, frozen or
+                // non-extensible array) leaves exactly the writes before it
+                // (bd-9vouw.477). A hole stays a hole in the removed array
+                // and moves as a hole (its target is deleted).
+                for k in 0..delete_count {
+                    if let Some(element) = self.array_index_get(Some(module), arr_id, start + k)? {
+                        self.create_data_property_or_throw(removed_arr, k.to_string(), element)?;
+                    }
                 }
-                let removed: Vec<Option<Value>> = elements
-                    .splice(start..start + delete_count, items.into_iter().map(Some))
-                    .collect();
-                let new_len = elements.len();
-                // ES2020 23.1.3.28 step 16: growing the array first writes
-                // the new top index, so a non-extensible (sealed or
-                // prevented) array refuses before any element moves
-                // (bd-9vouw.250).
-                if new_len > len
-                    && self
-                        .heap
-                        .get(arr_id.0 as usize)
-                        .is_some_and(|object| !object.extensible())
-                {
-                    return Err(InterpreterError::TypeError {
-                        expected: "an extensible array for Array.prototype.splice".to_string(),
-                        got: format!("Cannot add property {len}, object is not extensible"),
-                    });
-                }
+                self.set_object_property(
+                    removed_arr,
+                    "length".to_string(),
+                    Value::Int(i64::try_from(delete_count).unwrap_or(i64::MAX)),
+                )?;
+                let item_count = items.len();
+                let new_len = len - delete_count + item_count;
                 let was_dense = self.array_cache_is_dense(arr_id);
-                for (i, element) in elements.into_iter().enumerate() {
-                    self.array_store_or_delete(arr_id, i, element)?;
+                let mut moved_hole = false;
+                if item_count < delete_count {
+                    // Step 15: move the tail down, then delete the top.
+                    for k in start..len - delete_count {
+                        self.array_move_element(
+                            module,
+                            arr_id,
+                            k + delete_count,
+                            k + item_count,
+                            &mut moved_hole,
+                        )?;
+                    }
+                    for k in (new_len..len).rev() {
+                        self.array_delete_or_throw(arr_id, &k.to_string())?;
+                    }
+                } else if item_count > delete_count {
+                    // Step 16: move the tail up, from the top. Its first
+                    // write is a new top index, which a non-extensible
+                    // array refuses before anything else changes.
+                    for k in (start + 1..=len - delete_count).rev() {
+                        self.array_move_element(
+                            module,
+                            arr_id,
+                            k + delete_count - 1,
+                            k + item_count - 1,
+                            &mut moved_hole,
+                        )?;
+                    }
                 }
-                // Step 18: from the top index down.
-                for i in (new_len..len).rev() {
-                    self.array_delete_or_throw(arr_id, &i.to_string())?;
+                // Step 17: the items.
+                for (offset, item) in items.into_iter().enumerate() {
+                    self.set_object_property(arr_id, (start + offset).to_string(), item)?;
                 }
                 self.set_object_property(
                     arr_id,
@@ -43874,17 +43889,6 @@ impl InterpreterCore {
                     Value::Int(i64::try_from(new_len).unwrap_or(i64::MAX)),
                 )?;
                 self.refresh_dense_length_cache(arr_id, new_len, was_dense && !moved_hole);
-                let removed_len = removed.len();
-                for (i, element) in removed.into_iter().enumerate() {
-                    if let Some(element) = element {
-                        self.create_data_property_or_throw(removed_arr, i.to_string(), element)?;
-                    }
-                }
-                self.set_object_property(
-                    removed_arr,
-                    "length".to_string(),
-                    Value::Int(i64::try_from(removed_len).unwrap_or(i64::MAX)),
-                )?;
                 Ok(Value::Object(removed_arr))
             }
             BuiltinFunctionKind::ArrayToReversed => {

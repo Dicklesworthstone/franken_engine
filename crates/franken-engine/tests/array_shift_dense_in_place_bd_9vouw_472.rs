@@ -11,6 +11,10 @@
 //! subclass receiver (its removed array comes from @@species). Generic path:
 //! holes, an element inherited from Array.prototype, frozen, sealed,
 //! non-extensible and non-writable-length arrays and an array-like receiver.
+//! Throwing splices follow the spec's step order (bd-9vouw.477): a sealed array
+//! throws at its first delete before any item is written, and a non-extensible
+//! array keeps the items written into existing indices before the write to a
+//! new index throws.
 
 use std::process::Command;
 
@@ -113,6 +117,14 @@ try { fs.splice(0, 1); console.log("no error"); } catch (err) { console.log(err.
 var ns = Object.preventExtensions([1, 2, 3]);
 console.log(JSON.stringify(ns.splice(0, 1)), JSON.stringify(ns));
 try { ns.splice(0, 0, "grow"); console.log("no error"); } catch (err) { console.log(err.constructor.name, ns.length); }
+var ss = Object.seal([1.5, 1.5]);
+try { ss.splice(0, 190, 136); console.log("no error"); } catch (err) { console.log(err.constructor.name, JSON.stringify(ss)); }
+var ng = Object.preventExtensions(["s2", "s3"]);
+try { ng.splice(1, 2, 197, 143); console.log("no error"); } catch (err) { console.log(err.constructor.name, JSON.stringify(ng)); }
+var nt = Object.preventExtensions([1, 2, 3, 4]);
+try { nt.splice(1, 1, "a", "b"); console.log("no error"); } catch (err) { console.log(err.constructor.name, JSON.stringify(nt)); }
+var ne2 = Object.preventExtensions([1, 2, 3]);
+console.log(JSON.stringify(ne2.splice(1, 1, "x")), JSON.stringify(ne2));
 "#;
 
 const EXPECTED: &[&str] = &[
@@ -148,6 +160,10 @@ const EXPECTED: &[&str] = &[
     "TypeError 2",
     "[1] [2,3]",
     "TypeError 2",
+    "TypeError [1.5,1.5]",
+    "TypeError [\"s2\",197]",
+    "TypeError [1,2,3,4]",
+    "[2] [1,\"x\",3]",
 ];
 
 #[test]

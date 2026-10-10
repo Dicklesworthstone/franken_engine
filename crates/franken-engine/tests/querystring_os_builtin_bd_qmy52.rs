@@ -851,6 +851,16 @@ fn run_querystring_commonjs(
     lane: LaneChoice,
     builtin: bool,
 ) -> Result<Vec<String>, String> {
+    run_querystring_commonjs_with_environment(source, sibling, lane, builtin, None)
+}
+
+fn run_querystring_commonjs_with_environment(
+    source: &str,
+    sibling: Option<&str>,
+    lane: LaneChoice,
+    builtin: bool,
+    environment: Option<std::collections::BTreeMap<String, String>>,
+) -> Result<Vec<String>, String> {
     let root = tempfile::tempdir().expect("module root");
     let entry = root.path().join("entry.cjs");
     std::fs::write(&entry, source).expect("entry source");
@@ -866,6 +876,9 @@ fn run_querystring_commonjs(
     if builtin {
         capabilities.push("builtin".to_string());
     }
+    if environment.is_some() {
+        capabilities.push("env_read".to_string());
+    }
     let package = ExtensionPackage {
         extension_id: "querystring-module-values".to_string(),
         source: source.to_string(),
@@ -875,21 +888,28 @@ fn run_querystring_commonjs(
         version: "1.0.0".to_string(),
         metadata: Default::default(),
     };
-    ExecutionOrchestrator::new(OrchestratorConfig {
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig {
         force_lane: Some(lane),
         parse_goal: ParseGoal::Script,
         commonjs_entry: true,
         ..OrchestratorConfig::default()
-    })
-    .execute(&package)
-    .map(|result| {
-        result
-            .console_output
-            .into_iter()
-            .map(|entry| entry.message)
-            .collect()
-    })
-    .map_err(|error| format!("{error:?}"))
+    });
+    if let Some(environment) = environment {
+        let provider =
+            frankenengine_extension_host::host_io::EnvironmentSnapshotHostIo::new(environment)
+                .expect("explicit environment fixture");
+        orchestrator.set_host_io(std::sync::Arc::new(provider), None);
+    }
+    orchestrator
+        .execute(&package)
+        .map(|result| {
+            result
+                .console_output
+                .into_iter()
+                .map(|entry| entry.message)
+                .collect()
+        })
+        .map_err(|error| format!("{error:?}"))
 }
 
 #[test]
@@ -941,13 +961,126 @@ fn querystring_dynamic_methods_keep_the_builtin_capability_gate_bd_305gi() {
 }
 
 #[test]
+fn querystring_cross_file_replacement_keeps_captured_secret_provenance_bd_305gi() {
+    // Reflect.set is an internal labeled transfer. Ordinary property stores
+    // have an Internal static clearance and refuse this closure before the
+    // parent can observe the cached module, so use the explicit reflective
+    // operation to exercise the actual result and egress boundary.
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let error = run_querystring_commonjs_with_environment(
+            "const qs = require('querystring'); require('./sibling.cjs'); \
+             console.log(qs.escape('public input'));",
+            Some(
+                "const qs = require('node:querystring'); \
+                 const captured = process.env.PRIVATE_KEY; \
+                 Reflect.set(qs, 'escape', () => captured);",
+            ),
+            lane,
+            true,
+            Some(std::collections::BTreeMap::from([(
+                "PRIVATE_KEY".to_string(),
+                "secret-fixture".to_string(),
+            )])),
+        )
+        .expect_err("a cached module may contain a sibling's Secret-returning closure");
+        assert!(
+            error.contains("console:log:confidentiality"),
+            "{lane:?}: the replacement must run and its result must stop at the sink: {error}"
+        );
+    }
+}
+
+#[test]
 fn querystring_detached_methods_do_not_declassify_secret_inputs_bd_305gi() {
-    let error =
-        eval_err("const escape = require('querystring').escape; console.log(escape('password'));");
-    assert!(
-        error.contains("unauthorized flow") || error.contains("IFC") || error.contains("ifc"),
-        "secret-bearing transformed text must remain denied at the console: {error}"
-    );
+    use frankenengine_engine::baseline_interpreter::{
+        InterpreterConfig, InterpreterCore, InterpreterError, Value,
+    };
+    use frankenengine_engine::capability::RuntimeCapability;
+    use frankenengine_engine::hash_tiers::ContentHash;
+    use frankenengine_engine::ifc_artifacts::Label;
+    use frankenengine_engine::ir_contract::{CapabilityTag, Ir3Instruction, Ir3Module, RegRange};
+
+    // A literal's spelling is not provenance. Seed the same bytes with two
+    // real labels, then extract and call the realm module's native method.
+    // This bypasses the static analysis and checks the runtime sink itself.
+    let mut module = Ir3Module::new(ContentHash::compute(b"querystring-ifc"), "querystring-ifc");
+    module.constant_pool = vec!["escape".into()];
+    module.instructions = vec![
+        Ir3Instruction::HostCall {
+            capability: CapabilityTag("builtin:QuerystringModule".into()),
+            args: RegRange { start: 0, count: 0 },
+            dst: 1,
+        },
+        Ir3Instruction::LoadStr {
+            dst: 2,
+            pool_index: 0,
+        },
+        Ir3Instruction::GetProperty {
+            obj: 1,
+            key: 2,
+            dst: 3,
+        },
+        Ir3Instruction::Call {
+            callee: 3,
+            args: RegRange { start: 0, count: 1 },
+            dst: 4,
+        },
+        Ir3Instruction::HostCall {
+            capability: CapabilityTag("console:log".into()),
+            args: RegRange { start: 4, count: 1 },
+            dst: 5,
+        },
+        Ir3Instruction::Return { value: 4 },
+    ];
+
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for input_label in [Label::Public, Label::Secret] {
+            let mut config = match lane {
+                LaneChoice::QuickJs => InterpreterConfig::quickjs_defaults(),
+                LaneChoice::V8 => InterpreterConfig::v8_defaults(),
+            };
+            config.granted_capabilities = [
+                RuntimeCapability::VmDispatch,
+                RuntimeCapability::HeapAllocate,
+                RuntimeCapability::Builtin,
+                RuntimeCapability::Console,
+            ]
+            .into_iter()
+            .collect();
+            let mut core = InterpreterCore::new(config, "querystring-ifc");
+            core.seed_register(0, Value::str("sensitive value"))
+                .expect("seed querystring argument");
+            core.set_register_label(0, input_label.clone())
+                .expect("label querystring argument");
+
+            let outcome = core.execute(&module);
+            assert_eq!(
+                core.get_register_label(4).expect("transformed label"),
+                &input_label,
+                "{lane:?}: the extracted method must preserve input provenance"
+            );
+            if input_label == Label::Public {
+                assert_eq!(
+                    outcome.expect("Public input may reach the console").value,
+                    Value::str("sensitive%20value"),
+                    "{lane:?}"
+                );
+                assert_eq!(core.console_output().len(), 1, "{lane:?}");
+                assert_eq!(
+                    core.console_output()[0].message,
+                    "sensitive%20value",
+                    "{lane:?}"
+                );
+            } else {
+                assert!(
+                    matches!(&outcome, Err(InterpreterError::CapabilityDenied { capability })
+                        if capability == "console:log:confidentiality"),
+                    "{lane:?}: Secret input must be refused at the sink: {outcome:?}"
+                );
+                assert!(core.console_output().is_empty(), "{lane:?}");
+            }
+        }
+    }
 }
 
 #[test]

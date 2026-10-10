@@ -7340,7 +7340,7 @@ mod tests {
                 "process.platform;\nprocess['env']['PATH'];\n",
             ),
             ("destructure", "const { platform } = process;\n"),
-            ("static env", "process.env.PATH;\n"),
+            ("env possession", "process.env;\n"),
             ("computed env", "process['env']['PATH'];\n"),
             ("computed exit", "process['exit'](0);\n"),
         ] {

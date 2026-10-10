@@ -79,7 +79,11 @@ pub(super) fn binary(op: BigIntBinaryOp, left: &str, right: &str) -> Result<Stri
 /// and integer-arithmetic operations. Checked overflow is a tier miss, not a
 /// JS error: the arbitrary-precision path must still compute the exact value.
 /// Every admitted result fits in 128 bits, well below MAX_BIGINT_BITS.
-fn small_binary(op: BigIntBinaryOp, left: &str, right: &str) -> Option<Result<String, BigIntError>> {
+fn small_binary(
+    op: BigIntBinaryOp,
+    left: &str,
+    right: &str,
+) -> Option<Result<String, BigIntError>> {
     if left.len() > 40 || right.len() > 40 {
         return None;
     }
@@ -619,8 +623,8 @@ mod tests {
     #[test]
     fn borrowed_decimal_comparison_matches_the_parser() {
         let mut values: Vec<String> = [
-            "", "+", "-", "-0", "+000", "000", "0", "+001", "1", "-1",
-            "9", "10", "-9", "-10", "1_0", "invalid", "１２", "1.5",
+            "", "+", "-", "-0", "+000", "000", "0", "+001", "1", "-1", "9", "10", "-9", "-10",
+            "1_0", "invalid", "１２", "1.5",
         ]
         .into_iter()
         .map(str::to_string)
@@ -646,7 +650,13 @@ mod tests {
     #[test]
     fn mixed_number_comparison_keeps_exact_rounding_and_special_values() {
         let integers = [
-            "-9007199254740993", "-2", "-1", "0", "1", "2", "9007199254740993",
+            "-9007199254740993",
+            "-2",
+            "-1",
+            "0",
+            "1",
+            "2",
+            "9007199254740993",
         ];
         let numbers = [
             f64::NEG_INFINITY,
@@ -692,7 +702,20 @@ mod tests {
     fn native_shifts_preserve_direction_sign_and_overflow_fallbacks() {
         for value in [i128::MIN, i128::MIN + 1, -129, -1, 0, 1, 127, i128::MAX] {
             for amount in [
-                i128::MIN, -129, -128, -127, -64, -1, 0, 1, 63, 64, 126, 127, 128, 129,
+                i128::MIN,
+                -129,
+                -128,
+                -127,
+                -64,
+                -1,
+                0,
+                1,
+                63,
+                64,
+                126,
+                127,
+                128,
+                129,
                 i128::MAX,
             ] {
                 for op in [BigIntBinaryOp::Shl, BigIntBinaryOp::Shr] {

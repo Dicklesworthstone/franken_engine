@@ -8,6 +8,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use frankenengine_engine::ast::ParseGoal;
+use frankenengine_engine::authority_footprint::{
+    AnalysisCompleteness, CheckOutcome, SourceLocation, analyze_authority_footprint,
+};
 use frankenengine_engine::baseline_interpreter::{
     InterpreterConfig, InterpreterCore, InterpreterError, Value,
 };
@@ -128,6 +131,59 @@ fn lower(source: &str) -> Result<Ir3Module, LoweringPipelineError> {
             .with_ambient_authority_grant(AmbientAuthorityGrant::DenyAll),
     )
     .map(|output| output.ir3)
+}
+
+#[test]
+fn named_environment_reads_remain_in_the_authority_footprint_bd_omckp() {
+    for (expression, tag, end_column) in [
+        ("process.env.SECRET_KEY", "env:read", Some(38)),
+        ("process.env['SECRET_KEY']", "env:read", Some(41)),
+        ("'SECRET_KEY' in process.env", "env:has", None),
+    ] {
+        let source = format!("const greeting = \"hello\";\nconst secret = {expression};\n");
+        let report =
+            analyze_authority_footprint(&source, "environment-footprint.js", ParseGoal::Script);
+        assert!(report.analyzable, "{expression}: {report:?}");
+        assert_eq!(report.analysis_completeness, AnalysisCompleteness::Complete);
+        assert_eq!(report.outcome(), CheckOutcome::Clean);
+        assert!(report.findings.is_empty());
+        assert_eq!(report.required_capabilities.len(), 1);
+        let requirement = &report.required_capabilities[0];
+        assert_eq!(requirement.capability, Some(RuntimeCapability::EnvRead));
+        assert_eq!(requirement.capability_tag, tag);
+        if let Some(end_column) = end_column {
+            // The parser currently gives initializer Member nodes their
+            // enclosing declaration span, excluding its semicolon. The
+            // mediated hostcall must retain that exact original span.
+            assert_eq!(
+                requirement.call_sites,
+                vec![SourceLocation {
+                    start_line: 2,
+                    start_column: 1,
+                    end_line: 2,
+                    end_column,
+                }],
+                "a mediated named read retains its original declaration span"
+            );
+        }
+
+        // A clean static report is not an execution grant. The same source
+        // still fails before any provider call without runtime EnvRead.
+        let provider = CountedProvider::snapshot();
+        let error = execute(
+            &source,
+            false,
+            provider.clone(),
+            Arc::new(InMemoryHostIoTranscript::recording()),
+        )
+        .expect_err("authority inference cannot grant the required capability");
+        assert!(matches!(
+            error.primary_error(),
+            OrchestratorError::Interpreter(InterpreterError::CapabilityDenied { capability })
+                if capability == "env_read"
+        ));
+        assert_eq!(provider.calls.load(Ordering::Relaxed), 0);
+    }
 }
 
 #[test]

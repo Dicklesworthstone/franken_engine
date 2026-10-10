@@ -51,7 +51,7 @@ impl Drop for TempPackage {
 #[test]
 fn transitive_graph_is_walked_and_aggregated_with_citations() {
     let pkg = TempPackage::new("transitive_graph");
-    // index -> lib/a.js -> lib/b.js ; b reads process.env (ambient) ; index
+    // index -> lib/a.js -> lib/b.js ; b possesses process.env (ambient) ; index
     // also imports an external bare package.
     pkg.write(
         "index.js",
@@ -61,7 +61,7 @@ fn transitive_graph_is_walked_and_aggregated_with_citations() {
         "lib/a.js",
         "import { b } from \"./b.js\";\nexport const a = b + 1;\n",
     );
-    pkg.write("lib/b.js", "export const b = process.env.SEED;\n");
+    pkg.write("lib/b.js", "export const b = process.env;\n");
 
     let report = onboard_package(pkg.root(), "index.js", "demo-pkg", ParseGoal::Module);
 
@@ -131,6 +131,63 @@ fn transitive_graph_is_walked_and_aggregated_with_citations() {
             edge.from_module, edge.specifier
         );
     }
+}
+
+#[test]
+fn named_environment_reads_require_authority_across_transitive_intake_bd_omckp() {
+    let pkg = TempPackage::new("named_environment_authority");
+    pkg.write(
+        "index.js",
+        "import { config } from './lib/a.js';\nexport const value = config;\n",
+    );
+    pkg.write(
+        "lib/a.js",
+        "import { value } from './config.js';\nexport const config = value;\n",
+    );
+    pkg.write(
+        "lib/config.js",
+        "const marker = 'config';\nexport const value = process.env.NODE_ENV;\n",
+    );
+
+    let report = onboard_package(pkg.root(), "index.js", "environment-pkg", ParseGoal::Module);
+    assert!(report.analyzable);
+    assert_eq!(report.manifest_proposal.module_count, 3);
+    assert_eq!(report.completeness, PackageIntakeCompleteness::Complete);
+    assert_eq!(report.outcome(), PackageIntakeOutcome::Clean);
+    assert!(report.denied_ambient_authority.is_empty());
+    let env_requirements = report
+        .capability_profile_proposal
+        .capabilities
+        .iter()
+        .filter(|requirement| requirement.capability == Some(RuntimeCapability::EnvRead))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        env_requirements.len(),
+        1,
+        "clean intake retains its EnvRead grant requirement"
+    );
+    let requirement = env_requirements[0];
+    assert_eq!(requirement.capability_tag, "env:read");
+    assert_eq!(requirement.sites.len(), 1);
+    assert_eq!(requirement.sites[0].module, "lib/config.js");
+    // Named exports strip `export ` from the declaration span, while Member
+    // initializers retain that declaration's range (through NODE_ENV).
+    assert_eq!(
+        requirement.sites[0].location,
+        Some(frankenengine_engine::authority_footprint::SourceLocation {
+            start_line: 2,
+            start_column: 8,
+            end_line: 2,
+            end_column: 42,
+        }),
+    );
+    assert!(
+        report
+            .capability_profile_proposal
+            .least_authority_suggestion
+            .contains("env:read"),
+        "the operator must still be told to grant the required authority"
+    );
 }
 
 #[test]

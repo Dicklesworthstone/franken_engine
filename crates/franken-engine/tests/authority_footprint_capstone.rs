@@ -51,7 +51,7 @@ fn check_corpus_reports_span_capability_bundle_and_bounded_wording() {
     let source = dir.path().join("ambient.js");
     fs::write(
         &source,
-        "const greeting = \"hello\";\nconst secret = process.env.SECRET_KEY;\n",
+        "const greeting = \"hello\";\nconst secret = process.env;\n",
     )
     .expect("write source");
     let bundle = dir.path().join("check-bundle");
@@ -180,11 +180,7 @@ fn onboard_static_package_aggregates_reports_and_bundle_events() {
         "import { cfg } from \"./config.js\";\nimport { send } from \"./sink\";\nimport pad from \"left-pad\";\nexport const out = send(cfg, pad);\n",
     )
     .expect("write index");
-    fs::write(
-        root.join("config.js"),
-        "export const cfg = process.env.SECRET_KEY;\n",
-    )
-    .expect("write config");
+    fs::write(root.join("config.js"), "export const cfg = process.env;\n").expect("write config");
     fs::write(
         root.join("sink.js"),
         "export const send = hostcall<\"declassify.audit\">(\"secret_token\");\n",
@@ -319,7 +315,7 @@ fn diff_behavior_reports_added_authority_ifc_and_boundary_signal() {
     .expect("write after net");
     fs::write(
         after_root.join("env.js"),
-        "export const secret = process.env.SECRET_KEY;\n",
+        "export const secret = process.env;\n",
     )
     .expect("write after env");
     let bundle = dir.path().join("diff-bundle");

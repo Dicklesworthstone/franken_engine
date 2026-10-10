@@ -40570,61 +40570,72 @@ mod tests {
 
     #[test]
     fn object_keys_join_keeps_finite_own_key_provenance_bd_n8eta() {
-        for (name, source, expected_querystring_method, expected_console_count) in [
+        let literal = |value: &str| Ir1Op::LoadLiteral {
+            value: Ir1Literal::String(value.into()),
+        };
+        // Authenticate the pure native operation in IR itself. The first-class
+        // querystring module is mutable across files, so reading a method from
+        // its factory result cannot vouch for this native-call contract.
+        for (name, object_ops) in [
             (
-                "querystring_0010",
-                "const qs = require('querystring'); const value = { foo: 'bar', baz: 'qux' }; console.log(Object.keys(value).join(',')); console.log(qs.stringify(value));",
-                "stringify",
-                2,
+                "literal",
+                vec![
+                    literal("foo"),
+                    literal("bar"),
+                    literal("baz"),
+                    literal("qux"),
+                    Ir1Op::NewObject { count: 2 },
+                ],
             ),
             (
-                "querystring_0013",
-                "const qs = require('querystring'); const o = qs.parse('foo=bar&abc=xyz'); console.log(Object.keys(o).join(','), o.foo, o.abc);",
-                "parse",
-                1,
+                "querystring_parse",
+                vec![
+                    literal("foo=bar&baz=qux"),
+                    Ir1Op::HostCall {
+                        capability: "builtin:QuerystringParse".to_string(),
+                        arg_count: 1,
+                    },
+                ],
             ),
         ] {
-            let tree = crate::parser_api_stability::parse_script(source)
-                .unwrap_or_else(|error| panic!("parse {name}: {error}"));
-            let ir0 = Ir0Module::from_syntax_tree(tree, format!("{name}_bd_n8eta.js"));
-            let ir1 = lower_ir0_to_ir1(&ir0)
-                .unwrap_or_else(|error| panic!("lower {name} to IR1: {error}"))
-                .module;
-
-            assert!(
-                ir1.ops.iter().any(|op| matches!(op,
-                    Ir1Op::HostCall { capability, arg_count: 1 }
-                        if capability == "builtin:ObjectKeys"
-                )),
-                "{name} must retain the Object.keys operation"
+            let mut native = Ir1Module::new(
+                ContentHash::compute(name.as_bytes()),
+                format!("native_own_keys_{name}_bd_n8eta.js"),
             );
-            // bd-305gi: querystring's first-class object replaces the direct
-            // call recognizer. Preserve the same public-data flow assertions
-            // below while reading the actual, potentially replaced method.
-            assert!(
-                ir1.ops.iter().any(|op| matches!(op,
-                    Ir1Op::HostCall { capability, arg_count: 0 }
-                        if capability == "builtin:QuerystringModule"
-                )),
-                "{name} must materialize the querystring module"
-            );
-            assert!(
-                ir1.ops.iter().any(|op| matches!(op,
-                    Ir1Op::GetProperty { key: Ir1PropertyKey::Static(key) }
-                        if key.as_str() == Some(expected_querystring_method)
-                )),
-                "{name} must observe the querystring method property"
-            );
-            assert!(
-                ir1.ops.iter().any(|op| matches!(op,
-                    Ir1Op::GetProperty { key: Ir1PropertyKey::Static(key) }
-                        if key.as_str() == Some("join")
-                )),
-                "{name} must retain the Array.prototype.join observation"
-            );
-
-            let ir2 = lower_ir1_to_ir2(&ir1)
-                .unwrap_or_else(|error| panic!("lower {name} to IR2: {error}"))
+            native.ops = object_ops;
+            native.ops.extend([
+                Ir1Op::StoreBinding { binding_id: 0 },
+                Ir1Op::Pop,
+                Ir1Op::LoadBinding { binding_id: 0 },
+                Ir1Op::HostCall {
+                    capability: "builtin:ObjectKeys".to_string(),
+                    arg_count: 1,
+                },
+                Ir1Op::StoreBinding { binding_id: 1 },
+                Ir1Op::GetProperty {
+                    key: Ir1PropertyKey::Static("join".into()),
+                },
+                Ir1Op::LoadBinding { binding_id: 1 },
+                literal(","),
+                Ir1Op::CallMethod { arg_count: 1 },
+                Ir1Op::HostCall {
+                    capability: "console:log".to_string(),
+                    arg_count: 1,
+                },
+                Ir1Op::Pop,
+                Ir1Op::LoadBinding { binding_id: 0 },
+                Ir1Op::HostCall {
+                    capability: "builtin:QuerystringStringify".to_string(),
+                    arg_count: 1,
+                },
+                Ir1Op::HostCall {
+                    capability: "console:log".to_string(),
+                    arg_count: 1,
+                },
+                Ir1Op::Return,
+            ]);
+            let ir2 = lower_ir1_to_ir2(&native)
+                .unwrap_or_else(|error| panic!("native {name} flow: {error}"))
                 .module;
             let console_flows = ir2
                 .ops
@@ -40636,33 +40647,15 @@ mod tests {
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            assert_eq!(
-                console_flows.len(),
-                expected_console_count,
-                "{name} console flow count"
-            );
+            assert_eq!(console_flows.len(), 2, "native {name}");
             for console_flow in console_flows {
-                assert_eq!(console_flow.data_label, Label::Public, "{name}");
-                assert!(
-                    !console_flow.declassification_required,
-                    "{name} must not require a TopSecret-to-Internal declassification"
-                );
+                assert_eq!(console_flow.data_label, Label::Public, "native {name}");
+                assert!(!console_flow.declassification_required, "native {name}");
             }
-
-            // HybridRouter.eval denies at build_ir2_flow_proof_artifact, not
-            // at IR2 annotation. Pin the live 0010/0013 sources through that
-            // same lattice check under the trusted-eval grant.
-            let eval_context = LoweringContext::new(
-                format!("eval-hybrid-{name}"),
-                format!("eval-decision-{name}"),
-                "eval-policy-hybrid",
-            )
-            .with_ambient_authority_grant(AmbientAuthorityGrant::TrustedProcessShape);
-            if let Err(error) = build_ir2_flow_proof_artifact(&ir2, &eval_context) {
-                panic!("{name} must lower without UnauthorizedFlow: {error}");
-            }
-            lower_ir0_to_ir3(&ir0, &eval_context).unwrap_or_else(|error| {
-                panic!("{name} eval-equivalent IR0→IR3 must succeed: {error}")
+            let context =
+                LoweringContext::new("native-keys", "native-keys-decision", "native-keys-policy");
+            build_ir2_flow_proof_artifact(&ir2, &context).unwrap_or_else(|error| {
+                panic!("native {name} requires no declassification: {error}")
             });
         }
 
@@ -40723,6 +40716,111 @@ mod tests {
             ),
             "unknown Object.keys must keep the TopSecret→Internal fail-closed proof"
         );
+    }
+
+    #[test]
+    fn querystring_first_class_source_keeps_mutable_method_provenance_bd_305gi() {
+        for (name, source, expected_querystring_method, expected_console_labels) in [
+            (
+                "querystring_0010",
+                "const qs = require('querystring'); const value = { foo: 'bar', baz: 'qux' }; console.log(Object.keys(value).join(',')); console.log(qs.stringify(value));",
+                "stringify",
+                vec![Label::Public, Label::Internal],
+            ),
+            (
+                "querystring_0013",
+                "const qs = require('querystring'); const o = qs.parse('foo=bar&abc=xyz'); console.log(Object.keys(o).join(','), o.foo, o.abc);",
+                "parse",
+                vec![Label::Internal],
+            ),
+        ] {
+            let tree = crate::parser_api_stability::parse_script(source)
+                .unwrap_or_else(|error| panic!("parse {name}: {error}"));
+            let ir0 = Ir0Module::from_syntax_tree(tree, format!("{name}_bd_n8eta.js"));
+            let ir1 = lower_ir0_to_ir1(&ir0)
+                .unwrap_or_else(|error| panic!("lower {name} to IR1: {error}"))
+                .module;
+
+            assert!(
+                ir1.ops.iter().any(|op| matches!(op,
+                    Ir1Op::HostCall { capability, arg_count: 1 }
+                        if capability == "builtin:ObjectKeys"
+                )),
+                "{name} must retain the Object.keys operation"
+            );
+            // bd-305gi: querystring's first-class object replaces the direct
+            // call recognizer. Read the actual, potentially replaced method.
+            // A sibling module may have installed a closure or getter; the
+            // factory cannot authenticate immutable native members.
+            assert!(
+                ir1.ops.iter().any(|op| matches!(op,
+                    Ir1Op::HostCall { capability, arg_count: 0 }
+                        if capability == "builtin:QuerystringModule"
+                )),
+                "{name} must materialize the querystring module"
+            );
+            assert!(
+                ir1.ops.iter().any(|op| matches!(op,
+                    Ir1Op::GetProperty { key: Ir1PropertyKey::Static(key) }
+                        if key.as_str() == Some(expected_querystring_method)
+                )),
+                "{name} must observe the querystring method property"
+            );
+            assert!(
+                ir1.ops.iter().any(|op| matches!(op,
+                    Ir1Op::GetProperty { key: Ir1PropertyKey::Static(key) }
+                        if key.as_str() == Some("join")
+                )),
+                "{name} must retain the Array.prototype.join observation"
+            );
+
+            let ir2 = lower_ir1_to_ir2(&ir1)
+                .unwrap_or_else(|error| panic!("lower {name} to IR2: {error}"))
+                .module;
+            let console_flows = ir2
+                .ops
+                .iter()
+                .filter_map(|op| match &op.inner {
+                    Ir1Op::HostCall { capability, .. } if capability == "console:log" => {
+                        op.flow.as_ref()
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                console_flows.len(),
+                expected_console_labels.len(),
+                "{name} console flow count"
+            );
+            for (console_flow, expected_label) in
+                console_flows.into_iter().zip(expected_console_labels)
+            {
+                assert_eq!(console_flow.data_label, expected_label, "{name}");
+                assert!(
+                    !console_flow.declassification_required,
+                    "{name} must not require a TopSecret-to-Internal declassification"
+                );
+            }
+
+            // These source programs introduce no confidential source. Their
+            // dynamic method results remain conservatively Internal; the
+            // native-call Public contract is tested separately above.
+            // HybridRouter.eval denies at build_ir2_flow_proof_artifact, not
+            // at IR2 annotation. Pin the live 0010/0013 sources through that
+            // same lattice check under the trusted-eval grant.
+            let eval_context = LoweringContext::new(
+                format!("eval-hybrid-{name}"),
+                format!("eval-decision-{name}"),
+                "eval-policy-hybrid",
+            )
+            .with_ambient_authority_grant(AmbientAuthorityGrant::TrustedProcessShape);
+            if let Err(error) = build_ir2_flow_proof_artifact(&ir2, &eval_context) {
+                panic!("{name} must lower without UnauthorizedFlow: {error}");
+            }
+            lower_ir0_to_ir3(&ir0, &eval_context).unwrap_or_else(|error| {
+                panic!("{name} eval-equivalent IR0→IR3 must succeed: {error}")
+            });
+        }
     }
 
     #[test]

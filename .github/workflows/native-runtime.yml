@@ -76,8 +76,8 @@ jobs:
         if: always()
         run: |
           set -o pipefail
-          cargo test --locked -p frankenengine-engine --no-default-features \
-            --test environment_hostcalls \
+          cargo test --locked --no-fail-fast -p frankenengine-engine --no-default-features \
+            --test environment_hostcalls --test package_intake_integration \
             -- --nocapture --test-threads=1 2>&1 | tee boundary-environment-hostcall-tests.log
       - name: Execute live guardplane containment regressions
         if: always()

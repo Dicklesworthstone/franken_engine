@@ -69776,14 +69776,13 @@ impl InterpreterCore {
         &mut self,
         module: Option<&Ir3Module>,
         handler: crate::closure_model::ClosureHandle,
-        argument: crate::object_model::JsValue,
+        arguments: Vec<Value>,
         task_label: Label,
     ) -> Result<Value, InterpreterError> {
         let module = module.ok_or_else(|| InterpreterError::TypeError {
             expected: "module-backed Promise reaction handler dispatch".to_string(),
             got: "missing module context".to_string(),
         })?;
-        let argument = self.js_value_to_value(&argument);
         let callee = self.promise_reaction_callee(handler)?;
         // Promise reactions are control-dependent on settlement as well as
         // value-dependent on the delivered argument. Run the whole isolated
@@ -69793,7 +69792,7 @@ impl InterpreterCore {
             Some(module),
             callee,
             Value::Undefined,
-            vec![argument],
+            arguments,
             Some(task_label),
         );
         match &result {
@@ -70303,17 +70302,15 @@ impl InterpreterCore {
     ///
     /// Node semantics: the tick queue runs to exhaustion — including ticks
     /// enqueued by tick callbacks — before any Promise microtask. Each
-    /// executed tick counts against the caller's shared drain bound so a
-    /// mutually-feeding tick/microtask pair cannot starve the checkpoint. An
-    /// uncaught exception in a tick callback aborts the drain fail-closed
-    /// (Node's equivalent crashes the process).
+    /// executed tick counts in the caller's `drained`. An uncaught exception
+    /// in a tick callback aborts the drain fail-closed (Node's equivalent
+    /// crashes the process).
     fn drain_next_tick_queue(
         &mut self,
         module: Option<&Ir3Module>,
-        drained: &mut u32,
-        max_drain: u32,
+        drained: &mut u64,
     ) -> Result<(), InterpreterError> {
-        while *drained < max_drain {
+        loop {
             // Collector safe point between nextTick callbacks (bd-9vouw.57).
             self.gc_event_loop_safe_point();
             let previous_bytes = self.next_tick_queue_memory_bytes();
@@ -70338,8 +70335,14 @@ impl InterpreterCore {
     }
 
     fn drain_microtasks(&mut self, module: Option<&Ir3Module>) -> Result<(), InterpreterError> {
-        let max_drain = 10_000u32;
-        let mut drained = 0u32;
+        // The checkpoint runs until both queues are empty, as Node's does: it
+        // used to stop after 10,000 jobs and let a timer run ahead of the
+        // jobs still queued (bd-9vouw.478: 20,000 reactions on one promise
+        // printed "many 10000" from a setTimeout). It ends: a job that queues
+        // another runs guest code, which the instruction budget bounds, and a
+        // native job (a resolve function, a combinator element) only settles
+        // promises that guest code created and registered reactions on.
+        let mut drained = 0u64;
         #[cfg(test)]
         let entry_drift = self.memory_walk_drift();
         let mut dequeued_since_compaction = 0u32;
@@ -70351,7 +70354,7 @@ impl InterpreterCore {
         // (bd-9vouw.319).
         let mut tick_round = true;
 
-        while drained < max_drain {
+        loop {
             // Collector safe point between microtasks (bd-9vouw.57).
             self.gc_event_loop_safe_point();
             // bd-9vouw.71: a consumed queue slot stays charged until the
@@ -70367,7 +70370,7 @@ impl InterpreterCore {
             // bd-8nrud: the next-tick queue drains completely before the
             // round's Promise microtasks.
             if tick_round {
-                self.drain_next_tick_queue(module, &mut drained, max_drain)?;
+                self.drain_next_tick_queue(module, &mut drained)?;
                 tick_round = false;
             }
             let previous_promise_bytes = self.promise_runtime_memory_bytes();
@@ -70490,10 +70493,11 @@ impl InterpreterCore {
                             // with the handler's result (bd-9vouw.77).
                             let held = vec![Value::Promise(result_promise.0)];
                             match self.with_event_job_gc_request(held, |this| {
+                                let argument = this.js_value_to_value(argument);
                                 this.execute_promise_reaction_handler(
                                     module,
                                     handler,
-                                    argument.clone(),
+                                    vec![argument],
                                     task_label.clone(),
                                 )
                             }) {
@@ -70538,6 +70542,25 @@ impl InterpreterCore {
                                 }
                             }
                         }
+                    }
+                    // queueMicrotask(callback) (bd-9vouw.478): the callback
+                    // gets no arguments, its value is dropped, and a throw is
+                    // an uncaught exception that ends the run here, as in
+                    // Node. It used to reject a promise nobody held, and the
+                    // jobs after it still ran before that was reported.
+                    crate::promise_model::Microtask::QueuedCallback {
+                        handler,
+                        label: task_label,
+                    } => {
+                        let held = vec![self.promise_reaction_callee(*handler)?];
+                        self.with_event_job_gc_request(held, |this| {
+                            this.execute_promise_reaction_handler(
+                                module,
+                                *handler,
+                                Vec::new(),
+                                task_label.clone(),
+                            )
+                        })?;
                     }
                     crate::promise_model::Microtask::PromiseRejection {
                         reason,
@@ -71445,18 +71468,24 @@ impl InterpreterCore {
     /// Implemented as a `PromiseReaction` against a fresh (unobservable)
     /// promise so it reuses the audited reaction-drain path.
     fn queue_microtask_from_value(&mut self, callback: &Value) -> Result<Value, InterpreterError> {
-        let Value::Closure(closure_id) = callback else {
+        // Any callable, as Promise reactions take: a builtin (a promise's
+        // resolve function, `console.log`, a bound function) or an async or
+        // generator function object, not only a closure. Those were refused
+        // with "expected function, got function" (bd-9vouw.478).
+        let handler = if callback.is_callable() {
+            self.promise_reaction_handler_from_value(callback.clone(), "queueMicrotask callback")?
+        } else {
+            None
+        };
+        let Some(handler) = handler else {
             return Err(InterpreterError::TypeError {
                 expected: "function".to_string(),
                 got: callback.type_name().to_string(),
             });
         };
-        let result_promise = self.create_promise()?;
         let previous_promise_bytes = self.promise_runtime_memory_bytes();
-        let task = crate::promise_model::Microtask::PromiseReaction {
-            handler: Some(crate::closure_model::ClosureHandle(*closure_id)),
-            argument: crate::object_model::JsValue::Undefined,
-            result_promise,
+        let task = crate::promise_model::Microtask::QueuedCallback {
+            handler,
             label: crate::ifc_artifacts::Label::Public,
         };
         let next_queue_bytes = self
@@ -71475,12 +71504,7 @@ impl InterpreterCore {
             .saturating_add(self.promise_combinators_memory_bytes())
             .saturating_add(self.promise_combinator_watchers_memory_bytes())
             .saturating_add(self.promise_in_flight_task_bytes);
-        if let Err(error) =
-            self.apply_memory_component_delta(previous_promise_bytes, next_promise_bytes)
-        {
-            self.rollback_fresh_promise(result_promise);
-            return Err(error);
-        }
+        self.apply_memory_component_delta(previous_promise_bytes, next_promise_bytes)?;
         self.event_loop.microtasks.enqueue(task);
         self.settle_projected_promise_bytes(next_promise_bytes)?;
         Ok(Value::Undefined)

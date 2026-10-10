@@ -1860,6 +1860,8 @@ impl InterpreterCore {
             // Byte counts, no references.
             promise_combinators_bytes: _,
             promise_combinator_watchers_bytes: _,
+            // Ids of arrays a native join frame is holding: no new references.
+            array_join_stack: _,
             next_promise_combinator_id: _,
             module_state,
             pending_async_module_import,

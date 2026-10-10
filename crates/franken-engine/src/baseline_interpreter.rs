@@ -473,11 +473,36 @@ const MAX_ITERATION_TRACES: usize = 1024;
 const MAX_ITERATION_TRACE_EVENTS: usize = 4096;
 /// Trace index of an untraced iteration.
 const UNTRACED_ITERATION: usize = usize::MAX;
-/// Maximum nesting depth for recursive Array join/toString stringification.
-/// Runtime-constructed arrays can nest unboundedly, so recursion is bounded
-/// fail-closed: deeper sub-arrays render as `""` rather than risking stack
-/// exhaustion (bd-sxh8o.3).
-const ARRAY_JOIN_MAX_DEPTH: usize = 128;
+/// Most arrays one Array.prototype.join / toString may hold on its join
+/// stack (nesting depth). The join keeps its nested arrays on an explicit
+/// stack, so this bounds memory, not native stack: past it the join throws
+/// RangeError ("Maximum call stack size exceeded"), as Node does somewhere
+/// between 1,000 and 10,000 levels (bd-sxh8o.3, bd-9vouw.481).
+const ARRAY_JOIN_MAX_DEPTH: usize = 10_000;
+/// Nesting depth of the non-observable string fallback
+/// ([`InterpreterCore::array_join_string`]), which recurses natively: deeper
+/// sub-arrays render as `""` rather than risk stack exhaustion (bd-sxh8o.3).
+const ARRAY_STRING_FALLBACK_MAX_DEPTH: usize = 128;
+
+/// One array of an Array.prototype.join in progress: its length, the next
+/// element to render, and the elements rendered so far.
+struct ArrayJoinFrame {
+    array_id: ObjectId,
+    len: usize,
+    index: usize,
+    parts: Vec<String>,
+}
+
+impl ArrayJoinFrame {
+    fn new(array_id: ObjectId, len: usize) -> Self {
+        Self {
+            array_id,
+            len,
+            index: 0,
+            parts: Vec::with_capacity(len.min(4096)),
+        }
+    }
+}
 
 /// One queued `process.nextTick(callback, ...args)` job (bd-8nrud). The
 /// callback runs with the forwarded arguments before any Promise microtask at
@@ -15605,6 +15630,10 @@ pub struct InterpreterCore {
     /// per registered input (bd-9vouw.479).
     promise_combinators_bytes: u64,
     promise_combinator_watchers_bytes: u64,
+    /// Arrays an Array.prototype.join / toString is joining right now,
+    /// across guest re-entry (bd-9vouw.481): one of them met again renders
+    /// "". Empty between instructions.
+    array_join_stack: BTreeSet<u32>,
     /// Monotonic combinator id generator.
     next_promise_combinator_id: u64,
     /// Module registry/cache for ImportModule execution.
@@ -16594,6 +16623,7 @@ impl InterpreterCore {
             promise_combinator_watchers: BTreeMap::new(),
             promise_combinators_bytes: 0,
             promise_combinator_watchers_bytes: 0,
+            array_join_stack: BTreeSet::new(),
             next_promise_combinator_id: 0,
             module_state: ModuleState::new(),
             pending_async_module_import: None,
@@ -36765,6 +36795,7 @@ impl InterpreterCore {
         self.promise_combinator_watchers.clear();
         self.promise_combinators_bytes = 0;
         self.promise_combinator_watchers_bytes = 0;
+        self.array_join_stack.clear();
         self.promise_in_flight_task_bytes = 0;
         self.promise_reaction_callables.clear();
         self.next_promise_reaction_callable_id = PROMISE_REACTION_CALLABLE_BASE;
@@ -43115,12 +43146,10 @@ impl InterpreterCore {
                     None | Some(Value::Undefined) => ",".to_string(),
                     Some(value) => self.value_to_string(&value),
                 };
-                let mut active = BTreeSet::new();
                 Ok(Value::str(self.array_join_observable(
                     module,
                     arr_id,
                     &separator,
-                    &mut active,
                 )?))
             }
             BuiltinFunctionKind::ArrayToString => {
@@ -43156,13 +43185,7 @@ impl InterpreterCore {
                                     .brand()
                                     .is_some_and(|tag| TypedArrayKind::from_type_name(tag).is_some())
                         }) {
-                            let mut active = BTreeSet::new();
-                            Ok(Value::str(self.array_join_observable(
-                                module,
-                                arr_id,
-                                ",",
-                                &mut active,
-                            )?))
+                            Ok(Value::str(self.array_join_observable(module, arr_id, ",")?))
                         } else {
                             Ok(self.object_prototype_to_string_value(&Value::Object(arr_id)))
                         }
@@ -66740,8 +66763,7 @@ impl InterpreterCore {
             .get(object_id.0 as usize)
             .is_some_and(|object| object.is_array)
         {
-            let mut active = BTreeSet::new();
-            let joined = self.array_join_observable(module, object_id, ",", &mut active)?;
+            let joined = self.array_join_observable(module, object_id, ",")?;
             return Ok(Value::Str(JsString::from(joined)));
         }
         Ok(Value::Str(JsString::from(
@@ -66802,6 +66824,17 @@ impl InterpreterCore {
                 to_primitive_seen = true;
             }
             current = self.observable_prototype_link(object, id);
+            // %Object.prototype% is materialized on first use; until then an
+            // ordinary object's default link resolves to nothing here, yet
+            // its chain does reach the intrinsic's virtual conversion
+            // methods. Only an explicit null prototype ends a chain without
+            // them. Reading the unmaterialized link as null sent every nested
+            // array through a guest toString call (a call frame per level,
+            // and a fresh cycle guard), and made the result depend on whether
+            // earlier code had touched Object.prototype (bd-9vouw.481).
+            if current.is_none() && object_prototype.is_none() && !object.is_null_prototype {
+                reaches_object_prototype = true;
+            }
         }
         // A chain that ends without %Object.prototype% (`Object.create(null)`)
         // has no conversion methods at all: OrdinaryToPrimitive throws.
@@ -100710,39 +100743,72 @@ impl InterpreterCore {
     /// ES2020 23.1.3.13 (join) / 23.1.3.30 (toString) element stringification:
     /// concatenate the elements with `separator`; `undefined`/`null` render as
     /// `""`; nested arrays recurse through their own default (`","`) join.
-    /// `active` carries the ancestor chain of arrays currently being joined so
-    /// a cyclic array renders `""` instead of recursing forever, and depth is
-    /// bounded fail-closed at [`ARRAY_JOIN_MAX_DEPTH`] (bd-sxh8o.3).
+    /// The interpreter's join stack carries the arrays currently being joined
+    /// so a cyclic array renders `""` instead of recursing forever, and depth
+    /// is bounded fail-closed at [`ARRAY_JOIN_MAX_DEPTH`] (bd-sxh8o.3,
+    /// bd-9vouw.481).
     /// Array.prototype.join with observable element conversion (bd-9vouw.37):
     /// an element object that defines a guest toString / valueOf /
     /// @@toPrimitive converts through ToPrimitive(hint "string") (ES2020
-    /// 23.1.3.13 step 7.c ToString). Nested arrays join recursively under the
-    /// same cycle guard and depth cap as [`Self::array_join_string`]; every
-    /// other element keeps its non-observable rendering.
+    /// 23.1.3.13 step 7.c ToString). Nested arrays join recursively on the
+    /// same join stack, under the depth cap [`Self::array_join_string`] also
+    /// applies; every other element keeps its non-observable rendering.
     fn array_join_observable(
         &mut self,
         module: &Ir3Module,
         array_id: ObjectId,
         separator: &str,
-        active: &mut BTreeSet<u32>,
     ) -> Result<String, InterpreterError> {
-        if !active.insert(array_id.0) {
+        // The ancestor chain is the interpreter's join stack, not a set owned
+        // by one call: an element's guest toString may re-enter here, and a
+        // fresh set per entry never saw a cycle (`a.push(a); a.join()`
+        // overflowed the call stack; V8 keeps one join stack per isolate,
+        // bd-9vouw.481). Every array this join puts on the stack comes off
+        // again, however it ends.
+        if !self.array_join_stack.insert(array_id.0) {
             return Ok(String::new());
         }
-        if active.len() > ARRAY_JOIN_MAX_DEPTH {
-            active.remove(&array_id.0);
-            return Ok(String::new());
+        let mut nested = Vec::new();
+        let joined = self.array_join_observable_frames(module, array_id, separator, &mut nested);
+        self.array_join_stack.remove(&array_id.0);
+        for frame in &nested {
+            self.array_join_stack.remove(&frame.array_id.0);
         }
+        joined
+    }
+
+    /// The join of [`Self::array_join_observable`] over an explicit stack of
+    /// nested arrays, so nesting costs no native stack: `nested` holds the
+    /// arrays being joined below `array_id`, each on the join stack.
+    fn array_join_observable_frames(
+        &mut self,
+        module: &Ir3Module,
+        array_id: ObjectId,
+        separator: &str,
+        nested: &mut Vec<ArrayJoinFrame>,
+    ) -> Result<String, InterpreterError> {
         let len = self.array_like_length(array_id)?;
-        let mut parts = Vec::with_capacity(len.min(4096));
-        for index in 0..len {
-            let element = self
-                .array_index_get(Some(module), array_id, index)?
-                .unwrap_or(Value::Undefined);
-            if let Err(error) = self.join_element_stored_label(array_id, index as u64) {
-                active.remove(&array_id.0);
-                return Err(error);
+        let mut root = ArrayJoinFrame::new(array_id, len);
+        loop {
+            let frame = nested.last_mut().unwrap_or(&mut root);
+            if frame.index == frame.len {
+                let Some(done) = nested.pop() else {
+                    return Ok(root.parts.join(separator));
+                };
+                self.array_join_stack.remove(&done.array_id.0);
+                nested
+                    .last_mut()
+                    .unwrap_or(&mut root)
+                    .parts
+                    .push(done.parts.join(","));
+                continue;
             }
+            let (current, index) = (frame.array_id, frame.index);
+            frame.index += 1;
+            let element = self
+                .array_index_get(Some(module), current, index)?
+                .unwrap_or(Value::Undefined);
+            self.join_element_stored_label(current, index as u64)?;
             let rendered = match element {
                 Value::Undefined | Value::Null => String::new(),
                 Value::Object(nested_id)
@@ -100752,12 +100818,28 @@ impl InterpreterCore {
                         .is_some_and(|object| object.is_array)
                         && !self.object_has_user_conversion_hook(nested_id) =>
                 {
-                    let joined = self.array_join_observable(module, nested_id, ",", active);
-                    match joined {
-                        Ok(joined) => joined,
-                        Err(error) => {
-                            active.remove(&array_id.0);
-                            return Err(error);
+                    // An array already being joined renders "" (the cycle
+                    // guard); a nested one is joined as its own frame.
+                    if !self.array_join_stack.insert(nested_id.0) {
+                        String::new()
+                    } else if self.array_join_stack.len() > ARRAY_JOIN_MAX_DEPTH {
+                        self.array_join_stack.remove(&nested_id.0);
+                        // Deeper nesting fails loudly, as Node does once its
+                        // native stack runs out, instead of rendering "".
+                        return Err(InterpreterError::StackOverflow {
+                            depth: self.array_join_stack.len() + 1,
+                            max: ARRAY_JOIN_MAX_DEPTH,
+                        });
+                    } else {
+                        match self.array_like_length(nested_id) {
+                            Ok(nested_len) => {
+                                nested.push(ArrayJoinFrame::new(nested_id, nested_len));
+                                continue;
+                            }
+                            Err(error) => {
+                                self.array_join_stack.remove(&nested_id.0);
+                                return Err(error);
+                            }
                         }
                     }
                 }
@@ -100766,30 +100848,20 @@ impl InterpreterCore {
                         Some(module),
                         Value::Object(object_id),
                         "string",
-                    ) {
+                    )? {
                         // ToString of a Symbol (a Symbol wrapper converts to
                         // its symbol, bd-9vouw.239) is a TypeError.
-                        Ok(Value::Symbol(_)) => {
-                            active.remove(&array_id.0);
-                            return Err(Self::symbol_to_string_error());
-                        }
-                        Ok(primitive) => self.value_to_string(&primitive),
-                        Err(error) => {
-                            active.remove(&array_id.0);
-                            return Err(error);
-                        }
+                        Value::Symbol(_) => return Err(Self::symbol_to_string_error()),
+                        primitive => self.value_to_string(&primitive),
                     }
                 }
                 Value::Symbol(_) => {
-                    active.remove(&array_id.0);
                     return Err(Self::symbol_to_string_error());
                 }
                 other => self.value_to_string(&other),
             };
-            parts.push(rendered);
+            nested.last_mut().unwrap_or(&mut root).parts.push(rendered);
         }
-        active.remove(&array_id.0);
-        Ok(parts.join(separator))
     }
 
     fn array_join_string(
@@ -100801,7 +100873,7 @@ impl InterpreterCore {
         if !active.insert(array_id.0) {
             return Ok(String::new());
         }
-        if active.len() > ARRAY_JOIN_MAX_DEPTH {
+        if active.len() > ARRAY_STRING_FALLBACK_MAX_DEPTH {
             active.remove(&array_id.0);
             return Ok(String::new());
         }

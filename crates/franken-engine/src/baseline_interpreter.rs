@@ -15597,6 +15597,14 @@ pub struct InterpreterCore {
     /// Watchers keyed by promise handle for combinator updates.
     promise_combinator_watchers:
         BTreeMap<crate::promise_model::PromiseHandle, Vec<PromiseCombinatorWatcher>>,
+    /// Running totals of the two maps' memory estimates
+    /// (`promise_combinators_memory_bytes_by_walk` and
+    /// `promise_combinator_watchers_memory_bytes_by_walk`), kept up to date at
+    /// every mutation. Every Promise operation measures them, and re-summing
+    /// made a pending Promise.all over n inputs cost O(n) per settlement and
+    /// per registered input (bd-9vouw.479).
+    promise_combinators_bytes: u64,
+    promise_combinator_watchers_bytes: u64,
     /// Monotonic combinator id generator.
     next_promise_combinator_id: u64,
     /// Module registry/cache for ImportModule execution.
@@ -16584,6 +16592,8 @@ impl InterpreterCore {
             next_writable_completion_token: 0,
             promise_combinators: BTreeMap::new(),
             promise_combinator_watchers: BTreeMap::new(),
+            promise_combinators_bytes: 0,
+            promise_combinator_watchers_bytes: 0,
             next_promise_combinator_id: 0,
             module_state: ModuleState::new(),
             pending_async_module_import: None,
@@ -36753,6 +36763,8 @@ impl InterpreterCore {
         self.event_loop = crate::promise_model::EventLoop::new();
         self.promise_combinators.clear();
         self.promise_combinator_watchers.clear();
+        self.promise_combinators_bytes = 0;
+        self.promise_combinator_watchers_bytes = 0;
         self.promise_in_flight_task_bytes = 0;
         self.promise_reaction_callables.clear();
         self.next_promise_reaction_callable_id = PROMISE_REACTION_CALLABLE_BASE;
@@ -50101,6 +50113,8 @@ impl InterpreterCore {
                 break;
             }
         }
+        // Bulk removals above: recount the running totals once.
+        self.resync_promise_combinator_bytes();
     }
 
     /// Fail closed when an isolated owner-module activation cannot continue.
@@ -67764,9 +67778,13 @@ impl InterpreterCore {
                 details: "Promise combinator id space exhausted".to_string(),
             })?;
         let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        let entry_bytes = Self::promise_combinator_entry_bytes(&state);
         self.promise_combinators.insert(id, state);
+        self.promise_combinators_bytes = self.promise_combinators_bytes.saturating_add(entry_bytes);
         if let Err(error) = self.apply_promise_runtime_memory_delta(previous_promise_bytes) {
             self.promise_combinators.remove(&id);
+            self.promise_combinators_bytes =
+                self.promise_combinators_bytes.saturating_sub(entry_bytes);
             return Err(error);
         }
         self.next_promise_combinator_id = next_id;
@@ -67779,10 +67797,19 @@ impl InterpreterCore {
         watcher: PromiseCombinatorWatcher,
     ) -> Result<(), InterpreterError> {
         let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        // One more watcher, and a new map entry when the promise had none.
+        let added_bytes = if self.promise_combinator_watchers.contains_key(&handle) {
+            Self::promise_combinator_watchers_bytes_for(1)
+        } else {
+            Self::promise_combinator_watcher_entry_bytes(1)
+        };
         self.promise_combinator_watchers
             .entry(handle)
             .or_default()
             .push(watcher);
+        self.promise_combinator_watchers_bytes = self
+            .promise_combinator_watchers_bytes
+            .saturating_add(added_bytes);
         if let Err(error) = self.apply_promise_runtime_memory_delta(previous_promise_bytes) {
             let remove_entry =
                 if let Some(watchers) = self.promise_combinator_watchers.get_mut(&handle) {
@@ -67794,6 +67821,9 @@ impl InterpreterCore {
             if remove_entry {
                 self.promise_combinator_watchers.remove(&handle);
             }
+            self.promise_combinator_watchers_bytes = self
+                .promise_combinator_watchers_bytes
+                .saturating_sub(added_bytes);
             return Err(error);
         }
         Ok(())
@@ -67891,12 +67921,12 @@ impl InterpreterCore {
         kind: crate::promise_model::ReactionKind,
         value: &crate::object_model::JsValue,
         label: &Label,
-    ) -> Result<bool, InterpreterError> {
+    ) -> Result<Option<u64>, InterpreterError> {
         let Some(state) = self.promise_combinators.get(&combinator_id) else {
-            return Ok(false);
+            return Ok(None);
         };
         let Some(entry_bytes) = state.observation_memory_growth(index, kind, value) else {
-            return Ok(false);
+            return Ok(None);
         };
         let result_promise = state.result_promise();
         let previous_store_bytes = self.promise_store.estimated_memory_bytes();
@@ -67913,7 +67943,7 @@ impl InterpreterCore {
         self.promise_store
             .join_label(result_promise, label)
             .expect("preflighted combinator result remains valid");
-        Ok(true)
+        Ok(Some(entry_bytes))
     }
 
     /// A refused native job must not strand an aggregate or leave a partially
@@ -67950,10 +67980,26 @@ impl InterpreterCore {
     ) -> Result<(), InterpreterError> {
         let previous_promise_bytes = self.promise_runtime_memory_bytes();
         let removed_state = self.promise_combinators.remove(&combinator_id);
+        if let Some(state) = &removed_state {
+            self.promise_combinators_bytes = self
+                .promise_combinators_bytes
+                .saturating_sub(Self::promise_combinator_entry_bytes(state));
+        }
+        let mut removed_watcher_bytes = 0u64;
         self.promise_combinator_watchers.retain(|_, watchers| {
+            let before = watchers.len();
             watchers.retain(|watcher| watcher.combinator_id != combinator_id);
-            !watchers.is_empty()
+            let kept = !watchers.is_empty();
+            removed_watcher_bytes = removed_watcher_bytes.saturating_add(if kept {
+                Self::promise_combinator_watchers_bytes_for(before - watchers.len())
+            } else {
+                Self::promise_combinator_watcher_entry_bytes(before)
+            });
+            kept
         });
+        self.promise_combinator_watchers_bytes = self
+            .promise_combinator_watchers_bytes
+            .saturating_sub(removed_watcher_bytes);
         drop(removed_state);
         self.apply_promise_runtime_memory_delta(previous_promise_bytes)?;
         Ok(())
@@ -68229,10 +68275,9 @@ impl InterpreterCore {
     /// the aggregate, allocating result objects, or taking a cascade snapshot.
     fn release_settled_combinator_watchers(&mut self, handle: crate::promise_model::PromiseHandle) {
         if let Some(watchers) = self.promise_combinator_watchers.remove(&handle) {
-            let bytes = MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(
-                (watchers.len() as u64)
-                    .saturating_mul(std::mem::size_of::<PromiseCombinatorWatcher>() as u64),
-            );
+            let bytes = Self::promise_combinator_watcher_entry_bytes(watchers.len());
+            self.promise_combinator_watchers_bytes =
+                self.promise_combinator_watchers_bytes.saturating_sub(bytes);
             self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(bytes);
         }
     }
@@ -68244,19 +68289,22 @@ impl InterpreterCore {
         value: &crate::object_model::JsValue,
         label: &crate::ifc_artifacts::Label,
     ) -> Result<(), InterpreterError> {
-        if !self.prepare_combinator_observation(
+        let Some(growth) = self.prepare_combinator_observation(
             combinator_id,
             index,
             crate::promise_model::ReactionKind::Fulfill,
             value,
             label,
-        )? {
+        )?
+        else {
             return Ok(());
-        }
+        };
         // Record only an admitted retained payload. Terminal materialization
-        // borrows this tracker instead of cloning the whole aggregate.
+        // borrows this tracker instead of cloning the whole aggregate. The
+        // record grows the tracker by exactly the admitted `growth`.
         let mut resolution = None;
         if let Some(state) = self.promise_combinators.get_mut(&combinator_id) {
+            self.promise_combinators_bytes = self.promise_combinators_bytes.saturating_add(growth);
             match state {
                 PromiseCombinatorState::All(tracker) => {
                     if tracker.record_fulfillment(index, value.clone()) {
@@ -68322,17 +68370,20 @@ impl InterpreterCore {
         reason: &crate::object_model::JsValue,
         label: &crate::ifc_artifacts::Label,
     ) -> Result<(), InterpreterError> {
-        if !self.prepare_combinator_observation(
+        let Some(growth) = self.prepare_combinator_observation(
             combinator_id,
             index,
             crate::promise_model::ReactionKind::Reject,
             reason,
             label,
-        )? {
+        )?
+        else {
             return Ok(());
-        }
+        };
         let mut resolution = None;
         if let Some(state) = self.promise_combinators.get_mut(&combinator_id) {
+            // The record grows the tracker by exactly the admitted `growth`.
+            self.promise_combinators_bytes = self.promise_combinators_bytes.saturating_add(growth);
             match state {
                 PromiseCombinatorState::All(tracker) => {
                     tracker.mark_settled();
@@ -68442,6 +68493,10 @@ impl InterpreterCore {
         let previous_event_loop = self.event_loop.clone();
         let previous_combinators = self.promise_combinators.clone();
         let previous_watchers = self.promise_combinator_watchers.clone();
+        let previous_combinator_bytes = (
+            self.promise_combinators_bytes,
+            self.promise_combinator_watchers_bytes,
+        );
         let previous_combinator_id = self.next_promise_combinator_id;
         let previous_heap_len = self.heap.len();
 
@@ -68451,6 +68506,10 @@ impl InterpreterCore {
             self.event_loop = previous_event_loop;
             self.promise_combinators = previous_combinators;
             self.promise_combinator_watchers = previous_watchers;
+            (
+                self.promise_combinators_bytes,
+                self.promise_combinator_watchers_bytes,
+            ) = previous_combinator_bytes;
             self.next_promise_combinator_id = previous_combinator_id;
             self.rollback_heap_to_len(previous_heap_len);
             self.estimated_memory_bytes = previous_estimated_bytes;
@@ -102469,21 +102528,69 @@ impl InterpreterCore {
         }
     }
 
+    /// The combinator map's memory estimate: its running total
+    /// (bd-9vouw.479). Unit tests check it against the full walk.
     fn promise_combinators_memory_bytes(&self) -> u64 {
-        Self::saturating_sum(self.promise_combinators.values().map(|state| {
-            MEMORY_ESTIMATE_MAP_ENTRY_BYTES
-                .saturating_add(Self::estimate_promise_combinator_bytes(state))
-        }))
+        #[cfg(test)]
+        assert_eq!(
+            self.promise_combinators_bytes,
+            self.promise_combinators_memory_bytes_by_walk(),
+            "promise combinator running total drifted from the walk"
+        );
+        self.promise_combinators_bytes
     }
 
+    /// The watcher map's memory estimate: its running total (bd-9vouw.479).
     fn promise_combinator_watchers_memory_bytes(&self) -> u64 {
-        Self::saturating_sum(self.promise_combinator_watchers.values().map(|watchers| {
-            MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(
-                u64::try_from(watchers.len())
-                    .unwrap_or(u64::MAX)
-                    .saturating_mul(std::mem::size_of::<PromiseCombinatorWatcher>() as u64),
-            )
-        }))
+        #[cfg(test)]
+        assert_eq!(
+            self.promise_combinator_watchers_bytes,
+            self.promise_combinator_watchers_memory_bytes_by_walk(),
+            "promise combinator watcher running total drifted from the walk"
+        );
+        self.promise_combinator_watchers_bytes
+    }
+
+    /// One combinator map entry's estimate.
+    fn promise_combinator_entry_bytes(state: &PromiseCombinatorState) -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(Self::estimate_promise_combinator_bytes(state))
+    }
+
+    /// One watcher map entry's estimate, for `count` watchers.
+    fn promise_combinator_watcher_entry_bytes(count: usize) -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(Self::promise_combinator_watchers_bytes_for(count))
+    }
+
+    /// The bytes `count` watchers take inside one watcher map entry.
+    fn promise_combinator_watchers_bytes_for(count: usize) -> u64 {
+        u64::try_from(count)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(std::mem::size_of::<PromiseCombinatorWatcher>() as u64)
+    }
+
+    fn promise_combinators_memory_bytes_by_walk(&self) -> u64 {
+        Self::saturating_sum(
+            self.promise_combinators
+                .values()
+                .map(Self::promise_combinator_entry_bytes),
+        )
+    }
+
+    fn promise_combinator_watchers_memory_bytes_by_walk(&self) -> u64 {
+        Self::saturating_sum(
+            self.promise_combinator_watchers
+                .values()
+                .map(|watchers| Self::promise_combinator_watcher_entry_bytes(watchers.len())),
+        )
+    }
+
+    /// Recount both running totals from the maps, after a bulk change.
+    fn resync_promise_combinator_bytes(&mut self) {
+        self.promise_combinators_bytes = self.promise_combinators_memory_bytes_by_walk();
+        self.promise_combinator_watchers_bytes =
+            self.promise_combinator_watchers_memory_bytes_by_walk();
     }
 
     /// Owned footprint of the `process.nextTick` job queue (bd-8nrud).
@@ -102524,8 +102631,8 @@ impl InterpreterCore {
         self.promise_store
             .estimated_memory_bytes_by_walk()
             .saturating_add(self.event_loop.estimated_memory_bytes_by_walk())
-            .saturating_add(self.promise_combinators_memory_bytes())
-            .saturating_add(self.promise_combinator_watchers_memory_bytes())
+            .saturating_add(self.promise_combinators_memory_bytes_by_walk())
+            .saturating_add(self.promise_combinator_watchers_memory_bytes_by_walk())
             .saturating_add(self.promise_in_flight_task_bytes)
     }
 

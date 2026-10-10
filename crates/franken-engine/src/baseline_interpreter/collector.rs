@@ -1857,6 +1857,9 @@ impl InterpreterCore {
             promise_combinators,
             // Keyed by the promises they watch.
             promise_combinator_watchers,
+            // Byte counts, no references.
+            promise_combinators_bytes: _,
+            promise_combinator_watchers_bytes: _,
             next_promise_combinator_id: _,
             module_state,
             pending_async_module_import,

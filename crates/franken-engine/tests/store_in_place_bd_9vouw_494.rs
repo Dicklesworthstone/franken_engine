@@ -1,0 +1,147 @@
+//! bd-9vouw.494: a plain store into a register-resident local (`x = e`,
+//! `let x = e`) lets the instruction that computed `e` write the binding's
+//! register instead of a temporary that a Move then copied. The first test
+//! runs stores whose value matters: producers that throw (getter, callee,
+//! valueOf, unresolvable name) and must leave the binding unchanged,
+//! conditional / logical / nullish / optional-chain right-hand sides (their
+//! arms join at a label, so the copy stays), chained stores, `x = x++`,
+//! right-hand sides that read or write the stored binding, short-lived
+//! locals, a generator, a finally, a template whose parts run toString,
+//! parameters with `arguments`, and top-level stores. Node v22.2.0 and Bun
+//! 1.4.3 print the line, as did the n65 frankenctl before this change. The
+//! other two check the IR: an arithmetic or call result is not copied into
+//! its binding, and a conditional right-hand side keeps its copy.
+
+use frankenengine_engine::HybridRouter;
+use frankenengine_engine::ast::ParseGoal;
+use frankenengine_engine::ir_contract::{Ir0Module, Ir3Instruction};
+use frankenengine_engine::lowering_pipeline::{
+    lower_ir0_to_ir1, lower_ir1_to_ir2, lower_ir2_to_ir3,
+};
+use frankenengine_engine::parser::{CanonicalEs2020Parser, Es2020Parser};
+
+fn console_lines(source: &str) -> Vec<String> {
+    HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .iter()
+        .map(|entry| entry.message.clone())
+        .collect()
+}
+
+/// The instructions after the top level's Halt: the bodies of the declared
+/// functions, in declaration order.
+fn function_bodies(source: &str) -> Vec<Ir3Instruction> {
+    let tree = CanonicalEs2020Parser
+        .parse(source, ParseGoal::Script)
+        .expect("fixture should parse");
+    let ir0 = Ir0Module::from_syntax_tree(tree, "store_in_place_bd_9vouw_494.js");
+    let ir1 = lower_ir0_to_ir1(&ir0).expect("IR0->IR1").module;
+    let ir2 = lower_ir1_to_ir2(&ir1).expect("IR1->IR2").module;
+    lower_ir2_to_ir3(&ir2)
+        .expect("IR2->IR3")
+        .module
+        .instructions
+        .into_iter()
+        .skip_while(|instruction| !matches!(instruction, Ir3Instruction::Halt))
+        .skip(1)
+        .collect()
+}
+
+/// The destination of an arithmetic or call instruction.
+fn computed_destination(instruction: &Ir3Instruction) -> Option<u32> {
+    match instruction {
+        Ir3Instruction::Add { dst, .. }
+        | Ir3Instruction::Sub { dst, .. }
+        | Ir3Instruction::Mul { dst, .. }
+        | Ir3Instruction::Call { dst, .. } => Some(*dst),
+        _ => None,
+    }
+}
+
+#[test]
+fn stored_values_match_node() {
+    let source = r#"const out = [];
+function arith(n) { let s = 0; let t = 0; for (let i = 0; i < n; i++) { s += i; t = s + i; s = t * 2 - s; } return s + ',' + t; }
+function chain(c) { let a, b; a = b = c + 1; return a + b; }
+function postinc() { let x = 5; x = x++; let y = 5; y = ++y; return x + ',' + y; }
+function selfref(a) { let s = a; s = s * 2 + s; s = s - (s = 1); return s; }
+function cond(f) { let x = 1; x = f ? x + 10 : x + 20; let y = 0; y = f || 7; let z = null; z = z ?? 3; const o = { p: { q: 4 } }; let w = 0; w = o?.p?.q; let v = 9; v = (void 0)?.p; return [x, y, z, w, v].join(); }
+function throwing() {
+  let x = 1;
+  const bad = { get p() { throw new Error('g'); } };
+  try { x = bad.p; } catch (e) { out.push('get:' + x); }
+  function boom() { throw 7; }
+  try { x = boom(); } catch (e) { out.push('call:' + x); }
+  const vo = { valueOf() { throw 8; } };
+  try { x = vo + 1; } catch (e) { out.push('valueOf:' + x); }
+  try { x = undefinedName + 1; } catch (e) { out.push('ref:' + x); }
+  try { let y = 2; y = bad.p; } catch (e) { out.push('decl'); }
+  return x;
+}
+function calls(n) { function f(v) { return v + 1; } let s = 0; for (let i = 0; i < n; i++) s = f(s); return s; }
+function linked() { let o = { v: 1, next: { v: 2, next: { v: 3, next: null } } }; let sum = 0; while (o) { sum += o.v; o = o.next; } return sum; }
+function method() { let a = [3, 1, 2]; a = a.slice().sort(); let s = 'x'; s = s.toUpperCase(); const t = `${a}-${s}`; return t; }
+function* gen(n) { let x = 0; x = yield x + 1; x = x * n; yield x; }
+function fin(a) { let x = a; try { x = x + 1; return x; } finally { x = x * 100; out.push('fin' + x); } }
+function shortLived(n) { let r = 0; for (let i = 0; i < n; i++) { let tmp = i * 3; tmp = tmp + 1; r += tmp; } return r; }
+function swap(a, b) { let t = a; a = b; b = t; return a + ':' + b; }
+function templ() { let n = 0; const o = { toString() { n++; return 'o'; } }; let s = ''; s = `${o}${o}`; return s + n; }
+function unary(v) { let k; k = typeof v; let m; m = -v; let b; b = !v; let c; c = ~v; return k + m + b + c; }
+function closure(a) { let z = a; const g = () => z; z = a + 5; return g(); }
+function cmp(a, b) { let r; r = a < b; let e; e = a === b; let i; i = 'x' in { x: 1 }; return [r, e, i].join(); }
+function argsStore(a, b) { a = b + 1; b = a * 2; return a + '/' + b + '/' + arguments.length; }
+function seqStore(a) { let x = 0; x = (a++, a + 1); return x + ',' + a; }
+const gi = gen(3); const g1 = gi.next().value; const g2 = gi.next(5).value;
+out.push(arith(5), chain(1), postinc(), selfref(2), cond(true), cond(false), throwing(), calls(10), linked(), method(), g1, g2, fin(1), shortLived(4), swap(1, 2), templ(), unary(3), closure(1), cmp(1, 2), argsStore(1, 2), seqStore(1));
+let top = 1; let topT = 0; for (let i = 0; i < 4; i++) { topT = top + i; top = topT * 2; }
+let topC = 5; topC = topC > 3 ? topC - 1 : topC + 1;
+let topS = 'a'; topS = topS + topS; let topO = { n: { n: null } }; topO = topO.n;
+out.push(top, topT, topC, topS, topO.n);
+console.log(out.join(' '));
+"#;
+    assert_eq!(
+        console_lines(source),
+        [
+            r#"get:1 call:1 valueOf:1 ref:1 decl fin200 30,26 4 5,6 5 11,true,3,4, 21,7,3,4, 1 10 6 1,2,3-X 1 15 2 22 2:1 oo2 number-3false-4 6 true,false,true 3/6/2 3,2 38 19 4 aa "#
+        ]
+    );
+}
+
+#[test]
+fn arithmetic_and_call_results_are_not_copied_into_their_binding() {
+    let body = function_bodies(
+        "function g(s, i) { let t = 0; for (let k = 0; k < 3; k++) { t = s + i; s = t * 2 - s; } return t + s; }
+function c(n) { function f(v) { return v + 1; } let s = 0; for (let i = 0; i < n; i++) s = f(s); return s; }",
+    );
+    for pair in body.windows(2) {
+        if let (Some(written), Ir3Instruction::Move { src, .. }) =
+            (computed_destination(&pair[0]), &pair[1])
+        {
+            assert_ne!(
+                written, *src,
+                "result copied by a Move: {pair:?} in {body:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_conditional_right_hand_side_keeps_its_copy() {
+    let body = function_bodies(
+        "function h(c) { let x = 0; for (let k = 0; k < 3; k++) { x = c ? k + 1 : k + 2; } return x; }",
+    );
+    let Some(Ir3Instruction::Return { value }) = body
+        .iter()
+        .find(|instruction| matches!(instruction, Ir3Instruction::Return { .. }))
+    else {
+        panic!("no Return in {body:?}");
+    };
+    assert!(
+        body.iter().any(
+            |instruction| matches!(instruction, Ir3Instruction::Move { dst, .. } if dst == value)
+        ),
+        "the joined value is copied into x: {body:?}"
+    );
+}

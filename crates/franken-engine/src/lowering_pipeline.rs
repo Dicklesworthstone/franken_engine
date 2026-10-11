@@ -8686,6 +8686,9 @@ fn lower_ir2_to_ir3_with_input_hash(
     // perf: pre-size value stack based on estimated expression nesting depth
     let mut value_stack: ArenaVec<'_, Reg> = arena.alloc_vec_with_capacity::<Reg>(32);
     let mut label_targets = BTreeMap::<u32, u32>::new();
+    // bd-9vouw.494: where the last label was bound; a store copy at that
+    // position is a jump target and keeps its producer's destination.
+    let mut last_label_target: Option<u32> = None;
     let mut iterator_cleanup_labels = BTreeMap::<u32, Reg>::new();
     let mut pending_jumps = Vec::<PendingJump>::new();
     let mut catch_entry_labels = BTreeSet::<u32>::new();
@@ -9435,7 +9438,26 @@ fn lower_ir2_to_ir3_with_input_hash(
                         &mut pinned_register_high,
                         &mut register_high_water,
                     );
-                    ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    let src_is_dead_temporary = is_dead_expression_temporary(
+                        src,
+                        &value_stack,
+                        &iterator_anchors,
+                        statement_register_floor,
+                        pinned_register_high,
+                        &live_status_registers,
+                    );
+                    let label_at_end =
+                        last_label_target == u32::try_from(ir3.instructions.len()).ok();
+                    if !retarget_store_producer(
+                        &mut ir3.instructions,
+                        0,
+                        src,
+                        dst,
+                        src_is_dead_temporary,
+                        label_at_end,
+                    ) {
+                        ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    }
                     value_stack.push(dst);
                 }
             }
@@ -9474,7 +9496,26 @@ fn lower_ir2_to_ir3_with_input_hash(
                         &mut register_high_water,
                     );
                     pop_lowering_value(&mut value_stack)?;
-                    ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    let src_is_dead_temporary = is_dead_expression_temporary(
+                        src,
+                        &value_stack,
+                        &iterator_anchors,
+                        statement_register_floor,
+                        pinned_register_high,
+                        &live_status_registers,
+                    );
+                    let label_at_end =
+                        last_label_target == u32::try_from(ir3.instructions.len()).ok();
+                    if !retarget_store_producer(
+                        &mut ir3.instructions,
+                        0,
+                        src,
+                        dst,
+                        src_is_dead_temporary,
+                        label_at_end,
+                    ) {
+                        ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    }
                     value_stack.push(dst);
                     // The stored value now lives in the binding's register:
                     // the temporaries that computed it are dead
@@ -9998,7 +10039,26 @@ fn lower_ir2_to_ir3_with_input_hash(
                     // binding's register when it read it in place.
                     AssignmentOperator::Assign if src == dst => {}
                     AssignmentOperator::Assign => {
-                        ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                        let src_is_dead_temporary = is_dead_expression_temporary(
+                            src,
+                            &value_stack,
+                            &iterator_anchors,
+                            statement_register_floor,
+                            pinned_register_high,
+                            &live_status_registers,
+                        );
+                        let label_at_end =
+                            last_label_target == u32::try_from(ir3.instructions.len()).ok();
+                        if !retarget_store_producer(
+                            &mut ir3.instructions,
+                            0,
+                            src,
+                            dst,
+                            src_is_dead_temporary,
+                            label_at_end,
+                        ) {
+                            ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                        }
                     }
                     AssignmentOperator::AddAssign => {
                         ir3.instructions.push(Ir3Instruction::Add {
@@ -10135,6 +10195,7 @@ fn lower_ir2_to_ir3_with_input_hash(
                         detail: "IR2 contains duplicate label ids",
                     });
                 }
+                last_label_target = Some(target);
                 // If this label is a catch handler entry, emit EnterCatch
                 // so the runtime can provide the exception value.
                 if catch_entry_labels.contains(id) {
@@ -11234,6 +11295,9 @@ fn lower_ir2_to_ir3_with_input_hash(
         // pass-scoped region arena.
         let mut fn_value_stack: ArenaVec<'_, Reg> = arena.alloc_vec_with_capacity::<Reg>(16);
         let mut fn_label_targets = BTreeMap::<u32, u32>::new();
+        // bd-9vouw.494: as `last_label_target`; a body's entry counts as one,
+        // so its first store never retargets the previous body's last op.
+        let mut fn_last_label_target: Option<u32> = Some(entry);
         let mut fn_pending_jumps = Vec::<PendingJump>::new();
         let mut fn_catch_entry_labels = BTreeSet::<u32>::new();
         let mut fn_iterator_cleanup_labels = BTreeMap::<u32, Reg>::new();
@@ -11865,7 +11929,26 @@ fn lower_ir2_to_ir3_with_input_hash(
                         &mut fn_pinned_register_high,
                         &mut fn_register_high_water,
                     );
-                    ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    let src_is_dead_temporary = is_dead_expression_temporary(
+                        src,
+                        &fn_value_stack,
+                        &fn_iterator_anchors,
+                        fn_statement_register_floor,
+                        fn_pinned_register_high,
+                        &fn_live_status_registers,
+                    );
+                    let label_at_end =
+                        fn_last_label_target == u32::try_from(ir3.instructions.len()).ok();
+                    if !retarget_store_producer(
+                        &mut ir3.instructions,
+                        entry as usize,
+                        src,
+                        dst,
+                        src_is_dead_temporary,
+                        label_at_end,
+                    ) {
+                        ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    }
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::StoreBinding { binding_id } => {
@@ -11942,7 +12025,26 @@ fn lower_ir2_to_ir3_with_input_hash(
                         &mut fn_register_high_water,
                     );
                     let src = pop_lowering_value(&mut fn_value_stack)?;
-                    ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    let src_is_dead_temporary = is_dead_expression_temporary(
+                        src,
+                        &fn_value_stack,
+                        &fn_iterator_anchors,
+                        fn_statement_register_floor,
+                        fn_pinned_register_high,
+                        &fn_live_status_registers,
+                    );
+                    let label_at_end =
+                        fn_last_label_target == u32::try_from(ir3.instructions.len()).ok();
+                    if !retarget_store_producer(
+                        &mut ir3.instructions,
+                        entry as usize,
+                        src,
+                        dst,
+                        src_is_dead_temporary,
+                        label_at_end,
+                    ) {
+                        ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    }
                     fn_value_stack.push(dst);
                     // bd-9vouw.246: the stored value now lives in the
                     // binding's register, so the temporaries that computed it
@@ -12165,6 +12267,7 @@ fn lower_ir2_to_ir3_with_input_hash(
                 Ir1Op::Label { id } => {
                     let target = ir3.instructions.len() as u32;
                     fn_label_targets.insert(*id, target);
+                    fn_last_label_target = Some(target);
                     if fn_catch_entry_labels.contains(id) {
                         let dst = alloc_register(&mut fn_reg);
                         ir3.instructions.push(Ir3Instruction::EnterCatch { dst });
@@ -12347,7 +12450,26 @@ fn lower_ir2_to_ir3_with_input_hash(
                         )
                     });
                     if *operator == AssignmentOperator::Assign {
-                        ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                        let src_is_dead_temporary = is_dead_expression_temporary(
+                            src,
+                            &fn_value_stack,
+                            &fn_iterator_anchors,
+                            fn_statement_register_floor,
+                            fn_pinned_register_high,
+                            &fn_live_status_registers,
+                        );
+                        let label_at_end =
+                            fn_last_label_target == u32::try_from(ir3.instructions.len()).ok();
+                        if !retarget_store_producer(
+                            &mut ir3.instructions,
+                            entry as usize,
+                            src,
+                            dst,
+                            src_is_dead_temporary,
+                            label_at_end,
+                        ) {
+                            ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                        }
                     } else if postfix_value_used {
                         // `x++`/`x--` evaluate to the old value (bd-9vouw.119).
                         let (result, value) = lower_postfix_update_to_ir3(
@@ -35201,6 +35323,104 @@ fn function_local_register(
     })
 }
 
+/// bd-9vouw.494: `x = <expr>` and `let x = <expr>` for a register-resident
+/// binding computed the value into a temporary and copied it, `Add t, a, b;
+/// Move x, t`. When the instruction just emitted wrote that temporary, it
+/// writes the binding's register instead and the copy is not emitted.
+///
+/// Sound only when nothing else can observe the temporary or the order of the
+/// two writes, which the caller establishes:
+/// - `src` is a dead temporary: above the statement floor and the pinned
+///   bindings, not a live slot or an iterator anchor, and not on the value
+///   stack once the stored value is popped;
+/// - no label is bound at the end of the stream (`label_at_end`), so no jump
+///   lands between the producer and the copy (a conditional expression's
+///   arms each write the temporary and join there);
+/// - the producer sits in the current function (`first_index`).
+///
+/// The producer kinds read every operand before they write their destination
+/// (a call writes it when it returns, a throwing producer never), and each
+/// writes a label computed from its operands with `write_reg_with_label`,
+/// which the copy reproduced exactly (`Move` writes the source's label the
+/// same way). Kinds whose destination label depends on the destination's
+/// previous label are excluded: literal loads (`write_reg` keeps the previous
+/// label unless the context label dominates it) and `GetProperty` (joins the
+/// prior destination label). One call path writes that way too: a call that
+/// creates a generator or async-generator object (`write_reg`), so for
+/// `g = gen()` the binding keeps its own previous label where the copy gave
+/// it the temporary's; both are at least the context label.
+fn retarget_store_producer(
+    instructions: &mut [Ir3Instruction],
+    first_index: usize,
+    src: Reg,
+    dst: Reg,
+    src_is_dead_temporary: bool,
+    label_at_end: bool,
+) -> bool {
+    if !src_is_dead_temporary || label_at_end || src == dst || instructions.len() <= first_index {
+        return false;
+    }
+    let Some(last) = instructions.last_mut() else {
+        return false;
+    };
+    // A producer that can run guest code (a callee, a builtin's callbacks, a
+    // part's toString) does not get the binding's register when it also
+    // reads that register as an operand: `a = a.concat(b)` keeps its copy.
+    let in_range = |range: &RegRange| dst >= range.start && dst - range.start < range.count;
+    let reads_dst = match &*last {
+        Ir3Instruction::Call { callee, args, .. } => *callee == dst || in_range(args),
+        Ir3Instruction::CallMethod {
+            receiver,
+            callee,
+            args,
+            ..
+        } => *receiver == dst || *callee == dst || in_range(args),
+        Ir3Instruction::TemplateLiteral { parts, .. } => in_range(parts),
+        _ => false,
+    };
+    if reads_dst {
+        return false;
+    }
+    let written = match last {
+        Ir3Instruction::Add { dst, .. }
+        | Ir3Instruction::Sub { dst, .. }
+        | Ir3Instruction::Mul { dst, .. }
+        | Ir3Instruction::Div { dst, .. }
+        | Ir3Instruction::Mod { dst, .. }
+        | Ir3Instruction::Exp { dst, .. }
+        | Ir3Instruction::UnaryNeg { dst, .. }
+        | Ir3Instruction::UnaryPlus { dst, .. }
+        | Ir3Instruction::LogicalNot { dst, .. }
+        | Ir3Instruction::BitNot { dst, .. }
+        | Ir3Instruction::TypeOf { dst, .. }
+        | Ir3Instruction::Lt { dst, .. }
+        | Ir3Instruction::Lte { dst, .. }
+        | Ir3Instruction::Gt { dst, .. }
+        | Ir3Instruction::Gte { dst, .. }
+        | Ir3Instruction::Eq { dst, .. }
+        | Ir3Instruction::StrictEq { dst, .. }
+        | Ir3Instruction::NotEq { dst, .. }
+        | Ir3Instruction::StrictNotEq { dst, .. }
+        | Ir3Instruction::BitAnd { dst, .. }
+        | Ir3Instruction::BitOr { dst, .. }
+        | Ir3Instruction::BitXor { dst, .. }
+        | Ir3Instruction::Shl { dst, .. }
+        | Ir3Instruction::Shr { dst, .. }
+        | Ir3Instruction::Ushr { dst, .. }
+        | Ir3Instruction::Move { dst, .. }
+        | Ir3Instruction::Call { dst, .. }
+        | Ir3Instruction::CallMethod { dst, .. }
+        | Ir3Instruction::LoadScoped { dst, .. }
+        | Ir3Instruction::TemplateLiteral { dst, .. } => dst,
+        _ => return false,
+    };
+    if *written != src {
+        return false;
+    }
+    *written = dst;
+    true
+}
+
 /// bd-9vouw.23: once a batch array or object literal is built, its element
 /// and key registers are dead. When nothing live sits at or above the lowest
 /// of them (no value-stack entry, and it is above the statement floor, pinned
@@ -35357,6 +35577,27 @@ fn compact_call_result(
 /// per expression temporary, for the rest of the body.
 fn live_status_register_ceiling(live: &BTreeSet<Reg>) -> Reg {
     live.last().map_or(0, |register| register.saturating_add(1))
+}
+
+/// bd-9vouw.494: whether `register` is an expression temporary that nothing
+/// names once it has left the value stack: at or above every register
+/// [`expression_rewind_target`] keeps (statement floor, pinned bindings, live
+/// slots, the innermost loop iterator's body floor) and not on the stack.
+fn is_dead_expression_temporary(
+    register: Reg,
+    value_stack: &[Reg],
+    anchors: &[IteratorAnchor],
+    floor: Reg,
+    pinned_high: Reg,
+    live: &BTreeSet<Reg>,
+) -> bool {
+    let reserved = floor
+        .max(pinned_high)
+        .max(live_status_register_ceiling(live));
+    let reserved = anchors
+        .last()
+        .map_or(reserved, |anchor| reserved.max(anchor.body_floor));
+    register >= reserved && !value_stack.contains(&register)
 }
 
 /// bd-9vouw.23: a for-in/for-of iterator that stays on the lowering value

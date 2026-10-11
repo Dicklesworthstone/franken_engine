@@ -126,10 +126,18 @@ fn top_level_compound_operator_reads_an_unwritten_target_in_place() {
         ),
         "the Add follows the call and reads its result register: {looped:?}"
     );
+    // The body starts after the loop's last jump before it: the entry Jump to
+    // the bottom test since bd-9vouw.486 rotated loops (the condition's
+    // JumpIf before that).
     let body_start = looped[..add_index]
         .iter()
-        .rposition(|instruction| matches!(instruction, Ir3Instruction::JumpIf { .. }))
-        .expect("the loop condition's jump");
+        .rposition(|instruction| {
+            matches!(
+                instruction,
+                Ir3Instruction::Jump { .. } | Ir3Instruction::JumpIf { .. }
+            )
+        })
+        .expect("the loop's entry jump");
     assert!(
         !looped[body_start..add_index]
             .iter()
@@ -140,21 +148,28 @@ fn top_level_compound_operator_reads_an_unwritten_target_in_place() {
         "no copy of s before the call: {looped:?}"
     );
 
-    // The Add's result is stored to x by the Move after it; its left operand
-    // is the copy of x taken before `x = 5`, not x's register.
+    // The Add's left operand is the copy of x taken before `x = 5`, not x's
+    // register, and the sum goes to x's register: the Add writes it directly
+    // (bd-9vouw.494; a Move after the Add copied the sum there before).
     let hazard = top_level_ir3("var x = 1; x += (x = 5);");
     let add_index = hazard
         .iter()
         .position(|instruction| matches!(instruction, Ir3Instruction::Add { .. }))
         .expect("the Add");
-    let Ir3Instruction::Add { dst: sum, lhs, .. } = hazard[add_index] else {
+    let Ir3Instruction::Add {
+        dst: x_register,
+        lhs,
+        ..
+    } = hazard[add_index]
+    else {
         unreachable!()
     };
     assert!(
-        matches!(
-            hazard.get(add_index + 1),
-            Some(Ir3Instruction::Move { dst: x_register, src }) if *src == sum && *x_register != lhs
-        ),
+        x_register != lhs
+            && hazard[..add_index].iter().any(|instruction| matches!(
+                instruction,
+                Ir3Instruction::Move { dst, src } if *dst == lhs && *src == x_register
+            )),
         "`x += (x = 5)` adds to a copy of x and stores the sum to x: {hazard:?}"
     );
 }

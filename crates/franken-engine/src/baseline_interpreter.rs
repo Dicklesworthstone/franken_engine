@@ -158211,7 +158211,7 @@ mod tests {
     /// across a key longer than the kept capacity and short keys after it.
     #[test]
     fn property_witness_scratch_folds_the_same_bytes() {
-        let mut core = test_interpreter();
+        let mut core = quickjs_test_core();
         let long_name = "k".repeat(1_000);
         let long = RuntimePropertyKey::String(JsString::from(long_name.as_str()));
         let short = RuntimePropertyKey::String(JsString::from("x"));
@@ -159828,7 +159828,7 @@ mod tests {
             ],
             vec!["bd_9vouw_487_cell".to_string()],
         );
-        let mut core = test_interpreter();
+        let mut core = quickjs_test_core();
         core.mutate_registers(|registers| registers[0] = Value::Int(42));
         core.set_register_label(0, Label::Secret)
             .expect("source label should be settable");

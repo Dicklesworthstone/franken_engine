@@ -1,0 +1,63 @@
+name: Native Set Algebra
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/franken-engine/src/baseline_interpreter*'
+      - 'crates/franken-engine/src/baseline_interpreter/**'
+      - 'crates/franken-engine/tests/set_*'
+      - 'crates/franken-engine/tests/fixtures/set_algebra/**'
+      - '.github/workflows/set-algebra-runtime.yml'
+      - '.github/workflows/native-runtime.yml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-set-algebra:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      CARGO_BUILD_JOBS: '1'
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust
+        run: rustup toolchain install nightly-2026-09-21 --profile minimal
+      - name: Select existing native runtime dependency closure
+        run: |
+          python3 - <<'PY'
+          import pathlib, subprocess, textwrap
+          text = pathlib.Path('.github/workflows/native-runtime.yml').read_text()
+          step = text.split('      - name: Select native runtime dependency closure\n', 1)[1].split('\n      - name:', 1)[0]
+          subprocess.run(['bash', '-e', '-c', textwrap.dedent(step.split('        run: |\n', 1)[1])], check=True)
+          PY
+      - name: Execute native Set mutation and boundary regressions
+        run: |
+          set -o pipefail
+          git rev-parse HEAD > set-algebra-revision.txt
+          cargo +nightly-2026-09-21 test --locked --no-fail-fast \
+            -p frankenengine-engine --no-default-features \
+            --test set_methods_bd_9vouw_161 --test set_algebra_mutation_execution \
+            --test collection_for_each_delete_bd_9vouw_314 \
+            -- --nocapture --test-threads=1 2>&1 | tee set-algebra-tests.log
+      - name: Retain native execution results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: set-algebra-validation
+          path: set-algebra-*.txt
+      - name: Retain complete test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: set-algebra-test-log
+          path: set-algebra-tests.log

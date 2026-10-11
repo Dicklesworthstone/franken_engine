@@ -1,0 +1,15 @@
+intersection-delete-append=1,3,4|1,3,4
+intersection-clear-append=1,3|1,3
+intersection-revisit-dedup=1,2|1,2,1
+subset-sees-appended-failure=false|1,2
+disjoint-sees-appended-match=false|1,2
+subset-skips-deleted=true|1
+difference-keeps-copy=1,3|1,2,3|9
+union-copy-after-iterator=2,3,4|keys,get-next,next,next
+symmetricDifference-copy-after-iterator=3,4|keys,get-next,next,next
+difference-copy-before-iterator=1|9
+nested-cursors=1,3,4|outer1,inner1,inner3,inner4,outer3,outer4
+throw-cleans-cursor=true|true|2,3|0
+internal-data-not-guest-iteration=1,2
+copy-before-first-next=1,2|1,9|1|2
+early-false-closes=false|next,return

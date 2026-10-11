@@ -47818,95 +47818,106 @@ mod tests {
 
     #[test]
     fn lower_for_of_body_preserves_throw_and_return_close_kinds_bd_g73mg() {
-        let ir0 = stmt_ir0(vec![Statement::ForOf(ForOfStatement {
-            binding: BindingPattern::Identifier("value".into()),
-            binding_kind: Some(VariableDeclarationKind::Const),
-            assignment_strictness: AssignmentStrictness::Sloppy,
-            iterable: Expression::Identifier("values".into()),
-            body: Box::new(Statement::Return(ReturnStatement {
-                argument: Some(Expression::Identifier("value".into())),
+        // A fresh `const value` head cannot throw, so only the body runs in a
+        // close region (bd-9vouw.486); an assignment head (`value` undeclared,
+        // a PutName) keeps the head region the body's throw target shares.
+        for (binding_kind, guards) in [(Some(VariableDeclarationKind::Const), 1), (None, 2)] {
+            let ir0 = stmt_ir0(vec![Statement::ForOf(ForOfStatement {
+                binding: BindingPattern::Identifier("value".into()),
+                binding_kind,
+                assignment_strictness: AssignmentStrictness::Sloppy,
+                iterable: Expression::Identifier("values".into()),
+                body: Box::new(Statement::Return(ReturnStatement {
+                    argument: Some(Expression::Identifier("value".into())),
+                    span: span(),
+                })),
                 span: span(),
-            })),
-            span: span(),
-        })]);
-        let ir1 = lower_ir0_to_ir1(&ir0)
-            .expect("for-of return lowering")
-            .module;
-        let begin_tries: Vec<_> = ir1
-            .ops
-            .iter()
-            .filter_map(|op| match op {
-                Ir1Op::BeginTry {
-                    catch_label,
-                    finally_label,
-                } => Some((*catch_label, *finally_label)),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(begin_tries.len(), 2, "head and body guards");
-        assert_eq!(begin_tries[0].1, Some(begin_tries[0].0));
-        let (throw_close_label, return_close_label) = begin_tries[1];
-        let return_close_label = return_close_label.expect("body return target");
-        assert_eq!(throw_close_label, begin_tries[0].0);
-        assert_ne!(throw_close_label, return_close_label);
-
-        let return_handler = ir1
-            .ops
-            .iter()
-            .position(|op| matches!(op, Ir1Op::Label { id } if *id == return_close_label))
-            .expect("return close handler");
-        // EnterFinally must sit exactly at the return-close target: the
-        // pending-completion ownership check compares the unwind target to the
-        // EnterFinally ip, so a close emitted before EnterFinally silently
-        // drops the suspended return value (bd-s94p8).
-        assert!(matches!(
-            ir1.ops.get(return_handler + 1),
-            Some(Ir1Op::EnterFinally)
-        ));
-        assert!(matches!(
-            ir1.ops.get(return_handler + 3),
-            Some(Ir1Op::IteratorClose {
-                reason: IteratorCloseReason::Return
-            })
-        ));
-        assert!(matches!(
-            ir1.ops.get(return_handler + 4),
-            Some(Ir1Op::EndFinally)
-        ));
-
-        let throw_handler = ir1
-            .ops
-            .iter()
-            .position(|op| matches!(op, Ir1Op::Label { id } if *id == throw_close_label))
-            .expect("throw close handler");
-        assert!(matches!(
-            ir1.ops.get(throw_handler + 1),
-            Some(Ir1Op::EnterFinally)
-        ));
-        assert!(matches!(
-            ir1.ops.get(throw_handler + 3),
-            Some(Ir1Op::IteratorClose {
-                reason: IteratorCloseReason::Throw
-            })
-        ));
-
-        let ir2 = lower_ir1_to_ir2(&ir1).expect("IR1->IR2").module;
-        let ir3 = lower_ir2_to_ir3(&ir2).expect("IR2->IR3").module;
-        assert_eq!(
-            ir3.instructions
+            })]);
+            let ir1 = lower_ir0_to_ir1(&ir0)
+                .expect("for-of return lowering")
+                .module;
+            let begin_tries: Vec<_> = ir1
+                .ops
                 .iter()
-                .filter(|instruction| matches!(instruction, Ir3Instruction::EnterCatch { .. }))
-                .count(),
-            0,
-            "the distinct body Throw target is finally-style and must retain its exception"
-        );
-        assert!(ir3.instructions.iter().any(|instruction| matches!(
-            instruction,
-            Ir3Instruction::IteratorClose {
-                reason: IteratorCloseReason::Return,
-                ..
+                .filter_map(|op| match op {
+                    Ir1Op::BeginTry {
+                        catch_label,
+                        finally_label,
+                    } => Some((*catch_label, *finally_label)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                begin_tries.len(),
+                guards,
+                "head and body guards ({binding_kind:?})"
+            );
+            let (throw_close_label, return_close_label) = begin_tries[guards - 1];
+            let return_close_label = return_close_label.expect("body return target");
+            if guards == 2 {
+                assert_eq!(begin_tries[0].1, Some(begin_tries[0].0));
+                assert_eq!(throw_close_label, begin_tries[0].0);
             }
-        )));
+            assert_ne!(throw_close_label, return_close_label);
+
+            let return_handler = ir1
+                .ops
+                .iter()
+                .position(|op| matches!(op, Ir1Op::Label { id } if *id == return_close_label))
+                .expect("return close handler");
+            // EnterFinally must sit exactly at the return-close target: the
+            // pending-completion ownership check compares the unwind target to
+            // the EnterFinally ip, so a close emitted before EnterFinally
+            // silently drops the suspended return value (bd-s94p8).
+            assert!(matches!(
+                ir1.ops.get(return_handler + 1),
+                Some(Ir1Op::EnterFinally)
+            ));
+            assert!(matches!(
+                ir1.ops.get(return_handler + 3),
+                Some(Ir1Op::IteratorClose {
+                    reason: IteratorCloseReason::Return
+                })
+            ));
+            assert!(matches!(
+                ir1.ops.get(return_handler + 4),
+                Some(Ir1Op::EndFinally)
+            ));
+
+            let throw_handler = ir1
+                .ops
+                .iter()
+                .position(|op| matches!(op, Ir1Op::Label { id } if *id == throw_close_label))
+                .expect("throw close handler");
+            assert!(matches!(
+                ir1.ops.get(throw_handler + 1),
+                Some(Ir1Op::EnterFinally)
+            ));
+            assert!(matches!(
+                ir1.ops.get(throw_handler + 3),
+                Some(Ir1Op::IteratorClose {
+                    reason: IteratorCloseReason::Throw
+                })
+            ));
+
+            let ir2 = lower_ir1_to_ir2(&ir1).expect("IR1->IR2").module;
+            let ir3 = lower_ir2_to_ir3(&ir2).expect("IR2->IR3").module;
+            assert_eq!(
+                ir3.instructions
+                    .iter()
+                    .filter(|instruction| matches!(instruction, Ir3Instruction::EnterCatch { .. }))
+                    .count(),
+                0,
+                "the distinct body Throw target is finally-style and must retain its exception"
+            );
+            assert!(ir3.instructions.iter().any(|instruction| matches!(
+                instruction,
+                Ir3Instruction::IteratorClose {
+                    reason: IteratorCloseReason::Return,
+                    ..
+                }
+            )));
+        }
     }
 
     #[test]

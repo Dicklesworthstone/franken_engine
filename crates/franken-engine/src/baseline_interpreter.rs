@@ -15894,6 +15894,18 @@ impl InterpreterCore {
         name: &str,
         allow_missing: bool,
     ) -> Result<Value, InterpreterError> {
+        self.load_runtime_name_labeled(name, allow_missing)
+            .map(|(value, _label)| value)
+    }
+
+    /// [`Self::load_runtime_name`] with the label the binding's cell holds
+    /// alongside its value (the label LoadScoped reads); the CommonJS path
+    /// names and an allowed missing name are Public (bd-9vouw.487).
+    fn load_runtime_name_labeled(
+        &self,
+        name: &str,
+        allow_missing: bool,
+    ) -> Result<(Value, Label), InterpreterError> {
         if let Some(binding) = self.resolve_runtime_name_binding(name) {
             let state = binding.state()?;
             if !state.initialized {
@@ -15901,7 +15913,7 @@ impl InterpreterCore {
                     name: name.to_string(),
                 });
             }
-            return Ok(state.value.clone());
+            return Ok((state.value.clone(), state.label.clone()));
         }
 
         if self.active_generated_function_artifact.is_none()
@@ -15909,14 +15921,14 @@ impl InterpreterCore {
         {
             let (filename, dirname) = self.cjs_filename_dirname(Some(&context.module_specifier));
             match name {
-                "__filename" => return Ok(filename),
-                "__dirname" => return Ok(dirname),
+                "__filename" => return Ok((filename, Label::Public)),
+                "__dirname" => return Ok((dirname, Label::Public)),
                 _ => {}
             }
         }
 
         if allow_missing {
-            Ok(Value::Undefined)
+            Ok((Value::Undefined, Label::Public))
         } else {
             Err(InterpreterError::UndefinedBinding {
                 name: name.to_string(),
@@ -57066,7 +57078,7 @@ impl InterpreterCore {
                     allow_missing,
                 } => {
                     let name = Self::scoped_constant_name(module, name_pool_index);
-                    match self.load_runtime_name(name.as_ref(), false) {
+                    match self.load_runtime_name_labeled(name.as_ref(), false) {
                         Err(InterpreterError::UndefinedBinding { .. }) => {
                             match self.load_global_object_name(Some(module), name.as_ref())? {
                                 Some((val, label)) => {
@@ -57087,7 +57099,18 @@ impl InterpreterCore {
                                 }
                             }
                         }
-                        loaded => self.write_reg(dst, loaded?)?,
+                        loaded => {
+                            // A scope cell keeps its value's label (LoadScoped
+                            // writes it); the read carries it, joined with
+                            // dst's like the global-object read above
+                            // (bd-9vouw.487: the value used to keep dst's
+                            // label only).
+                            let (val, label) = loaded?;
+                            let prior_dst_label = self.get_register_label(dst)?;
+                            let label = self
+                                .join_owned_label_with_temporary_budget(label, prior_dst_label)?;
+                            self.write_reg_with_label(dst, val, label)?;
+                        }
                     }
                     self.ip += 1;
                 }
@@ -158577,6 +158600,63 @@ mod tests {
                 name: "bd_0k19b_missing".to_string(),
             }),
             Some("ReferenceError")
+        );
+    }
+
+    /// bd-9vouw.487: LoadName of a name the scope chain resolves carries the
+    /// label the cell holds (as LoadScoped of the same cell does); it used to
+    /// write the value under the destination register's previous label.
+    #[test]
+    fn load_name_of_a_scope_cell_carries_the_cell_label() {
+        let module = test_module_with_pool(
+            vec![
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 0,
+                    kind: BindingKind::Var as u8,
+                },
+                Ir3Instruction::StoreScoped {
+                    src: 0,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::LoadName {
+                    dst: 1,
+                    name_pool_index: 0,
+                    allow_missing: false,
+                },
+                Ir3Instruction::LoadScoped {
+                    dst: 2,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec!["bd_9vouw_487_cell".to_string()],
+        );
+        let mut core = test_interpreter();
+        core.mutate_registers(|registers| registers[0] = Value::Int(42));
+        core.set_register_label(0, Label::Secret)
+            .expect("source label should be settable");
+        // Both destinations start strictly below Secret: a read that keeps
+        // the destination's label leaves them Public.
+        core.set_register_label(1, Label::Public)
+            .expect("LoadName destination label should be settable");
+        core.set_register_label(2, Label::Public)
+            .expect("LoadScoped destination label should be settable");
+        core.execute(&module).expect("scope cell round trip");
+
+        assert_eq!(core.read_reg(1).expect("LoadName value"), Value::Int(42));
+        assert_eq!(
+            core.get_register_label(1).expect("LoadName label"),
+            &Label::Secret,
+            "LoadName carries the cell's label"
+        );
+        assert_eq!(
+            core.get_register_label(2).expect("LoadScoped label"),
+            &Label::Secret,
+            "LoadScoped of the same cell (the reference behaviour)"
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
         );
     }
 

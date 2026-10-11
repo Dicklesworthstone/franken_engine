@@ -317,9 +317,10 @@ fn a_top_level_loop_records_only_its_body_as_the_completion() {
             .any(|instruction| matches!(instruction, Ir3Instruction::LoadInt { value: 1, .. })),
         "no load of the update's 1: {code:?}"
     );
-    // One iteration: Add, its completion Move, Inc, the literal 5, Lt and
-    // the JumpIf back to the body.
-    assert_eq!(iteration(&code), 6);
+    // One iteration: Add, its completion Move, Inc, Lt and the JumpIf back
+    // to the body; the literal 5 is loaded once before the loop
+    // (bd-9vouw.496).
+    assert_eq!(iteration(&code), 5);
 
     // A binding read again while an in-place compound read holds its
     // register stays a copy: in `s = s + s * 2` the sum is written to s's

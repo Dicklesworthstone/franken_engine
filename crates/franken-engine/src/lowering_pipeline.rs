@@ -9571,18 +9571,17 @@ fn lower_ir2_to_ir3_with_input_hash(
                 args.reverse();
                 let callee = pop_lowering_value(&mut value_stack)?;
 
-                let start_reg = register_cursor;
-                for &arg_reg in &args {
-                    let dst = alloc_register(&mut register_cursor);
-                    ir3.instructions
-                        .push(Ir3Instruction::Move { dst, src: arg_reg });
-                }
-
+                let copies = call_argument_window(
+                    &args,
+                    &[callee],
+                    &value_stack,
+                    statement_register_floor
+                        .max(pinned_register_high)
+                        .max(live_status_register_ceiling(&live_status_registers)),
+                    &mut register_cursor,
+                    &mut ir3.instructions,
+                );
                 let dst = alloc_register(&mut register_cursor);
-                let copies = RegRange {
-                    start: start_reg,
-                    count: *arg_count,
-                };
                 ir3.instructions.push(Ir3Instruction::Call {
                     callee,
                     args: copies,
@@ -9617,18 +9616,17 @@ fn lower_ir2_to_ir3_with_input_hash(
                 let receiver = pop_lowering_value(&mut value_stack)?;
                 let callee = pop_lowering_value(&mut value_stack)?;
 
-                let start_reg = register_cursor;
-                for &arg_reg in &args {
-                    let dst = alloc_register(&mut register_cursor);
-                    ir3.instructions
-                        .push(Ir3Instruction::Move { dst, src: arg_reg });
-                }
-
+                let copies = call_argument_window(
+                    &args,
+                    &[receiver, callee],
+                    &value_stack,
+                    statement_register_floor
+                        .max(pinned_register_high)
+                        .max(live_status_register_ceiling(&live_status_registers)),
+                    &mut register_cursor,
+                    &mut ir3.instructions,
+                );
                 let dst = alloc_register(&mut register_cursor);
-                let copies = RegRange {
-                    start: start_reg,
-                    count: *arg_count,
-                };
                 ir3.instructions.push(Ir3Instruction::CallMethod {
                     receiver,
                     callee,
@@ -10398,13 +10396,10 @@ fn lower_ir2_to_ir3_with_input_hash(
                         val: val_reg,
                     });
                 }
-                emit_array_length_store(
-                    &mut ir3.instructions,
-                    &mut constant_pool,
-                    &mut register_cursor,
-                    dst,
-                    *count,
-                );
+                // No length store: CreateDataProperty of index count - 1
+                // already made the length `count` (ArrayDefineOwnProperty),
+                // and a hole is defined and deleted, which keeps it
+                // (bd-9vouw.491).
                 let reserved_below = statement_register_floor
                     .max(pinned_register_high)
                     .max(live_status_register_ceiling(&live_status_registers));
@@ -11779,8 +11774,16 @@ fn lower_ir2_to_ir3_with_input_hash(
                             &mut fn_pinned_register_high,
                             &mut fn_register_high_water,
                         );
-                        let read_in_place = src < fn_pinned_register_high
-                            && pinned_read_consumed_in_place(&annotated_body_ops, op_index);
+                        // A `return x` reads the register itself, a pinned or
+                        // a short-lived local's alike: Return reads its value
+                        // when it runs (before any finally) and nothing runs in
+                        // between (bd-9vouw.493).
+                        let read_in_place = (src < fn_pinned_register_high
+                            && pinned_read_consumed_in_place(&annotated_body_ops, op_index))
+                            || matches!(
+                                annotated_body_ops.get(op_index + 1).map(|next| &next.inner),
+                                Some(Ir1Op::Return)
+                            );
                         if read_in_place {
                             fn_value_stack.push(src);
                         } else {
@@ -12084,17 +12087,17 @@ fn lower_ir2_to_ir3_with_input_hash(
                     }
                     args.reverse();
                     let callee = pop_lowering_value(&mut fn_value_stack)?;
-                    let start_reg = fn_reg;
-                    for arg_reg in &args {
-                        let dst = alloc_register(&mut fn_reg);
-                        ir3.instructions
-                            .push(Ir3Instruction::Move { dst, src: *arg_reg });
-                    }
+                    let copies = call_argument_window(
+                        &args,
+                        &[callee],
+                        &fn_value_stack,
+                        fn_statement_register_floor
+                            .max(fn_pinned_register_high)
+                            .max(live_status_register_ceiling(&fn_live_status_registers)),
+                        &mut fn_reg,
+                        &mut ir3.instructions,
+                    );
                     let dst = alloc_register(&mut fn_reg);
-                    let copies = RegRange {
-                        start: start_reg,
-                        count: count as u32,
-                    };
                     ir3.instructions.push(Ir3Instruction::Call {
                         callee,
                         args: copies,
@@ -12126,17 +12129,17 @@ fn lower_ir2_to_ir3_with_input_hash(
                     args.reverse();
                     let receiver = pop_lowering_value(&mut fn_value_stack)?;
                     let callee = pop_lowering_value(&mut fn_value_stack)?;
-                    let start_reg = fn_reg;
-                    for arg_reg in &args {
-                        let dst = alloc_register(&mut fn_reg);
-                        ir3.instructions
-                            .push(Ir3Instruction::Move { dst, src: *arg_reg });
-                    }
+                    let copies = call_argument_window(
+                        &args,
+                        &[receiver, callee],
+                        &fn_value_stack,
+                        fn_statement_register_floor
+                            .max(fn_pinned_register_high)
+                            .max(live_status_register_ceiling(&fn_live_status_registers)),
+                        &mut fn_reg,
+                        &mut ir3.instructions,
+                    );
                     let dst = alloc_register(&mut fn_reg);
-                    let copies = RegRange {
-                        start: start_reg,
-                        count: count as u32,
-                    };
                     ir3.instructions.push(Ir3Instruction::CallMethod {
                         receiver,
                         callee,
@@ -12572,13 +12575,7 @@ fn lower_ir2_to_ir3_with_input_hash(
                             val: val_reg,
                         });
                     }
-                    emit_array_length_store(
-                        &mut ir3.instructions,
-                        &mut constant_pool,
-                        &mut fn_reg,
-                        dst,
-                        *count,
-                    );
+                    // No length store (bd-9vouw.491): see the top-level arm.
                     let reserved_below = fn_statement_register_floor
                         .max(fn_pinned_register_high)
                         .max(live_status_register_ceiling(&fn_live_status_registers));
@@ -34711,31 +34708,6 @@ fn extract_hostcall_capability(raw: &str) -> Option<String> {
     None
 }
 
-fn emit_array_length_store(
-    instructions: &mut Vec<Ir3Instruction>,
-    constant_pool: &mut ConstantPool,
-    register_cursor: &mut Reg,
-    array_reg: Reg,
-    length: u32,
-) {
-    let key_reg = alloc_register(register_cursor);
-    let key_pool_index = push_constant_optimized(constant_pool, "length");
-    instructions.push(Ir3Instruction::LoadStr {
-        dst: key_reg,
-        pool_index: key_pool_index,
-    });
-    let length_reg = alloc_register(register_cursor);
-    instructions.push(Ir3Instruction::LoadInt {
-        dst: length_reg,
-        value: i64::from(length),
-    });
-    instructions.push(Ir3Instruction::SetProperty {
-        obj: array_reg,
-        key: key_reg,
-        val: length_reg,
-    });
-}
-
 fn lower_literal_to_ir3_optimized(
     value: &Ir1Literal,
     dst: Reg,
@@ -35304,6 +35276,49 @@ fn compaction_value_stack<'a>(value_stack: &'a [Reg], in_place: &BTreeSet<Reg>) 
 /// overflowed the 256-register frame. A call that leaves the value stack
 /// empty is left as it is: nothing accumulates above it, and the statement
 /// boundary rewind reclaims its registers without an extra Move.
+/// bd-9vouw.375: the argument window of a Call or CallMethod. When the
+/// arguments already sit in contiguous temporaries that end at the register
+/// cursor (each argument expression's own result, in order), at or above
+/// `reserved_below`, and none of them is still on the value stack or another
+/// operand of the call, the call reads them in place; otherwise each is
+/// copied into a fresh contiguous window above the cursor, as before. A call
+/// reads its arguments' values and labels from the window when it runs and
+/// writes only its result, which is allocated above the window, so reading
+/// in place observes the same values: `arg_count` fewer Moves per call.
+fn call_argument_window(
+    args: &[Reg],
+    other_operands: &[Reg],
+    value_stack: &[Reg],
+    reserved_below: Reg,
+    cursor: &mut Reg,
+    instructions: &mut Vec<Ir3Instruction>,
+) -> RegRange {
+    let count = u32::try_from(args.len()).unwrap_or(u32::MAX);
+    if let (Some(&first), Some(&last)) = (args.first(), args.last())
+        && first >= reserved_below
+        && last.checked_add(1) == Some(*cursor)
+        && args
+            .iter()
+            .zip(first..)
+            .all(|(&arg, expected)| arg == expected)
+        && !value_stack
+            .iter()
+            .chain(other_operands)
+            .any(|register| (first..=last).contains(register))
+    {
+        return RegRange {
+            start: first,
+            count,
+        };
+    }
+    let start = *cursor;
+    for &arg in args {
+        let dst = alloc_register(cursor);
+        instructions.push(Ir3Instruction::Move { dst, src: arg });
+    }
+    RegRange { start, count }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn compact_call_result(
     instructions: &mut Vec<Ir3Instruction>,
@@ -47803,95 +47818,106 @@ mod tests {
 
     #[test]
     fn lower_for_of_body_preserves_throw_and_return_close_kinds_bd_g73mg() {
-        let ir0 = stmt_ir0(vec![Statement::ForOf(ForOfStatement {
-            binding: BindingPattern::Identifier("value".into()),
-            binding_kind: Some(VariableDeclarationKind::Const),
-            assignment_strictness: AssignmentStrictness::Sloppy,
-            iterable: Expression::Identifier("values".into()),
-            body: Box::new(Statement::Return(ReturnStatement {
-                argument: Some(Expression::Identifier("value".into())),
+        // A fresh `const value` head cannot throw, so only the body runs in a
+        // close region (bd-9vouw.486); an assignment head (`value` undeclared,
+        // a PutName) keeps the head region the body's throw target shares.
+        for (binding_kind, guards) in [(Some(VariableDeclarationKind::Const), 1), (None, 2)] {
+            let ir0 = stmt_ir0(vec![Statement::ForOf(ForOfStatement {
+                binding: BindingPattern::Identifier("value".into()),
+                binding_kind,
+                assignment_strictness: AssignmentStrictness::Sloppy,
+                iterable: Expression::Identifier("values".into()),
+                body: Box::new(Statement::Return(ReturnStatement {
+                    argument: Some(Expression::Identifier("value".into())),
+                    span: span(),
+                })),
                 span: span(),
-            })),
-            span: span(),
-        })]);
-        let ir1 = lower_ir0_to_ir1(&ir0)
-            .expect("for-of return lowering")
-            .module;
-        let begin_tries: Vec<_> = ir1
-            .ops
-            .iter()
-            .filter_map(|op| match op {
-                Ir1Op::BeginTry {
-                    catch_label,
-                    finally_label,
-                } => Some((*catch_label, *finally_label)),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(begin_tries.len(), 2, "head and body guards");
-        assert_eq!(begin_tries[0].1, Some(begin_tries[0].0));
-        let (throw_close_label, return_close_label) = begin_tries[1];
-        let return_close_label = return_close_label.expect("body return target");
-        assert_eq!(throw_close_label, begin_tries[0].0);
-        assert_ne!(throw_close_label, return_close_label);
-
-        let return_handler = ir1
-            .ops
-            .iter()
-            .position(|op| matches!(op, Ir1Op::Label { id } if *id == return_close_label))
-            .expect("return close handler");
-        // EnterFinally must sit exactly at the return-close target: the
-        // pending-completion ownership check compares the unwind target to the
-        // EnterFinally ip, so a close emitted before EnterFinally silently
-        // drops the suspended return value (bd-s94p8).
-        assert!(matches!(
-            ir1.ops.get(return_handler + 1),
-            Some(Ir1Op::EnterFinally)
-        ));
-        assert!(matches!(
-            ir1.ops.get(return_handler + 3),
-            Some(Ir1Op::IteratorClose {
-                reason: IteratorCloseReason::Return
-            })
-        ));
-        assert!(matches!(
-            ir1.ops.get(return_handler + 4),
-            Some(Ir1Op::EndFinally)
-        ));
-
-        let throw_handler = ir1
-            .ops
-            .iter()
-            .position(|op| matches!(op, Ir1Op::Label { id } if *id == throw_close_label))
-            .expect("throw close handler");
-        assert!(matches!(
-            ir1.ops.get(throw_handler + 1),
-            Some(Ir1Op::EnterFinally)
-        ));
-        assert!(matches!(
-            ir1.ops.get(throw_handler + 3),
-            Some(Ir1Op::IteratorClose {
-                reason: IteratorCloseReason::Throw
-            })
-        ));
-
-        let ir2 = lower_ir1_to_ir2(&ir1).expect("IR1->IR2").module;
-        let ir3 = lower_ir2_to_ir3(&ir2).expect("IR2->IR3").module;
-        assert_eq!(
-            ir3.instructions
+            })]);
+            let ir1 = lower_ir0_to_ir1(&ir0)
+                .expect("for-of return lowering")
+                .module;
+            let begin_tries: Vec<_> = ir1
+                .ops
                 .iter()
-                .filter(|instruction| matches!(instruction, Ir3Instruction::EnterCatch { .. }))
-                .count(),
-            0,
-            "the distinct body Throw target is finally-style and must retain its exception"
-        );
-        assert!(ir3.instructions.iter().any(|instruction| matches!(
-            instruction,
-            Ir3Instruction::IteratorClose {
-                reason: IteratorCloseReason::Return,
-                ..
+                .filter_map(|op| match op {
+                    Ir1Op::BeginTry {
+                        catch_label,
+                        finally_label,
+                    } => Some((*catch_label, *finally_label)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                begin_tries.len(),
+                guards,
+                "head and body guards ({binding_kind:?})"
+            );
+            let (throw_close_label, return_close_label) = begin_tries[guards - 1];
+            let return_close_label = return_close_label.expect("body return target");
+            if guards == 2 {
+                assert_eq!(begin_tries[0].1, Some(begin_tries[0].0));
+                assert_eq!(throw_close_label, begin_tries[0].0);
             }
-        )));
+            assert_ne!(throw_close_label, return_close_label);
+
+            let return_handler = ir1
+                .ops
+                .iter()
+                .position(|op| matches!(op, Ir1Op::Label { id } if *id == return_close_label))
+                .expect("return close handler");
+            // EnterFinally must sit exactly at the return-close target: the
+            // pending-completion ownership check compares the unwind target to
+            // the EnterFinally ip, so a close emitted before EnterFinally
+            // silently drops the suspended return value (bd-s94p8).
+            assert!(matches!(
+                ir1.ops.get(return_handler + 1),
+                Some(Ir1Op::EnterFinally)
+            ));
+            assert!(matches!(
+                ir1.ops.get(return_handler + 3),
+                Some(Ir1Op::IteratorClose {
+                    reason: IteratorCloseReason::Return
+                })
+            ));
+            assert!(matches!(
+                ir1.ops.get(return_handler + 4),
+                Some(Ir1Op::EndFinally)
+            ));
+
+            let throw_handler = ir1
+                .ops
+                .iter()
+                .position(|op| matches!(op, Ir1Op::Label { id } if *id == throw_close_label))
+                .expect("throw close handler");
+            assert!(matches!(
+                ir1.ops.get(throw_handler + 1),
+                Some(Ir1Op::EnterFinally)
+            ));
+            assert!(matches!(
+                ir1.ops.get(throw_handler + 3),
+                Some(Ir1Op::IteratorClose {
+                    reason: IteratorCloseReason::Throw
+                })
+            ));
+
+            let ir2 = lower_ir1_to_ir2(&ir1).expect("IR1->IR2").module;
+            let ir3 = lower_ir2_to_ir3(&ir2).expect("IR2->IR3").module;
+            assert_eq!(
+                ir3.instructions
+                    .iter()
+                    .filter(|instruction| matches!(instruction, Ir3Instruction::EnterCatch { .. }))
+                    .count(),
+                0,
+                "the distinct body Throw target is finally-style and must retain its exception"
+            );
+            assert!(ir3.instructions.iter().any(|instruction| matches!(
+                instruction,
+                Ir3Instruction::IteratorClose {
+                    reason: IteratorCloseReason::Return,
+                    ..
+                }
+            )));
+        }
     }
 
     #[test]

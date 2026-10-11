@@ -7897,12 +7897,26 @@ impl RuntimePropertyKey {
     }
 }
 
+#[cfg(test)]
 fn property_resolution_found_payload(
     key: &RuntimePropertyKey,
     object_id: ObjectId,
     depth: u32,
 ) -> Vec<u8> {
-    let mut payload = Vec::with_capacity(
+    let mut payload = Vec::new();
+    write_property_resolution_found_payload(&mut payload, key, object_id, depth);
+    payload
+}
+
+/// Replace `payload`'s contents with the found-property witness event's bytes.
+fn write_property_resolution_found_payload(
+    payload: &mut Vec<u8>,
+    key: &RuntimePropertyKey,
+    object_id: ObjectId,
+    depth: u32,
+) {
+    payload.clear();
+    payload.reserve(
         b"property_found:key=".len()
             + key.diagnostic_byte_len()
             + b",object_id=".len()
@@ -7911,13 +7925,16 @@ fn property_resolution_found_payload(
             + decimal_u32_len(depth),
     );
     payload.extend_from_slice(b"property_found:key=");
-    key.append_diagnostic_bytes(&mut payload);
+    key.append_diagnostic_bytes(payload);
     payload.extend_from_slice(b",object_id=");
-    append_decimal_u32(&mut payload, object_id.0);
+    append_decimal_u32(payload, object_id.0);
     payload.extend_from_slice(b",depth=");
-    append_decimal_u32(&mut payload, depth);
-    payload
+    append_decimal_u32(payload, depth);
 }
+
+/// The most property-witness scratch capacity an interpreter keeps between
+/// reads; a longer key's buffer is dropped after its event.
+const PROPERTY_WITNESS_SCRATCH_MAX_CAPACITY: usize = 256;
 
 /// Slots per heap chunk. A full chunk whose objects were all reclaimed is
 /// released as a whole (bd-9vouw.57 phase B), so memory follows the live set
@@ -15129,6 +15146,11 @@ pub struct InterpreterCore {
     /// `Undefined`, so a callback neither allocates nor drops `max_registers`
     /// slots. Engine capacity of at most `max_registers` slots, not charged.
     simple_callback_register_pool: Vec<Value>,
+    /// The bytes of the last found-property witness event, kept so a
+    /// property read folds its event without allocating a buffer. Engine
+    /// capacity (at most PROPERTY_WITNESS_SCRATCH_MAX_CAPACITY bytes kept),
+    /// not charged.
+    property_witness_scratch: Vec<u8>,
     /// JSON parser/reviver scratch retained on the Rust stack across guest
     /// callbacks. A nested accounting resync must not erase this ownership.
     json_parse_temporary_bytes: u64,
@@ -15894,6 +15916,18 @@ impl InterpreterCore {
         name: &str,
         allow_missing: bool,
     ) -> Result<Value, InterpreterError> {
+        self.load_runtime_name_labeled(name, allow_missing)
+            .map(|(value, _label)| value)
+    }
+
+    /// [`Self::load_runtime_name`] with the label the binding's cell holds
+    /// alongside its value (the label LoadScoped reads); the CommonJS path
+    /// names and an allowed missing name are Public (bd-9vouw.487).
+    fn load_runtime_name_labeled(
+        &self,
+        name: &str,
+        allow_missing: bool,
+    ) -> Result<(Value, Label), InterpreterError> {
         if let Some(binding) = self.resolve_runtime_name_binding(name) {
             let state = binding.state()?;
             if !state.initialized {
@@ -15901,7 +15935,7 @@ impl InterpreterCore {
                     name: name.to_string(),
                 });
             }
-            return Ok(state.value.clone());
+            return Ok((state.value.clone(), state.label.clone()));
         }
 
         if self.active_generated_function_artifact.is_none()
@@ -15909,14 +15943,14 @@ impl InterpreterCore {
         {
             let (filename, dirname) = self.cjs_filename_dirname(Some(&context.module_specifier));
             match name {
-                "__filename" => return Ok(filename),
-                "__dirname" => return Ok(dirname),
+                "__filename" => return Ok((filename, Label::Public)),
+                "__dirname" => return Ok((dirname, Label::Public)),
                 _ => {}
             }
         }
 
         if allow_missing {
-            Ok(Value::Undefined)
+            Ok((Value::Undefined, Label::Public))
         } else {
             Err(InterpreterError::UndefinedBinding {
                 name: name.to_string(),
@@ -16477,6 +16511,7 @@ impl InterpreterCore {
             estimated_memory_bytes,
             simple_callback_temporary_bytes: 0,
             simple_callback_register_pool: Vec::new(),
+            property_witness_scratch: Vec::new(),
             json_parse_temporary_bytes: 0,
             module_snapshot_in_flight_bytes: 0,
             temporarily_suspended_execution_bytes: 0,
@@ -57066,7 +57101,7 @@ impl InterpreterCore {
                     allow_missing,
                 } => {
                     let name = Self::scoped_constant_name(module, name_pool_index);
-                    match self.load_runtime_name(name.as_ref(), false) {
+                    match self.load_runtime_name_labeled(name.as_ref(), false) {
                         Err(InterpreterError::UndefinedBinding { .. }) => {
                             match self.load_global_object_name(Some(module), name.as_ref())? {
                                 Some((val, label)) => {
@@ -57087,7 +57122,18 @@ impl InterpreterCore {
                                 }
                             }
                         }
-                        loaded => self.write_reg(dst, loaded?)?,
+                        loaded => {
+                            // A scope cell keeps its value's label (LoadScoped
+                            // writes it); the read carries it, joined with
+                            // dst's like the global-object read above
+                            // (bd-9vouw.487: the value used to keep dst's
+                            // label only).
+                            let (val, label) = loaded?;
+                            let prior_dst_label = self.get_register_label(dst)?;
+                            let label = self
+                                .join_owned_label_with_temporary_budget(label, prior_dst_label)?;
+                            self.write_reg_with_label(dst, val, label)?;
+                        }
                     }
                     self.ip += 1;
                 }
@@ -58865,6 +58911,7 @@ impl InterpreterCore {
         // ES2020 13.7.5.12 ForIn/OfHeadEvaluation: ToObject(exprValue), so a
         // primitive enumerates its wrapper (a string its indices).
         let mut continue_at = None;
+        let callable = value.is_callable().then(|| value.clone());
         let object_id = match value {
             Value::Object(object_id) => object_id,
             // Step 7.a: an undefined or null object enumerates nothing (the
@@ -58936,7 +58983,32 @@ impl InterpreterCore {
             }
         };
 
-        let keys = self.collect_for_in_keys_continuing(module, object_id, continue_at)?;
+        // A function's inherited keys come from its value-level [[Prototype]]
+        // (%Function.prototype%, a parent class, a function-kind intrinsic),
+        // not from its backing object's link, which defaults to
+        // Object.prototype (bd-9vouw.488): enumerate the backing objects of
+        // the callable ancestors, then continue at the first ordinary object.
+        let mut leading = Vec::new();
+        if let (Some(function), Some(module)) = (callable.as_ref(), module) {
+            let mut prototype = self.function_value_prototype(Some(module), function)?;
+            for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
+                if !prototype.is_callable() {
+                    break;
+                }
+                let backing = match &prototype {
+                    Value::BuiltinFunction(builtin) => {
+                        Self::builtin_function_property_object(builtin)
+                    }
+                    other => self.function_own_property_object(module, other)?,
+                };
+                leading.extend(backing);
+                prototype = self.function_value_prototype(Some(module), &prototype)?;
+            }
+            if let Value::Object(prototype) = prototype {
+                continue_at = Some(prototype);
+            }
+        }
+        let keys = self.collect_for_in_keys_continuing(module, object_id, &leading, continue_at)?;
         let trace_index =
             self.start_iteration_trace(IterationKind::ForIn, || format!("object:{}", object_id.0));
         if self.iteration_traced(trace_index) {
@@ -63271,11 +63343,16 @@ impl InterpreterCore {
         object_id: ObjectId,
         depth: u32,
     ) {
-        // Deterministic decision: fold, don't record (bd-9vouw.18).
-        self.nondeterminism_trace.witness_deterministic(
-            NondeterminismSource::PropertyResolution,
-            &property_resolution_found_payload(key, object_id, depth),
-        );
+        // Deterministic decision: fold, don't record (bd-9vouw.18). The bytes
+        // go through a reused buffer: a Vec per property read was malloc and
+        // free on every found [[Get]].
+        let mut payload = std::mem::take(&mut self.property_witness_scratch);
+        write_property_resolution_found_payload(&mut payload, key, object_id, depth);
+        self.nondeterminism_trace
+            .witness_deterministic(NondeterminismSource::PropertyResolution, &payload);
+        if payload.capacity() <= PROPERTY_WITNESS_SCRATCH_MAX_CAPACITY {
+            self.property_witness_scratch = payload;
+        }
     }
 
     /// Resolve an `Array.prototype` method name to its receiver-aware builtin
@@ -105724,17 +105801,20 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
         object_id: ObjectId,
     ) -> Result<Vec<JsString>, InterpreterError> {
-        self.collect_for_in_keys_continuing(module, object_id, None)
+        self.collect_for_in_keys_continuing(module, object_id, &[], None)
     }
 
-    /// The for-in keys of `object_id` and its prototype chain; when the
-    /// object itself has no prototype link the walk continues at
-    /// `continue_at` (a promise's, generator's or iterator's backing object
-    /// inherits from its intrinsic prototype, bd-9vouw.149).
+    /// The for-in keys of `object_id` and its prototype chain. After
+    /// `object_id` the walk visits `leading` in order (the backing objects
+    /// of a function's parent constructors, bd-9vouw.488), then `continue_at`
+    /// when given (a promise's, generator's or iterator's backing object
+    /// inherits from its intrinsic prototype, bd-9vouw.149; a function from
+    /// its value-level [[Prototype]]), then ordinary prototype links.
     fn collect_for_in_keys_continuing(
         &mut self,
         module: Option<&Ir3Module>,
         object_id: ObjectId,
+        leading: &[ObjectId],
         continue_at: Option<ObjectId>,
     ) -> Result<Vec<JsString>, InterpreterError> {
         let mut keys = Vec::new();
@@ -105742,6 +105822,8 @@ impl InterpreterCore {
         let mut visited = BTreeSet::new();
         let mut current = Some(object_id);
         let mut depth = 0u32;
+        let mut leading_levels = leading.iter().copied();
+        let mut continue_at = continue_at;
 
         while let Some(id) = current {
             if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
@@ -105783,9 +105865,12 @@ impl InterpreterCore {
             // [[Prototype]] (a generator's recorded `prototype`, a Promise
             // subclass's, or the intrinsic), not at the backing object's link
             // (bd-9vouw.120).
-            current = match continue_at {
-                Some(prototype) if id == object_id => Some(prototype),
-                _ => self.proxy_aware_prototype_link(module, id)?,
+            current = match leading_levels.next() {
+                Some(level) => Some(level),
+                None => match continue_at.take() {
+                    Some(prototype) => Some(prototype),
+                    None => self.proxy_aware_prototype_link(module, id)?,
+                },
             };
             depth += 1;
         }
@@ -157012,6 +157097,32 @@ mod tests {
         }
     }
 
+    /// bd-9vouw.492: the found-property witness event folds through a reused
+    /// buffer; the digest equals the fold of the allocating builder's bytes,
+    /// across a key longer than the kept capacity and short keys after it.
+    #[test]
+    fn property_witness_scratch_folds_the_same_bytes() {
+        let mut core = test_interpreter();
+        let long_name = "k".repeat(1_000);
+        let long = RuntimePropertyKey::String(JsString::from(long_name.as_str()));
+        let short = RuntimePropertyKey::String(JsString::from("x"));
+        let mut expected = core.nondeterminism_trace.deterministic_witness;
+        for (key, object_id, depth) in [
+            (&short, ObjectId(3), 0),
+            (&long, ObjectId(4), 2),
+            (&short, ObjectId(5), 1),
+        ] {
+            core.capture_property_resolution_found(key, object_id, depth);
+            expected.fold(
+                NondeterminismSource::PropertyResolution,
+                &property_resolution_found_payload(key, object_id, depth),
+            );
+        }
+        assert_eq!(core.nondeterminism_trace.deterministic_witness, expected);
+        assert_eq!(expected.event_count, 3);
+        assert!(core.property_witness_scratch.capacity() <= PROPERTY_WITNESS_SCRATCH_MAX_CAPACITY);
+    }
+
     #[test]
     fn runtime_property_diagnostics_are_injective_bd_b12xs_5() {
         let empty = RuntimePropertyKey::String(JsString::from(""));
@@ -158577,6 +158688,63 @@ mod tests {
                 name: "bd_0k19b_missing".to_string(),
             }),
             Some("ReferenceError")
+        );
+    }
+
+    /// bd-9vouw.487: LoadName of a name the scope chain resolves carries the
+    /// label the cell holds (as LoadScoped of the same cell does); it used to
+    /// write the value under the destination register's previous label.
+    #[test]
+    fn load_name_of_a_scope_cell_carries_the_cell_label() {
+        let module = test_module_with_pool(
+            vec![
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 0,
+                    kind: BindingKind::Var as u8,
+                },
+                Ir3Instruction::StoreScoped {
+                    src: 0,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::LoadName {
+                    dst: 1,
+                    name_pool_index: 0,
+                    allow_missing: false,
+                },
+                Ir3Instruction::LoadScoped {
+                    dst: 2,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec!["bd_9vouw_487_cell".to_string()],
+        );
+        let mut core = test_interpreter();
+        core.mutate_registers(|registers| registers[0] = Value::Int(42));
+        core.set_register_label(0, Label::Secret)
+            .expect("source label should be settable");
+        // Both destinations start strictly below Secret: a read that keeps
+        // the destination's label leaves them Public.
+        core.set_register_label(1, Label::Public)
+            .expect("LoadName destination label should be settable");
+        core.set_register_label(2, Label::Public)
+            .expect("LoadScoped destination label should be settable");
+        core.execute(&module).expect("scope cell round trip");
+
+        assert_eq!(core.read_reg(1).expect("LoadName value"), Value::Int(42));
+        assert_eq!(
+            core.get_register_label(1).expect("LoadName label"),
+            &Label::Secret,
+            "LoadName carries the cell's label"
+        );
+        assert_eq!(
+            core.get_register_label(2).expect("LoadScoped label"),
+            &Label::Secret,
+            "LoadScoped of the same cell (the reference behaviour)"
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
         );
     }
 

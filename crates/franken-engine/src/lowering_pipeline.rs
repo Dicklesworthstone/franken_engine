@@ -35914,6 +35914,7 @@ fn straight_line_stack_effect(op: &Ir1Op, binding_id: BindingId) -> Option<(usiz
 ///   `arr[i]`, `i < arr.length`), whose result register is never a
 ///   binding's (pure_op_result_register's floor, or a fresh register);
 /// - a property write taking it as its object or key (`o.n = o.n + 1`).
+///
 /// A register binding is written only by its own ops (a closure's is
 /// scoped), so the register still holds the value read: a method call's
 /// receiver local (stored once, before the method lookup), `f(x)` of a local

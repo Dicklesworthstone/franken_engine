@@ -53981,8 +53981,17 @@ impl InterpreterCore {
                     // another function's (an arrow's, a bound function's) is
                     // an ordinary own property, as in function_own_get
                     // (bd-9vouw.277).
+                    let authoritative_standard_backing = self
+                        .authoritative_standard_constructor_backing(
+                            module,
+                            &obj_val,
+                            &property_key,
+                        )?;
                     let mut inherited_function_standard = None;
                     let function_backing = match &obj_val {
+                        _ if authoritative_standard_backing.is_some() => {
+                            authoritative_standard_backing
+                        }
                         Value::Function(_)
                         | Value::Closure(_)
                         | Value::GeneratorFunction(_)
@@ -54056,13 +54065,17 @@ impl InterpreterCore {
                         value
                     } else if let Some(backing) = function_backing {
                         self.run_pre_runtime_property_access_hook(module, backing, &property_key)?;
-                        self.proxy_aware_get_runtime_property(
-                            Some(module),
-                            backing,
-                            &property_key,
-                            obj_val.clone(),
-                            0,
-                        )?
+                        if authoritative_standard_backing.is_some() {
+                            self.get_v(module, &obj_val, &property_key)?
+                        } else {
+                            self.proxy_aware_get_runtime_property(
+                                Some(module),
+                                backing,
+                                &property_key,
+                                obj_val.clone(),
+                                0,
+                            )?
+                        }
                     } else {
                         match obj_val {
                             Value::Object(oid) => {
@@ -54560,7 +54573,14 @@ impl InterpreterCore {
                     // string and Symbol keys while respecting shadowing.
                     // bd-9vouw.17: a function's backing object is the owner of
                     // its own properties, so their stored labels join too.
-                    if let Some(owner) = object_id.or(function_backing).or(primitive_owner) {
+                    // The authoritative constructor path records the actual
+                    // resolved owner's label during [[Get]]. Its storage's
+                    // implicit Object.prototype chain is not the function's
+                    // chain and must not override a Public shadow.
+                    if let Some(owner) = object_id
+                        .or(function_backing.filter(|_| authoritative_standard_backing.is_none()))
+                        .or(primitive_owner)
+                    {
                         let stored_label = self.runtime_property_label(owner, &property_key);
                         result_label = self
                             .join_owned_label_with_temporary_budget(result_label, &stored_label)?;
@@ -58764,6 +58784,26 @@ impl InterpreterCore {
         function: &Value,
         key: &RuntimePropertyKey,
     ) -> Result<bool, InterpreterError> {
+        if let Some(backing) =
+            self.authoritative_standard_constructor_backing(module, function, key)?
+        {
+            if self
+                .heap
+                .get(backing.0 as usize)
+                .is_some_and(|object| object.contains_own_runtime_property(key))
+            {
+                return Ok(true);
+            }
+            return match self.function_value_prototype(Some(module), function)? {
+                Value::Object(prototype) => {
+                    self.proxy_aware_has_runtime_property(Some(module), prototype, key, 0)
+                }
+                prototype if prototype.is_callable() => {
+                    self.function_has_property(module, &prototype, key)
+                }
+                _ => Ok(false),
+            };
+        }
         // A callable proxy and %Function.prototype% have complete property
         // chains on their backing objects (bd-9vouw.132, bd-9vouw.346).
         if let Value::BuiltinFunction(builtin) = function
@@ -63126,6 +63166,20 @@ impl InterpreterCore {
             if let Some(val) = property_value {
                 // Capture property resolution success for deterministic replay
                 self.capture_property_resolution_found(key, id, depth);
+                // A materialized constructor walks its actual function
+                // prototype, while its own storage has an ordinary object's
+                // implicit chain. Preserve the label of this resolved owner
+                // before a getter runs or throws (bd-9vouw.366).
+                if let Some(module) = module
+                    && self
+                        .authoritative_standard_constructor_backing(module, &receiver, key)?
+                        .is_some()
+                {
+                    let label = self.runtime_property_label(id, key);
+                    if label != Label::Public {
+                        self.join_into_pending_hostcall_result_label(Some(label))?;
+                    }
+                }
                 return self.resolve_accessor_get(module, val, receiver);
             }
             // RegExp.prototype.global, Map.prototype.size, ...: accessors the
@@ -63232,7 +63286,16 @@ impl InterpreterCore {
         };
         // Consult virtual function prototypes only after real own/inherited
         // properties, including an explicitly stored undefined, have won.
+        // Materialized constructors already walk their actual prototype;
+        // a custom parent must not acquire Function.prototype's members.
+        let authoritative_standard_backing = match module {
+            Some(module) => {
+                self.authoritative_standard_constructor_backing(module, &receiver, key)?
+            }
+            None => None,
+        };
         if receiver.is_callable()
+            && authoritative_standard_backing.is_none()
             && !matches!(&receiver, Value::BuiltinFunction(builtin)
                 if builtin.kind == BuiltinFunctionKind::FunctionPrototype)
             && let Some(value) = Self::function_prototype_property(key_text)
@@ -67471,6 +67534,32 @@ impl InterpreterCore {
         receiver: Value,
         depth: u32,
     ) -> Result<Option<Value>, InterpreterError> {
+        if let Some(backing) =
+            self.authoritative_standard_constructor_backing(module, function, key)?
+        {
+            if self
+                .heap
+                .get(backing.0 as usize)
+                .is_some_and(|object| object.contains_own_runtime_property(key))
+            {
+                return self
+                    .proxy_aware_get_runtime_property(Some(module), backing, key, receiver, depth)
+                    .map(Some);
+            }
+            let prototype = self.function_value_prototype(Some(module), function)?;
+            return if matches!(prototype, Value::Null) {
+                Ok(Some(Value::Undefined))
+            } else {
+                self.get_v_with_receiver(
+                    module,
+                    &prototype,
+                    key,
+                    receiver,
+                    depth.saturating_add(1),
+                )
+                .map(Some)
+            };
+        }
         let name_or_length = matches!(key.as_str(), Some("name" | "length"));
         // `prototype` has dedicated storage only on a function that has an
         // intrinsic one; another function's is an ordinary own property
@@ -110726,6 +110815,29 @@ impl InterpreterCore {
         keys
     }
 
+    /// A materialized standard constructor owns its initial statics and all
+    /// later writes. Deleted members continue on its actual [[Prototype]]
+    /// instead of being synthesized again (bd-9vouw.366). RegExp's legacy
+    /// statics retain their dynamic match-state path; they are not seeded
+    /// on the ordinary property backing.
+    fn authoritative_standard_constructor_backing(
+        &self,
+        module: &Ir3Module,
+        function: &Value,
+        key: &RuntimePropertyKey,
+    ) -> Result<Option<ObjectId>, InterpreterError> {
+        let Value::BuiltinFunction(builtin) = function else {
+            return Ok(None);
+        };
+        if builtin.kind != BuiltinFunctionKind::StandardConstructor
+            || (&*builtin.module_specifier == "RegExp"
+                && key.as_str().is_some_and(is_legacy_regexp_static))
+        {
+            return Ok(None);
+        }
+        self.function_own_property_object(module, function)
+    }
+
     /// bd-9vouw.17: members of a first-class standard constructor value.
     fn standard_constructor_property(
         &mut self,
@@ -139608,6 +139720,67 @@ mod async_runtime_tests_current {
             &crate::ifc_artifacts::Label::Secret,
             "GetProperty join must not lower a dst that already holds higher taint"
         );
+    }
+
+    #[test]
+    fn materialized_constructor_reads_preserve_actual_prototype_labels() {
+        for key in [
+            RuntimePropertyKey::String(JsString::from("inherited")),
+            RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id()),
+        ] {
+            for (inherited_label, shadowed_label) in [
+                (Label::Secret, Label::Public),
+                (Label::Public, Label::Secret),
+            ] {
+                let module = test_module_with_functions(
+                    vec![
+                        Ir3Instruction::GetProperty {
+                            obj: 0,
+                            key: 1,
+                            dst: 2,
+                        },
+                        Ir3Instruction::Halt,
+                    ],
+                    vec![],
+                );
+                let mut core = test_interpreter();
+                let constructor =
+                    Value::BuiltinFunction(BuiltinFunction::standard_constructor("Object"));
+                core.ensure_function_own_property_object(&module, &constructor)
+                    .expect("constructor storage should allocate")
+                    .expect("standard constructor has property storage");
+                let function_prototype = core
+                    .ensure_builtin_prototype("Function")
+                    .expect("Function.prototype should allocate");
+                let object_prototype = core
+                    .ensure_builtin_prototype("Object")
+                    .expect("Object.prototype should allocate");
+                core.set_object_runtime_property(object_prototype, key.clone(), Value::Int(7))
+                    .expect("shadowed property should be writable");
+                core.set_own_runtime_property_label(object_prototype, &key, &shadowed_label)
+                    .expect("shadowed property label should be settable");
+                core.set_object_runtime_property(function_prototype, key.clone(), Value::Int(41))
+                    .expect("inherited property should be writable");
+                core.set_own_runtime_property_label(function_prototype, &key, &inherited_label)
+                    .expect("inherited property label should be settable");
+                core.write_reg_with_label(0, constructor, Label::Public)
+                    .expect("constructor register should fit");
+                core.write_reg_with_label(1, key.value(), Label::Public)
+                    .expect("key register should fit");
+                core.write_reg_with_label(2, Value::Undefined, Label::Public)
+                    .expect("destination register should fit");
+
+                core.execute(&module)
+                    .expect("inherited constructor property read should execute");
+
+                assert_eq!(core.read_reg(2).unwrap(), Value::Int(41));
+                assert_eq!(
+                    core.get_register_label(2).unwrap(),
+                    &inherited_label,
+                    "the resolved Function.prototype property supplies the label, including a Public shadow"
+                );
+            }
+        }
     }
 
     #[test]

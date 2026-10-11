@@ -119,6 +119,15 @@ jobs:
             --test object_json_globals_bd9a8cz2 \
             -- --nocapture --test-threads=1
 
+      - name: Verify labels on inherited constructor properties
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --no-default-features -p frankenengine-engine --lib \
+            materialized_constructor_reads_preserve_actual_prototype_labels \
+            -- --nocapture --test-threads=1
+
       - name: Confirm tracked sources and manifests remain unchanged
         if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         shell: bash

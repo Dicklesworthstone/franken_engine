@@ -13612,6 +13612,10 @@ fn lower_ir2_to_ir3_with_input_hash(
         });
     }
 
+    // Publish the optimized names before the capability scan reads them.
+    // Keeping the pool local until afterward hides every LoadName capability.
+    ir3.constant_pool = constant_pool.into_vec();
+
     // Function-body `HostCall`s (e.g. `Symbol.iterator` / `new Error()`
     // used inside a function) are emitted by the per-function lowering above and
     // are NOT recorded in `required_capabilities` by the module-level pass. Scan
@@ -13624,19 +13628,24 @@ fn lower_ir2_to_ir3_with_input_hash(
             Ir3Instruction::HostCall { capability, .. } => {
                 required_capabilities.insert(capability.0.clone());
             }
-            // A timer global read as a value (`const st = setTimeout;
-            // st(fn, 5)`) is called through its first-class builtin value,
-            // which needs the timer capability as a direct call does.
-            // Lexical bindings named like a timer load via LoadScoped.
+            // Calls through first-class timer and standard builtin values
+            // need the same authority as the corresponding direct HostCall.
+            // Inspect function bodies too; lexical shadows use LoadScoped.
             Ir3Instruction::LoadName {
                 name_pool_index, ..
-            } if ir3
-                .constant_pool
-                .get(*name_pool_index as usize)
-                .and_then(JsString::as_str)
-                .is_some_and(|name| timer_global_capability(name).is_some()) =>
-            {
-                required_capabilities.insert("timer".to_string());
+            } => {
+                if let Some(name) = ir3
+                    .constant_pool
+                    .get(*name_pool_index as usize)
+                    .and_then(JsString::as_str)
+                {
+                    if timer_global_capability(name).is_some() {
+                        required_capabilities.insert("timer".to_string());
+                    }
+                    if has_mutable_static_builtins(name) {
+                        required_capabilities.insert("builtin".to_string());
+                    }
+                }
             }
             _ => {}
         }
@@ -13646,9 +13655,6 @@ fn lower_ir2_to_ir3_with_input_hash(
         .into_iter()
         .map(CapabilityTag)
         .collect();
-
-    // Transfer optimized constant pool back to ir3 module
-    ir3.constant_pool = constant_pool.into_vec();
 
     verify_ir3_specialization(&ir3).map_err(lowering_error_from_ir_error)?;
 
@@ -15253,6 +15259,95 @@ fn lower_spread_apply_hostcall_to_ir1(
         capability: format!("{APPLY_HOSTCALL_TARGET_PREFIX}{capability}"),
         arg_count: 2,
     });
+    Ok(())
+}
+
+/// Resolve a method reference before evaluating its arguments. Standard
+/// builtin properties are mutable, so they share this ordinary member-call
+/// path with user objects instead of selecting a native callee at compile time.
+#[allow(clippy::too_many_arguments)]
+fn lower_member_call_to_ir1(
+    object: &Expression,
+    property: &Expression,
+    computed: bool,
+    arguments: &[Expression],
+    ops: &mut Vec<Ir1Op>,
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    root_scope_id: ScopeId,
+    label_counter: &mut u32,
+    span_table: &mut Vec<Ir1OpSpanEntry>,
+) -> Result<(), LoweringPipelineError> {
+    if stages_argument_array(arguments) {
+        return lower_member_spread_call_to_reflect_apply(
+            object,
+            property,
+            computed,
+            arguments,
+            ops,
+            bindings,
+            binding_lookup,
+            binding_index,
+            root_scope_id,
+            label_counter,
+            span_table,
+        );
+    }
+    let arg_count =
+        u32::try_from(arguments.len()).map_err(|_| LoweringPipelineError::TooManyArguments {
+            count: arguments.len(),
+            max: u32::MAX as usize,
+        })?;
+    lower_expression_to_ir1(
+        object,
+        ops,
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
+        label_counter,
+        span_table,
+    )?;
+    let receiver_binding = alloc_internal_binding(
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
+        "method_receiver",
+    )?;
+    ops.push(Ir1Op::StoreBinding {
+        binding_id: receiver_binding,
+    });
+    // StoreBinding leaves the receiver on the stack for GetProperty.
+    let key = lower_member_property_key_to_ir1(
+        property,
+        computed,
+        ops,
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
+        label_counter,
+        span_table,
+    )?;
+    ops.push(Ir1Op::GetProperty { key });
+    ops.push(Ir1Op::LoadBinding {
+        binding_id: receiver_binding,
+    });
+    for argument in arguments {
+        lower_expression_to_ir1(
+            argument,
+            ops,
+            bindings,
+            binding_lookup,
+            binding_index,
+            root_scope_id,
+            label_counter,
+            span_table,
+        )?;
+    }
+    ops.push(Ir1Op::CallMethod { arg_count });
     Ok(())
 }
 
@@ -17919,6 +18014,31 @@ fn lower_expression_to_ir1_inner(
                 });
                 return Ok(());
             }
+            // bd-9vouw.366: read the live property before the argument list.
+            // A replaced method, getter, or saved native alias must retain
+            // the same behavior as an ordinary JavaScript member reference.
+            if let Expression::Member {
+                object,
+                property,
+                computed,
+                ..
+            } = callee.as_ref()
+                && is_mutable_static_builtin_receiver(object, binding_lookup)
+            {
+                return lower_member_call_to_ir1(
+                    object,
+                    property,
+                    *computed,
+                    arguments,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                    span_table,
+                );
+            }
             if let Expression::Member {
                 object,
                 property,
@@ -19418,84 +19538,27 @@ fn lower_expression_to_ir1_inner(
                 return Ok(());
             }
 
-            // Detect method calls: obj.method(args) → CallMethod with receiver
-            let is_method = matches!(callee.as_ref(), Expression::Member { .. });
-            if is_method {
-                if let Expression::Member {
+            // Detect method calls: obj.method(args) → CallMethod with receiver.
+            if let Expression::Member {
+                object,
+                property,
+                computed,
+                ..
+            } = callee.as_ref()
+            {
+                lower_member_call_to_ir1(
                     object,
                     property,
-                    computed,
-                    ..
-                } = callee.as_ref()
-                {
-                    // Push receiver (object) first
-                    lower_expression_to_ir1(
-                        object,
-                        ops,
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        root_scope_id,
-                        label_counter,
-                        span_table,
-                    )?;
-                    // Push the method (GetProperty on the object)
-                    // We need to duplicate the object ref for GetProperty
-                    // Store object in a temp binding
-                    let receiver_binding = alloc_internal_binding(
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        root_scope_id,
-                        "method_receiver",
-                    )?;
-                    ops.push(Ir1Op::StoreBinding {
-                        binding_id: receiver_binding,
-                    });
-                    // Object is still on stack from StoreBinding (it pushes back)
-                    // GetProperty pops object and pushes property value
-                    let key = lower_member_property_key_to_ir1(
-                        property,
-                        *computed,
-                        ops,
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        root_scope_id,
-                        label_counter,
-                        span_table,
-                    )?;
-                    ops.push(Ir1Op::GetProperty { key });
-                    // GetProperty consumed the receiver; the stack now holds
-                    // only the resolved method value for this call.
-                    // Push receiver again for CallMethod
-                    ops.push(Ir1Op::LoadBinding {
-                        binding_id: receiver_binding,
-                    });
-                    // Push args
-                    for arg in arguments {
-                        lower_expression_to_ir1(
-                            arg,
-                            ops,
-                            bindings,
-                            binding_lookup,
-                            binding_index,
-                            root_scope_id,
-                            label_counter,
-                            span_table,
-                        )?;
-                    }
-                    let arg_count = arguments.len();
-                    if arg_count > u32::MAX as usize {
-                        return Err(LoweringPipelineError::TooManyArguments {
-                            count: arg_count,
-                            max: u32::MAX as usize,
-                        });
-                    }
-                    ops.push(Ir1Op::CallMethod {
-                        arg_count: arg_count as u32,
-                    });
-                }
+                    *computed,
+                    arguments,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                    span_table,
+                )?;
             } else {
                 lower_expression_to_ir1(
                     callee,
@@ -19642,6 +19705,35 @@ fn lower_expression_to_ir1_inner(
                     capability,
                     arg_count: 0,
                 });
+                return Ok(());
+            }
+
+            // bd-9vouw.366: value reads and direct calls observe the same
+            // mutable property. Intrinsic prototype reads above retain their
+            // canonical identity; ordinary static members use runtime Get.
+            if is_mutable_static_builtin_receiver(object, binding_lookup) {
+                lower_expression_to_ir1(
+                    object,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                    span_table,
+                )?;
+                let key = lower_member_property_key_to_ir1(
+                    property,
+                    *computed,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                    span_table,
+                )?;
+                ops.push(Ir1Op::GetProperty { key });
                 return Ok(());
             }
 
@@ -30147,6 +30239,24 @@ fn global_function_call_capability(
 /// will exercise exactly as a direct call would; the runtime call of the value
 /// then passes the ordinary hostcall capability gate.
 pub(crate) const STATIC_VALUE_CAPABILITY_PREFIX: &str = "builtin:static-value:";
+
+/// These standard constructors and namespace objects have real runtime
+/// bindings and mutable static properties. Source member operations must
+/// resolve their live properties; internal native HostCalls stay explicit.
+fn has_mutable_static_builtins(name: &str) -> bool {
+    matches!(
+        name,
+        "Object" | "Array" | "String" | "Number" | "JSON" | "Reflect"
+    )
+}
+
+fn is_mutable_static_builtin_receiver(
+    object: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    matches!(object, Expression::Identifier(name)
+        if has_mutable_static_builtins(name) && !is_lexically_shadowed(binding_lookup, name))
+}
 
 /// Bare global functions that read as first-class values.
 pub(crate) const GLOBAL_FUNCTION_VALUE_NAMES: [&str; 13] = [
@@ -41338,7 +41448,7 @@ mod tests {
                 "querystring_0010",
                 "const qs = require('querystring'); const value = { foo: 'bar', baz: 'qux' }; console.log(Object.keys(value).join(',')); console.log(qs.stringify(value));",
                 "stringify",
-                vec![Label::Public, Label::Internal],
+                vec![Label::Internal, Label::Internal],
             ),
             (
                 "querystring_0013",
@@ -41356,10 +41466,17 @@ mod tests {
 
             assert!(
                 ir1.ops.iter().any(|op| matches!(op,
-                    Ir1Op::HostCall { capability, arg_count: 1 }
+                    Ir1Op::GetProperty { key: Ir1PropertyKey::Static(key) }
+                        if key.as_str() == Some("keys")
+                )),
+                "{name} must resolve the mutable Object.keys property"
+            );
+            assert!(
+                !ir1.ops.iter().any(|op| matches!(op,
+                    Ir1Op::HostCall { capability, .. }
                         if capability == "builtin:ObjectKeys"
                 )),
-                "{name} must retain the Object.keys operation"
+                "{name} must not authenticate a replaceable method as an intrinsic"
             );
             // bd-305gi: querystring's first-class object replaces the direct
             // call recognizer. Read the actual, potentially replaced method.
@@ -41437,11 +41554,11 @@ mod tests {
     }
 
     #[test]
-    fn object_keys_join_stays_finite_over_callable_aggregates_bd_lmchj() {
-        // A literal aggregate holding summarized callables keeps structural
-        // key-name finiteness: keys() never reads property values, so the
-        // callable contents cannot disclose labels through the produced key
-        // array or its immediate authenticated `.join`.
+    fn object_keys_join_keeps_mutable_provenance_over_callable_aggregates_bd_lmchj() {
+        // Source Object.keys resolves a mutable method even for a literal
+        // aggregate. Its call can execute guest code, so retain the program's
+        // Internal bound. The authenticated native Public contract is covered
+        // by object_keys_join_keeps_finite_own_key_provenance_bd_n8eta.
         let callable_source = "function f() { return 5; } const o = { a: 1, g: f }; console.log(Object.keys(o).join('|'));";
         let tree = crate::parser_api_stability::parse_script(callable_source)
             .expect("callable aggregate source parses");
@@ -41462,7 +41579,7 @@ mod tests {
             })
             .and_then(|op| op.flow.as_ref())
             .expect("callable aggregate console flow");
-        assert_eq!(console_flow.data_label, Label::Public);
+        assert_eq!(console_flow.data_label, Label::Internal);
         assert!(
             !console_flow.declassification_required,
             "callable aggregate keys().join must not require declassification"
@@ -41709,10 +41826,12 @@ mod tests {
 
         for (name, source, expected_console_count, expected_label) in [
             (
-                "callable_only_catch",
+                // The source property can be replaced with a guest constructor;
+                // only the explicit native factory proves callable-only shape.
+                "mutable_callable_catch",
                 "const probe=(Array.isArray); let outcome='unset'; try { new probe([]); outcome='constructed'; } catch (error) { outcome='caught'; } console.log(outcome); console.log('alive:' + probe([]));",
                 2,
-                Label::Public,
+                Label::Internal,
             ),
             (
                 "function_constructor",

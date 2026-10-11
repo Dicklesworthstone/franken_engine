@@ -526,12 +526,10 @@ impl InterpreterCore {
                 return Ok(parent);
             }
             if let Some(backing) = self.function_own_property_object(module, function)?
-                && let Some(prototype) = self
-                    .heap
-                    .get(backing.0 as usize)
-                    .and_then(|object| object.prototype)
+                && let Some(object) = self.heap.get(backing.0 as usize)
+                && (object.prototype.is_some() || object.is_null_prototype)
             {
-                return Ok(self.prototype_value_for_link(Some(module), Some(prototype)));
+                return Ok(self.prototype_value_for_link(Some(module), object.prototype));
             }
         }
         // ES2020 22.2.5: every concrete typed array constructor's

@@ -1,21 +1,23 @@
-//! bd-9vouw.486: loops and ifs run no dead, copy or redundant jump
+//! bd-9vouw.486: loops and ifs run no dead, copy or redundant jump or try
 //! instructions: no load of the `1` of `++`/`--` (IR1 pushes it, no lowering
 //! of the update reads it), no copy of a register binding that is the right
 //! operand of a compound assignment (`s += i` reads `i`'s register, as
 //! bd-9vouw.330 does for operators, now also at top level), no top-level
 //! completion Move for a loop test or a for update, loops that test at the
-//! bottom so an iteration ends in one conditional jump back to the body, and
-//! `if (!x)` / `if (a === b)` branching on the exact negation in one jump.
-//! The first test checks values where those matter: updates of register,
-//! captured and top-level bindings as statements and as values, BigInt,
-//! string and valueOf operands, compound operators of every kind, a binding
-//! used on both sides (`x += x`, `u += u * 2`, `h = h + h * 2`, `v = v * v`),
-//! and the read-then-write hazards (`x -= (x = 5)`, `y += y++`, `z *= ++z`).
-//! Node v22.2.0 and Bun 1.4.2 print the line, as did the release frankenctl
-//! of rc-next59 (fctl_abp_53ef3d835) before this change. Others check loop
-//! control flow, negated if tests and the completion value of a loop (Node's
-//! vm.runInNewContext: undefined and 30; that frankenctl reported 2 and 3,
-//! the last update's value). The last three check the instructions.
+//! bottom so an iteration ends in one conditional jump back to the body,
+//! `if (!x)` / `if (a === b)` branching on the exact negation in one jump,
+//! and no iterator-closing try region around a for-of head that is a fresh
+//! let/const identifier. The first test checks values where those matter:
+//! updates of register, captured and top-level bindings as statements and as
+//! values, BigInt, string and valueOf operands, compound operators of every
+//! kind, a binding used on both sides (`x += x`, `u += u * 2`,
+//! `h = h + h * 2`, `v = v * v`), and the read-then-write hazards
+//! (`x -= (x = 5)`, `y += y++`, `z *= ++z`). Node v22.2.0 and Bun 1.4.2 print
+//! the line, as did the release frankenctl of rc-next59 (fctl_abp_53ef3d835)
+//! before this change. Others check loop control flow, negated if tests,
+//! for-of iterator closing and binding, and the completion value of a loop
+//! (Node's vm.runInNewContext: undefined and 30; that frankenctl reported 2
+//! and 3, the last update's value). The rest check the instructions.
 
 use frankenengine_engine::HybridRouter;
 use frankenengine_engine::ast::ParseGoal;
@@ -123,6 +125,39 @@ console.log(out.join(' '));
     assert_eq!(
         lines,
         ["fffffffftttttttddgt 1,3,4,6,7,10,11,12,13 vv abneabNEa 105,15 xzne"]
+    );
+}
+
+/// A for-of whose head is a fresh let/const identifier runs no head region
+/// that would close the iterator: the iterator is still closed (return())
+/// on break, on a body throw and on a throwing destructuring head, not when
+/// next() throws; assigning a const as the head throws a TypeError and
+/// closes it; each iteration's binding is captured fresh; strings and Maps.
+/// Node v22.2.0 and the release frankenctl of rc-next59 print the line (Bun
+/// 1.4.3 rejects `for (k of ...)` on a const k at parse time).
+#[test]
+fn for_of_heads_close_and_bind_as_before() {
+    let source = r#"var out = [];
+function iter(n, log, failNextAt) { let i = 0; return { [Symbol.iterator]() { return this; }, next() { if (i === failNextAt) throw new Error('next'); return i < n ? { value: i++, done: false } : { value: undefined, done: true }; }, return() { log.push('R'); return {}; } }; }
+function closes() { const log = []; let s = 0; for (const x of iter(5, log)) { if (x === 2) break; s += x; } log.push(s); try { for (let x of iter(5, log)) { if (x === 1) throw new Error('body'); } } catch (e) { log.push(e.message); } try { for (const [a, b] of iter(3, log)) {} } catch (e) { log.push(e.constructor.name); } try { for (const x of iter(5, log, 2)) {} } catch (e) { log.push(e.message); } return log.join(','); }
+function constHead() { const log = []; const k = 7; try { for (k of iter(3, log)) {} } catch (e) { log.push(e.constructor.name); } return log.join(',') + ':' + k; }
+function captures() { const fs = []; for (const x of [1, 2, 3]) fs.push(() => x); let total = 0; for (let y of [10, 20]) { y += 1; total += y; } return fs.map(f => f()).join('') + ':' + total; }
+function strings() { let s = ''; for (const ch of 'hé😀') s += '[' + ch + ']'; let m = 0; for (const [k, v] of new Map([['a', 1], ['b', 2]])) m += v; return s + m; }
+out.push(closes(), constHead(), captures(), strings());
+let top = 0; for (const v of [5, 6, 7]) top += v; out.push(top);
+console.log(out.join(' '));
+"#;
+    let outcome = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"));
+    let lines: Vec<&str> = outcome
+        .console_output
+        .iter()
+        .map(|entry| entry.message.as_str())
+        .collect();
+    assert_eq!(
+        lines,
+        ["R,1,R,body,R,TypeError,next R,TypeError:7 123:32 [h][é][😀]3 18"]
     );
 }
 
@@ -344,4 +379,55 @@ fn equality_and_not_tests_branch_in_one_jump() {
                 .any(|instruction| matches!(instruction, Ir3Instruction::Jump { .. })),
         "{lt:?}"
     );
+}
+
+/// The try regions inside one for-of iteration: from its ForOfNext through
+/// the Jump back to it.
+fn for_of_iteration_try_regions(instructions: &[Ir3Instruction]) -> usize {
+    let next = instructions
+        .iter()
+        .position(|instruction| matches!(instruction, Ir3Instruction::ForOfNext { .. }))
+        .unwrap_or_else(|| panic!("no ForOfNext: {instructions:?}"));
+    let back = instructions
+        .iter()
+        .position(|instruction| {
+            matches!(instruction, Ir3Instruction::Jump { target } if *target as usize == next)
+        })
+        .unwrap_or_else(|| panic!("no back jump: {instructions:?}"));
+    instructions[next..back]
+        .iter()
+        .filter(|instruction| matches!(instruction, Ir3Instruction::BeginTry { .. }))
+        .count()
+}
+
+#[test]
+fn a_fresh_for_of_head_runs_no_try_region() {
+    for (source, regions) in [
+        // The body's region only.
+        (
+            "function g(a) { let s = 0; for (const x of a) s += x; return s; }",
+            1,
+        ),
+        (
+            "function g(a) { let s = 0; for (let x of a) s += x; return s; }",
+            1,
+        ),
+        // A destructuring head can throw (`null` has no x): it keeps its
+        // region.
+        (
+            "function g(a) { let s = 0; for (const { x } of a) s += x; return s; }",
+            2,
+        ),
+        // So does an assignment to an existing binding.
+        (
+            "function g(a) { let s = 0, x; for (x of a) s += x; return s; }",
+            2,
+        ),
+    ] {
+        assert_eq!(
+            for_of_iteration_try_regions(&lowered(source)),
+            regions,
+            "{source}"
+        );
+    }
 }

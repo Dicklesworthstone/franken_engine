@@ -6314,15 +6314,28 @@ fn lower_statement_to_ir1_with_flow(
             ops.push(Ir1Op::ForOfNext {
                 done_label: end_label,
             });
+            // Initializing a fresh let/const binding of a plain identifier
+            // cannot throw, so that head needs no region closing the iterator
+            // (bd-9vouw.486: two instructions per iteration). An assignment
+            // to an existing binding can (`const x = 0; for (x of a)` is a
+            // TypeError), as can a destructuring or an unresolved name.
+            let head_can_throw = !(matches!(for_of_stmt.binding, BindingPattern::Identifier(_))
+                && matches!(
+                    for_of_stmt.binding_kind,
+                    Some(VariableDeclarationKind::Let | VariableDeclarationKind::Const)
+                ));
             // IteratorStep/IteratorValue failures do not close the iterator.
             // Begin the head protected region only once a yielded value exists.
-            ops.push(Ir1Op::BeginTry {
-                catch_label: throw_close_label,
-                // Route directly to a finally-style handler. Unlike a catch,
-                // this preserves the pending exception for EndFinally instead
-                // of materializing it as a new user-value Throw.
-                finally_label: Some(throw_close_label),
-            });
+            if head_can_throw {
+                ops.push(Ir1Op::BeginTry {
+                    catch_label: throw_close_label,
+                    // Route directly to a finally-style handler. Unlike a
+                    // catch, this preserves the pending exception for
+                    // EndFinally instead of materializing it as a new
+                    // user-value Throw.
+                    finally_label: Some(throw_close_label),
+                });
+            }
 
             // Bind the yielded value to the loop variable.
             let bid = match for_of_stmt.binding_kind {
@@ -6451,7 +6464,9 @@ fn lower_statement_to_ir1_with_flow(
                     None,
                 )?;
             }
-            ops.push(Ir1Op::EndTry);
+            if head_can_throw {
+                ops.push(Ir1Op::EndTry);
+            }
 
             // A body throw and a function return carry different completion
             // precedence through IteratorClose. The runtime already routes a

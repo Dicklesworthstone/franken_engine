@@ -114,9 +114,83 @@ impl StringifyState {
         Ok(())
     }
 
+    /// Append ASCII into already charged capacity. A normal push starts each
+    /// batch, so allocation, cancellation/work and size-limit boundaries keep
+    /// the scalar writer's exact order. The bulk suffix crosses none of them.
+    fn ascii(
+        &mut self,
+        core: &mut InterpreterCore,
+        mut bytes: &[u8],
+    ) -> Result<(), InterpreterError> {
+        debug_assert!(bytes.is_ascii());
+        while let Some((&first, rest)) = bytes.split_first() {
+            self.push(core, u16::from(first))?;
+            bytes = rest;
+            let remainder = self.output.len() % 256;
+            let until_checkpoint = if remainder == 0 { 0 } else { 256 - remainder };
+            let available = self.output.capacity() - self.output.len();
+            let below_limit = core
+                .config
+                .max_string_size
+                .saturating_sub(self.projection_bytes);
+            let count = bytes
+                .len()
+                .min(available)
+                .min(until_checkpoint)
+                .min(below_limit);
+            // ASCII contributes exactly one projected byte, even following a
+            // high surrogate. No reserve occurs: these slots are already paid.
+            for &byte in &bytes[..count] {
+                self.output.push(u16::from(byte));
+            }
+            self.projection_bytes += count;
+            bytes = &bytes[count..];
+        }
+        Ok(())
+    }
+
     fn text(&mut self, core: &mut InterpreterCore, text: &str) -> Result<(), InterpreterError> {
+        // Literals, numbers and escape spellings are short. Bound the ASCII
+        // probe so a long text never introduces an unbounded checkpoint delay.
+        if text.len() <= 256 && text.is_ascii() {
+            return self.ascii(core, text.as_bytes());
+        }
         for unit in text.encode_utf16() {
             self.push(core, unit)?;
+        }
+        Ok(())
+    }
+
+    /// Quote an ASCII payload between the caller's opening/closing quotes.
+    /// Inspect at most one checkpoint interval before appending a span; a
+    /// large unescaped string never needs an uncharged whole-string scan.
+    fn quote_ascii(
+        &mut self,
+        core: &mut InterpreterCore,
+        mut bytes: &[u8],
+    ) -> Result<(), InterpreterError> {
+        while !bytes.is_empty() {
+            let window = bytes.len().min(256);
+            let plain = bytes[..window]
+                .iter()
+                .position(|&byte| byte < 0x20 || byte == b'"' || byte == b'\\')
+                .unwrap_or(window);
+            if plain != 0 {
+                self.ascii(core, &bytes[..plain])?;
+                bytes = &bytes[plain..];
+                continue;
+            }
+            match bytes[0] {
+                b'"' => self.text(core, "\\\"")?,
+                b'\\' => self.text(core, "\\\\")?,
+                0x08 => self.text(core, "\\b")?,
+                0x0c => self.text(core, "\\f")?,
+                b'\n' => self.text(core, "\\n")?,
+                b'\r' => self.text(core, "\\r")?,
+                b'\t' => self.text(core, "\\t")?,
+                byte => self.hex_escape(core, u16::from(byte))?,
+            }
+            bytes = &bytes[1..];
         }
         Ok(())
     }
@@ -143,6 +217,12 @@ impl StringifyState {
         text: &JsString,
     ) -> Result<(), InterpreterError> {
         self.push(core, u16::from(b'"'))?;
+        if text.is_ascii() {
+            // JsString caches ASCII classification; no input-sized scan here.
+            let bytes = text.as_str().expect("ASCII has an exact str view").as_bytes();
+            self.quote_ascii(core, bytes)?;
+            return self.push(core, u16::from(b'"'));
+        }
         // JSON quoting needs code units, not Unicode scalar values. Preserve
         // paired surrogates directly and escape only unpaired halves instead
         // of decoding every scalar and immediately encoding it back to UTF-16.
@@ -1188,5 +1268,184 @@ mod tests {
         );
         assert_eq!(core.pending_hostcall_result_label, Some(Label::Secret));
         assert_accounted(&core);
+    }
+
+    fn compare_text(
+        text: &str,
+        prefix: &[u16],
+        string_limit: usize,
+        work_budget: u64,
+        scratch_budget: Option<u64>,
+    ) {
+        let mut actual_core = core();
+        let mut expected_core = core();
+        let mut actual = StringifyState::default();
+        let mut expected = StringifyState::default();
+        for &unit in prefix {
+            actual.push(&mut actual_core, unit).unwrap();
+            expected.push(&mut expected_core, unit).unwrap();
+        }
+        for core in [&mut actual_core, &mut expected_core] {
+            core.config.max_string_size = string_limit;
+            core.config.instruction_budget = core.instructions_executed + work_budget;
+            if let Some(bytes) = scratch_budget {
+                core.config.max_total_memory_bytes = core.estimated_memory_bytes() + bytes;
+            }
+        }
+        let got = actual.text(&mut actual_core, text);
+        let want = reference_text(&mut expected, &mut expected_core, text);
+        assert_eq!(format!("{got:?}"), format!("{want:?}"));
+        assert_eq!(actual.output, expected.output);
+        assert_eq!(actual.projection_bytes, expected.projection_bytes);
+        assert_eq!(actual.output.capacity(), expected.output.capacity());
+        assert_eq!(actual.charged, expected.charged);
+        assert_eq!(
+            actual_core.instructions_executed,
+            expected_core.instructions_executed
+        );
+        assert_eq!(
+            actual_core.json_parse_temporary_bytes,
+            expected_core.json_parse_temporary_bytes
+        );
+        assert_eq!(
+            actual_core.estimated_memory_bytes(),
+            expected_core.estimated_memory_bytes()
+        );
+        release_test_state(&mut actual_core, actual);
+        release_test_state(&mut expected_core, expected);
+    }
+
+    #[test]
+    fn ascii_text_keeps_checkpoint_capacity_and_refusal_boundaries() {
+        for prefix_len in [0, 1, 63, 64, 127, 128, 254, 255, 256, 511] {
+            let prefix = vec![u16::from(b'p'); prefix_len];
+            for length in [0, 1, 2, 63, 64, 65, 127, 128, 255, 256, 257, 1024] {
+                let text = "a".repeat(length);
+                for limit in [0, 1, 63, 64, 65, 255, 256, 257, 511, 1024, 4096] {
+                    compare_text(&text, &prefix, limit, 100_000, None);
+                }
+                for work in [0, 1, 2, 8] {
+                    compare_text(&text, &prefix, 4096, work, None);
+                }
+                for scratch in [0, 1, 127, 128, 129, 255, 256, 257, 1024] {
+                    compare_text(&text, &prefix, 4096, 100_000, Some(scratch));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ascii_quote_batches_keep_every_escape_and_boundary_position() {
+        for position in [0, 1, 62, 63, 64, 126, 127, 128, 254, 255, 256, 511] {
+            let mut units = vec![u16::from(b'a'); position];
+            units.extend(0..128);
+            units.extend(std::iter::repeat_n(u16::from(b'z'), 513));
+            let text = JsString::from_code_units(&units);
+            assert!(text.is_ascii());
+            compare_quote(&text, &[], 4096, 100_000, None);
+            for limit in [position, position + 1, position + 2, position + 64] {
+                compare_quote(&text, &[], limit, 100_000, None);
+            }
+            for work in [0, 1, 2, 8] {
+                compare_quote(&text, &[], 4096, work, None);
+            }
+        }
+    }
+
+    #[test]
+    fn text_batching_keeps_utf16_projection_and_unicode_fallback() {
+        let high_surrogate = [0xd800];
+        for text in [
+            "",
+            "ascii",
+            "\0\n\t",
+            "é",
+            "€",
+            "😀",
+            "a😀b",
+            "\u{2028}\u{2029}",
+        ] {
+            for prefix in [&high_surrogate[..], &[][..]] {
+                for limit in 0..24 {
+                    compare_text(text, prefix, limit, 100_000, None);
+                }
+            }
+        }
+        // Both sides of the bounded text probe, followed by the non-ASCII
+        // fallback: no whole-input ASCII scan is needed for long text.
+        for length in [255, 256, 257, 2048] {
+            let text = format!("{}😀", "a".repeat(length));
+            compare_text(&text, &high_surrogate, 4096, 100_000, None);
+        }
+    }
+
+    #[test]
+    fn ascii_batches_do_not_allocate_when_paid_capacity_is_available() {
+        let mut core = core();
+        let mut state = StringifyState::default();
+        state.push(&mut core, u16::from(b'x')).unwrap();
+        let capacity = state.output.capacity();
+        let charged = state.charged;
+        core.config.max_total_memory_bytes = core.estimated_memory_bytes();
+        state.ascii(&mut core, &vec![b'a'; capacity - 1]).unwrap();
+        assert_eq!(state.output.len(), capacity);
+        assert_eq!(state.output.capacity(), capacity);
+        assert_eq!(state.charged, charged);
+        assert!(state.ascii(&mut core, b"!").is_err());
+        assert_eq!(state.output.len(), capacity);
+        assert_eq!(state.output.capacity(), capacity);
+        assert_eq!(state.charged, charged);
+        release_test_state(&mut core, state);
+    }
+
+    #[test]
+    fn long_ascii_builtin_quotes_keep_secret_result_provenance() {
+        let mut core = core();
+        let payload = "0123456789abcdef".repeat(256);
+        core.seed_register(0, Value::str(payload.clone())).unwrap();
+        core.set_register_label(0, Label::Secret).unwrap();
+        assert_eq!(
+            stringify(&mut core).unwrap(),
+            Value::str(format!("\"{payload}\""))
+        );
+        assert_eq!(core.pending_hostcall_result_label, Some(Label::Secret));
+        assert_accounted(&core);
+    }
+
+    #[test]
+    fn ascii_batches_observe_cancellation_at_the_scalar_checkpoint() {
+        for prefix_len in [0, 1, 63, 64, 255, 256, 257] {
+            let mut actual_core = core();
+            let mut expected_core = core();
+            let mut actual = StringifyState::default();
+            let mut expected = StringifyState::default();
+            for _ in 0..prefix_len {
+                actual.push(&mut actual_core, 65).unwrap();
+                expected.push(&mut expected_core, 65).unwrap();
+            }
+            let token = CancellationToken::new();
+            token.cancel();
+            actual_core.config.cancellation_token = Some(token.clone());
+            expected_core.config.cancellation_token = Some(token);
+            let text = "z".repeat(768);
+            assert!(matches!(
+                actual.quote(&mut actual_core, &JsString::from(text.clone())),
+                Err(InterpreterError::Cancelled)
+            ));
+            assert!(matches!(
+                reference_quote(&mut expected, &mut expected_core, &JsString::from(text)),
+                Err(InterpreterError::Cancelled)
+            ));
+            assert_eq!(actual.output, expected.output);
+            assert_eq!(actual.projection_bytes, expected.projection_bytes);
+            assert_eq!(actual.output.capacity(), expected.output.capacity());
+            assert_eq!(actual.charged, expected.charged);
+            assert_eq!(
+                actual_core.instructions_executed,
+                expected_core.instructions_executed
+            );
+            release_test_state(&mut actual_core, actual);
+            release_test_state(&mut expected_core, expected);
+        }
     }
 }

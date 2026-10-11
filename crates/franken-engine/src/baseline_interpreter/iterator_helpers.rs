@@ -264,7 +264,11 @@ impl InterpreterCore {
         self.iterator_helper_set(iterator, RSI_REGEXP_SLOT, regexp)?;
         self.iterator_helper_set(iterator, RSI_STRING_SLOT, Value::Str(subject))?;
         if *label != Label::Public {
-            self.set_own_property_label(iterator, RSI_STRING_SLOT, label)?;
+            self.set_own_runtime_property_label(
+                iterator,
+                &RuntimePropertyKey::String(JsString::from(RSI_STRING_SLOT)),
+                label,
+            )?;
         }
         self.iterator_helper_set(iterator, RSI_GLOBAL_SLOT, Value::Bool(global))?;
         self.iterator_helper_set(iterator, RSI_UNICODE_SLOT, Value::Bool(full_unicode))?;

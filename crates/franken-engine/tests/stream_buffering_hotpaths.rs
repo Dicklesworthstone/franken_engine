@@ -47,3 +47,11 @@ r.destroy();
 "#;
     assert_eq!(console_lines(source), "bounded");
 }
+
+#[test]
+fn buffered_writes_preserve_callbacks_backpressure_and_finish_order() {
+    assert_eq!(
+        console_lines(include_str!("fixtures/stream_buffering/buffered_writable.js")),
+        "write 2048 2048 2096128 drain,end-callback,finish"
+    );
+}

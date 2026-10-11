@@ -1638,7 +1638,10 @@
       } while (i < buffered.length && !state.writing);
       if (i === buffered.length) {
         resetBuffer(state);
-      } else if (i > 256) {
+      } else if (i > 256 && i >= buffered.length - i) {
+        // Move at most as many live entries as the prefix we just consumed.
+        // A fixed 257-write interval recopied a large backlog quadratically.
+        // Keep the existing in-place array and callback/entry identities.
         buffered.splice(0, i);
         state.bufferedIndex = 0;
       } else {

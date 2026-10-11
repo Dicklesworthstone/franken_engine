@@ -175,20 +175,112 @@ function runFixture(stream, name) {
   }, { log: (...args) => output.push(args.join(' ')) });
   return output;
 }
+async function writableProbe(stream, n, kind = 'ordinary') {
+  let release;
+  let moved = 0;
+  let compactions = 0;
+  const seen = [];
+  const callbacks = [];
+  const events = [];
+  const returns = [];
+  const writable = new stream.Writable({ objectMode: true, highWaterMark: 16,
+    write(value, encoding, callback) { seen.push(value); release = callback; },
+  });
+  writable.on('drain', () => events.push('drain'));
+  writable.on('finish', () => events.push('finish'));
+  writable.on('close', () => events.push('close'));
+  writable.on('error', error => events.push('error:' + error.message));
+  function completed(i) {
+    return error => {
+      callbacks.push([i, error ? error.message : null]);
+      if (kind === 'reentrant' && i < 20 && !error) {
+        writable.write(n + i, completed(n + i));
+      }
+    };
+  }
+  writable.cork();
+  for (let i = 0; i < n; i++) returns.push(writable.write(i, completed(i)));
+  // Observe only the array this real state machine actually compacts. Node's
+  // implementation is the observable oracle, not the subject of this counter.
+  const buffered = writable._writableState.buffered;
+  if (Array.isArray(buffered)) {
+    Object.defineProperty(buffered, 'splice', {
+      configurable: true,
+      value: function (start, count) {
+        moved += this.length - start - count;
+        compactions++;
+        return Array.prototype.splice.call(this, start, count);
+      },
+    });
+  }
+  writable.uncork();
+  let delivered = 0;
+  const expectedCount = kind === 'reentrant' ? n + 20 : n;
+  while (release) {
+    const complete = release;
+    release = undefined;
+    if (kind === 'vector' && delivered === 300) {
+      writable._writev = function (entries, callback) {
+        for (const entry of entries) seen.push(entry.chunk);
+        release = callback;
+      };
+    }
+    if (kind === 'error' && delivered === 300) {
+      complete(new Error('queue-stop'));
+      delivered++;
+      break;
+    }
+    complete();
+    delivered++;
+    if (delivered === 257 || delivered === Math.floor(n / 2)) {
+      const pending = writable.writableBuffer;
+      const firstPending = seen.length;
+      assert.deepEqual(pending.map(entry => entry.chunk),
+        Array.from({ length: n + (kind === 'reentrant' ? 20 : 0) - firstPending },
+          (_, i) => firstPending + i));
+    }
+    assert(delivered <= expectedCount, 'a completion was reused');
+  }
+  if (kind !== 'error') writable.end(() => events.push('end-callback'));
+  await tick();
+  assert.equal(writable.writableLength, 0);
+  assert.equal(callbacks.length, expectedCount);
+  assert.deepEqual(callbacks.map(entry => entry[0]),
+    Array.from({ length: expectedCount }, (_, i) => i));
+  assert.deepEqual(seen, Array.from({ length: seen.length }, (_, i) => i));
+  return { observable: { seen, callbacks, events, returns }, moved, compactions };
+}
+
+async function checkWritable(stream) {
+  const result = {};
+  for (const kind of ['ordinary', 'reentrant', 'vector', 'error']) {
+    const actual = await writableProbe(stream, 2048, kind);
+    const expected = await writableProbe(nativeStream, 2048, kind);
+    assert.deepEqual(actual.observable, expected.observable, 'writable ' + kind);
+    assert(actual.moved <= 2048, `quadratic compaction in ${kind}: ${actual.moved}`);
+    result[kind] = { moved: actual.moved, compactions: actual.compactions,
+      callbacks: actual.observable.callbacks.length, events: actual.observable.events };
+  }
+  return result;
+}
+
 async function sourceTests(filename) {
   const stream = loadStream(filename);
   const queue = checkQueue(stream);
   const modes = ['object', 'text', 'bytes'];
   for (const mode of modes) assert.deepEqual(readableProbe(stream, mode), readableProbe(nativeStream, mode));
   const fixtureOutputs = {};
-  for (const name of ['steady_readable.js', 'partial_readable.js']) {
+  for (const name of ['steady_readable.js', 'partial_readable.js', 'buffered_writable.js']) {
     const expected = runFixture(nativeStream, name);
     const actual = runFixture(stream, name);
+    await tick();
+    assert(expected.length > 0, `fixture produced no output: ${name}`);
     assert.deepEqual(actual, expected, name);
     fixtureOutputs[name] = actual;
   }
   await tick();
-  return { queue, readableModes: modes, fixtureOutputs };
+  const writable = await checkWritable(stream);
+  return { queue, readableModes: modes, fixtureOutputs, writable };
 }
 if (require.main === module) {
   sourceTests(process.argv[2] || defaultSource)
@@ -196,4 +288,4 @@ if (require.main === module) {
       scope: 'engine-owned JavaScript under Node; not the Rust engine', ...result }, null, 2)))
     .catch(error => { console.error(error); process.exitCode = 1; });
 }
-module.exports = { loadStream, tick, checkQueue, readableProbe, sourceTests, defaultSource };
+module.exports = { loadStream, tick, checkQueue, readableProbe, sourceTests, writableProbe, defaultSource };

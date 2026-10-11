@@ -42551,8 +42551,21 @@ impl InterpreterCore {
                     return Ok(result);
                 }
                 let value = self.string_pattern_this(module, &receiver)?;
-                let pattern = self.string_pattern_arg(module, args)?;
-                self.string_match_all_value(&value, &pattern)
+                let label = self.join_arg_range_label(args)?;
+                let pattern = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                // A pristine RegExp whose @@matchAll is the intrinsic one
+                // (the protocol call above left it to us) runs on the
+                // matcher; any other pattern supplied no @@matchAll, so
+                // steps 4-5 create a RegExp and Invoke its @@matchAll
+                // (bd-9vouw.498).
+                let key = RuntimePropertyKey::Symbol(WellKnownSymbol::MatchAll.id());
+                if let Value::Object(pattern_id) = pattern
+                    && self.regexp_is_pristine(&pattern)
+                    && self.regexp_uses_builtin_symbol_method(pattern_id, &key)
+                {
+                    return self.string_match_all_value(&value, &pattern, &label);
+                }
+                self.string_match_all_created_regexp(module, value, pattern, &label)
             }
             BuiltinFunctionKind::StringSearch => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
@@ -62013,6 +62026,7 @@ impl InterpreterCore {
         &mut self,
         input: &JsString,
         pattern: &Value,
+        label: &Label,
     ) -> Result<Value, InterpreterError> {
         let (source, flags, last_index) = match self.regexp_source_flags_from_value(pattern) {
             Some((source, flags)) => {
@@ -62043,7 +62057,13 @@ impl InterpreterCore {
         let full_unicode = flags.contains('u') || flags.contains('v');
         let clone = self.alloc_regexp_object(source, flags)?;
         self.set_object_property(clone, "lastIndex".to_string(), last_index)?;
-        self.create_regexp_string_iterator(clone, input.clone(), full_unicode)
+        self.create_regexp_string_iterator(
+            Value::Object(clone),
+            input.clone(),
+            true,
+            full_unicode,
+            label,
+        )
     }
 
     /// ES2020 21.1.3.18 String.prototype.search: the index of the first
@@ -79864,7 +79884,10 @@ impl InterpreterCore {
         let input = self.value_to_string(&input);
         match method {
             "@@match" => self.string_match_value(&input, &receiver),
-            "@@matchAll" => self.string_match_all_value(&JsString::from(input), &receiver),
+            "@@matchAll" => {
+                let label = self.join_arg_range_label(args)?;
+                self.string_match_all_value(&JsString::from(input), &receiver, &label)
+            }
             "@@search" => self.string_search_value(&input, &receiver),
             "@@split" => {
                 let limit =
@@ -80182,8 +80205,9 @@ impl InterpreterCore {
 
     /// Whether `object_id` is a RegExp whose `key` method is certainly the
     /// builtin: no own property shadows it, its prototype is
-    /// %RegExp.prototype% (or none), and %RegExp.prototype% has no own `key`
-    /// property. The common `s.split(/,/)` then skips the property walk.
+    /// %RegExp.prototype% (or none), and %RegExp.prototype% neither stores
+    /// its own `key` property nor had the intrinsic one deleted. The common
+    /// `s.split(/,/)` then skips the property walk.
     fn regexp_uses_builtin_symbol_method(
         &self,
         object_id: ObjectId,
@@ -80201,10 +80225,14 @@ impl InterpreterCore {
         let regexp_prototype = self.builtin_prototypes.get("RegExp").copied();
         match object.prototype {
             None => true,
+            // A deleted intrinsic method is absent too (bd-9vouw.498).
             Some(prototype) if Some(prototype) == regexp_prototype => self
                 .heap
                 .get(prototype.0 as usize)
-                .is_some_and(|prototype| prototype.own_runtime_property_value(key).is_none()),
+                .is_some_and(|prototype| {
+                    prototype.own_runtime_property_value(key).is_none()
+                        && !prototype.deleted_virtual_keys.contains(key)
+                }),
             Some(_) => false,
         }
     }

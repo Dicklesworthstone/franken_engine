@@ -11774,8 +11774,16 @@ fn lower_ir2_to_ir3_with_input_hash(
                             &mut fn_pinned_register_high,
                             &mut fn_register_high_water,
                         );
-                        let read_in_place = src < fn_pinned_register_high
-                            && pinned_read_consumed_in_place(&annotated_body_ops, op_index);
+                        // A `return x` reads the register itself, a pinned or
+                        // a short-lived local's alike: Return reads its value
+                        // when it runs (before any finally) and nothing runs in
+                        // between (bd-9vouw.493).
+                        let read_in_place = (src < fn_pinned_register_high
+                            && pinned_read_consumed_in_place(&annotated_body_ops, op_index))
+                            || matches!(
+                                annotated_body_ops.get(op_index + 1).map(|next| &next.inner),
+                                Some(Ir1Op::Return)
+                            );
                         if read_in_place {
                             fn_value_stack.push(src);
                         } else {

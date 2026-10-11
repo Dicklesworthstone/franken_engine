@@ -43398,6 +43398,17 @@ impl InterpreterCore {
                         "Array.prototype.filter",
                     )?;
                 let result = self.array_species_result(module, arr_id, 0)?;
+                let mut prefix_label = {
+                    let mut source_label = self.join_arg_range_label(args)?;
+                    if let Some(register) = receiver_register {
+                        source_label = self.join_owned_label_with_temporary_budget(
+                            source_label,
+                            self.get_register_label(register)?,
+                        )?;
+                    }
+                    self.array_result_prefix_label(arr_id, result, &source_label)?
+                };
+                self.record_array_result_prefix_label(result, &prefix_label)?;
                 let mut out = 0usize;
                 for index in 0..len {
                     let Some(element) = self.array_index_get(Some(module), arr_id, index)? else {
@@ -43414,18 +43425,19 @@ impl InterpreterCore {
                                 arr_id,
                             )
                         })?;
-                    // Selection controls both output positions and length,
-                    // including when a Secret predicate rejects every element.
-                    // A species constructor can expose the result via an alias.
-                    if predicate_label != Label::Public {
-                        self.join_object_mutation_label(result, &predicate_label)?;
-                    }
+                    // Every earlier selection controls this output position.
+                    // Label length even when the predicate rejects the element,
+                    // so an existing species alias observes that dependency.
+                    prefix_label = std::cmp::max(prefix_label, predicate_label);
+                    prefix_label =
+                        self.array_result_prefix_label(arr_id, result, &prefix_label)?;
+                    self.record_array_result_prefix_label(result, &prefix_label)?;
                     if keep.is_truthy() {
                         self.create_labeled_data_property_or_throw(
                             result,
                             out.to_string(),
                             element,
-                            &predicate_label,
+                            &prefix_label,
                         )?;
                         out += 1;
                     }
@@ -43565,6 +43577,17 @@ impl InterpreterCore {
                         "Array.prototype.flatMap",
                     )?;
                 let result = self.array_species_result(module, arr_id, 0)?;
+                let mut prefix_label = {
+                    let mut source_label = self.join_arg_range_label(args)?;
+                    if let Some(register) = receiver_register {
+                        source_label = self.join_owned_label_with_temporary_budget(
+                            source_label,
+                            self.get_register_label(register)?,
+                        )?;
+                    }
+                    self.array_result_prefix_label(arr_id, result, &source_label)?
+                };
+                self.record_array_result_prefix_label(result, &prefix_label)?;
                 let mut out = 0usize;
                 for index in 0..len {
                     let Some(element) = self.array_index_get(Some(module), arr_id, index)? else {
@@ -43581,11 +43604,12 @@ impl InterpreterCore {
                                 arr_id,
                             )
                         })?;
-                    // Flattening can change every later output position and
-                    // the length; preserve this dependency on species aliases.
-                    if mapped_label != Label::Public {
-                        self.join_object_mutation_label(result, &mapped_label)?;
-                    }
+                    // A previous callback or empty nested array can still
+                    // determine where this value is written and the final length.
+                    prefix_label = std::cmp::max(prefix_label, mapped_label);
+                    prefix_label =
+                        self.array_result_prefix_label(arr_id, result, &prefix_label)?;
+                    self.record_array_result_prefix_label(result, &prefix_label)?;
                     let nested = if let Value::Object(eid) = &mapped {
                         self.heap
                             .get(eid.0 as usize)
@@ -43604,7 +43628,7 @@ impl InterpreterCore {
                                 0,
                                 result,
                                 &mut out,
-                                &mapped_label,
+                                &prefix_label,
                             )?;
                         }
                     } else {
@@ -43612,7 +43636,7 @@ impl InterpreterCore {
                             result,
                             out.to_string(),
                             mapped,
-                            &mapped_label,
+                            &prefix_label,
                         )?;
                         out += 1;
                     }
@@ -77557,6 +77581,97 @@ impl InterpreterCore {
         }
     }
 
+    /// Borrow the first owning string property's label with the same shadowing
+    /// and traversal bounds as runtime_property_label, without cloning its name.
+    fn array_string_property_label_ref(
+        &self,
+        object_id: ObjectId,
+        key: &JsString,
+    ) -> Option<&Label> {
+        let runtime_key = RuntimePropertyKey::String(key.clone());
+        let mut current = Some(object_id);
+        let mut depth = 0u32;
+        let mut visited = ChainGuard::default();
+        while let Some(id) = current {
+            if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
+                break;
+            }
+            let object = self.heap.get(id.0 as usize)?;
+            if object.contains_own_runtime_property(&runtime_key) {
+                return object.property_labels.get_exact(key);
+            }
+            current = self.observable_prototype_link(object, id);
+            depth += 1;
+        }
+        None
+    }
+
+    /// Join provenance already observed while compacting an array result.
+    /// The source length and mutation state matter even when it has no elements.
+    fn array_result_prefix_label(
+        &self,
+        source: ObjectId,
+        result: ObjectId,
+        input_label: &Label,
+    ) -> Result<Label, InterpreterError> {
+        let length_key = JsString::from("length");
+        let mut winner = input_label;
+        for candidate in [
+            self.array_string_property_label_ref(source, &length_key),
+            self.object_mutation_labels.get(&source),
+            self.object_mutation_labels.get(&result),
+            self.pending_hostcall_result_label.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if candidate > winner {
+                winner = candidate;
+            }
+        }
+        // A Custom name can be large. Scan borrowed labels, then preflight
+        // both the caller's input temporary and the single winning clone.
+        self.clone_dominant_label_with_temporary_budget(
+            winner,
+            &Label::Public,
+            Self::estimate_label_bytes(input_label),
+        )
+    }
+
+    /// Preserve length provenance on an ordinary Array species result before
+    /// writing an element. Its reference may already be held by a Public alias.
+    /// Missing-index and HasProperty observations need separate shape tracking.
+    fn record_array_result_prefix_label(
+        &mut self,
+        result: ObjectId,
+        label: &Label,
+    ) -> Result<(), InterpreterError> {
+        if label == &Label::Public {
+            return Ok(());
+        }
+        self.join_pending_array_result_label(label)?;
+        self.join_object_mutation_label(result, label)?;
+        if let Some(object) = self.heap.get(result.0 as usize)
+            && object.is_array
+        {
+            let length_key = JsString::from("length");
+            let previous_label = object
+                .property_labels
+                .get_exact(&length_key)
+                .unwrap_or(&Label::Public);
+            // The labels form a total order. Keep an already dominant stored
+            // label without cloning its name; otherwise the input is the join.
+            if previous_label < label {
+                self.set_own_runtime_property_label(
+                    result,
+                    &RuntimePropertyKey::String(length_key),
+                    label,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     fn array_flatten_into(
         &mut self,
         module: &Ir3Module,
@@ -77566,6 +77681,8 @@ impl InterpreterCore {
         out: &mut usize,
         source_label: &Label,
     ) -> Result<(), InterpreterError> {
+        let mut prefix_label = self.array_result_prefix_label(src_id, result, source_label)?;
+        self.record_array_result_prefix_label(result, &prefix_label)?;
         let len = self.array_like_length(src_id)?;
         for i in 0..len {
             // FlattenIntoArray (ES2020 23.1.3.10.1): a hole is skipped and
@@ -77574,15 +77691,17 @@ impl InterpreterCore {
             let Some(element) = self.array_index_get(Some(module), src_id, i)? else {
                 continue;
             };
-            let element_key = RuntimePropertyKey::String(JsString::from(i.to_string()));
-            let element_label = source_label
-                .join(&self.runtime_property_label(src_id, &element_key))
-                .join(
-                    self.object_mutation_labels
-                        .get(&src_id)
-                        .unwrap_or(&Label::Public),
-                );
-            self.join_pending_array_result_label(&element_label)?;
+            let element_key = JsString::from(i.to_string());
+            if let Some(element_label) =
+                self.array_string_property_label_ref(src_id, &element_key)
+            {
+                prefix_label =
+                    self.join_owned_label_with_temporary_budget(prefix_label, element_label)?;
+            }
+            // A recursive empty array may have contributed a length label.
+            // Getter returns and earlier callback results also join this prefix.
+            prefix_label = self.array_result_prefix_label(src_id, result, &prefix_label)?;
+            self.record_array_result_prefix_label(result, &prefix_label)?;
             let nested = if let Value::Object(eid) = &element {
                 self.heap
                     .get(eid.0 as usize)
@@ -77593,14 +77712,14 @@ impl InterpreterCore {
             };
             if depth > 0 && nested {
                 if let Value::Object(eid) = element {
-                    self.array_flatten_into(module, eid, depth - 1, result, out, &element_label)?;
+                    self.array_flatten_into(module, eid, depth - 1, result, out, &prefix_label)?;
                 }
             } else {
                 self.create_labeled_data_property_or_throw(
                     result,
                     out.to_string(),
                     element,
-                    &element_label,
+                    &prefix_label,
                 )?;
                 *out += 1;
             }
@@ -139955,10 +140074,15 @@ mod async_runtime_tests_current {
                     first_label,
                     "{kind:?}: callback result label must survive storage"
                 );
+                let later_label = if kind == BuiltinFunctionKind::ArrayFlatMap {
+                    first_label.clone()
+                } else {
+                    Label::Public
+                };
                 assert_eq!(
                     core.own_property_label(mapped, "1"),
-                    Label::Public,
-                    "{kind:?}: a later Public element keeps its own label"
+                    later_label,
+                    "{kind:?}: flatMap positions retain earlier callback provenance"
                 );
                 assert_eq!(
                     core.take_pending_hostcall_result_label()
@@ -139973,6 +140097,267 @@ mod async_runtime_tests_current {
                 );
             }
         }
+    }
+
+    fn array_shape_species_module() -> Ir3Module {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Halt,
+                Ir3Instruction::Return { value: 0 },
+                Ir3Instruction::LoadScoped {
+                    dst: 1,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::Return { value: 1 },
+                Ir3Instruction::LoadBool {
+                    dst: 3,
+                    value: false,
+                },
+                Ir3Instruction::Return { value: 3 },
+            ],
+            vec![
+                Ir3FunctionDesc {
+                    entry: 1,
+                    arity: 3,
+                    frame_size: 3,
+                    name: Some("identity".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 2,
+                    arity: 1,
+                    frame_size: 2,
+                    name: Some("existing_species_result".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 4,
+                    arity: 3,
+                    frame_size: 4,
+                    name: Some("reject_element".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+            ],
+        );
+        module.constant_pool.push("array_shape_result".into());
+        module
+    }
+
+    fn install_array_shape_species(core: &mut InterpreterCore, source: ObjectId) -> ObjectId {
+        let result = core.alloc_array_from_values(&[]).expect("species array");
+        core.inject_runtime_global_binding("array_shape_result", Value::Object(result))
+            .expect("Public species result binding");
+        core.write_reg_with_label(8, Value::Object(result), Label::Public)
+            .expect("pre-existing Public alias");
+        let constructor = core
+            .alloc_object_with_prototype(None)
+            .expect("species constructor holder");
+        core.set_object_runtime_property(
+            constructor,
+            RuntimePropertyKey::Symbol(WellKnownSymbol::Species.id()),
+            Value::Function(1),
+        )
+        .expect("species constructor");
+        core.set_object_property(source, "constructor".to_string(), Value::Object(constructor))
+            .expect("source constructor");
+        result
+    }
+
+    fn assert_array_shape_alias_length(core: &mut InterpreterCore, length: i64, label: &Label) {
+        // Read through the alias that predates the call after dropping its
+        // aggregate completion label. Only the stored length provenance remains.
+        core.clear_pending_hostcall_result_label();
+        assert_eq!(core.get_register_label(8).unwrap(), &Label::Public);
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 9,
+                    pool_index: 0,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 8,
+                    key: 9,
+                    dst: 10,
+                },
+                Ir3Instruction::Return { value: 10 },
+            ],
+            vec![],
+        );
+        module.constant_pool.push("length".into());
+        core.ip = 0;
+        let observed = core.run_loop_labeled(&module).expect("alias length read");
+        assert_eq!(observed.value, Value::Int(length));
+        assert_eq!(&observed.label, label);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn filter_prefix_and_empty_length_survive_public_species_alias_bd_9vouw_110() {
+        let module = array_shape_species_module();
+        for first_label in [Label::Public, Label::Secret] {
+            // Identity rejects the first element and keeps the later Public
+            // one. The constant callback rejects everything, but its literal
+            // return still inherits the first element's execution context.
+            for callback in [0, 2] {
+                let mut core = test_interpreter();
+                let source = core
+                    .alloc_array_from_values(&[Value::Bool(false), Value::Bool(true)])
+                    .expect("source array");
+                core.set_own_property_label(source, "0", &first_label)
+                    .expect("first source label");
+                let result = install_array_shape_species(&mut core, source);
+                core.write_reg_with_label(0, Value::Function(callback), Label::Public)
+                    .expect("callback register");
+                let returned = core
+                    .dispatch_builtin_function(
+                        &module,
+                        &BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayFilter),
+                        RegRange { start: 0, count: 1 },
+                        Some(Value::Object(source)),
+                        None,
+                    )
+                    .expect("filter should execute");
+                assert_eq!(returned, Value::Object(result));
+                let (_, later_label) = core
+                    .invoke_labeled_array_callback(
+                        Some(&module),
+                        &Value::Function(callback),
+                        Value::Undefined,
+                        Value::Bool(true),
+                        1,
+                        source,
+                    )
+                    .expect("later callback is Public");
+                assert_eq!(later_label, Label::Public);
+                assert_eq!(
+                    core.take_pending_hostcall_result_label()
+                        .unwrap_or(Label::Public),
+                    first_label
+                );
+                let length = if callback == 0 { 1 } else { 0 };
+                if callback == 0 {
+                    assert_eq!(
+                        core.heap[result.0 as usize].properties.get("0"),
+                        Some(&Value::Bool(true))
+                    );
+                    assert_eq!(core.own_property_label(result, "0"), first_label);
+                }
+                assert_array_shape_alias_length(&mut core, length, &first_label);
+            }
+        }
+    }
+
+    #[test]
+    fn flat_map_empty_source_length_and_mutation_taint_later_species_positions_bd_9vouw_110() {
+        let module = array_shape_species_module();
+        for source_label in [Label::Public, Label::Secret] {
+            for use_mutation_label in [false, true] {
+                for append_public in [false, true] {
+                    let mut core = test_interpreter();
+                    let empty = core.alloc_array_from_values(&[]).expect("empty mapped array");
+                    if use_mutation_label {
+                        core.join_object_mutation_label(empty, &source_label)
+                            .expect("empty source mutation label");
+                    } else {
+                        core.set_own_property_label(empty, "length", &source_label)
+                            .expect("empty source length label");
+                    }
+                    let mut elements = vec![Value::Object(empty)];
+                    if append_public {
+                        elements.push(Value::str("last"));
+                    }
+                    let source = core.alloc_array_from_values(&elements).expect("source array");
+                    let result = install_array_shape_species(&mut core, source);
+                    core.write_reg_with_label(0, Value::Function(0), Label::Public)
+                        .expect("callback register");
+                    let returned = core
+                        .dispatch_builtin_function(
+                            &module,
+                            &BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayFlatMap),
+                            RegRange { start: 0, count: 1 },
+                            Some(Value::Object(source)),
+                            None,
+                        )
+                        .expect("flatMap should execute");
+                    assert_eq!(returned, Value::Object(result));
+                    assert_eq!(
+                        core.take_pending_hostcall_result_label()
+                            .unwrap_or(Label::Public),
+                        source_label,
+                        "empty source: mutation={use_mutation_label}, tail={append_public}"
+                    );
+                    if append_public {
+                        assert_eq!(
+                            core.heap[result.0 as usize].properties.get("0"),
+                            Some(&Value::str("last"))
+                        );
+                        assert_eq!(core.own_property_label(result, "0"), source_label);
+                    }
+                    let length = i64::from(append_public);
+                    assert_array_shape_alias_length(&mut core, length, &source_label);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn array_prefix_custom_label_is_preflighted_before_cloning_bd_9vouw_110() {
+        let mut core = test_interpreter();
+        let source = core.alloc_array_from_values(&[]).expect("source array");
+        let result = core.alloc_array_from_values(&[]).expect("result array");
+        let label = Label::Custom {
+            name: "large-array-length-label".repeat(256),
+            level: 6,
+        };
+        core.set_own_property_label(source, "length", &label)
+            .expect("stored Custom length label");
+        let inherited = core
+            .alloc_object_with_prototype(Some(source))
+            .expect("inherited length receiver");
+        let shadow = core
+            .alloc_object_with_prototype(Some(source))
+            .expect("Public own length receiver");
+        core.set_object_property(shadow, "length".to_string(), Value::Int(0))
+            .expect("Public length shadow");
+        let before = core.estimated_memory_bytes();
+        let label_bytes = InterpreterCore::estimate_label_bytes(&label);
+
+        core.config.max_total_memory_bytes = before + label_bytes - 1;
+        for receiver in [source, inherited] {
+            assert!(matches!(
+                core.array_result_prefix_label(receiver, result, &Label::Public),
+                Err(InterpreterError::MemoryBudgetExceeded { .. })
+            ));
+            assert_eq!(core.estimated_memory_bytes(), before);
+            assert_eq!(core.own_property_label(result, "length"), Label::Public);
+            assert!(core.pending_hostcall_result_label.is_none());
+        }
+
+        // A Public first owner ends the lookup without cloning the inherited
+        // Custom name. Only the winning label's temporary bytes are required.
+        core.config.max_total_memory_bytes = before;
+        assert_eq!(
+            core.array_result_prefix_label(shadow, result, &Label::Public)
+                .expect("Public own length requires no Custom clone"),
+            Label::Public
+        );
+        core.config.max_total_memory_bytes = before + label_bytes;
+        assert_eq!(
+            core.array_result_prefix_label(inherited, result, &Label::Public)
+                .expect("the exact winning label budget should suffice"),
+            label
+        );
+        assert_eq!(core.estimated_memory_bytes(), before);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]

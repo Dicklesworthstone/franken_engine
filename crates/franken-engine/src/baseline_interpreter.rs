@@ -9998,6 +9998,11 @@ struct GeneratorExecutionSnapshot {
     /// The label file's length then; the two files need not be equally long
     /// (an isolated wrapper replaces the value file and keeps the labels).
     register_label_len: usize,
+    /// [`InterpreterCore::register_dirty_end`] of these files, which
+    /// `install_generator_execution` restores: the whole file's length would
+    /// make the next call after every generator step clear to its end
+    /// (bd-9vouw.499).
+    register_dirty_end: usize,
     delegation: Option<GeneratorDelegation>,
     active_inline_callback_context_label: Option<Label>,
     call_stack: Vec<CallFrame>,
@@ -15345,11 +15350,16 @@ pub struct InterpreterCore {
     register_width: usize,
     /// Run loops currently active on the native stack (bd-9vouw.72).
     native_run_loop_depth: usize,
-    /// Largest stacked-frame prefix ever occupied by this core. This monotonic
-    /// high-water mark keeps reduced clears safe when a reusable core later
-    /// executes a narrower module: stale values and labels from the older,
-    /// wider module are still cleared before the new callee starts.
-    stacked_register_frame_clear_width_high_water: usize,
+    /// Every register at or past this physical index holds `Undefined` with
+    /// a Public label (bd-9vouw.499). A frame entry clears its window and
+    /// every register up to here, then sets it to its window's end; every
+    /// write past it (a register write, a label write, a restored or widened
+    /// window, an installed file) raises it. It replaced a monotonic
+    /// high-water mark of the widest frame ever entered, which every later
+    /// entry cleared: after one call of a function with 200 registers, each
+    /// call of a 3-register function cleared 200 values and labels (1,000,000
+    /// calls took 4.60 s instead of 1.61 s).
+    register_dirty_end: usize,
     /// The top-level run's compact Tier-I plan and the address of the module
     /// it was compiled for. Nested builtin callbacks in that same module
     /// dispatch through it too (verified frame widths, scope-inert leaves,
@@ -16603,7 +16613,7 @@ impl InterpreterCore {
             register_base: 0,
             register_width: max_regs,
             native_run_loop_depth: 0,
-            stacked_register_frame_clear_width_high_water: 0,
+            register_dirty_end: 0,
             top_level_compact_tier1: None,
             entry_frame_widths: None,
             catch_frames: Vec::new(),
@@ -34623,8 +34633,23 @@ impl InterpreterCore {
     /// is `value_bytes` when the caller knows it (a fresh file of
     /// `Undefined` is 0; a restored snapshot carries its own), else `None`.
     fn install_register_file(&mut self, registers: Vec<Value>, value_bytes: Option<u64>) {
+        self.note_registers_written_to(registers.len());
         self.registers = SeedTrackedField::new(registers);
         self.registers_value_bytes.set(value_bytes);
+    }
+
+    /// A write to physical register `actual_reg` (bd-9vouw.499).
+    #[inline]
+    fn note_register_written(&mut self, actual_reg: usize) {
+        if actual_reg >= self.register_dirty_end {
+            self.register_dirty_end = actual_reg + 1;
+        }
+    }
+
+    /// Writes to physical registers below `end` (bd-9vouw.499).
+    #[inline]
+    fn note_registers_written_to(&mut self, end: usize) {
+        self.register_dirty_end = self.register_dirty_end.max(end);
     }
 
     pub(crate) fn mutate_heap<R>(&mut self, f: impl FnOnce(&mut Heap) -> R) -> R {
@@ -34904,6 +34929,7 @@ impl InterpreterCore {
             });
         }
         let actual_reg = self.register_base + reg as usize;
+        self.note_register_written(actual_reg);
         let Some(previous_label) = self.register_labels.get(actual_reg) else {
             return Err(InterpreterError::RegisterOutOfBounds {
                 register: reg,
@@ -35535,6 +35561,7 @@ impl InterpreterCore {
         }
 
         if let Some(final_label) = final_label {
+            self.note_register_written(actual_array_register);
             let Some(target_label) = self.register_labels.get_mut(actual_array_register) else {
                 self.mutate_heap(|heap| {
                     if let Some(target) = heap.get_mut(heap_index) {
@@ -35882,6 +35909,7 @@ impl InterpreterCore {
         self.apply_memory_component_delta(previous_bytes, Self::estimate_value_bytes(&value))?;
         self.last_pre_run_seed = None;
         self.last_post_run_epoch = None;
+        self.note_register_written(reg as usize);
         self.mutate_registers(|r| r[reg as usize] = value);
         Ok(())
     }
@@ -47589,6 +47617,7 @@ impl InterpreterCore {
         let reg_start = self.register_base;
 
         // perf: hot path - use into_iter to avoid cloning each register value
+        self.note_registers_written_to(reg_end);
         self.mutate_registers(|r| {
             for (i, value) in saved_registers.into_iter().enumerate() {
                 r[reg_start + i] = value;
@@ -49949,6 +49978,7 @@ impl InterpreterCore {
             register_labels,
             register_len: max_registers,
             register_label_len: max_registers,
+            register_dirty_end: max_registers,
             delegation: None,
             active_inline_callback_context_label: invocation.inline_context_label,
             call_stack: vec![CallFrame {
@@ -50014,6 +50044,8 @@ impl InterpreterCore {
         let mut execution = GeneratorExecutionSnapshot {
             register_len: registers.len(),
             register_label_len: register_labels.len(),
+            // The core's files are empty now, so nothing past 0 is dirty.
+            register_dirty_end: std::mem::take(&mut self.register_dirty_end),
             registers,
             register_labels,
             delegation: self.generator_delegation.take(),
@@ -50451,6 +50483,7 @@ impl InterpreterCore {
         self.registers.value = registers;
         self.registers_value_bytes.set(None);
         self.install_register_labels(register_labels, None);
+        self.register_dirty_end = execution.register_dirty_end;
         self.generator_delegation = execution.delegation;
         self.active_inline_callback_context_label = execution.active_inline_callback_context_label;
         self.call_stack
@@ -91000,6 +91033,7 @@ impl InterpreterCore {
         }
 
         let mut saved_values = Vec::with_capacity(value_count);
+        self.note_registers_written_to(required_len);
         self.mutate_registers(|registers| {
             if registers.len() < required_len {
                 registers.resize(required_len, Value::Undefined);
@@ -91094,6 +91128,7 @@ impl InterpreterCore {
             .saturating_sub(current_register_bytes)
             .saturating_sub(saved_carrier_bytes)
             .saturating_add(previous_register_bytes);
+        self.note_registers_written_to(required_len);
         self.mutate_registers(|registers| {
             if registers.len() < required_len {
                 registers.resize(required_len, Value::Undefined);
@@ -100626,6 +100661,7 @@ impl InterpreterCore {
     /// file if the index is past the current length.
     #[cfg(test)]
     fn set_reg(&mut self, idx: usize, value: Value) {
+        self.note_register_written(idx);
         self.mutate_registers(|r| {
             if idx >= r.len() {
                 r.resize(idx + 1, Value::Undefined);
@@ -100669,6 +100705,7 @@ impl InterpreterCore {
     #[cfg(test)]
     fn set_register(&mut self, reg: u32, value: Value) -> Result<(), InterpreterError> {
         let idx = reg as usize;
+        self.note_register_written(idx);
         self.mutate_registers(|r| {
             if idx >= r.len() {
                 r.resize(idx + 1, Value::Undefined);
@@ -101368,6 +101405,7 @@ impl InterpreterCore {
             // Preserve the sole execution-seed mutation chokepoint before the
             // direct replacement. Eligibility proves the value/label logical
             // byte total is unchanged and no context label can dominate.
+            self.note_register_written(actual_reg);
             self.mutate_registers_by_bytes(0, 0, |registers| registers[actual_reg] = value);
             return Ok(());
         }
@@ -101380,6 +101418,7 @@ impl InterpreterCore {
         actual_reg: usize,
         value: Value,
     ) -> Result<(), InterpreterError> {
+        self.note_register_written(actual_reg);
         // bd-31ijt: the previous implementation called sync_estimated_memory_bytes()
         // after every register write, walking the full heap, registers, scope chain,
         // closures, call stack, iterators, and generators each time — turning every
@@ -101462,6 +101501,7 @@ impl InterpreterCore {
             // The existing and replacement value/label pairs own zero dynamic
             // bytes. Keep seed materialization and epoch advancement exact,
             // then replace both parallel register files as one logical write.
+            self.note_register_written(actual_reg);
             self.mutate_registers_by_bytes(0, 0, |registers| registers[actual_reg] = value);
             self.register_labels[actual_reg] = label;
             return Ok(());
@@ -101476,6 +101516,7 @@ impl InterpreterCore {
         value: Value,
         label: Label,
     ) -> Result<(), InterpreterError> {
+        self.note_register_written(actual_reg);
         let previous_value_bytes = self
             .registers
             .get(actual_reg)
@@ -101599,11 +101640,33 @@ impl InterpreterCore {
         }
         self.register_base = base;
         self.register_width = width.min(max_registers);
-        self.stacked_register_frame_clear_width_high_water = self
-            .stacked_register_frame_clear_width_high_water
-            .max(width);
-        let clear_width = self.stacked_register_frame_clear_width_high_water;
-        self.clear_current_register_frame_width(clear_width);
+        // The callee's window and whatever an earlier frame or write left
+        // past it (bd-9vouw.499); every register past `register_dirty_end`
+        // is already clear.
+        let window_end = base.saturating_add(self.register_width);
+        let clear_end = window_end.max(self.register_dirty_end);
+        // The test build checks the invariant a window past the clear: a
+        // write that skipped `note_register_written` would show up here.
+        #[cfg(test)]
+        {
+            let check_end = clear_end.saturating_add(max_registers);
+            debug_assert!(
+                self.registers
+                    .get(clear_end..check_end.min(self.registers.len()))
+                    .unwrap_or(&[])
+                    .iter()
+                    .all(|value| matches!(value, Value::Undefined))
+                    && self
+                        .register_labels
+                        .get(clear_end..check_end.min(self.register_labels.len()))
+                        .unwrap_or(&[])
+                        .iter()
+                        .all(|label| matches!(label, Label::Public)),
+                "a register past register_dirty_end holds a value (bd-9vouw.499)"
+            );
+        }
+        self.clear_current_register_frame_width(clear_end - base);
+        self.register_dirty_end = window_end;
         Ok(())
     }
 
@@ -101652,7 +101715,10 @@ impl InterpreterCore {
             if physical_frame_end > registers.len() {
                 registers.resize(physical_frame_end, Value::Undefined);
             }
-            registers[frame_start..frame_end].fill(Value::Undefined);
+            // A clear past one window (registers an earlier, deeper frame
+            // left, bd-9vouw.499) stops at the file's end.
+            let end = frame_end.min(registers.len());
+            registers[frame_start..end].fill(Value::Undefined);
         });
         let released_label_bytes = Self::saturating_sum(
             self.register_labels
@@ -101665,7 +101731,8 @@ impl InterpreterCore {
             self.register_labels
                 .resize(physical_frame_end, Label::Public);
         }
-        self.register_labels[frame_start..frame_end].fill(Label::Public);
+        let label_end = frame_end.min(self.register_labels.len());
+        self.register_labels[frame_start..label_end].fill(Label::Public);
         self.adjust_register_labels_bytes(released_label_bytes, 0);
         self.estimated_memory_bytes = self
             .estimated_memory_bytes
@@ -103902,6 +103969,7 @@ impl InterpreterCore {
     /// is `bytes` when the caller knows it (a Public file is 0, a restored
     /// snapshot carries its own), else `None`.
     fn install_register_labels(&mut self, labels: Vec<Label>, bytes: Option<u64>) {
+        self.note_registers_written_to(labels.len());
         self.register_labels = labels;
         self.register_labels_bytes.set(bytes);
     }
@@ -148701,10 +148769,9 @@ mod tests {
         let mut narrow_only_core =
             InterpreterCore::new(config.clone(), "tier-i-exact-narrow-frame");
         narrow_only_core.enter_stacked_register_frame_for_function(&module, Some(&plan), 2);
-        assert_eq!(
-            narrow_only_core.stacked_register_frame_clear_width_high_water,
-            1
-        );
+        // The narrow frame's window is the only part of the file that may
+        // hold a value after its entry (bd-9vouw.499).
+        assert_eq!(narrow_only_core.register_dirty_end, max_registers + 1);
         assert_eq!(narrow_only_core.registers.len(), max_registers * 2);
         assert_eq!(narrow_only_core.register_labels.len(), max_registers * 2);
 
@@ -149413,9 +149480,94 @@ mod tests {
         core.register_width = max_registers;
         core.enter_stacked_register_frame(Some(&narrow_plan));
 
-        assert_eq!(core.stacked_register_frame_clear_width_high_water, 8);
+        // The wide frame's write raised the dirty end past register 7, so the
+        // narrow entry cleared it (bd-9vouw.499); only its own window may be
+        // dirty after it.
+        assert_eq!(core.register_dirty_end, max_registers + 1);
         assert_eq!(core.registers[max_registers + 7], Value::Undefined);
         assert_eq!(core.register_labels[max_registers + 7], Label::Public);
+
+        // bd-9vouw.499: the next narrow entry clears its own window only;
+        // the wide frame's slots are already clear.
+        core.write_reg_with_label(0, Value::Int(1), Label::Secret)
+            .expect("narrow frame write");
+        core.register_base = 0;
+        core.register_width = max_registers;
+        assert_eq!(core.register_dirty_end, max_registers + 1);
+        core.enter_stacked_register_frame(Some(&narrow_plan))
+            .expect("narrow entry");
+        assert_eq!(core.registers[max_registers], Value::Undefined);
+        assert_eq!(core.register_labels[max_registers], Label::Public);
+        assert_eq!(core.register_dirty_end, max_registers + 1);
+    }
+
+    /// bd-9vouw.499: registers a deeper frame left behind, past the window of
+    /// the next frame entered at a shallower base, are cleared by that entry,
+    /// and a write past every window (a widened builtin window) is cleared
+    /// by the next entry too.
+    #[test]
+    fn stale_registers_of_deeper_frames_are_cleared_by_the_next_entry() {
+        let module = |frame_size: u32| {
+            test_module_with_functions(
+                vec![
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadInt { dst: 0, value: 1 },
+                    Ir3Instruction::Return { value: 0 },
+                ],
+                vec![
+                    Ir3FunctionDesc {
+                        entry: 0,
+                        arity: 0,
+                        frame_size: 1,
+                        name: Some("main".to_string()),
+                        is_generator: false,
+                        rest_param_index: None,
+                    },
+                    Ir3FunctionDesc {
+                        entry: 1,
+                        arity: 0,
+                        frame_size,
+                        name: Some("callee".to_string()),
+                        is_generator: false,
+                        rest_param_index: None,
+                    },
+                ],
+            )
+        };
+        let four = CompactTier1Program::compile(&module(4)).expect("width-4 plan");
+        let two = CompactTier1Program::compile(&module(2)).expect("width-2 plan");
+        let mut core = quickjs_test_core();
+        let max_registers = core.config.max_registers as usize;
+
+        // main -> a (width 4) -> b (width 4); b writes its last register.
+        core.enter_stacked_register_frame(Some(&four)).expect("a");
+        core.enter_stacked_register_frame(Some(&four)).expect("b");
+        assert_eq!(core.register_base, max_registers + 4);
+        core.write_reg_with_label(3, Value::str("left by b"), Label::Secret)
+            .expect("b writes");
+        assert_eq!(core.register_dirty_end, max_registers + 8);
+        // Both return; main calls c (width 2) at a's base.
+        core.register_base = 0;
+        core.register_width = max_registers;
+        core.enter_stacked_register_frame(Some(&two)).expect("c");
+        assert_eq!(core.registers[max_registers + 7], Value::Undefined);
+        assert_eq!(core.register_labels[max_registers + 7], Label::Public);
+        assert_eq!(core.register_dirty_end, max_registers + 2);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        // A write past c's window (as a widened builtin window makes).
+        core.write_reg_with_label(5, Value::Int(9), Label::Secret)
+            .expect("write past the window");
+        assert_eq!(core.register_dirty_end, max_registers + 6);
+        core.register_base = 0;
+        core.register_width = max_registers;
+        core.enter_stacked_register_frame(Some(&two)).expect("d");
+        assert_eq!(core.registers[max_registers + 5], Value::Undefined);
+        assert_eq!(core.register_labels[max_registers + 5], Label::Public);
+        assert_eq!(core.register_dirty_end, max_registers + 2);
     }
 
     #[test]

@@ -145,3 +145,73 @@ fn a_conditional_right_hand_side_keeps_its_copy() {
         "the joined value is copied into x: {body:?}"
     );
 }
+
+#[test]
+fn store_results_and_compound_reads_match_node() {
+    let source = r#"const out = [];
+function make() { return { p: 7, q: { r: 8 } }; }
+function storeThenRead() { let o; const v = (o = make()).p; let x; const w = 3 + (x = 4); let k; const obj = { a: 'A' }; const z = obj[(k = 'a')]; return [v, o.q.r, w, x, z, k].join(); }
+function retStore(a) { let x = 0; if (a) return x = a * 2; return x; }
+function retStoreFinally(a) { let x = 1; try { return x = a + 1; } finally { x = -5; out.push('rf' + x); } }
+function meth(o, n) { let s = 0; for (let i = 0; i < n; i++) { s += o.m(i, 1); } return s; }
+function selfArg(n) { function f(v) { return v * 2; } let s = 1; for (let i = 0; i < n; i++) { s += f(s); } return s; }
+function captured() { let s = 1; const h = () => { s = 100; return 1; }; s += h(); return s; }
+function writesInRhs() { let s = 1; s += (s = 10) + 1; let t = 2; t *= t++ + 1; return s + ',' + t; }
+function compoundMethod(a) { let acc = ''; for (const x of a) { acc += x.toUpperCase(); } return acc; }
+function minus(o) { let s = 100; s -= o.v(); s *= o.v(); s /= o.v(); return s; }
+function throwsInRhs() { let s = 5; const o = { m() { throw new Error('x'); } }; try { s += o.m(); } catch (e) { out.push('kept' + s); } return s; }
+out.push(storeThenRead(), retStore(3), retStore(0), retStoreFinally(4), meth({ m(a, b) { return a + b; } }, 4), selfArg(4), captured(), writesInRhs(), compoundMethod(['a', 'b', 'c']), minus({ v() { return 2; } }), throwsInRhs());
+let ts = 0; const to = { m(a) { return a * 3; } }; for (let i = 0; i < 3; i++) { ts += to.m(i); } let tk; const tv = ({ a: 9 })[(tk = 'a')];
+out.push(ts, tv, tk);
+console.log(out.join(' '));
+"#;
+    assert_eq!(
+        console_lines(source),
+        [r#"rf-5 kept5 7,8,7,4,A,a 6 0 5 10 81 2 12,6 ABC 98 5 9 9 a"#]
+    );
+}
+
+#[test]
+fn a_method_call_compound_writes_its_binding_in_place() {
+    let body = function_bodies(
+        "function m(o, n) { let s = 0; for (let i = 0; i < n; i++) { s += o.m(i, 1); } return s; }",
+    );
+    let adds: Vec<_> = body
+        .iter()
+        .filter_map(|instruction| match instruction {
+            Ir3Instruction::Add { dst, lhs, .. } => Some((*dst, *lhs)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(adds.len(), 1, "{body:?}");
+    let (dst, s_register) = adds[0];
+    assert_eq!(dst, s_register, "the Add writes s's register: {body:?}");
+    assert!(
+        !body.iter().any(
+            |instruction| matches!(instruction, Ir3Instruction::Move { src, .. } if *src == s_register)
+        ),
+        "s is read in place, not copied: {body:?}"
+    );
+    // The method lookup reads the receiver's register as stored, with no
+    // copy between the store and the GetProperty.
+    let get = body
+        .iter()
+        .position(|instruction| matches!(instruction, Ir3Instruction::GetProperty { .. }))
+        .expect("the method lookup");
+    let Ir3Instruction::GetProperty { obj, .. } = body[get] else {
+        unreachable!()
+    };
+    let receiver_store = body[..get]
+        .iter()
+        .rev()
+        .find_map(|instruction| match instruction {
+            Ir3Instruction::Move { dst, src } => Some((*dst, *src)),
+            _ => None,
+        })
+        .expect("the receiver store");
+    assert_eq!(
+        receiver_store,
+        (obj, 0),
+        "receiver store then lookup: {body:?}"
+    );
+}

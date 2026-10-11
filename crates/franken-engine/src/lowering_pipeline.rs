@@ -11842,8 +11842,23 @@ fn lower_ir2_to_ir3_with_input_hash(
                         // a short-lived local's alike: Return reads its value
                         // when it runs (before any finally) and nothing runs in
                         // between (bd-9vouw.493).
+                        // `x op= rhs`'s read-first left operand, when rhs is
+                        // straight-line code that does not write x, reads the
+                        // register in place as the top-level loop does: the
+                        // operator computes into a temporary and the AssignOp
+                        // that follows retargets it to x (bd-9vouw.494), one
+                        // instruction for `s += o.m(i)` instead of a copy of
+                        // s, the operator and a Move back.
+                        let pinned = src < fn_pinned_register_high
+                            && !fn_short_lived_locals.contains_key(binding_id);
                         let read_in_place = (src < fn_pinned_register_high
                             && pinned_read_consumed_in_place(&annotated_body_ops, op_index))
+                            || (pinned
+                                && compound_left_operand_reads_in_place(
+                                    &annotated_body_ops,
+                                    op_index,
+                                    *binding_id,
+                                ))
                             || matches!(
                                 annotated_body_ops.get(op_index + 1).map(|next| &next.inner),
                                 Some(Ir1Op::Return)
@@ -35580,9 +35595,11 @@ fn live_status_register_ceiling(live: &BTreeSet<Reg>) -> Reg {
 }
 
 /// bd-9vouw.494: whether `register` is an expression temporary that nothing
-/// names once it has left the value stack: at or above every register
-/// [`expression_rewind_target`] keeps (statement floor, pinned bindings, live
-/// slots, the innermost loop iterator's body floor) and not on the stack.
+/// names once it has left the value stack: at or above the statement floor,
+/// the pinned bindings and the innermost loop iterator's body floor, not a
+/// live slot (a name status or a short-lived local, which may sit above it:
+/// a method call's receiver local takes the register after its object's
+/// copy), and not on the stack.
 fn is_dead_expression_temporary(
     register: Reg,
     value_stack: &[Reg],
@@ -35591,13 +35608,11 @@ fn is_dead_expression_temporary(
     pinned_high: Reg,
     live: &BTreeSet<Reg>,
 ) -> bool {
-    let reserved = floor
-        .max(pinned_high)
-        .max(live_status_register_ceiling(live));
+    let reserved = floor.max(pinned_high);
     let reserved = anchors
         .last()
         .map_or(reserved, |anchor| reserved.max(anchor.body_floor));
-    register >= reserved && !value_stack.contains(&register)
+    register >= reserved && !live.contains(&register) && !value_stack.contains(&register)
 }
 
 /// bd-9vouw.23: a for-in/for-of iterator that stays on the lowering value
@@ -35690,6 +35705,12 @@ fn store_result_needs_copy(
     stored: Reg,
     iterator_cleanup_labels: &BTreeMap<u32, Reg>,
 ) -> bool {
+    // bd-9vouw.494: an op that pops the value at once (an operator, a
+    // property read, a return) reads the binding's register before anything
+    // can write the binding again, so it needs no copy either: a method
+    // call's receiver store feeds its method lookup directly. Operator and
+    // property-read results never reuse a binding's register, which sits
+    // below every reusable temporary (pure_op_result_register).
     !matches!(
         next,
         None | Some(
@@ -35703,6 +35724,9 @@ fn store_result_needs_copy(
                 | Ir1Op::JumpIfFalsyConsume { .. }
                 | Ir1Op::JumpIfTruthy { .. }
                 | Ir1Op::JumpIfNullish { .. }
+                | Ir1Op::BinaryOp { .. }
+                | Ir1Op::GetProperty { .. }
+                | Ir1Op::Return
         )
     ) && !iterator_cleanup_labels
         .values()

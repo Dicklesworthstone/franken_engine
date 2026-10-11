@@ -214,4 +214,48 @@ fn a_method_call_compound_writes_its_binding_in_place() {
         (obj, 0),
         "receiver store then lookup: {body:?}"
     );
+    // The call reads the receiver local itself, not a reloaded copy.
+    assert!(
+        body.iter().any(|instruction| matches!(
+            instruction,
+            Ir3Instruction::CallMethod { receiver, .. } if *receiver == obj
+        )),
+        "the call's receiver is the receiver local: {body:?}"
+    );
+}
+
+/// Callees and method-call receivers read in place: a callee or receiver the
+/// arguments reassign keeps the value read before them, nested and chained
+/// method calls, a computed method key, a short-lived local as callee, yields
+/// in an argument list, optional calls, a throwing argument. Node v22.2.0
+/// prints the line, as did the n65 frankenctl before this change (Bun 1.4.3
+/// agrees except where it runs the file as strict code, `g()` throwing, and
+/// prints function sources with double quotes).
+#[test]
+fn callees_and_receivers_match_node() {
+    let source = r#"const out = [];
+function reassignCallee() { let f = (x) => 'f' + x; const g = (x) => 'g' + x; return f(f = g) + ',' + f(1); }
+function reassignReceiver() { let o = { n: 'A', m(x) { return this.n + (typeof x === 'object' ? x.n : x); } }; const other = { n: 'B', m() { return 'other'; } }; return o.m(o = other) + ',' + o.m(); }
+function nested() { const o = { v: 2, m(x) { return this.v * x; } }; const p = { v: 5, m(x) { return this.v + x; } }; return [o.m(o.m(3)), o.m(p.m(1)), p.m(o.m(p.m(0)))].join(); }
+function chained() { const a = { b: { c(x) { return x + 1; }, d: { e(y) { return this === a.b.d ? y * 10 : -1; } } } }; return a.b.c(1) + a.b.d.e(2); }
+function computedKey() { const o = { mx(v) { return v + 'x'; }, my(v) { return v + 'y'; } }; let k = 'm'; return o[k + 'x'](1) + o[(k = 'my')](2) + k; }
+function shortLivedCallee(n) { let r = 0; for (let i = 0; i < n; i++) { const h = (v) => v * i; r += h(2); } return r; }
+function* genArgs() { const o = { m(a, b) { return a + ':' + b; } }; const r = o.m(yield 1, yield 2); yield r; }
+function optionalCalls() { const o = { m(x) { return x * 2; } }; const n = null; return [o?.m(4), n?.m(5), o.m?.(6)].join(); }
+function pushLen() { const arr = []; for (let i = 0; i < 4; i++) arr.push(arr.length * 10); return arr.join('-'); }
+function throwingArgs() { let f = (x) => 'called' + x; const bad = { get v() { throw new Error('arg'); } }; try { f(bad.v); } catch (e) { out.push('argthrow:' + f(0)); } return 'ok'; }
+function thisInCallee() { const o = { k: 7, get() { return this.k; } }; const g = o.get; let r; try { r = g(); } catch (e) { r = 'TypeError'; } return o.get() + ',' + r; }
+function argsAliasReceiver() { const o = { list: [1], add(x) { this.list.push(x.list.length); return this; } }; return o.add(o).add(o).list.join(); }
+const gi = genArgs(); gi.next(); gi.next('A'); const gr = gi.next('B').value;
+out.push(reassignCallee(), reassignReceiver(), nested(), chained(), computedKey(), shortLivedCallee(4), gr, optionalCalls(), pushLen(), throwingArgs(), thisInCallee(), argsAliasReceiver());
+let tf = (x) => x + 1; let tr = tf(tf = (x) => x * 100); const to = { v: 3, m(x) { return this.v + x; } }; let tsum = 0; for (let i = 0; i < 3; i++) { tsum += to.m(to.m(i)); }
+out.push(tr, tf(2), tsum);
+console.log(out.join(' '));
+"#;
+    assert_eq!(
+        console_lines(source),
+        [
+            r#"argthrow:called0 f(x) => 'g' + x,g1 AB,other 12,12,15 22 1x2ymy 12 A:B 8,,12 0-10-20-30 ok 7,undefined 1,1,2 (x) => x * 1001 200 21"#
+        ]
+    );
 }

@@ -9372,6 +9372,12 @@ fn lower_ir2_to_ir3_with_input_hash(
                         && pinned_read_consumed_in_place(&ir2.ops, op_index)
                     {
                         value_stack.push(source_reg);
+                    } else if !compound_reads_in_place.contains(&source_reg)
+                        && call_operand_reads_in_place(&ir2.ops, op_index, *binding_id)
+                    {
+                        // A call's callee or a method call's receiver local
+                        // (bd-9vouw.494).
+                        value_stack.push(source_reg);
                     } else {
                         let dst = alloc_register(&mut register_cursor);
                         ir3.instructions.push(Ir3Instruction::Move {
@@ -11859,6 +11865,11 @@ fn lower_ir2_to_ir3_with_input_hash(
                                     op_index,
                                     *binding_id,
                                 ))
+                            || call_operand_reads_in_place(
+                                &annotated_body_ops,
+                                op_index,
+                                *binding_id,
+                            )
                             || matches!(
                                 annotated_body_ops.get(op_index + 1).map(|next| &next.inner),
                                 Some(Ir1Op::Return)
@@ -35819,6 +35830,72 @@ fn update_assignment_ignores_operand(next: Option<&Ir1Op>) -> bool {
     )
 }
 
+/// How far the in-place scans below look ahead: every read scans, so an
+/// unbounded scan of nested right sides or argument lists was quadratic.
+const STRAIGHT_LINE_SCAN_LIMIT: usize = 64;
+
+/// The (pops, pushes) of an op that runs no branch and does not write
+/// `binding_id`, for the in-place scans below; `None` for every other op
+/// (a jump, a label, a write of the binding, an op whose effect is not
+/// listed), which ends a scan with a copy.
+fn straight_line_stack_effect(op: &Ir1Op, binding_id: BindingId) -> Option<(usize, usize)> {
+    Some(match op {
+        Ir1Op::LoadLiteral { .. } | Ir1Op::LoadName { .. } | Ir1Op::LoadBinding { .. } => (0, 1),
+        Ir1Op::StoreBinding { binding_id: other }
+        | Ir1Op::AssignOp {
+            binding_id: other, ..
+        } if *other != binding_id => (1, 1),
+        Ir1Op::GetProperty {
+            key: Ir1PropertyKey::Static(_),
+        }
+        | Ir1Op::UnaryOp { .. } => (1, 1),
+        Ir1Op::GetProperty {
+            key: Ir1PropertyKey::Dynamic,
+        }
+        | Ir1Op::BinaryOp { .. } => (2, 1),
+        Ir1Op::Call { arg_count } => ((*arg_count as usize).saturating_add(1), 1),
+        Ir1Op::CallMethod { arg_count } => ((*arg_count as usize).saturating_add(2), 1),
+        _ => return None,
+    })
+}
+
+/// bd-9vouw.494: whether the read of register binding `binding_id` at
+/// `ops[index]` is a call's callee or a method call's receiver that only
+/// straight-line argument code separates from the call: scanning forward
+/// over ops whose stack effect is known, the op that consumes the read is a
+/// Call taking it as its callee or a CallMethod taking it as its receiver
+/// (the method value sits below it), and no op in between writes the binding
+/// or branches. A call reads its callee and receiver when it runs, and a
+/// register binding is written only by its own ops (a closure's is scoped),
+/// so the register still holds the value read: a method call's receiver
+/// local (stored once, before the method lookup) and `f(x)` of a local `f`
+/// need no copy. `f(f = g)` still calls a copy.
+fn call_operand_reads_in_place(ops: &[Ir2Op], index: usize, binding_id: BindingId) -> bool {
+    let mut above = 0usize;
+    for op in ops
+        .iter()
+        .skip(index.saturating_add(1))
+        .take(STRAIGHT_LINE_SCAN_LIMIT)
+    {
+        let Some((pops, pushes)) = straight_line_stack_effect(&op.inner, binding_id) else {
+            return false;
+        };
+        if pops > above {
+            return match op.inner {
+                Ir1Op::Call { arg_count } => {
+                    arg_count as usize == above && pops == above.saturating_add(1)
+                }
+                Ir1Op::CallMethod { arg_count } => {
+                    arg_count as usize == above && pops == above.saturating_add(2)
+                }
+                _ => false,
+            };
+        }
+        above = above - pops + pushes;
+    }
+    false
+}
+
 /// Whether the read of register binding `binding_id` at `ops[index]` is the
 /// left operand of a compound assignment that straight-line code alone
 /// separates from its operator: scanning forward over ops whose stack effect
@@ -35829,41 +35906,22 @@ fn update_assignment_ignores_operand(next: Option<&Ir1Op>) -> bool {
 /// ops (a closure's binding is scoped instead), so after such an rhs the
 /// register still holds the value read and the operator can read it in
 /// place. Any other op, or a right side longer than
-/// `COMPOUND_IN_PLACE_SCAN_LIMIT` ops, ends the scan with a copy (every read
-/// scans, so an unbounded scan of nested right sides was quadratic).
+/// [`STRAIGHT_LINE_SCAN_LIMIT`] ops, ends the scan with a copy.
 fn compound_left_operand_reads_in_place(
     ops: &[Ir2Op],
     index: usize,
     binding_id: BindingId,
 ) -> bool {
-    const COMPOUND_IN_PLACE_SCAN_LIMIT: usize = 64;
     // Values pushed above the read and not yet consumed.
     let mut above = 0usize;
     for (offset, op) in ops
         .iter()
         .enumerate()
         .skip(index.saturating_add(1))
-        .take(COMPOUND_IN_PLACE_SCAN_LIMIT)
+        .take(STRAIGHT_LINE_SCAN_LIMIT)
     {
-        let (pops, pushes) = match &op.inner {
-            Ir1Op::LoadLiteral { .. } | Ir1Op::LoadName { .. } | Ir1Op::LoadBinding { .. } => {
-                (0, 1)
-            }
-            Ir1Op::StoreBinding { binding_id: other }
-            | Ir1Op::AssignOp {
-                binding_id: other, ..
-            } if *other != binding_id => (1, 1),
-            Ir1Op::GetProperty {
-                key: Ir1PropertyKey::Static(_),
-            }
-            | Ir1Op::UnaryOp { .. } => (1, 1),
-            Ir1Op::GetProperty {
-                key: Ir1PropertyKey::Dynamic,
-            }
-            | Ir1Op::BinaryOp { .. } => (2, 1),
-            Ir1Op::Call { arg_count } => ((*arg_count as usize).saturating_add(1), 1),
-            Ir1Op::CallMethod { arg_count } => ((*arg_count as usize).saturating_add(2), 1),
-            _ => return false,
+        let Some((pops, pushes)) = straight_line_stack_effect(&op.inner, binding_id) else {
+            return false;
         };
         if pops > above {
             return above == 1

@@ -502,6 +502,13 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
         function: &Value,
     ) -> Result<Value, InterpreterError> {
+        if let Value::BuiltinFunction(builtin) = function
+            && builtin.kind == BuiltinFunctionKind::FunctionPrototype
+            && let Some(backing) = Self::builtin_function_property_object(builtin)
+        {
+            let link = self.ordinary_get_prototype_of(backing)?;
+            return Ok(self.prototype_value_for_link(module, link));
+        }
         if let Some(module) = module {
             let is_constructor_candidate = match function {
                 Value::Function(_) => true,
@@ -524,9 +531,7 @@ impl InterpreterCore {
                     .get(backing.0 as usize)
                     .and_then(|object| object.prototype)
             {
-                return Ok(self
-                    .function_value_for_backing(module, prototype)
-                    .unwrap_or(Value::Object(prototype)));
+                return Ok(self.prototype_value_for_link(Some(module), Some(prototype)));
             }
         }
         // ES2020 22.2.5: every concrete typed array constructor's
@@ -555,9 +560,9 @@ impl InterpreterCore {
                 BuiltinFunction::function_constructor(),
             ));
         }
-        Ok(Value::Object(self.ensure_builtin_prototype(
+        self.builtin_prototype_value(
             Self::function_intrinsic_prototype_name(function).unwrap_or("Function"),
-        )?))
+        )
     }
 
     /// [[SetPrototypeOf]] of a user function value (`Object.setPrototypeOf(D,
@@ -581,7 +586,7 @@ impl InterpreterCore {
             Value::Null => None,
             Value::Object(id) => Some(*id),
             callable if callable.is_callable() => {
-                match self.ensure_function_own_property_object(module, callable)? {
+                match self.own_property_holder(Some(module), callable, true)? {
                     Some(parent_backing) => Some(parent_backing),
                     None => return Ok(true),
                 }
@@ -630,9 +635,9 @@ impl InterpreterCore {
             Value::Null => Some(None),
             Value::Object(id) => Some(Some(*id)),
             Value::BuiltinFunction(builtin)
-                if builtin.kind == BuiltinFunctionKind::CallableProxy =>
+                if Self::builtin_function_property_object(builtin).is_some() =>
             {
-                Some(Some(Self::callable_proxy_record_id(builtin)?))
+                Self::builtin_function_property_object(builtin).map(Some)
             }
             callable if callable.is_callable() => match module {
                 Some(module) => self
@@ -656,6 +661,12 @@ impl InterpreterCore {
         let Some(id) = link else {
             return Value::Null;
         };
+        if self.builtin_prototypes.get("Function") == Some(&id) {
+            return Value::BuiltinFunction(BuiltinFunction::bound_to(
+                BuiltinFunctionKind::FunctionPrototype,
+                id,
+            ));
+        }
         if let Some(module) = module
             && self.heap.get(id.0 as usize).is_some_and(|object| {
                 ["length", "name"].iter().all(|key| {
@@ -681,6 +692,11 @@ impl InterpreterCore {
     fn integrity_prototype(value: &Value) -> Result<Option<ObjectId>, InterpreterError> {
         match value {
             Value::Object(id) => Ok(Some(*id)),
+            Value::BuiltinFunction(builtin)
+                if Self::builtin_function_property_object(builtin).is_some() =>
+            {
+                Ok(Self::builtin_function_property_object(builtin))
+            }
             Value::Null => Ok(None),
             other => Err(Self::integrity_type_error(
                 "object or null prototype",
@@ -762,7 +778,7 @@ impl InterpreterCore {
                 "setPrototypeOf",
                 vec![
                     self.proxy_trap_target(id, target),
-                    prototype.map_or(Value::Null, Value::Object),
+                    self.prototype_value_for_link(module, prototype),
                 ],
             )?
             else {

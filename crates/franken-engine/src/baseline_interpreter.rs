@@ -3767,6 +3767,10 @@ pub enum BuiltinFunctionKind {
     /// accessor whose getter is the `"Object.__proto__"` PrototypeGetter
     /// (bd-9vouw.284). Append only.
     ObjectProtoSetter,
+    /// %Function.prototype% (ES2020 19.2.3): a callable, non-constructible
+    /// function that returns undefined. Its bound object is the realm's
+    /// canonical Function prototype property storage (bd-9vouw.346).
+    FunctionPrototype,
 }
 
 /// Annex B B.2.2.2-14: each String HTML method's tag and attribute name.
@@ -5204,6 +5208,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::Require => "require",
             BuiltinFunctionKind::RequireResolve => "resolve",
             BuiltinFunctionKind::FunctionConstructor => "Function",
+            BuiltinFunctionKind::FunctionPrototype => "",
             BuiltinFunctionKind::GeneratedFunction => "anonymous",
             BuiltinFunctionKind::IteratorNext
             | BuiltinFunctionKind::GeneratorNext
@@ -6032,6 +6037,7 @@ impl BuiltinFunction {
             | K::PromiseFinallyThrower
             | K::ProxyRevoke
             | K::PrototypeGetter
+            | K::FunctionPrototype
             | K::ThrowTypeError => Some(0),
             _ => None,
         };
@@ -41875,6 +41881,7 @@ impl InterpreterCore {
             }
         }
         match builtin.kind {
+            BuiltinFunctionKind::FunctionPrototype => Ok(Value::Undefined),
             BuiltinFunctionKind::AsyncGeneratorNext
             | BuiltinFunctionKind::AsyncGeneratorReturn
             | BuiltinFunctionKind::AsyncGeneratorThrow => self.dispatch_async_generator_resume(
@@ -46064,7 +46071,7 @@ impl InterpreterCore {
                 }
                 let enumerable = self.object_own_property_is_enumerable(&receiver, &property)
                     || self
-                        .function_own_property_object(module, &receiver)?
+                        .own_property_holder(Some(module), &receiver, false)?
                         .is_some_and(|backing| {
                             self.object_own_property_is_enumerable(
                                 &Value::Object(backing),
@@ -46115,7 +46122,7 @@ impl InterpreterCore {
             // non-callable `this` instead of throwing as `instanceof` does.
             BuiltinFunctionKind::FunctionPrototypeHasInstance => {
                 let constructor = receiver.unwrap_or(Value::Undefined);
-                if !self.is_callable_for_has_instance(&constructor) {
+                if !constructor.is_callable() {
                     return Ok(Value::Bool(false));
                 }
                 let candidate = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
@@ -53994,16 +54001,20 @@ impl InterpreterCore {
                     // intrinsic prototype (after the match).
                     // A callable proxy's [[Get]] is its trap's (or its
                     // target's) answer, never continued here.
-                    let inherited_base =
-                        if function_backing.is_none() && !Self::is_callable_proxy(&obj_val) {
-                            Self::function_intrinsic_prototype_name(&obj_val)
-                                .or(self
-                                    .exotic_intrinsic_prototype_name(&obj_val)
-                                    .filter(|name| *name != "Promise"))
-                                .map(|prototype| (prototype, obj_val.clone()))
-                        } else {
-                            None
-                        };
+                    let inherited_base = if function_backing.is_none()
+                        && !matches!(&obj_val, Value::BuiltinFunction(builtin)
+                                if matches!(builtin.kind,
+                                    BuiltinFunctionKind::CallableProxy
+                                    | BuiltinFunctionKind::FunctionPrototype))
+                    {
+                        Self::function_intrinsic_prototype_name(&obj_val)
+                            .or(self
+                                .exotic_intrinsic_prototype_name(&obj_val)
+                                .filter(|name| *name != "Promise"))
+                            .map(|prototype| (prototype, obj_val.clone()))
+                    } else {
+                        None
+                    };
 
                     // The prototype object a primitive base's property came
                     // from, for the stored-label join below.
@@ -54181,7 +54192,7 @@ impl InterpreterCore {
                                     // bd-9vouw.34: `Date.prototype` and
                                     // `Promise.prototype` are the realm's
                                     // intrinsics (non-writable in ES2020).
-                                    Value::Object(self.ensure_builtin_prototype(name)?)
+                                    self.builtin_prototype_value(name)?
                                 } else if builtin.kind == BuiltinFunctionKind::Require
                                     && property_key.as_str() == Some("main")
                                 {
@@ -56337,7 +56348,7 @@ impl InterpreterCore {
                                     .function_value_for_backing(module, home_object)
                                     .is_some() =>
                             {
-                                Value::Object(self.ensure_builtin_prototype("Function")?)
+                                self.builtin_prototype_value("Function")?
                             }
                             (None, false) => self
                                 .ordinary_get_prototype_of(home_object)?
@@ -58343,7 +58354,7 @@ impl InterpreterCore {
             if matches!(&handler, Value::BuiltinFunction(builtin)
                 if builtin.kind == BuiltinFunctionKind::FunctionPrototypeHasInstance)
             {
-                if !self.is_callable_for_has_instance(&constructor) {
+                if !constructor.is_callable() {
                     return Ok((Value::Bool(false), None));
                 }
                 return Ok((
@@ -58372,16 +58383,6 @@ impl InterpreterCore {
             self.ordinary_instanceof(module, candidate, constructor)?,
             None,
         ))
-    }
-
-    /// IsCallable(C) for OrdinaryHasInstance: a callable value, or
-    /// %Function.prototype%, which is a function in the spec but an ordinary
-    /// object here. `[] instanceof Function.prototype` therefore reads its
-    /// `prototype`, a TypeError when that is not an object (bd-9vouw.268).
-    fn is_callable_for_has_instance(&self, value: &Value) -> bool {
-        value.is_callable()
-            || matches!(value, Value::Object(id)
-                if self.builtin_prototypes.get("Function") == Some(id))
     }
 
     /// A callable `Symbol.hasInstance` on an object target, or among a user
@@ -58425,7 +58426,7 @@ impl InterpreterCore {
         // ES2020 12.10.4 InstanceofOperator step 4: the target must be
         // callable, not constructible; a generator function has an object
         // `prototype` its generators inherit from (bd-9vouw.120).
-        if !self.is_callable_for_has_instance(&constructor) {
+        if !constructor.is_callable() {
             return Err(InterpreterError::TypeError {
                 expected: "callable instanceof target".to_string(),
                 got: constructor.type_name().to_string(),
@@ -58730,12 +58731,16 @@ impl InterpreterCore {
         function: &Value,
         key: &RuntimePropertyKey,
     ) -> Result<bool, InterpreterError> {
-        // A callable proxy answers through its `has` trap (bd-9vouw.132).
+        // A callable proxy and %Function.prototype% have complete property
+        // chains on their backing objects (bd-9vouw.132, bd-9vouw.346).
         if let Value::BuiltinFunction(builtin) = function
-            && builtin.kind == BuiltinFunctionKind::CallableProxy
+            && matches!(
+                builtin.kind,
+                BuiltinFunctionKind::CallableProxy | BuiltinFunctionKind::FunctionPrototype
+            )
+            && let Some(backing) = Self::builtin_function_property_object(builtin)
         {
-            let proxy = Self::callable_proxy_record_id(builtin)?;
-            return self.proxy_aware_has_runtime_property(Some(module), proxy, key, 0);
+            return self.proxy_aware_has_runtime_property(Some(module), backing, key, 0);
         }
         let own = match self.function_own_property_exists(module, function, key)? {
             Some(own) => own,
@@ -62866,12 +62871,7 @@ impl InterpreterCore {
         // backing object (prototype_link_for_value: `Object.create(fn)`,
         // `F.prototype = fn; new F()`), so a link to that object is the
         // function. Without a backing no object links to it.
-        let needle_backing = match module {
-            Some(module) if needle.is_callable() => {
-                self.function_own_property_object(module, needle)?
-            }
-            _ => None,
-        };
+        let needle_backing = self.own_property_holder(module, needle, false)?;
         let mut current = value.clone();
         for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
             let next = match &current {
@@ -62908,7 +62908,8 @@ impl InterpreterCore {
                 _ => return Ok(false),
             };
             if next == *needle
-                || matches!((&next, needle_backing), (Value::Object(id), Some(backing)) if *id == backing)
+                || (needle_backing.is_some()
+                    && self.own_property_holder(module, &next, false)? == needle_backing)
             {
                 return Ok(true);
             }
@@ -63199,6 +63200,8 @@ impl InterpreterCore {
         // Consult virtual function prototypes only after real own/inherited
         // properties, including an explicitly stored undefined, have won.
         if receiver.is_callable()
+            && !matches!(&receiver, Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::FunctionPrototype)
             && let Some(value) = Self::function_prototype_property(key_text)
             && !self.canonical_virtual_property_deleted("Function", key)
         {
@@ -66160,7 +66163,12 @@ impl InterpreterCore {
                 .filter(|(entry_owner, key, _)| *entry_owner == owner && !key.starts_with('['))
                 .map(|(_, key, _)| *key);
             let mut names: Vec<&str> = Vec::new();
-            for key in std::iter::once("constructor").chain(methods) {
+            let leading: &[&str] = if name == "Function" {
+                &["length", "name", "constructor"]
+            } else {
+                &["constructor"]
+            };
+            for key in leading.iter().copied().chain(methods) {
                 if !names.contains(&key)
                     && self
                         .canonical_prototype_own_virtual_value(object_id, key)
@@ -67353,12 +67361,20 @@ impl InterpreterCore {
                 );
             }
             Value::BuiltinFunction(builtin)
-                if builtin.kind == BuiltinFunctionKind::CallableProxy =>
+                if matches!(
+                    builtin.kind,
+                    BuiltinFunctionKind::CallableProxy | BuiltinFunctionKind::FunctionPrototype
+                ) =>
             {
-                let proxy = Self::callable_proxy_record_id(builtin)?;
+                let backing = Self::builtin_function_property_object(builtin).ok_or_else(|| {
+                    InterpreterError::TypeError {
+                        expected: "built-in function with property storage".to_string(),
+                        got: builtin.display_name().to_string(),
+                    }
+                })?;
                 return self.proxy_aware_get_runtime_property(
                     Some(module),
-                    proxy,
+                    backing,
                     key,
                     receiver,
                     depth,
@@ -67469,7 +67485,7 @@ impl InterpreterCore {
             {
                 let prototype = Self::materialized_global_prototype_name(builtin)
                     .expect("checked by the guard");
-                Value::Object(self.ensure_builtin_prototype(prototype)?)
+                self.builtin_prototype_value(prototype)?
             }
             Value::BuiltinFunction(builtin)
                 if builtin.kind == BuiltinFunctionKind::Require && name == "main" =>
@@ -82013,11 +82029,12 @@ impl InterpreterCore {
                 let Some(property_object) = Self::builtin_function_property_object(&builtin) else {
                     return Ok(Value::Undefined);
                 };
-                Ok(self
-                    .heap
-                    .get(property_object.0 as usize)
-                    .and_then(|object| object.own_runtime_property_value(&key))
-                    .unwrap_or(Value::Undefined))
+                self.iterator_protocol_property(
+                    module,
+                    property_object,
+                    &key,
+                    Value::BuiltinFunction(builtin),
+                )
             }
             other => Err(InterpreterError::TypeError {
                 expected: "object".to_string(),
@@ -92070,7 +92087,7 @@ impl InterpreterCore {
                     got: format!("{} argument(s)", args.count),
                 });
             }
-            return Ok(Value::Object(self.ensure_builtin_prototype(name)?));
+            return self.builtin_prototype_value(name);
         }
 
         // bd-9vouw.17: declared factory for a static builtin read as a value.
@@ -107638,14 +107655,9 @@ impl InterpreterCore {
         let mut names = match self.own_property_holder(module, function, true)? {
             Some(backing) => {
                 self.join_pending_hostcall_stream_label(backing)?;
-                self.heap
-                    .get(backing.0 as usize)
-                    .ok_or(InterpreterError::ObjectNotFound { id: backing.0 })?
-                    .properties
-                    .exact_keys()
+                self.proxy_aware_own_property_keys(module, backing, 0)?
                     .into_iter()
-                    .filter(|key| self.own_runtime_property_visible(backing, key))
-                    .map(Value::Str)
+                    .filter(|key| matches!(key, Value::Str(_)))
                     .collect::<Vec<_>>()
             }
             None => Vec::new(),
@@ -107702,7 +107714,7 @@ impl InterpreterCore {
             // writable (ES2020 19.1.2.19, 20.1.2.15, ...).
             Value::BuiltinFunction(builtin) => {
                 let value = match Self::materialized_global_prototype_name(builtin) {
-                    Some(name) => Value::Object(self.ensure_builtin_prototype(name)?),
+                    Some(name) => self.builtin_prototype_value(name)?,
                     None if builtin.kind == BuiltinFunctionKind::StandardConstructor => {
                         self.standard_constructor_property(builtin, "prototype")?
                     }
@@ -108531,6 +108543,14 @@ impl InterpreterCore {
             depth += 1;
         }
         false
+    }
+
+    /// The guest-visible value of an intrinsic prototype. The heap keeps
+    /// ObjectId links for property storage, while %Function.prototype%
+    /// exposes the callable value owning that same storage (bd-9vouw.346).
+    fn builtin_prototype_value(&mut self, name: &str) -> Result<Value, InterpreterError> {
+        let prototype = self.ensure_builtin_prototype(name)?;
+        Ok(self.prototype_value_for_link(None, Some(prototype)))
     }
 
     fn ensure_builtin_prototype(&mut self, name: &str) -> Result<ObjectId, InterpreterError> {
@@ -109813,6 +109833,11 @@ impl InterpreterCore {
     /// %Function.prototype%; `None` for a non-function.
     pub(super) fn function_intrinsic_prototype_name(value: &Value) -> Option<&'static str> {
         match value {
+            Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::FunctionPrototype =>
+            {
+                Some("Object")
+            }
             Value::Function(_) | Value::Closure(_) | Value::BuiltinFunction(_) => Some("Function"),
             Value::GeneratorFunction(_) => Some("GeneratorFunction"),
             Value::AsyncFunction(_) => Some("AsyncFunction"),
@@ -109892,6 +109917,7 @@ impl InterpreterCore {
             builtin.kind,
             BuiltinFunctionKind::DateConstructor
                 | BuiltinFunctionKind::PromiseConstructor
+                | BuiltinFunctionKind::FunctionPrototype
                 | BuiltinFunctionKind::EmitterOnceWrapper
                 // A callable proxy's properties are its proxy record's: every
                 // property operation reaches the traps (bd-9vouw.132).
@@ -111194,6 +111220,14 @@ impl InterpreterCore {
             // the empty name (ES2020 19.2.3), bd-9vouw.17.
             "Function" if key == "length" => Some(Value::Int(0)),
             "Function" if key == "name" => Some(Value::str("")),
+            "Function"
+                if matches!(
+                    key,
+                    "hasOwnProperty" | "propertyIsEnumerable" | "isPrototypeOf"
+                ) =>
+            {
+                None
+            }
             "Function" => Self::function_prototype_property(key),
             "Promise" => defined(Self::promise_property_value(key)),
             // DataView: the accessors instances already expose, served from

@@ -1,0 +1,113 @@
+name: Runtime builtin semantics
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.cargo/**'
+      - '.github/workflows/runtime-builtin-semantics.yml'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_HOME: ${{ runner.temp }}/franken-builtin-cargo
+      CARGO_TARGET_DIR: ${{ runner.temp }}/franken-builtin-target-${{ github.run_id }}-${{ github.run_attempt }}
+      CARGO_BUILD_JOBS: '1'
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_TERM_COLOR: never
+      CARGO_HTTP_USER_AGENT: 'OpenAI File Downloader, XaiImageApiFetch/1.0'
+      CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
+      GIT_TERMINAL_PROMPT: '0'
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: http.userAgent
+      GIT_CONFIG_VALUE_0: 'OpenAI File Downloader, XaiImageApiFetch/1.0'
+    steps:
+      - name: Check out the exact public repository revision
+        id: checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REPOSITORY" == "Dicklesworthstone/franken_engine" ]]
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test ! -e .git
+          git init --initial-branch=main .
+          git remote add origin https://github.com/Dicklesworthstone/franken_engine.git
+          git fetch --no-tags --depth=1 origin "$GITHUB_SHA"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git diff --exit-code
+
+      - name: Install the pinned official Rust distribution
+        id: toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib, tomllib
+          pin = tomllib.loads(pathlib.Path("rust-toolchain.toml").read_text())
+          if pin["toolchain"]["channel"] != "nightly-2026-09-21":
+              raise SystemExit("Review CI when changing the Rust pin")
+          PY
+          fe_toolchain_root="$RUNNER_TEMP/franken-builtin-toolchain"
+          mkdir "$fe_toolchain_root"
+          cd "$fe_toolchain_root"
+          for component in rustc rust-std cargo; do
+            curl --fail --location --silent --show-error --retry 2 \
+              --connect-timeout 30 --max-time 180 \
+              --user-agent "$CARGO_HTTP_USER_AGENT" \
+              "https://static.rust-lang.org/dist/2026-09-21/${component}-nightly-x86_64-unknown-linux-gnu.tar.xz" \
+              --output "${component}-nightly-x86_64-unknown-linux-gnu.tar.xz"
+          done
+          # SHA-256 values from the official 2026-09-21 channel manifest.
+          sha256sum --check <<'SHA256'
+          cd3810538dc6f5628a80216e61b084285fa2eb80096085f0d39baf349edf1728  rustc-nightly-x86_64-unknown-linux-gnu.tar.xz
+          9e9d82a1056f7ba9240513bad7f3667b3f6ba09e51cd6e3fec90da8d61b1bcbc  rust-std-nightly-x86_64-unknown-linux-gnu.tar.xz
+          f03b8ec41273cac775a8b0302f734234a66a09a443100ddf66ebc62cad7b7b5c  cargo-nightly-x86_64-unknown-linux-gnu.tar.xz
+          SHA256
+          for component in rustc rust-std cargo; do
+            tar -xJf "${component}-nightly-x86_64-unknown-linux-gnu.tar.xz"
+            sh "${component}-nightly-x86_64-unknown-linux-gnu/install.sh" \
+              --prefix="$fe_toolchain_root/installed" --disable-ldconfig
+          done
+          printf '%s\n' "$fe_toolchain_root/installed/bin" >> "$GITHUB_PATH"
+          printf 'RUSTC=%s\nRUSTDOC=%s\n' \
+            "$fe_toolchain_root/installed/bin/rustc" \
+            "$fe_toolchain_root/installed/bin/rustdoc" >> "$GITHUB_ENV"
+          "$fe_toolchain_root/installed/bin/rustc" --version --verbose
+          "$fe_toolchain_root/installed/bin/cargo" --version
+
+      - name: Check the complete production engine library
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo check --locked --no-default-features -p frankenengine-engine --lib
+
+      - name: Execute builtin, arguments, and property lookup regressions
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --no-default-features -p frankenengine-engine --no-fail-fast \
+            --test builtin_prototype_own_methods \
+            --test arguments_object_bd_9vouw_25 \
+            --test object_json_globals_bd9a8cz2 \
+            -- --nocapture --test-threads=1
+
+      - name: Confirm tracked sources and manifests remain unchanged
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git diff --exit-code

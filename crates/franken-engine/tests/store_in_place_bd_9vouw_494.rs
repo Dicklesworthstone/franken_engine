@@ -259,3 +259,53 @@ console.log(out.join(' '));
         ]
     );
 }
+
+/// Literal elements, keys and values read in place: a later operand of the
+/// same literal that writes the binding (the earlier operand keeps the old
+/// value), nested, returned and looped literals, computed keys, spreads, a
+/// `__proto__` key, accessors, shorthand properties and methods, a throwing
+/// operand, a literal that reads the binding it is stored to. Node v22.2.0
+/// and Bun 1.4.3 print the line, as did the n65 frankenctl before this
+/// change.
+#[test]
+fn literal_operands_match_node() {
+    let source = r##"const out = [];
+function point(x, y) { return { x: x, y: y }; }
+function laterWrites() { let x = 1; const a = { a: x, b: x = 5 }; let y = 1; const b = [y, y++, y]; let z = 2; const c = [z, (z += 1), z]; return JSON.stringify([a, b, c]); }
+function nestedLits(x, y) { return JSON.stringify({ a: [x, y], b: { c: x, d: [y, [x]] } }); }
+function computedKey(x) { const k = 'kk'; return JSON.stringify({ [k]: x, [k + '2']: [x, k] }); }
+function spreads(x) { const arr = [1, 2]; const o = { p: 1 }; return JSON.stringify([[...arr, x], { ...o, x: x }]); }
+function protoKey(x) { const p = { inherited: 'yes' }; const o = { __proto__: p, x: x }; return o.inherited + o.x + Object.keys(o).length; }
+function accessors(x) { const o = { v: x, get g() { return this.v * 2; }, set s(n) { this.v = n; }, x }; o.s = 21; return o.g + ',' + o.x; }
+function methodsShorthand(x) { const o = { x, m() { return this.x + 1; } }; return o.m(); }
+function loopLits(n) { let acc = 0; for (let i = 0; i < n; i++) { const p = { a: i, b: [i, i * 2] }; acc += p.a + p.b[1]; } return acc; }
+function arrReturn(a, b) { return [b, a]; }
+function throwInLit(x) { const bad = { get v() { throw new Error('lit'); } }; try { const o = { a: x, b: bad.v }; return o; } catch (e) { return 'caught' + x; } }
+function selfRefLit() { let o = { n: 1 }; o = { prev: o, n: o.n + 1 }; return o.n + ',' + o.prev.n; }
+out.push(JSON.stringify(point(3, 4)), laterWrites(), nestedLits(1, 2), computedKey(7), spreads(9), protoKey(5), accessors(4), methodsShorthand(10), loopLits(5), arrReturn(1, 2).join(), throwInLit(3), selfRefLit());
+let tx = 1; const tl = { a: tx, b: [tx, tx = 2], c: tx }; let ty = 3; const tm = [ty, { ty }];
+out.push(JSON.stringify(tl), JSON.stringify(tm));
+console.log(out.join(' '));
+"##;
+    assert_eq!(
+        console_lines(source),
+        [
+            r##"{"x":3,"y":4} [{"a":1,"b":5},[1,1,2],[2,3,3]] {"a":[1,2],"b":{"c":1,"d":[2,[1]]}} {"kk":7,"kk2":[7,"kk"]} [[1,2,9],{"p":1,"x":9}] yes51 42,4 11 30 2,1 caught3 2,1 {"a":1,"b":[1,2],"c":2} [3,{"ty":3}]"##
+        ]
+    );
+}
+
+/// `return { x: x, y: y }` and `return [b, a]` read their parameters in
+/// place and return the literal from its own register: no Move at all.
+#[test]
+fn returned_literals_of_parameters_run_no_move() {
+    let body = function_bodies(
+        "function point(x, y) { return { x: x, y: y }; } function swap(a, b) { return [b, a]; }",
+    );
+    assert!(
+        !body
+            .iter()
+            .any(|instruction| matches!(instruction, Ir3Instruction::Move { .. })),
+        "{body:?}"
+    );
+}

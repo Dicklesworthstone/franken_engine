@@ -9373,10 +9373,10 @@ fn lower_ir2_to_ir3_with_input_hash(
                     {
                         value_stack.push(source_reg);
                     } else if !compound_reads_in_place.contains(&source_reg)
-                        && call_operand_reads_in_place(&ir2.ops, op_index, *binding_id)
+                        && straight_line_consumer_reads_in_place(&ir2.ops, op_index, *binding_id)
                     {
-                        // A call's callee or a method call's receiver local
-                        // (bd-9vouw.494).
+                        // A call's callee, a method call's receiver local or
+                        // a literal's element (bd-9vouw.494).
                         value_stack.push(source_reg);
                     } else {
                         let dst = alloc_register(&mut register_cursor);
@@ -11865,7 +11865,7 @@ fn lower_ir2_to_ir3_with_input_hash(
                                     op_index,
                                     *binding_id,
                                 ))
-                            || call_operand_reads_in_place(
+                            || straight_line_consumer_reads_in_place(
                                 &annotated_body_ops,
                                 op_index,
                                 *binding_id,
@@ -12727,15 +12727,26 @@ fn lower_ir2_to_ir3_with_input_hash(
                     let reserved_below = fn_statement_register_floor
                         .max(fn_pinned_register_high)
                         .max(live_status_register_ceiling(&fn_live_status_registers));
-                    let dst = compact_batch_literal(
-                        &mut ir3.instructions,
-                        dst,
-                        &operands,
-                        &fn_value_stack,
-                        reserved_below,
-                        &mut fn_reg,
-                        &mut fn_register_high_water,
+                    // A literal returned at once keeps its register: nothing
+                    // in the body runs after the Return reads it, so moving
+                    // it down only adds a Move (bd-9vouw.494).
+                    let returned = matches!(
+                        annotated_body_ops.get(op_index + 1).map(|next| &next.inner),
+                        Some(Ir1Op::Return)
                     );
+                    let dst = if returned {
+                        dst
+                    } else {
+                        compact_batch_literal(
+                            &mut ir3.instructions,
+                            dst,
+                            &operands,
+                            &fn_value_stack,
+                            reserved_below,
+                            &mut fn_reg,
+                            &mut fn_register_high_water,
+                        )
+                    };
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::NewObject { count } => {
@@ -12768,15 +12779,26 @@ fn lower_ir2_to_ir3_with_input_hash(
                     let reserved_below = fn_statement_register_floor
                         .max(fn_pinned_register_high)
                         .max(live_status_register_ceiling(&fn_live_status_registers));
-                    let dst = compact_batch_literal(
-                        &mut ir3.instructions,
-                        dst,
-                        &operands,
-                        &fn_value_stack,
-                        reserved_below,
-                        &mut fn_reg,
-                        &mut fn_register_high_water,
+                    // A literal returned at once keeps its register: nothing
+                    // in the body runs after the Return reads it, so moving
+                    // it down only adds a Move (bd-9vouw.494).
+                    let returned = matches!(
+                        annotated_body_ops.get(op_index + 1).map(|next| &next.inner),
+                        Some(Ir1Op::Return)
                     );
+                    let dst = if returned {
+                        dst
+                    } else {
+                        compact_batch_literal(
+                            &mut ir3.instructions,
+                            dst,
+                            &operands,
+                            &fn_value_stack,
+                            reserved_below,
+                            &mut fn_reg,
+                            &mut fn_register_high_water,
+                        )
+                    };
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::ArrayPush => {
@@ -35455,6 +35477,9 @@ fn retarget_store_producer(
 /// Without this, nested literals in one statement used
 /// every register until the statement ended (Test262's
 /// harness/byteConversionValues.js needed a 1295-register frame).
+/// bd-9vouw.494: operands below the floor are binding registers a value read
+/// in place (straight_line_consumer_reads_in_place), not temporaries; they
+/// are left alone, and the temporaries among the rest are still reclaimed.
 fn compact_batch_literal(
     instructions: &mut Vec<Ir3Instruction>,
     literal: Reg,
@@ -35464,11 +35489,14 @@ fn compact_batch_literal(
     cursor: &mut Reg,
     high_water: &mut Reg,
 ) -> Reg {
-    let Some(&lowest_operand) = operands.iter().min() else {
+    let Some(&lowest_operand) = operands
+        .iter()
+        .filter(|&&operand| operand >= reserved_below)
+        .min()
+    else {
         return literal;
     };
     if lowest_operand >= literal
-        || lowest_operand < reserved_below
         || value_stack
             .iter()
             .any(|register| *register >= lowest_operand)
@@ -35855,22 +35883,34 @@ fn straight_line_stack_effect(op: &Ir1Op, binding_id: BindingId) -> Option<(usiz
         | Ir1Op::BinaryOp { .. } => (2, 1),
         Ir1Op::Call { arg_count } => ((*arg_count as usize).saturating_add(1), 1),
         Ir1Op::CallMethod { arg_count } => ((*arg_count as usize).saturating_add(2), 1),
+        Ir1Op::NewArray { count } => (*count as usize, 1),
+        Ir1Op::NewObject { count } => ((*count as usize).saturating_mul(2), 1),
         _ => return None,
     })
 }
 
 /// bd-9vouw.494: whether the read of register binding `binding_id` at
-/// `ops[index]` is a call's callee or a method call's receiver that only
-/// straight-line argument code separates from the call: scanning forward
-/// over ops whose stack effect is known, the op that consumes the read is a
-/// Call taking it as its callee or a CallMethod taking it as its receiver
-/// (the method value sits below it), and no op in between writes the binding
-/// or branches. A call reads its callee and receiver when it runs, and a
-/// register binding is written only by its own ops (a closure's is scoped),
-/// so the register still holds the value read: a method call's receiver
-/// local (stored once, before the method lookup) and `f(x)` of a local `f`
-/// need no copy. `f(f = g)` still calls a copy.
-fn call_operand_reads_in_place(ops: &[Ir2Op], index: usize, binding_id: BindingId) -> bool {
+/// `ops[index]` reaches the op that consumes it across straight-line code
+/// only, and that op reads it in place when it runs: scanning forward over
+/// ops whose stack effect is known, with no op in between writing the
+/// binding or branching, the consumer is
+/// - a Call taking it as its callee, or a CallMethod taking it as its
+///   receiver (the method value sits below it): a call reads both when it
+///   runs;
+/// - a batch array or object literal taking it as an element, key or value:
+///   the literal's CreateDataProperty instructions read their registers when
+///   they run, after every operand is evaluated, and write only the fresh
+///   object.
+/// A register binding is written only by its own ops (a closure's is
+/// scoped), so the register still holds the value read: a method call's
+/// receiver local (stored once, before the method lookup), `f(x)` of a local
+/// `f` and `{ x: x, y: y }` need no copies. `f(f = g)` and
+/// `[x, x = 5]` still read copies.
+fn straight_line_consumer_reads_in_place(
+    ops: &[Ir2Op],
+    index: usize,
+    binding_id: BindingId,
+) -> bool {
     let mut above = 0usize;
     for op in ops
         .iter()
@@ -35888,6 +35928,7 @@ fn call_operand_reads_in_place(ops: &[Ir2Op], index: usize, binding_id: BindingI
                 Ir1Op::CallMethod { arg_count } => {
                     arg_count as usize == above && pops == above.saturating_add(2)
                 }
+                Ir1Op::NewArray { .. } | Ir1Op::NewObject { .. } => true,
                 _ => false,
             };
         }

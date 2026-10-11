@@ -10398,13 +10398,10 @@ fn lower_ir2_to_ir3_with_input_hash(
                         val: val_reg,
                     });
                 }
-                emit_array_length_store(
-                    &mut ir3.instructions,
-                    &mut constant_pool,
-                    &mut register_cursor,
-                    dst,
-                    *count,
-                );
+                // No length store: CreateDataProperty of index count - 1
+                // already made the length `count` (ArrayDefineOwnProperty),
+                // and a hole is defined and deleted, which keeps it
+                // (bd-9vouw.491).
                 let reserved_below = statement_register_floor
                     .max(pinned_register_high)
                     .max(live_status_register_ceiling(&live_status_registers));
@@ -12572,13 +12569,7 @@ fn lower_ir2_to_ir3_with_input_hash(
                             val: val_reg,
                         });
                     }
-                    emit_array_length_store(
-                        &mut ir3.instructions,
-                        &mut constant_pool,
-                        &mut fn_reg,
-                        dst,
-                        *count,
-                    );
+                    // No length store (bd-9vouw.491): see the top-level arm.
                     let reserved_below = fn_statement_register_floor
                         .max(fn_pinned_register_high)
                         .max(live_status_register_ceiling(&fn_live_status_registers));
@@ -34709,31 +34700,6 @@ fn extract_hostcall_capability(raw: &str) -> Option<String> {
     }
 
     None
-}
-
-fn emit_array_length_store(
-    instructions: &mut Vec<Ir3Instruction>,
-    constant_pool: &mut ConstantPool,
-    register_cursor: &mut Reg,
-    array_reg: Reg,
-    length: u32,
-) {
-    let key_reg = alloc_register(register_cursor);
-    let key_pool_index = push_constant_optimized(constant_pool, "length");
-    instructions.push(Ir3Instruction::LoadStr {
-        dst: key_reg,
-        pool_index: key_pool_index,
-    });
-    let length_reg = alloc_register(register_cursor);
-    instructions.push(Ir3Instruction::LoadInt {
-        dst: length_reg,
-        value: i64::from(length),
-    });
-    instructions.push(Ir3Instruction::SetProperty {
-        obj: array_reg,
-        key: key_reg,
-        val: length_reg,
-    });
 }
 
 fn lower_literal_to_ir3_optimized(

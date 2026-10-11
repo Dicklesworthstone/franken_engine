@@ -15944,6 +15944,12 @@ impl InterpreterCore {
             return Ok((state.value.clone(), state.label.clone()));
         }
 
+        // These are immutable global-object value properties, not mutable
+        // scope cells. A real local binding (including its TDZ) wins above.
+        if let Some(value) = Self::read_only_global_value(name) {
+            return Ok((value, Label::Public));
+        }
+
         if self.active_generated_function_artifact.is_none()
             && let Some(context) = self.active_cjs_context.as_ref()
         {
@@ -16416,6 +16422,31 @@ impl InterpreterCore {
             strict,
             reference_token,
         )
+    }
+
+    fn read_only_global_value(name: &str) -> Option<Value> {
+        match name {
+            "undefined" => Some(Value::Undefined),
+            "NaN" => Some(Value::Float(Float64::new(f64::NAN))),
+            "Infinity" => Some(Value::Float(Float64::new(f64::INFINITY))),
+            _ => None,
+        }
+    }
+
+    /// Install the immutable global value properties without creating Var
+    /// cells, which would let name assignments bypass their descriptors.
+    fn seed_read_only_global_values(&mut self, global: ObjectId) -> Result<(), InterpreterError> {
+        for name in ["undefined", "NaN", "Infinity"] {
+            let value = Self::read_only_global_value(name)
+                .expect("the immutable global value names are exhaustive");
+            self.set_object_property(global, name.to_string(), value)?;
+            self.set_own_property_attributes(
+                global,
+                &RuntimePropertyKey::String(JsString::from(name)),
+                READ_ONLY_VALUE_ATTRIBUTES,
+            )?;
+        }
+        Ok(())
     }
 
     /// The global object's NaN, Infinity and undefined are non-writable data
@@ -37957,6 +37988,7 @@ impl InterpreterCore {
                     NON_ENUMERABLE_DATA_ATTRIBUTES,
                 )?;
             }
+            self.seed_read_only_global_values(global)?;
             entries.push(("globalThis", Value::Object(global)));
             entries.push(("global", Value::Object(global)));
             let registry_bytes = Self::projected_generated_function_realm_registry_bytes();
@@ -38416,6 +38448,7 @@ impl InterpreterCore {
             // the way theirs do (PREDECLARED_RUNTIME_GLOBALS in lowering).
             self.inject_runtime_global_binding(name, Value::Object(global))?;
         }
+        self.seed_read_only_global_values(global)?;
         self.realm_global_object = Some(global);
         Ok(())
     }

@@ -436,3 +436,196 @@ fn object_has_own() {
         "TypeError,TypeError true false",
     );
 }
+
+/// bd-9vouw.296/.313: the parser must preserve these IdentifierReferences
+/// until lexical scope resolution. They are ordinary parameter/local names.
+#[test]
+fn immutable_global_names_can_be_shadowed_by_parameters() {
+    check(
+        "(function (undefined, NaN, Infinity) { \
+           return [undefined, NaN, Infinity, -Infinity, typeof undefined].join('|'); \
+         })(7, 8, 9);",
+        "7|8|9|-9|number",
+    );
+    check(
+        "((undefined = 3, NaN = undefined + 1, Infinity = NaN + 1) => \
+           [undefined, NaN, Infinity].join('|'))();",
+        "3|4|5",
+    );
+    check(
+        "(function ({ undefined, NaN }, ...Infinity) { \
+           return [undefined, NaN, Infinity.length, Infinity[0]].join('|'); \
+         })({ undefined: 4, NaN: 5 }, 6, 7);",
+        "4|5|2|6",
+    );
+    check(
+        "(function (undefined, NaN, Infinity) { 'use strict'; \
+           return undefined + NaN + Infinity; })(1, 2, 3);",
+        "6",
+    );
+}
+
+#[test]
+fn immutable_global_names_use_local_hoisting_and_mutation() {
+    check(
+        "function f() { var before = typeof NaN; var NaN = 2; \
+           return before + ':' + NaN; } f();",
+        "undefined:2",
+    );
+    check(
+        "function f() { let undefined = 4; const Infinity = 9; var NaN = 6; \
+           undefined++; NaN += 2; return [undefined, NaN, Infinity].join('|'); } f();",
+        "5|8|9",
+    );
+    check(
+        "var result; { let undefined = 4; const NaN = 5; let Infinity = 6; \
+           result = [undefined, NaN, Infinity].join('|'); } \
+         result + ':' + [typeof undefined, typeof NaN, typeof Infinity].join('|');",
+        "4|5|6:undefined|number|number",
+    );
+    check(
+        "function f(undefined) { var result = (() => {})(); \
+           return [typeof result, typeof (void 0), undefined].join('|'); } f(7);",
+        "undefined|undefined|7",
+    );
+}
+
+#[test]
+fn immutable_global_names_keep_capture_and_inner_name_identity() {
+    check(
+        "function outer() { let undefined = 3; return function () { \
+           undefined += 2; return () => undefined; }; } \
+         const next = outer(); const read = next(); next(); read();",
+        "7",
+    );
+    check(
+        "const f = function NaN() { return NaN; }; f() === f;",
+        "true",
+    );
+    check(
+        "var result; try { throw 7; } catch (Infinity) { result = () => Infinity; } \
+         result() + ':' + Infinity;",
+        "7:Infinity",
+    );
+    // A function's local binding ids start from zero, just like its
+    // enclosing unit's. An inherited global-origin marker must not win
+    // over a same-id parameter or var.
+    check(
+        "var undefined; function f(undefined) { return undefined; } \
+         f(7) + ':' + typeof undefined;",
+        "7:undefined",
+    );
+    check(
+        "var Infinity = 7; function outer() { var Infinity = 8; \
+           return () => Infinity; } Infinity + ':' + outer()();",
+        "Infinity:8",
+    );
+}
+
+#[test]
+fn immutable_global_name_shadows_keep_tdz_and_const_errors() {
+    check(
+        "let result; try { (function () { return undefined; let undefined = 7; })(); } \
+         catch (e) { result = e.name; } result;",
+        "ReferenceError",
+    );
+    check(
+        "let result; try { { result = typeof NaN; let NaN = 7; } } \
+         catch (e) { result = e.name; } result;",
+        "ReferenceError",
+    );
+    check(
+        "let result; try { (function (NaN = Infinity, Infinity = 1) {})(); } \
+         catch (e) { result = e.name; } result;",
+        "ReferenceError",
+    );
+    check(
+        "let result; try { (function () { const undefined = 7; undefined = 8; })(); } \
+         catch (e) { result = e.name; } result;",
+        "TypeError",
+    );
+}
+
+#[test]
+fn immutable_global_names_remain_ordinary_property_names() {
+    check(
+        "function f(undefined, NaN, Infinity) { \
+           const o = { undefined: 1, NaN: 2, Infinity: 3 }; \
+           const shorthand = { undefined, NaN, Infinity }; \
+           return [o.undefined, o.NaN, o.Infinity, shorthand.NaN, \
+             Object.keys(shorthand).join('/')].join('|'); } f(7, 8, 9);",
+        "1|2|3|8|undefined/NaN/Infinity",
+    );
+    check(
+        "function f(NaN) { const o = { [NaN]: 4 }; return o[NaN]; } f('key');",
+        "4",
+    );
+    check("(function (undefined) { return undef\\u0069ned; })(7);", "7");
+}
+
+#[test]
+fn immutable_global_names_resolve_through_with_objects() {
+    check(
+        "var result; with ({ undefined: 4, NaN: 5, Infinity: 6 }) { \
+           result = [undefined, NaN, Infinity].join('|'); } result;",
+        "4|5|6",
+    );
+    check(
+        "function f(undefined) { with ({ undefined: 9 }) { return undefined; } } f(3);",
+        "9",
+    );
+    check(
+        "var result; with ({}) { result = [typeof undefined, typeof NaN, Infinity].join('|'); } \
+         result;",
+        "undefined|number|Infinity",
+    );
+}
+
+#[test]
+fn immutable_global_values_keep_values_and_property_attributes() {
+    check(
+        "[typeof undefined, typeof NaN, typeof Infinity, NaN !== NaN, \
+          Infinity === 1 / 0, -Infinity === -1 / 0].join('|');",
+        "undefined|number|number|true|true|true",
+    );
+    check(
+        "['undefined', 'NaN', 'Infinity'].map(function (name) { \
+           const d = Object.getOwnPropertyDescriptor(globalThis, name); \
+           return [typeof d.value, d.writable, d.enumerable, d.configurable].join(':'); \
+         }).join('|');",
+        "undefined:false:false:false|number:false:false:false|number:false:false:false",
+    );
+    check(
+        "NaN += 1; Infinity++; undefined ??= 3; \
+         [NaN !== NaN, Infinity === 1 / 0, typeof undefined, \
+          delete NaN, delete Infinity, delete undefined].join('|');",
+        "true|true|undefined|false|false|false",
+    );
+    check(
+        "[Reflect.set(globalThis, 'NaN', 1), globalThis.NaN !== globalThis.NaN, \
+          globalThis.Infinity === Infinity].join('|');",
+        "false|true|true",
+    );
+    check(
+        "var NaN = 1; var Infinity = 2; var undefined = 3; \
+         function read() { return [NaN !== NaN, Infinity, typeof undefined].join('|'); } \
+         read();",
+        "true|Infinity|undefined",
+    );
+}
+
+#[test]
+fn generated_functions_resolve_immutable_global_names() {
+    check(
+        "Function('NaN += 1; Infinity++; undefined ??= 2; \
+           return NaN !== NaN && Infinity === 1 / 0 && typeof undefined === \"undefined\"')();",
+        "true",
+    );
+    check(
+        "let result; try { Function('\"use strict\"; NaN = 1')(); } \
+         catch (e) { result = e.name; } result;",
+        "TypeError",
+    );
+    check("Function('undefined', 'return undefined')(7);", "7");
+    check("Function('const NaN = 3; return NaN')();", "3");
+}

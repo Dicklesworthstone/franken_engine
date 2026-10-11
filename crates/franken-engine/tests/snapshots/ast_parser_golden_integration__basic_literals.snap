@@ -80,7 +80,9 @@ expression: scrubbed_actual
     },
     {
       "Expression": {
-        "expression": "UndefinedLiteral",
+        "expression": {
+          "Identifier": "undefined"
+        },
         "span": {
           "start_offset": "[START_OFFSET]",
           "end_offset": "[END_OFFSET]",

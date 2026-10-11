@@ -234,6 +234,40 @@ fn has_source_lexical_binding(binding_lookup: &BTreeMap<String, BindingId>, name
     binding_lookup.contains_key(&lexical_binding_sentinel(name))
 }
 
+/// A script's global declaration of an immutable value property cannot
+/// shadow that property. The origin distinguishes it from a block-local
+/// binding of the same spelling; function-local declarations clear the
+/// inherited marker because each function restarts its binding-id space.
+fn script_global_value_sentinel(name: &str) -> String {
+    format!("{LEXICAL_BINDING_SENTINEL_PREFIX}\0script-global-value\0{name}")
+}
+
+fn global_value_literal(name: &str) -> Option<Ir1Literal> {
+    match name {
+        "undefined" => Some(Ir1Literal::Undefined),
+        "NaN" => Some(Ir1Literal::Float(f64::NAN.to_bits())),
+        "Infinity" => Some(Ir1Literal::Float(f64::INFINITY.to_bits())),
+        _ => None,
+    }
+}
+
+/// Constant-fold only an immutable global reference, after name resolution.
+/// Synthetic UndefinedLiteral/FloatLiteral AST values remain literals even
+/// when source code declares a local with the corresponding global name.
+fn unshadowed_global_value(
+    binding_lookup: &BTreeMap<String, BindingId>,
+    name: &str,
+) -> Option<Ir1Literal> {
+    let value = global_value_literal(name)?;
+    let is_global = !has_source_lexical_binding(binding_lookup, name)
+        || binding_lookup
+            .get(&script_global_value_sentinel(name))
+            .is_some_and(|origin| {
+                binding_lookup.get(&capture_origin_sentinel(name)) == Some(origin)
+            });
+    is_global.then_some(value)
+}
+
 /// Materialize the body-local bridge used to address a source lexical binding
 /// inherited from an enclosing lowering unit.
 ///
@@ -1290,6 +1324,12 @@ fn lower_ir0_to_ir1_on_current_stack(
             .get(name)
             .expect("reserved root source binding must have an exact id");
         binding_lookup.insert(capture_origin_sentinel(name), binding_id);
+        if ir0.tree.goal == ParseGoal::Script
+            && !authenticated_commonjs_runtime_bindings
+            && global_value_literal(name).is_some()
+        {
+            binding_lookup.insert(script_global_value_sentinel(name), binding_id);
+        }
     }
     // bd-1xl17.a: record fs-module binding aliases (`const fs = require('fs')`
     // that are actually used as `fs.readFileSync/writeFileSync`) as NUL-sentinels
@@ -3256,6 +3296,13 @@ fn prepare_function_body_bindings(
                 body_lookup.insert(key.clone(), binding_id);
             }
         }
+    }
+
+    // A local parameter, var, lexical declaration or inner function name
+    // shadows an immutable global value even if its id happens to equal
+    // that global declaration's id in the enclosing lowering unit.
+    for name in local_names.iter().map(String::as_str).chain(self_name) {
+        body_lookup.remove(&script_global_value_sentinel(name));
     }
 
     // Buffer object provenance is intentionally not inherited from the outer
@@ -8426,7 +8473,10 @@ fn right_side_runs_no_code(
         | Expression::BooleanLiteral(_)
         | Expression::NullLiteral
         | Expression::UndefinedLiteral => true,
-        Expression::Identifier(name) => has_source_lexical_binding(binding_lookup, name),
+        Expression::Identifier(name) => {
+            has_source_lexical_binding(binding_lookup, name)
+                || unshadowed_global_value(binding_lookup, name).is_some()
+        }
         _ => false,
     }
 }
@@ -14919,6 +14969,12 @@ fn lower_typeof_operand_suppressing_ambient(
         });
         return Ok(true);
     }
+    if let Expression::Identifier(name) = argument
+        && let Some(value) = unshadowed_global_value(binding_lookup, name)
+    {
+        ops.push(Ir1Op::LoadLiteral { value });
+        return Ok(true);
+    }
     match argument {
         Expression::Identifier(name) if !has_source_lexical_binding(binding_lookup, name) => {
             // `typeof` is the one identifier-read form that tolerates a missing
@@ -16315,6 +16371,10 @@ fn lower_expression_to_ir1_inner(
 ) -> Result<(), LoweringPipelineError> {
     match expression {
         Expression::Identifier(name) => {
+            if let Some(value) = unshadowed_global_value(binding_lookup, name) {
+                ops.push(Ir1Op::LoadLiteral { value });
+                return Ok(());
+            }
             if is_eval_value_read(expression, binding_lookup) {
                 ops.push(Ir1Op::HostCall {
                     capability: EVAL_VALUE_CAPABILITY.to_string(),
@@ -16684,10 +16744,7 @@ fn lower_expression_to_ir1_inner(
                     // and a var-created global's DeleteBinding answer
                     // false). It evaluated x and answered true. A `with`
                     // body reaches here only for names its object lacks.
-                    // `undefined` parses as a literal but names the global
-                    // object's non-configurable property (or a local
-                    // binding): `delete undefined` is false either way.
-                    Expression::Identifier(_) | Expression::UndefinedLiteral => {
+                    Expression::Identifier(_) => {
                         ops.push(Ir1Op::LoadLiteral {
                             value: Ir1Literal::Boolean(false),
                         });
@@ -48900,6 +48957,53 @@ mod tests {
                 value: Ir1Literal::Null
             }
         )));
+    }
+
+    #[test]
+    fn immutable_global_references_keep_the_literal_fast_path() {
+        let ops = lower_script_source_ops("undefined; NaN; Infinity;", "global-values.js");
+        let literals = ops
+            .iter()
+            .filter_map(|op| match op {
+                Ir1Op::LoadLiteral { value } => Some(value.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            literals,
+            vec![
+                Ir1Literal::Undefined,
+                Ir1Literal::Float(f64::NAN.to_bits()),
+                Ir1Literal::Float(f64::INFINITY.to_bits()),
+            ]
+        );
+        assert!(!ops.iter().any(|op| matches!(op, Ir1Op::LoadName { .. })));
+    }
+
+    #[test]
+    fn module_and_commonjs_bindings_shadow_immutable_global_names() {
+        for name in ["undefined", "NaN", "Infinity"] {
+            let source = format!("const {name} = 7; {name};");
+            let ops = lower_esm_source_ops(&source, "global-shadow.mjs");
+            assert!(ops.iter().any(|op| matches!(op, Ir1Op::LoadBinding { .. })));
+
+            let tree = crate::parser_api_stability::parse_script(&source).expect("parse CommonJS");
+            let ir0 = Ir0Module::from_syntax_tree(tree, "global-shadow.cjs");
+            let result = lower_ir0_to_ir1_with_authenticated_runtime_bindings(
+                &ir0,
+                AmbientAuthorityGrant::DenyAll,
+                true,
+                false,
+            )
+            .expect("lower authenticated CommonJS");
+            assert!(
+                result
+                    .module
+                    .ops
+                    .iter()
+                    .any(|op| matches!(op, Ir1Op::LoadBinding { .. }))
+            );
+        }
     }
 
     #[test]

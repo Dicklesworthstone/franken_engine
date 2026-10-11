@@ -10,6 +10,10 @@ on:
       - 'crates/franken-engine/src/lowering_pipeline.rs'
       - 'crates/franken-engine/tests/crypto_builtin_bd_2z157.rs'
       - 'crates/franken-engine/tests/global_value_property_targets_bd_9vouw_373.rs'
+      - 'crates/franken-engine/tests/standard_global_values_bd_9vouw_17.rs'
+      - 'crates/franken-engine/tests/parser_edge_cases.rs'
+      - 'crates/franken-engine/tests/parser_arena_conformance.rs'
+      - 'crates/franken-engine/tests/snapshots/ast_parser_golden_integration__basic_literals.snap'
       - '.github/workflows/runtime-value-provenance.yml'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -51,6 +55,14 @@ jobs:
           cargo test --locked -p frankenengine-engine --no-default-features --no-fail-fast \
             --test crypto_builtin_bd_2z157 --test array_species_bd_9vouw_94 \
             --test array_every_map_callbacks -- --nocapture --test-threads=1
+      - name: Execute identifier resolution and parser regressions
+        if: always()
+        run: |
+          cargo test --locked -p frankenengine-engine --no-default-features --no-fail-fast \
+            --test standard_global_values_bd_9vouw_17 \
+            --test global_value_property_targets_bd_9vouw_373 \
+            --test parser_edge_cases --test parser_arena_conformance \
+            --test ast_parser_golden_integration -- --nocapture --test-threads=1
       - name: Check all workspace targets
         if: always()
         run: cargo check --locked --all-targets

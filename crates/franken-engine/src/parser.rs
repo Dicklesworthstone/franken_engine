@@ -7047,9 +7047,6 @@ fn parse_primary_expression(
     if expression == "null" {
         return Ok(Expression::NullLiteral);
     }
-    if expression == "undefined" {
-        return Ok(Expression::UndefinedLiteral);
-    }
     if expression == "this" {
         return Ok(if context.strict_mode && !context.script_this {
             Expression::This
@@ -9537,24 +9534,10 @@ fn try_parse_unary_prefix(
                 .next()
                 .is_some_and(|next| !is_identifier_continue(next))
         {
-            // `NaN` and `Infinity` parse as number literals everywhere else,
-            // but the operand of `delete NaN` / `delete (Infinity)` is a
-            // reference to the global object's non-configurable property:
-            // false, and an early error in strict code. As literals they
-            // deleted a value and answered true.
-            let mut operand = rest.trim();
-            while let Some(inner) = operand.strip_prefix('(').and_then(|o| o.strip_suffix(')')) {
-                operand = inner.trim();
-            }
-            let arg =
-                if matches!(op, UnaryOperator::Delete) && matches!(operand, "NaN" | "Infinity") {
-                    Expression::Identifier(operand.to_string())
-                } else {
-                    match parse_expression(rest.trim(), span, context, recursion_depth + 1) {
-                        Ok(e) => e,
-                        Err(e) => return Some(Err(e)),
-                    }
-                };
+            let arg = match parse_expression(rest.trim(), span, context, recursion_depth + 1) {
+                Ok(expression) => expression,
+                Err(error) => return Some(Err(error)),
+            };
             // bd-9vouw.136: a strict-mode delete throws where a sloppy one
             // answers false, and of a bare identifier it is an early error
             // (ES2020 12.5.3.1).
@@ -9776,10 +9759,7 @@ fn try_parse_update(
         if operand_src.is_empty() || operand_src.starts_with('+') || operand_src.starts_with('-') {
             return None;
         }
-        let target = global_value_property_target(
-            operand_src,
-            parse_expression(operand_src, span, context, recursion_depth + 1).ok()?,
-        );
+        let target = parse_expression(operand_src, span, context, recursion_depth + 1).ok()?;
         if !is_simple_update_target(&target) {
             if let Some(rejection) =
                 reject_non_assignable_update_target(&target, operand_src, span, context)
@@ -9817,10 +9797,7 @@ fn try_parse_update(
         if operand_src.is_empty() || operand_src.ends_with('+') || operand_src.ends_with('-') {
             return None;
         }
-        let target = global_value_property_target(
-            operand_src,
-            parse_expression(operand_src, span, context, recursion_depth + 1).ok()?,
-        );
+        let target = parse_expression(operand_src, span, context, recursion_depth + 1).ok()?;
         if !is_simple_update_target(&target) {
             if let Some(rejection) =
                 reject_non_assignable_update_target(&target, operand_src, span, context)
@@ -10841,25 +10818,6 @@ fn find_last_top_level_optional_chain(s: &str) -> Option<usize> {
 // Array/object literal parsing
 // ---------------------------------------------------------------------------
 
-/// `undefined`, `NaN` and `Infinity` parse as their constants when read, but
-/// they are identifiers (ES2020 18.1: non-writable properties of the global
-/// object, or a binding that shadows them), so an assignment or update can
-/// target them: `undefined = 5` and `NaN++` are not early errors. The
-/// runtime makes such a write a no-op, or a TypeError in strict code, unless
-/// a binding of that name receives it. Any other target is unchanged.
-fn global_value_property_target(source: &str, target: Expression) -> Expression {
-    let source = source.trim();
-    match target {
-        Expression::UndefinedLiteral if source == "undefined" => {
-            Expression::Identifier(source.to_string())
-        }
-        Expression::FloatLiteral(_) if matches!(source, "NaN" | "Infinity") => {
-            Expression::Identifier(source.to_string())
-        }
-        target => target,
-    }
-}
-
 /// Parse cover grammar only where the caller has already recognized an
 /// assignment target. An initialized shorthand (`{x = value}`) must never be
 /// accepted as an ordinary object expression or in the default's RHS.
@@ -10897,10 +10855,7 @@ fn parse_assignment_target_expression(
             parse_assignment_target_expression(rest, span, context, recursion_depth + 1)?,
         )));
     }
-    let target = global_value_property_target(
-        source,
-        parse_expression(source, span, context, recursion_depth)?,
-    );
+    let target = parse_expression(source, span, context, recursion_depth)?;
     // The specific diagnostic first: `config?.theme = value`.
     if assignment_target_has_optional_chain(&target) {
         return Err(ParseError::new(
@@ -11946,16 +11901,9 @@ fn parse_f64_numeric_literal(input: &str) -> Option<f64> {
         return None;
     }
 
-    // Handle special values
-    if trimmed == "Infinity" {
-        return Some(f64::INFINITY);
-    }
-    if trimmed == "-Infinity" {
-        return Some(f64::NEG_INFINITY);
-    }
-    if trimmed == "NaN" {
-        return Some(f64::NAN);
-    }
+    // NaN and Infinity are identifier references, not numeric literals.
+    // Scope resolution decides whether they name an immutable global value
+    // or a local binding (bd-9vouw.296/.313).
 
     // Strip numeric separators
     let unsigned = trimmed.strip_prefix(['-', '+']).unwrap_or(trimmed);
@@ -18668,14 +18616,21 @@ mod tests {
     }
 
     #[test]
-    fn undefined_literal_is_parsed() {
+    fn global_value_names_are_identifier_references() {
         let parser = CanonicalEs2020Parser;
-        let tree = parser.parse("undefined", ParseGoal::Script).expect("parse");
-        match &tree.body[0] {
-            Statement::Expression(expr) => {
-                assert_eq!(expr.expression, Expression::UndefinedLiteral);
+        for (source, name) in [
+            ("undefined", "undefined"),
+            ("NaN", "NaN"),
+            ("Infinity", "Infinity"),
+            (r"undef\u0069ned", "undefined"),
+        ] {
+            let tree = parser.parse(source, ParseGoal::Script).expect("parse");
+            match &tree.body[0] {
+                Statement::Expression(expr) => {
+                    assert_eq!(expr.expression, Expression::Identifier(name.to_string()));
+                }
+                _ => panic!("expected expression statement"),
             }
-            _ => panic!("expected expression statement"),
         }
     }
 
@@ -22500,17 +22455,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_f64_numeric_literal_special_values() {
-        assert_eq!(parse_f64_numeric_literal("Infinity"), Some(f64::INFINITY));
-        assert_eq!(
-            parse_f64_numeric_literal("-Infinity"),
-            Some(f64::NEG_INFINITY)
-        );
-        assert!(
-            parse_f64_numeric_literal("NaN")
-                .expect("serde serialization should succeed")
-                .is_nan()
-        );
+    fn global_value_names_are_not_numeric_literals() {
+        assert_eq!(parse_f64_numeric_literal("Infinity"), None);
+        assert_eq!(parse_f64_numeric_literal("-Infinity"), None);
+        assert_eq!(parse_f64_numeric_literal("NaN"), None);
+        // An overflowing numeric literal is still a number, independently
+        // of any source binding named Infinity.
+        assert_eq!(parse_f64_numeric_literal("1e999"), Some(f64::INFINITY));
     }
 
     #[test]

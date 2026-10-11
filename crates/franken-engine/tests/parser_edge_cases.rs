@@ -445,7 +445,9 @@ fn null_and_undefined_literals_are_parsed() {
     }
     match &tree_undef.body[0] {
         Statement::Expression(expr) => {
-            assert!(matches!(&expr.expression, Expression::UndefinedLiteral));
+            assert!(
+                matches!(&expr.expression, Expression::Identifier(name) if name == "undefined")
+            );
         }
         _ => panic!("expected expression"),
     }

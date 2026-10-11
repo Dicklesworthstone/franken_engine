@@ -121,28 +121,51 @@ impl StringifyState {
         Ok(())
     }
 
+    /// Emit a JSON Unicode escape without a temporary formatted String. Each
+    /// output unit still uses push, preserving work, size and allocation gates.
+    fn hex_escape(
+        &mut self,
+        core: &mut InterpreterCore,
+        unit: u16,
+    ) -> Result<(), InterpreterError> {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        self.push(core, u16::from(b'\\'))?;
+        self.push(core, u16::from(b'u'))?;
+        for shift in [12, 8, 4, 0] {
+            self.push(core, u16::from(HEX[usize::from((unit >> shift) & 0xf)]))?;
+        }
+        Ok(())
+    }
+
     fn quote(
         &mut self,
         core: &mut InterpreterCore,
         text: &JsString,
     ) -> Result<(), InterpreterError> {
         self.push(core, u16::from(b'"'))?;
-        for decoded in char::decode_utf16(text.encode_utf16()) {
-            match decoded {
-                Ok('"') => self.text(core, "\\\"")?,
-                Ok('\\') => self.text(core, "\\\\")?,
-                Ok('\u{0008}') => self.text(core, "\\b")?,
-                Ok('\u{000c}') => self.text(core, "\\f")?,
-                Ok('\n') => self.text(core, "\\n")?,
-                Ok('\r') => self.text(core, "\\r")?,
-                Ok('\t') => self.text(core, "\\t")?,
-                Ok(c) if c <= '\u{001f}' => self.text(core, &format!("\\u{:04x}", c as u32))?,
-                Ok(c) => {
-                    for unit in c.encode_utf16(&mut [0_u16; 2]) {
-                        self.push(core, *unit)?;
+        // JSON quoting needs code units, not Unicode scalar values. Preserve
+        // paired surrogates directly and escape only unpaired halves instead
+        // of decoding every scalar and immediately encoding it back to UTF-16.
+        let mut units = text.encode_utf16().peekable();
+        while let Some(unit) = units.next() {
+            match unit {
+                0x22 => self.text(core, "\\\"")?,
+                0x5c => self.text(core, "\\\\")?,
+                0x08 => self.text(core, "\\b")?,
+                0x0c => self.text(core, "\\f")?,
+                0x0a => self.text(core, "\\n")?,
+                0x0d => self.text(core, "\\r")?,
+                0x09 => self.text(core, "\\t")?,
+                0x00..=0x1f | 0xdc00..=0xdfff => self.hex_escape(core, unit)?,
+                0xd800..=0xdbff => {
+                    if let Some(low) = units.next_if(|low| (0xdc00..=0xdfff).contains(low)) {
+                        self.push(core, unit)?;
+                        self.push(core, low)?;
+                    } else {
+                        self.hex_escape(core, unit)?;
                     }
                 }
-                Err(error) => self.text(core, &format!("\\u{:04x}", error.unpaired_surrogate()))?,
+                _ => self.push(core, unit)?,
             }
         }
         self.push(core, u16::from(b'"'))
@@ -971,6 +994,199 @@ mod tests {
         );
         assert!(core.pending_exception.is_none());
         assert!(core.active_inline_callback_context_label.is_none());
+        assert_accounted(&core);
+    }
+
+    // Independent pre-optimization oracle: retain the scalar codec and
+    // formatted escapes, and never delegate text to the optimized writer.
+    fn reference_text(
+        state: &mut StringifyState,
+        core: &mut InterpreterCore,
+        text: &str,
+    ) -> Result<(), InterpreterError> {
+        for unit in text.encode_utf16() {
+            state.push(core, unit)?;
+        }
+        Ok(())
+    }
+
+    fn reference_quote(
+        state: &mut StringifyState,
+        core: &mut InterpreterCore,
+        text: &JsString,
+    ) -> Result<(), InterpreterError> {
+        state.push(core, u16::from(b'"'))?;
+        for decoded in char::decode_utf16(text.encode_utf16()) {
+            match decoded {
+                Ok('"') => reference_text(state, core, "\\\"")?,
+                Ok('\\') => reference_text(state, core, "\\\\")?,
+                Ok('\u{0008}') => reference_text(state, core, "\\b")?,
+                Ok('\u{000c}') => reference_text(state, core, "\\f")?,
+                Ok('\n') => reference_text(state, core, "\\n")?,
+                Ok('\r') => reference_text(state, core, "\\r")?,
+                Ok('\t') => reference_text(state, core, "\\t")?,
+                Ok(c) if c <= '\u{001f}' => {
+                    reference_text(state, core, &format!("\\u{:04x}", c as u32))?;
+                }
+                Ok(c) => {
+                    for unit in c.encode_utf16(&mut [0_u16; 2]) {
+                        state.push(core, *unit)?;
+                    }
+                }
+                Err(error) => {
+                    reference_text(state, core, &format!("\\u{:04x}", error.unpaired_surrogate()))?;
+                }
+            }
+        }
+        state.push(core, u16::from(b'"'))
+    }
+
+    fn release_test_state(core: &mut InterpreterCore, state: StringifyState) {
+        let charged = state.charged;
+        drop(state);
+        core.json_release_temporary(charged);
+        assert_accounted(core);
+    }
+
+    fn compare_quote(
+        text: &JsString,
+        prefix: &[u16],
+        string_limit: usize,
+        work_budget: u64,
+        scratch_budget: Option<u64>,
+    ) {
+        let mut actual_core = core();
+        let mut expected_core = core();
+        let mut actual = StringifyState::default();
+        let mut expected = StringifyState::default();
+        for &unit in prefix {
+            actual.push(&mut actual_core, unit).unwrap();
+            expected.push(&mut expected_core, unit).unwrap();
+        }
+        for core in [&mut actual_core, &mut expected_core] {
+            core.config.max_string_size = string_limit;
+            core.config.instruction_budget = core.instructions_executed + work_budget;
+            if let Some(bytes) = scratch_budget {
+                core.config.max_total_memory_bytes = core.estimated_memory_bytes() + bytes;
+            }
+        }
+        let got = actual.quote(&mut actual_core, text);
+        let want = reference_quote(&mut expected, &mut expected_core, text);
+        assert_eq!(format!("{got:?}"), format!("{want:?}"));
+        assert_eq!(actual.output, expected.output);
+        assert_eq!(actual.projection_bytes, expected.projection_bytes);
+        assert_eq!(actual.output.capacity(), expected.output.capacity());
+        assert_eq!(actual.charged, expected.charged);
+        assert_eq!(
+            actual_core.instructions_executed,
+            expected_core.instructions_executed
+        );
+        assert_eq!(
+            actual_core.json_parse_temporary_bytes,
+            expected_core.json_parse_temporary_bytes
+        );
+        assert_eq!(
+            actual_core.estimated_memory_bytes(),
+            expected_core.estimated_memory_bytes()
+        );
+        release_test_state(&mut actual_core, actual);
+        release_test_state(&mut expected_core, expected);
+    }
+
+    #[test]
+    fn quote_code_units_matches_scalar_oracle_for_every_bmp_unit() {
+        let text = JsString::from_code_units(&(0..=u16::MAX).collect::<Vec<_>>());
+        compare_quote(&text, &[], 1_048_576, 100_000, None);
+    }
+
+    #[test]
+    fn quote_code_units_preserves_pairs_and_short_escapes() {
+        let text = JsString::from_code_units(&[
+            0, 8, 9, 10, 12, 13, 34, 92, 47, 0xd800, 65, 0xdc00, 0xd83d, 0xde00,
+        ]);
+        let mut core = core();
+        let mut state = StringifyState::default();
+        state.quote(&mut core, &text).unwrap();
+        assert_eq!(
+            state.output,
+            "\"\\u0000\\b\\t\\n\\f\\r\\\"\\\\/\\ud800A\\udc00😀\""
+                .encode_utf16()
+                .collect::<Vec<_>>()
+        );
+        release_test_state(&mut core, state);
+    }
+
+    #[test]
+    fn quote_code_units_matches_scalar_oracle_at_surrogate_boundaries() {
+        let boundaries = [
+            0, 0x1f, 0x20, 0x22, 0x5c, 0x7f, 0xd7ff, 0xd800, 0xdbff, 0xdc00, 0xdfff, 0xe000, 0xffff,
+        ];
+        for left in boundaries {
+            for right in boundaries {
+                let text = JsString::from_code_units(&[left, right, left]);
+                compare_quote(&text, &[], 1_048_576, 100_000, None);
+            }
+        }
+    }
+
+    #[test]
+    fn quote_code_units_matches_scalar_oracle_for_seeded_exact_strings() {
+        let mut seed = 0x71a3_49c5_u32;
+        for length in 0..256 {
+            let units = (0..length)
+                .map(|_| {
+                    seed ^= seed << 13;
+                    seed ^= seed >> 17;
+                    seed ^= seed << 5;
+                    seed as u16
+                })
+                .collect::<Vec<_>>();
+            compare_quote(
+                &JsString::from_code_units(&units),
+                &[],
+                1_048_576,
+                100_000,
+                None,
+            );
+        }
+    }
+
+    #[test]
+    fn quote_code_units_preserves_refusal_prefixes_and_scratch_charges() {
+        let texts = [
+            JsString::from("a".repeat(700)),
+            JsString::from_code_units(&[0, 34, 0xd800, 0xdc00, 0xdfff, 65, 8, 92]),
+            JsString::from_code_units(&vec![0xd800; 128]),
+        ];
+        let prefixes = [vec![], vec![65; 255], vec![0xd800]];
+        for text in &texts {
+            for prefix in &prefixes {
+                for limit in [0, 1, 2, 5, 6, 7, 63, 64, 65, 255, 256, 257, 511, 1024] {
+                    for work in [0, 1, 2, 8] {
+                        compare_quote(text, prefix, limit, work, None);
+                    }
+                }
+                for scratch in [0, 1, 127, 128, 129, 255, 256, 257, 1024] {
+                    compare_quote(text, prefix, 4096, 100_000, Some(scratch));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn quoted_string_builtin_keeps_secret_provenance_and_exact_units() {
+        let mut core = core();
+        core.seed_register(
+            0,
+            Value::Str(JsString::from_code_units(&[0xd800, 65, 0xdc00])),
+        )
+        .unwrap();
+        core.set_register_label(0, Label::Secret).unwrap();
+        assert_eq!(
+            stringify(&mut core).unwrap(),
+            Value::str("\"\\ud800A\\udc00\"")
+        );
+        assert_eq!(core.pending_hostcall_result_label, Some(Label::Secret));
         assert_accounted(&core);
     }
 }

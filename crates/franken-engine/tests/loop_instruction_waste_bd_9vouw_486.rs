@@ -1,19 +1,19 @@
-//! bd-9vouw.486: loop bodies run no dead or copy instructions for the `1`
-//! of `++`/`--` (IR1 pushes it, no lowering of the update reads it), the
-//! right operand of a compound assignment that is a register binding
-//! (`s += i` reads `i`'s register, as bd-9vouw.330 does for operators, now
-//! also at top level), or the top-level completion of a loop test or a for
-//! update. The first test checks values where those matter: updates of
-//! register, captured and top-level bindings as statements and as values,
-//! BigInt, string and valueOf operands, compound operators of every kind,
-//! a binding used on both sides (`x += x`, `u += u * 2`, `h = h + h * 2`,
-//! `v = v * v`), and
-//! the read-then-write hazards (`x -= (x = 5)`, `y += y++`, `z *= ++z`).
-//! Node v22.2.0 and Bun 1.4.2 print the line, as did the release frankenctl
-//! of rc-next59 (fctl_abp_53ef3d835) before this change. The second checks
-//! the completion value of a loop (Node's vm.runInNewContext: undefined and
-//! 30; that frankenctl reported 2 and 3, the last update's value). The last
-//! two check the instructions.
+//! bd-9vouw.486: loop bodies run no dead or copy instructions for the `1` of
+//! `++`/`--` (IR1 pushes it, no lowering of the update reads it), the right
+//! operand of a compound assignment that is a register binding (`s += i`
+//! reads `i`'s register, as bd-9vouw.330 does for operators, now also at top
+//! level), or the top-level completion of a loop test or a for update, and
+//! loops test at the bottom, so an iteration ends in one conditional jump
+//! back to the body. The first test checks values where those matter: updates
+//! of register, captured and top-level bindings as statements and as values,
+//! BigInt, string and valueOf operands, compound operators of every kind, a
+//! binding used on both sides (`x += x`, `u += u * 2`, `h = h + h * 2`,
+//! `v = v * v`), and the read-then-write hazards (`x -= (x = 5)`, `y += y++`,
+//! `z *= ++z`). Node v22.2.0 and Bun 1.4.2 print the line, as did the release
+//! frankenctl of rc-next59 (fctl_abp_53ef3d835) before this change. Another
+//! checks loop control flow, another the completion value of a loop (Node's
+//! vm.runInNewContext: undefined and 30; that frankenctl reported 2 and 3,
+//! the last update's value). The last two check the instructions.
 
 use frankenengine_engine::HybridRouter;
 use frankenengine_engine::ast::ParseGoal;
@@ -58,6 +58,38 @@ console.log(out.join(' '));
         [
             "45 79,720,7,2 36,0 4,6,2,4,8,6,6,NaN,5,v 6,6 12,45,5 -3,6,20 45 -86 9 9 16 10 10 40 6 6 4 5 8 27 x01 4 4 3"
         ]
+    );
+}
+
+/// Loops whose test now runs at the bottom: break, continue (labeled too),
+/// zero-iteration loops, how often each test runs, closures over the
+/// per-iteration binding made in the head, test, update and body, loops in a
+/// switch case and in a generator. Node v22.2.0, Bun 1.4.2 and the release
+/// frankenctl of rc-next59 print the line.
+#[test]
+fn loop_control_flow_keeps_values() {
+    let source = r#"var out = [];
+function tests() { let calls = 0; const t = (v) => { calls++; return v; }; let a = 0; while (t(a < 3)) a++; let b = 0; do { b++; } while (t(b < 2)); for (let i = 0; t(i < 2); i++) {} let z = 0; while (t(false)) z++; for (let i = 0; t(false); i++) z++; return [a, b, z, calls].join(); }
+function control() { let log = []; for (let i = 0; i < 6; i++) { if (i === 1) continue; if (i === 4) break; log.push(i); } let j = 0; while (true) { j++; if (j < 3) continue; if (j > 4) break; log.push('w' + j); } let k = 0; do { k++; if (k === 2) continue; log.push('d' + k); } while (k < 3); outer: for (let x = 0; x < 3; x++) { for (let y = 0; y < 3; y++) { if (y === 1) continue outer; if (x === 2) break outer; log.push(x + '' + y); } } for (;;) { log.push('f'); break; } return log.join(); }
+function closures() { const fs = []; for (let i = 0, g = () => i; i < 3; i++, fs.push(() => i)) fs.push(() => i * 10); const fromTest = []; for (let i = 0; fromTest.push(() => i) && i < 2; i++) {} return [fs.map(f => f()).join('|'), fromTest.map(f => f()).join('|')].join(' '); }
+function nested(n) { let total = 0; switch (n) { case 1: for (let i = 0; i < 3; i++) { let j = 0; while (j < i) { total += j; j++; } } break; default: total = -1; } return total; }
+function gen() { function* g() { let i = 0; while (i < 3) { yield i; i++; } do { yield 'd'; } while (false); } return [...g()].join(); }
+out.push(tests(), control(), closures(), nested(1), nested(2), gen());
+let c = 0; for (let i = 10; i > 0; i -= 3) c++; let w = 0, n = 5; while (n--) w += n; let dw = 0; do dw += 2; while (dw < 5);
+out.push(c, w, n, dw);
+console.log(out.join(' '));
+"#;
+    let outcome = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"));
+    let lines: Vec<&str> = outcome
+        .console_output
+        .iter()
+        .map(|entry| entry.message.as_str())
+        .collect();
+    assert_eq!(
+        lines,
+        ["3,2,0,11 0,2,3,w3,w4,d1,d3,00,10,f 0|1|10|2|20|3 0|1|2 1 -1 0,1,2,d 4 10 -1 6"]
     );
 }
 
@@ -117,7 +149,7 @@ fn script_code(source: &str) -> Vec<Ir3Instruction> {
 }
 
 #[test]
-fn a_function_counting_loop_runs_five_instructions_per_iteration() {
+fn a_function_counting_loop_runs_four_instructions_per_iteration() {
     // n is register 0, s register 1, i register 2.
     let body = function_bodies(
         "function g(n) { let s = 0; for (let i = 0; i < n; i++) s += i; return s; }",
@@ -150,21 +182,37 @@ fn a_function_counting_loop_runs_five_instructions_per_iteration() {
             .any(|instruction| matches!(instruction, Ir3Instruction::Move { src: 2, .. })),
         "no copy of i: {body:?}"
     );
-    // The loop: Lt, JumpIf, the exit Jump, Add, Inc and the back Jump.
-    let start = body
-        .iter()
-        .position(|instruction| matches!(instruction, Ir3Instruction::Lt { .. }))
-        .expect("loop test");
-    let end = body
-        .iter()
-        .rposition(|instruction| matches!(instruction, Ir3Instruction::Jump { .. }))
-        .expect("back jump");
+    // One iteration: Add, Inc, Lt and the JumpIf back to the body.
     assert_eq!(
-        end - start + 1,
-        6,
-        "loop instructions: {:?}",
-        &body[start..=end]
+        iteration(&lowered(
+            "function g(n) { let s = 0; for (let i = 0; i < n; i++) s += i; return s; }"
+        )),
+        4
     );
+}
+
+/// The instructions of a program's one loop iteration: from the back edge's
+/// target through the back edge, a conditional jump to an earlier
+/// instruction (the test runs at the bottom).
+fn iteration(instructions: &[Ir3Instruction]) -> usize {
+    let (back_edge, target) = instructions
+        .iter()
+        .enumerate()
+        .find_map(|(index, instruction)| match instruction {
+            Ir3Instruction::JumpIf { target, .. } if (*target as usize) < index => {
+                Some((index, *target as usize))
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no conditional back edge: {instructions:?}"));
+    assert!(
+        !instructions[target..back_edge]
+            .iter()
+            .any(|instruction| matches!(instruction, Ir3Instruction::Jump { .. })),
+        "an iteration runs no unconditional jump: {:?}",
+        &instructions[target..=back_edge]
+    );
+    back_edge - target + 1
 }
 
 #[test]
@@ -201,6 +249,9 @@ fn a_top_level_loop_records_only_its_body_as_the_completion() {
             .any(|instruction| matches!(instruction, Ir3Instruction::LoadInt { value: 1, .. })),
         "no load of the update's 1: {code:?}"
     );
+    // One iteration: Add, its completion Move, Inc, the literal 5, Lt and
+    // the JumpIf back to the body.
+    assert_eq!(iteration(&code), 6);
 
     // A binding read again while an in-place compound read holds its
     // register stays a copy: in `s = s + s * 2` the sum is written to s's

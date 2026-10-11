@@ -5914,23 +5914,20 @@ fn lower_statement_to_ir1_with_flow(
             let loop_label = alloc_label(label_counter);
             let continue_label = alloc_label(label_counter);
             let end_label = alloc_label(label_counter);
-            ops.push(Ir1Op::Label { id: loop_label });
-            if let Some(test) = &for_stmt.condition {
-                lower_expression_to_ir1(
-                    test,
-                    ops,
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    scope_id,
-                    label_counter,
-                    span_table,
-                )?;
-                ops.push(Ir1Op::JumpIfFalsy {
-                    label_id: end_label,
+            // With a test, the test runs at the bottom (bd-9vouw.486): entry
+            // jumps to it and its JumpIfTruthy (one JumpIf) returns to the
+            // body, in the spec's order (test, body, per-iteration copy,
+            // update, test).
+            let test_label = for_stmt
+                .condition
+                .as_ref()
+                .map(|_| alloc_label(label_counter));
+            if let Some(test_label) = test_label {
+                ops.push(Ir1Op::Jump {
+                    label_id: test_label,
                 });
-                ops.push(Ir1Op::Pop);
             }
+            ops.push(Ir1Op::Label { id: loop_label });
             lower_statement_to_ir1_with_flow(
                 &for_stmt.body,
                 ops,
@@ -5970,9 +5967,26 @@ fn lower_statement_to_ir1_with_flow(
                 // also saves the top-level completion Move per iteration.
                 ops.push(Ir1Op::Discard);
             }
-            ops.push(Ir1Op::Jump {
-                label_id: loop_label,
-            });
+            if let (Some(test_label), Some(test)) = (test_label, &for_stmt.condition) {
+                ops.push(Ir1Op::Label { id: test_label });
+                lower_expression_to_ir1(
+                    test,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                    label_counter,
+                    span_table,
+                )?;
+                ops.push(Ir1Op::JumpIfTruthy {
+                    label_id: loop_label,
+                });
+            } else {
+                ops.push(Ir1Op::Jump {
+                    label_id: loop_label,
+                });
+            }
             ops.push(Ir1Op::Label { id: end_label });
             restore_binding_entries(binding_lookup, lexical_binding_snapshot);
             restore_source_lexical_markers(binding_lookup, &lexical_marker_snapshot);
@@ -6568,23 +6582,16 @@ fn lower_statement_to_ir1_with_flow(
             ));
         }
         Statement::While(while_stmt) => {
-            let loop_label = alloc_label(label_counter);
+            // Test at the bottom (bd-9vouw.486): entry jumps to the test,
+            // whose JumpIfTruthy (one JumpIf) returns to the body, so an
+            // iteration runs no JumpIf-over-Jump and no back Jump.
+            let body_label = alloc_label(label_counter);
+            let test_label = alloc_label(label_counter);
             let end_label = alloc_label(label_counter);
-            ops.push(Ir1Op::Label { id: loop_label });
-            lower_expression_to_ir1(
-                &while_stmt.condition,
-                ops,
-                bindings,
-                binding_lookup,
-                binding_index,
-                scope_id,
-                label_counter,
-                span_table,
-            )?;
-            ops.push(Ir1Op::JumpIfFalsy {
-                label_id: end_label,
+            ops.push(Ir1Op::Jump {
+                label_id: test_label,
             });
-            ops.push(Ir1Op::Pop);
+            ops.push(Ir1Op::Label { id: body_label });
             lower_statement_to_ir1_with_flow(
                 &while_stmt.body,
                 ops,
@@ -6596,12 +6603,23 @@ fn lower_statement_to_ir1_with_flow(
                 span_table,
                 ControlFlowTargets {
                     break_label: Some(end_label),
-                    continue_label: Some(loop_label),
+                    continue_label: Some(test_label),
                 },
-                &label_ctx.enter_loop(end_label, loop_label),
+                &label_ctx.enter_loop(end_label, test_label),
             )?;
-            ops.push(Ir1Op::Jump {
-                label_id: loop_label,
+            ops.push(Ir1Op::Label { id: test_label });
+            lower_expression_to_ir1(
+                &while_stmt.condition,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                label_counter,
+                span_table,
+            )?;
+            ops.push(Ir1Op::JumpIfTruthy {
+                label_id: body_label,
             });
             ops.push(Ir1Op::Label { id: end_label });
         }
@@ -6636,11 +6654,8 @@ fn lower_statement_to_ir1_with_flow(
                 label_counter,
                 span_table,
             )?;
-            ops.push(Ir1Op::JumpIfFalsy {
-                label_id: end_label,
-            });
-            ops.push(Ir1Op::Pop);
-            ops.push(Ir1Op::Jump {
+            // A truthy test returns to the body in one JumpIf (bd-9vouw.486).
+            ops.push(Ir1Op::JumpIfTruthy {
                 label_id: loop_label,
             });
             ops.push(Ir1Op::Label { id: end_label });
@@ -47886,13 +47901,26 @@ mod tests {
             span: span(),
         })]);
         let result = lower_ir0_to_ir1(&ir0).expect("while should lower");
-        let labels = result
+        let labels: Vec<u32> = result
             .module
             .ops
             .iter()
-            .filter(|op| matches!(op, Ir1Op::Label { .. }))
-            .count();
-        assert_eq!(labels, 2); // loop + end
+            .filter_map(|op| match op {
+                Ir1Op::Label { id } => Some(*id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(labels.len(), 3); // body + test + end
+        // The test runs at the bottom (bd-9vouw.486): entry jumps to it, and
+        // a truthy test is the back edge to the body.
+        assert!(result.module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::Jump { label_id } if *label_id == labels[1]
+        )));
+        assert!(result.module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::JumpIfTruthy { label_id } if *label_id == labels[0]
+        )));
     }
 
     #[test]
@@ -47930,14 +47958,15 @@ mod tests {
             jumps.contains(&labels[1]),
             "continue in do-while must jump to the condition-check label"
         );
+        // A truthy test is the back edge to the loop label, in one
+        // conditional jump (bd-9vouw.486).
         assert!(
-            jumps.contains(&labels[0]),
-            "do-while must retain a back-edge jump to the loop label"
+            result.module.ops.iter().any(|op| matches!(
+                op,
+                Ir1Op::JumpIfTruthy { label_id } if *label_id == labels[0]
+            )),
+            "do-while must retain a back edge to the loop label"
         );
-        assert!(result.module.ops.iter().any(|op| matches!(
-            op,
-            Ir1Op::JumpIfFalsy { label_id } if *label_id == labels[2]
-        )));
     }
 
     #[test]

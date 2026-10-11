@@ -5804,8 +5804,31 @@ fn lower_statement_to_ir1_with_flow(
             restore_source_lexical_markers(binding_lookup, &lexical_marker_snapshot);
         }
         Statement::If(if_stmt) => {
+            // bd-9vouw.486: `if (!x)`, `if (a === b)` and the other
+            // (in)equalities branch on the exact negation (`x`, `a !== b`)
+            // with JumpIfTruthy to the else branch: one JumpIf, where
+            // JumpIfFalsy lowers to a JumpIf over a Jump (and `!x` to a
+            // LogicalNot first). A relational test has no exact negation (NaN).
+            let negated_condition = match &if_stmt.condition {
+                Expression::Unary {
+                    operator: UnaryOperator::LogicalNot,
+                    argument,
+                } => Some(std::borrow::Cow::Borrowed(argument.as_ref())),
+                Expression::Binary {
+                    operator,
+                    left,
+                    right,
+                } => negated_equality(*operator).map(|operator| {
+                    std::borrow::Cow::Owned(Expression::Binary {
+                        operator,
+                        left: left.clone(),
+                        right: right.clone(),
+                    })
+                }),
+                _ => None,
+            };
             lower_expression_to_ir1(
-                &if_stmt.condition,
+                negated_condition.as_deref().unwrap_or(&if_stmt.condition),
                 ops,
                 bindings,
                 binding_lookup,
@@ -5816,10 +5839,16 @@ fn lower_statement_to_ir1_with_flow(
             )?;
             let else_label = alloc_label(label_counter);
             let end_label = alloc_label(label_counter);
-            ops.push(Ir1Op::JumpIfFalsy {
-                label_id: else_label,
-            });
-            ops.push(Ir1Op::Pop);
+            if negated_condition.is_some() {
+                ops.push(Ir1Op::JumpIfTruthy {
+                    label_id: else_label,
+                });
+            } else {
+                ops.push(Ir1Op::JumpIfFalsy {
+                    label_id: else_label,
+                });
+                ops.push(Ir1Op::Pop);
+            }
             lower_statement_to_ir1_with_flow(
                 &if_stmt.consequent,
                 ops,
@@ -35438,6 +35467,20 @@ fn pinned_read_consumed_in_place(ops: &[Ir2Op], index: usize) -> bool {
             op_at(1),
             Some(Ir1Op::LoadLiteral { .. } | Ir1Op::LoadBinding { .. })
         ) && operator(op_at(2)))
+}
+
+/// The operator whose result is exactly the negation of `operator`'s, with
+/// the same evaluation (`a != b` is `!(a == b)`, ES2020 13.11.1), for an
+/// (in)equality; `None` for every other operator (a relational one is false
+/// both ways on NaN).
+fn negated_equality(operator: BinaryOperator) -> Option<BinaryOperator> {
+    match operator {
+        BinaryOperator::Equal => Some(BinaryOperator::NotEqual),
+        BinaryOperator::NotEqual => Some(BinaryOperator::Equal),
+        BinaryOperator::StrictEqual => Some(BinaryOperator::StrictNotEqual),
+        BinaryOperator::StrictNotEqual => Some(BinaryOperator::StrictEqual),
+        _ => None,
+    }
 }
 
 /// Whether `next` is an arithmetic or bitwise compound assignment to a

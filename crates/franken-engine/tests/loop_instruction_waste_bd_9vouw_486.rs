@@ -1,19 +1,21 @@
-//! bd-9vouw.486: loop bodies run no dead or copy instructions for the `1` of
-//! `++`/`--` (IR1 pushes it, no lowering of the update reads it), the right
-//! operand of a compound assignment that is a register binding (`s += i`
-//! reads `i`'s register, as bd-9vouw.330 does for operators, now also at top
-//! level), or the top-level completion of a loop test or a for update, and
-//! loops test at the bottom, so an iteration ends in one conditional jump
-//! back to the body. The first test checks values where those matter: updates
-//! of register, captured and top-level bindings as statements and as values,
-//! BigInt, string and valueOf operands, compound operators of every kind, a
-//! binding used on both sides (`x += x`, `u += u * 2`, `h = h + h * 2`,
-//! `v = v * v`), and the read-then-write hazards (`x -= (x = 5)`, `y += y++`,
-//! `z *= ++z`). Node v22.2.0 and Bun 1.4.2 print the line, as did the release
-//! frankenctl of rc-next59 (fctl_abp_53ef3d835) before this change. Another
-//! checks loop control flow, another the completion value of a loop (Node's
+//! bd-9vouw.486: loops and ifs run no dead, copy or redundant jump
+//! instructions: no load of the `1` of `++`/`--` (IR1 pushes it, no lowering
+//! of the update reads it), no copy of a register binding that is the right
+//! operand of a compound assignment (`s += i` reads `i`'s register, as
+//! bd-9vouw.330 does for operators, now also at top level), no top-level
+//! completion Move for a loop test or a for update, loops that test at the
+//! bottom so an iteration ends in one conditional jump back to the body, and
+//! `if (!x)` / `if (a === b)` branching on the exact negation in one jump.
+//! The first test checks values where those matter: updates of register,
+//! captured and top-level bindings as statements and as values, BigInt,
+//! string and valueOf operands, compound operators of every kind, a binding
+//! used on both sides (`x += x`, `u += u * 2`, `h = h + h * 2`, `v = v * v`),
+//! and the read-then-write hazards (`x -= (x = 5)`, `y += y++`, `z *= ++z`).
+//! Node v22.2.0 and Bun 1.4.2 print the line, as did the release frankenctl
+//! of rc-next59 (fctl_abp_53ef3d835) before this change. Others check loop
+//! control flow, negated if tests and the completion value of a loop (Node's
 //! vm.runInNewContext: undefined and 30; that frankenctl reported 2 and 3,
-//! the last update's value). The last two check the instructions.
+//! the last update's value). The last three check the instructions.
 
 use frankenengine_engine::HybridRouter;
 use frankenengine_engine::ast::ParseGoal;
@@ -90,6 +92,37 @@ console.log(out.join(' '));
     assert_eq!(
         lines,
         ["3,2,0,11 0,2,3,w3,w4,d1,d3,00,10,f 0|1|10|2|20|3 0|1|2 1 -1 0,1,2,d 4 10 -1 6"]
+    );
+}
+
+/// `if (!x)` and the (in)equality tests branch on their exact negation:
+/// every falsy and truthy kind of value, `==` coercion that runs valueOf
+/// (once per test), NaN and -0, operand order, else branches, ifs in a loop
+/// body and at top level. Node v22.2.0, Bun 1.4.2 and the release frankenctl
+/// of rc-next59 print the line.
+#[test]
+fn negated_if_conditions_keep_values() {
+    let source = r#"var out = [];
+function nots() { const vals = [0, -0, '', null, undefined, NaN, false, 0n, 1, 'a', [], {}, -1, 1n, Symbol('s')]; const r = []; for (const v of vals) { if (!v) r.push('f'); else r.push('t'); } let x = 3; if (!!x) r.push('dd'); if (!(x > 2)) r.push('no'); else r.push('gt'); return r.join(''); }
+function eqs() { const log = []; const o = { valueOf() { log.push('v'); return 1; } }; const r = []; if (null == undefined) r.push(1); if (null === undefined) r.push(2); else r.push(3); if ('1' == 1) r.push(4); if ('1' != 1) r.push(5); else r.push(6); if (o == 1) r.push(7); if (o != 1) r.push(8); if (NaN == NaN) r.push(9); if (NaN != NaN) r.push(10); if (NaN !== NaN) r.push(11); if (0 === -0) r.push(12); if (!(0 !== -0)) r.push(13); return [r.join(','), log.join('')].join(' '); }
+function order() { const log = []; const a = () => (log.push('a'), 1), b = () => (log.push('b'), 2); if (a() === b()) log.push('eq'); else log.push('ne'); if (a() !== b()) log.push('NE'); if (!a()) log.push('x'); return log.join(''); }
+function inLoop(n) { let hits = 0, misses = 0; for (let i = 0; i < n; i++) { if (i % 4 === 0) hits++; else misses++; if (!(i & 1)) hits += 10; } return [hits, misses].join(); }
+out.push(nots(), eqs(), order(), inLoop(20));
+let k = 0, m = 'x'; if (k === 0) m += 'z'; if (!k) m += 'n'; if (k != 0) m += 'bad'; else m += 'e';
+out.push(m);
+console.log(out.join(' '));
+"#;
+    let outcome = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"));
+    let lines: Vec<&str> = outcome
+        .console_output
+        .iter()
+        .map(|entry| entry.message.as_str())
+        .collect();
+    assert_eq!(
+        lines,
+        ["fffffffftttttttddgt 1,3,4,6,7,10,11,12,13 vv abneabNEa 105,15 xzne"]
     );
 }
 
@@ -263,5 +296,52 @@ fn a_top_level_loop_records_only_its_body_as_the_completion() {
             .iter()
             .any(|instruction| matches!(instruction, Ir3Instruction::Move { src: 1, .. })),
         "the second read of s is a copy: {twice:?}"
+    );
+}
+
+#[test]
+fn equality_and_not_tests_branch_in_one_jump() {
+    // a is register 0, b register 1, n register 2.
+    let eq = function_bodies("function f(a, b) { let n = 0; if (a === b) n++; return n; }");
+    let test = eq
+        .iter()
+        .position(|instruction| matches!(instruction, Ir3Instruction::StrictNotEq { .. }))
+        .unwrap_or_else(|| panic!("`a === b` branches on `a !== b`: {eq:?}"));
+    assert!(
+        matches!(eq.get(test + 1), Some(Ir3Instruction::JumpIf { .. }))
+            && matches!(
+                eq.get(test + 2),
+                Some(Ir3Instruction::Inc { dst: 2, src: 2 })
+            ),
+        "the negated test jumps over `n++` in one JumpIf: {eq:?}"
+    );
+    assert!(
+        !eq.iter()
+            .any(|instruction| matches!(instruction, Ir3Instruction::StrictEq { .. })),
+        "{eq:?}"
+    );
+
+    let not = function_bodies("function g(a) { let n = 0; if (!a) n++; return n; }");
+    assert!(
+        !not.iter()
+            .any(|instruction| matches!(instruction, Ir3Instruction::LogicalNot { .. })),
+        "`!a` branches on a itself: {not:?}"
+    );
+    assert!(
+        !not.iter()
+            .any(|instruction| matches!(instruction, Ir3Instruction::Jump { .. })),
+        "{not:?}"
+    );
+
+    // A relational test keeps JumpIfFalsy's JumpIf over a Jump: `a < b` and
+    // `a >= b` are both false when either is NaN.
+    let lt = function_bodies("function h(a, b) { let n = 0; if (a < b) n++; return n; }");
+    assert!(
+        lt.iter()
+            .any(|instruction| matches!(instruction, Ir3Instruction::Lt { .. }))
+            && lt
+                .iter()
+                .any(|instruction| matches!(instruction, Ir3Instruction::Jump { .. })),
+        "{lt:?}"
     );
 }

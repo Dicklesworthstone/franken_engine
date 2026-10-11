@@ -431,33 +431,69 @@
   }
 
   // ---- buffer list ----
+  // Circular storage reuses consumed slots even when a live stream never
+  // empties. Both ends are amortized O(1); prepend never shifts the backlog.
+  // Growth is geometric and clear releases the backing after a full drain.
   function BufferList() {
     this.chunks = [];
     this.index = 0;
+    this.length = 0;
   }
-  BufferList.prototype.size = function () { return this.chunks.length - this.index; };
-  BufferList.prototype.push = function (chunk) { this.chunks.push(chunk); };
-  BufferList.prototype.unshift = function (chunk) {
-    if (this.index > 0) {
-      this.index -= 1;
-      this.chunks[this.index] = chunk;
-    } else {
-      this.chunks.unshift(chunk);
+  function growBufferList(list) {
+    const old = list.chunks;
+    const capacity = old.length === 0 ? 8 : old.length * 2;
+    const chunks = new Array(capacity);
+    let index = list.index;
+    for (let i = 0; i < list.length; i++) {
+      chunks[i] = old[index];
+      index += 1;
+      if (index === old.length) index = 0;
     }
+    list.chunks = chunks;
+    list.index = 0;
+  }
+  BufferList.prototype.size = function () { return this.length; };
+  BufferList.prototype.push = function (chunk) {
+    if (this.length === this.chunks.length) growBufferList(this);
+    let index = this.index + this.length;
+    if (index >= this.chunks.length) index -= this.chunks.length;
+    this.chunks[index] = chunk;
+    this.length += 1;
   };
-  BufferList.prototype.first = function () { return this.chunks[this.index]; };
+  BufferList.prototype.unshift = function (chunk) {
+    if (this.length === this.chunks.length) growBufferList(this);
+    this.index = this.index === 0 ? this.chunks.length - 1 : this.index - 1;
+    this.chunks[this.index] = chunk;
+    this.length += 1;
+  };
+  BufferList.prototype.first = function () {
+    return this.length === 0 ? undefined : this.chunks[this.index];
+  };
   BufferList.prototype.shift = function () {
+    if (this.length === 0) return undefined;
     const chunk = this.chunks[this.index];
     this.chunks[this.index] = null;
     this.index += 1;
-    if (this.index === this.chunks.length) this.clear();
+    if (this.index === this.chunks.length) this.index = 0;
+    this.length -= 1;
+    if (this.length === 0) this.clear();
     return chunk;
   };
   BufferList.prototype.clear = function () {
     this.chunks = [];
     this.index = 0;
+    this.length = 0;
   };
-  BufferList.prototype.all = function () { return this.chunks.slice(this.index); };
+  BufferList.prototype.all = function () {
+    const chunks = new Array(this.length);
+    let index = this.index;
+    for (let i = 0; i < this.length; i++) {
+      chunks[i] = this.chunks[index];
+      index += 1;
+      if (index === this.chunks.length) index = 0;
+    }
+    return chunks;
+  };
   // Take `n` bytes (or characters when the chunks are strings) from the front.
   BufferList.prototype.consume = function (n, hasStrings) {
     const first = this.first();

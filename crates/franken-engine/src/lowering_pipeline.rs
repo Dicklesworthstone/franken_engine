@@ -5965,7 +5965,10 @@ fn lower_statement_to_ir1_with_flow(
                     label_counter,
                     span_table,
                 )?;
-                ops.push(Ir1Op::Pop);
+                // The update's value is never the loop's completion value
+                // (ForBodyEvaluation keeps the body's): a pure discard, which
+                // also saves the top-level completion Move per iteration.
+                ops.push(Ir1Op::Discard);
             }
             ops.push(Ir1Op::Jump {
                 label_id: loop_label,
@@ -9247,6 +9250,15 @@ fn lower_ir2_to_ir3_with_input_hash(
         }
 
         match &op.inner {
+            Ir1Op::LoadLiteral { .. }
+                if update_assignment_ignores_operand(
+                    ir2.ops.get(op_index + 1).map(|next| &next.inner),
+                ) =>
+            {
+                // The `1` of `++`/`--`: no lowering of the update reads it, so
+                // it gets a register slot and no instruction.
+                value_stack.push(alloc_register(&mut register_cursor));
+            }
             Ir1Op::LoadLiteral { value } => {
                 let dst = alloc_register(&mut register_cursor);
                 lower_literal_to_ir3_optimized(
@@ -9283,11 +9295,20 @@ fn lower_ir2_to_ir3_with_input_hash(
                     // operator reads the register itself and writes the
                     // result back to it (see the BinaryOp arm), one
                     // instruction as before bd-9vouw.327's read-first order.
-                    if source_reg < pinned_register_high
-                        && !short_lived_temporaries.contains_key(binding_id)
+                    let pinned = source_reg < pinned_register_high
+                        && !short_lived_temporaries.contains_key(binding_id);
+                    if pinned
                         && compound_left_operand_reads_in_place(&ir2.ops, op_index, *binding_id)
                     {
                         compound_reads_in_place.insert(source_reg);
+                        value_stack.push(source_reg);
+                    } else if pinned
+                        // A register an in-place compound read holds is
+                        // where its operator writes the result (BinaryOp
+                        // arm), so a second read of it stays a copy.
+                        && !compound_reads_in_place.contains(&source_reg)
+                        && pinned_read_consumed_in_place(&ir2.ops, op_index)
+                    {
                         value_stack.push(source_reg);
                     } else {
                         let dst = alloc_register(&mut register_cursor);
@@ -9674,8 +9695,16 @@ fn lower_ir2_to_ir3_with_input_hash(
                     // Expression-statement completion: move the discarded
                     // value into register 0 so the interpreter returns it as
                     // the script completion value when execution falls off
-                    // the end of the instruction stream.
-                    if register != 0 {
+                    // the end of the instruction stream. A value JumpIfFalsy
+                    // just tested (an if or loop test, the left side of a
+                    // short-circuit) is never a completion value.
+                    let tested_value = op_index
+                        .checked_sub(1)
+                        .and_then(|previous| ir2.ops.get(previous))
+                        .is_some_and(|previous| {
+                            matches!(previous.inner, Ir1Op::JumpIfFalsy { .. })
+                        });
+                    if register != 0 && !tested_value {
                         ir3.instructions.push(Ir3Instruction::Move {
                             dst: 0,
                             src: register,
@@ -11604,6 +11633,15 @@ fn lower_ir2_to_ir3_with_input_hash(
             }
             // We handle a core subset of ops that appear in function bodies.
             match &ir2_op.inner {
+                Ir1Op::LoadLiteral { .. }
+                    if update_assignment_ignores_operand(
+                        annotated_body_ops.get(op_index + 1).map(|next| &next.inner),
+                    ) =>
+                {
+                    // The `1` of `++`/`--`: no lowering of the update reads it,
+                    // so it gets a register slot and no instruction.
+                    fn_value_stack.push(alloc_register(&mut fn_reg));
+                }
                 Ir1Op::LoadLiteral { value } => {
                     let dst = alloc_register(&mut fn_reg);
                     match value {
@@ -11682,35 +11720,8 @@ fn lower_ir2_to_ir3_with_input_hash(
                             &mut fn_pinned_register_high,
                             &mut fn_register_high_water,
                         );
-                        // bd-9vouw.330: a pinned local that the next op reads
-                        // (an operator, or a static property read), or the op
-                        // after one more load, is read in place: nothing in
-                        // between can write it, those ops write only their
-                        // result, and their result register is never a pinned
-                        // one (pure_op_result_register's floor). Any other
-                        // read is a copy, as an assignment may follow it.
-                        let consumed_next = |offset: usize| {
-                            matches!(
-                                annotated_body_ops
-                                    .get(op_index + offset)
-                                    .map(|next| &next.inner),
-                                Some(
-                                    Ir1Op::BinaryOp { .. }
-                                        | Ir1Op::GetProperty {
-                                            key: Ir1PropertyKey::Static(_)
-                                        }
-                                )
-                            )
-                        };
                         let read_in_place = src < fn_pinned_register_high
-                            && (consumed_next(1)
-                                || (matches!(
-                                    annotated_body_ops.get(op_index + 1).map(|next| &next.inner),
-                                    Some(Ir1Op::LoadLiteral { .. } | Ir1Op::LoadBinding { .. })
-                                ) && matches!(
-                                    annotated_body_ops.get(op_index + 2).map(|next| &next.inner),
-                                    Some(Ir1Op::BinaryOp { .. })
-                                )));
+                            && pinned_read_consumed_in_place(&annotated_body_ops, op_index);
                         if read_in_place {
                             fn_value_stack.push(src);
                         } else {
@@ -35381,6 +35392,78 @@ fn store_result_needs_copy(
     ) && !iterator_cleanup_labels
         .values()
         .any(|register| *register == stored)
+}
+
+/// Whether the read of a pinned register binding at `ops[index]` may push the
+/// binding's register itself instead of a copy: the op that consumes it comes
+/// next, or after one more literal or binding load, so nothing in between can
+/// write the binding (a register binding is written only by its own ops; a
+/// closure's binding is scoped instead), and that op reads it before it
+/// writes anything:
+/// - an operator or a static property read (bd-9vouw.330), whose result
+///   register is never a pinned one (pure_op_result_register's floor, or a
+///   fresh register);
+/// - the right operand of an arithmetic or bitwise compound assignment
+///   (`s += i`), which pushes the target's value or a fresh register, never
+///   its operand (bd-9vouw.486).
+///
+/// Any other read is a copy, as an assignment may follow it (`x + (x = 5)`).
+fn pinned_read_consumed_in_place(ops: &[Ir2Op], index: usize) -> bool {
+    let op_at = |offset: usize| ops.get(index + offset).map(|op| &op.inner);
+    let operator = |op: Option<&Ir1Op>| matches!(op, Some(Ir1Op::BinaryOp { .. }));
+    operator(op_at(1))
+        || matches!(
+            op_at(1),
+            Some(Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Static(_)
+            })
+        )
+        || compound_assignment_consumes_operand(op_at(1))
+        || (matches!(
+            op_at(1),
+            Some(Ir1Op::LoadLiteral { .. } | Ir1Op::LoadBinding { .. })
+        ) && operator(op_at(2)))
+}
+
+/// Whether `next` is an arithmetic or bitwise compound assignment to a
+/// binding, which takes the IR1 stack top as its right operand.
+fn compound_assignment_consumes_operand(next: Option<&Ir1Op>) -> bool {
+    matches!(
+        next,
+        Some(Ir1Op::AssignOp { operator, .. }) if matches!(
+            operator,
+            AssignmentOperator::AddAssign
+                | AssignmentOperator::SubtractAssign
+                | AssignmentOperator::MultiplyAssign
+                | AssignmentOperator::DivideAssign
+                | AssignmentOperator::RemainderAssign
+                | AssignmentOperator::ExponentiateAssign
+                | AssignmentOperator::LeftShiftAssign
+                | AssignmentOperator::RightShiftAssign
+                | AssignmentOperator::UnsignedRightShiftAssign
+                | AssignmentOperator::BitwiseAndAssign
+                | AssignmentOperator::BitwiseOrAssign
+                | AssignmentOperator::BitwiseXorAssign
+        )
+    )
+}
+
+/// Whether `next` is a `++`/`--` of a binding, whose IR1 right operand (the
+/// literal 1) no lowering reads: each steps the target's own value
+/// (lower_assign_op_to_ir3, lower_postfix_update_to_ir3, the register arms'
+/// `Inc`/`Dec`), so the literal needs a stack slot but no instruction
+/// (bd-9vouw.486).
+fn update_assignment_ignores_operand(next: Option<&Ir1Op>) -> bool {
+    matches!(
+        next,
+        Some(Ir1Op::AssignOp { operator, .. }) if matches!(
+            operator,
+            AssignmentOperator::IncrementAssign
+                | AssignmentOperator::DecrementAssign
+                | AssignmentOperator::PostIncrementAssign
+                | AssignmentOperator::PostDecrementAssign
+        )
+    )
 }
 
 /// Whether the read of register binding `binding_id` at `ops[index]` is the

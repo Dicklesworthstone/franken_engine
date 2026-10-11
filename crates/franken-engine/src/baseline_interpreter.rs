@@ -43167,7 +43167,18 @@ impl InterpreterCore {
                 };
                 let result = self.array_species_result(module, arr_id, 0)?;
                 let mut out = 0usize;
-                self.array_flatten_into(module, arr_id, depth, result, &mut out)?;
+                let source_label = match receiver_register {
+                    Some(register) => self.clone_register_label_with_temporary_budget(register)?,
+                    None => self.clone_active_execution_context_label()?,
+                };
+                self.array_flatten_into(
+                    module,
+                    arr_id,
+                    depth,
+                    result,
+                    &mut out,
+                    &source_label,
+                )?;
                 // An array result keeps its length in step; another
                 // species object gets only the data properties.
                 if self.generic_is_array(result)? {
@@ -43307,9 +43318,9 @@ impl InterpreterCore {
                     let Some(element) = self.array_index_get(Some(module), arr_id, index)? else {
                         continue;
                     };
-                    let mapped =
+                    let (mapped, mapped_label) =
                         self.with_gc_nested_request(vec![Value::Object(result)], |core| {
-                            core.invoke_array_callback(
+                            core.invoke_labeled_array_callback(
                                 Some(module),
                                 &callback,
                                 this_arg.clone(),
@@ -43318,7 +43329,12 @@ impl InterpreterCore {
                                 arr_id,
                             )
                         })?;
-                    self.create_data_property_or_throw(result, index.to_string(), mapped)?;
+                    self.create_labeled_data_property_or_throw(
+                        result,
+                        index.to_string(),
+                        mapped,
+                        &mapped_label,
+                    )?;
                 }
                 // An array result keeps its length in step; another
                 // species object gets only the data properties.
@@ -43347,18 +43363,30 @@ impl InterpreterCore {
                     let Some(element) = self.array_index_get(Some(module), arr_id, index)? else {
                         continue;
                     };
-                    let keep = self.with_gc_nested_request(vec![Value::Object(result)], |core| {
-                        core.invoke_array_callback(
-                            Some(module),
-                            &callback,
-                            this_arg.clone(),
-                            element.clone(),
-                            index,
-                            arr_id,
-                        )
-                    })?;
+                    let (keep, predicate_label) =
+                        self.with_gc_nested_request(vec![Value::Object(result)], |core| {
+                            core.invoke_labeled_array_callback(
+                                Some(module),
+                                &callback,
+                                this_arg.clone(),
+                                element.clone(),
+                                index,
+                                arr_id,
+                            )
+                        })?;
+                    // Selection controls both output positions and length,
+                    // including when a Secret predicate rejects every element.
+                    // A species constructor can expose the result via an alias.
+                    if predicate_label != Label::Public {
+                        self.join_object_mutation_label(result, &predicate_label)?;
+                    }
                     if keep.is_truthy() {
-                        self.create_data_property_or_throw(result, out.to_string(), element)?;
+                        self.create_labeled_data_property_or_throw(
+                            result,
+                            out.to_string(),
+                            element,
+                            &predicate_label,
+                        )?;
                         out += 1;
                     }
                 }
@@ -43502,9 +43530,9 @@ impl InterpreterCore {
                     let Some(element) = self.array_index_get(Some(module), arr_id, index)? else {
                         continue;
                     };
-                    let mapped =
+                    let (mapped, mapped_label) =
                         self.with_gc_nested_request(vec![Value::Object(result)], |core| {
-                            core.invoke_array_callback(
+                            core.invoke_labeled_array_callback(
                                 Some(module),
                                 &callback,
                                 this_arg.clone(),
@@ -43513,6 +43541,11 @@ impl InterpreterCore {
                                 arr_id,
                             )
                         })?;
+                    // Flattening can change every later output position and
+                    // the length; preserve this dependency on species aliases.
+                    if mapped_label != Label::Public {
+                        self.join_object_mutation_label(result, &mapped_label)?;
+                    }
                     let nested = if let Value::Object(eid) = &mapped {
                         self.heap
                             .get(eid.0 as usize)
@@ -43525,10 +43558,22 @@ impl InterpreterCore {
                         if let Value::Object(eid) = mapped {
                             // depth 0 => copy the mapped array's elements one
                             // level without recursing further.
-                            self.array_flatten_into(module, eid, 0, result, &mut out)?;
+                            self.array_flatten_into(
+                                module,
+                                eid,
+                                0,
+                                result,
+                                &mut out,
+                                &mapped_label,
+                            )?;
                         }
                     } else {
-                        self.create_data_property_or_throw(result, out.to_string(), mapped)?;
+                        self.create_labeled_data_property_or_throw(
+                            result,
+                            out.to_string(),
+                            mapped,
+                            &mapped_label,
+                        )?;
                         out += 1;
                     }
                 }
@@ -76830,15 +76875,35 @@ impl InterpreterCore {
         element_index: usize,
         array_id: ObjectId,
     ) -> Result<Value, InterpreterError> {
+        self.invoke_labeled_array_callback(
+            module,
+            callback,
+            this_arg,
+            element,
+            element_index,
+            array_id,
+        )
+        .map(|(value, _label)| value)
+    }
+
+    /// Preserve callback return provenance both for the enclosing builtin's
+    /// result and for callers that copy the value into a new array. Predicates
+    /// also contribute: their result decides which value/index/length escapes.
+    fn invoke_labeled_array_callback(
+        &mut self,
+        module: Option<&Ir3Module>,
+        callback: &Value,
+        this_arg: Value,
+        element: Value,
+        element_index: usize,
+        array_id: ObjectId,
+    ) -> Result<(Value, Label), InterpreterError> {
         let index = i64::try_from(element_index).map_err(|_| InterpreterError::TypeError {
             expected: "array callback index within i64".to_string(),
             got: element_index.to_string(),
         })?;
-        // bd-9vouw.110: the element's stored label (and the array's own) is
-        // the callback's context label, so a sink inside the callback sees it.
-        // Passed bare, `[secret].forEach(s => { const w = console.warn; w(s) })`
-        // printed the secret: the aliased sink escapes the static check, and
-        // the argument register arrived Public.
+        // The element's stored label (and the array's own) is the callback's
+        // context label, so an aliased sink inside the callback sees it.
         let element_key = RuntimePropertyKey::String(JsString::from(element_index.to_string()));
         let element_label = self.runtime_property_label(array_id, &element_key).join(
             self.object_mutation_labels
@@ -76847,7 +76912,7 @@ impl InterpreterCore {
         );
         let argument_label = (element_label != Label::Public).then_some(element_label);
         let held = self.gc_nested_request.take().unwrap_or_default();
-        self.with_gc_nested_request(held, |core| {
+        let result = self.with_gc_nested_request(held, |core| {
             core.invoke_inline_method_call_with_argument_label(
                 module,
                 callback.clone(),
@@ -76855,8 +76920,26 @@ impl InterpreterCore {
                 vec![element, Value::Int(index), Value::Object(array_id)],
                 argument_label,
             )
-            .map(|(value, _label)| value)
-        })
+        })?;
+        // The inline-call boundary preserves a nonempty pending label in its
+        // caller snapshot. Join instead of replacing it so a later Public
+        // callback cannot erase an earlier Secret return.
+        self.join_pending_array_result_label(&result.1)?;
+        Ok(result)
+    }
+
+    fn join_pending_array_result_label(&mut self, label: &Label) -> Result<(), InterpreterError> {
+        if label == &Label::Public {
+            return Ok(());
+        }
+        let joined = self.clone_dominant_label_with_temporary_budget(
+            self.pending_hostcall_result_label
+                .as_ref()
+                .unwrap_or(&Label::Public),
+            label,
+            Self::estimate_label_bytes(label),
+        )?;
+        self.replace_pending_hostcall_result_label(Some(joined))
     }
 
     fn array_prototype_reduce(
@@ -77283,6 +77366,34 @@ impl InterpreterCore {
         )
     }
 
+    /// Stage the label before the value so a denied allocation cannot publish
+    /// an unlabeled callback result through a species-created alias. Restore
+    /// the old label if CreateDataPropertyOrThrow refuses the write.
+    fn create_labeled_data_property_or_throw(
+        &mut self,
+        object_id: ObjectId,
+        key: String,
+        value: Value,
+        label: &Label,
+    ) -> Result<(), InterpreterError> {
+        if label == &Label::Public
+            && self
+                .heap
+                .get(object_id.0 as usize)
+                .is_some_and(|object| object.property_labels.is_empty())
+        {
+            return self.create_data_property_or_throw(object_id, key, value);
+        }
+        let runtime_key = RuntimePropertyKey::String(JsString::from(key.as_str()));
+        let previous_label = self.own_stored_runtime_property_label(object_id, &runtime_key);
+        self.set_own_runtime_property_label(object_id, &runtime_key, label)?;
+        if let Err(error) = self.create_data_property_or_throw(object_id, key, value) {
+            self.set_own_runtime_property_label(object_id, &runtime_key, &previous_label)?;
+            return Err(error);
+        }
+        Ok(())
+    }
+
     fn array_flatten_into(
         &mut self,
         module: &Ir3Module,
@@ -77290,6 +77401,7 @@ impl InterpreterCore {
         depth: i64,
         result: ObjectId,
         out: &mut usize,
+        source_label: &Label,
     ) -> Result<(), InterpreterError> {
         let len = self.array_like_length(src_id)?;
         for i in 0..len {
@@ -77299,6 +77411,15 @@ impl InterpreterCore {
             let Some(element) = self.array_index_get(Some(module), src_id, i)? else {
                 continue;
             };
+            let element_key = RuntimePropertyKey::String(JsString::from(i.to_string()));
+            let element_label = source_label
+                .join(&self.runtime_property_label(src_id, &element_key))
+                .join(
+                    self.object_mutation_labels
+                        .get(&src_id)
+                        .unwrap_or(&Label::Public),
+                );
+            self.join_pending_array_result_label(&element_label)?;
             let nested = if let Value::Object(eid) = &element {
                 self.heap
                     .get(eid.0 as usize)
@@ -77309,10 +77430,15 @@ impl InterpreterCore {
             };
             if depth > 0 && nested {
                 if let Value::Object(eid) = element {
-                    self.array_flatten_into(module, eid, depth - 1, result, out)?;
+                    self.array_flatten_into(module, eid, depth - 1, result, out, &element_label)?;
                 }
             } else {
-                self.create_data_property_or_throw(result, out.to_string(), element)?;
+                self.create_labeled_data_property_or_throw(
+                    result,
+                    out.to_string(),
+                    element,
+                    &element_label,
+                )?;
                 *out += 1;
             }
         }
@@ -99053,10 +99179,10 @@ impl InterpreterCore {
                         continue;
                     };
 
-                    let mapped_result = self.with_gc_nested_request(
+                    let (mapped_result, mapped_label) = self.with_gc_nested_request(
                         vec![Value::Object(result_array_id)],
                         |core| {
-                            core.invoke_array_callback(
+                            core.invoke_labeled_array_callback(
                                 module,
                                 &callback,
                                 this_arg.clone(),
@@ -99067,8 +99193,12 @@ impl InterpreterCore {
                         },
                     )?;
 
-                    // Set result in new array
-                    self.set_object_property(result_array_id, index.to_string(), mapped_result)?;
+                    self.create_labeled_data_property_or_throw(
+                        result_array_id,
+                        index.to_string(),
+                        mapped_result,
+                        &mapped_label,
+                    )?;
                 }
 
                 // Set result array length
@@ -106025,26 +106155,18 @@ impl InterpreterCore {
         Ok(())
     }
 
-    /// IFC: join the stored label of element `index` of `object_id` into the
-    /// pending hostcall result label. bd-ojvo1 stores a label per element and
-    /// an index read (GetProperty) joins it, but join, indexOf, includes and
-    /// lastIndexOf read elements natively, so `[secret].join()` and
-    /// `[secret].includes(x)` came out Public. Objects with no stored labels
-    /// pay one emptiness check.
+    /// Join the stored label of an element read by a native array aggregate
+    /// into its pending result label. Resolve the same first owning object
+    /// as the value lookup: a hole may inherit a labeled prototype element,
+    /// while a Public own element must shadow a Secret inherited element.
     fn join_element_stored_label(
         &mut self,
         object_id: ObjectId,
         index: u64,
     ) -> Result<(), InterpreterError> {
-        let label = match self.heap.get(object_id.0 as usize) {
-            Some(object) if !object.property_labels.is_empty() => object
-                .property_labels
-                .get_exact(&JsString::from(index.to_string()))
-                .filter(|label| **label != Label::Public)
-                .cloned(),
-            _ => None,
-        };
-        if let Some(label) = label {
+        let key = RuntimePropertyKey::String(JsString::from(index.to_string()));
+        let label = self.runtime_property_label(object_id, &key);
+        if label != Label::Public {
             let joined = self
                 .pending_hostcall_result_label
                 .as_ref()
@@ -139516,6 +139638,157 @@ mod async_runtime_tests_current {
         );
     }
 
+
+    #[test]
+    fn array_mapping_preserves_callback_element_and_aggregate_labels_bd_9vouw_110() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Halt,
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 1,
+                arity: 3,
+                frame_size: 3,
+                name: Some("identity".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        for kind in [
+            BuiltinFunctionKind::ArrayMap,
+            BuiltinFunctionKind::ArrayFlatMap,
+        ] {
+            for first_label in [Label::Public, Label::Secret] {
+                let mut core = test_interpreter();
+                let array = core
+                    .alloc_array_from_values(&[Value::str("first"), Value::str("last")])
+                    .expect("source array");
+                core.set_own_property_label(array, "0", &first_label)
+                    .expect("source label");
+                core.write_reg(0, Value::Function(0))
+                    .expect("callback register");
+                let mapped = core
+                    .dispatch_builtin_function(
+                        &module,
+                        &BuiltinFunction::new_kind(kind),
+                        RegRange { start: 0, count: 1 },
+                        Some(Value::Object(array)),
+                        None,
+                    )
+                    .expect("mapping should execute");
+                let Value::Object(mapped) = mapped else {
+                    panic!("{kind:?} must return an array");
+                };
+                assert_eq!(
+                    core.heap[mapped.0 as usize].properties.get("0"),
+                    Some(&Value::str("first")),
+                    "{kind:?}"
+                );
+                assert_eq!(
+                    core.own_property_label(mapped, "0"),
+                    first_label,
+                    "{kind:?}: callback result label must survive storage"
+                );
+                assert_eq!(
+                    core.own_property_label(mapped, "1"),
+                    Label::Public,
+                    "{kind:?}: a later Public element keeps its own label"
+                );
+                assert_eq!(
+                    core.take_pending_hostcall_result_label()
+                        .unwrap_or(Label::Public),
+                    first_label,
+                    "{kind:?}: the later Public callback must not erase earlier provenance"
+                );
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes(),
+                    "{kind:?}: label storage must remain accounted"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn flat_map_preserves_labels_stored_in_callback_returned_arrays_bd_9vouw_110() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Halt,
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 1,
+                arity: 3,
+                frame_size: 3,
+                name: Some("identity".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = test_interpreter();
+        let nested = core
+            .alloc_array_from_values(&[Value::str("classified")])
+            .expect("nested array");
+        core.set_own_property_label(nested, "0", &Label::Secret)
+            .expect("nested element label");
+        let array = core
+            .alloc_array_from_values(&[Value::Object(nested)])
+            .expect("source array");
+        core.write_reg(0, Value::Function(0))
+            .expect("callback register");
+        let result = core
+            .dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayFlatMap),
+                RegRange { start: 0, count: 1 },
+                Some(Value::Object(array)),
+                None,
+            )
+            .expect("flatMap should execute");
+        let Value::Object(result) = result else {
+            panic!("flatMap must return an array");
+        };
+        assert_eq!(
+            core.heap[result.0 as usize].properties.get("0"),
+            Some(&Value::str("classified"))
+        );
+        assert_eq!(core.own_property_label(result, "0"), Label::Secret);
+        assert_eq!(
+            core.take_pending_hostcall_result_label(),
+            Some(Label::Secret)
+        );
+    }
+
+    #[test]
+    fn labeled_array_result_write_restores_prior_label_on_refusal_bd_9vouw_110() {
+        let mut core = test_interpreter();
+        let array = core
+            .alloc_array_from_values(&[Value::str("original")])
+            .expect("result array");
+        core.mutate_heap(|heap| heap[array.0 as usize].is_frozen = true);
+        let before = core.estimated_memory_bytes();
+        let error = core
+            .create_labeled_data_property_or_throw(
+                array,
+                "0".to_string(),
+                Value::str("classified"),
+                &Label::Secret,
+            )
+            .expect_err("a frozen species result must reject the write");
+        assert!(matches!(error, InterpreterError::TypeError { .. }));
+        assert_eq!(
+            core.heap[array.0 as usize].properties.get("0"),
+            Some(&Value::str("original"))
+        );
+        assert_eq!(core.own_property_label(array, "0"), Label::Public);
+        assert_eq!(core.estimated_memory_bytes(), before);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
     /// IFC: join, indexOf, includes and lastIndexOf read elements natively,
     /// and the generic array-like path reads them through [[Get]]; the stored
     /// element label (bd-ojvo1) joins their result label, so a Secret element
@@ -139606,6 +139879,90 @@ mod async_runtime_tests_current {
             core.take_pending_hostcall_result_label(),
             Some(Label::Secret)
         );
+    }
+
+    #[test]
+    fn array_aggregate_reads_follow_inherited_element_labels_and_own_shadowing() {
+        use super::active_builtin_regressions::call_builtin_for_test;
+
+        for native_array in [true, false] {
+            for own_shadow in [false, true] {
+                let mut core = test_interpreter();
+                let prototype = core
+                    .alloc_object_with_properties(&[("0", Value::str("classified"))])
+                    .expect("prototype should allocate");
+                core.set_own_property_label(prototype, "0", &Label::Secret)
+                    .expect("inherited element label should fit");
+                let intermediate = core
+                    .alloc_object_with_prototype(Some(prototype))
+                    .expect("intermediate prototype should allocate");
+                let receiver = if native_array {
+                    core.alloc_array_with_prototype(Some(intermediate))
+                } else {
+                    core.alloc_object_with_prototype(Some(intermediate))
+                }
+                .expect("receiver should allocate");
+                core.set_object_property(receiver, "length".to_string(), Value::Int(1))
+                    .expect("array-like length should fit");
+                if own_shadow {
+                    core.set_object_property(receiver, "0".to_string(), Value::str("public"))
+                        .expect("Public own element should fit");
+                }
+
+                let expected_label = if own_shadow {
+                    Label::Public
+                } else {
+                    Label::Secret
+                };
+                let expected_index = if own_shadow { -1 } else { 0 };
+                for (kind, args, expected) in [
+                    (
+                        BuiltinFunctionKind::ArrayJoin,
+                        vec![],
+                        Value::str(if own_shadow { "public" } else { "classified" }),
+                    ),
+                    (
+                        BuiltinFunctionKind::ArrayIncludes,
+                        vec![Value::str("classified")],
+                        Value::Bool(!own_shadow),
+                    ),
+                    (
+                        BuiltinFunctionKind::ArrayIndexOf,
+                        vec![Value::str("classified")],
+                        Value::Int(expected_index),
+                    ),
+                    (
+                        BuiltinFunctionKind::ArrayLastIndexOf,
+                        vec![Value::str("classified")],
+                        Value::Int(expected_index),
+                    ),
+                ] {
+                    core.clear_pending_hostcall_result_label();
+                    let result = call_builtin_for_test(
+                        &mut core,
+                        BuiltinFunction::new_kind(kind),
+                        receiver,
+                        &args,
+                    )
+                    .expect("aggregate read should succeed");
+                    assert_eq!(
+                        result, expected,
+                        "{kind:?}, native_array={native_array}, own_shadow={own_shadow}"
+                    );
+                    assert_eq!(
+                        core.take_pending_hostcall_result_label()
+                            .unwrap_or(Label::Public),
+                        expected_label,
+                        "{kind:?} must use the label of the property that supplied its value; \
+                         native_array={native_array}, own_shadow={own_shadow}"
+                    );
+                }
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
+            }
+        }
     }
 
     #[test]

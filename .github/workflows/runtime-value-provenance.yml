@@ -63,6 +63,21 @@ jobs:
             --test global_value_property_targets_bd_9vouw_373 \
             --test parser_edge_cases --test parser_arena_conformance \
             --test ast_parser_golden_integration -- --nocapture --test-threads=1
+      - name: Execute focused native provenance and scope regressions
+        if: always()
+        shell: bash
+        run: |
+          failed=0
+          for test_filter in \
+            bd_9vouw_110 \
+            array_aggregate_reads_ \
+            immutable_global_references_keep_the_literal_fast_path \
+            module_and_commonjs_bindings_shadow_immutable_global_names \
+            global_value_names_; do
+            cargo test --locked -p frankenengine-engine --no-default-features \
+              --lib "$test_filter" -- --nocapture --test-threads=1 || failed=1
+          done
+          exit "$failed"
       - name: Check all workspace targets
         if: always()
         run: cargo check --locked --all-targets

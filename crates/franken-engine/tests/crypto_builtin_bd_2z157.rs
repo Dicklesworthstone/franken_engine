@@ -1008,10 +1008,7 @@ fn aliased_console_sinks_refuse_secret_arguments_bd_9vouw_110() {
 #[test]
 fn array_callback_returns_cannot_launder_secrets_bd_9vouw_110() {
     const CASES: [(&str, &str); 9] = [
-        (
-            "[0].map(function () { return secret; })[0]",
-            "public",
-        ),
+        ("[0].map(function () { return secret; })[0]", "public"),
         (
             "[secret].map(function (value) { return value; })[0]",
             "public",
@@ -1020,14 +1017,8 @@ fn array_callback_returns_cannot_launder_secrets_bd_9vouw_110() {
             "[0, 1].map(function (index) { return index === 0 ? secret : 'last'; }).join('|')",
             "public|last",
         ),
-        (
-            "[0].flatMap(function () { return secret; })[0]",
-            "public",
-        ),
-        (
-            "[0].flatMap(function () { return [secret]; })[0]",
-            "public",
-        ),
+        ("[0].flatMap(function () { return secret; })[0]", "public"),
+        ("[0].flatMap(function () { return [secret]; })[0]", "public"),
         (
             "['kept'].filter(function () { return secret.length > 0; }).length",
             "1",
@@ -1037,17 +1028,20 @@ fn array_callback_returns_cannot_launder_secrets_bd_9vouw_110() {
             "0",
         ),
         (
-            "[0, 1].some(function (index) { if (index === 0) return secret.length === 0; return false; })",
+            "[0, 1].some(function (index) { \
+             if (index === 0) return secret.length === 0; return false; })",
             "false",
         ),
         (
-            "[0, 1].every(function (index) { if (index === 0) return secret.length > 0; return true; })",
+            "[0, 1].every(function (index) { \
+             if (index === 0) return secret.length > 0; return true; })",
             "true",
         ),
     ];
     for (expression, public_output) in CASES {
         let source = format!(
-            "const crypto = require('crypto'); const secret = crypto.randomUUID();              const output = {expression}; const print = console.log; print(output);"
+            "const crypto = require('crypto'); const secret = crypto.randomUUID(); \
+             const output = {expression}; const print = console.log; print(output);"
         );
         let provider = Arc::new(ScriptedRandomHostIo::bytes([vec![0x11; 16]]));
         let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
@@ -1074,18 +1068,15 @@ fn array_callback_returns_cannot_launder_secrets_bd_9vouw_110() {
         );
 
         let source = format!(
-            "const secret = 'public'; const output = {expression};              const print = console.log; print(output);"
+            "const secret = 'public'; const output = {expression}; \
+             const print = console.log; print(output);"
         );
         let result = execute_crypto(
             &source,
             Arc::new(ScriptedRandomHostIo::never()),
             Arc::new(InMemoryHostIoTranscript::recording()),
         );
-        assert_eq!(
-            orchestrated_console(&result),
-            public_output,
-            "{expression}"
-        );
+        assert_eq!(orchestrated_console(&result), public_output, "{expression}");
     }
 }
 
@@ -1106,7 +1097,9 @@ fn inherited_array_elements_cannot_launder_secrets_through_aggregates() {
     for receiver in RECEIVERS {
         for (expression, public_output) in AGGREGATES {
             let source = format!(
-                "const crypto = require('crypto'); const secret = crypto.randomUUID();                  const p = [secret]; {receiver}                  const output = {expression}; const print = console.log; print(output);"
+                "const crypto = require('crypto'); const p = []; {receiver} \
+                 p[0] = crypto.randomUUID(); const output = {expression}; \
+                 const print = console.log; print(output);"
             );
             let provider = Arc::new(ScriptedRandomHostIo::bytes([vec![0x11; 16]]));
             let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
@@ -1137,7 +1130,8 @@ fn inherited_array_elements_cannot_launder_secrets_through_aggregates() {
             );
 
             let source = format!(
-                "const p = ['public']; {receiver}                  const output = {expression}; const print = console.log; print(output);"
+                "const p = []; {receiver} p[0] = 'public'; \
+                 const output = {expression}; const print = console.log; print(output);"
             );
             let result = execute_crypto(
                 &source,
@@ -1150,10 +1144,13 @@ fn inherited_array_elements_cannot_launder_secrets_through_aggregates() {
                 "{receiver} {expression}"
             );
 
-            // The Secret prototype remains present but is not read: this own
-            // Public element shadows it and must not acquire its provenance.
+            // Establish the prototype and own Public element before the Secret
+            // source mutates the prototype. Reading the shadow does not inspect
+            // the inherited element or depend on secret prototype selection.
             let source = format!(
-                "const crypto = require('crypto'); const secret = crypto.randomUUID();                  const p = [secret]; {receiver} a[0] = 'public';                  const output = {expression}; const print = console.log; print(output);"
+                "const crypto = require('crypto'); const p = []; {receiver} \
+                 a[0] = 'public'; p[0] = crypto.randomUUID(); \
+                 const output = {expression}; const print = console.log; print(output);"
             );
             let provider = Arc::new(ScriptedRandomHostIo::bytes([vec![0x11; 16]]));
             let result = execute_crypto(

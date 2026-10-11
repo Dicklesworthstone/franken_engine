@@ -77415,9 +77415,11 @@ impl InterpreterCore {
         )
     }
 
-    /// Stage the label before the value so a denied allocation cannot publish
-    /// an unlabeled callback result through a species-created alias. Restore
-    /// the old label if CreateDataPropertyOrThrow refuses the write.
+    /// Prepare and reserve the label map before writing an indexed array
+    /// result. The value writer invokes no guest code and its trailing
+    /// descriptor reset only releases memory, so success can publish the
+    /// preallocated labels without another fallible operation. On refusal the
+    /// original labels remain intact; rollback never allocates.
     fn create_labeled_data_property_or_throw(
         &mut self,
         object_id: ObjectId,
@@ -77425,22 +77427,45 @@ impl InterpreterCore {
         value: Value,
         label: &Label,
     ) -> Result<(), InterpreterError> {
-        if label == &Label::Public
-            && self
-                .heap
-                .get(object_id.0 as usize)
-                .is_some_and(|object| object.property_labels.is_empty())
-        {
+        let heap_index = object_id.0 as usize;
+        let object = self
+            .heap
+            .get(heap_index)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        if label == &Label::Public && object.property_labels.is_empty() {
             return self.create_data_property_or_throw(object_id, key, value);
         }
-        let runtime_key = RuntimePropertyKey::String(JsString::from(key.as_str()));
-        let previous_label = self.own_stored_runtime_property_label(object_id, &runtime_key);
-        self.set_own_runtime_property_label(object_id, &runtime_key, label)?;
-        if let Err(error) = self.create_data_property_or_throw(object_id, key, value) {
-            self.set_own_runtime_property_label(object_id, &runtime_key, &previous_label)?;
-            return Err(error);
+        let previous_label_bytes =
+            Self::estimate_execution_seed_ordered_label_map_bytes(&object.property_labels);
+        self.check_temporary_memory_budget(previous_label_bytes)?;
+        let mut projected_labels = object.property_labels.clone();
+        let property_key = JsString::from(key.as_str());
+        if label == &Label::Public {
+            projected_labels.remove_exact(&property_key);
+        } else {
+            projected_labels.insert_exact(property_key, label.clone());
         }
-        Ok(())
+        let projected_label_bytes =
+            Self::estimate_execution_seed_ordered_label_map_bytes(&projected_labels);
+        // Both maps stay live until the value write either commits or refuses.
+        // Include the staged map in every budget check made by that writer.
+        self.apply_memory_component_delta(0, projected_label_bytes)?;
+        match self.create_data_property_or_throw(object_id, key, value) {
+            Ok(()) => {
+                self.mutate_heap(|heap| heap[heap_index].property_labels = projected_labels);
+                self.estimated_memory_bytes = self
+                    .estimated_memory_bytes
+                    .saturating_sub(previous_label_bytes);
+                Ok(())
+            }
+            Err(error) => {
+                drop(projected_labels);
+                self.estimated_memory_bytes = self
+                    .estimated_memory_bytes
+                    .saturating_sub(projected_label_bytes);
+                Err(error)
+            }
+        }
     }
 
     fn array_flatten_into(
@@ -139850,6 +139875,108 @@ mod async_runtime_tests_current {
         );
         assert_eq!(core.own_property_label(array, "0"), Label::Public);
         assert_eq!(core.estimated_memory_bytes(), before);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn labeled_array_result_write_keeps_secret_labels_on_tight_frozen_refusal_bd_9vouw_110() {
+        for tightly_budgeted in [true, false] {
+            let mut core = test_interpreter();
+            let array = core
+                .alloc_array_from_values(&[Value::str("classified"), Value::str("other")])
+                .expect("species result array");
+            core.set_own_property_label(array, "0", &Label::Secret)
+                .expect("first result label");
+            core.set_own_property_label(array, "1", &Label::Secret)
+                .expect("second result label");
+            core.mutate_heap(|heap| heap[array.0 as usize].is_frozen = true);
+            let before = core.estimated_memory_bytes();
+            if tightly_budgeted {
+                core.config.max_total_memory_bytes = before;
+            }
+            let error = core
+                .create_labeled_data_property_or_throw(
+                    array,
+                    "0".to_string(),
+                    Value::str("public"),
+                    &Label::Public,
+                )
+                .expect_err("a frozen species result must reject replacement");
+            if tightly_budgeted {
+                assert!(matches!(error, InterpreterError::MemoryBudgetExceeded { .. }));
+            } else {
+                assert!(matches!(error, InterpreterError::TypeError { .. }));
+            }
+            // Clearing the first label before a frozen write was refused
+            // required cloning the remaining map to restore it. At this
+            // ceiling that rollback itself failed and exposed the old value.
+            assert_eq!(
+                core.heap[array.0 as usize].properties.get("0"),
+                Some(&Value::str("classified"))
+            );
+            assert_eq!(core.own_property_label(array, "0"), Label::Secret);
+            assert_eq!(core.own_property_label(array, "1"), Label::Secret);
+            assert_eq!(core.estimated_memory_bytes(), before);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn labeled_array_result_write_releases_staged_labels_after_value_budget_refusal_bd_9vouw_110() {
+        let mut core = test_interpreter();
+        let array = core
+            .alloc_array_from_values(&[Value::str("classified"), Value::str("other")])
+            .expect("species result array");
+        core.set_own_property_label(array, "0", &Label::Secret)
+            .expect("first result label");
+        core.set_own_property_label(array, "1", &Label::Secret)
+            .expect("second result label");
+        let before = core.estimated_memory_bytes();
+        // The two small labels fit in this headroom, but the replacement
+        // value does not. This reaches the value writer after label staging.
+        core.config.max_total_memory_bytes = before.saturating_add(4096);
+        let error = core
+            .create_labeled_data_property_or_throw(
+                array,
+                "0".to_string(),
+                Value::str("x".repeat(8192)),
+                &Label::Public,
+            )
+            .expect_err("oversized replacement must be refused");
+        assert!(matches!(error, InterpreterError::MemoryBudgetExceeded { .. }));
+        assert_eq!(
+            core.heap[array.0 as usize].properties.get("0"),
+            Some(&Value::str("classified"))
+        );
+        assert_eq!(core.own_property_label(array, "0"), Label::Secret);
+        assert_eq!(core.own_property_label(array, "1"), Label::Secret);
+        assert_eq!(core.estimated_memory_bytes(), before);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        // A subsequent admitted replacement clears only its own old label
+        // and releases the temporary map on the success path as well.
+        core.create_labeled_data_property_or_throw(
+            array,
+            "0".to_string(),
+            Value::str("public"),
+            &Label::Public,
+        )
+        .expect("a small Public replacement should fit");
+        assert_eq!(
+            core.heap[array.0 as usize].properties.get("0"),
+            Some(&Value::str("public"))
+        );
+        assert_eq!(core.own_property_label(array, "0"), Label::Public);
+        assert_eq!(core.own_property_label(array, "1"), Label::Secret);
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()

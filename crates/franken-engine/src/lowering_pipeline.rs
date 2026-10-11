@@ -3206,6 +3206,15 @@ fn rewrite_class_expression_self_capture(
     }
 }
 
+// A function's implicit `arguments` binding is a real function-local binding,
+// even when an outer source declaration has the same name. Its exact ID is
+// routed to the entry-created runtime cell, which `var arguments` redeclares.
+const OWN_ARGUMENTS_BINDING_SENTINEL: &str = "\0own_arguments_binding";
+const REDECLARED_ARGUMENTS_BINDING_SENTINEL: &str = "\0redeclared_arguments_binding";
+// Arrows may inherit this origin, but a same-named parameter or block binding
+// must not. Captures of the implicit binding use its existing runtime cell.
+const RUNTIME_ARGUMENTS_ORIGIN_SENTINEL: &str = "\0runtime_arguments_origin";
+
 /// Prepare a fresh function-like lookup without eagerly materializing every
 /// inherited name. NUL markers carry source-lexical visibility only; an exact
 /// normal bridge binding is allocated later, and only when a descendant
@@ -3215,6 +3224,7 @@ fn rewrite_class_expression_self_capture(
 fn prepare_function_body_bindings(
     statements: Option<&[Statement]>,
     self_name: Option<&str>,
+    is_arrow: bool,
     mentioned: &MentionedNames<'_>,
     outer_lookup: &BTreeMap<String, BindingId>,
     body_lookup: &mut BTreeMap<String, BindingId>,
@@ -3225,6 +3235,9 @@ fn prepare_function_body_bindings(
         .filter(|name| !is_internal_lowering_binding(name))
         .cloned()
         .collect::<BTreeSet<_>>();
+    let parameter_binds_arguments = local_names.contains("arguments");
+    let body_shadows_arguments = statements
+        .is_some_and(|statements| direct_lexical_binding_names(statements).contains("arguments"));
     if let Some(statements) = statements {
         local_names.extend(reserve_root_scope_bindings(
             statements,
@@ -3236,6 +3249,20 @@ fn prepare_function_body_bindings(
             body_lookup,
             body_binding_index,
         ));
+    }
+    if !is_arrow
+        && !parameter_binds_arguments
+        && !body_shadows_arguments
+        && mentioned.names.contains("arguments")
+    {
+        let is_var_redeclaration = local_names.contains("arguments");
+        let binding_id = reserve_binding_id(body_lookup, body_binding_index, "arguments");
+        body_lookup.insert(OWN_ARGUMENTS_BINDING_SENTINEL.to_string(), binding_id);
+        body_lookup.insert(RUNTIME_ARGUMENTS_ORIGIN_SENTINEL.to_string(), binding_id);
+        if is_var_redeclaration {
+            body_lookup.insert(REDECLARED_ARGUMENTS_BINDING_SENTINEL.to_string(), binding_id);
+        }
+        local_names.insert("arguments".to_string());
     }
     // A stream provenance sentinel belongs to the imported binding in the
     // enclosing scope, not to a same-spelled parameter/local in this fresh
@@ -3256,7 +3283,9 @@ fn prepare_function_body_bindings(
             body_lookup.insert(capture_origin_sentinel(name), binding_id);
         }
     }
-    if let Some(name) = self_name {
+    if let Some(name) = self_name
+        && (is_arrow || name != "arguments" || parameter_binds_arguments)
+    {
         suppress_stream_module_sentinel(body_lookup, name);
         suppress_net_module_sentinel(body_lookup, name);
         suppress_zlib_module_sentinel(body_lookup, name);
@@ -3288,6 +3317,9 @@ fn prepare_function_body_bindings(
             .copied()
             .chain(AUTHENTICATED_COMMONJS_RUNTIME_BINDINGS)
         {
+            if !is_arrow && name == "arguments" {
+                continue;
+            }
             key.truncate(prefix.len());
             key.push_str(name);
             if !body_lookup.contains_key(&key)
@@ -3296,6 +3328,14 @@ fn prepare_function_body_bindings(
                 body_lookup.insert(key.clone(), binding_id);
             }
         }
+    }
+
+    if is_arrow
+        && !local_names.contains("arguments")
+        && let Some(&origin) = outer_lookup.get(RUNTIME_ARGUMENTS_ORIGIN_SENTINEL)
+        && outer_lookup.get(&capture_origin_sentinel("arguments")) == Some(&origin)
+    {
+        body_lookup.insert(RUNTIME_ARGUMENTS_ORIGIN_SENTINEL.to_string(), origin);
     }
 
     // A local parameter, var, lexical declaration or inner function name
@@ -5068,6 +5108,8 @@ fn allocate_destructure_param_bindings(
 struct ParameterPrologueState {
     references: Vec<(String, BindingId)>,
     child_capture_entries: Vec<(String, BindingId)>,
+    arguments_binding: Option<BindingId>,
+    has_parameter_prologue: bool,
 }
 
 fn push_generator_prologue_end(body_ops: &mut Vec<Ir1Op>) {
@@ -5082,6 +5124,7 @@ fn push_generator_prologue_end(body_ops: &mut Vec<Ir1Op>) {
 fn lower_function_parameter_prologue(
     destructure_params: &[(String, &BindingPattern)],
     self_name: Option<&str>,
+    is_arrow: bool,
     outer_lookup: &BTreeMap<String, BindingId>,
     body_ops: &mut Vec<Ir1Op>,
     body_bindings: &mut Vec<ResolvedBinding>,
@@ -5098,6 +5141,7 @@ fn lower_function_parameter_prologue(
     let pre_lower_names = prepare_function_body_bindings(
         None,
         self_name,
+        is_arrow,
         &MentionedNames::of_patterns(destructure_params.iter().map(|(_, pattern)| *pattern)),
         outer_lookup,
         &mut prologue_lookup,
@@ -5150,13 +5194,32 @@ fn lower_function_parameter_prologue(
     Ok(ParameterPrologueState {
         references,
         child_capture_entries,
+        arguments_binding: prologue_lookup.get(OWN_ARGUMENTS_BINDING_SENTINEL).copied(),
+        has_parameter_prologue: true,
     })
 }
 
 fn merge_parameter_prologue_state(
     state: &ParameterPrologueState,
     body_lookup: &mut BTreeMap<String, BindingId>,
+    body_ops: &mut Vec<Ir1Op>,
 ) {
+    if state.has_parameter_prologue
+        && let Some(&binding_id) = body_lookup.get(REDECLARED_ARGUMENTS_BINDING_SENTINEL)
+    {
+        // A parameter-initializer closure retains the parameter environment.
+        // A body `var arguments` starts with that environment's current value,
+        // but later body assignments must not replace the parameter binding.
+        // Perform this copy after defaults, which may themselves assign it.
+        body_lookup.remove(OWN_ARGUMENTS_BINDING_SENTINEL);
+        body_lookup.remove(RUNTIME_ARGUMENTS_ORIGIN_SENTINEL);
+        body_ops.push(Ir1Op::LoadName {
+            name: "arguments".to_string(),
+            allow_missing: false,
+        });
+        body_ops.push(Ir1Op::StoreBinding { binding_id });
+        body_ops.push(Ir1Op::Discard);
+    }
     for (name, binding_id) in &state.references {
         body_lookup.entry(name.clone()).or_insert(*binding_id);
     }
@@ -7483,6 +7546,7 @@ fn lower_statement_to_ir1_with_flow(
             let parameter_prologue = lower_function_parameter_prologue(
                 &destructure_params,
                 None,
+                false,
                 binding_lookup,
                 &mut body_ops,
                 &mut body_bindings,
@@ -7491,18 +7555,19 @@ fn lower_statement_to_ir1_with_flow(
                 body_scope,
                 &mut body_label_counter,
             )?;
-            if func.is_generator {
-                push_generator_prologue_end(&mut body_ops);
-            }
             let pre_lower_names = prepare_function_body_bindings(
                 Some(&func.body.body),
                 None,
+                false,
                 &MentionedNames::of_function(func.name.as_deref(), &func.params, &func.body.body),
                 binding_lookup,
                 &mut body_lookup,
                 &mut body_binding_index,
             );
-            merge_parameter_prologue_state(&parameter_prologue, &mut body_lookup);
+            merge_parameter_prologue_state(&parameter_prologue, &mut body_lookup, &mut body_ops);
+            if func.is_generator {
+                push_generator_prologue_end(&mut body_ops);
+            }
             for stmt in hoisted_statement_order(&func.body.body) {
                 lower_statement_to_ir1(
                     stmt,
@@ -7660,6 +7725,7 @@ fn lower_statement_to_ir1_with_flow(
             let parameter_prologue = lower_function_parameter_prologue(
                 &destructure_params,
                 Some(&class_name),
+                false,
                 binding_lookup,
                 &mut body_ops,
                 &mut body_bindings,
@@ -7677,12 +7743,13 @@ fn lower_statement_to_ir1_with_flow(
             let ctor_pre_lower_names = prepare_function_body_bindings(
                 ctor_statements,
                 Some(&class_name),
+                false,
                 &class_mentions,
                 binding_lookup,
                 &mut body_lookup,
                 &mut body_binding_index,
             );
-            merge_parameter_prologue_state(&parameter_prologue, &mut body_lookup);
+            merge_parameter_prologue_state(&parameter_prologue, &mut body_lookup, &mut body_ops);
             if let Some(ctor) = constructor {
                 for stmt in hoisted_statement_order(&ctor.body.body) {
                     lower_statement_to_ir1(
@@ -7920,6 +7987,7 @@ fn lower_statement_to_ir1_with_flow(
                 let parameter_prologue = lower_function_parameter_prologue(
                     &m_destructure_params,
                     None,
+                    false,
                     binding_lookup,
                     &mut m_body_ops,
                     &mut m_bindings,
@@ -7928,9 +7996,6 @@ fn lower_statement_to_ir1_with_flow(
                     m_scope,
                     &mut m_label_counter,
                 )?;
-                if method.is_generator {
-                    push_generator_prologue_end(&mut m_body_ops);
-                }
                 // The member's own mentions with the class-level ones: the
                 // whole class's set cost each member the size of the class,
                 // O(members^2) to lower one class.
@@ -7942,12 +8007,16 @@ fn lower_statement_to_ir1_with_flow(
                 let method_pre_lower_names = prepare_function_body_bindings(
                     Some(&method.body.body),
                     None,
+                    false,
                     &member_mentions,
                     binding_lookup,
                     &mut m_lookup,
                     &mut m_binding_index,
                 );
-                merge_parameter_prologue_state(&parameter_prologue, &mut m_lookup);
+                merge_parameter_prologue_state(&parameter_prologue, &mut m_lookup, &mut m_body_ops);
+                if method.is_generator {
+                    push_generator_prologue_end(&mut m_body_ops);
+                }
                 for stmt in hoisted_statement_order(&method.body.body) {
                     lower_statement_to_ir1(
                         stmt,
@@ -12792,6 +12861,11 @@ fn lower_ir2_to_ir3_with_input_hash(
                     let available_capture_names: BTreeSet<&str> = fv_id_to_name
                         .values()
                         .chain(child_capture_id_to_name.values())
+                        .chain(
+                            runtime_global_id_to_name
+                                .values()
+                                .filter(|name| name.as_str() == "arguments"),
+                        )
                         .map(String::as_str)
                         .collect();
                     let temp_free_vars: Vec<&String> = inner_fv
@@ -12908,6 +12982,11 @@ fn lower_ir2_to_ir3_with_input_hash(
                     let available_capture_names: BTreeSet<&str> = fv_id_to_name
                         .values()
                         .chain(child_capture_id_to_name.values())
+                        .chain(
+                            runtime_global_id_to_name
+                                .values()
+                                .filter(|name| name.as_str() == "arguments"),
+                        )
                         .map(String::as_str)
                         .collect();
                     let self_capture_name = inner_name
@@ -14163,11 +14242,21 @@ fn append_free_var_capture(
         .get(&capture_origin_sentinel(name))
         .copied()
         .unwrap_or(outer_id);
-    let runtime_name = capture_cell_name(name, origin_id);
-    outer_lookup.insert(
-        child_capture_binding_sentinel(outer_id, &runtime_name),
-        outer_id,
-    );
+    let runtime_name = if name == "arguments"
+        && outer_lookup.get(RUNTIME_ARGUMENTS_ORIGIN_SENTINEL) == Some(&origin_id)
+    {
+        // The owning function already declares this cell on entry. Giving an
+        // arrow a copied capture alias would split subsequent assignments in
+        // the parent, the arrow, and parameter-default closures.
+        "arguments".to_string()
+    } else {
+        let runtime_name = capture_cell_name(name, origin_id);
+        outer_lookup.insert(
+            child_capture_binding_sentinel(outer_id, &runtime_name),
+            outer_id,
+        );
+        runtime_name
+    };
     names.push(runtime_name);
     ids.push(body_id);
 }
@@ -14770,6 +14859,17 @@ fn rewrite_unresolved_function_body_loads(
         {
             commonjs_wrapper_loads.push((name.clone(), *binding_id));
         }
+    }
+
+    // The implicit arguments binding is source-resolvable, but uses the
+    // same exact-ID scope-load seam. Its entry marker initializes the cell
+    // before defaults and body initializers. Parameter defaults retain their
+    // own ID even when a body declaration shadows the spelling.
+    if let Some(&binding_id) = body_lookup.get(OWN_ARGUMENTS_BINDING_SENTINEL) {
+        commonjs_wrapper_loads.push(("arguments".to_string(), binding_id));
+    }
+    if let Some(binding_id) = parameter_prologue.arguments_binding {
+        commonjs_wrapper_loads.push(("arguments".to_string(), binding_id));
     }
 
     if unresolved_by_id.is_empty() {
@@ -15993,6 +16093,7 @@ fn try_lower_arrow_expression_to_ir1(
     let parameter_prologue = lower_function_parameter_prologue(
         &destructure_params,
         None,
+        true,
         binding_lookup,
         &mut body_ops,
         &mut body_bindings,
@@ -16008,12 +16109,13 @@ fn try_lower_arrow_expression_to_ir1(
     let pre_lower_names = prepare_function_body_bindings(
         body_statements,
         None,
+        true,
         &MentionedNames::of_arrow(params, body),
         binding_lookup,
         &mut body_lookup,
         &mut body_binding_index,
     );
-    merge_parameter_prologue_state(&parameter_prologue, &mut body_lookup);
+    merge_parameter_prologue_state(&parameter_prologue, &mut body_lookup, &mut body_ops);
     match body {
         ArrowBody::Expression(expr) => lower_expression_to_ir1(
             expr,
@@ -20581,6 +20683,7 @@ fn lower_expression_to_ir1_inner(
             let parameter_prologue = lower_function_parameter_prologue(
                 &destructure_params,
                 name.as_deref(),
+                false,
                 binding_lookup,
                 &mut body_ops,
                 &mut body_bindings,
@@ -20589,18 +20692,19 @@ fn lower_expression_to_ir1_inner(
                 body_scope,
                 &mut body_label_counter,
             )?;
-            if *is_generator {
-                push_generator_prologue_end(&mut body_ops);
-            }
             let pre_lower_names = prepare_function_body_bindings(
                 Some(&body.body),
                 name.as_deref(),
+                false,
                 &MentionedNames::of_function(name.as_deref(), params, &body.body),
                 binding_lookup,
                 &mut body_lookup,
                 &mut body_binding_index,
             );
-            merge_parameter_prologue_state(&parameter_prologue, &mut body_lookup);
+            merge_parameter_prologue_state(&parameter_prologue, &mut body_lookup, &mut body_ops);
+            if *is_generator {
+                push_generator_prologue_end(&mut body_ops);
+            }
             for stmt in hoisted_statement_order(&body.body) {
                 lower_statement_to_ir1(
                     stmt,
@@ -21162,6 +21266,7 @@ fn lower_expression_to_ir1_inner(
             let parameter_prologue = lower_function_parameter_prologue(
                 &destructure_params,
                 name.as_deref(),
+                false,
                 binding_lookup,
                 &mut body_ops,
                 &mut body_bindings,
@@ -21176,12 +21281,13 @@ fn lower_expression_to_ir1_inner(
             let ctor_pre_lower_names = prepare_function_body_bindings(
                 ctor_statements,
                 name.as_deref(),
+                false,
                 &class_mentions,
                 binding_lookup,
                 &mut body_lookup,
                 &mut body_binding_index,
             );
-            merge_parameter_prologue_state(&parameter_prologue, &mut body_lookup);
+            merge_parameter_prologue_state(&parameter_prologue, &mut body_lookup, &mut body_ops);
             if let Some(ctor) = constructor {
                 for stmt in hoisted_statement_order(&ctor.body.body) {
                     lower_statement_to_ir1(
@@ -21427,6 +21533,7 @@ fn lower_expression_to_ir1_inner(
                 let parameter_prologue = lower_function_parameter_prologue(
                     &m_destructure_params,
                     name.as_deref(),
+                    false,
                     binding_lookup,
                     &mut m_body_ops,
                     &mut m_bindings,
@@ -21435,9 +21542,6 @@ fn lower_expression_to_ir1_inner(
                     m_scope,
                     &mut m_label_counter,
                 )?;
-                if method.is_generator {
-                    push_generator_prologue_end(&mut m_body_ops);
-                }
                 // The member's own mentions with the class-level ones (see
                 // the class declaration path).
                 let member_mentions = MentionedNames::of_class(
@@ -21448,12 +21552,16 @@ fn lower_expression_to_ir1_inner(
                 let method_pre_lower_names = prepare_function_body_bindings(
                     Some(&method.body.body),
                     name.as_deref(),
+                    false,
                     &member_mentions,
                     binding_lookup,
                     &mut m_lookup,
                     &mut m_binding_index,
                 );
-                merge_parameter_prologue_state(&parameter_prologue, &mut m_lookup);
+                merge_parameter_prologue_state(&parameter_prologue, &mut m_lookup, &mut m_body_ops);
+                if method.is_generator {
+                    push_generator_prologue_end(&mut m_body_ops);
+                }
                 for stmt in hoisted_statement_order(&method.body.body) {
                     lower_statement_to_ir1(
                         stmt,
@@ -51767,6 +51875,7 @@ mod tests {
         prepare_function_body_bindings(
             Some(&body),
             None,
+            false,
             &mentioned,
             &outer,
             &mut body_lookup,

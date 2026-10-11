@@ -7897,12 +7897,26 @@ impl RuntimePropertyKey {
     }
 }
 
+#[cfg(test)]
 fn property_resolution_found_payload(
     key: &RuntimePropertyKey,
     object_id: ObjectId,
     depth: u32,
 ) -> Vec<u8> {
-    let mut payload = Vec::with_capacity(
+    let mut payload = Vec::new();
+    write_property_resolution_found_payload(&mut payload, key, object_id, depth);
+    payload
+}
+
+/// Replace `payload`'s contents with the found-property witness event's bytes.
+fn write_property_resolution_found_payload(
+    payload: &mut Vec<u8>,
+    key: &RuntimePropertyKey,
+    object_id: ObjectId,
+    depth: u32,
+) {
+    payload.clear();
+    payload.reserve(
         b"property_found:key=".len()
             + key.diagnostic_byte_len()
             + b",object_id=".len()
@@ -7911,13 +7925,16 @@ fn property_resolution_found_payload(
             + decimal_u32_len(depth),
     );
     payload.extend_from_slice(b"property_found:key=");
-    key.append_diagnostic_bytes(&mut payload);
+    key.append_diagnostic_bytes(payload);
     payload.extend_from_slice(b",object_id=");
-    append_decimal_u32(&mut payload, object_id.0);
+    append_decimal_u32(payload, object_id.0);
     payload.extend_from_slice(b",depth=");
-    append_decimal_u32(&mut payload, depth);
-    payload
+    append_decimal_u32(payload, depth);
 }
+
+/// The most property-witness scratch capacity an interpreter keeps between
+/// reads; a longer key's buffer is dropped after its event.
+const PROPERTY_WITNESS_SCRATCH_MAX_CAPACITY: usize = 256;
 
 /// Slots per heap chunk. A full chunk whose objects were all reclaimed is
 /// released as a whole (bd-9vouw.57 phase B), so memory follows the live set
@@ -15129,6 +15146,11 @@ pub struct InterpreterCore {
     /// `Undefined`, so a callback neither allocates nor drops `max_registers`
     /// slots. Engine capacity of at most `max_registers` slots, not charged.
     simple_callback_register_pool: Vec<Value>,
+    /// The bytes of the last found-property witness event, kept so a
+    /// property read folds its event without allocating a buffer. Engine
+    /// capacity (at most PROPERTY_WITNESS_SCRATCH_MAX_CAPACITY bytes kept),
+    /// not charged.
+    property_witness_scratch: Vec<u8>,
     /// JSON parser/reviver scratch retained on the Rust stack across guest
     /// callbacks. A nested accounting resync must not erase this ownership.
     json_parse_temporary_bytes: u64,
@@ -16489,6 +16511,7 @@ impl InterpreterCore {
             estimated_memory_bytes,
             simple_callback_temporary_bytes: 0,
             simple_callback_register_pool: Vec::new(),
+            property_witness_scratch: Vec::new(),
             json_parse_temporary_bytes: 0,
             module_snapshot_in_flight_bytes: 0,
             temporarily_suspended_execution_bytes: 0,
@@ -63320,11 +63343,16 @@ impl InterpreterCore {
         object_id: ObjectId,
         depth: u32,
     ) {
-        // Deterministic decision: fold, don't record (bd-9vouw.18).
-        self.nondeterminism_trace.witness_deterministic(
-            NondeterminismSource::PropertyResolution,
-            &property_resolution_found_payload(key, object_id, depth),
-        );
+        // Deterministic decision: fold, don't record (bd-9vouw.18). The bytes
+        // go through a reused buffer: a Vec per property read was malloc and
+        // free on every found [[Get]].
+        let mut payload = std::mem::take(&mut self.property_witness_scratch);
+        write_property_resolution_found_payload(&mut payload, key, object_id, depth);
+        self.nondeterminism_trace
+            .witness_deterministic(NondeterminismSource::PropertyResolution, &payload);
+        if payload.capacity() <= PROPERTY_WITNESS_SCRATCH_MAX_CAPACITY {
+            self.property_witness_scratch = payload;
+        }
     }
 
     /// Resolve an `Array.prototype` method name to its receiver-aware builtin
@@ -157067,6 +157095,32 @@ mod tests {
                 Value::Int(index as i64)
             );
         }
+    }
+
+    /// bd-9vouw.492: the found-property witness event folds through a reused
+    /// buffer; the digest equals the fold of the allocating builder's bytes,
+    /// across a key longer than the kept capacity and short keys after it.
+    #[test]
+    fn property_witness_scratch_folds_the_same_bytes() {
+        let mut core = test_interpreter();
+        let long_name = "k".repeat(1_000);
+        let long = RuntimePropertyKey::String(JsString::from(long_name.as_str()));
+        let short = RuntimePropertyKey::String(JsString::from("x"));
+        let mut expected = core.nondeterminism_trace.deterministic_witness;
+        for (key, object_id, depth) in [
+            (&short, ObjectId(3), 0),
+            (&long, ObjectId(4), 2),
+            (&short, ObjectId(5), 1),
+        ] {
+            core.capture_property_resolution_found(key, object_id, depth);
+            expected.fold(
+                NondeterminismSource::PropertyResolution,
+                &property_resolution_found_payload(key, object_id, depth),
+            );
+        }
+        assert_eq!(core.nondeterminism_trace.deterministic_witness, expected);
+        assert_eq!(expected.event_count, 3);
+        assert!(core.property_witness_scratch.capacity() <= PROPERTY_WITNESS_SCRATCH_MAX_CAPACITY);
     }
 
     #[test]

@@ -9173,6 +9173,12 @@ fn lower_ir2_to_ir3_with_input_hash(
     // Binding registers a compound assignment's operator reads in place
     // while they sit on the value stack (compound_left_operand_reads_in_place).
     let mut compound_reads_in_place = BTreeSet::<Reg>::new();
+    // bd-9vouw.496: loop-invariant literals and static keys, loaded once
+    // before each outermost top-level loop (plan_loop_constant_hoists).
+    let loop_hoists = plan_loop_constant_hoists(&ir2.ops);
+    let mut next_loop_hoist = 0usize;
+    let mut hoisted_constants: Vec<(Ir1Literal, Reg)> = Vec::new();
+    let mut hoisted_until = 0usize;
     for (op_index, op) in ir2.ops.iter().enumerate() {
         prune_iterator_anchors(&mut iterator_anchors, &value_stack);
         // A short-lived temporary's register is free once its last
@@ -9202,6 +9208,47 @@ fn lower_ir2_to_ir3_with_input_hash(
             if live_status_registers.is_empty() {
                 statement_register_floor = register_cursor;
             }
+        }
+        if op_index > hoisted_until {
+            hoisted_constants.clear();
+        }
+        if let Some(hoist) = loop_hoists.get(next_loop_hoist)
+            && hoist.insert_at == op_index
+        {
+            next_loop_hoist += 1;
+            if value_stack.is_empty() {
+                hoisted_constants = hoist
+                    .constants
+                    .iter()
+                    .map(|literal| {
+                        let register = alloc_pinned_register(
+                            &mut register_cursor,
+                            &mut pinned_register_high,
+                            &mut register_high_water,
+                        );
+                        lower_literal_to_ir3_optimized(
+                            literal,
+                            register,
+                            &mut ir3.instructions,
+                            &mut constant_pool,
+                        );
+                        (literal.clone(), register)
+                    })
+                    .collect();
+                hoisted_until = hoist.end;
+                if live_status_registers.is_empty() {
+                    statement_register_floor = register_cursor;
+                }
+            }
+        }
+        if let Ir1Op::LoadLiteral { value } = &op.inner
+            && let Some(&(_, register)) = hoisted_constants
+                .iter()
+                .find(|(literal, _)| literal == value)
+        {
+            // Loaded before the loop (bd-9vouw.496).
+            value_stack.push(register);
+            continue;
         }
         if matches!(op.effect, EffectBoundary::HostcallEffect) {
             let capability = op
@@ -10275,12 +10322,19 @@ fn lower_ir2_to_ir3_with_input_hash(
                 let (obj, key_reg) = match key {
                     Ir1PropertyKey::Static(key) => {
                         let obj = pop_lowering_value(&mut value_stack)?;
-                        let key_reg = alloc_register(&mut register_cursor);
-                        let pool_index = push_constant_optimized(&mut constant_pool, key.clone());
-                        ir3.instructions.push(Ir3Instruction::LoadStr {
-                            dst: key_reg,
-                            pool_index,
-                        });
+                        let key_reg = match hoisted_string_constant(&hoisted_constants, key) {
+                            Some(register) => register,
+                            None => {
+                                let key_reg = alloc_register(&mut register_cursor);
+                                let pool_index =
+                                    push_constant_optimized(&mut constant_pool, key.clone());
+                                ir3.instructions.push(Ir3Instruction::LoadStr {
+                                    dst: key_reg,
+                                    pool_index,
+                                });
+                                key_reg
+                            }
+                        };
                         (obj, key_reg)
                     }
                     Ir1PropertyKey::Dynamic => {
@@ -10302,12 +10356,19 @@ fn lower_ir2_to_ir3_with_input_hash(
                 let (obj, key_reg) = match key {
                     Ir1PropertyKey::Static(key) => {
                         let obj = pop_lowering_value(&mut value_stack)?;
-                        let key_reg = alloc_register(&mut register_cursor);
-                        let pool_index = push_constant_optimized(&mut constant_pool, key.clone());
-                        ir3.instructions.push(Ir3Instruction::LoadStr {
-                            dst: key_reg,
-                            pool_index,
-                        });
+                        let key_reg = match hoisted_string_constant(&hoisted_constants, key) {
+                            Some(register) => register,
+                            None => {
+                                let key_reg = alloc_register(&mut register_cursor);
+                                let pool_index =
+                                    push_constant_optimized(&mut constant_pool, key.clone());
+                                ir3.instructions.push(Ir3Instruction::LoadStr {
+                                    dst: key_reg,
+                                    pool_index,
+                                });
+                                key_reg
+                            }
+                        };
                         (obj, key_reg)
                     }
                     Ir1PropertyKey::Dynamic => {
@@ -11741,6 +11802,12 @@ fn lower_ir2_to_ir3_with_input_hash(
                 detail: "annotated function body does not match its IR1 ops",
             });
         }
+        // bd-9vouw.496: loop-invariant literals and static keys, loaded once
+        // before each outermost loop (plan_loop_constant_hoists).
+        let fn_loop_hoists = plan_loop_constant_hoists(&annotated_body_ops);
+        let mut fn_next_loop_hoist = 0usize;
+        let mut fn_hoisted_constants: Vec<(Ir1Literal, Reg)> = Vec::new();
+        let mut fn_hoisted_until = 0usize;
         for (op_index, ir2_op) in annotated_body_ops.iter().enumerate() {
             prune_iterator_anchors(&mut fn_iterator_anchors, &fn_value_stack);
             // A short-lived local's register is free once its last reference
@@ -11764,6 +11831,47 @@ fn lower_ir2_to_ir3_with_input_hash(
                 if fn_live_status_registers.is_empty() {
                     fn_statement_register_floor = fn_reg;
                 }
+            }
+            if op_index > fn_hoisted_until {
+                fn_hoisted_constants.clear();
+            }
+            if let Some(hoist) = fn_loop_hoists.get(fn_next_loop_hoist)
+                && hoist.insert_at == op_index
+            {
+                fn_next_loop_hoist += 1;
+                if fn_value_stack.is_empty() {
+                    fn_hoisted_constants = hoist
+                        .constants
+                        .iter()
+                        .map(|literal| {
+                            let register = alloc_pinned_register(
+                                &mut fn_reg,
+                                &mut fn_pinned_register_high,
+                                &mut fn_register_high_water,
+                            );
+                            lower_literal_to_ir3_optimized(
+                                literal,
+                                register,
+                                &mut ir3.instructions,
+                                &mut constant_pool,
+                            );
+                            (literal.clone(), register)
+                        })
+                        .collect();
+                    fn_hoisted_until = hoist.end;
+                    if fn_live_status_registers.is_empty() {
+                        fn_statement_register_floor = fn_reg;
+                    }
+                }
+            }
+            if let Ir1Op::LoadLiteral { value } = &ir2_op.inner
+                && let Some(&(_, register)) = fn_hoisted_constants
+                    .iter()
+                    .find(|(literal, _)| literal == value)
+            {
+                // Loaded before the loop (bd-9vouw.496).
+                fn_value_stack.push(register);
+                continue;
             }
             // We handle a core subset of ops that appear in function bodies.
             match &ir2_op.inner {
@@ -12547,12 +12655,19 @@ fn lower_ir2_to_ir3_with_input_hash(
                     let (obj, key_reg) = match key {
                         Ir1PropertyKey::Static(k) => {
                             let obj = pop_lowering_value(&mut fn_value_stack)?;
-                            let kr = alloc_register(&mut fn_reg);
-                            let pool_index = push_constant_optimized(&mut constant_pool, k.clone());
-                            ir3.instructions.push(Ir3Instruction::LoadStr {
-                                dst: kr,
-                                pool_index,
-                            });
+                            let kr = match hoisted_string_constant(&fn_hoisted_constants, k) {
+                                Some(register) => register,
+                                None => {
+                                    let kr = alloc_register(&mut fn_reg);
+                                    let pool_index =
+                                        push_constant_optimized(&mut constant_pool, k.clone());
+                                    ir3.instructions.push(Ir3Instruction::LoadStr {
+                                        dst: kr,
+                                        pool_index,
+                                    });
+                                    kr
+                                }
+                            };
                             (obj, kr)
                         }
                         Ir1PropertyKey::Dynamic => {
@@ -12574,12 +12689,19 @@ fn lower_ir2_to_ir3_with_input_hash(
                     let (obj, key_reg) = match key {
                         Ir1PropertyKey::Static(k) => {
                             let obj = pop_lowering_value(&mut fn_value_stack)?;
-                            let kr = alloc_register(&mut fn_reg);
-                            let pool_index = push_constant_optimized(&mut constant_pool, k.clone());
-                            ir3.instructions.push(Ir3Instruction::LoadStr {
-                                dst: kr,
-                                pool_index,
-                            });
+                            let kr = match hoisted_string_constant(&fn_hoisted_constants, k) {
+                                Some(register) => register,
+                                None => {
+                                    let kr = alloc_register(&mut fn_reg);
+                                    let pool_index =
+                                        push_constant_optimized(&mut constant_pool, k.clone());
+                                    ir3.instructions.push(Ir3Instruction::LoadStr {
+                                        dst: kr,
+                                        pool_index,
+                                    });
+                                    kr
+                                }
+                            };
                             (obj, kr)
                         }
                         Ir1PropertyKey::Dynamic => {
@@ -34922,6 +35044,149 @@ fn emit_empty_array_length_store(
         key: key_reg,
         val: length_reg,
     });
+}
+
+/// bd-9vouw.496: the most constants one loop hoists, each into a register
+/// pinned for the rest of the body.
+const MAX_HOISTED_LOOP_CONSTANTS: usize = 16;
+
+/// bd-9vouw.496: the literals and static property keys an outermost loop
+/// reads, loaded once into pinned registers at `insert_at` (before the
+/// loop's entry `Jump` to its bottom test, or before the body label of a
+/// loop entered by falling into it) instead of on every iteration.
+struct LoopConstantHoist {
+    insert_at: usize,
+    end: usize,
+    constants: Vec<Ir1Literal>,
+}
+
+/// bd-9vouw.496: plan the loop-invariant constant loads of a body. A loop is
+/// a back edge, a `JumpIfTruthy` to an earlier label (while, do-while and
+/// for loops test at the bottom, bd-9vouw.486); only outermost loops are
+/// planned, so a constant of an inner loop is loaded before the outer one.
+/// A loop is skipped when anything outside it, other than its own entry
+/// jump, targets a label inside it (the loads could be bypassed). The loop's
+/// `++`/`--` operand literal is not hoisted: no instruction loads it
+/// (update_assignment_ignores_operand). BigInt literals are not hoisted.
+/// The emitter applies a plan only when the value stack is empty at
+/// `insert_at` (a statement boundary).
+fn plan_loop_constant_hoists(ops: &[Ir2Op]) -> Vec<LoopConstantHoist> {
+    let mut label_at = BTreeMap::<u32, usize>::new();
+    for (index, op) in ops.iter().enumerate() {
+        if let Ir1Op::Label { id } = &op.inner {
+            label_at.insert(*id, index);
+        }
+    }
+    let targets = |op: &Ir1Op| -> Vec<u32> {
+        match op {
+            Ir1Op::Jump { label_id }
+            | Ir1Op::JumpIfFalsy { label_id }
+            | Ir1Op::JumpIfFalsyConsume { label_id }
+            | Ir1Op::JumpIfTruthy { label_id }
+            | Ir1Op::JumpIfNullish { label_id } => vec![*label_id],
+            Ir1Op::BeginTry {
+                catch_label,
+                finally_label,
+            } => std::iter::once(*catch_label)
+                .chain(finally_label.iter().copied())
+                .collect(),
+            Ir1Op::ForInNext { done_label } | Ir1Op::ForOfNext { done_label } => {
+                vec![*done_label]
+            }
+            _ => Vec::new(),
+        }
+    };
+    let mut loops = ops
+        .iter()
+        .enumerate()
+        .filter_map(|(index, op)| match &op.inner {
+            Ir1Op::JumpIfTruthy { label_id } => label_at
+                .get(label_id)
+                .filter(|&&body| body < index)
+                .map(|&body| (body, index)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    loops.sort_unstable();
+    let mut outermost: Vec<(usize, usize)> = Vec::new();
+    for (body, end) in loops {
+        if outermost
+            .last()
+            .is_some_and(|&(outer_body, outer_end)| body >= outer_body && end <= outer_end)
+        {
+            continue;
+        }
+        outermost.push((body, end));
+    }
+    outermost
+        .into_iter()
+        .filter_map(|(body, end)| {
+            let insert_at = match body.checked_sub(1).map(|index| &ops[index].inner) {
+                Some(Ir1Op::Jump { label_id })
+                    if label_at
+                        .get(label_id)
+                        .is_some_and(|&test| test > body && test <= end) =>
+                {
+                    body - 1
+                }
+                _ => body,
+            };
+            let entered_only_at_its_head = ops.iter().enumerate().all(|(index, op)| {
+                (index >= insert_at && index <= end)
+                    || targets(&op.inner).iter().all(|label| {
+                        label_at
+                            .get(label)
+                            .is_none_or(|&target| target <= insert_at || target > end)
+                    })
+            });
+            if !entered_only_at_its_head {
+                return None;
+            }
+            let mut constants: Vec<Ir1Literal> = Vec::new();
+            for index in body..=end {
+                let literal = match &ops[index].inner {
+                    Ir1Op::LoadLiteral { value }
+                        if !update_assignment_ignores_operand(
+                            ops.get(index + 1).map(|next| &next.inner),
+                        ) =>
+                    {
+                        Some(value.clone())
+                    }
+                    Ir1Op::GetProperty {
+                        key: Ir1PropertyKey::Static(key),
+                    }
+                    | Ir1Op::SetProperty {
+                        key: Ir1PropertyKey::Static(key),
+                        ..
+                    } => Some(Ir1Literal::String(key.clone())),
+                    _ => None,
+                };
+                if let Some(literal) = literal
+                    && !matches!(literal, Ir1Literal::BigInt(_))
+                    && !constants.contains(&literal)
+                    && constants.len() < MAX_HOISTED_LOOP_CONSTANTS
+                {
+                    constants.push(literal);
+                }
+            }
+            (!constants.is_empty()).then_some(LoopConstantHoist {
+                insert_at,
+                end,
+                constants,
+            })
+        })
+        .collect()
+}
+
+/// bd-9vouw.496: the pinned register a hoisted string constant was loaded
+/// into, for a static property key inside its loop.
+fn hoisted_string_constant(hoisted: &[(Ir1Literal, Reg)], key: &JsString) -> Option<Reg> {
+    hoisted
+        .iter()
+        .find_map(|(literal, register)| match literal {
+            Ir1Literal::String(text) if text == key => Some(*register),
+            _ => None,
+        })
 }
 
 fn lower_literal_to_ir3_optimized(

@@ -1,5 +1,12 @@
 (function () {
   'use strict';
+  // Capture realm helpers before guest code can replace their public bindings.
+  // Capturing them performs no builtin call and grants no filesystem authority.
+  var NativePromise = Promise;
+  var apply = Reflect.apply;
+  var bufferAlloc = Buffer.alloc;
+  var bufferFrom = Buffer.from;
+  var isBuffer = Buffer.isBuffer;
   // The discriminator is the same typed FsOperation argument the old direct
   // call lowering emits. In particular, fd lifecycle operations require write
   // authority. No wrapper performs host I/O outside these two intrinsics.
@@ -135,13 +142,135 @@
   function asPromise(method) {
     return function () {
       var args = arguments;
-      return new Promise(function (resolve) {
-        resolve(Reflect.apply(method, undefined, args));
+      return new NativePromise(function (resolve) {
+        resolve(apply(method, undefined, args));
       });
+    };
+  }
+  function argumentError(name) {
+    var error = new TypeError('Invalid ' + name + ' argument');
+    error.code = 'ERR_INVALID_ARG_TYPE';
+    return error;
+  }
+  function bufferWindow(buffer, offset, length) {
+    if (!isBuffer(buffer)) { throw argumentError('buffer (expected Buffer)'); }
+    if (offset === undefined) { offset = 0; }
+    if (length === undefined) { length = buffer.length - offset; }
+    if (typeof offset !== 'number' || typeof length !== 'number') {
+      throw argumentError('offset or length');
+    }
+    if (offset % 1 !== 0 || length % 1 !== 0 || offset < 0 || length < 0 ||
+        offset > buffer.length || length > buffer.length - offset) {
+      var error = new RangeError('Buffer offset or length is out of range');
+      error.code = 'ERR_OUT_OF_RANGE';
+      throw error;
+    }
+    return { offset: offset, length: length };
+  }
+  // Descriptor ownership stays in this closure, never in a guest-writable fd
+  // property. These methods use the existing synchronous descriptor effects
+  // with Promise completion, not an off-thread I/O backend. Buffer/string I/O
+  // is supported; streams, stat-on-fd and automatic finalization are not.
+  function fileHandle(descriptor) {
+    var closing = false;
+    var active = 0;
+    var closePromise;
+    var resolveClose;
+    var rejectClose;
+    function finishClose() {
+      if (!closing || active !== 0 || descriptor < 0) { return; }
+      var fd = descriptor;
+      descriptor = -1;
+      try { closeSync(fd); resolveClose(); }
+      catch (error) { rejectClose(error); }
+    }
+    function perform(syscall, operation) {
+      return new NativePromise(function (resolve) {
+        if (closing) {
+          var error = new Error('file closed');
+          error.code = 'EBADF';
+          error.syscall = syscall;
+          throw error;
+        }
+        // Option getters can re-enter close(). Keep ownership until this
+        // operation finishes, including validation and any exceptional exit.
+        active += 1;
+        try { resolve(operation(descriptor)); }
+        finally { active -= 1; finishClose(); }
+      });
+    }
+    return {
+      get fd() { return closing ? -1 : descriptor; },
+      close: function () {
+        if (closePromise !== undefined) { return closePromise; }
+        closing = true;
+        closePromise = new NativePromise(function (resolve, reject) {
+          resolveClose = resolve;
+          rejectClose = reject;
+        });
+        finishClose();
+        return closePromise;
+      },
+      sync: function () {
+        return perform('fsync', function (fd) { fsyncSync(fd); });
+      },
+      read: function (buffer, offset, length, position) {
+        return perform('read', function (fd) {
+          var options;
+          if (!isBuffer(buffer)) {
+            options = buffer === undefined ? {} : buffer;
+            if (options === null || typeof options !== 'object') {
+              throw argumentError('options');
+            }
+            buffer = options.buffer;
+            if (buffer === undefined) { buffer = bufferAlloc(16384); }
+            offset = options.offset;
+            length = options.length;
+            position = options.position;
+          } else if (offset !== null && typeof offset === 'object') {
+            options = offset;
+            offset = options.offset;
+            length = options.length;
+            position = options.position;
+          }
+          var window = bufferWindow(buffer, offset, length);
+          if (position === undefined || position === -1) { position = null; }
+          var count = readSync(fd, buffer, window.offset, window.length, position);
+          return { bytesRead: count, buffer: buffer };
+        });
+      },
+      write: function (data, offset, length, position) {
+        return perform('write', function (fd) {
+          var buffer = data;
+          if (typeof data === 'string') {
+            // The public string overload is (string, position, encoding).
+            // Encode first so native descriptor writes always count bytes.
+            buffer = bufferFrom(data, length === undefined ? 'utf8' : length);
+            position = typeof offset === 'number' ? offset : null;
+            offset = 0;
+            length = buffer.length;
+          } else if (offset !== null && typeof offset === 'object') {
+            var options = offset;
+            offset = options.offset;
+            length = options.length;
+            position = options.position;
+          }
+          var window = bufferWindow(buffer, offset, length);
+          if (position === undefined || position === -1) { position = null; }
+          var count = writeSync(fd, buffer, window.offset, window.length, position);
+          return { bytesWritten: count, buffer: data };
+        });
+      }
     };
   }
   var promises = {
     constants: constants,
+    open: function open(path, flags, mode) {
+      return new NativePromise(function (resolve) {
+        if (flags === undefined) { flags = 'r'; }
+        resolve(fileHandle(openSync(path, flags, mode)));
+      });
+    },
     mkdir: asPromise(mkdirSync), readdir: asPromise(readdirSync),
     stat: asPromise(statSync), lstat: asPromise(lstatSync),
     unlink: asPromise(unlinkSync), rmdir: asPromise(rmdirSync), rm: asPromise(rmSync),
@@ -151,21 +280,21 @@
     symlink: asPromise(symlinkSync), truncate: asPromise(truncateSync),
     mkdtemp: asPromise(mkdtempSync),
     readFile: function readFile(path, options) {
-      return new Promise(function (resolve, reject) {
+      return new NativePromise(function (resolve, reject) {
         __franken_fs_read('\0fsop:read', path, options, function (error, value) {
           if (error) { reject(error); } else { resolve(value); }
         });
       });
     },
     writeFile: function writeFile(path, data, options) {
-      return new Promise(function (resolve, reject) {
+      return new NativePromise(function (resolve, reject) {
         __franken_fs_write('\0fsop:write', path, data, options, function (error) {
           if (error) { reject(error); } else { resolve(); }
         });
       });
     },
     appendFile: function appendFile(path, data, options) {
-      return new Promise(function (resolve, reject) {
+      return new NativePromise(function (resolve, reject) {
         __franken_fs_write('\0fsop:append', path, data, options, function (error) {
           if (error) { reject(error); } else { resolve(); }
         });

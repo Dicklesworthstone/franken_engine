@@ -88,3 +88,37 @@ fn an_array_literal_runs_no_set_property() {
         "no length store: {body:?}"
     );
 }
+
+/// An empty literal defines no element, so it keeps its length store:
+/// NewArray's array has no own `length` until one is set. Without the store
+/// (0bbe85252) `[].length` read undefined, `pushLen` printed `NaN-10-20-30`
+/// and `Object.getOwnPropertyNames([])` lacked "length". Empty literals at
+/// top level, nested, in functions and loops, returned, then pushed to or
+/// resized. Node v22.2.0 and Bun 1.4.3 print the line, as did the n65
+/// frankenctl (before bd-9vouw.491); the n66 frankenctl (with it) printed
+/// `  1   ,1 undefined2undefined2undefined2 NaN-10-20-30  0 [] true`.
+#[test]
+fn empty_array_literals_have_length_zero() {
+    let source = r##"const out = [];
+const a = [];
+out.push(a.length, [].length, [[]].length, [[]][0].length, [[], []][1].length);
+function f() { const b = []; b.push(b.length); b.push(b.length); return b.join(','); }
+function g(n) { let s = ''; for (let i = 0; i < n; i++) { const c = []; s += c.length; c.length = 2; s += c.length; } return s; }
+function pushLen() { const arr = []; for (let i = 0; i < 4; i++) arr.push(arr.length * 10); return arr.join('-'); }
+function ret() { return []; }
+out.push(f(), g(3), pushLen(), ret().length, Object.keys([]).length, JSON.stringify(Object.getOwnPropertyNames([])), Array.isArray([]));
+console.log(out.join(' '));
+"##;
+    let outcome = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"));
+    let lines: Vec<&str> = outcome
+        .console_output
+        .iter()
+        .map(|entry| entry.message.as_str())
+        .collect();
+    assert_eq!(
+        lines,
+        [r##"0 0 1 0 0 0,1 020202 0-10-20-30 0 0 ["length"] true"##]
+    );
+}

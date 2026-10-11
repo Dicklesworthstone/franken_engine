@@ -9571,18 +9571,17 @@ fn lower_ir2_to_ir3_with_input_hash(
                 args.reverse();
                 let callee = pop_lowering_value(&mut value_stack)?;
 
-                let start_reg = register_cursor;
-                for &arg_reg in &args {
-                    let dst = alloc_register(&mut register_cursor);
-                    ir3.instructions
-                        .push(Ir3Instruction::Move { dst, src: arg_reg });
-                }
-
+                let copies = call_argument_window(
+                    &args,
+                    &[callee],
+                    &value_stack,
+                    statement_register_floor
+                        .max(pinned_register_high)
+                        .max(live_status_register_ceiling(&live_status_registers)),
+                    &mut register_cursor,
+                    &mut ir3.instructions,
+                );
                 let dst = alloc_register(&mut register_cursor);
-                let copies = RegRange {
-                    start: start_reg,
-                    count: *arg_count,
-                };
                 ir3.instructions.push(Ir3Instruction::Call {
                     callee,
                     args: copies,
@@ -9617,18 +9616,17 @@ fn lower_ir2_to_ir3_with_input_hash(
                 let receiver = pop_lowering_value(&mut value_stack)?;
                 let callee = pop_lowering_value(&mut value_stack)?;
 
-                let start_reg = register_cursor;
-                for &arg_reg in &args {
-                    let dst = alloc_register(&mut register_cursor);
-                    ir3.instructions
-                        .push(Ir3Instruction::Move { dst, src: arg_reg });
-                }
-
+                let copies = call_argument_window(
+                    &args,
+                    &[receiver, callee],
+                    &value_stack,
+                    statement_register_floor
+                        .max(pinned_register_high)
+                        .max(live_status_register_ceiling(&live_status_registers)),
+                    &mut register_cursor,
+                    &mut ir3.instructions,
+                );
                 let dst = alloc_register(&mut register_cursor);
-                let copies = RegRange {
-                    start: start_reg,
-                    count: *arg_count,
-                };
                 ir3.instructions.push(Ir3Instruction::CallMethod {
                     receiver,
                     callee,
@@ -12081,17 +12079,17 @@ fn lower_ir2_to_ir3_with_input_hash(
                     }
                     args.reverse();
                     let callee = pop_lowering_value(&mut fn_value_stack)?;
-                    let start_reg = fn_reg;
-                    for arg_reg in &args {
-                        let dst = alloc_register(&mut fn_reg);
-                        ir3.instructions
-                            .push(Ir3Instruction::Move { dst, src: *arg_reg });
-                    }
+                    let copies = call_argument_window(
+                        &args,
+                        &[callee],
+                        &fn_value_stack,
+                        fn_statement_register_floor
+                            .max(fn_pinned_register_high)
+                            .max(live_status_register_ceiling(&fn_live_status_registers)),
+                        &mut fn_reg,
+                        &mut ir3.instructions,
+                    );
                     let dst = alloc_register(&mut fn_reg);
-                    let copies = RegRange {
-                        start: start_reg,
-                        count: count as u32,
-                    };
                     ir3.instructions.push(Ir3Instruction::Call {
                         callee,
                         args: copies,
@@ -12123,17 +12121,17 @@ fn lower_ir2_to_ir3_with_input_hash(
                     args.reverse();
                     let receiver = pop_lowering_value(&mut fn_value_stack)?;
                     let callee = pop_lowering_value(&mut fn_value_stack)?;
-                    let start_reg = fn_reg;
-                    for arg_reg in &args {
-                        let dst = alloc_register(&mut fn_reg);
-                        ir3.instructions
-                            .push(Ir3Instruction::Move { dst, src: *arg_reg });
-                    }
+                    let copies = call_argument_window(
+                        &args,
+                        &[receiver, callee],
+                        &fn_value_stack,
+                        fn_statement_register_floor
+                            .max(fn_pinned_register_high)
+                            .max(live_status_register_ceiling(&fn_live_status_registers)),
+                        &mut fn_reg,
+                        &mut ir3.instructions,
+                    );
                     let dst = alloc_register(&mut fn_reg);
-                    let copies = RegRange {
-                        start: start_reg,
-                        count: count as u32,
-                    };
                     ir3.instructions.push(Ir3Instruction::CallMethod {
                         receiver,
                         callee,
@@ -35270,6 +35268,49 @@ fn compaction_value_stack<'a>(value_stack: &'a [Reg], in_place: &BTreeSet<Reg>) 
 /// overflowed the 256-register frame. A call that leaves the value stack
 /// empty is left as it is: nothing accumulates above it, and the statement
 /// boundary rewind reclaims its registers without an extra Move.
+/// bd-9vouw.375: the argument window of a Call or CallMethod. When the
+/// arguments already sit in contiguous temporaries that end at the register
+/// cursor (each argument expression's own result, in order), at or above
+/// `reserved_below`, and none of them is still on the value stack or another
+/// operand of the call, the call reads them in place; otherwise each is
+/// copied into a fresh contiguous window above the cursor, as before. A call
+/// reads its arguments' values and labels from the window when it runs and
+/// writes only its result, which is allocated above the window, so reading
+/// in place observes the same values: `arg_count` fewer Moves per call.
+fn call_argument_window(
+    args: &[Reg],
+    other_operands: &[Reg],
+    value_stack: &[Reg],
+    reserved_below: Reg,
+    cursor: &mut Reg,
+    instructions: &mut Vec<Ir3Instruction>,
+) -> RegRange {
+    let count = u32::try_from(args.len()).unwrap_or(u32::MAX);
+    if let (Some(&first), Some(&last)) = (args.first(), args.last())
+        && first >= reserved_below
+        && last.checked_add(1) == Some(*cursor)
+        && args
+            .iter()
+            .zip(first..)
+            .all(|(&arg, expected)| arg == expected)
+        && !value_stack
+            .iter()
+            .chain(other_operands)
+            .any(|register| (first..=last).contains(register))
+    {
+        return RegRange {
+            start: first,
+            count,
+        };
+    }
+    let start = *cursor;
+    for &arg in args {
+        let dst = alloc_register(cursor);
+        instructions.push(Ir3Instruction::Move { dst, src: arg });
+    }
+    RegRange { start, count }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn compact_call_result(
     instructions: &mut Vec<Ir3Instruction>,

@@ -504,6 +504,17 @@ impl ArrayJoinFrame {
     }
 }
 
+/// The register file of the synchronous reducer lane
+/// ([`InterpreterCore::invoke_simple_reduce_callback_inner`]) and the bytes its
+/// values own, kept up to date by each write: the lane used to re-sum every
+/// register at every instruction. `high_water` is one past the highest
+/// register written, the prefix to reset when the file goes back to the pool.
+struct SimpleCallbackRegisters {
+    values: Vec<Value>,
+    value_bytes: u64,
+    high_water: usize,
+}
+
 /// One queued `process.nextTick(callback, ...args)` job (bd-8nrud). The
 /// callback runs with the forwarded arguments before any Promise microtask at
 /// the next checkpoint, matching Node's next-tick ordering.
@@ -15114,6 +15125,10 @@ pub struct InterpreterCore {
     /// makes every nested allocation gate see the temporary owner while still
     /// allowing exact release on every callback exit (bd-aw8td).
     simple_callback_temporary_bytes: u64,
+    /// The reducer lane's register file between callbacks, every slot
+    /// `Undefined`, so a callback neither allocates nor drops `max_registers`
+    /// slots. Engine capacity of at most `max_registers` slots, not charged.
+    simple_callback_register_pool: Vec<Value>,
     /// JSON parser/reviver scratch retained on the Rust stack across guest
     /// callbacks. A nested accounting resync must not erase this ownership.
     json_parse_temporary_bytes: u64,
@@ -16461,6 +16476,7 @@ impl InterpreterCore {
             heap: SeedTrackedField::new(Heap::new()),
             estimated_memory_bytes,
             simple_callback_temporary_bytes: 0,
+            simple_callback_register_pool: Vec::new(),
             json_parse_temporary_bytes: 0,
             module_snapshot_in_flight_bytes: 0,
             temporarily_suspended_execution_bytes: 0,
@@ -81965,249 +81981,281 @@ impl InterpreterCore {
         self.simple_callback_temporary_bytes = self
             .simple_callback_temporary_bytes
             .saturating_add(register_carrier_bytes);
-        let mut local_registers = vec![Value::Undefined; register_count];
-        Self::write_local_register(&mut local_registers, 0, accumulator)?;
-        Self::write_local_register(&mut local_registers, 1, current_value)?;
-        Self::write_local_register(&mut local_registers, 2, Value::Int(element_index))?;
-        Self::write_local_register(&mut local_registers, 3, Value::Object(array_id))?;
+        let mut local_registers = self.take_simple_callback_registers(register_count);
+        let outcome = (|| -> Result<Value, InterpreterError> {
+            Self::write_local_register(&mut local_registers, 0, accumulator)?;
+            Self::write_local_register(&mut local_registers, 1, current_value)?;
+            Self::write_local_register(&mut local_registers, 2, Value::Int(element_index))?;
+            Self::write_local_register(&mut local_registers, 3, Value::Object(array_id))?;
 
-        let mut instruction_pointer = function.entry as usize;
-        for _step in 0..self.config.instruction_budget {
-            self.simple_callback_temporary_bytes = previous_callback_temporary_bytes
-                .saturating_add(Self::simple_callback_register_bytes(&local_registers));
-            let instruction_ref = module.instructions.get(instruction_pointer).ok_or(
-                InterpreterError::InstructionOutOfBounds {
-                    ip: instruction_pointer,
-                    count: module.instructions.len(),
-                },
-            )?;
-            if let Ir3Instruction::LoadBigInt { value, .. } = instruction_ref {
-                self.check_temporary_memory_budget(Self::bigint_literal_construction_peak_bytes(
-                    value,
-                ))?;
-            }
-            let instruction = instruction_ref.clone();
-            match instruction {
-                Ir3Instruction::LoadInt { dst, value } => {
-                    Self::write_local_register(&mut local_registers, dst, Value::Int(value))?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::LoadBigInt { dst, value } => {
-                    Self::write_local_register(
-                        &mut local_registers,
-                        dst,
-                        Value::BigInt(Arc::from(value)),
+            let mut instruction_pointer = function.entry as usize;
+            for _step in 0..self.config.instruction_budget {
+                self.simple_callback_temporary_bytes = previous_callback_temporary_bytes
+                    .saturating_add(Self::simple_callback_register_bytes(&local_registers));
+                let instruction_ref = module.instructions.get(instruction_pointer).ok_or(
+                    InterpreterError::InstructionOutOfBounds {
+                        ip: instruction_pointer,
+                        count: module.instructions.len(),
+                    },
+                )?;
+                if let Ir3Instruction::LoadBigInt { value, .. } = instruction_ref {
+                    self.check_temporary_memory_budget(
+                        Self::bigint_literal_construction_peak_bytes(value),
                     )?;
-                    instruction_pointer += 1;
                 }
-                Ir3Instruction::LoadFloat { dst, bits } => {
-                    Self::write_local_register(
-                        &mut local_registers,
-                        dst,
-                        Value::Float(Float64::new(f64::from_bits(bits))),
-                    )?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::LoadStr { dst, pool_index } => {
-                    let value = module
-                        .constant_pool
-                        .get(pool_index as usize)
-                        .cloned()
-                        .ok_or(InterpreterError::StringPoolOutOfBounds {
-                            index: pool_index,
-                            pool_size: module.constant_pool.len() as u32,
-                        })?;
-                    Self::write_local_register(&mut local_registers, dst, Value::str(value))?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::LoadBool { dst, value } => {
-                    Self::write_local_register(&mut local_registers, dst, Value::Bool(value))?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::LoadNull { dst } => {
-                    Self::write_local_register(&mut local_registers, dst, Value::Null)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::LoadUndefined { dst } => {
-                    Self::write_local_register(&mut local_registers, dst, Value::Undefined)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::LoadName {
-                    dst,
-                    name_pool_index,
-                    allow_missing,
-                } => {
-                    let name = Self::scoped_constant_name(module, name_pool_index);
-                    let value = match self.load_runtime_name(name.as_ref(), false) {
-                        // This lane runs no guest code: a data property of the
-                        // global object only, as its GetProperty reads.
-                        Err(InterpreterError::UndefinedBinding { .. }) => {
-                            match self.global_object_data_property(name.as_ref()) {
-                                Some(value) => value,
-                                None if allow_missing => Value::Undefined,
-                                None => {
-                                    return Err(InterpreterError::UndefinedBinding {
-                                        name: name.into_owned(),
-                                    });
-                                }
-                            }
-                        }
-                        loaded => loaded?,
-                    };
-                    Self::write_local_register(&mut local_registers, dst, value)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::ResolveNameStatus {
-                    dst,
-                    name_pool_index,
-                } => {
-                    let name = Self::scoped_constant_name(module, name_pool_index);
-                    let reference_token = self.capture_runtime_name_reference(name.as_ref())?;
-                    Self::write_local_register(
-                        &mut local_registers,
-                        dst,
-                        Value::Int(i64::from(reference_token)),
-                    )?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::PutName {
-                    src,
-                    name_pool_index,
-                    strict,
-                } => {
-                    let name = Self::scoped_constant_name(module, name_pool_index);
-                    let value = Self::read_local_register(&local_registers, src)?;
-                    self.put_runtime_name(name.as_ref(), value, strict)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::PutNameWithStatus {
-                    src,
-                    status,
-                    name_pool_index,
-                    strict,
-                } => {
-                    let name = Self::scoped_constant_name(module, name_pool_index);
-                    let value = Self::read_local_register(&local_registers, src)?;
-                    let reference_token = Self::runtime_name_reference_token(
-                        Self::read_local_register(&local_registers, status)?,
-                    )?;
-                    self.put_runtime_name_with_status(
-                        name.as_ref(),
-                        value,
-                        strict,
-                        reference_token,
-                    )?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::LoadNewTarget { dst } => {
-                    Self::write_local_register(&mut local_registers, dst, Value::Undefined)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::Move { dst, src } => {
-                    let value = Self::read_local_register(&local_registers, src)?;
-                    Self::write_local_register(&mut local_registers, dst, value)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::Add { dst, lhs, rhs } => {
-                    let left = Self::read_local_register(&local_registers, lhs)?;
-                    let right = Self::read_local_register(&local_registers, rhs)?;
-                    let value = self.eval_add_values(Some(module), &left, &right)?;
-                    Self::write_local_register(&mut local_registers, dst, value)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::Sub { dst, lhs, rhs } => {
-                    let left = Self::read_local_register(&local_registers, lhs)?;
-                    let right = Self::read_local_register(&local_registers, rhs)?;
-                    let value = Self::eval_arith_values(&left, &right, "sub")?;
-                    Self::write_local_register(&mut local_registers, dst, value)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::Inc { dst, src } | Ir3Instruction::Dec { dst, src } => {
-                    let delta = if matches!(instruction_ref, Ir3Instruction::Inc { .. }) {
-                        1
-                    } else {
-                        -1
-                    };
-                    let value = Self::read_local_register(&local_registers, src)?;
-                    let value = Self::step_numeric(&value, delta)?;
-                    Self::write_local_register(&mut local_registers, dst, value)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::Mul { dst, lhs, rhs } => {
-                    let left = Self::read_local_register(&local_registers, lhs)?;
-                    let right = Self::read_local_register(&local_registers, rhs)?;
-                    let value = Self::eval_arith_values(&left, &right, "mul")?;
-                    Self::write_local_register(&mut local_registers, dst, value)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::Div { dst, lhs, rhs } => {
-                    let left = Self::read_local_register(&local_registers, lhs)?;
-                    let right = Self::read_local_register(&local_registers, rhs)?;
-                    let value = Self::eval_div_values(&left, &right)?;
-                    Self::write_local_register(&mut local_registers, dst, value)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::GetProperty { obj, key, dst } => {
-                    let object_value = Self::read_local_register(&local_registers, obj)?;
-                    let key_value = Self::read_local_register(&local_registers, key)?;
-                    let value =
-                        self.simple_callback_get_property(Some(module), object_value, &key_value)?;
-                    Self::write_local_register(&mut local_registers, dst, value)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::Jump { target } => {
-                    instruction_pointer = target as usize;
-                }
-                Ir3Instruction::JumpIf { cond, target } => {
-                    let value = Self::read_local_register(&local_registers, cond)?;
-                    if value.is_truthy() {
-                        instruction_pointer = target as usize;
-                    } else {
+                let instruction = instruction_ref.clone();
+                match instruction {
+                    Ir3Instruction::LoadInt { dst, value } => {
+                        Self::write_local_register(&mut local_registers, dst, Value::Int(value))?;
                         instruction_pointer += 1;
                     }
-                }
-                Ir3Instruction::Return { value } => {
-                    return Self::read_local_register(&local_registers, value);
-                }
-                Ir3Instruction::Halt => {
-                    return Ok(Value::Undefined);
-                }
-                Ir3Instruction::Throw { value } => {
-                    // bd-8enww.4.8: preserve the callback's explicitly-thrown
-                    // value so an enclosing `try`/`catch` binds the ORIGINAL
-                    // value verbatim, instead of the wrapped "unsupported
-                    // instruction" TypeError this `match` used to surface via its
-                    // `other` arm (which the caller then re-boxed into a generic
-                    // Error object — the `[object …]` symptom of this bug).
-                    //
-                    // Mirror the modern `Throw` arm: arm `pending_exception` with
-                    // the value and surface an `UncaughtException`. The `Call` /
-                    // `CallMethod` builtin dispatch that ran this reducer then
-                    // routes it through `route_isolated_explicit_throw` into the
-                    // caller's catch frames, re-raising the preserved value. This
-                    // legacy mini-lane tracks no per-register labels, so the
-                    // escaping value's confidentiality is re-established (as a
-                    // sound upper bound) by the receiver+args label join on the
-                    // dispatch site's throw path.
-                    let thrown = Self::read_local_register(&local_registers, value)?;
-                    self.replace_pending_abrupt_slots(Some((thrown.clone(), Label::Public)), None)?;
-                    return Err(InterpreterError::UncaughtException {
-                        value: self.uncaught_exception_description(&thrown),
-                    });
-                }
-                other => {
-                    return Err(InterpreterError::TypeError {
-                        expected: "simple synchronous reducer callback".to_string(),
-                        got: format!("unsupported reducer instruction {other:?}"),
-                    });
+                    Ir3Instruction::LoadBigInt { dst, value } => {
+                        Self::write_local_register(
+                            &mut local_registers,
+                            dst,
+                            Value::BigInt(Arc::from(value)),
+                        )?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::LoadFloat { dst, bits } => {
+                        Self::write_local_register(
+                            &mut local_registers,
+                            dst,
+                            Value::Float(Float64::new(f64::from_bits(bits))),
+                        )?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::LoadStr { dst, pool_index } => {
+                        let value = module
+                            .constant_pool
+                            .get(pool_index as usize)
+                            .cloned()
+                            .ok_or(InterpreterError::StringPoolOutOfBounds {
+                                index: pool_index,
+                                pool_size: module.constant_pool.len() as u32,
+                            })?;
+                        Self::write_local_register(&mut local_registers, dst, Value::str(value))?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::LoadBool { dst, value } => {
+                        Self::write_local_register(&mut local_registers, dst, Value::Bool(value))?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::LoadNull { dst } => {
+                        Self::write_local_register(&mut local_registers, dst, Value::Null)?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::LoadUndefined { dst } => {
+                        Self::write_local_register(&mut local_registers, dst, Value::Undefined)?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::LoadName {
+                        dst,
+                        name_pool_index,
+                        allow_missing,
+                    } => {
+                        let name = Self::scoped_constant_name(module, name_pool_index);
+                        let value = match self.load_runtime_name(name.as_ref(), false) {
+                            // This lane runs no guest code: a data property of the
+                            // global object only, as its GetProperty reads.
+                            Err(InterpreterError::UndefinedBinding { .. }) => {
+                                match self.global_object_data_property(name.as_ref()) {
+                                    Some(value) => value,
+                                    None if allow_missing => Value::Undefined,
+                                    None => {
+                                        return Err(InterpreterError::UndefinedBinding {
+                                            name: name.into_owned(),
+                                        });
+                                    }
+                                }
+                            }
+                            loaded => loaded?,
+                        };
+                        Self::write_local_register(&mut local_registers, dst, value)?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::ResolveNameStatus {
+                        dst,
+                        name_pool_index,
+                    } => {
+                        let name = Self::scoped_constant_name(module, name_pool_index);
+                        let reference_token = self.capture_runtime_name_reference(name.as_ref())?;
+                        Self::write_local_register(
+                            &mut local_registers,
+                            dst,
+                            Value::Int(i64::from(reference_token)),
+                        )?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::PutName {
+                        src,
+                        name_pool_index,
+                        strict,
+                    } => {
+                        let name = Self::scoped_constant_name(module, name_pool_index);
+                        let value = Self::read_local_register(&local_registers, src)?;
+                        self.put_runtime_name(name.as_ref(), value, strict)?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::PutNameWithStatus {
+                        src,
+                        status,
+                        name_pool_index,
+                        strict,
+                    } => {
+                        let name = Self::scoped_constant_name(module, name_pool_index);
+                        let value = Self::read_local_register(&local_registers, src)?;
+                        let reference_token = Self::runtime_name_reference_token(
+                            Self::read_local_register(&local_registers, status)?,
+                        )?;
+                        self.put_runtime_name_with_status(
+                            name.as_ref(),
+                            value,
+                            strict,
+                            reference_token,
+                        )?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::LoadNewTarget { dst } => {
+                        Self::write_local_register(&mut local_registers, dst, Value::Undefined)?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::Move { dst, src } => {
+                        let value = Self::read_local_register(&local_registers, src)?;
+                        Self::write_local_register(&mut local_registers, dst, value)?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::Add { dst, lhs, rhs } => {
+                        let left = Self::read_local_register(&local_registers, lhs)?;
+                        let right = Self::read_local_register(&local_registers, rhs)?;
+                        let value = self.eval_add_values(Some(module), &left, &right)?;
+                        Self::write_local_register(&mut local_registers, dst, value)?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::Sub { dst, lhs, rhs } => {
+                        let left = Self::read_local_register(&local_registers, lhs)?;
+                        let right = Self::read_local_register(&local_registers, rhs)?;
+                        let value = Self::eval_arith_values(&left, &right, "sub")?;
+                        Self::write_local_register(&mut local_registers, dst, value)?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::Inc { dst, src } | Ir3Instruction::Dec { dst, src } => {
+                        let delta = if matches!(instruction_ref, Ir3Instruction::Inc { .. }) {
+                            1
+                        } else {
+                            -1
+                        };
+                        let value = Self::read_local_register(&local_registers, src)?;
+                        let value = Self::step_numeric(&value, delta)?;
+                        Self::write_local_register(&mut local_registers, dst, value)?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::Mul { dst, lhs, rhs } => {
+                        let left = Self::read_local_register(&local_registers, lhs)?;
+                        let right = Self::read_local_register(&local_registers, rhs)?;
+                        let value = Self::eval_arith_values(&left, &right, "mul")?;
+                        Self::write_local_register(&mut local_registers, dst, value)?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::Div { dst, lhs, rhs } => {
+                        let left = Self::read_local_register(&local_registers, lhs)?;
+                        let right = Self::read_local_register(&local_registers, rhs)?;
+                        let value = Self::eval_div_values(&left, &right)?;
+                        Self::write_local_register(&mut local_registers, dst, value)?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::GetProperty { obj, key, dst } => {
+                        let object_value = Self::read_local_register(&local_registers, obj)?;
+                        let key_value = Self::read_local_register(&local_registers, key)?;
+                        let value = self.simple_callback_get_property(
+                            Some(module),
+                            object_value,
+                            &key_value,
+                        )?;
+                        Self::write_local_register(&mut local_registers, dst, value)?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::Jump { target } => {
+                        instruction_pointer = target as usize;
+                    }
+                    Ir3Instruction::JumpIf { cond, target } => {
+                        let value = Self::read_local_register(&local_registers, cond)?;
+                        if value.is_truthy() {
+                            instruction_pointer = target as usize;
+                        } else {
+                            instruction_pointer += 1;
+                        }
+                    }
+                    Ir3Instruction::Return { value } => {
+                        return Self::read_local_register(&local_registers, value);
+                    }
+                    Ir3Instruction::Halt => {
+                        return Ok(Value::Undefined);
+                    }
+                    Ir3Instruction::Throw { value } => {
+                        // bd-8enww.4.8: preserve the callback's explicitly-thrown
+                        // value so an enclosing `try`/`catch` binds the ORIGINAL
+                        // value verbatim, instead of the wrapped "unsupported
+                        // instruction" TypeError this `match` used to surface via its
+                        // `other` arm (which the caller then re-boxed into a generic
+                        // Error object — the `[object …]` symptom of this bug).
+                        //
+                        // Mirror the modern `Throw` arm: arm `pending_exception` with
+                        // the value and surface an `UncaughtException`. The `Call` /
+                        // `CallMethod` builtin dispatch that ran this reducer then
+                        // routes it through `route_isolated_explicit_throw` into the
+                        // caller's catch frames, re-raising the preserved value. This
+                        // legacy mini-lane tracks no per-register labels, so the
+                        // escaping value's confidentiality is re-established (as a
+                        // sound upper bound) by the receiver+args label join on the
+                        // dispatch site's throw path.
+                        let thrown = Self::read_local_register(&local_registers, value)?;
+                        self.replace_pending_abrupt_slots(
+                            Some((thrown.clone(), Label::Public)),
+                            None,
+                        )?;
+                        return Err(InterpreterError::UncaughtException {
+                            value: self.uncaught_exception_description(&thrown),
+                        });
+                    }
+                    other => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "simple synchronous reducer callback".to_string(),
+                            got: format!("unsupported reducer instruction {other:?}"),
+                        });
+                    }
                 }
             }
-        }
 
-        Err(InterpreterError::BudgetExhausted {
-            executed: self.config.instruction_budget,
-            budget: self.config.instruction_budget,
-        })
+            Err(InterpreterError::BudgetExhausted {
+                executed: self.config.instruction_budget,
+                budget: self.config.instruction_budget,
+            })
+        })();
+        self.return_simple_callback_registers(local_registers);
+        outcome
+    }
+
+    /// The reducer lane's register file: the pooled one when it has
+    /// `register_count` slots (all `Undefined`), else a new one.
+    fn take_simple_callback_registers(&mut self, register_count: usize) -> SimpleCallbackRegisters {
+        let mut values = std::mem::take(&mut self.simple_callback_register_pool);
+        if values.len() != register_count {
+            values = vec![Value::Undefined; register_count];
+        }
+        SimpleCallbackRegisters {
+            values,
+            value_bytes: 0,
+            high_water: 0,
+        }
+    }
+
+    /// Reset the written prefix and keep the file for the next callback.
+    fn return_simple_callback_registers(&mut self, mut registers: SimpleCallbackRegisters) {
+        for value in &mut registers.values[..registers.high_water] {
+            *value = Value::Undefined;
+        }
+        self.simple_callback_register_pool = registers.values;
     }
 
     fn invoke_inline_method_call(
@@ -83306,42 +83354,47 @@ impl InterpreterCore {
         result.map(|value| (value, result_label))
     }
 
-    fn read_local_register(registers: &[Value], register: u32) -> Result<Value, InterpreterError> {
-        registers
-            .get(register as usize)
-            .cloned()
-            .ok_or(InterpreterError::RegisterOutOfBounds {
+    fn read_local_register(
+        registers: &SimpleCallbackRegisters,
+        register: u32,
+    ) -> Result<Value, InterpreterError> {
+        registers.values.get(register as usize).cloned().ok_or(
+            InterpreterError::RegisterOutOfBounds {
                 register,
-                max: registers.len() as u32,
-            })
+                max: registers.values.len() as u32,
+            },
+        )
     }
 
     fn write_local_register(
-        registers: &mut [Value],
+        registers: &mut SimpleCallbackRegisters,
         register: u32,
         value: Value,
     ) -> Result<(), InterpreterError> {
-        let max_registers = registers.len() as u32;
+        let max_registers = registers.values.len() as u32;
         let register_index = register as usize;
-        if register_index >= registers.len() {
+        let Some(slot) = registers.values.get_mut(register_index) else {
             return Err(InterpreterError::RegisterOutOfBounds {
                 register,
                 max: max_registers,
             });
-        }
-        registers[register_index] = value;
+        };
+        let released = Self::estimate_execution_seed_value_bytes(slot);
+        let added = Self::estimate_execution_seed_value_bytes(&value);
+        *slot = value;
+        registers.value_bytes = registers
+            .value_bytes
+            .saturating_sub(released)
+            .saturating_add(added);
+        registers.high_water = registers.high_water.max(register_index + 1);
         Ok(())
     }
 
-    fn simple_callback_register_bytes(registers: &[Value]) -> u64 {
-        u64::try_from(registers.len())
+    fn simple_callback_register_bytes(registers: &SimpleCallbackRegisters) -> u64 {
+        u64::try_from(registers.values.len())
             .unwrap_or(u64::MAX)
             .saturating_mul(u64::try_from(std::mem::size_of::<Value>()).unwrap_or(u64::MAX))
-            .saturating_add(Self::saturating_sum(
-                registers
-                    .iter()
-                    .map(Self::estimate_execution_seed_value_bytes),
-            ))
+            .saturating_add(registers.value_bytes)
     }
 
     fn eval_add_values(
@@ -149613,6 +149666,78 @@ mod tests {
             .saturating_add(InterpreterCore::bigint_add_construction_peak_bytes(
                 left, right,
             ))
+    }
+
+    #[test]
+    fn reducer_register_file_is_reused_clean_and_its_bytes_released() {
+        // The reducer lane keeps its register file between callbacks: the
+        // second callback reads register 5, which only the first one wrote,
+        // and must see `undefined`, not the first callback's BigInt.
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadBigInt {
+                    dst: 5,
+                    value: "7".repeat(64),
+                },
+                Ir3Instruction::Return { value: 5 },
+                Ir3Instruction::Return { value: 5 },
+            ],
+            vec![
+                Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 4,
+                    frame_size: 6,
+                    name: Some("writes_r5".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 2,
+                    arity: 4,
+                    frame_size: 6,
+                    name: Some("reads_r5".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+            ],
+        );
+        let mut core = quickjs_test_core();
+        core.config.max_registers = 8;
+        core.sync_estimated_memory_bytes()
+            .expect("callback fixture accounting");
+        let first = core
+            .invoke_simple_reduce_callback(
+                Some(&module),
+                &Value::Function(0),
+                Value::Int(0),
+                Value::Int(1),
+                0,
+                ObjectId(0),
+            )
+            .expect("first reducer callback");
+        assert!(matches!(first, Value::BigInt(_)));
+        let second = core
+            .invoke_simple_reduce_callback(
+                Some(&module),
+                &Value::Function(1),
+                Value::Int(0),
+                Value::Int(1),
+                1,
+                ObjectId(0),
+            )
+            .expect("second reducer callback");
+        assert_eq!(second, Value::Undefined);
+        assert_eq!(core.simple_callback_temporary_bytes, 0);
+        assert!(
+            core.simple_callback_register_pool
+                .iter()
+                .all(|value| matches!(value, Value::Undefined)),
+            "the pooled register file is all undefined between callbacks"
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]

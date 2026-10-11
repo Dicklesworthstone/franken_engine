@@ -58888,6 +58888,7 @@ impl InterpreterCore {
         // ES2020 13.7.5.12 ForIn/OfHeadEvaluation: ToObject(exprValue), so a
         // primitive enumerates its wrapper (a string its indices).
         let mut continue_at = None;
+        let callable = value.is_callable().then(|| value.clone());
         let object_id = match value {
             Value::Object(object_id) => object_id,
             // Step 7.a: an undefined or null object enumerates nothing (the
@@ -58959,7 +58960,32 @@ impl InterpreterCore {
             }
         };
 
-        let keys = self.collect_for_in_keys_continuing(module, object_id, continue_at)?;
+        // A function's inherited keys come from its value-level [[Prototype]]
+        // (%Function.prototype%, a parent class, a function-kind intrinsic),
+        // not from its backing object's link, which defaults to
+        // Object.prototype (bd-9vouw.488): enumerate the backing objects of
+        // the callable ancestors, then continue at the first ordinary object.
+        let mut leading = Vec::new();
+        if let (Some(function), Some(module)) = (callable.as_ref(), module) {
+            let mut prototype = self.function_value_prototype(Some(module), function)?;
+            for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
+                if !prototype.is_callable() {
+                    break;
+                }
+                let backing = match &prototype {
+                    Value::BuiltinFunction(builtin) => {
+                        Self::builtin_function_property_object(builtin)
+                    }
+                    other => self.function_own_property_object(module, other)?,
+                };
+                leading.extend(backing);
+                prototype = self.function_value_prototype(Some(module), &prototype)?;
+            }
+            if let Value::Object(prototype) = prototype {
+                continue_at = Some(prototype);
+            }
+        }
+        let keys = self.collect_for_in_keys_continuing(module, object_id, &leading, continue_at)?;
         let trace_index =
             self.start_iteration_trace(IterationKind::ForIn, || format!("object:{}", object_id.0));
         if self.iteration_traced(trace_index) {
@@ -105747,17 +105773,20 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
         object_id: ObjectId,
     ) -> Result<Vec<JsString>, InterpreterError> {
-        self.collect_for_in_keys_continuing(module, object_id, None)
+        self.collect_for_in_keys_continuing(module, object_id, &[], None)
     }
 
-    /// The for-in keys of `object_id` and its prototype chain; when the
-    /// object itself has no prototype link the walk continues at
-    /// `continue_at` (a promise's, generator's or iterator's backing object
-    /// inherits from its intrinsic prototype, bd-9vouw.149).
+    /// The for-in keys of `object_id` and its prototype chain. After
+    /// `object_id` the walk visits `leading` in order (the backing objects
+    /// of a function's parent constructors, bd-9vouw.488), then `continue_at`
+    /// when given (a promise's, generator's or iterator's backing object
+    /// inherits from its intrinsic prototype, bd-9vouw.149; a function from
+    /// its value-level [[Prototype]]), then ordinary prototype links.
     fn collect_for_in_keys_continuing(
         &mut self,
         module: Option<&Ir3Module>,
         object_id: ObjectId,
+        leading: &[ObjectId],
         continue_at: Option<ObjectId>,
     ) -> Result<Vec<JsString>, InterpreterError> {
         let mut keys = Vec::new();
@@ -105765,6 +105794,8 @@ impl InterpreterCore {
         let mut visited = BTreeSet::new();
         let mut current = Some(object_id);
         let mut depth = 0u32;
+        let mut leading_levels = leading.iter().copied();
+        let mut continue_at = continue_at;
 
         while let Some(id) = current {
             if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
@@ -105806,9 +105837,12 @@ impl InterpreterCore {
             // [[Prototype]] (a generator's recorded `prototype`, a Promise
             // subclass's, or the intrinsic), not at the backing object's link
             // (bd-9vouw.120).
-            current = match continue_at {
-                Some(prototype) if id == object_id => Some(prototype),
-                _ => self.proxy_aware_prototype_link(module, id)?,
+            current = match leading_levels.next() {
+                Some(level) => Some(level),
+                None => match continue_at.take() {
+                    Some(prototype) => Some(prototype),
+                    None => self.proxy_aware_prototype_link(module, id)?,
+                },
             };
             depth += 1;
         }

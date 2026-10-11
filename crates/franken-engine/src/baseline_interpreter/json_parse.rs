@@ -1020,7 +1020,7 @@ mod tests {
     }
 
     fn parse(core: &mut InterpreterCore, input: Value) -> Result<Value, InterpreterError> {
-        core.set_register(0, input)?;
+        core.seed_register(0, input)?;
         core.dispatch_builtin_hostcall("builtin:JsonParse", RegRange { start: 0, count: 1 }, None)
     }
 
@@ -1457,7 +1457,7 @@ mod tests {
         };
         core.active_inline_callback_context_label = Some(caller.clone());
         core.sync_estimated_memory_bytes().unwrap();
-        core.set_register(0, Value::str(r#"{"empty":{},"items":[]}"#))
+        core.seed_register(0, Value::str(r#"{"empty":{},"items":[]}"#))
             .unwrap();
         core.set_register_label(0, input_label.clone()).unwrap();
         let Value::Object(root) = core
@@ -1492,7 +1492,7 @@ mod tests {
     #[test]
     fn syntax_error_carries_input_provenance_without_dangling_parse_metadata() {
         let mut core = core();
-        core.set_register(0, Value::str(r#"{"empty":{},"items":[1]} invalid"#))
+        core.seed_register(0, Value::str(r#"{"empty":{},"items":[1]} invalid"#))
             .unwrap();
         core.set_register_label(0, Label::Secret).unwrap();
         assert!(matches!(
@@ -1565,7 +1565,7 @@ mod tests {
     #[test]
     fn configured_string_limit_applies_after_primitive_to_string_coercion() {
         let mut core = core();
-        core.set_register(0, Value::Int(1234)).unwrap();
+        core.seed_register(0, Value::Int(1234)).unwrap();
         core.config.max_string_size = 3;
         assert!(matches!(
             core.dispatch_builtin_hostcall(
@@ -1587,7 +1587,7 @@ mod tests {
     fn symbol_input_type_error_retains_context_and_allows_subsequent_parse() {
         let mut core = core();
         // IDs 1..=13 are the runtime's reserved well-known Symbols.
-        core.set_register(0, Value::Symbol(SymbolId(1))).unwrap();
+        core.seed_register(0, Value::Symbol(SymbolId(1))).unwrap();
         let input_label = Label::Custom {
             name: "json-symbol-input".repeat(16),
             level: 9,

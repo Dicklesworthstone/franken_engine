@@ -164712,7 +164712,7 @@ mod tests {
         for name in ["Object", "Array", "SyntaxError"] {
             core.ensure_builtin_prototype(name).unwrap();
         }
-        core.set_register(0, Value::str(r#"{"a":[1,2]} trailing"#))
+        core.seed_register(0, Value::str(r#"{"a":[1,2]} trailing"#))
             .expect("invalid JSON input should fit register zero");
         let heap_before = core.heap_size();
 

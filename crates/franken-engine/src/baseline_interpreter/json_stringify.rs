@@ -791,7 +791,7 @@ mod tests {
         };
         core.active_inline_callback_context_label = Some(caller.clone());
         core.sync_estimated_memory_bytes().unwrap();
-        core.set_register(0, Value::Object(object)).unwrap();
+        core.seed_register(0, Value::Object(object)).unwrap();
         assert!(matches!(
             stringify(&mut core),
             Err(InterpreterError::UncaughtException { .. })
@@ -812,7 +812,7 @@ mod tests {
             .unwrap();
         core.join_direct_object_mutation_label(object, &Label::Secret)
             .unwrap();
-        core.set_register(0, Value::Object(object)).unwrap();
+        core.seed_register(0, Value::Object(object)).unwrap();
         assert!(matches!(
             stringify(&mut core),
             Err(InterpreterError::UncaughtException { .. })
@@ -832,14 +832,14 @@ mod tests {
     #[test]
     fn public_native_failure_does_not_poison_the_next_serialization() {
         let mut core = core();
-        core.set_register(0, Value::BigInt("1".into())).unwrap();
+        core.seed_register(0, Value::BigInt("1".into())).unwrap();
         assert!(matches!(
             stringify(&mut core),
             Err(InterpreterError::UncaughtException { .. })
         ));
         assert_type_error(&core, &Label::Public);
         core.replace_pending_abrupt_slots(None, None).unwrap();
-        core.set_register(0, Value::str("public")).unwrap();
+        core.seed_register(0, Value::str("public")).unwrap();
         assert_eq!(stringify(&mut core).unwrap(), Value::str("\"public\""));
         assert!(core.pending_exception.is_none());
         assert!(core.active_inline_callback_context_label.is_none());
@@ -850,7 +850,7 @@ mod tests {
     #[test]
     fn instruction_refusal_is_not_materialized_as_a_language_error() {
         let mut core = core();
-        core.set_register(0, Value::BigInt("1".into())).unwrap();
+        core.seed_register(0, Value::BigInt("1".into())).unwrap();
         core.set_register_label(0, Label::Secret).unwrap();
         core.config.instruction_budget = core.instructions_executed;
         assert!(matches!(
@@ -964,7 +964,7 @@ mod tests {
             expected.push_str(&format!("\"{key}\":{index}"));
         }
         expected.push('}');
-        core.set_register(0, Value::Object(object)).unwrap();
+        core.seed_register(0, Value::Object(object)).unwrap();
         assert_eq!(
             stringify(&mut core).unwrap(),
             Value::Str(JsString::from(expected))

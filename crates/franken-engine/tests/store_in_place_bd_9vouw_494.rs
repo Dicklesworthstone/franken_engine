@@ -309,3 +309,59 @@ fn returned_literals_of_parameters_run_no_move() {
         "{body:?}"
     );
 }
+
+/// Operator, property-read and property-write operands read in place across
+/// straight-line code: `arr[i]` and `i < arr.length` loops, `o.n = o.n + i`,
+/// operands a later operand reassigns (`x + (x = 5)`, `arr[i = 2] + arr[i]`,
+/// `o[k] + o[(k = 'q')]`), a property write's value that a later argument or
+/// element reassigns (it keeps its copy), a Proxy whose get trap runs for
+/// every index read. Node v22.2.0 and Bun 1.4.3 print the line, as did the
+/// n65 frankenctl before this change.
+#[test]
+fn operator_and_property_operands_match_node() {
+    let source = r##"const out = [];
+function sumArr(arr) { let sum = 0; for (let i = 0; i < arr.length; i++) { sum += arr[i]; } return sum; }
+function setProps(o, n) { for (let i = 0; i < n; i++) { o.count = o.count + i; } return o.count; }
+function build(n) { let s = ''; for (let i = 0; i < n; i++) { s += 'a' + i; } return s; }
+function hazards() { let x = 1; const a = x + (x = 5); let i = 0; const arr = [10, 20, 30]; const b = arr[i = 2] + arr[i]; let k = 'p'; const o = { p: 'P', q: 'Q' }; const c = o[k] + o[(k = 'q')] + k; return [a, b, c].join(); }
+function valuePosition() { let x = 1; const o = {}; function f(a, b) { return a + ':' + b; } const r1 = f(o.p = x, x = 5); let y = 2; const arr = [o.q = y, y = 7, o.q]; return r1 + ',' + arr.join('/'); }
+function distances(o) { let x = 3; const r = [typeof x, -x, !x, x * o.m, o.m + x, x < o.arr.length, o.arr[x - 3]]; return r.join(); }
+function getterIndex() { let i = 0; const arr = new Proxy([5, 6, 7], { get(t, p) { return p === 'length' ? 3 : t[p] * 10; } }); let s = 0; for (i = 0; i < arr.length; i++) s += arr[i]; return s + ',' + i; }
+function keysWrite() { const o = {}; let k = 'a'; o[k] = 1; o[k + 'b'] = 2; let n = 0; o.n = n; o.m = (n = 4); return JSON.stringify(o) + n; }
+function chain(o) { let t = o; const v = t.a.b.c; t = t.a; return v + t.b.c; }
+out.push(sumArr([1, 2, 3, 4]), setProps({ count: 0 }, 4), build(4), hazards(), valuePosition(), distances({ m: 2, arr: [9, 8] }), getterIndex(), keysWrite(), chain({ a: { b: { c: 1 } } }));
+let ti = 0; const ta = [1, 2]; let ts = 0; for (ti = 0; ti < ta.length; ti++) ts += ta[ti]; const to = { n: 0 }; for (let j = 0; j < 3; j++) to.n = to.n + j;
+out.push(ts, ti, to.n);
+console.log(out.join(' '));
+"##;
+    assert_eq!(
+        console_lines(source),
+        [
+            r##"10 6 a0a1a2a3 6,60,PQq 1:5,2/7/2 number,-3,false,6,5,false,9 180,3 {"a":1,"ab":2,"n":0,"m":4}4 2 3 2 3"##
+        ]
+    );
+}
+
+/// `for (let i = 0; i < arr.length; i++) sum += arr[i];` copies nothing in
+/// its loop: the index read, the Add into sum, the step and the bound test
+/// read the bindings' registers.
+#[test]
+fn an_indexed_array_loop_copies_nothing() {
+    let body = function_bodies(
+        "function sumArr(arr) { let sum = 0; for (let i = 0; i < arr.length; i++) { sum += arr[i]; } return sum; }",
+    );
+    let entry = body
+        .iter()
+        .position(|instruction| matches!(instruction, Ir3Instruction::Jump { .. }))
+        .expect("the loop's entry jump");
+    let back_edge = body
+        .iter()
+        .position(|instruction| matches!(instruction, Ir3Instruction::JumpIf { .. }))
+        .expect("the loop's back edge");
+    assert!(
+        !body[entry..back_edge]
+            .iter()
+            .any(|instruction| matches!(instruction, Ir3Instruction::Move { .. })),
+        "{body:?}"
+    );
+}

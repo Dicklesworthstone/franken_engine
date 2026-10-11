@@ -35885,6 +35885,14 @@ fn straight_line_stack_effect(op: &Ir1Op, binding_id: BindingId) -> Option<(usiz
         Ir1Op::CallMethod { arg_count } => ((*arg_count as usize).saturating_add(2), 1),
         Ir1Op::NewArray { count } => (*count as usize, 1),
         Ir1Op::NewObject { count } => ((*count as usize).saturating_mul(2), 1),
+        Ir1Op::SetProperty {
+            key: Ir1PropertyKey::Static(_),
+            ..
+        } => (2, 1),
+        Ir1Op::SetProperty {
+            key: Ir1PropertyKey::Dynamic,
+            ..
+        } => (3, 1),
         _ => return None,
     })
 }
@@ -35900,7 +35908,12 @@ fn straight_line_stack_effect(op: &Ir1Op, binding_id: BindingId) -> Option<(usiz
 /// - a batch array or object literal taking it as an element, key or value:
 ///   the literal's CreateDataProperty instructions read their registers when
 ///   they run, after every operand is evaluated, and write only the fresh
-///   object.
+///   object;
+/// - an operator or a property read taking it as an operand (bd-9vouw.330's
+///   rule when the consumer comes next, now across straight-line code too:
+///   `arr[i]`, `i < arr.length`), whose result register is never a
+///   binding's (pure_op_result_register's floor, or a fresh register);
+/// - a property write taking it as its object or key (`o.n = o.n + 1`).
 /// A register binding is written only by its own ops (a closure's is
 /// scoped), so the register still holds the value read: a method call's
 /// receiver local (stored once, before the method lookup), `f(x)` of a local
@@ -35928,7 +35941,16 @@ fn straight_line_consumer_reads_in_place(
                 Ir1Op::CallMethod { arg_count } => {
                     arg_count as usize == above && pops == above.saturating_add(2)
                 }
-                Ir1Op::NewArray { .. } | Ir1Op::NewObject { .. } => true,
+                Ir1Op::NewArray { .. }
+                | Ir1Op::NewObject { .. }
+                | Ir1Op::BinaryOp { .. }
+                | Ir1Op::UnaryOp { .. }
+                | Ir1Op::GetProperty { .. } => true,
+                // Its object or key, not its value: the property write
+                // leaves the value's register on the stack as the
+                // assignment's result, which a later op may read after the
+                // binding changed (`f(o.p = x, x = 5)`).
+                Ir1Op::SetProperty { .. } => above >= 1,
                 _ => false,
             };
         }

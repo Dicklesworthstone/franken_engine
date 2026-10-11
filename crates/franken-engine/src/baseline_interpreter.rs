@@ -7936,6 +7936,10 @@ fn write_property_resolution_found_payload(
 /// reads; a longer key's buffer is dropped after its event.
 const PROPERTY_WITNESS_SCRATCH_MAX_CAPACITY: usize = 256;
 
+/// The most argument slots each call-argument scratch vector keeps between
+/// calls; a call with more arguments drops its vectors after the call.
+const CALL_ARGUMENT_SCRATCH_MAX_CAPACITY: usize = 64;
+
 /// Slots per heap chunk. A full chunk whose objects were all reclaimed is
 /// released as a whole (bd-9vouw.57 phase B), so memory follows the live set
 /// rather than the number of allocations.
@@ -11233,14 +11237,24 @@ struct CallFrame {
 /// cannot change while a frame above it is live, so the frames below the top
 /// are a running total here and their saved caller chains are registered in
 /// the cold binding-cell ledger, as a parked activation's are. Only the top
-/// frame, which `last_mut` may change, is measured on demand. Reads deref to a
-/// slice; every other mutation goes through these methods.
+/// frame, which `last_mut` may change, is measured on demand, at most once
+/// between changes. Reads deref to a slice; every other mutation goes through
+/// these methods.
 #[derive(Debug, Default)]
 struct CallStack {
     frames: Vec<CallFrame>,
     /// [`InterpreterCore::estimate_live_call_frame_bytes`] summed over every
     /// frame but the top one.
     below_top_bytes: u64,
+    /// For each frame below the top, its estimate when a frame was pushed
+    /// over it, which `pop` restores as the top's without measuring it again.
+    below_top_frame_bytes: Vec<u64>,
+    /// The top frame's estimate since it was last measured. A frame's
+    /// estimate depends only on its own fields (a string's retained bytes
+    /// are fixed when it is built, a saved chain is charged per frame), so
+    /// only `push`, `pop`, `take` and `last_mut` clear it. Every call and
+    /// return measured the top frame about six times (bd-9vouw.497).
+    top_bytes: Cell<Option<u64>>,
     /// For each frame below the top, the index of the first frame at or
     /// below it with the strictly greatest `super_label` among the frames
     /// that carry a HomeObject (`active_execution_context_label`).
@@ -11258,11 +11272,20 @@ impl std::ops::Deref for CallStack {
 impl CallStack {
     /// Estimated bytes of all frames.
     fn frame_bytes(&self) -> u64 {
-        self.below_top_bytes.saturating_add(
-            self.frames
-                .last()
-                .map_or(0, InterpreterCore::estimate_live_call_frame_bytes),
-        )
+        self.below_top_bytes.saturating_add(self.top_frame_bytes())
+    }
+
+    /// [`InterpreterCore::estimate_live_call_frame_bytes`] of the top frame.
+    fn top_frame_bytes(&self) -> u64 {
+        if let Some(bytes) = self.top_bytes.get() {
+            return bytes;
+        }
+        let bytes = self
+            .frames
+            .last()
+            .map_or(0, InterpreterCore::estimate_live_call_frame_bytes);
+        self.top_bytes.set(Some(bytes));
+        bytes
     }
 
     /// The top frame's saved caller chain, the only saved chain the live-only
@@ -11274,10 +11297,10 @@ impl CallStack {
     }
 
     fn push(&mut self, frame: CallFrame, cold: &mut ColdBindingCells) {
+        let covered_bytes = self.top_frame_bytes();
         if let Some(top) = self.frames.last() {
-            self.below_top_bytes = self
-                .below_top_bytes
-                .saturating_add(InterpreterCore::estimate_live_call_frame_bytes(top));
+            self.below_top_bytes = self.below_top_bytes.saturating_add(covered_bytes);
+            self.below_top_frame_bytes.push(covered_bytes);
             if let Some(saved) = &top.saved_scope_chain {
                 cold.register_frames(saved);
             }
@@ -11293,6 +11316,7 @@ impl CallStack {
             self.below_top_super_winner.push(winner);
         }
         self.frames.push(frame);
+        self.top_bytes.set(None);
     }
 
     /// The `super_label` of the first frame with the strictly greatest one
@@ -11317,14 +11341,24 @@ impl CallStack {
 
     fn pop(&mut self, cold: &mut ColdBindingCells) -> Option<CallFrame> {
         let frame = self.frames.pop()?;
+        self.top_bytes.set(None);
         if let Some(top) = self.frames.last() {
             self.below_top_super_winner.pop();
-            let bytes = InterpreterCore::estimate_live_call_frame_bytes(top);
+            let bytes = self
+                .below_top_frame_bytes
+                .pop()
+                .unwrap_or_else(|| InterpreterCore::estimate_live_call_frame_bytes(top));
+            debug_assert_eq!(
+                bytes,
+                InterpreterCore::estimate_live_call_frame_bytes(top),
+                "a covered frame's estimate changed under the frame above it (bd-9vouw.497)"
+            );
             debug_assert!(
                 self.below_top_bytes >= bytes,
                 "call-stack running total lost a frame (bd-9vouw.72)"
             );
             self.below_top_bytes = self.below_top_bytes.saturating_sub(bytes);
+            self.top_bytes.set(Some(bytes));
             if let Some(saved) = &top.saved_scope_chain {
                 cold.release_frames(saved);
             }
@@ -11342,6 +11376,8 @@ impl CallStack {
             }
         }
         self.below_top_bytes = 0;
+        self.below_top_frame_bytes.clear();
+        self.top_bytes.set(None);
         self.below_top_super_winner.clear();
         std::mem::take(&mut self.frames)
     }
@@ -11359,6 +11395,7 @@ impl CallStack {
 
     /// The top frame is measured on demand, so it may change in place.
     fn last_mut(&mut self) -> Option<&mut CallFrame> {
+        self.top_bytes.set(None);
         self.frames.last_mut()
     }
 }
@@ -15151,6 +15188,14 @@ pub struct InterpreterCore {
     /// capacity (at most PROPERTY_WITNESS_SCRATCH_MAX_CAPACITY bytes kept),
     /// not charged.
     property_witness_scratch: Vec<u8>,
+    /// The argument values and labels of the call being set up, kept so a
+    /// call does not allocate and free two vectors (bd-9vouw.497). Empty
+    /// between calls: a call takes them, drains them into the callee's
+    /// registers and puts them back (`restore_call_argument_scratch`); a call
+    /// that fails in between drops them. Engine capacity (at most
+    /// CALL_ARGUMENT_SCRATCH_MAX_CAPACITY slots each kept), not charged.
+    call_argument_value_scratch: Vec<Value>,
+    call_argument_label_scratch: Vec<Label>,
     /// JSON parser/reviver scratch retained on the Rust stack across guest
     /// callbacks. A nested accounting resync must not erase this ownership.
     json_parse_temporary_bytes: u64,
@@ -16512,6 +16557,8 @@ impl InterpreterCore {
             simple_callback_temporary_bytes: 0,
             simple_callback_register_pool: Vec::new(),
             property_witness_scratch: Vec::new(),
+            call_argument_value_scratch: Vec::new(),
+            call_argument_label_scratch: Vec::new(),
             json_parse_temporary_bytes: 0,
             module_snapshot_in_flight_bytes: 0,
             temporarily_suspended_execution_bytes: 0,
@@ -52921,8 +52968,7 @@ impl InterpreterCore {
                                 });
                             }
 
-                            let mut arg_vals = Vec::new();
-                            let mut arg_labels = Vec::new();
+                            let (mut arg_vals, mut arg_labels) = self.take_call_argument_scratch();
                             for i in 0..args.count.min(func.arity) {
                                 let reg = args.start.checked_add(i).ok_or(
                                     InterpreterError::RegisterOutOfBounds {
@@ -53101,13 +53147,14 @@ impl InterpreterCore {
 
                             // Copy arguments into registers for the callee.
                             for (i, (val, label)) in
-                                arg_vals.into_iter().zip(arg_labels).enumerate()
+                                arg_vals.drain(..).zip(arg_labels.drain(..)).enumerate()
                             {
                                 let reg = i as u32;
                                 if reg < self.config.max_registers {
                                     self.write_reg_with_label(reg, val, label)?;
                                 }
                             }
+                            self.restore_call_argument_scratch(arg_vals, arg_labels);
 
                             self.ip = func.entry as usize;
                         }
@@ -53524,8 +53571,7 @@ impl InterpreterCore {
                         });
                     }
 
-                    let mut arg_vals = Vec::new();
-                    let mut arg_labels = Vec::new();
+                    let (mut arg_vals, mut arg_labels) = self.take_call_argument_scratch();
                     for i in 0..args.count.min(func.arity) {
                         let reg = args.start.checked_add(i).ok_or(
                             InterpreterError::RegisterOutOfBounds {
@@ -53632,12 +53678,15 @@ impl InterpreterCore {
                         func_idx,
                     )?;
 
-                    for (i, (val, label)) in arg_vals.into_iter().zip(arg_labels).enumerate() {
+                    for (i, (val, label)) in
+                        arg_vals.drain(..).zip(arg_labels.drain(..)).enumerate()
+                    {
                         let reg = i as u32;
                         if reg < self.config.max_registers {
                             self.write_reg_with_label(reg, val, label)?;
                         }
                     }
+                    self.restore_call_argument_scratch(arg_vals, arg_labels);
 
                     self.ip = func.entry as usize;
                 }
@@ -63352,6 +63401,29 @@ impl InterpreterCore {
             .witness_deterministic(NondeterminismSource::PropertyResolution, &payload);
         if payload.capacity() <= PROPERTY_WITNESS_SCRATCH_MAX_CAPACITY {
             self.property_witness_scratch = payload;
+        }
+    }
+
+    /// The call-argument scratch vectors, empty, for a call to fill
+    /// (bd-9vouw.497).
+    fn take_call_argument_scratch(&mut self) -> (Vec<Value>, Vec<Label>) {
+        let mut values = std::mem::take(&mut self.call_argument_value_scratch);
+        let mut labels = std::mem::take(&mut self.call_argument_label_scratch);
+        values.clear();
+        labels.clear();
+        (values, labels)
+    }
+
+    /// Keep a call's drained argument vectors for the next call, unless they
+    /// grew past CALL_ARGUMENT_SCRATCH_MAX_CAPACITY.
+    fn restore_call_argument_scratch(&mut self, mut values: Vec<Value>, mut labels: Vec<Label>) {
+        values.clear();
+        labels.clear();
+        if values.capacity() <= CALL_ARGUMENT_SCRATCH_MAX_CAPACITY {
+            self.call_argument_value_scratch = values;
+        }
+        if labels.capacity() <= CALL_ARGUMENT_SCRATCH_MAX_CAPACITY {
+            self.call_argument_label_scratch = labels;
         }
     }
 
@@ -101630,21 +101702,28 @@ impl InterpreterCore {
             .saturating_add(malformed_utf16_bytes)
     }
 
+    #[inline]
     fn estimate_value_bytes(value: &Value) -> u64 {
         // Keep the overwhelmingly common non-accessor path allocation-free.
         // Only accessor graphs need the iterative worklist/memo machinery
-        // below; constructing it for every integer/object/function property
-        // made exact-carrier preflight allocate before its own peak gate.
+        // (estimate_accessor_value_bytes); constructing it for every
+        // integer/object/function property made exact-carrier preflight
+        // allocate before its own peak gate. The match is inlined into every
+        // register write and frame estimate, which call this several times
+        // per instruction (bd-9vouw.497).
         match value {
-            Value::BigInt(digits) => return Self::estimate_string_bytes(digits),
-            Value::Str(text) => return Self::estimate_js_string_bytes(text),
+            Value::BigInt(digits) => Self::estimate_string_bytes(digits),
+            Value::Str(text) => Self::estimate_js_string_bytes(text),
             Value::BuiltinFunction(builtin) => {
-                return Self::estimate_string_bytes(&builtin.module_specifier);
+                Self::estimate_string_bytes(&builtin.module_specifier)
             }
-            Value::Accessor { .. } => {}
-            _ => return 0,
+            Value::Accessor { .. } => Self::estimate_accessor_value_bytes(value),
+            _ => 0,
         }
+    }
 
+    #[inline(never)]
+    fn estimate_accessor_value_bytes(value: &Value) -> u64 {
         // Accessors form an immutable `Arc<Value>` graph. Walk that graph
         // iteratively so an embedder-supplied chain cannot exhaust the host
         // stack, and memoize each shared node so a compact diamond/DAG cannot
@@ -170406,7 +170485,7 @@ mod pending_async_register_cost_bd_9vouw_167 {
     use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
     use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
-    fn module_for(source: &str) -> Ir3Module {
+    pub(super) fn module_for(source: &str) -> Ir3Module {
         let tree = CanonicalEs2020Parser
             .parse_with_options(
                 ParserSource {
@@ -170474,5 +170553,117 @@ mod pending_async_register_cost_bd_9vouw_167 {
                 "{lane}: a pending async call costs {per_call} bytes"
             );
         }
+    }
+}
+
+/// bd-9vouw.497: a call fills reused argument vectors, and the call stack
+/// measures its top frame at most once between changes.
+#[cfg(test)]
+mod call_setup_reuse_bd_9vouw_497 {
+    use super::pending_async_register_cost_bd_9vouw_167::module_for;
+    use super::*;
+
+    fn run(source: &str) -> (InterpreterCore, Value) {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.instruction_budget = 1_000_000_000;
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]
+        .into_iter()
+        .collect();
+        let mut core = InterpreterCore::new(config, "call-setup-reuse");
+        let value = core
+            .execute(&module_for(source))
+            .expect("the program runs")
+            .value;
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        (core, value)
+    }
+
+    /// Calls and method calls with no, fewer, more, rest and 70 arguments;
+    /// a 70-argument call drops its vectors and the next call keeps new ones.
+    /// Node v22.2.0 and Bun 1.4.3 print the value, as did the n66 frankenctl.
+    #[test]
+    fn calls_reuse_their_argument_vectors() {
+        let wide_arguments = (0..70)
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let wide_parameters = (0..70).map(|i| format!("p{i}")).collect::<Vec<_>>();
+        let source = format!(
+            "function zero() {{ return 0; }}\n\
+             function one(a) {{ return a; }}\n\
+             function three(a, b, c) {{ return a + b + c; }}\n\
+             function fewer(a, b, c) {{ return String(c) + String(a); }}\n\
+             function more(a) {{ return a + arguments.length; }}\n\
+             function rest(a, ...r) {{ return a + r.length * 10; }}\n\
+             const o = {{ m(a, b) {{ return a * b; }} }};\n\
+             function wide({}) {{ return {}; }}\n\
+             let t = 0, s = '';\n\
+             for (let i = 0; i < 3; i++) {{\n\
+               t += zero() + one(i) + three(i, 1, 2) + more(i, 7, 8) + rest(i, 1, 2, 3) + o.m(i, 3) + wide({wide_arguments});\n\
+               s += fewer(i) + '|';\n\
+             }}\n\
+             t + ':' + s + ':' + three(1, 2, 3);",
+            wide_parameters.join(", "),
+            wide_parameters.join(" + "),
+        );
+        let (core, value) = run(&source);
+        assert_eq!(
+            value,
+            Value::str("7374:undefined0|undefined1|undefined2|:6")
+        );
+        for capacity in [
+            core.call_argument_value_scratch.capacity(),
+            core.call_argument_label_scratch.capacity(),
+        ] {
+            assert!(
+                (1..=CALL_ARGUMENT_SCRATCH_MAX_CAPACITY).contains(&capacity),
+                "the last call kept its vectors: capacity {capacity}"
+            );
+        }
+        assert!(core.call_argument_value_scratch.is_empty());
+        assert!(core.call_argument_label_scratch.is_empty());
+    }
+
+    /// The top frame changes in place when super() initializes a derived
+    /// constructor's `this`, when its instance fields run and when a sloppy
+    /// callee boxes a primitive `this`; recursion and try/finally returns
+    /// push and pop frames over it. The test build checks the call stack's
+    /// total against a full walk at every measurement and each popped-to
+    /// frame's kept estimate against a new one. Node v22.2.0 prints the
+    /// value, as did the n66 frankenctl (Bun runs the file as a module, where
+    /// `this` stays a string).
+    #[test]
+    fn the_top_frame_estimate_follows_its_changes() {
+        let (core, value) = run("class Base { constructor(n) { this.n = n; } }\n\
+             class Derived extends Base {\n\
+               label = 'field-' + this.n;\n\
+               constructor(n) { super(n * 2); this.extra = 'x'.repeat(n); }\n\
+             }\n\
+             function sloppy() { return typeof this + this.length; }\n\
+             String.prototype.sloppy = sloppy;\n\
+             function rec(d, s) { return d === 0 ? s.length : rec(d - 1, s + 'ab'); }\n\
+             function tf(n) { try { if (n > 1) return 'early' + n; } finally { var z = n; } return 'late' + z; }\n\
+             const out = [];\n\
+             for (let i = 0; i < 4; i++) {\n\
+               const d = new Derived(i);\n\
+               out.push(d.n + d.label + d.extra.length, 'str'.sloppy(), rec(i, 'q'), tf(i));\n\
+             }\n\
+             out.join(',');");
+        assert_eq!(
+            value,
+            Value::str(
+                "0field-00,object3,1,late0,2field-21,object3,3,late1,\
+                 4field-42,object3,5,early2,6field-63,object3,7,early3"
+            )
+        );
+        assert!(core.call_stack.is_empty());
+        assert!(core.call_stack.below_top_frame_bytes.is_empty());
     }
 }

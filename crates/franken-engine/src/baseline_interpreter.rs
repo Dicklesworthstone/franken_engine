@@ -54635,6 +54635,16 @@ impl InterpreterCore {
                                     ordinary_own_property_read.take()
                                 {
                                     ordinary_own_property_label = stored_label;
+                                    // In a callback scope [[Get]] observes the
+                                    // owner's shape label and the property's
+                                    // stored label into the context, and
+                                    // charges the step, before it resolves
+                                    // (proxy_aware_get_runtime_property): the
+                                    // same call, at the same point
+                                    // (bd-9vouw.505).
+                                    if self.active_inline_callback_context_label.is_some() {
+                                        self.reflect_observe_selected_property(oid, &property_key)?;
+                                    }
                                     self.capture_property_resolution_found(&property_key, oid, 0);
                                     self.resolve_accessor_get(
                                         Some(module),
@@ -64053,13 +64063,6 @@ impl InterpreterCore {
         key: &RuntimePropertyKey,
     ) -> Option<&HeapObject> {
         if key.as_str() == Some("__proto__") {
-            return None;
-        }
-        // In a callback scope [[Get]] observes the owner's shape label and
-        // the property's stored label into the context
-        // (reflect_observe_selected_property); only the generic path does
-        // (bd-9vouw.505).
-        if self.active_inline_callback_context_label.is_some() {
             return None;
         }
         #[cfg(test)]
@@ -142150,9 +142153,10 @@ mod async_runtime_tests_current {
     /// context), [[Get]] observes the owner's shape label and the property's
     /// stored label into the context (da779790e). The own-property fast path
     /// predates that and skipped it: reading a public key of an object whose
-    /// shape a Secret store labelled left the context Public. The read now
-    /// takes the generic path whenever a context is active, for an object
-    /// with or without a prototype.
+    /// shape a Secret store labelled left the context Public. The fast read
+    /// now makes the same observation, so it matches the generic path (forced
+    /// by the test switch) in value, labels, context, instruction count and
+    /// trace, for an object with or without a prototype.
     #[test]
     fn own_property_read_in_a_callback_scope_observes_the_shape_label_bd_9vouw_505() {
         let module = test_module_with_functions(
@@ -142166,7 +142170,7 @@ mod async_runtime_tests_current {
             ],
             vec![],
         );
-        for with_prototype in [false, true] {
+        let run = |force_generic: bool, with_prototype: bool| {
             let mut core = test_interpreter();
             let object = core
                 .alloc_object_with_properties(&[("data", Value::Int(7))])
@@ -142185,13 +142189,35 @@ mod async_runtime_tests_current {
             });
             core.active_inline_callback_context_label = Some(Label::Public);
             let data = RuntimePropertyKey::String(JsString::from("data"));
-            assert_eq!(core.ordinary_own_property_fast_read(object, &data), None);
-            assert_eq!(core.run_loop(&module), Err(InterpreterError::Halted));
-            assert_eq!(core.read_reg(2).unwrap(), Value::Int(7));
+            assert!(
+                core.ordinary_own_property_fast_read(object, &data)
+                    .is_some(),
+                "the fast read serves the object in a callback scope"
+            );
+            FORCE_GENERIC_OWN_PROPERTY_READS.with(|force| force.set(force_generic));
+            let halted = core.run_loop(&module);
+            FORCE_GENERIC_OWN_PROPERTY_READS.with(|force| force.set(false));
+            assert_eq!(halted, Err(InterpreterError::Halted));
+            (
+                core.read_reg(2).unwrap(),
+                core.get_register_label(2).unwrap().clone(),
+                core.active_inline_callback_context_label.clone(),
+                core.instructions_executed,
+                core.nondeterminism_trace_ref().clone(),
+            )
+        };
+        for with_prototype in [false, true] {
+            let fast = run(false, with_prototype);
+            let generic = run(true, with_prototype);
+            assert_eq!(fast.0, Value::Int(7));
             assert_eq!(
-                core.active_inline_callback_context_label,
+                fast.2,
                 Some(Label::Secret),
                 "the read observes the Secret shape label (prototype: {with_prototype})"
+            );
+            assert_eq!(
+                fast, generic,
+                "fast and generic reads in a callback scope (prototype: {with_prototype})"
             );
         }
     }

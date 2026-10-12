@@ -9292,6 +9292,9 @@ fn lower_ir2_to_ir3_with_input_hash(
     // Binding registers a compound assignment's operator reads in place
     // while they sit on the value stack (compound_left_operand_reads_in_place).
     let mut compound_reads_in_place = BTreeSet::<Reg>::new();
+    // Binding registers a straight-line consumer read in place: never a
+    // temporary to call-result or literal compaction (bd-9vouw.494).
+    let mut straight_line_reads_in_place = BTreeSet::<Reg>::new();
     // bd-9vouw.496: loop-invariant literals and static keys, loaded once
     // before each outermost top-level loop (plan_loop_constant_hoists).
     let loop_hoists = plan_loop_constant_hoists(&ir2.ops);
@@ -9472,6 +9475,7 @@ fn lower_ir2_to_ir3_with_input_hash(
                 reserved_below,
                 &mut register_cursor,
                 &mut register_high_water,
+                &straight_line_reads_in_place,
             );
             value_stack.push(dst);
             continue;
@@ -9542,7 +9546,10 @@ fn lower_ir2_to_ir3_with_input_hash(
                         && straight_line_consumer_reads_in_place(&ir2.ops, op_index, *binding_id)
                     {
                         // A call's callee, a method call's receiver local or
-                        // a literal's element (bd-9vouw.494).
+                        // a literal's element (bd-9vouw.494). Compaction
+                        // must not take the binding's register for a
+                        // temporary of the consuming call or literal.
+                        straight_line_reads_in_place.insert(source_reg);
                         value_stack.push(source_reg);
                     } else {
                         let dst = alloc_register(&mut register_cursor);
@@ -9813,6 +9820,7 @@ fn lower_ir2_to_ir3_with_input_hash(
                     reserved_below,
                     &mut register_cursor,
                     &mut register_high_water,
+                    &straight_line_reads_in_place,
                 );
                 value_stack.push(dst);
             }
@@ -9859,6 +9867,7 @@ fn lower_ir2_to_ir3_with_input_hash(
                     reserved_below,
                     &mut register_cursor,
                     &mut register_high_water,
+                    &straight_line_reads_in_place,
                 );
                 value_stack.push(dst);
             }
@@ -10668,6 +10677,7 @@ fn lower_ir2_to_ir3_with_input_hash(
                     reserved_below,
                     &mut register_cursor,
                     &mut register_high_water,
+                    &straight_line_reads_in_place,
                 );
                 value_stack.push(dst);
             }
@@ -10712,6 +10722,7 @@ fn lower_ir2_to_ir3_with_input_hash(
                     reserved_below,
                     &mut register_cursor,
                     &mut register_high_water,
+                    &straight_line_reads_in_place,
                 );
                 value_stack.push(dst);
             }
@@ -11219,6 +11230,7 @@ fn lower_ir2_to_ir3_with_input_hash(
                     reserved_below,
                     &mut register_cursor,
                     &mut register_high_water,
+                    &straight_line_reads_in_place,
                 );
                 value_stack.push(dst);
             }
@@ -11310,6 +11322,7 @@ fn lower_ir2_to_ir3_with_input_hash(
                     reserved_below,
                     &mut register_cursor,
                     &mut register_high_water,
+                    &straight_line_reads_in_place,
                 );
                 value_stack.push(dst);
             }
@@ -11490,6 +11503,7 @@ fn lower_ir2_to_ir3_with_input_hash(
         // end-of-pass scratch as the top-level `value_stack`, served from the
         // pass-scoped region arena.
         let mut fn_value_stack: ArenaVec<'_, Reg> = arena.alloc_vec_with_capacity::<Reg>(16);
+        let mut fn_straight_line_reads_in_place = BTreeSet::<Reg>::new();
         let mut fn_label_targets = BTreeMap::<u32, u32>::new();
         // bd-9vouw.494: as `last_label_target`; a body's entry counts as one,
         // so its first store never retargets the previous body's last op.
@@ -12094,6 +12108,14 @@ fn lower_ir2_to_ir3_with_input_hash(
                         // s, the operator and a Move back.
                         let pinned = src < fn_pinned_register_high
                             && !fn_short_lived_locals.contains_key(binding_id);
+                        let straight_line = straight_line_consumer_reads_in_place(
+                            &annotated_body_ops,
+                            op_index,
+                            *binding_id,
+                        );
+                        if straight_line {
+                            fn_straight_line_reads_in_place.insert(src);
+                        }
                         let read_in_place = (src < fn_pinned_register_high
                             && pinned_read_consumed_in_place(&annotated_body_ops, op_index))
                             || (pinned
@@ -12102,11 +12124,7 @@ fn lower_ir2_to_ir3_with_input_hash(
                                     op_index,
                                     *binding_id,
                                 ))
-                            || straight_line_consumer_reads_in_place(
-                                &annotated_body_ops,
-                                op_index,
-                                *binding_id,
-                            )
+                            || straight_line
                             || matches!(
                                 annotated_body_ops.get(op_index + 1).map(|next| &next.inner),
                                 Some(Ir1Op::Return)
@@ -12481,6 +12499,7 @@ fn lower_ir2_to_ir3_with_input_hash(
                         reserved_below,
                         &mut fn_reg,
                         &mut fn_register_high_water,
+                        &fn_straight_line_reads_in_place,
                     );
                     fn_value_stack.push(dst);
                 }
@@ -12524,6 +12543,7 @@ fn lower_ir2_to_ir3_with_input_hash(
                         reserved_below,
                         &mut fn_reg,
                         &mut fn_register_high_water,
+                        &fn_straight_line_reads_in_place,
                     );
                     fn_value_stack.push(dst);
                 }
@@ -13005,6 +13025,7 @@ fn lower_ir2_to_ir3_with_input_hash(
                             reserved_below,
                             &mut fn_reg,
                             &mut fn_register_high_water,
+                            &fn_straight_line_reads_in_place,
                         )
                     };
                     fn_value_stack.push(dst);
@@ -13057,6 +13078,7 @@ fn lower_ir2_to_ir3_with_input_hash(
                             reserved_below,
                             &mut fn_reg,
                             &mut fn_register_high_water,
+                            &fn_straight_line_reads_in_place,
                         )
                     };
                     fn_value_stack.push(dst);
@@ -13594,6 +13616,7 @@ fn lower_ir2_to_ir3_with_input_hash(
                         reserved_below,
                         &mut fn_reg,
                         &mut fn_register_high_water,
+                        &fn_straight_line_reads_in_place,
                     );
                     fn_value_stack.push(dst);
                 }
@@ -13769,6 +13792,7 @@ fn lower_ir2_to_ir3_with_input_hash(
                         reserved_below,
                         &mut fn_reg,
                         &mut fn_register_high_water,
+                        &fn_straight_line_reads_in_place,
                     );
                     fn_value_stack.push(dst);
                 }
@@ -36066,6 +36090,12 @@ fn retarget_store_producer(
 /// bd-9vouw.494: operands below the floor are binding registers a value read
 /// in place (straight_line_consumer_reads_in_place), not temporaries; they
 /// are left alone, and the temporaries among the rest are still reclaimed.
+/// So are the registers of bindings a straight-line consumer read in place
+/// above the floor (`bindings_read_in_place`): a short-lived local read in
+/// place is not a temporary of the call or literal that consumes it, and
+/// counting it made compaction give up below earlier results (the n68 gate:
+/// top-level `[o.m(1), ...]` kept four registers per call).
+#[allow(clippy::too_many_arguments)]
 fn compact_batch_literal(
     instructions: &mut Vec<Ir3Instruction>,
     literal: Reg,
@@ -36074,10 +36104,11 @@ fn compact_batch_literal(
     reserved_below: Reg,
     cursor: &mut Reg,
     high_water: &mut Reg,
+    bindings_read_in_place: &BTreeSet<Reg>,
 ) -> Reg {
     let Some(&lowest_operand) = operands
         .iter()
-        .filter(|&&operand| operand >= reserved_below)
+        .filter(|&&operand| operand >= reserved_below && !bindings_read_in_place.contains(&operand))
         .min()
     else {
         return literal;
@@ -36189,6 +36220,7 @@ fn compact_call_result(
     reserved_below: Reg,
     cursor: &mut Reg,
     high_water: &mut Reg,
+    bindings_read_in_place: &BTreeSet<Reg>,
 ) -> Reg {
     if value_stack.is_empty() {
         return result;
@@ -36207,6 +36239,7 @@ fn compact_call_result(
         reserved_below,
         cursor,
         high_water,
+        bindings_read_in_place,
     )
 }
 

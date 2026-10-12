@@ -52618,49 +52618,9 @@ impl InterpreterCore {
             // allocated its capability tag only to drop it (bd-9vouw.348).
             let reentrant_only =
                 compact_instruction.is_none() && self.tier_r_always_reentrant(instr_ref);
-            let instr =
+            let mut instr =
                 (compact_instruction.is_none() && !reentrant_only).then(|| instr_ref.clone());
-            // bd-9vouw.501: a spread call `f(...list)` is the Reflect.apply
-            // hostcall over a fresh array; when building the argument list is
-            // unobservable it runs as the method call `undefined.f(...)`, the
-            // list handed to the CallMethod handler as `apply_arguments`.
-            // The profiler keeps observing the hostcall.
             let mut spread_apply_arguments = None;
-            let (instr, reentrant_only) = match instr_ref {
-                Ir3Instruction::HostCall {
-                    capability,
-                    args,
-                    dst,
-                } if reentrant_only
-                    && self.profiling_data.is_none()
-                    && args.count == 3
-                    && capability.0 == "builtin:ReflectApply" =>
-                {
-                    match self.unobservable_apply_arguments(
-                        module,
-                        &[],
-                        args.start,
-                        args.start + 1,
-                        args.start + 2,
-                    )? {
-                        Some(values) => {
-                            let call = Ir3Instruction::CallMethod {
-                                receiver: args.start + 1,
-                                callee: args.start,
-                                args: RegRange {
-                                    start: self.config.max_registers,
-                                    count: values.len() as u32,
-                                },
-                                dst: *dst,
-                            };
-                            spread_apply_arguments = Some(values);
-                            (Some(call), false)
-                        }
-                        None => (instr, reentrant_only),
-                    }
-                }
-                _ => (instr, reentrant_only),
-            };
             self.instructions_executed += 1;
 
             // Checkpoint guard integration: tick on each instruction
@@ -52702,10 +52662,24 @@ impl InterpreterCore {
                 continue;
             }
             if reentrant_only {
-                return Ok(DispatchOutcome::ReentrantInstruction {
-                    instruction_ip: self.ip,
-                    profile_start,
-                });
+                // bd-9vouw.501: a spread call `f(...list)` is the Reflect.apply
+                // hostcall over a fresh array; when building the argument list
+                // is unobservable it runs as the method call `undefined.f(...)`,
+                // the list handed to the CallMethod handler as
+                // `apply_arguments`. Only the reentrant instructions reach this
+                // check: made before the dispatch, it cost every instruction.
+                match self.spread_call_as_method_call(module, instr_ref)? {
+                    Some((call, values)) => {
+                        instr = Some(call);
+                        spread_apply_arguments = Some(values);
+                    }
+                    None => {
+                        return Ok(DispatchOutcome::ReentrantInstruction {
+                            instruction_ip: self.ip,
+                            profile_start,
+                        });
+                    }
+                }
             }
 
             // bd-9vouw.37: a numeric operator with an object operand runs its
@@ -82099,6 +82073,51 @@ impl InterpreterCore {
             self.json_charge_work()?;
         }
         Ok(Some(values))
+    }
+
+    /// The CallMethod a spread call's Reflect.apply hostcall runs as, with
+    /// its argument list, when `unobservable_apply_arguments` allows it
+    /// (bd-9vouw.501); `None` for any other instruction, and while the
+    /// profiler observes instructions.
+    fn spread_call_as_method_call(
+        &mut self,
+        module: &Ir3Module,
+        instruction: &Ir3Instruction,
+    ) -> Result<Option<(Ir3Instruction, Vec<Value>)>, InterpreterError> {
+        let Ir3Instruction::HostCall {
+            capability,
+            args,
+            dst,
+        } = instruction
+        else {
+            return Ok(None);
+        };
+        if self.profiling_data.is_some()
+            || args.count != 3
+            || capability.0 != "builtin:ReflectApply"
+        {
+            return Ok(None);
+        }
+        let Some(values) = self.unobservable_apply_arguments(
+            module,
+            &[],
+            args.start,
+            args.start + 1,
+            args.start + 2,
+        )?
+        else {
+            return Ok(None);
+        };
+        let call = Ir3Instruction::CallMethod {
+            receiver: args.start + 1,
+            callee: args.start,
+            args: RegRange {
+                start: self.config.max_registers,
+                count: values.len() as u32,
+            },
+            dst: *dst,
+        };
+        Ok(Some((call, values)))
     }
 
     /// Make `values` (Public) registers `max_registers..` of the active frame

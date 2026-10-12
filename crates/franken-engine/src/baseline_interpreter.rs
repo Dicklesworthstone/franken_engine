@@ -7942,6 +7942,10 @@ fn write_property_resolution_found_payload(
 /// reads; a longer key's buffer is dropped after its event.
 const PROPERTY_WITNESS_SCRATCH_MAX_CAPACITY: usize = 256;
 
+/// The most argument slots each call-argument scratch vector keeps between
+/// calls; a call with more arguments drops its vectors after the call.
+const CALL_ARGUMENT_SCRATCH_MAX_CAPACITY: usize = 64;
+
 /// Slots per heap chunk. A full chunk whose objects were all reclaimed is
 /// released as a whole (bd-9vouw.57 phase B), so memory follows the live set
 /// rather than the number of allocations.
@@ -10000,6 +10004,11 @@ struct GeneratorExecutionSnapshot {
     /// The label file's length then; the two files need not be equally long
     /// (an isolated wrapper replaces the value file and keeps the labels).
     register_label_len: usize,
+    /// [`InterpreterCore::register_dirty_end`] of these files, which
+    /// `install_generator_execution` restores: the whole file's length would
+    /// make the next call after every generator step clear to its end
+    /// (bd-9vouw.499).
+    register_dirty_end: usize,
     delegation: Option<GeneratorDelegation>,
     active_inline_callback_context_label: Option<Label>,
     call_stack: Vec<CallFrame>,
@@ -11239,14 +11248,24 @@ struct CallFrame {
 /// cannot change while a frame above it is live, so the frames below the top
 /// are a running total here and their saved caller chains are registered in
 /// the cold binding-cell ledger, as a parked activation's are. Only the top
-/// frame, which `last_mut` may change, is measured on demand. Reads deref to a
-/// slice; every other mutation goes through these methods.
+/// frame, which `last_mut` may change, is measured on demand, at most once
+/// between changes. Reads deref to a slice; every other mutation goes through
+/// these methods.
 #[derive(Debug, Default)]
 struct CallStack {
     frames: Vec<CallFrame>,
     /// [`InterpreterCore::estimate_live_call_frame_bytes`] summed over every
     /// frame but the top one.
     below_top_bytes: u64,
+    /// For each frame below the top, its estimate when a frame was pushed
+    /// over it, which `pop` restores as the top's without measuring it again.
+    below_top_frame_bytes: Vec<u64>,
+    /// The top frame's estimate since it was last measured. A frame's
+    /// estimate depends only on its own fields (a string's retained bytes
+    /// are fixed when it is built, a saved chain is charged per frame), so
+    /// only `push`, `pop`, `take` and `last_mut` clear it. Every call and
+    /// return measured the top frame about six times (bd-9vouw.497).
+    top_bytes: Cell<Option<u64>>,
     /// For each frame below the top, the index of the first frame at or
     /// below it with the strictly greatest `super_label` among the frames
     /// that carry a HomeObject (`active_execution_context_label`).
@@ -11264,11 +11283,20 @@ impl std::ops::Deref for CallStack {
 impl CallStack {
     /// Estimated bytes of all frames.
     fn frame_bytes(&self) -> u64 {
-        self.below_top_bytes.saturating_add(
-            self.frames
-                .last()
-                .map_or(0, InterpreterCore::estimate_live_call_frame_bytes),
-        )
+        self.below_top_bytes.saturating_add(self.top_frame_bytes())
+    }
+
+    /// [`InterpreterCore::estimate_live_call_frame_bytes`] of the top frame.
+    fn top_frame_bytes(&self) -> u64 {
+        if let Some(bytes) = self.top_bytes.get() {
+            return bytes;
+        }
+        let bytes = self
+            .frames
+            .last()
+            .map_or(0, InterpreterCore::estimate_live_call_frame_bytes);
+        self.top_bytes.set(Some(bytes));
+        bytes
     }
 
     /// The top frame's saved caller chain, the only saved chain the live-only
@@ -11280,10 +11308,10 @@ impl CallStack {
     }
 
     fn push(&mut self, frame: CallFrame, cold: &mut ColdBindingCells) {
+        let covered_bytes = self.top_frame_bytes();
         if let Some(top) = self.frames.last() {
-            self.below_top_bytes = self
-                .below_top_bytes
-                .saturating_add(InterpreterCore::estimate_live_call_frame_bytes(top));
+            self.below_top_bytes = self.below_top_bytes.saturating_add(covered_bytes);
+            self.below_top_frame_bytes.push(covered_bytes);
             if let Some(saved) = &top.saved_scope_chain {
                 cold.register_frames(saved);
             }
@@ -11299,6 +11327,7 @@ impl CallStack {
             self.below_top_super_winner.push(winner);
         }
         self.frames.push(frame);
+        self.top_bytes.set(None);
     }
 
     /// The `super_label` of the first frame with the strictly greatest one
@@ -11323,14 +11352,24 @@ impl CallStack {
 
     fn pop(&mut self, cold: &mut ColdBindingCells) -> Option<CallFrame> {
         let frame = self.frames.pop()?;
+        self.top_bytes.set(None);
         if let Some(top) = self.frames.last() {
             self.below_top_super_winner.pop();
-            let bytes = InterpreterCore::estimate_live_call_frame_bytes(top);
+            let bytes = self
+                .below_top_frame_bytes
+                .pop()
+                .unwrap_or_else(|| InterpreterCore::estimate_live_call_frame_bytes(top));
+            debug_assert_eq!(
+                bytes,
+                InterpreterCore::estimate_live_call_frame_bytes(top),
+                "a covered frame's estimate changed under the frame above it (bd-9vouw.497)"
+            );
             debug_assert!(
                 self.below_top_bytes >= bytes,
                 "call-stack running total lost a frame (bd-9vouw.72)"
             );
             self.below_top_bytes = self.below_top_bytes.saturating_sub(bytes);
+            self.top_bytes.set(Some(bytes));
             if let Some(saved) = &top.saved_scope_chain {
                 cold.release_frames(saved);
             }
@@ -11348,6 +11387,8 @@ impl CallStack {
             }
         }
         self.below_top_bytes = 0;
+        self.below_top_frame_bytes.clear();
+        self.top_bytes.set(None);
         self.below_top_super_winner.clear();
         std::mem::take(&mut self.frames)
     }
@@ -11365,6 +11406,7 @@ impl CallStack {
 
     /// The top frame is measured on demand, so it may change in place.
     fn last_mut(&mut self) -> Option<&mut CallFrame> {
+        self.top_bytes.set(None);
         self.frames.last_mut()
     }
 }
@@ -15157,6 +15199,14 @@ pub struct InterpreterCore {
     /// capacity (at most PROPERTY_WITNESS_SCRATCH_MAX_CAPACITY bytes kept),
     /// not charged.
     property_witness_scratch: Vec<u8>,
+    /// The argument values and labels of the call being set up, kept so a
+    /// call does not allocate and free two vectors (bd-9vouw.497). Empty
+    /// between calls: a call takes them, drains them into the callee's
+    /// registers and puts them back (`restore_call_argument_scratch`); a call
+    /// that fails in between drops them. Engine capacity (at most
+    /// CALL_ARGUMENT_SCRATCH_MAX_CAPACITY slots each kept), not charged.
+    call_argument_value_scratch: Vec<Value>,
+    call_argument_label_scratch: Vec<Label>,
     /// JSON parser/reviver scratch retained on the Rust stack across guest
     /// callbacks. A nested accounting resync must not erase this ownership.
     json_parse_temporary_bytes: u64,
@@ -15306,11 +15356,16 @@ pub struct InterpreterCore {
     register_width: usize,
     /// Run loops currently active on the native stack (bd-9vouw.72).
     native_run_loop_depth: usize,
-    /// Largest stacked-frame prefix ever occupied by this core. This monotonic
-    /// high-water mark keeps reduced clears safe when a reusable core later
-    /// executes a narrower module: stale values and labels from the older,
-    /// wider module are still cleared before the new callee starts.
-    stacked_register_frame_clear_width_high_water: usize,
+    /// Every register at or past this physical index holds `Undefined` with
+    /// a Public label (bd-9vouw.499). A frame entry clears its window and
+    /// every register up to here, then sets it to its window's end; every
+    /// write past it (a register write, a label write, a restored or widened
+    /// window, an installed file) raises it. It replaced a monotonic
+    /// high-water mark of the widest frame ever entered, which every later
+    /// entry cleared: after one call of a function with 200 registers, each
+    /// call of a 3-register function cleared 200 values and labels (1,000,000
+    /// calls took 4.60 s instead of 1.61 s).
+    register_dirty_end: usize,
     /// The top-level run's compact Tier-I plan and the address of the module
     /// it was compiled for. Nested builtin callbacks in that same module
     /// dispatch through it too (verified frame widths, scope-inert leaves,
@@ -16549,6 +16604,8 @@ impl InterpreterCore {
             simple_callback_temporary_bytes: 0,
             simple_callback_register_pool: Vec::new(),
             property_witness_scratch: Vec::new(),
+            call_argument_value_scratch: Vec::new(),
+            call_argument_label_scratch: Vec::new(),
             json_parse_temporary_bytes: 0,
             module_snapshot_in_flight_bytes: 0,
             temporarily_suspended_execution_bytes: 0,
@@ -16593,7 +16650,7 @@ impl InterpreterCore {
             register_base: 0,
             register_width: max_regs,
             native_run_loop_depth: 0,
-            stacked_register_frame_clear_width_high_water: 0,
+            register_dirty_end: 0,
             top_level_compact_tier1: None,
             entry_frame_widths: None,
             catch_frames: Vec::new(),
@@ -34613,8 +34670,23 @@ impl InterpreterCore {
     /// is `value_bytes` when the caller knows it (a fresh file of
     /// `Undefined` is 0; a restored snapshot carries its own), else `None`.
     fn install_register_file(&mut self, registers: Vec<Value>, value_bytes: Option<u64>) {
+        self.note_registers_written_to(registers.len());
         self.registers = SeedTrackedField::new(registers);
         self.registers_value_bytes.set(value_bytes);
+    }
+
+    /// A write to physical register `actual_reg` (bd-9vouw.499).
+    #[inline]
+    fn note_register_written(&mut self, actual_reg: usize) {
+        if actual_reg >= self.register_dirty_end {
+            self.register_dirty_end = actual_reg + 1;
+        }
+    }
+
+    /// Writes to physical registers below `end` (bd-9vouw.499).
+    #[inline]
+    fn note_registers_written_to(&mut self, end: usize) {
+        self.register_dirty_end = self.register_dirty_end.max(end);
     }
 
     pub(crate) fn mutate_heap<R>(&mut self, f: impl FnOnce(&mut Heap) -> R) -> R {
@@ -34844,6 +34916,7 @@ impl InterpreterCore {
             restore
         {
             self.before_seed_surface_write();
+            self.note_registers_written_to(registers.len());
             self.registers.value = registers;
             self.registers_value_bytes.set(None);
             self.heap.value = heap;
@@ -34894,6 +34967,7 @@ impl InterpreterCore {
             });
         }
         let actual_reg = self.register_base + reg as usize;
+        self.note_register_written(actual_reg);
         let Some(previous_label) = self.register_labels.get(actual_reg) else {
             return Err(InterpreterError::RegisterOutOfBounds {
                 register: reg,
@@ -35525,6 +35599,7 @@ impl InterpreterCore {
         }
 
         if let Some(final_label) = final_label {
+            self.note_register_written(actual_array_register);
             let Some(target_label) = self.register_labels.get_mut(actual_array_register) else {
                 self.mutate_heap(|heap| {
                     if let Some(target) = heap.get_mut(heap_index) {
@@ -35872,6 +35947,7 @@ impl InterpreterCore {
         self.apply_memory_component_delta(previous_bytes, Self::estimate_value_bytes(&value))?;
         self.last_pre_run_seed = None;
         self.last_post_run_epoch = None;
+        self.note_register_written(reg as usize);
         self.mutate_registers(|r| r[reg as usize] = value);
         Ok(())
     }
@@ -42544,8 +42620,21 @@ impl InterpreterCore {
                     return Ok(result);
                 }
                 let value = self.string_pattern_this(module, &receiver)?;
-                let pattern = self.string_pattern_arg(module, args)?;
-                self.string_match_all_value(&value, &pattern)
+                let label = self.join_arg_range_label(args)?;
+                let pattern = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                // A pristine RegExp whose @@matchAll is the intrinsic one
+                // (the protocol call above left it to us) runs on the
+                // matcher; any other pattern supplied no @@matchAll, so
+                // steps 4-5 create a RegExp and Invoke its @@matchAll
+                // (bd-9vouw.498).
+                let key = RuntimePropertyKey::Symbol(WellKnownSymbol::MatchAll.id());
+                if let Value::Object(pattern_id) = pattern
+                    && self.regexp_is_pristine(&pattern)
+                    && self.regexp_uses_builtin_symbol_method(pattern_id, &key)
+                {
+                    return self.string_match_all_value(&value, &pattern, &label);
+                }
+                self.string_match_all_created_regexp(module, value, pattern, &label)
             }
             BuiltinFunctionKind::StringSearch => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
@@ -47638,6 +47727,7 @@ impl InterpreterCore {
         let reg_start = self.register_base;
 
         // perf: hot path - use into_iter to avoid cloning each register value
+        self.note_registers_written_to(reg_end);
         self.mutate_registers(|r| {
             for (i, value) in saved_registers.into_iter().enumerate() {
                 r[reg_start + i] = value;
@@ -49998,6 +50088,7 @@ impl InterpreterCore {
             register_labels,
             register_len: max_registers,
             register_label_len: max_registers,
+            register_dirty_end: max_registers,
             delegation: None,
             active_inline_callback_context_label: invocation.inline_context_label,
             call_stack: vec![CallFrame {
@@ -50063,6 +50154,8 @@ impl InterpreterCore {
         let mut execution = GeneratorExecutionSnapshot {
             register_len: registers.len(),
             register_label_len: register_labels.len(),
+            // The core's files are empty now, so nothing past 0 is dirty.
+            register_dirty_end: std::mem::take(&mut self.register_dirty_end),
             registers,
             register_labels,
             delegation: self.generator_delegation.take(),
@@ -50500,6 +50593,7 @@ impl InterpreterCore {
         self.registers.value = registers;
         self.registers_value_bytes.set(None);
         self.install_register_labels(register_labels, None);
+        self.register_dirty_end = execution.register_dirty_end;
         self.generator_delegation = execution.delegation;
         self.active_inline_callback_context_label = execution.active_inline_callback_context_label;
         self.call_stack
@@ -53030,8 +53124,7 @@ impl InterpreterCore {
                                 });
                             }
 
-                            let mut arg_vals = Vec::new();
-                            let mut arg_labels = Vec::new();
+                            let (mut arg_vals, mut arg_labels) = self.take_call_argument_scratch();
                             for i in 0..args.count.min(func.arity) {
                                 let reg = args.start.checked_add(i).ok_or(
                                     InterpreterError::RegisterOutOfBounds {
@@ -53210,13 +53303,14 @@ impl InterpreterCore {
 
                             // Copy arguments into registers for the callee.
                             for (i, (val, label)) in
-                                arg_vals.into_iter().zip(arg_labels).enumerate()
+                                arg_vals.drain(..).zip(arg_labels.drain(..)).enumerate()
                             {
                                 let reg = i as u32;
                                 if reg < self.config.max_registers {
                                     self.write_reg_with_label(reg, val, label)?;
                                 }
                             }
+                            self.restore_call_argument_scratch(arg_vals, arg_labels);
 
                             self.ip = func.entry as usize;
                         }
@@ -53633,8 +53727,7 @@ impl InterpreterCore {
                         });
                     }
 
-                    let mut arg_vals = Vec::new();
-                    let mut arg_labels = Vec::new();
+                    let (mut arg_vals, mut arg_labels) = self.take_call_argument_scratch();
                     for i in 0..args.count.min(func.arity) {
                         let reg = args.start.checked_add(i).ok_or(
                             InterpreterError::RegisterOutOfBounds {
@@ -53741,12 +53834,15 @@ impl InterpreterCore {
                         func_idx,
                     )?;
 
-                    for (i, (val, label)) in arg_vals.into_iter().zip(arg_labels).enumerate() {
+                    for (i, (val, label)) in
+                        arg_vals.drain(..).zip(arg_labels.drain(..)).enumerate()
+                    {
                         let reg = i as u32;
                         if reg < self.config.max_registers {
                             self.write_reg_with_label(reg, val, label)?;
                         }
                     }
+                    self.restore_call_argument_scratch(arg_vals, arg_labels);
 
                     self.ip = func.entry as usize;
                 }
@@ -62111,6 +62207,7 @@ impl InterpreterCore {
         &mut self,
         input: &JsString,
         pattern: &Value,
+        label: &Label,
     ) -> Result<Value, InterpreterError> {
         let (source, flags, last_index) = match self.regexp_source_flags_from_value(pattern) {
             Some((source, flags)) => {
@@ -62141,7 +62238,13 @@ impl InterpreterCore {
         let full_unicode = flags.contains('u') || flags.contains('v');
         let clone = self.alloc_regexp_object(source, flags)?;
         self.set_object_property(clone, "lastIndex".to_string(), last_index)?;
-        self.create_regexp_string_iterator(clone, input.clone(), full_unicode)
+        self.create_regexp_string_iterator(
+            Value::Object(clone),
+            input.clone(),
+            true,
+            full_unicode,
+            label,
+        )
     }
 
     /// ES2020 21.1.3.18 String.prototype.search: the index of the first
@@ -63520,6 +63623,29 @@ impl InterpreterCore {
             .witness_deterministic(NondeterminismSource::PropertyResolution, &payload);
         if payload.capacity() <= PROPERTY_WITNESS_SCRATCH_MAX_CAPACITY {
             self.property_witness_scratch = payload;
+        }
+    }
+
+    /// The call-argument scratch vectors, empty, for a call to fill
+    /// (bd-9vouw.497).
+    fn take_call_argument_scratch(&mut self) -> (Vec<Value>, Vec<Label>) {
+        let mut values = std::mem::take(&mut self.call_argument_value_scratch);
+        let mut labels = std::mem::take(&mut self.call_argument_label_scratch);
+        values.clear();
+        labels.clear();
+        (values, labels)
+    }
+
+    /// Keep a call's drained argument vectors for the next call, unless they
+    /// grew past CALL_ARGUMENT_SCRATCH_MAX_CAPACITY.
+    fn restore_call_argument_scratch(&mut self, mut values: Vec<Value>, mut labels: Vec<Label>) {
+        values.clear();
+        labels.clear();
+        if values.capacity() <= CALL_ARGUMENT_SCRATCH_MAX_CAPACITY {
+            self.call_argument_value_scratch = values;
+        }
+        if labels.capacity() <= CALL_ARGUMENT_SCRATCH_MAX_CAPACITY {
+            self.call_argument_label_scratch = labels;
         }
     }
 
@@ -80200,7 +80326,10 @@ impl InterpreterCore {
         let input = self.value_to_string(&input);
         match method {
             "@@match" => self.string_match_value(&input, &receiver),
-            "@@matchAll" => self.string_match_all_value(&JsString::from(input), &receiver),
+            "@@matchAll" => {
+                let label = self.join_arg_range_label(args)?;
+                self.string_match_all_value(&JsString::from(input), &receiver, &label)
+            }
             "@@search" => self.string_search_value(&input, &receiver),
             "@@split" => {
                 let limit =
@@ -80518,8 +80647,9 @@ impl InterpreterCore {
 
     /// Whether `object_id` is a RegExp whose `key` method is certainly the
     /// builtin: no own property shadows it, its prototype is
-    /// %RegExp.prototype% (or none), and %RegExp.prototype% has no own `key`
-    /// property. The common `s.split(/,/)` then skips the property walk.
+    /// %RegExp.prototype% (or none), and %RegExp.prototype% neither stores
+    /// its own `key` property nor had the intrinsic one deleted. The common
+    /// `s.split(/,/)` then skips the property walk.
     fn regexp_uses_builtin_symbol_method(
         &self,
         object_id: ObjectId,
@@ -80537,10 +80667,14 @@ impl InterpreterCore {
         let regexp_prototype = self.builtin_prototypes.get("RegExp").copied();
         match object.prototype {
             None => true,
+            // A deleted intrinsic method is absent too (bd-9vouw.498).
             Some(prototype) if Some(prototype) == regexp_prototype => self
                 .heap
                 .get(prototype.0 as usize)
-                .is_some_and(|prototype| prototype.own_runtime_property_value(key).is_none()),
+                .is_some_and(|prototype| {
+                    prototype.own_runtime_property_value(key).is_none()
+                        && !prototype.deleted_virtual_keys.contains(key)
+                }),
             Some(_) => false,
         }
     }
@@ -91309,6 +91443,7 @@ impl InterpreterCore {
         }
 
         let mut saved_values = Vec::with_capacity(value_count);
+        self.note_registers_written_to(required_len);
         self.mutate_registers(|registers| {
             if registers.len() < required_len {
                 registers.resize(required_len, Value::Undefined);
@@ -91403,6 +91538,7 @@ impl InterpreterCore {
             .saturating_sub(current_register_bytes)
             .saturating_sub(saved_carrier_bytes)
             .saturating_add(previous_register_bytes);
+        self.note_registers_written_to(required_len);
         self.mutate_registers(|registers| {
             if registers.len() < required_len {
                 registers.resize(required_len, Value::Undefined);
@@ -100939,6 +101075,7 @@ impl InterpreterCore {
     /// file if the index is past the current length.
     #[cfg(test)]
     fn set_reg(&mut self, idx: usize, value: Value) {
+        self.note_register_written(idx);
         self.mutate_registers(|r| {
             if idx >= r.len() {
                 r.resize(idx + 1, Value::Undefined);
@@ -100982,6 +101119,7 @@ impl InterpreterCore {
     #[cfg(test)]
     fn set_register(&mut self, reg: u32, value: Value) -> Result<(), InterpreterError> {
         let idx = reg as usize;
+        self.note_register_written(idx);
         self.mutate_registers(|r| {
             if idx >= r.len() {
                 r.resize(idx + 1, Value::Undefined);
@@ -101681,6 +101819,7 @@ impl InterpreterCore {
             // Preserve the sole execution-seed mutation chokepoint before the
             // direct replacement. Eligibility proves the value/label logical
             // byte total is unchanged and no context label can dominate.
+            self.note_register_written(actual_reg);
             self.mutate_registers_by_bytes(0, 0, |registers| registers[actual_reg] = value);
             return Ok(());
         }
@@ -101693,6 +101832,7 @@ impl InterpreterCore {
         actual_reg: usize,
         value: Value,
     ) -> Result<(), InterpreterError> {
+        self.note_register_written(actual_reg);
         // bd-31ijt: the previous implementation called sync_estimated_memory_bytes()
         // after every register write, walking the full heap, registers, scope chain,
         // closures, call stack, iterators, and generators each time — turning every
@@ -101775,6 +101915,7 @@ impl InterpreterCore {
             // The existing and replacement value/label pairs own zero dynamic
             // bytes. Keep seed materialization and epoch advancement exact,
             // then replace both parallel register files as one logical write.
+            self.note_register_written(actual_reg);
             self.mutate_registers_by_bytes(0, 0, |registers| registers[actual_reg] = value);
             self.register_labels[actual_reg] = label;
             return Ok(());
@@ -101789,6 +101930,7 @@ impl InterpreterCore {
         value: Value,
         label: Label,
     ) -> Result<(), InterpreterError> {
+        self.note_register_written(actual_reg);
         let previous_value_bytes = self
             .registers
             .get(actual_reg)
@@ -101912,11 +102054,33 @@ impl InterpreterCore {
         }
         self.register_base = base;
         self.register_width = width.min(max_registers);
-        self.stacked_register_frame_clear_width_high_water = self
-            .stacked_register_frame_clear_width_high_water
-            .max(width);
-        let clear_width = self.stacked_register_frame_clear_width_high_water;
-        self.clear_current_register_frame_width(clear_width);
+        // The callee's window and whatever an earlier frame or write left
+        // past it (bd-9vouw.499); every register past `register_dirty_end`
+        // is already clear.
+        let window_end = base.saturating_add(self.register_width);
+        let clear_end = window_end.max(self.register_dirty_end);
+        // The test build checks the invariant a window past the clear: a
+        // write that skipped `note_register_written` would show up here.
+        #[cfg(test)]
+        {
+            let check_end = clear_end.saturating_add(max_registers);
+            debug_assert!(
+                self.registers
+                    .get(clear_end..check_end.min(self.registers.len()))
+                    .unwrap_or(&[])
+                    .iter()
+                    .all(|value| matches!(value, Value::Undefined))
+                    && self
+                        .register_labels
+                        .get(clear_end..check_end.min(self.register_labels.len()))
+                        .unwrap_or(&[])
+                        .iter()
+                        .all(|label| matches!(label, Label::Public)),
+                "a register past register_dirty_end holds a value (bd-9vouw.499)"
+            );
+        }
+        self.clear_current_register_frame_width(clear_end - base);
+        self.register_dirty_end = window_end;
         Ok(())
     }
 
@@ -101965,7 +102129,10 @@ impl InterpreterCore {
             if physical_frame_end > registers.len() {
                 registers.resize(physical_frame_end, Value::Undefined);
             }
-            registers[frame_start..frame_end].fill(Value::Undefined);
+            // A clear past one window (registers an earlier, deeper frame
+            // left, bd-9vouw.499) stops at the file's end.
+            let end = frame_end.min(registers.len());
+            registers[frame_start..end].fill(Value::Undefined);
         });
         let released_label_bytes = Self::saturating_sum(
             self.register_labels
@@ -101978,7 +102145,8 @@ impl InterpreterCore {
             self.register_labels
                 .resize(physical_frame_end, Label::Public);
         }
-        self.register_labels[frame_start..frame_end].fill(Label::Public);
+        let label_end = frame_end.min(self.register_labels.len());
+        self.register_labels[frame_start..label_end].fill(Label::Public);
         self.adjust_register_labels_bytes(released_label_bytes, 0);
         self.estimated_memory_bytes = self
             .estimated_memory_bytes
@@ -102043,21 +102211,28 @@ impl InterpreterCore {
             .saturating_add(malformed_utf16_bytes)
     }
 
+    #[inline]
     fn estimate_value_bytes(value: &Value) -> u64 {
         // Keep the overwhelmingly common non-accessor path allocation-free.
         // Only accessor graphs need the iterative worklist/memo machinery
-        // below; constructing it for every integer/object/function property
-        // made exact-carrier preflight allocate before its own peak gate.
+        // (estimate_accessor_value_bytes); constructing it for every
+        // integer/object/function property made exact-carrier preflight
+        // allocate before its own peak gate. The match is inlined into every
+        // register write and frame estimate, which call this several times
+        // per instruction (bd-9vouw.497).
         match value {
-            Value::BigInt(digits) => return Self::estimate_string_bytes(digits),
-            Value::Str(text) => return Self::estimate_js_string_bytes(text),
+            Value::BigInt(digits) => Self::estimate_string_bytes(digits),
+            Value::Str(text) => Self::estimate_js_string_bytes(text),
             Value::BuiltinFunction(builtin) => {
-                return Self::estimate_string_bytes(&builtin.module_specifier);
+                Self::estimate_string_bytes(&builtin.module_specifier)
             }
-            Value::Accessor { .. } => {}
-            _ => return 0,
+            Value::Accessor { .. } => Self::estimate_accessor_value_bytes(value),
+            _ => 0,
         }
+    }
 
+    #[inline(never)]
+    fn estimate_accessor_value_bytes(value: &Value) -> u64 {
         // Accessors form an immutable `Arc<Value>` graph. Walk that graph
         // iteratively so an embedder-supplied chain cannot exhaust the host
         // stack, and memoize each shared node so a compact diamond/DAG cannot
@@ -104208,6 +104383,7 @@ impl InterpreterCore {
     /// is `bytes` when the caller knows it (a Public file is 0, a restored
     /// snapshot carries its own), else `None`.
     fn install_register_labels(&mut self, labels: Vec<Label>, bytes: Option<u64>) {
+        self.note_registers_written_to(labels.len());
         self.register_labels = labels;
         self.register_labels_bytes.set(bytes);
     }
@@ -149703,10 +149879,9 @@ mod tests {
         let mut narrow_only_core =
             InterpreterCore::new(config.clone(), "tier-i-exact-narrow-frame");
         narrow_only_core.enter_stacked_register_frame_for_function(&module, Some(&plan), 2);
-        assert_eq!(
-            narrow_only_core.stacked_register_frame_clear_width_high_water,
-            1
-        );
+        // The narrow frame's window is the only part of the file that may
+        // hold a value after its entry (bd-9vouw.499).
+        assert_eq!(narrow_only_core.register_dirty_end, max_registers + 1);
         assert_eq!(narrow_only_core.registers.len(), max_registers * 2);
         assert_eq!(narrow_only_core.register_labels.len(), max_registers * 2);
 
@@ -150415,9 +150590,94 @@ mod tests {
         core.register_width = max_registers;
         core.enter_stacked_register_frame(Some(&narrow_plan));
 
-        assert_eq!(core.stacked_register_frame_clear_width_high_water, 8);
+        // The wide frame's write raised the dirty end past register 7, so the
+        // narrow entry cleared it (bd-9vouw.499); only its own window may be
+        // dirty after it.
+        assert_eq!(core.register_dirty_end, max_registers + 1);
         assert_eq!(core.registers[max_registers + 7], Value::Undefined);
         assert_eq!(core.register_labels[max_registers + 7], Label::Public);
+
+        // bd-9vouw.499: the next narrow entry clears its own window only;
+        // the wide frame's slots are already clear.
+        core.write_reg_with_label(0, Value::Int(1), Label::Secret)
+            .expect("narrow frame write");
+        core.register_base = 0;
+        core.register_width = max_registers;
+        assert_eq!(core.register_dirty_end, max_registers + 1);
+        core.enter_stacked_register_frame(Some(&narrow_plan))
+            .expect("narrow entry");
+        assert_eq!(core.registers[max_registers], Value::Undefined);
+        assert_eq!(core.register_labels[max_registers], Label::Public);
+        assert_eq!(core.register_dirty_end, max_registers + 1);
+    }
+
+    /// bd-9vouw.499: registers a deeper frame left behind, past the window of
+    /// the next frame entered at a shallower base, are cleared by that entry,
+    /// and a write past every window (a widened builtin window) is cleared
+    /// by the next entry too.
+    #[test]
+    fn stale_registers_of_deeper_frames_are_cleared_by_the_next_entry() {
+        let module = |frame_size: u32| {
+            test_module_with_functions(
+                vec![
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadInt { dst: 0, value: 1 },
+                    Ir3Instruction::Return { value: 0 },
+                ],
+                vec![
+                    Ir3FunctionDesc {
+                        entry: 0,
+                        arity: 0,
+                        frame_size: 1,
+                        name: Some("main".to_string()),
+                        is_generator: false,
+                        rest_param_index: None,
+                    },
+                    Ir3FunctionDesc {
+                        entry: 1,
+                        arity: 0,
+                        frame_size,
+                        name: Some("callee".to_string()),
+                        is_generator: false,
+                        rest_param_index: None,
+                    },
+                ],
+            )
+        };
+        let four = CompactTier1Program::compile(&module(4)).expect("width-4 plan");
+        let two = CompactTier1Program::compile(&module(2)).expect("width-2 plan");
+        let mut core = quickjs_test_core();
+        let max_registers = core.config.max_registers as usize;
+
+        // main -> a (width 4) -> b (width 4); b writes its last register.
+        core.enter_stacked_register_frame(Some(&four)).expect("a");
+        core.enter_stacked_register_frame(Some(&four)).expect("b");
+        assert_eq!(core.register_base, max_registers + 4);
+        core.write_reg_with_label(3, Value::str("left by b"), Label::Secret)
+            .expect("b writes");
+        assert_eq!(core.register_dirty_end, max_registers + 8);
+        // Both return; main calls c (width 2) at a's base.
+        core.register_base = 0;
+        core.register_width = max_registers;
+        core.enter_stacked_register_frame(Some(&two)).expect("c");
+        assert_eq!(core.registers[max_registers + 7], Value::Undefined);
+        assert_eq!(core.register_labels[max_registers + 7], Label::Public);
+        assert_eq!(core.register_dirty_end, max_registers + 2);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        // A write past c's window (as a widened builtin window makes).
+        core.write_reg_with_label(5, Value::Int(9), Label::Secret)
+            .expect("write past the window");
+        assert_eq!(core.register_dirty_end, max_registers + 6);
+        core.register_base = 0;
+        core.register_width = max_registers;
+        core.enter_stacked_register_frame(Some(&two)).expect("d");
+        assert_eq!(core.registers[max_registers + 5], Value::Undefined);
+        assert_eq!(core.register_labels[max_registers + 5], Label::Public);
+        assert_eq!(core.register_dirty_end, max_registers + 2);
     }
 
     #[test]
@@ -171515,7 +171775,7 @@ mod pending_async_register_cost_bd_9vouw_167 {
     use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
     use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
-    fn module_for(source: &str) -> Ir3Module {
+    pub(super) fn module_for(source: &str) -> Ir3Module {
         let tree = CanonicalEs2020Parser
             .parse_with_options(
                 ParserSource {
@@ -171583,5 +171843,117 @@ mod pending_async_register_cost_bd_9vouw_167 {
                 "{lane}: a pending async call costs {per_call} bytes"
             );
         }
+    }
+}
+
+/// bd-9vouw.497: a call fills reused argument vectors, and the call stack
+/// measures its top frame at most once between changes.
+#[cfg(test)]
+mod call_setup_reuse_bd_9vouw_497 {
+    use super::pending_async_register_cost_bd_9vouw_167::module_for;
+    use super::*;
+
+    fn run(source: &str) -> (InterpreterCore, Value) {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.instruction_budget = 1_000_000_000;
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]
+        .into_iter()
+        .collect();
+        let mut core = InterpreterCore::new(config, "call-setup-reuse");
+        let value = core
+            .execute(&module_for(source))
+            .expect("the program runs")
+            .value;
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        (core, value)
+    }
+
+    /// Calls and method calls with no, fewer, more, rest and 70 arguments;
+    /// a 70-argument call drops its vectors and the next call keeps new ones.
+    /// Node v22.2.0 and Bun 1.4.3 print the value, as did the n66 frankenctl.
+    #[test]
+    fn calls_reuse_their_argument_vectors() {
+        let wide_arguments = (0..70)
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let wide_parameters = (0..70).map(|i| format!("p{i}")).collect::<Vec<_>>();
+        let source = format!(
+            "function zero() {{ return 0; }}\n\
+             function one(a) {{ return a; }}\n\
+             function three(a, b, c) {{ return a + b + c; }}\n\
+             function fewer(a, b, c) {{ return String(c) + String(a); }}\n\
+             function more(a) {{ return a + arguments.length; }}\n\
+             function rest(a, ...r) {{ return a + r.length * 10; }}\n\
+             const o = {{ m(a, b) {{ return a * b; }} }};\n\
+             function wide({}) {{ return {}; }}\n\
+             let t = 0, s = '';\n\
+             for (let i = 0; i < 3; i++) {{\n\
+               t += zero() + one(i) + three(i, 1, 2) + more(i, 7, 8) + rest(i, 1, 2, 3) + o.m(i, 3) + wide({wide_arguments});\n\
+               s += fewer(i) + '|';\n\
+             }}\n\
+             t + ':' + s + ':' + three(1, 2, 3);",
+            wide_parameters.join(", "),
+            wide_parameters.join(" + "),
+        );
+        let (core, value) = run(&source);
+        assert_eq!(
+            value,
+            Value::str("7374:undefined0|undefined1|undefined2|:6")
+        );
+        for capacity in [
+            core.call_argument_value_scratch.capacity(),
+            core.call_argument_label_scratch.capacity(),
+        ] {
+            assert!(
+                (1..=CALL_ARGUMENT_SCRATCH_MAX_CAPACITY).contains(&capacity),
+                "the last call kept its vectors: capacity {capacity}"
+            );
+        }
+        assert!(core.call_argument_value_scratch.is_empty());
+        assert!(core.call_argument_label_scratch.is_empty());
+    }
+
+    /// The top frame changes in place when super() initializes a derived
+    /// constructor's `this`, when its instance fields run and when a sloppy
+    /// callee boxes a primitive `this`; recursion and try/finally returns
+    /// push and pop frames over it. The test build checks the call stack's
+    /// total against a full walk at every measurement and each popped-to
+    /// frame's kept estimate against a new one. Node v22.2.0 prints the
+    /// value, as did the n66 frankenctl (Bun runs the file as a module, where
+    /// `this` stays a string).
+    #[test]
+    fn the_top_frame_estimate_follows_its_changes() {
+        let (core, value) = run("class Base { constructor(n) { this.n = n; } }\n\
+             class Derived extends Base {\n\
+               label = 'field-' + this.n;\n\
+               constructor(n) { super(n * 2); this.extra = 'x'.repeat(n); }\n\
+             }\n\
+             function sloppy() { return typeof this + this.length; }\n\
+             String.prototype.sloppy = sloppy;\n\
+             function rec(d, s) { return d === 0 ? s.length : rec(d - 1, s + 'ab'); }\n\
+             function tf(n) { try { if (n > 1) return 'early' + n; } finally { var z = n; } return 'late' + z; }\n\
+             const out = [];\n\
+             for (let i = 0; i < 4; i++) {\n\
+               const d = new Derived(i);\n\
+               out.push(d.n + d.label + d.extra.length, 'str'.sloppy(), rec(i, 'q'), tf(i));\n\
+             }\n\
+             out.join(',');");
+        assert_eq!(
+            value,
+            Value::str(
+                "0field-00,object3,1,late0,2field-21,object3,3,late1,\
+                 4field-42,object3,5,early2,6field-63,object3,7,early3"
+            )
+        );
+        assert!(core.call_stack.is_empty());
+        assert!(core.call_stack.below_top_frame_bytes.is_empty());
     }
 }

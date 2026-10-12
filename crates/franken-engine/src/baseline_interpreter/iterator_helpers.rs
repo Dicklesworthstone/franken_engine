@@ -103,17 +103,21 @@ pub(super) const ITERATOR_HELPER_SLOT_KEYS: [&str; 10] = [
     RUNNING_SLOT,
 ];
 
-/// A matchAll iterator's slots: the RegExp it runs (a private clone), the
-/// subject, whether the RegExp is full-Unicode, and whether it is done.
+/// A matchAll iterator's slots: the RegExp it runs (the matcher @@matchAll
+/// constructed), the subject (labelled with the matchAll arguments' label,
+/// which a guest `exec` it calls receives), whether the RegExp is global and
+/// full-Unicode, and whether it is done.
 const RSI_REGEXP_SLOT: &str = "__regexpStringIteratorRegExp";
 const RSI_STRING_SLOT: &str = "__regexpStringIteratorString";
+const RSI_GLOBAL_SLOT: &str = "__regexpStringIteratorGlobal";
 const RSI_UNICODE_SLOT: &str = "__regexpStringIteratorUnicode";
 const RSI_DONE_SLOT: &str = "__regexpStringIteratorDone";
 
 /// Hidden from own-key enumeration and reflection (`own_property_visible`).
-pub(super) const REGEXP_STRING_ITERATOR_SLOT_KEYS: [&str; 4] = [
+pub(super) const REGEXP_STRING_ITERATOR_SLOT_KEYS: [&str; 5] = [
     RSI_REGEXP_SLOT,
     RSI_STRING_SLOT,
+    RSI_GLOBAL_SLOT,
     RSI_UNICODE_SLOT,
     RSI_DONE_SLOT,
 ];
@@ -167,7 +171,7 @@ impl InterpreterCore {
                 self.iterator_from(module, object)
             }
             "IteratorHelper.next" => self.iterator_helper_next(module, &receiver),
-            "RegExpStringIterator.next" => self.regexp_string_iterator_next(&receiver),
+            "RegExpStringIterator.next" => self.regexp_string_iterator_next(module, &receiver),
             "IteratorHelper.return" => self.iterator_helper_return(module, &receiver),
             "WrapForValidIterator.next" => {
                 let wrapper = self.iterator_helper_receiver(&receiver, true, "next")?;
@@ -242,29 +246,50 @@ impl InterpreterCore {
         })
     }
 
-    /// CreateRegExpStringIterator(R, S, global, fullUnicode) (ES2020
-    /// 21.2.7.1) for a global `regexp`: each `next` runs one exec, so only
-    /// the match being consumed is alive (bd-9vouw.476).
+    /// CreateRegExpStringIterator(R, S, global, fullUnicode) (ES2024
+    /// 22.2.9.1): each `next` runs one exec, so only the match being
+    /// consumed is alive (bd-9vouw.476), and a guest `exec` runs when `next`
+    /// is called, not when the iterator is made (bd-9vouw.498). `label` is
+    /// the matchAll arguments' label.
     pub(super) fn create_regexp_string_iterator(
         &mut self,
-        regexp: ObjectId,
+        regexp: Value,
         subject: JsString,
+        global: bool,
         full_unicode: bool,
+        label: &Label,
     ) -> Result<Value, InterpreterError> {
         let prototype = self.ensure_builtin_prototype(REGEXP_STRING_ITERATOR_PROTOTYPE)?;
         let iterator = self.alloc_object_with_prototype(Some(prototype))?;
-        self.iterator_helper_set(iterator, RSI_REGEXP_SLOT, Value::Object(regexp))?;
+        self.iterator_helper_set(iterator, RSI_REGEXP_SLOT, regexp)?;
         self.iterator_helper_set(iterator, RSI_STRING_SLOT, Value::Str(subject))?;
+        if *label != Label::Public {
+            self.set_own_runtime_property_label(
+                iterator,
+                &RuntimePropertyKey::String(JsString::from(RSI_STRING_SLOT)),
+                label,
+            )?;
+        }
+        self.iterator_helper_set(iterator, RSI_GLOBAL_SLOT, Value::Bool(global))?;
         self.iterator_helper_set(iterator, RSI_UNICODE_SLOT, Value::Bool(full_unicode))?;
         self.iterator_helper_set(iterator, RSI_DONE_SLOT, Value::Bool(false))?;
         self.hide_internal_slots(iterator, &REGEXP_STRING_ITERATOR_SLOT_KEYS)?;
         Ok(Value::Object(iterator))
     }
 
-    /// %RegExpStringIteratorPrototype%.next (ES2020 21.2.7.1.1): the next
-    /// match, or done once exec finds none. An empty match moves lastIndex on
-    /// (AdvanceStringIndex), or the next exec would find it again.
-    fn regexp_string_iterator_next(&mut self, receiver: &Value) -> Result<Value, InterpreterError> {
+    /// %RegExpStringIteratorPrototype%.next (ES2024 22.2.9.2.1): the next
+    /// match, or done once exec finds none, or after the one match of a
+    /// RegExp that is not global. An empty match of a global RegExp moves
+    /// lastIndex on (AdvanceStringIndex), or the next exec would find it
+    /// again. The matcher answers for a pristine RegExp; for any other (a
+    /// user or overridden exec, a subclass instance, a non-number lastIndex,
+    /// overridden since the iterator was made) RegExpExec, Get and Set run as
+    /// the specification reads them (bd-9vouw.498).
+    fn regexp_string_iterator_next(
+        &mut self,
+        module: &Ir3Module,
+        receiver: &Value,
+    ) -> Result<Value, InterpreterError> {
         let iterator = match receiver {
             Value::Object(id)
                 if self
@@ -289,14 +314,49 @@ impl InterpreterCore {
         }
         let regexp = self.iterator_helper_slot(iterator, RSI_REGEXP_SLOT)?;
         let subject = self.iterator_helper_slot(iterator, RSI_STRING_SLOT)?;
+        let global = matches!(
+            self.iterator_helper_slot(iterator, RSI_GLOBAL_SLOT)?,
+            Value::Bool(true)
+        );
         // Each exec costs what the guest `re.exec(s)` it stands for would:
         // one instruction of the run's budget.
         self.charge_property_copy_work()?;
+        if !self.regexp_is_pristine(&regexp) {
+            let Value::Str(text) = &subject else {
+                return Err(InterpreterError::InternalError {
+                    details: "RegExp String Iterator lost its string".to_string(),
+                });
+            };
+            let full_unicode = matches!(
+                self.iterator_helper_slot(iterator, RSI_UNICODE_SLOT)?,
+                Value::Bool(true)
+            );
+            let label = self.runtime_property_label(
+                iterator,
+                &RuntimePropertyKey::String(JsString::from(RSI_STRING_SLOT)),
+            );
+            let found = self.regexp_string_iterator_step_generic(
+                module,
+                &regexp,
+                text,
+                global,
+                full_unicode,
+                &label,
+            )?;
+            if found.is_none() || !global {
+                self.iterator_helper_set(iterator, RSI_DONE_SLOT, Value::Bool(true))?;
+            }
+            return self.alloc_iterator_result_object(found);
+        }
         let result = self.regexp_prototype_exec(regexp.clone(), &subject)?;
         let Value::Object(result_id) = result else {
             self.iterator_helper_set(iterator, RSI_DONE_SLOT, Value::Bool(true))?;
             return self.alloc_iterator_result_object(None);
         };
+        if !global {
+            self.iterator_helper_set(iterator, RSI_DONE_SLOT, Value::Bool(true))?;
+            return self.alloc_iterator_result_object(Some(result));
+        }
         let empty_match = matches!(
             self.heap
                 .get(result_id.0 as usize)

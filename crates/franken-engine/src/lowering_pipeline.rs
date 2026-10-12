@@ -8805,6 +8805,9 @@ fn lower_ir2_to_ir3_with_input_hash(
     // perf: pre-size value stack based on estimated expression nesting depth
     let mut value_stack: ArenaVec<'_, Reg> = arena.alloc_vec_with_capacity::<Reg>(32);
     let mut label_targets = BTreeMap::<u32, u32>::new();
+    // bd-9vouw.494: where the last label was bound; a store copy at that
+    // position is a jump target and keeps its producer's destination.
+    let mut last_label_target: Option<u32> = None;
     let mut iterator_cleanup_labels = BTreeMap::<u32, Reg>::new();
     let mut pending_jumps = Vec::<PendingJump>::new();
     let mut catch_entry_labels = BTreeSet::<u32>::new();
@@ -9289,6 +9292,12 @@ fn lower_ir2_to_ir3_with_input_hash(
     // Binding registers a compound assignment's operator reads in place
     // while they sit on the value stack (compound_left_operand_reads_in_place).
     let mut compound_reads_in_place = BTreeSet::<Reg>::new();
+    // bd-9vouw.496: loop-invariant literals and static keys, loaded once
+    // before each outermost top-level loop (plan_loop_constant_hoists).
+    let loop_hoists = plan_loop_constant_hoists(&ir2.ops);
+    let mut next_loop_hoist = 0usize;
+    let mut hoisted_constants: Vec<(Ir1Literal, Reg)> = Vec::new();
+    let mut hoisted_until = 0usize;
     for (op_index, op) in ir2.ops.iter().enumerate() {
         prune_iterator_anchors(&mut iterator_anchors, &value_stack);
         // A short-lived temporary's register is free once its last
@@ -9318,6 +9327,47 @@ fn lower_ir2_to_ir3_with_input_hash(
             if live_status_registers.is_empty() {
                 statement_register_floor = register_cursor;
             }
+        }
+        if op_index > hoisted_until {
+            hoisted_constants.clear();
+        }
+        if let Some(hoist) = loop_hoists.get(next_loop_hoist)
+            && hoist.insert_at == op_index
+        {
+            next_loop_hoist += 1;
+            if value_stack.is_empty() {
+                hoisted_constants = hoist
+                    .constants
+                    .iter()
+                    .map(|literal| {
+                        let register = alloc_pinned_register(
+                            &mut register_cursor,
+                            &mut pinned_register_high,
+                            &mut register_high_water,
+                        );
+                        lower_literal_to_ir3_optimized(
+                            literal,
+                            register,
+                            &mut ir3.instructions,
+                            &mut constant_pool,
+                        );
+                        (literal.clone(), register)
+                    })
+                    .collect();
+                hoisted_until = hoist.end;
+                if live_status_registers.is_empty() {
+                    statement_register_floor = register_cursor;
+                }
+            }
+        }
+        if let Ir1Op::LoadLiteral { value } = &op.inner
+            && let Some(&(_, register)) = hoisted_constants
+                .iter()
+                .find(|(literal, _)| literal == value)
+        {
+            // Loaded before the loop (bd-9vouw.496).
+            value_stack.push(register);
+            continue;
         }
         if matches!(op.effect, EffectBoundary::HostcallEffect) {
             let capability = op
@@ -9488,6 +9538,12 @@ fn lower_ir2_to_ir3_with_input_hash(
                         && pinned_read_consumed_in_place(&ir2.ops, op_index)
                     {
                         value_stack.push(source_reg);
+                    } else if !compound_reads_in_place.contains(&source_reg)
+                        && straight_line_consumer_reads_in_place(&ir2.ops, op_index, *binding_id)
+                    {
+                        // A call's callee, a method call's receiver local or
+                        // a literal's element (bd-9vouw.494).
+                        value_stack.push(source_reg);
                     } else {
                         let dst = alloc_register(&mut register_cursor);
                         ir3.instructions.push(Ir3Instruction::Move {
@@ -9554,7 +9610,26 @@ fn lower_ir2_to_ir3_with_input_hash(
                         &mut pinned_register_high,
                         &mut register_high_water,
                     );
-                    ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    let src_is_dead_temporary = is_dead_expression_temporary(
+                        src,
+                        &value_stack,
+                        &iterator_anchors,
+                        statement_register_floor,
+                        pinned_register_high,
+                        &live_status_registers,
+                    );
+                    let label_at_end =
+                        last_label_target == u32::try_from(ir3.instructions.len()).ok();
+                    if !retarget_store_producer(
+                        &mut ir3.instructions,
+                        0,
+                        src,
+                        dst,
+                        src_is_dead_temporary,
+                        label_at_end,
+                    ) {
+                        ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    }
                     value_stack.push(dst);
                 }
             }
@@ -9593,7 +9668,26 @@ fn lower_ir2_to_ir3_with_input_hash(
                         &mut register_high_water,
                     );
                     pop_lowering_value(&mut value_stack)?;
-                    ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    let src_is_dead_temporary = is_dead_expression_temporary(
+                        src,
+                        &value_stack,
+                        &iterator_anchors,
+                        statement_register_floor,
+                        pinned_register_high,
+                        &live_status_registers,
+                    );
+                    let label_at_end =
+                        last_label_target == u32::try_from(ir3.instructions.len()).ok();
+                    if !retarget_store_producer(
+                        &mut ir3.instructions,
+                        0,
+                        src,
+                        dst,
+                        src_is_dead_temporary,
+                        label_at_end,
+                    ) {
+                        ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    }
                     value_stack.push(dst);
                     // The stored value now lives in the binding's register:
                     // the temporaries that computed it are dead
@@ -10117,7 +10211,26 @@ fn lower_ir2_to_ir3_with_input_hash(
                     // binding's register when it read it in place.
                     AssignmentOperator::Assign if src == dst => {}
                     AssignmentOperator::Assign => {
-                        ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                        let src_is_dead_temporary = is_dead_expression_temporary(
+                            src,
+                            &value_stack,
+                            &iterator_anchors,
+                            statement_register_floor,
+                            pinned_register_high,
+                            &live_status_registers,
+                        );
+                        let label_at_end =
+                            last_label_target == u32::try_from(ir3.instructions.len()).ok();
+                        if !retarget_store_producer(
+                            &mut ir3.instructions,
+                            0,
+                            src,
+                            dst,
+                            src_is_dead_temporary,
+                            label_at_end,
+                        ) {
+                            ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                        }
                     }
                     AssignmentOperator::AddAssign => {
                         ir3.instructions.push(Ir3Instruction::Add {
@@ -10254,6 +10367,7 @@ fn lower_ir2_to_ir3_with_input_hash(
                         detail: "IR2 contains duplicate label ids",
                     });
                 }
+                last_label_target = Some(target);
                 // If this label is a catch handler entry, emit EnterCatch
                 // so the runtime can provide the exception value.
                 if catch_entry_labels.contains(id) {
@@ -10327,12 +10441,19 @@ fn lower_ir2_to_ir3_with_input_hash(
                 let (obj, key_reg) = match key {
                     Ir1PropertyKey::Static(key) => {
                         let obj = pop_lowering_value(&mut value_stack)?;
-                        let key_reg = alloc_register(&mut register_cursor);
-                        let pool_index = push_constant_optimized(&mut constant_pool, key.clone());
-                        ir3.instructions.push(Ir3Instruction::LoadStr {
-                            dst: key_reg,
-                            pool_index,
-                        });
+                        let key_reg = match hoisted_string_constant(&hoisted_constants, key) {
+                            Some(register) => register,
+                            None => {
+                                let key_reg = alloc_register(&mut register_cursor);
+                                let pool_index =
+                                    push_constant_optimized(&mut constant_pool, key.clone());
+                                ir3.instructions.push(Ir3Instruction::LoadStr {
+                                    dst: key_reg,
+                                    pool_index,
+                                });
+                                key_reg
+                            }
+                        };
                         (obj, key_reg)
                     }
                     Ir1PropertyKey::Dynamic => {
@@ -10354,12 +10475,19 @@ fn lower_ir2_to_ir3_with_input_hash(
                 let (obj, key_reg) = match key {
                     Ir1PropertyKey::Static(key) => {
                         let obj = pop_lowering_value(&mut value_stack)?;
-                        let key_reg = alloc_register(&mut register_cursor);
-                        let pool_index = push_constant_optimized(&mut constant_pool, key.clone());
-                        ir3.instructions.push(Ir3Instruction::LoadStr {
-                            dst: key_reg,
-                            pool_index,
-                        });
+                        let key_reg = match hoisted_string_constant(&hoisted_constants, key) {
+                            Some(register) => register,
+                            None => {
+                                let key_reg = alloc_register(&mut register_cursor);
+                                let pool_index =
+                                    push_constant_optimized(&mut constant_pool, key.clone());
+                                ir3.instructions.push(Ir3Instruction::LoadStr {
+                                    dst: key_reg,
+                                    pool_index,
+                                });
+                                key_reg
+                            }
+                        };
                         (obj, key_reg)
                     }
                     Ir1PropertyKey::Dynamic => {
@@ -11363,6 +11491,9 @@ fn lower_ir2_to_ir3_with_input_hash(
         // pass-scoped region arena.
         let mut fn_value_stack: ArenaVec<'_, Reg> = arena.alloc_vec_with_capacity::<Reg>(16);
         let mut fn_label_targets = BTreeMap::<u32, u32>::new();
+        // bd-9vouw.494: as `last_label_target`; a body's entry counts as one,
+        // so its first store never retargets the previous body's last op.
+        let mut fn_last_label_target: Option<u32> = Some(entry);
         let mut fn_pending_jumps = Vec::<PendingJump>::new();
         let mut fn_catch_entry_labels = BTreeSet::<u32>::new();
         let mut fn_iterator_cleanup_labels = BTreeMap::<u32, Reg>::new();
@@ -11790,6 +11921,12 @@ fn lower_ir2_to_ir3_with_input_hash(
                 detail: "annotated function body does not match its IR1 ops",
             });
         }
+        // bd-9vouw.496: loop-invariant literals and static keys, loaded once
+        // before each outermost loop (plan_loop_constant_hoists).
+        let fn_loop_hoists = plan_loop_constant_hoists(&annotated_body_ops);
+        let mut fn_next_loop_hoist = 0usize;
+        let mut fn_hoisted_constants: Vec<(Ir1Literal, Reg)> = Vec::new();
+        let mut fn_hoisted_until = 0usize;
         for (op_index, ir2_op) in annotated_body_ops.iter().enumerate() {
             prune_iterator_anchors(&mut fn_iterator_anchors, &fn_value_stack);
             // A short-lived local's register is free once its last reference
@@ -11813,6 +11950,47 @@ fn lower_ir2_to_ir3_with_input_hash(
                 if fn_live_status_registers.is_empty() {
                     fn_statement_register_floor = fn_reg;
                 }
+            }
+            if op_index > fn_hoisted_until {
+                fn_hoisted_constants.clear();
+            }
+            if let Some(hoist) = fn_loop_hoists.get(fn_next_loop_hoist)
+                && hoist.insert_at == op_index
+            {
+                fn_next_loop_hoist += 1;
+                if fn_value_stack.is_empty() {
+                    fn_hoisted_constants = hoist
+                        .constants
+                        .iter()
+                        .map(|literal| {
+                            let register = alloc_pinned_register(
+                                &mut fn_reg,
+                                &mut fn_pinned_register_high,
+                                &mut fn_register_high_water,
+                            );
+                            lower_literal_to_ir3_optimized(
+                                literal,
+                                register,
+                                &mut ir3.instructions,
+                                &mut constant_pool,
+                            );
+                            (literal.clone(), register)
+                        })
+                        .collect();
+                    fn_hoisted_until = hoist.end;
+                    if fn_live_status_registers.is_empty() {
+                        fn_statement_register_floor = fn_reg;
+                    }
+                }
+            }
+            if let Ir1Op::LoadLiteral { value } = &ir2_op.inner
+                && let Some(&(_, register)) = fn_hoisted_constants
+                    .iter()
+                    .find(|(literal, _)| literal == value)
+            {
+                // Loaded before the loop (bd-9vouw.496).
+                fn_value_stack.push(register);
+                continue;
             }
             // We handle a core subset of ops that appear in function bodies.
             match &ir2_op.inner {
@@ -11907,8 +12085,28 @@ fn lower_ir2_to_ir3_with_input_hash(
                         // a short-lived local's alike: Return reads its value
                         // when it runs (before any finally) and nothing runs in
                         // between (bd-9vouw.493).
+                        // `x op= rhs`'s read-first left operand, when rhs is
+                        // straight-line code that does not write x, reads the
+                        // register in place as the top-level loop does: the
+                        // operator computes into a temporary and the AssignOp
+                        // that follows retargets it to x (bd-9vouw.494), one
+                        // instruction for `s += o.m(i)` instead of a copy of
+                        // s, the operator and a Move back.
+                        let pinned = src < fn_pinned_register_high
+                            && !fn_short_lived_locals.contains_key(binding_id);
                         let read_in_place = (src < fn_pinned_register_high
                             && pinned_read_consumed_in_place(&annotated_body_ops, op_index))
+                            || (pinned
+                                && compound_left_operand_reads_in_place(
+                                    &annotated_body_ops,
+                                    op_index,
+                                    *binding_id,
+                                ))
+                            || straight_line_consumer_reads_in_place(
+                                &annotated_body_ops,
+                                op_index,
+                                *binding_id,
+                            )
                             || matches!(
                                 annotated_body_ops.get(op_index + 1).map(|next| &next.inner),
                                 Some(Ir1Op::Return)
@@ -11994,7 +12192,26 @@ fn lower_ir2_to_ir3_with_input_hash(
                         &mut fn_pinned_register_high,
                         &mut fn_register_high_water,
                     );
-                    ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    let src_is_dead_temporary = is_dead_expression_temporary(
+                        src,
+                        &fn_value_stack,
+                        &fn_iterator_anchors,
+                        fn_statement_register_floor,
+                        fn_pinned_register_high,
+                        &fn_live_status_registers,
+                    );
+                    let label_at_end =
+                        fn_last_label_target == u32::try_from(ir3.instructions.len()).ok();
+                    if !retarget_store_producer(
+                        &mut ir3.instructions,
+                        entry as usize,
+                        src,
+                        dst,
+                        src_is_dead_temporary,
+                        label_at_end,
+                    ) {
+                        ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    }
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::StoreBinding { binding_id } => {
@@ -12071,7 +12288,26 @@ fn lower_ir2_to_ir3_with_input_hash(
                         &mut fn_register_high_water,
                     );
                     let src = pop_lowering_value(&mut fn_value_stack)?;
-                    ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    let src_is_dead_temporary = is_dead_expression_temporary(
+                        src,
+                        &fn_value_stack,
+                        &fn_iterator_anchors,
+                        fn_statement_register_floor,
+                        fn_pinned_register_high,
+                        &fn_live_status_registers,
+                    );
+                    let label_at_end =
+                        fn_last_label_target == u32::try_from(ir3.instructions.len()).ok();
+                    if !retarget_store_producer(
+                        &mut ir3.instructions,
+                        entry as usize,
+                        src,
+                        dst,
+                        src_is_dead_temporary,
+                        label_at_end,
+                    ) {
+                        ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    }
                     fn_value_stack.push(dst);
                     // bd-9vouw.246: the stored value now lives in the
                     // binding's register, so the temporaries that computed it
@@ -12294,6 +12530,7 @@ fn lower_ir2_to_ir3_with_input_hash(
                 Ir1Op::Label { id } => {
                     let target = ir3.instructions.len() as u32;
                     fn_label_targets.insert(*id, target);
+                    fn_last_label_target = Some(target);
                     if fn_catch_entry_labels.contains(id) {
                         let dst = alloc_register(&mut fn_reg);
                         ir3.instructions.push(Ir3Instruction::EnterCatch { dst });
@@ -12476,7 +12713,26 @@ fn lower_ir2_to_ir3_with_input_hash(
                         )
                     });
                     if *operator == AssignmentOperator::Assign {
-                        ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                        let src_is_dead_temporary = is_dead_expression_temporary(
+                            src,
+                            &fn_value_stack,
+                            &fn_iterator_anchors,
+                            fn_statement_register_floor,
+                            fn_pinned_register_high,
+                            &fn_live_status_registers,
+                        );
+                        let label_at_end =
+                            fn_last_label_target == u32::try_from(ir3.instructions.len()).ok();
+                        if !retarget_store_producer(
+                            &mut ir3.instructions,
+                            entry as usize,
+                            src,
+                            dst,
+                            src_is_dead_temporary,
+                            label_at_end,
+                        ) {
+                            ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                        }
                     } else if postfix_value_used {
                         // `x++`/`x--` evaluate to the old value (bd-9vouw.119).
                         let (result, value) = lower_postfix_update_to_ir3(
@@ -12518,12 +12774,19 @@ fn lower_ir2_to_ir3_with_input_hash(
                     let (obj, key_reg) = match key {
                         Ir1PropertyKey::Static(k) => {
                             let obj = pop_lowering_value(&mut fn_value_stack)?;
-                            let kr = alloc_register(&mut fn_reg);
-                            let pool_index = push_constant_optimized(&mut constant_pool, k.clone());
-                            ir3.instructions.push(Ir3Instruction::LoadStr {
-                                dst: kr,
-                                pool_index,
-                            });
+                            let kr = match hoisted_string_constant(&fn_hoisted_constants, k) {
+                                Some(register) => register,
+                                None => {
+                                    let kr = alloc_register(&mut fn_reg);
+                                    let pool_index =
+                                        push_constant_optimized(&mut constant_pool, k.clone());
+                                    ir3.instructions.push(Ir3Instruction::LoadStr {
+                                        dst: kr,
+                                        pool_index,
+                                    });
+                                    kr
+                                }
+                            };
                             (obj, kr)
                         }
                         Ir1PropertyKey::Dynamic => {
@@ -12545,12 +12808,19 @@ fn lower_ir2_to_ir3_with_input_hash(
                     let (obj, key_reg) = match key {
                         Ir1PropertyKey::Static(k) => {
                             let obj = pop_lowering_value(&mut fn_value_stack)?;
-                            let kr = alloc_register(&mut fn_reg);
-                            let pool_index = push_constant_optimized(&mut constant_pool, k.clone());
-                            ir3.instructions.push(Ir3Instruction::LoadStr {
-                                dst: kr,
-                                pool_index,
-                            });
+                            let kr = match hoisted_string_constant(&fn_hoisted_constants, k) {
+                                Some(register) => register,
+                                None => {
+                                    let kr = alloc_register(&mut fn_reg);
+                                    let pool_index =
+                                        push_constant_optimized(&mut constant_pool, k.clone());
+                                    ir3.instructions.push(Ir3Instruction::LoadStr {
+                                        dst: kr,
+                                        pool_index,
+                                    });
+                                    kr
+                                }
+                            };
                             (obj, kr)
                         }
                         Ir1PropertyKey::Dynamic => {
@@ -12717,15 +12987,26 @@ fn lower_ir2_to_ir3_with_input_hash(
                     let reserved_below = fn_statement_register_floor
                         .max(fn_pinned_register_high)
                         .max(live_status_register_ceiling(&fn_live_status_registers));
-                    let dst = compact_batch_literal(
-                        &mut ir3.instructions,
-                        dst,
-                        &operands,
-                        &fn_value_stack,
-                        reserved_below,
-                        &mut fn_reg,
-                        &mut fn_register_high_water,
+                    // A literal returned at once keeps its register: nothing
+                    // in the body runs after the Return reads it, so moving
+                    // it down only adds a Move (bd-9vouw.494).
+                    let returned = matches!(
+                        annotated_body_ops.get(op_index + 1).map(|next| &next.inner),
+                        Some(Ir1Op::Return)
                     );
+                    let dst = if returned {
+                        dst
+                    } else {
+                        compact_batch_literal(
+                            &mut ir3.instructions,
+                            dst,
+                            &operands,
+                            &fn_value_stack,
+                            reserved_below,
+                            &mut fn_reg,
+                            &mut fn_register_high_water,
+                        )
+                    };
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::NewObject { count } => {
@@ -12758,15 +13039,26 @@ fn lower_ir2_to_ir3_with_input_hash(
                     let reserved_below = fn_statement_register_floor
                         .max(fn_pinned_register_high)
                         .max(live_status_register_ceiling(&fn_live_status_registers));
-                    let dst = compact_batch_literal(
-                        &mut ir3.instructions,
-                        dst,
-                        &operands,
-                        &fn_value_stack,
-                        reserved_below,
-                        &mut fn_reg,
-                        &mut fn_register_high_water,
+                    // A literal returned at once keeps its register: nothing
+                    // in the body runs after the Return reads it, so moving
+                    // it down only adds a Move (bd-9vouw.494).
+                    let returned = matches!(
+                        annotated_body_ops.get(op_index + 1).map(|next| &next.inner),
+                        Some(Ir1Op::Return)
                     );
+                    let dst = if returned {
+                        dst
+                    } else {
+                        compact_batch_literal(
+                            &mut ir3.instructions,
+                            dst,
+                            &operands,
+                            &fn_value_stack,
+                            reserved_below,
+                            &mut fn_reg,
+                            &mut fn_register_high_water,
+                        )
+                    };
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::ArrayPush => {
@@ -35029,6 +35321,149 @@ fn emit_empty_array_length_store(
     });
 }
 
+/// bd-9vouw.496: the most constants one loop hoists, each into a register
+/// pinned for the rest of the body.
+const MAX_HOISTED_LOOP_CONSTANTS: usize = 16;
+
+/// bd-9vouw.496: the literals and static property keys an outermost loop
+/// reads, loaded once into pinned registers at `insert_at` (before the
+/// loop's entry `Jump` to its bottom test, or before the body label of a
+/// loop entered by falling into it) instead of on every iteration.
+struct LoopConstantHoist {
+    insert_at: usize,
+    end: usize,
+    constants: Vec<Ir1Literal>,
+}
+
+/// bd-9vouw.496: plan the loop-invariant constant loads of a body. A loop is
+/// a back edge, a `JumpIfTruthy` to an earlier label (while, do-while and
+/// for loops test at the bottom, bd-9vouw.486); only outermost loops are
+/// planned, so a constant of an inner loop is loaded before the outer one.
+/// A loop is skipped when anything outside it, other than its own entry
+/// jump, targets a label inside it (the loads could be bypassed). The loop's
+/// `++`/`--` operand literal is not hoisted: no instruction loads it
+/// (update_assignment_ignores_operand). BigInt literals are not hoisted.
+/// The emitter applies a plan only when the value stack is empty at
+/// `insert_at` (a statement boundary).
+fn plan_loop_constant_hoists(ops: &[Ir2Op]) -> Vec<LoopConstantHoist> {
+    let mut label_at = BTreeMap::<u32, usize>::new();
+    for (index, op) in ops.iter().enumerate() {
+        if let Ir1Op::Label { id } = &op.inner {
+            label_at.insert(*id, index);
+        }
+    }
+    let targets = |op: &Ir1Op| -> Vec<u32> {
+        match op {
+            Ir1Op::Jump { label_id }
+            | Ir1Op::JumpIfFalsy { label_id }
+            | Ir1Op::JumpIfFalsyConsume { label_id }
+            | Ir1Op::JumpIfTruthy { label_id }
+            | Ir1Op::JumpIfNullish { label_id } => vec![*label_id],
+            Ir1Op::BeginTry {
+                catch_label,
+                finally_label,
+            } => std::iter::once(*catch_label)
+                .chain(finally_label.iter().copied())
+                .collect(),
+            Ir1Op::ForInNext { done_label } | Ir1Op::ForOfNext { done_label } => {
+                vec![*done_label]
+            }
+            _ => Vec::new(),
+        }
+    };
+    let mut loops = ops
+        .iter()
+        .enumerate()
+        .filter_map(|(index, op)| match &op.inner {
+            Ir1Op::JumpIfTruthy { label_id } => label_at
+                .get(label_id)
+                .filter(|&&body| body < index)
+                .map(|&body| (body, index)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    loops.sort_unstable();
+    let mut outermost: Vec<(usize, usize)> = Vec::new();
+    for (body, end) in loops {
+        if outermost
+            .last()
+            .is_some_and(|&(outer_body, outer_end)| body >= outer_body && end <= outer_end)
+        {
+            continue;
+        }
+        outermost.push((body, end));
+    }
+    outermost
+        .into_iter()
+        .filter_map(|(body, end)| {
+            let insert_at = match body.checked_sub(1).map(|index| &ops[index].inner) {
+                Some(Ir1Op::Jump { label_id })
+                    if label_at
+                        .get(label_id)
+                        .is_some_and(|&test| test > body && test <= end) =>
+                {
+                    body - 1
+                }
+                _ => body,
+            };
+            let entered_only_at_its_head = ops.iter().enumerate().all(|(index, op)| {
+                (index >= insert_at && index <= end)
+                    || targets(&op.inner).iter().all(|label| {
+                        label_at
+                            .get(label)
+                            .is_none_or(|&target| target <= insert_at || target > end)
+                    })
+            });
+            if !entered_only_at_its_head {
+                return None;
+            }
+            let mut constants: Vec<Ir1Literal> = Vec::new();
+            for index in body..=end {
+                let literal = match &ops[index].inner {
+                    Ir1Op::LoadLiteral { value }
+                        if !update_assignment_ignores_operand(
+                            ops.get(index + 1).map(|next| &next.inner),
+                        ) =>
+                    {
+                        Some(value.clone())
+                    }
+                    Ir1Op::GetProperty {
+                        key: Ir1PropertyKey::Static(key),
+                    }
+                    | Ir1Op::SetProperty {
+                        key: Ir1PropertyKey::Static(key),
+                        ..
+                    } => Some(Ir1Literal::String(key.clone())),
+                    _ => None,
+                };
+                if let Some(literal) = literal
+                    && !matches!(literal, Ir1Literal::BigInt(_))
+                    && !constants.contains(&literal)
+                    && constants.len() < MAX_HOISTED_LOOP_CONSTANTS
+                {
+                    constants.push(literal);
+                }
+            }
+            (!constants.is_empty()).then_some(LoopConstantHoist {
+                insert_at,
+                end,
+                constants,
+            })
+        })
+        .collect()
+}
+
+/// bd-9vouw.496: the pinned register a hoisted string constant was loaded
+/// into, for a static property key inside its loop.
+fn hoisted_string_constant(hoisted: &[(Ir1Literal, Reg)], key: &JsString) -> Option<Reg> {
+    hoisted
+        .iter()
+        .find_map(|(literal, register)| match literal {
+            Ir1Literal::String(text) if text == key => Some(*register),
+            _ => None,
+        })
+}
+
 fn lower_literal_to_ir3_optimized(
     value: &Ir1Literal,
     dst: Reg,
@@ -35522,6 +35957,104 @@ fn function_local_register(
     })
 }
 
+/// bd-9vouw.494: `x = <expr>` and `let x = <expr>` for a register-resident
+/// binding computed the value into a temporary and copied it, `Add t, a, b;
+/// Move x, t`. When the instruction just emitted wrote that temporary, it
+/// writes the binding's register instead and the copy is not emitted.
+///
+/// Sound only when nothing else can observe the temporary or the order of the
+/// two writes, which the caller establishes:
+/// - `src` is a dead temporary: above the statement floor and the pinned
+///   bindings, not a live slot or an iterator anchor, and not on the value
+///   stack once the stored value is popped;
+/// - no label is bound at the end of the stream (`label_at_end`), so no jump
+///   lands between the producer and the copy (a conditional expression's
+///   arms each write the temporary and join there);
+/// - the producer sits in the current function (`first_index`).
+///
+/// The producer kinds read every operand before they write their destination
+/// (a call writes it when it returns, a throwing producer never), and each
+/// writes a label computed from its operands with `write_reg_with_label`,
+/// which the copy reproduced exactly (`Move` writes the source's label the
+/// same way). Kinds whose destination label depends on the destination's
+/// previous label are excluded: literal loads (`write_reg` keeps the previous
+/// label unless the context label dominates it) and `GetProperty` (joins the
+/// prior destination label). One call path writes that way too: a call that
+/// creates a generator or async-generator object (`write_reg`), so for
+/// `g = gen()` the binding keeps its own previous label where the copy gave
+/// it the temporary's; both are at least the context label.
+fn retarget_store_producer(
+    instructions: &mut [Ir3Instruction],
+    first_index: usize,
+    src: Reg,
+    dst: Reg,
+    src_is_dead_temporary: bool,
+    label_at_end: bool,
+) -> bool {
+    if !src_is_dead_temporary || label_at_end || src == dst || instructions.len() <= first_index {
+        return false;
+    }
+    let Some(last) = instructions.last_mut() else {
+        return false;
+    };
+    // A producer that can run guest code (a callee, a builtin's callbacks, a
+    // part's toString) does not get the binding's register when it also
+    // reads that register as an operand: `a = a.concat(b)` keeps its copy.
+    let in_range = |range: &RegRange| dst >= range.start && dst - range.start < range.count;
+    let reads_dst = match &*last {
+        Ir3Instruction::Call { callee, args, .. } => *callee == dst || in_range(args),
+        Ir3Instruction::CallMethod {
+            receiver,
+            callee,
+            args,
+            ..
+        } => *receiver == dst || *callee == dst || in_range(args),
+        Ir3Instruction::TemplateLiteral { parts, .. } => in_range(parts),
+        _ => false,
+    };
+    if reads_dst {
+        return false;
+    }
+    let written = match last {
+        Ir3Instruction::Add { dst, .. }
+        | Ir3Instruction::Sub { dst, .. }
+        | Ir3Instruction::Mul { dst, .. }
+        | Ir3Instruction::Div { dst, .. }
+        | Ir3Instruction::Mod { dst, .. }
+        | Ir3Instruction::Exp { dst, .. }
+        | Ir3Instruction::UnaryNeg { dst, .. }
+        | Ir3Instruction::UnaryPlus { dst, .. }
+        | Ir3Instruction::LogicalNot { dst, .. }
+        | Ir3Instruction::BitNot { dst, .. }
+        | Ir3Instruction::TypeOf { dst, .. }
+        | Ir3Instruction::Lt { dst, .. }
+        | Ir3Instruction::Lte { dst, .. }
+        | Ir3Instruction::Gt { dst, .. }
+        | Ir3Instruction::Gte { dst, .. }
+        | Ir3Instruction::Eq { dst, .. }
+        | Ir3Instruction::StrictEq { dst, .. }
+        | Ir3Instruction::NotEq { dst, .. }
+        | Ir3Instruction::StrictNotEq { dst, .. }
+        | Ir3Instruction::BitAnd { dst, .. }
+        | Ir3Instruction::BitOr { dst, .. }
+        | Ir3Instruction::BitXor { dst, .. }
+        | Ir3Instruction::Shl { dst, .. }
+        | Ir3Instruction::Shr { dst, .. }
+        | Ir3Instruction::Ushr { dst, .. }
+        | Ir3Instruction::Move { dst, .. }
+        | Ir3Instruction::Call { dst, .. }
+        | Ir3Instruction::CallMethod { dst, .. }
+        | Ir3Instruction::LoadScoped { dst, .. }
+        | Ir3Instruction::TemplateLiteral { dst, .. } => dst,
+        _ => return false,
+    };
+    if *written != src {
+        return false;
+    }
+    *written = dst;
+    true
+}
+
 /// bd-9vouw.23: once a batch array or object literal is built, its element
 /// and key registers are dead. When nothing live sits at or above the lowest
 /// of them (no value-stack entry, and it is above the statement floor, pinned
@@ -35530,6 +36063,9 @@ fn function_local_register(
 /// Without this, nested literals in one statement used
 /// every register until the statement ended (Test262's
 /// harness/byteConversionValues.js needed a 1295-register frame).
+/// bd-9vouw.494: operands below the floor are binding registers a value read
+/// in place (straight_line_consumer_reads_in_place), not temporaries; they
+/// are left alone, and the temporaries among the rest are still reclaimed.
 fn compact_batch_literal(
     instructions: &mut Vec<Ir3Instruction>,
     literal: Reg,
@@ -35539,11 +36075,14 @@ fn compact_batch_literal(
     cursor: &mut Reg,
     high_water: &mut Reg,
 ) -> Reg {
-    let Some(&lowest_operand) = operands.iter().min() else {
+    let Some(&lowest_operand) = operands
+        .iter()
+        .filter(|&&operand| operand >= reserved_below)
+        .min()
+    else {
         return literal;
     };
     if lowest_operand >= literal
-        || lowest_operand < reserved_below
         || value_stack
             .iter()
             .any(|register| *register >= lowest_operand)
@@ -35680,6 +36219,27 @@ fn live_status_register_ceiling(live: &BTreeSet<Reg>) -> Reg {
     live.last().map_or(0, |register| register.saturating_add(1))
 }
 
+/// bd-9vouw.494: whether `register` is an expression temporary that nothing
+/// names once it has left the value stack: at or above the statement floor,
+/// the pinned bindings and the innermost loop iterator's body floor, not a
+/// live slot (a name status or a short-lived local, which may sit above it:
+/// a method call's receiver local takes the register after its object's
+/// copy), and not on the stack.
+fn is_dead_expression_temporary(
+    register: Reg,
+    value_stack: &[Reg],
+    anchors: &[IteratorAnchor],
+    floor: Reg,
+    pinned_high: Reg,
+    live: &BTreeSet<Reg>,
+) -> bool {
+    let reserved = floor.max(pinned_high);
+    let reserved = anchors
+        .last()
+        .map_or(reserved, |anchor| reserved.max(anchor.body_floor));
+    register >= reserved && !live.contains(&register) && !value_stack.contains(&register)
+}
+
 /// bd-9vouw.23: a for-in/for-of iterator that stays on the lowering value
 /// stack for its loop's whole body: its stack slot, its register, and the
 /// lowest register the body's statements may reuse (the loop head's
@@ -35770,6 +36330,12 @@ fn store_result_needs_copy(
     stored: Reg,
     iterator_cleanup_labels: &BTreeMap<u32, Reg>,
 ) -> bool {
+    // bd-9vouw.494: an op that pops the value at once (an operator, a
+    // property read, a return) reads the binding's register before anything
+    // can write the binding again, so it needs no copy either: a method
+    // call's receiver store feeds its method lookup directly. Operator and
+    // property-read results never reuse a binding's register, which sits
+    // below every reusable temporary (pure_op_result_register).
     !matches!(
         next,
         None | Some(
@@ -35783,6 +36349,9 @@ fn store_result_needs_copy(
                 | Ir1Op::JumpIfFalsyConsume { .. }
                 | Ir1Op::JumpIfTruthy { .. }
                 | Ir1Op::JumpIfNullish { .. }
+                | Ir1Op::BinaryOp { .. }
+                | Ir1Op::GetProperty { .. }
+                | Ir1Op::Return
         )
     ) && !iterator_cleanup_labels
         .values()
@@ -35875,6 +36444,108 @@ fn update_assignment_ignores_operand(next: Option<&Ir1Op>) -> bool {
     )
 }
 
+/// How far the in-place scans below look ahead: every read scans, so an
+/// unbounded scan of nested right sides or argument lists was quadratic.
+const STRAIGHT_LINE_SCAN_LIMIT: usize = 64;
+
+/// The (pops, pushes) of an op that runs no branch and does not write
+/// `binding_id`, for the in-place scans below; `None` for every other op
+/// (a jump, a label, a write of the binding, an op whose effect is not
+/// listed), which ends a scan with a copy.
+fn straight_line_stack_effect(op: &Ir1Op, binding_id: BindingId) -> Option<(usize, usize)> {
+    Some(match op {
+        Ir1Op::LoadLiteral { .. } | Ir1Op::LoadName { .. } | Ir1Op::LoadBinding { .. } => (0, 1),
+        Ir1Op::StoreBinding { binding_id: other }
+        | Ir1Op::AssignOp {
+            binding_id: other, ..
+        } if *other != binding_id => (1, 1),
+        Ir1Op::GetProperty {
+            key: Ir1PropertyKey::Static(_),
+        }
+        | Ir1Op::UnaryOp { .. } => (1, 1),
+        Ir1Op::GetProperty {
+            key: Ir1PropertyKey::Dynamic,
+        }
+        | Ir1Op::BinaryOp { .. } => (2, 1),
+        Ir1Op::Call { arg_count } => ((*arg_count as usize).saturating_add(1), 1),
+        Ir1Op::CallMethod { arg_count } => ((*arg_count as usize).saturating_add(2), 1),
+        Ir1Op::NewArray { count } => (*count as usize, 1),
+        Ir1Op::NewObject { count } => ((*count as usize).saturating_mul(2), 1),
+        Ir1Op::SetProperty {
+            key: Ir1PropertyKey::Static(_),
+            ..
+        } => (2, 1),
+        Ir1Op::SetProperty {
+            key: Ir1PropertyKey::Dynamic,
+            ..
+        } => (3, 1),
+        _ => return None,
+    })
+}
+
+/// bd-9vouw.494: whether the read of register binding `binding_id` at
+/// `ops[index]` reaches the op that consumes it across straight-line code
+/// only, and that op reads it in place when it runs: scanning forward over
+/// ops whose stack effect is known, with no op in between writing the
+/// binding or branching, the consumer is
+/// - a Call taking it as its callee, or a CallMethod taking it as its
+///   receiver (the method value sits below it): a call reads both when it
+///   runs;
+/// - a batch array or object literal taking it as an element, key or value:
+///   the literal's CreateDataProperty instructions read their registers when
+///   they run, after every operand is evaluated, and write only the fresh
+///   object;
+/// - an operator or a property read taking it as an operand (bd-9vouw.330's
+///   rule when the consumer comes next, now across straight-line code too:
+///   `arr[i]`, `i < arr.length`), whose result register is never a
+///   binding's (pure_op_result_register's floor, or a fresh register);
+/// - a property write taking it as its object or key (`o.n = o.n + 1`).
+///
+/// A register binding is written only by its own ops (a closure's is
+/// scoped), so the register still holds the value read: a method call's
+/// receiver local (stored once, before the method lookup), `f(x)` of a local
+/// `f` and `{ x: x, y: y }` need no copies. `f(f = g)` and
+/// `[x, x = 5]` still read copies.
+fn straight_line_consumer_reads_in_place(
+    ops: &[Ir2Op],
+    index: usize,
+    binding_id: BindingId,
+) -> bool {
+    let mut above = 0usize;
+    for op in ops
+        .iter()
+        .skip(index.saturating_add(1))
+        .take(STRAIGHT_LINE_SCAN_LIMIT)
+    {
+        let Some((pops, pushes)) = straight_line_stack_effect(&op.inner, binding_id) else {
+            return false;
+        };
+        if pops > above {
+            return match op.inner {
+                Ir1Op::Call { arg_count } => {
+                    arg_count as usize == above && pops == above.saturating_add(1)
+                }
+                Ir1Op::CallMethod { arg_count } => {
+                    arg_count as usize == above && pops == above.saturating_add(2)
+                }
+                Ir1Op::NewArray { .. }
+                | Ir1Op::NewObject { .. }
+                | Ir1Op::BinaryOp { .. }
+                | Ir1Op::UnaryOp { .. }
+                | Ir1Op::GetProperty { .. } => true,
+                // Its object or key, not its value: the property write
+                // leaves the value's register on the stack as the
+                // assignment's result, which a later op may read after the
+                // binding changed (`f(o.p = x, x = 5)`).
+                Ir1Op::SetProperty { .. } => above >= 1,
+                _ => false,
+            };
+        }
+        above = above - pops + pushes;
+    }
+    false
+}
+
 /// Whether the read of register binding `binding_id` at `ops[index]` is the
 /// left operand of a compound assignment that straight-line code alone
 /// separates from its operator: scanning forward over ops whose stack effect
@@ -35885,41 +36556,22 @@ fn update_assignment_ignores_operand(next: Option<&Ir1Op>) -> bool {
 /// ops (a closure's binding is scoped instead), so after such an rhs the
 /// register still holds the value read and the operator can read it in
 /// place. Any other op, or a right side longer than
-/// `COMPOUND_IN_PLACE_SCAN_LIMIT` ops, ends the scan with a copy (every read
-/// scans, so an unbounded scan of nested right sides was quadratic).
+/// [`STRAIGHT_LINE_SCAN_LIMIT`] ops, ends the scan with a copy.
 fn compound_left_operand_reads_in_place(
     ops: &[Ir2Op],
     index: usize,
     binding_id: BindingId,
 ) -> bool {
-    const COMPOUND_IN_PLACE_SCAN_LIMIT: usize = 64;
     // Values pushed above the read and not yet consumed.
     let mut above = 0usize;
     for (offset, op) in ops
         .iter()
         .enumerate()
         .skip(index.saturating_add(1))
-        .take(COMPOUND_IN_PLACE_SCAN_LIMIT)
+        .take(STRAIGHT_LINE_SCAN_LIMIT)
     {
-        let (pops, pushes) = match &op.inner {
-            Ir1Op::LoadLiteral { .. } | Ir1Op::LoadName { .. } | Ir1Op::LoadBinding { .. } => {
-                (0, 1)
-            }
-            Ir1Op::StoreBinding { binding_id: other }
-            | Ir1Op::AssignOp {
-                binding_id: other, ..
-            } if *other != binding_id => (1, 1),
-            Ir1Op::GetProperty {
-                key: Ir1PropertyKey::Static(_),
-            }
-            | Ir1Op::UnaryOp { .. } => (1, 1),
-            Ir1Op::GetProperty {
-                key: Ir1PropertyKey::Dynamic,
-            }
-            | Ir1Op::BinaryOp { .. } => (2, 1),
-            Ir1Op::Call { arg_count } => ((*arg_count as usize).saturating_add(1), 1),
-            Ir1Op::CallMethod { arg_count } => ((*arg_count as usize).saturating_add(2), 1),
-            _ => return false,
+        let Some((pops, pushes)) = straight_line_stack_effect(&op.inner, binding_id) else {
+            return false;
         };
         if pops > above {
             return above == 1

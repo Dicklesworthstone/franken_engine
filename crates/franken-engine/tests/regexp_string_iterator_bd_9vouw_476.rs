@@ -37,11 +37,73 @@ const EXPECTED: &[&str] = &[
     "0 0 2,4,6",
 ];
 
-#[test]
-fn regexp_string_iterator_matches_node() {
+/// bd-9vouw.498: the iterator of a RegExp whose reads are observable runs
+/// RegExpExec when `next` is called (an exec that throws throws from that
+/// `next`, which leaves the iterator running), is a RegExp String Iterator
+/// for a non-global RegExp too, and moves lastIndex past an empty match by
+/// Get/ToLength/Set; an iterator made while its matcher was pristine calls a
+/// RegExp.prototype.exec assigned afterwards. String.prototype.matchAll with
+/// a pattern that supplies no @@matchAll creates a RegExp from
+/// ToString(pattern) and invokes its @@matchAll: a replacement runs, a
+/// deleted one is a TypeError. Node v22.2.0 and Bun 1.4.3 print these lines;
+/// the n66 frankenctl printed an Array Iterator, ran no exec, threw nothing
+/// and ignored the replacement.
+const OBSERVABLE_PROGRAM: &str = r#"var out = [];
+var nonGlobal = /b/[Symbol.matchAll]('abcb');
+out.push(Object.prototype.toString.call(nonGlobal) + ' ' + [...nonGlobal].map(m => m.index).join());
+var plain = Object.create(/./g[Symbol.matchAll](''));
+try { plain.next(); out.push('no throw'); } catch (e) { out.push(e.constructor.name); }
+var it = /./g[Symbol.matchAll]('abc');
+var calls = 0, seen = [];
+var savedExec = RegExp.prototype.exec;
+RegExp.prototype.exec = function (s) {
+  calls++;
+  seen.push(s + '@' + this.lastIndex);
+  if (calls === 4) throw new RangeError('fourth');
+  if (calls === 5) return null;
+  return calls === 1 ? { 0: 'x', index: 7 } : { 0: { toString() { return ''; } }, index: 8 };
+};
+out.push('before next ' + calls);
+var r = it.next(); out.push(r.value.index + ' ' + r.done + ' ' + calls);
+r = it.next(); out.push(r.value.index + ' ' + calls);
+r = it.next(); out.push(r.value.index + ' ' + calls);
+try { it.next(); } catch (e) { out.push(e.name + ' ' + e.message); }
+r = it.next(); out.push(r.done + ' ' + r.value + ' ' + calls);
+r = it.next(); out.push(r.done + ' ' + calls);
+out.push(seen.join());
+RegExp.prototype.exec = savedExec;
+delete RegExp.prototype[Symbol.matchAll];
+try { 'ab'.matchAll(/a/g); out.push('no throw'); } catch (e) { out.push(e.constructor.name); }
+try { 'ab'.matchAll('a'); out.push('no throw'); } catch (e) { out.push(e.constructor.name); }
+var received = [];
+RegExp.prototype[Symbol.matchAll] = function (s) { received.push(this.source + '/' + this.flags + ':' + s); return 'custom'; };
+out.push('a'.matchAll(null) + ' ' + ''.matchAll(undefined) + ' ' + 'xy'.matchAll('y') + ' ' + String.prototype.matchAll.call({ toString() { return 'obj'; } }, 'o'));
+var own = /z/g; own[Symbol.matchAll] = undefined;
+out.push('zz'.matchAll(own) + ' ' + received.join());
+for (const line of out) console.log(line);
+"#;
+
+const OBSERVABLE_EXPECTED: &[&str] = &[
+    "[object RegExp String Iterator] 1",
+    "TypeError",
+    "before next 0",
+    "7 false 1",
+    "8 2",
+    "8 3",
+    "RangeError fourth",
+    "true undefined 5",
+    "true 5",
+    "abc@0,abc@0,abc@1,abc@2,abc@2",
+    "TypeError",
+    "TypeError",
+    "custom custom custom custom",
+    r#"custom null/g:a,(?:)/g:,y/g:xy,o/g:obj,\/z\/g/g:zz"#,
+];
+
+fn console_lines(name: &str, program: &str) -> Vec<String> {
     let root = tempfile::tempdir().expect("temp dir");
-    let entry = root.path().join("regexp_string_iterator_bd_9vouw_476.js");
-    std::fs::write(&entry, PROGRAM).expect("write program");
+    let entry = root.path().join(format!("{name}.js"));
+    std::fs::write(&entry, program).expect("write program");
     let report = root.path().join("report.json");
     let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
         .args([
@@ -64,11 +126,26 @@ fn regexp_string_iterator_matches_node() {
     );
     let report: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&report).expect("read report")).expect("json");
-    let printed: Vec<&str> = report["console_output"]
+    report["console_output"]
         .as_array()
         .expect("console_output")
         .iter()
-        .filter_map(|entry| entry["message"].as_str())
-        .collect();
-    assert_eq!(printed, EXPECTED);
+        .filter_map(|entry| entry["message"].as_str().map(str::to_string))
+        .collect()
+}
+
+#[test]
+fn regexp_string_iterator_matches_node() {
+    assert_eq!(
+        console_lines("regexp_string_iterator_bd_9vouw_476", PROGRAM),
+        EXPECTED
+    );
+}
+
+#[test]
+fn observable_matchers_and_created_regexps_match_node() {
+    assert_eq!(
+        console_lines("regexp_string_iterator_bd_9vouw_498", OBSERVABLE_PROGRAM),
+        OBSERVABLE_EXPECTED
+    );
 }

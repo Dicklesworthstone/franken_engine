@@ -122,3 +122,61 @@ fn a_module_with_a_frame_wider_than_256_registers_runs_bd_9vouw_262() {
         .collect();
     assert_eq!(lines, ["4560 64 64 63"]);
 }
+
+/// bd-9vouw.499: a frame entry clears its window and whatever an earlier
+/// frame or write left past it, instead of the widest window ever entered.
+/// After a 200-register function, recursion 2,000 deep, generator steps that
+/// call a function, calls that leave strings and objects in their registers
+/// and an async call, the narrow calls still compute what Node v22.2.0 and
+/// Bun 1.4.3 print (as did the n66 frankenctl, which cleared the widest
+/// window on every call).
+#[test]
+fn narrow_calls_after_wide_and_deep_frames_keep_their_values_bd_9vouw_499() {
+    let root = temp_dir("fe_run_frame_clear");
+    let source = root.join("frames.js");
+    let locals: String = (0..200).map(|i| format!(" var v{i} = n + {i};")).collect();
+    let sum: Vec<String> = (0..200).map(|i| format!("v{i}")).collect();
+    let program = format!(
+        "function wide(n) {{{locals} return {}; }}\n\
+         function f(v) {{ return v + 1; }}\n\
+         function rec(d) {{ return d === 0 ? 0 : 1 + rec(d - 1); }}\n\
+         function* gen(n) {{ for (let i = 0; i < n; i++) yield f(i) * 2; }}\n\
+         async function af(x) {{ await null; return f(x) + wide(1); }}\n\
+         function leak() {{ let a = {{ big: 'x'.repeat(100) }}; let b = [a, a]; let c = 'y'.repeat(50); return b.length + c.length; }}\n\
+         let s = wide(1);\n\
+         for (let i = 0; i < 1000; i++) s = f(s);\n\
+         const depth = rec(2000);\n\
+         let g = 0;\n\
+         for (const x of gen(100)) g += x + f(x);\n\
+         let t = 0;\n\
+         for (let i = 0; i < 100; i++) {{ t += leak(); t += f(i); }}\n\
+         af(5).then(v => console.log('async', v));\n\
+         console.log(s, depth, g, t);\n",
+        sum.join(" + ")
+    );
+    fs::write(&source, program).expect("write program");
+    let report = root.join("frames.run.json");
+    let output = frankenctl(&[
+        "run",
+        "--input",
+        utf8(&source),
+        "--extension-id",
+        "frame-clear",
+        "--out",
+        utf8(&report),
+    ]);
+    assert!(
+        output.status.success(),
+        "run failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(&report).expect("read report")).expect("report json");
+    let lines: Vec<&str> = report["console_output"]
+        .as_array()
+        .expect("console_output array")
+        .iter()
+        .filter_map(|entry| entry["message"].as_str())
+        .collect();
+    assert_eq!(lines, ["21100 2000 20300 10250", "async 20106"]);
+}

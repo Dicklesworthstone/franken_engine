@@ -155,6 +155,12 @@ pub(super) enum GcPin<'a> {
 #[derive(Debug, Clone, Default)]
 struct NestedPins {
     values: Vec<Value>,
+    /// Scope frames those Rust frames hold, whose bindings a collection
+    /// marks then. Marking every binding when the loop was armed made each
+    /// await and isolated call walk the caller's whole scope chain, the
+    /// global frame included (bd-9vouw.500); the cells are shared, so their
+    /// values when a collection runs are the ones the frames hold.
+    scope_frames: Vec<ScopeFrame>,
     /// Async-function records with at least this id, which the caller reads
     /// once the loop returns (the record its isolated call created, and any
     /// it must reject if the call fails), completed or not.
@@ -270,6 +276,9 @@ struct GcMarker {
     async_generator_stack: Vec<u32>,
     visited_frames: AddressSet,
     visited_cells: AddressSet,
+    /// When set, `scope_frames` keeps the frames here instead of marking
+    /// their bindings (`gc_arm_nested`'s `NestedPins::scope_frames`).
+    deferred_scope_frames: Option<Vec<ScopeFrame>>,
 }
 
 impl GcMarker {
@@ -300,6 +309,7 @@ impl GcMarker {
             async_generator_stack: Vec::new(),
             visited_frames: AddressSet::default(),
             visited_cells: AddressSet::default(),
+            deferred_scope_frames: None,
         }
     }
 
@@ -472,6 +482,10 @@ impl GcMarker {
     }
 
     fn scope_frames(&mut self, frames: &[ScopeFrame]) {
+        if let Some(deferred) = &mut self.deferred_scope_frames {
+            deferred.extend_from_slice(frames);
+            return;
+        }
         for frame in frames {
             self.scope_frame(frame);
         }
@@ -1026,6 +1040,7 @@ impl InterpreterCore {
             return None;
         }
         let mut marker = self.gc_new_marker();
+        marker.deferred_scope_frames = Some(Vec::new());
         let mut async_functions_from: Option<usize> = None;
         for pin in pins {
             match pin {
@@ -1038,8 +1053,10 @@ impl InterpreterCore {
                 GcPin::GeneratorExecution(execution) => marker.generator_execution(execution),
             }
         }
+        let scope_frames = marker.deferred_scope_frames.take().unwrap_or_default();
         self.gc.nested_pins.push(NestedPins {
             values: Self::gc_marked_values(&marker),
+            scope_frames,
             async_functions_from,
         });
         let previous = self
@@ -2010,6 +2027,10 @@ impl InterpreterCore {
                     .map(|(_, function)| function),
             )
             .for_each(|value| m.value(value));
+        self.gc
+            .nested_pins
+            .iter()
+            .for_each(|pins| m.scope_frames(&pins.scope_frames));
         if let Some(from) = self
             .gc
             .nested_pins

@@ -516,6 +516,72 @@ fn oracle_all_failed_different_exceptions_is_divergence() {
     assert_eq!(summary["exit_code"].as_i64(), Some(3));
 }
 
+/// bd-rvpy0: Bun prints an uncaught plain `Error` as `error: <message>`
+/// (Bun 1.4.3), Node as `Error: <message>`: the same failure, so the lanes
+/// reach consensus. That Bun line against a Node TypeError is a divergence,
+/// and the lowercase line from the Node lane is still a generic exit.
+#[cfg(unix)]
+#[test]
+fn oracle_bun_plain_error_line_is_a_comparable_error() {
+    let fixture = write_fixture("oracle_run_bun_plain_error", "ignored;\n");
+    let node_error = write_runtime_fixture(
+        "oracle_runtime_node_plain_error",
+        "printf 'Error: plain\\n' >&2\nexit 1",
+    );
+    let bun_error = write_runtime_fixture(
+        "oracle_runtime_bun_plain_error",
+        "printf '1 | throw new Error(\"plain\")\\nerror: plain\\n      at [eval]:1:7\\n' >&2\nexit 1",
+    );
+    let node_type_error = write_runtime_fixture(
+        "oracle_runtime_node_type_error_vs_bun",
+        "printf 'TypeError: plain\\n' >&2\nexit 1",
+    );
+    let run = |node: &std::path::Path, bun: &std::path::Path| {
+        run_oracle(&[
+            "run",
+            fixture.to_str().unwrap(),
+            "--engines",
+            "node,bun",
+            "--node-bin",
+            node.to_str().unwrap(),
+            "--bun-bin",
+            bun.to_str().unwrap(),
+            "--json",
+        ])
+    };
+
+    let same = run(&node_error, &bun_error);
+    assert!(
+        same.status.success(),
+        "a Node Error and a Bun plain error are one failure: {}",
+        String::from_utf8_lossy(&same.stderr)
+    );
+    let summary = parse_json(&same.stdout);
+    assert_eq!(summary["semantic_verdict"].as_str(), Some("consensus"));
+    assert_eq!(summary["degraded"].as_bool(), Some(false));
+    assert!(
+        summary["backends"]
+            .as_array()
+            .expect("backends array")
+            .iter()
+            .all(|receipt| receipt["status"].as_str() == Some("failed"))
+    );
+
+    let different = run(&node_type_error, &bun_error);
+    assert_eq!(different.status.code(), Some(3));
+    let summary = parse_json(&different.stdout);
+    assert_eq!(summary["semantic_verdict"].as_str(), Some("divergence"));
+
+    let node_lowercase = run(&bun_error, &bun_error);
+    assert_eq!(node_lowercase.status.code(), Some(4));
+    let summary = parse_json(&node_lowercase.stdout);
+    assert_eq!(
+        summary["semantic_verdict"].as_str(),
+        Some("insufficient_data")
+    );
+    assert_eq!(summary["degraded"].as_bool(), Some(true));
+}
+
 #[cfg(unix)]
 #[test]
 fn oracle_generic_nonzero_process_exits_are_degraded_not_consensus() {

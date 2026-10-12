@@ -34879,6 +34879,7 @@ impl InterpreterCore {
             restore
         {
             self.before_seed_surface_write();
+            self.note_registers_written_to(registers.len());
             self.registers.value = registers;
             self.registers_value_bytes.set(None);
             self.heap.value = heap;

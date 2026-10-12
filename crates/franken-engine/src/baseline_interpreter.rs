@@ -7799,6 +7799,11 @@ fn engine_symbol_id(symbol: CoreSymbolId) -> SymbolId {
 
 const UPPER_HEX: &[u8; 16] = b"0123456789ABCDEF";
 
+/// A physical register `InterpreterCore::compact_public_int_operands` found
+/// eligible for a static write; only that check makes one (bd-9vouw.504).
+#[derive(Debug, Clone, Copy)]
+struct StaticWriteSlot(usize);
+
 fn decimal_u32_len(value: u32) -> usize {
     if value == 0 {
         1
@@ -11364,6 +11369,7 @@ impl CallStack {
 
     /// The `super_label` of the first frame with the strictly greatest one
     /// among the frames that carry a HomeObject, bottom-up.
+    #[inline]
     fn super_label_winner(&self) -> Option<&Label> {
         let below = self
             .below_top_super_winner
@@ -34569,6 +34575,7 @@ impl InterpreterCore {
         )
     }
 
+    #[inline]
     fn live_execution_seed_reserved_bytes(&self) -> u64 {
         if self
             .execution_seed_reservation_ledger
@@ -34583,6 +34590,7 @@ impl InterpreterCore {
         }
     }
 
+    #[inline]
     fn total_memory_bytes_from_base(&self, base_bytes: u64) -> u64 {
         base_bytes
             .saturating_add(self.live_execution_seed_reserved_bytes())
@@ -35718,6 +35726,7 @@ impl InterpreterCore {
     /// HomeObject-bound closure. A method selected through a secret definition
     /// key/prototype must taint literals, throws, and zero-argument effects in
     /// its body, not only the explicit argument registers it happens to read.
+    #[inline]
     fn active_execution_context_label(&self) -> Option<&Label> {
         let mut winner = self.active_inline_callback_context_label.as_ref();
         // bd-9vouw.72: the frames' first strict maximum, kept by the call
@@ -35790,12 +35799,17 @@ impl InterpreterCore {
         Ok(joined.clone())
     }
 
+    #[inline]
     fn join_owned_label_with_temporary_budget(
         &self,
         owned: Label,
         other: &Label,
     ) -> Result<Label, InterpreterError> {
-        if &owned >= other {
+        // Public is the bottom of Label's order (level 0, before any
+        // same-level Custom): `owned >= Public` always holds, so the usual
+        // join with a Public operand skips the out-of-line comparison
+        // (bd-9vouw.504).
+        if matches!(other, Label::Public) || &owned >= other {
             return Ok(owned);
         }
         drop(owned);
@@ -52779,9 +52793,11 @@ impl InterpreterCore {
                     });
                 }
                 Ir3Instruction::Move { dst, src } => {
-                    let result_label = self.unary_operation_label(src)?;
-                    let val = self.read_reg(src)?;
-                    self.write_reg_with_label(dst, val, result_label)?;
+                    if !self.static_move(dst, src) {
+                        let result_label = self.unary_operation_label(src)?;
+                        let val = self.read_reg(src)?;
+                        self.write_reg_with_label(dst, val, result_label)?;
+                    }
                     self.ip += 1;
                 }
                 Ir3Instruction::Jump { target } => {
@@ -57852,17 +57868,19 @@ impl InterpreterCore {
                 self.ip += 1;
             }
             Op::Move => {
-                let result_label = self.unary_operation_label(lhs)?;
-                let value = self.read_reg(lhs)?;
-                self.write_reg_with_label(dst, value, result_label)?;
+                if !self.static_move(dst, lhs) {
+                    let result_label = self.unary_operation_label(lhs)?;
+                    let value = self.read_reg(lhs)?;
+                    self.write_reg_with_label(dst, value, result_label)?;
+                }
                 self.ip += 1;
             }
             Op::Add => {
                 let mut compact_handled = false;
-                if let Some((left, right)) = self.compact_public_int_operands(dst, lhs, rhs) {
+                if let Some((left, right, slot)) = self.compact_public_int_operands(dst, lhs, rhs) {
                     if let Some(sum) = left.checked_add(right) {
                         if sum >= MIN_SAFE_INTEGER && sum <= MAX_SAFE_INTEGER {
-                            self.write_reg_with_label(dst, Value::Int(sum), Label::Public)?;
+                            self.write_static_slot(slot, Value::Int(sum));
                             self.record_tier_i_specialization();
                             compact_handled = true;
                         }
@@ -57878,10 +57896,10 @@ impl InterpreterCore {
             }
             Op::Sub => {
                 let mut compact_handled = false;
-                if let Some((left, right)) = self.compact_public_int_operands(dst, lhs, rhs) {
+                if let Some((left, right, slot)) = self.compact_public_int_operands(dst, lhs, rhs) {
                     if let Some(diff) = left.checked_sub(right) {
                         if diff >= MIN_SAFE_INTEGER && diff <= MAX_SAFE_INTEGER {
-                            self.write_reg_with_label(dst, Value::Int(diff), Label::Public)?;
+                            self.write_static_slot(slot, Value::Int(diff));
                             self.record_tier_i_specialization();
                             compact_handled = true;
                         }
@@ -57896,11 +57914,11 @@ impl InterpreterCore {
             }
             Op::Mul => {
                 let mut compact_handled = false;
-                if let Some((left, right)) = self.compact_public_int_operands(dst, lhs, rhs) {
+                if let Some((left, right, slot)) = self.compact_public_int_operands(dst, lhs, rhs) {
                     if !((left == 0 && right < 0) || (right == 0 && left < 0)) {
                         if let Some(prod) = left.checked_mul(right) {
                             if prod >= MIN_SAFE_INTEGER && prod <= MAX_SAFE_INTEGER {
-                                self.write_reg_with_label(dst, Value::Int(prod), Label::Public)?;
+                                self.write_static_slot(slot, Value::Int(prod));
                                 self.record_tier_i_specialization();
                                 compact_handled = true;
                             }
@@ -57945,10 +57963,10 @@ impl InterpreterCore {
                 let delta: i64 = if instruction.opcode == Op::Inc { 1 } else { -1 };
                 let stepped = self
                     .compact_public_int_operands(dst, lhs, lhs)
-                    .and_then(|(value, _)| value.checked_add(delta))
-                    .filter(|value| (MIN_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(value));
-                if let Some(stepped) = stepped {
-                    self.write_reg_with_label(dst, Value::Int(stepped), Label::Public)?;
+                    .and_then(|(value, _, slot)| Some((value.checked_add(delta)?, slot)))
+                    .filter(|(value, _)| (MIN_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(value));
+                if let Some((stepped, slot)) = stepped {
+                    self.write_static_slot(slot, Value::Int(stepped));
                     self.record_tier_i_specialization();
                 } else {
                     let result_label = self.unary_operation_label(lhs)?;
@@ -58075,7 +58093,12 @@ impl InterpreterCore {
     /// destination growth, dynamic destination ownership, or over-budget base
     /// state falls back before mutation to the canonical helpers.
     #[inline(always)]
-    fn compact_public_int_operands(&self, dst: u32, lhs: u32, rhs: u32) -> Option<(i64, i64)> {
+    fn compact_public_int_operands(
+        &self,
+        dst: u32,
+        lhs: u32,
+        rhs: u32,
+    ) -> Option<(i64, i64, StaticWriteSlot)> {
         if dst >= self.config.max_registers
             || lhs >= self.config.max_registers
             || rhs >= self.config.max_registers
@@ -58091,13 +58114,59 @@ impl InterpreterCore {
         ) else {
             return None;
         };
-        if self.register_labels.get(actual_lhs) != Some(&Label::Public)
-            || self.register_labels.get(actual_rhs) != Some(&Label::Public)
+        if !matches!(self.register_labels.get(actual_lhs), Some(Label::Public))
+            || !matches!(self.register_labels.get(actual_rhs), Some(Label::Public))
             || !self.static_register_write_eligible(actual_dst, &Value::Undefined, &Label::Public)
         {
             return None;
         }
-        Some((*left, *right))
+        Some((*left, *right, StaticWriteSlot(actual_dst)))
+    }
+
+    /// `Move dst, src` when the source value and label own no dynamic bytes
+    /// and the destination is eligible for a static write: the write
+    /// `write_reg_with_label` makes on its static path, without cloning the
+    /// label through a budget check (a static label is zero bytes; the
+    /// eligibility check refuses an over-budget state, which the generic
+    /// path reports) (bd-9vouw.504). False leaves every register untouched.
+    #[inline(always)]
+    fn static_move(&mut self, dst: u32, src: u32) -> bool {
+        if dst >= self.config.max_registers || src >= self.config.max_registers {
+            return false;
+        }
+        let actual_src = self.register_base + src as usize;
+        let actual_dst = self.register_base + dst as usize;
+        let (Some(value), Some(label)) = (
+            self.registers.get(actual_src),
+            self.register_labels.get(actual_src),
+        ) else {
+            return false;
+        };
+        if !Self::static_register_value(value) || !Self::static_register_label(label) {
+            return false;
+        }
+        let (value, label) = (value.clone(), label.clone());
+        if !self.static_register_write_eligible(actual_dst, &value, &label) {
+            return false;
+        }
+        self.note_register_written(actual_dst);
+        self.mutate_registers_by_bytes(0, 0, |registers| registers[actual_dst] = value);
+        self.register_labels[actual_dst] = label;
+        true
+    }
+
+    /// Store a compact operator's Public primitive result in the slot
+    /// `compact_public_int_operands` found eligible: the write
+    /// `write_reg_with_label` makes on its static path, without checking
+    /// eligibility a second time (bd-9vouw.504). Nothing runs between the
+    /// check and this write but the operator's integer arithmetic.
+    #[inline(always)]
+    fn write_static_slot(&mut self, slot: StaticWriteSlot, value: Value) {
+        debug_assert!(Self::static_register_value(&value));
+        let StaticWriteSlot(actual_reg) = slot;
+        self.note_register_written(actual_reg);
+        self.mutate_registers_by_bytes(0, 0, |registers| registers[actual_reg] = value);
+        self.register_labels[actual_reg] = Label::Public;
     }
 
     #[inline]
@@ -58108,7 +58177,7 @@ impl InterpreterCore {
         rhs: u32,
         operator: &str,
     ) -> Result<(), InterpreterError> {
-        if let Some((left, right)) = self.compact_public_int_operands(dst, lhs, rhs) {
+        if let Some((left, right, slot)) = self.compact_public_int_operands(dst, lhs, rhs) {
             // Preserve the canonical interpreter's current numeric comparison
             // projection through f64, including its behavior above 2^53.
             let left = left as f64;
@@ -58120,7 +58189,7 @@ impl InterpreterCore {
                 ">=" => left >= right,
                 _ => unreachable!("compact relational opcode is statically validated"),
             };
-            self.write_reg_with_label(dst, Value::Bool(result), Label::Public)?;
+            self.write_static_slot(slot, Value::Bool(result));
             self.record_tier_i_specialization();
         } else {
             let result_label = self.binary_operation_label(lhs, rhs)?;
@@ -58140,13 +58209,9 @@ impl InterpreterCore {
         strict: bool,
         negate: bool,
     ) -> Result<(), InterpreterError> {
-        if let Some((left, right)) = self.compact_public_int_operands(dst, lhs, rhs) {
+        if let Some((left, right, slot)) = self.compact_public_int_operands(dst, lhs, rhs) {
             let matches = left == right;
-            self.write_reg_with_label(
-                dst,
-                Value::Bool(if negate { !matches } else { matches }),
-                Label::Public,
-            )?;
+            self.write_static_slot(slot, Value::Bool(if negate { !matches } else { matches }));
             self.record_tier_i_specialization();
         } else {
             let result_label = self.binary_operation_label(lhs, rhs)?;
@@ -58165,7 +58230,7 @@ impl InterpreterCore {
         rhs: u32,
         operator: &str,
     ) -> Result<(), InterpreterError> {
-        if let Some((left, right)) = self.compact_public_int_operands(dst, lhs, rhs) {
+        if let Some((left, right, slot)) = self.compact_public_int_operands(dst, lhs, rhs) {
             let left = left as i32;
             let right = right as i32;
             let shift = (right as u32) & 31;
@@ -58178,7 +58243,7 @@ impl InterpreterCore {
                 ">>>" => (left as u32).wrapping_shr(shift) as i64,
                 _ => unreachable!("compact bitwise opcode is statically validated"),
             };
-            self.write_reg_with_label(dst, Value::Int(result), Label::Public)?;
+            self.write_static_slot(slot, Value::Int(result));
             self.record_tier_i_specialization();
         } else {
             let result_label = self.binary_operation_label(lhs, rhs)?;
@@ -105345,6 +105410,7 @@ impl InterpreterCore {
         u32::try_from(self.heap.live_len()).unwrap_or(u32::MAX)
     }
 
+    #[inline]
     fn memory_request_exceeds_budget(&self, requested_base_bytes: u64, max_bytes: u64) -> bool {
         let requested_bytes = self.total_memory_bytes_from_base(requested_base_bytes);
         // `u64::MAX` is the saturating overflow sentinel for logical memory
@@ -141481,6 +141547,83 @@ mod async_runtime_tests_current {
             );
             assert!(!drained_core_trace.is_finalised());
             assert!(drained_core_trace.session_id.is_empty());
+        }
+    }
+
+    /// bd-9vouw.504: `static_move` copies a value and label that own no
+    /// dynamic bytes into a destination holding none, label included and with
+    /// the memory estimate unchanged; anything else is left to the accounted
+    /// path, with every register untouched.
+    #[test]
+    fn static_move_copies_only_static_pairs_bd_9vouw_504() {
+        let mut core = test_interpreter();
+        core.mutate_registers(|registers| {
+            registers[0] = Value::Int(5);
+            registers[1] = Value::Undefined;
+            registers[2] = Value::str("owned");
+            registers[3] = Value::Int(1);
+        });
+        core.set_register_label(0, Label::Secret)
+            .expect("source label should be settable");
+        let bytes_before = core.estimated_memory_bytes;
+        assert!(core.static_move(1, 0));
+        assert_eq!(core.read_reg(1).unwrap(), Value::Int(5));
+        assert_eq!(
+            core.get_register_label(1).unwrap(),
+            &Label::Secret,
+            "the source label moves with the value"
+        );
+        assert_eq!(core.estimated_memory_bytes, bytes_before);
+
+        // A string owns bytes as the source or as the replaced destination
+        // value, and a Custom label owns its name.
+        assert!(!core.static_move(3, 2));
+        assert!(!core.static_move(2, 0));
+        core.set_register_label(
+            0,
+            Label::Custom {
+                name: "custom".to_string(),
+                level: 2,
+            },
+        )
+        .expect("custom label should be settable");
+        assert!(!core.static_move(3, 0));
+        assert_eq!(core.read_reg(3).unwrap(), Value::Int(1));
+        assert_eq!(core.get_register_label(3).unwrap(), &Label::Public);
+        assert_eq!(core.read_reg(2).unwrap(), Value::str("owned"));
+        let max_registers = core.config.max_registers;
+        assert!(!core.static_move(max_registers, 1));
+        assert!(!core.static_move(1, max_registers));
+    }
+
+    /// bd-9vouw.504: `join_owned_label_with_temporary_budget` returns the
+    /// owned label for a Public operand without comparing, which is right
+    /// only while Public is the bottom of Label's order, Custom labels of
+    /// level 0 included.
+    #[test]
+    fn public_is_the_bottom_of_the_label_order_bd_9vouw_504() {
+        let core = test_interpreter();
+        for label in [
+            Label::Public,
+            Label::Internal,
+            Label::Confidential,
+            Label::Secret,
+            Label::TopSecret,
+            Label::Custom {
+                name: String::new(),
+                level: 0,
+            },
+            Label::Custom {
+                name: "a".to_string(),
+                level: 0,
+            },
+        ] {
+            assert!(label >= Label::Public, "{label:?}");
+            assert_eq!(
+                core.join_owned_label_with_temporary_budget(label.clone(), &Label::Public)
+                    .unwrap(),
+                label
+            );
         }
     }
 

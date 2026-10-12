@@ -7205,6 +7205,89 @@ impl fmt::Display for Value {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ObjectId(pub u32);
 
+/// The GC remembered set (bd-28ezw) as one bit per heap index
+/// (bd-9vouw.490): every reference write inserts its object, and the
+/// `BTreeSet` it was searched a tree on each write, about 360 instructions,
+/// 7% of an array-literal loop. Same members, same ascending order.
+#[derive(Debug, Clone, Default)]
+struct RememberedSet {
+    words: Vec<u64>,
+    len: usize,
+}
+
+impl RememberedSet {
+    fn slot(object_id: &ObjectId) -> (usize, u64) {
+        ((object_id.0 / 64) as usize, 1u64 << (object_id.0 % 64))
+    }
+
+    /// Add `object_id`; true when it was not a member.
+    pub fn insert(&mut self, object_id: ObjectId) -> bool {
+        let (word, mask) = Self::slot(&object_id);
+        if word >= self.words.len() {
+            self.words.resize(word + 1, 0);
+        }
+        let fresh = self.words[word] & mask == 0;
+        if fresh {
+            self.words[word] |= mask;
+            self.len += 1;
+        }
+        fresh
+    }
+
+    pub fn contains(&self, object_id: &ObjectId) -> bool {
+        let (word, mask) = Self::slot(object_id);
+        self.words.get(word).is_some_and(|bits| bits & mask != 0)
+    }
+
+    /// Remove `object_id`; true when it was a member.
+    pub fn remove(&mut self, object_id: &ObjectId) -> bool {
+        let (word, mask) = Self::slot(object_id);
+        let Some(bits) = self.words.get_mut(word) else {
+            return false;
+        };
+        let present = *bits & mask != 0;
+        if present {
+            *bits &= !mask;
+            self.len -= 1;
+        }
+        present
+    }
+
+    pub fn clear(&mut self) {
+        self.words.clear();
+        self.len = 0;
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// The members in ascending order.
+    pub fn iter(&self) -> impl Iterator<Item = ObjectId> + '_ {
+        self.words.iter().enumerate().flat_map(|(word, &bits)| {
+            (0..64u32)
+                .filter(move |bit| bits & (1u64 << bit) != 0)
+                .map(move |bit| ObjectId(word as u32 * 64 + bit))
+        })
+    }
+
+    pub fn retain(&mut self, mut keep: impl FnMut(&ObjectId) -> bool) {
+        let dropped = self.iter().filter(|id| !keep(id)).collect::<Vec<_>>();
+        for object_id in &dropped {
+            self.remove(object_id);
+        }
+    }
+}
+
+impl PartialEq for RememberedSet {
+    /// Set equality: trailing empty words (left by `remove`) do not count.
+    fn eq(&self, other: &Self) -> bool {
+        self.len == other.len && self.iter().eq(other.iter())
+    }
+}
+
+impl Eq for RememberedSet {}
+
 /// The visited set of one prototype-chain walk, with no heap allocation for
 /// its first [`CHAIN_GUARD_INLINE`] links (bd-9vouw.124): every [[Get]] that
 /// missed an own property, and every label read, built a `BTreeSet` node.
@@ -15928,7 +16011,7 @@ pub struct InterpreterCore {
     /// Exact Symbol identities, descriptions, and global registry state.
     symbol_state: SeedTrackedField<RuntimeSymbolState>,
     /// GC remembered set for tracking old->young generation references.
-    gc_remembered_set: BTreeSet<ObjectId>,
+    gc_remembered_set: RememberedSet,
     /// JIT hot path detection counters for function calls.
     jit_function_call_counts: BTreeMap<u32, u64>,
     /// JIT hot path detection counters for loop backedges.
@@ -16895,7 +16978,7 @@ impl InterpreterCore {
             proxy_trap_lookup_depth: 0,
             weakmap_storage: BTreeMap::new(),
             symbol_state: SeedTrackedField::new(RuntimeSymbolState::default()),
-            gc_remembered_set: BTreeSet::new(),
+            gc_remembered_set: RememberedSet::default(),
             jit_function_call_counts: BTreeMap::new(),
             jit_loop_iteration_counts: LoopIterationCounters::default(),
             jit_hot_threshold: 10_000, // Default threshold
@@ -35901,8 +35984,8 @@ impl InterpreterCore {
     }
 
     /// Get a copy of the remembered set for inspection and diagnostics.
-    pub fn gc_get_remembered_set(&self) -> &BTreeSet<ObjectId> {
-        &self.gc_remembered_set
+    pub fn gc_get_remembered_set(&self) -> BTreeSet<ObjectId> {
+        self.gc_remembered_set.iter().collect()
     }
 
     // ---------------------------------------------------------------------------
@@ -141804,6 +141887,53 @@ mod async_runtime_tests_current {
                 label
             );
         }
+    }
+
+    /// bd-9vouw.490: the bitset remembered set answers as the BTreeSet it
+    /// replaces through a deterministic mix of inserts, removes, retains and
+    /// clears: the same insert/remove results, members, ascending order and
+    /// length, and set equality that ignores emptied words.
+    #[test]
+    fn remembered_set_matches_a_btree_set_bd_9vouw_490() {
+        let mut bits = RememberedSet::default();
+        let mut tree = BTreeSet::<ObjectId>::new();
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        for step in 0..4_000u32 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            let id = ObjectId((state % 700) as u32);
+            match state % 11 {
+                0..=5 => assert_eq!(bits.insert(id), tree.insert(id), "insert {id:?}"),
+                6..=8 => assert_eq!(bits.remove(&id), tree.remove(&id), "remove {id:?}"),
+                9 => {
+                    let cut = (state % 700) as u32;
+                    bits.retain(|object| object.0 < cut);
+                    tree.retain(|object| object.0 < cut);
+                }
+                _ if step % 500 == 0 => {
+                    bits.clear();
+                    tree.clear();
+                }
+                _ => {}
+            }
+            assert_eq!(bits.contains(&id), tree.contains(&id));
+            assert_eq!(bits.len(), tree.len());
+        }
+        assert_eq!(
+            bits.iter().collect::<Vec<_>>(),
+            tree.iter().copied().collect::<Vec<_>>()
+        );
+
+        let mut emptied = bits.clone();
+        let extra = ObjectId(10_000);
+        emptied.insert(extra);
+        assert_ne!(emptied, bits);
+        emptied.remove(&extra);
+        assert_eq!(
+            emptied, bits,
+            "an emptied trailing word does not change the set"
+        );
     }
 
     /// bd-9vouw.504: setting a Public label on a property without a stored

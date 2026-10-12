@@ -50299,16 +50299,17 @@ impl InterpreterCore {
     }
 
     /// The spare files to refill into a file of `len` values: those of that
-    /// length if any, else the latest kept, else new empty ones.
+    /// length if any, else new empty ones. A spare of another length stays:
+    /// a step takes one file and installs one, so a spare handed out for
+    /// the wrong length was cut or regrown on every install, and the pool
+    /// never held one of each length (bd-9vouw.500).
     fn take_spare_register_files(&mut self, len: usize) -> (Vec<Value>, Vec<Label>) {
-        let index = self
-            .spare_register_files
+        self.spare_register_files
             .iter()
             .position(|(registers, _)| registers.len() == len)
-            .or_else(|| self.spare_register_files.len().checked_sub(1));
-        index.map_or_else(Default::default, |index| {
-            self.spare_register_files.remove(index)
-        })
+            .map_or_else(Default::default, |index| {
+                self.spare_register_files.remove(index)
+            })
     }
 
     fn async_function_ids_in_call_stack(
@@ -151196,10 +151197,10 @@ mod tests {
         assert_eq!(values.as_ptr(), long_address);
         core.keep_spare_register_files(values, vec![Label::Public; 2 * window]);
 
-        // No spare of the length: the latest kept one.
+        // No spare of the length: new empty files, and the spares stay.
         let (values, labels) = core.take_spare_register_files(3 * window);
-        assert_eq!(values.as_ptr(), long_address);
-        core.keep_spare_register_files(values, labels);
+        assert!(values.is_empty() && labels.is_empty());
+        assert_eq!(core.spare_register_files.len(), 2);
         // A third spare evicts the oldest.
         let (third_values, third_labels) = cleared(window / 2);
         core.keep_spare_register_files(third_values, third_labels);
@@ -151212,6 +151213,23 @@ mod tests {
         // None kept at all: empty files.
         core.spare_register_files.clear();
         assert_eq!(core.take_spare_register_files(window).0.len(), 0);
+
+        // A step from inside a function: the caller's file (two windows) is
+        // taken, the activation's (one window) installed, then the reverse.
+        // From the second step on, each install finds its own file.
+        let (caller_values, caller_labels) = cleared(2 * window);
+        let caller_address = caller_values.as_ptr();
+        core.keep_spare_register_files(caller_values, caller_labels);
+        let (values, _) = core.take_spare_register_files(window);
+        assert!(values.is_empty(), "the caller's file is not cut down");
+        let (activation_values, activation_labels) = cleared(window);
+        let activation_address = activation_values.as_ptr();
+        core.keep_spare_register_files(activation_values, activation_labels);
+        let (values, labels) = core.take_spare_register_files(2 * window);
+        assert_eq!(values.as_ptr(), caller_address);
+        core.keep_spare_register_files(values, labels);
+        let (values, _) = core.take_spare_register_files(window);
+        assert_eq!(values.as_ptr(), activation_address);
     }
 
     #[test]

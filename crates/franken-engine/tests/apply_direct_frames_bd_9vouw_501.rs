@@ -14,9 +14,13 @@
 
 use frankenengine_engine::HybridRouter;
 
+/// The recursions and 300-element lists run past the eval default of
+/// 100,000 instructions.
+const INSTRUCTION_BUDGET: u64 = 20_000_000;
+
 fn console_lines(source: &str) -> Vec<String> {
     HybridRouter::default()
-        .eval(source)
+        .eval_with_budgets(source, Some(INSTRUCTION_BUDGET), None)
         .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
         .console_output
         .iter()

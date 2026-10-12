@@ -104774,22 +104774,6 @@ impl InterpreterCore {
         self.register_labels_bytes.set(bytes);
     }
 
-    /// The share of [`Self::registers_memory_bytes`] plus
-    /// [`Self::register_labels_memory_bytes`] owned by `range`, which must lie
-    /// within both files.
-    fn register_range_memory_bytes(&self, range: std::ops::Range<usize>) -> u64 {
-        Self::saturating_sum(
-            self.registers[range.clone()]
-                .iter()
-                .map(Self::estimate_value_bytes),
-        )
-        .saturating_add(Self::saturating_sum(
-            self.register_labels[range]
-                .iter()
-                .map(Self::estimate_label_bytes),
-        ))
-    }
-
     fn active_inline_callback_context_memory_bytes(&self) -> u64 {
         self.active_inline_callback_context_label
             .as_ref()

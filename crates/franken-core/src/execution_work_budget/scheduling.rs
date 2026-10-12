@@ -44,6 +44,8 @@ impl ExecutionWorkPool {
 /// A host panic consumes the owner just like any other failed dispatch.
 /// Revoking its work scope denies a queued job before VM construction and
 /// requests cancellation of a running job through native checkpoints.
+/// Dropping this owner permanently closes its admission-local cancellation
+/// scope, including on synchronous completion, rejection and unwinding.
 #[derive(Debug)]
 #[must_use = "dropping an admission permanently discards its reserved allowance"]
 pub struct ExecutionAdmission {
@@ -65,7 +67,10 @@ impl ExecutionAdmission {
     /// Hosts must still enforce `instruction_limit` on the admitted execution.
     ///
     /// A revocation already visible here fails before dispatch. A later one
-    /// remains visible through the signal, including after this owner drops.
+    /// remains visible through the signal. Custom dispatchers must retain this
+    /// admission until their execution and synchronous callbacks finish:
+    /// dropping it permanently cancels every signal derived from its scope.
+    /// Retaining or resetting a child signal cannot reopen a closed admission.
     pub fn execution_cancellation(&self) -> Result<CancellationToken, WorkBudgetError> {
         if self.scope.is_cancelled() {
             return Err(WorkBudgetError::Revoked);
@@ -385,19 +390,58 @@ mod execution_cancellation_tests {
     }
 
     #[test]
-    fn dispatch_signal_retains_live_ancestors_after_admission_and_pool_drop() {
+    fn dispatch_signal_retains_live_ancestors_after_pool_owner_drop() {
         let root = ExecutionWorkPool::new(128);
         let tenant = root.partition(128).unwrap();
         let admission = tenant.reserve(64).unwrap();
         let signal = admission.execution_cancellation().unwrap();
-        drop(admission);
         drop(tenant);
         assert!(!signal.is_cancelled());
         root.revoke();
         assert!(signal.is_cancelled());
+        drop(admission);
         signal.reset();
         assert!(signal.is_cancelled());
         assert_eq!(root.committed(), 128);
+    }
+
+    #[test]
+    fn discarded_admission_closes_child_signal_before_any_ancestor_revocation() {
+        let pool = ExecutionWorkPool::new(128);
+        let admission = pool.reserve(64).unwrap();
+        let peer = pool.reserve(64).unwrap();
+        let signal = admission.execution_cancellation().unwrap();
+        let peer_signal = peer.execution_cancellation().unwrap();
+        drop(admission);
+        assert!(signal.is_cancelled());
+        signal.reset();
+        assert!(signal.is_cancelled());
+        assert!(!pool.is_revoked());
+        assert!(!peer_signal.is_cancelled());
+        pool.revoke();
+        assert!(peer_signal.is_cancelled());
+        assert_eq!(pool.committed(), 128);
+    }
+
+    #[test]
+    fn custom_native_dispatch_retains_admission_until_execution_finishes() {
+        use super::super::tests::{config, module};
+        let pool = ExecutionWorkPool::new(256);
+        let admission = pool.reserve(128).unwrap();
+        let signal = admission.execution_cancellation().unwrap();
+        let mut current = config(admission.instruction_limit());
+        current.cancellation_token = Some(signal.clone());
+        let mut core = InterpreterCore::new(current, "custom-admitted-dispatch");
+        let result = core.execute(&module("40 + 2;")).unwrap();
+        assert!(result.instructions_executed > 0);
+        assert!(result.instructions_executed <= admission.instruction_limit());
+        assert!(!signal.is_cancelled());
+        drop(core);
+        drop(admission);
+        signal.reset();
+        assert!(signal.is_cancelled());
+        assert!(!pool.is_revoked());
+        assert_eq!(pool.remaining(), 128);
     }
 
     #[test]

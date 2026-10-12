@@ -7926,6 +7926,14 @@ fn property_resolution_found_payload(
     payload
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Sends every own-property read through the generic [[Get]], so a test
+    /// can compare it with the fast path on the same object.
+    static FORCE_GENERIC_OWN_PROPERTY_READS: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
 /// How many small array indices keep a shared decimal key.
 const SMALL_INDEX_KEYS: usize = 1024;
 
@@ -63956,9 +63964,25 @@ impl InterpreterCore {
         if key.as_str() == Some("__proto__") {
             return None;
         }
+        // In a callback scope [[Get]] observes the owner's shape label and
+        // the property's stored label into the context
+        // (reflect_observe_selected_property); only the generic path does
+        // (bd-9vouw.505).
+        if self.active_inline_callback_context_label.is_some() {
+            return None;
+        }
+        #[cfg(test)]
+        if FORCE_GENERIC_OWN_PROPERTY_READS.with(std::cell::Cell::get) {
+            return None;
+        }
         let object = self.heap.get(object_id.0 as usize)?;
+        // An own data property answers before the prototype is consulted, so
+        // a prototype does not matter here (bd-9vouw.504: instances of
+        // classes and constructors now take this path). Of the generic walk's
+        // depth-0 special cases, a String wrapper's index/length properties
+        // are the one the exclusions below do not already cover.
         if object.is_import_meta
-            || object.prototype.is_some()
+            || object.primitive_value.is_some()
             || object.array_buffer.is_some()
             || object.typed_array.is_some()
             || object.data_view.is_some()
@@ -140737,7 +140761,7 @@ mod async_runtime_tests_current {
 
     #[test]
     fn ordinary_own_property_fast_path_matches_forced_fallback_trace_and_ifc() {
-        let run = |force_fallback: bool| {
+        let run = |force_fallback: bool, with_prototype: bool| {
             let module = test_module_with_functions(
                 vec![
                     Ir3Instruction::GetProperty {
@@ -140756,12 +140780,13 @@ mod async_runtime_tests_current {
             let empty_prototype = core
                 .alloc_object_with_prototype(None)
                 .expect("empty prototype should allocate");
-            if force_fallback {
+            if with_prototype {
                 let index = object.0 as usize;
                 core.mutate_heap(|heap| {
                     heap[index].prototype = Some(empty_prototype);
                 });
             }
+            FORCE_GENERIC_OWN_PROPERTY_READS.with(|force| force.set(force_fallback));
             core.set_own_property_label(object, "data", &Label::Secret)
                 .expect("property label should be settable");
             core.mutate_registers(|registers| {
@@ -140782,11 +140807,12 @@ mod async_runtime_tests_current {
                     &RuntimePropertyKey::String(JsString::from("data")),
                 ),
                 !force_fallback,
-                "the empty prototype forces the generic path without changing the depth-0 hit"
+                "the test switch forces the generic path; a prototype does not (bd-9vouw.504)"
             );
             let result = core
                 .execute(&module)
                 .expect("ordinary own-property read should execute");
+            FORCE_GENERIC_OWN_PROPERTY_READS.with(|force| force.set(false));
             assert_eq!(
                 core.nondeterminism_trace_ref(),
                 &result.nondeterminism_trace,
@@ -140803,14 +140829,17 @@ mod async_runtime_tests_current {
             )
         };
 
-        let fast = run(false);
-        let fallback = run(true);
-        assert_eq!(fast.0, Value::Int(41));
-        assert_eq!(fast.1, Label::Secret);
-        assert_eq!(
-            fast, fallback,
-            "fast and generic paths must preserve the read outcome, IFC label, trace, and instruction count"
-        );
+        for with_prototype in [false, true] {
+            let fast = run(false, with_prototype);
+            let fallback = run(true, with_prototype);
+            assert_eq!(fast.0, Value::Int(41));
+            assert_eq!(fast.1, Label::Secret);
+            assert_eq!(
+                fast, fallback,
+                "fast and generic paths must preserve the read outcome, IFC label, trace, and \
+                 instruction count (prototype: {with_prototype})"
+            );
+        }
     }
 
     #[test]
@@ -141953,6 +141982,56 @@ mod async_runtime_tests_current {
             trace_count_before,
             "a malformed Proxy must not emit an ordinary property-found trace"
         );
+    }
+
+    /// bd-9vouw.505: inside a callback scope (an active inline callback
+    /// context), [[Get]] observes the owner's shape label and the property's
+    /// stored label into the context (da779790e). The own-property fast path
+    /// predates that and skipped it: reading a public key of an object whose
+    /// shape a Secret store labelled left the context Public. The read now
+    /// takes the generic path whenever a context is active, for an object
+    /// with or without a prototype.
+    #[test]
+    fn own_property_read_in_a_callback_scope_observes_the_shape_label_bd_9vouw_505() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 2,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+        for with_prototype in [false, true] {
+            let mut core = test_interpreter();
+            let object = core
+                .alloc_object_with_properties(&[("data", Value::Int(7))])
+                .expect("ordinary object should allocate");
+            if with_prototype {
+                let prototype = core
+                    .alloc_object_with_properties(&[])
+                    .expect("prototype should allocate");
+                core.mutate_heap(|heap| heap[object.0 as usize].prototype = Some(prototype));
+            }
+            core.join_object_mutation_label(object, &Label::Secret)
+                .expect("shape label should fit");
+            core.mutate_registers(|registers| {
+                registers[0] = Value::Object(object);
+                registers[1] = Value::str("data");
+            });
+            core.active_inline_callback_context_label = Some(Label::Public);
+            let data = RuntimePropertyKey::String(JsString::from("data"));
+            assert_eq!(core.ordinary_own_property_fast_read(object, &data), None);
+            assert_eq!(core.run_loop(&module), Err(InterpreterError::Halted));
+            assert_eq!(core.read_reg(2).unwrap(), Value::Int(7));
+            assert_eq!(
+                core.active_inline_callback_context_label,
+                Some(Label::Secret),
+                "the read observes the Secret shape label (prototype: {with_prototype})"
+            );
+        }
     }
 
     /// bd-9vouw.504: the fast own-property read returns a data property's

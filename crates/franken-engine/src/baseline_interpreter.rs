@@ -16965,9 +16965,18 @@ impl InterpreterCore {
         label: &Label,
     ) -> Result<(), InterpreterError> {
         let mut current = Some(object_id);
-        let mut visited = BTreeSet::new();
+        // The cycle guard of a Proxy chain; a store into an ordinary object
+        // ends after one step, so the set (one node allocation per store)
+        // starts only when the chain goes on (bd-9vouw.504).
+        let mut visited: Option<BTreeSet<ObjectId>> = None;
+        let mut first = true;
         while let Some(target) = current {
-            if !visited.insert(target) {
+            if first {
+                first = false;
+            } else if !visited
+                .get_or_insert_with(|| BTreeSet::from([object_id]))
+                .insert(target)
+            {
                 break;
             }
             self.join_direct_object_mutation_label(target, label)?;
@@ -107133,6 +107142,21 @@ impl InterpreterCore {
         let Some(current) = self.heap.get(heap_index) else {
             return Err(InterpreterError::ObjectNotFound { id: object_id.0 });
         };
+        // A Public label is stored as no entry: with none for the key, there
+        // is nothing to remove and the estimate stays (bd-9vouw.504). Every
+        // store into a Public-labelled property came through the removal
+        // below: two walks of the label map and a heap write of nothing.
+        if matches!(label, Label::Public)
+            && match key {
+                RuntimePropertyKey::String(key) => current.property_labels.get_exact(key).is_none(),
+                RuntimePropertyKey::Symbol(symbol) => current
+                    .property_labels
+                    .baseline_symbol_property(core_symbol_id(*symbol))
+                    .is_none(),
+            }
+        {
+            return Ok(());
+        }
         let previous_bytes =
             Self::estimate_execution_seed_ordered_label_map_bytes(&current.property_labels);
         if matches!(label, Label::Public) {
@@ -141751,6 +141775,81 @@ mod async_runtime_tests_current {
                 label
             );
         }
+    }
+
+    /// bd-9vouw.504: setting a Public label on a property without a stored
+    /// label changes nothing (no entry, the same estimate); over a stored
+    /// label it removes the entry and gives back its bytes.
+    #[test]
+    fn public_label_on_an_unlabelled_property_changes_nothing_bd_9vouw_504() {
+        let mut core = test_interpreter();
+        let object = core
+            .alloc_object_with_properties(&[("data", Value::Int(7)), ("other", Value::Int(8))])
+            .expect("ordinary object should allocate");
+        let data = RuntimePropertyKey::String(JsString::from("data"));
+        let bytes_before = core.estimated_memory_bytes;
+        core.set_own_runtime_property_label(object, &data, &Label::Public)
+            .expect("a Public label should fit");
+        assert_eq!(core.estimated_memory_bytes, bytes_before);
+        assert_eq!(core.runtime_property_label(object, &data), Label::Public);
+
+        core.set_own_runtime_property_label(object, &data, &Label::Secret)
+            .expect("a Secret label should fit");
+        assert_eq!(core.runtime_property_label(object, &data), Label::Secret);
+        assert!(core.estimated_memory_bytes > bytes_before);
+        core.set_own_runtime_property_label(object, &data, &Label::Public)
+            .expect("a Public label should fit");
+        assert_eq!(core.runtime_property_label(object, &data), Label::Public);
+        assert_eq!(core.estimated_memory_bytes, bytes_before);
+    }
+
+    /// bd-9vouw.504: the mutation-label join labels an ordinary object, and
+    /// along a Proxy chain stops at the first repeat: two proxies targeting
+    /// each other, and one targeting itself.
+    #[test]
+    fn object_mutation_label_join_follows_proxy_chains_and_stops_on_cycles_bd_9vouw_504() {
+        let mut core = test_interpreter();
+        let plain = core
+            .alloc_object_with_properties(&[])
+            .expect("object should allocate");
+        core.join_object_mutation_label(plain, &Label::Secret)
+            .expect("join should fit");
+        assert_eq!(
+            core.object_mutation_labels.get(&plain),
+            Some(&Label::Secret)
+        );
+
+        let first = core
+            .alloc_object_with_properties(&[])
+            .expect("object should allocate");
+        let second = core
+            .alloc_object_with_properties(&[])
+            .expect("object should allocate");
+        let lone = core
+            .alloc_object_with_properties(&[])
+            .expect("object should allocate");
+        for (proxy, target) in [(first, second), (second, first), (lone, lone)] {
+            core.set_object_brand(proxy, PROXY_TYPE_TAG)
+                .expect("proxy marker should fit");
+            core.set_object_property(proxy, PROXY_TARGET_SLOT.to_string(), Value::Object(target))
+                .expect("proxy target slot should fit");
+        }
+        core.join_object_mutation_label(first, &Label::Confidential)
+            .expect("a two-proxy cycle should end");
+        assert_eq!(
+            core.object_mutation_labels.get(&first),
+            Some(&Label::Confidential)
+        );
+        assert_eq!(
+            core.object_mutation_labels.get(&second),
+            Some(&Label::Confidential)
+        );
+        core.join_object_mutation_label(lone, &Label::Internal)
+            .expect("a self-targeting proxy should end");
+        assert_eq!(
+            core.object_mutation_labels.get(&lone),
+            Some(&Label::Internal)
+        );
     }
 
     #[test]

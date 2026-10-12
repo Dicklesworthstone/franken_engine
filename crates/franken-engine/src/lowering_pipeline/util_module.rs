@@ -974,6 +974,13 @@ mod tests {
             free: BTreeSet::new(),
         };
         walker.expression(expression).expect("walks");
+        // `undefined`, `NaN` and `Infinity` parse as identifier references
+        // (b2a15dbab), but an unshadowed read of one folds to its constant
+        // and a program cannot redeclare them at its top level: a module
+        // never reads or protects them as globals.
+        for constant in ["undefined", "NaN", "Infinity"] {
+            walker.free.remove(constant);
+        }
         walker.free
     }
 

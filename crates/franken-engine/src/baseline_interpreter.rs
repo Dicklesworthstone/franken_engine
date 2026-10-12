@@ -306,6 +306,13 @@ const DEFAULT_QUICKJS_MAX_REGISTERS: u32 = 256;
 
 /// Default register file size for the throughput profile.
 const DEFAULT_V8_MAX_REGISTERS: u32 = 4096;
+/// Longest file, in `max_registers` windows, the core keeps as a spare
+/// register file (`spare_register_files`); a longer one is freed.
+const SPARE_REGISTER_FILE_WINDOWS: usize = 4;
+/// Spare register files the core keeps. A generator stepped from inside a
+/// function alternates between the caller's file and the activation's,
+/// which differ in length: with one spare every install cut or regrew it.
+const SPARE_REGISTER_FILES: usize = 2;
 /// Default heap object budget for the deterministic profile.
 const DEFAULT_QUICKJS_MAX_HEAP_OBJECTS: u32 = 100_000;
 /// Default heap object budget for the throughput profile.
@@ -7792,6 +7799,11 @@ fn engine_symbol_id(symbol: CoreSymbolId) -> SymbolId {
 
 const UPPER_HEX: &[u8; 16] = b"0123456789ABCDEF";
 
+/// A physical register `InterpreterCore::compact_public_int_operands` found
+/// eligible for a static write; only that check makes one (bd-9vouw.504).
+#[derive(Debug, Clone, Copy)]
+struct StaticWriteSlot(usize);
+
 fn decimal_u32_len(value: u32) -> usize {
     if value == 0 {
         1
@@ -7912,6 +7924,34 @@ fn property_resolution_found_payload(
     let mut payload = Vec::new();
     write_property_resolution_found_payload(&mut payload, key, object_id, depth);
     payload
+}
+
+/// How many small array indices keep a shared decimal key.
+const SMALL_INDEX_KEYS: usize = 1024;
+
+/// The decimal property key of a small non-negative integer, shared per
+/// thread (bd-9vouw.504): `a[i]` formatted a String and then made a shared
+/// copy of it on every access. Key identity is never observable; the keys
+/// are filled on first use, at most SMALL_INDEX_KEYS of them.
+fn small_index_key(number: i64) -> Option<JsString> {
+    thread_local! {
+        static KEYS: std::cell::RefCell<Vec<Option<JsString>>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let index = usize::try_from(number)
+        .ok()
+        .filter(|index| *index < SMALL_INDEX_KEYS)?;
+    KEYS.with(|keys| {
+        let mut keys = keys.borrow_mut();
+        if keys.len() <= index {
+            keys.resize(index + 1, None);
+        }
+        Some(
+            keys[index]
+                .get_or_insert_with(|| JsString::from(index.to_string()))
+                .clone(),
+        )
+    })
 }
 
 /// Replace `payload`'s contents with the found-property witness event's bytes.
@@ -10009,6 +10049,14 @@ struct GeneratorExecutionSnapshot {
     /// make the next call after every generator step clear to its end
     /// (bd-9vouw.499).
     register_dirty_end: usize,
+    /// [`InterpreterCore::registers_memory_bytes`] of the files when they
+    /// were parked, if the core had it cached, which
+    /// `install_generator_execution` restores: the trimmed tail and the
+    /// padding that replaces it are cleared slots, which own no bytes
+    /// (bd-9vouw.500). `None` makes the next read sum the file.
+    registers_value_bytes: Option<u64>,
+    /// The same for [`InterpreterCore::register_labels_memory_bytes`].
+    register_labels_bytes: Option<u64>,
     delegation: Option<GeneratorDelegation>,
     active_inline_callback_context_label: Option<Label>,
     call_stack: Vec<CallFrame>,
@@ -10040,14 +10088,7 @@ impl GeneratorExecutionSnapshot {
     /// deterministic lane, 8,192 on the throughput lane) that were almost all
     /// cleared (bd-9vouw.167). `register_len` keeps the length to restore.
     fn trim_cleared_register_tail(&mut self) {
-        let len = self.registers.len().max(self.register_labels.len());
-        let live = (0..len)
-            .rev()
-            .find(|&index| {
-                !matches!(self.registers.get(index), Some(Value::Undefined) | None)
-                    || !matches!(self.register_labels.get(index), Some(Label::Public) | None)
-            })
-            .map_or(0, |index| index + 1);
+        let live = live_register_prefix_len(&self.registers, &self.register_labels);
         if live < self.registers.len() {
             self.registers.truncate(live);
             self.registers.shrink_to_fit();
@@ -10056,6 +10097,30 @@ impl GeneratorExecutionSnapshot {
             self.register_labels.truncate(live);
             self.register_labels.shrink_to_fit();
         }
+    }
+}
+
+/// Length of the files' live prefix: every register past it is undefined
+/// with a Public label, as are the slots one file has past the other's end
+/// (bd-9vouw.167).
+fn live_register_prefix_len(registers: &[Value], register_labels: &[Label]) -> usize {
+    let values_end = registers
+        .iter()
+        .rposition(|value| !matches!(value, Value::Undefined))
+        .map_or(0, |index| index + 1);
+    let labels_end = register_labels
+        .iter()
+        .rposition(|label| !matches!(label, Label::Public))
+        .map_or(0, |index| index + 1);
+    values_end.max(labels_end)
+}
+
+/// Make a file whose every slot is `cleared` hold `prefix` followed by
+/// cleared slots, `len` in all (at least the prefix).
+fn refill_cleared_file<T: Clone>(file: &mut Vec<T>, prefix: Vec<T>, len: usize, cleared: T) {
+    file.resize(len.max(prefix.len()), cleared);
+    for (slot, value) in file.iter_mut().zip(prefix) {
+        *slot = value;
     }
 }
 
@@ -11332,6 +11397,7 @@ impl CallStack {
 
     /// The `super_label` of the first frame with the strictly greatest one
     /// among the frames that carry a HomeObject, bottom-up.
+    #[inline]
     fn super_label_winner(&self) -> Option<&Label> {
         let below = self
             .below_top_super_winner
@@ -13592,6 +13658,11 @@ struct ModuleExecutionSnapshot {
     /// [`InterpreterCore::register_labels_memory_bytes`] of
     /// `register_labels`, which no one writes while they are parked here.
     register_label_bytes: u64,
+    /// [`InterpreterCore::register_dirty_end`] of these files, which
+    /// `restore_module_execution` restores: the whole file's length would make
+    /// the next call after every isolated call clear to its end
+    /// (bd-9vouw.499).
+    register_dirty_end: usize,
     /// PC-style provenance for an isolated stream/event callback. Keeping one
     /// snapshotted label avoids cloning a Custom label into every register.
     active_inline_callback_context_label: Option<Label>,
@@ -15194,6 +15265,15 @@ pub struct InterpreterCore {
     /// `Undefined`, so a callback neither allocates nor drops `max_registers`
     /// slots. Engine capacity of at most `max_registers` slots, not charged.
     simple_callback_register_pool: Vec<Value>,
+    /// The register and label files `take_generator_execution` emptied, every
+    /// slot undefined with a Public label, which the next
+    /// `install_generator_execution` or `isolate_module_execution` refills
+    /// instead of allocating and clearing whole windows: an `await` or a
+    /// generator step moved four windows through the allocator
+    /// (bd-9vouw.500). Engine capacity of at most `SPARE_REGISTER_FILES`
+    /// pairs of at most `SPARE_REGISTER_FILE_WINDOWS` windows a file, not
+    /// charged.
+    spare_register_files: Vec<(Vec<Value>, Vec<Label>)>,
     /// The bytes of the last found-property witness event, kept so a
     /// property read folds its event without allocating a buffer. Engine
     /// capacity (at most PROPERTY_WITNESS_SCRATCH_MAX_CAPACITY bytes kept),
@@ -16603,6 +16683,7 @@ impl InterpreterCore {
             estimated_memory_bytes,
             simple_callback_temporary_bytes: 0,
             simple_callback_register_pool: Vec::new(),
+            spare_register_files: Vec::new(),
             property_witness_scratch: Vec::new(),
             call_argument_value_scratch: Vec::new(),
             call_argument_label_scratch: Vec::new(),
@@ -34522,6 +34603,7 @@ impl InterpreterCore {
         )
     }
 
+    #[inline]
     fn live_execution_seed_reserved_bytes(&self) -> u64 {
         if self
             .execution_seed_reservation_ledger
@@ -34536,6 +34618,7 @@ impl InterpreterCore {
         }
     }
 
+    #[inline]
     fn total_memory_bytes_from_base(&self, base_bytes: u64) -> u64 {
         base_bytes
             .saturating_add(self.live_execution_seed_reserved_bytes())
@@ -35671,6 +35754,7 @@ impl InterpreterCore {
     /// HomeObject-bound closure. A method selected through a secret definition
     /// key/prototype must taint literals, throws, and zero-argument effects in
     /// its body, not only the explicit argument registers it happens to read.
+    #[inline]
     fn active_execution_context_label(&self) -> Option<&Label> {
         let mut winner = self.active_inline_callback_context_label.as_ref();
         // bd-9vouw.72: the frames' first strict maximum, kept by the call
@@ -35743,12 +35827,17 @@ impl InterpreterCore {
         Ok(joined.clone())
     }
 
+    #[inline]
     fn join_owned_label_with_temporary_budget(
         &self,
         owned: Label,
         other: &Label,
     ) -> Result<Label, InterpreterError> {
-        if &owned >= other {
+        // Public is the bottom of Label's order (level 0, before any
+        // same-level Custom): `owned >= Public` always holds, so the usual
+        // join with a Public operand skips the out-of-line comparison
+        // (bd-9vouw.504).
+        if matches!(other, Label::Public) || &owned >= other {
             return Ok(owned);
         }
         drop(owned);
@@ -37445,8 +37534,11 @@ impl InterpreterCore {
     /// as before, as the overwrite left them.
     fn isolate_module_execution(&mut self) -> Result<ModuleExecutionSnapshot, InterpreterError> {
         let accounted_bytes = self.charge_module_execution_snapshot()?;
-        let fresh_registers = vec![Value::Undefined; self.config.max_registers as usize];
-        let fresh_labels = vec![Label::Public; self.register_labels.len()];
+        // The spare files are cleared throughout (bd-9vouw.500).
+        let (mut fresh_registers, mut fresh_labels) =
+            self.take_spare_register_files(self.config.max_registers as usize);
+        fresh_registers.resize(self.config.max_registers as usize, Value::Undefined);
+        fresh_labels.resize(self.register_labels.len(), Label::Public);
         let register_bytes = self.registers_memory_bytes();
         let registers = std::mem::replace(&mut self.registers.value, fresh_registers);
         // `Undefined` carries no bytes beyond its slot.
@@ -37455,13 +37547,16 @@ impl InterpreterCore {
         let register_labels = std::mem::replace(&mut self.register_labels, fresh_labels);
         // A Public label owns no bytes beyond its slot.
         self.register_labels_bytes.set(Some(0));
-        Ok(self.module_execution_snapshot(
+        let snapshot = self.module_execution_snapshot(
             accounted_bytes,
             registers,
             register_bytes,
             register_labels,
             register_label_bytes,
-        ))
+        );
+        // The fresh files are clear throughout (bd-9vouw.499).
+        self.register_dirty_end = 0;
+        Ok(snapshot)
     }
 
     /// Charge a module-execution snapshot of the current state to the budget
@@ -37493,6 +37588,7 @@ impl InterpreterCore {
             generator_delegation: self.generator_delegation.clone(),
             register_labels,
             register_label_bytes,
+            register_dirty_end: self.register_dirty_end,
             active_inline_callback_context_label: self.active_inline_callback_context_label.clone(),
             call_stack: self.call_stack.to_vec(),
             ip: self.ip,
@@ -37530,6 +37626,8 @@ impl InterpreterCore {
             snapshot.register_labels,
             Some(snapshot.register_label_bytes),
         );
+        // No one writes the files while they are parked (bd-9vouw.499).
+        self.register_dirty_end = snapshot.register_dirty_end;
         self.active_inline_callback_context_label = snapshot.active_inline_callback_context_label;
         self.call_stack
             .replace(snapshot.call_stack, &mut self.closures.cold_cells);
@@ -47189,7 +47287,6 @@ impl InterpreterCore {
         // pushed change, so neither side is re-walked.
         let previous_scope_bytes =
             (!scope_inert_activation).then(|| self.scope_chain_structural_bytes());
-        let callee_frames = (!scope_inert_activation).then(|| self.scope_chain.frames.clone());
         #[cfg(debug_assertions)]
         let walked_scope_before =
             (!scope_inert_activation).then(|| self.scope_chain_memory_bytes());
@@ -47229,13 +47326,18 @@ impl InterpreterCore {
                 Self::terminal_async_failure_label(label)
             });
             let return_ip = frame.return_ip;
-            self.restore_call_frame_state(&mut frame);
+            let callee_frames = if scope_inert_activation {
+                self.restore_call_frame_state(&mut frame);
+                Vec::new()
+            } else {
+                self.restore_call_frame_control_state(&mut frame);
+                self.swap_back_returning_scope_chain(&mut frame)
+            };
             self.ip = return_ip;
             let frame_memory_result = match (previous_scope_bytes, previous_closure_bytes) {
                 (Some(previous_scope_bytes), Some(previous_closure_bytes)) => {
-                    let released_cell_bytes = self.released_frame_cell_payload_bytes(
-                        callee_frames.as_deref().unwrap_or_default(),
-                    );
+                    let released_cell_bytes =
+                        self.released_frame_cell_payload_bytes(&callee_frames);
                     #[cfg(debug_assertions)]
                     self.debug_assert_scope_swap_delta(
                         walked_scope_before.expect("ordinary scope accounting"),
@@ -47307,16 +47409,55 @@ impl InterpreterCore {
     }
 
     fn restore_call_frame_state(&mut self, frame: &mut CallFrame) {
+        self.restore_call_frame_control_state(frame);
+        self.restore_scope_chain_for_frame(frame);
+    }
+
+    /// Everything [`Self::restore_call_frame_state`] restores but the scope
+    /// chain.
+    fn restore_call_frame_control_state(&mut self, frame: &mut CallFrame) {
         self.register_base = frame.register_base;
         self.register_width = frame.register_width;
         self.suspended_abrupt_completions
             .truncate(frame.saved_suspended_abrupt_depth);
         self.finally_frames.truncate(frame.saved_finally_mode_depth);
-        self.restore_scope_chain_for_frame(frame);
         self.pending_exception = frame.saved_pending_exception.take();
         self.pending_exception_label =
             std::mem::replace(&mut frame.saved_pending_exception_label, Label::Public);
         self.pending_return = frame.saved_pending_return.take();
+    }
+
+    /// The scope half of [`Self::restore_call_frame_state`] for the frame
+    /// `complete_return` pops from an activation that replaced the chain,
+    /// giving back the callee frames that leave the chain for
+    /// `released_frame_cell_payload_bytes`. They were cloned before the swap:
+    /// a Vec and a reference count per frame on every return (bd-9vouw.504).
+    /// A plain return also moves the saved chain back instead of cloning it.
+    /// An async settle or a derived constructor's field initializers run code
+    /// before the frame drops, so those keep the frame's copy, and with it
+    /// every map's sharing count, until then, as before.
+    fn swap_back_returning_scope_chain(&mut self, frame: &mut CallFrame) -> Vec<ScopeFrame> {
+        debug_assert_eq!(frame.scope_inert_virtual_scope_bytes, 0);
+        let runs_code_before_drop =
+            frame.async_function_id.is_some() || frame.initialize_derived_this_on_return;
+        let saved = if runs_code_before_drop {
+            frame.saved_scope_chain.clone()
+        } else {
+            frame.saved_scope_chain.take()
+        };
+        match saved {
+            Some(saved) => std::mem::replace(&mut self.scope_chain.frames, saved),
+            None => {
+                let mut left = Vec::new();
+                while self.scope_chain.depth() > frame.saved_scope_depth {
+                    let Some(popped) = self.scope_chain.pop() else {
+                        break;
+                    };
+                    left.push(popped);
+                }
+                left
+            }
+        }
     }
 
     fn settle_async_function(
@@ -47701,11 +47842,6 @@ impl InterpreterCore {
                 ),
             });
         }
-        // Only the restored range of the register file changes, so its bytes
-        // are the register component delta. Measuring the whole file walked
-        // every live frame twice per await.
-        let previous_register_bytes =
-            self.register_range_memory_bytes(saved_register_base..window_end);
         let (saved_registers, saved_register_labels) = {
             let async_function = self
                 .async_functions
@@ -47726,22 +47862,45 @@ impl InterpreterCore {
         // Restore register file
         let reg_start = self.register_base;
 
-        // perf: hot path - use into_iter to avoid cloning each register value
+        // Only the restored window changes, so the bytes leaving and entering
+        // it are the register component delta, and they move the cached file
+        // sums. One pass writes the saved prefix and clears the rest of the
+        // window: summing the window before and after and dropping the caches
+        // walked it twice and the whole file at the next read (bd-9vouw.500).
+        let mut previous_value_bytes = 0u64;
+        let mut next_value_bytes = 0u64;
         self.note_registers_written_to(reg_end);
+        let cached_value_bytes = self.registers_value_bytes.get();
         self.mutate_registers(|r| {
-            for (i, value) in saved_registers.into_iter().enumerate() {
-                r[reg_start + i] = value;
+            let mut saved = saved_registers.into_iter();
+            for slot in &mut r[reg_start..window_end] {
+                let value = saved.next().unwrap_or(Value::Undefined);
+                previous_value_bytes =
+                    previous_value_bytes.saturating_add(Self::estimate_value_bytes(slot));
+                next_value_bytes =
+                    next_value_bytes.saturating_add(Self::estimate_value_bytes(&value));
+                *slot = value;
             }
-            r[reg_end..window_end].fill(Value::Undefined);
         });
-        for (slot, label) in self.register_labels[reg_start..reg_end]
-            .iter_mut()
-            .zip(saved_register_labels)
-        {
+        self.registers_value_bytes
+            .set(cached_value_bytes.map(|bytes| {
+                bytes
+                    .saturating_sub(previous_value_bytes)
+                    .saturating_add(next_value_bytes)
+            }));
+        let mut previous_label_bytes = 0u64;
+        let mut next_label_bytes = 0u64;
+        let mut saved_labels = saved_register_labels.into_iter();
+        for slot in &mut self.register_labels[reg_start..window_end] {
+            let label = saved_labels.next().unwrap_or(Label::Public);
+            previous_label_bytes =
+                previous_label_bytes.saturating_add(Self::estimate_label_bytes(slot));
+            next_label_bytes = next_label_bytes.saturating_add(Self::estimate_label_bytes(&label));
             *slot = label;
         }
-        self.register_labels[reg_end..window_end].fill(Label::Public);
-        self.register_labels_bytes.set(None);
+        self.adjust_register_labels_bytes(previous_label_bytes, next_label_bytes);
+        let previous_register_bytes = previous_value_bytes.saturating_add(previous_label_bytes);
+        let next_register_bytes = next_value_bytes.saturating_add(next_label_bytes);
 
         // Resume execution - now we can safely get the mutable reference
         let async_function = self
@@ -47753,7 +47912,6 @@ impl InterpreterCore {
             })?;
         async_function.phase = AsyncFunctionPhase::Executing;
         let next_async_bytes = Self::estimate_async_function_bytes(async_function);
-        let next_register_bytes = self.register_range_memory_bytes(reg_start..window_end);
         self.estimated_memory_bytes = self
             .estimated_memory_bytes
             .saturating_sub(previous_register_bytes)
@@ -49783,14 +49941,18 @@ impl InterpreterCore {
             .as_ref()
             .map(|environment| Self::estimate_scope_chain_bytes(environment))
             .unwrap_or(0);
-        let saved_scope_chain = if captured_env.is_some() {
-            Some(self.snapshot_scope_chain_with_temporary_budget(captured_env_bytes)?)
-        } else {
-            None
-        };
+        if captured_env.is_some() {
+            self.preflight_scope_chain_snapshot_with_temporary_budget(captured_env_bytes)?;
+        }
         let previous_scope_bytes = self.scope_chain_memory_bytes();
         let previous_closure_bytes = self.closures_memory_bytes();
         let previous_call_stack_bytes = self.call_stack_memory_bytes();
+        // The callee's environment replaces the caller's chain below, so the
+        // frame takes the chain itself rather than a copy (bd-9vouw.504);
+        // nothing reads the chain until the environment is in place.
+        let saved_scope_chain = captured_env
+            .is_some()
+            .then(|| std::mem::take(&mut self.scope_chain.frames));
         let pushed_frame = CallFrame {
             return_ip,
             return_reg,
@@ -50089,6 +50251,8 @@ impl InterpreterCore {
             register_len: max_registers,
             register_label_len: max_registers,
             register_dirty_end: max_registers,
+            registers_value_bytes: None,
+            register_labels_bytes: None,
             delegation: None,
             active_inline_callback_context_label: invocation.inline_context_label,
             call_stack: vec![CallFrame {
@@ -50147,15 +50311,34 @@ impl InterpreterCore {
 
     fn take_generator_execution(&mut self) -> GeneratorExecutionSnapshot {
         self.before_seed_surface_write();
-        let registers = std::mem::take(&mut self.registers.value);
-        self.registers_value_bytes.set(Some(0));
-        let register_labels = std::mem::take(&mut self.register_labels);
-        self.register_labels_bytes.set(Some(0));
-        let mut execution = GeneratorExecutionSnapshot {
-            register_len: registers.len(),
-            register_label_len: register_labels.len(),
+        let register_len = self.registers.len();
+        let register_label_len = self.register_labels.len();
+        // The snapshot takes the files' live prefix (the trim of
+        // bd-9vouw.167) by moving each value out, which leaves the core's
+        // files cleared throughout: they become the spare the next install
+        // refills, instead of being truncated, reallocated and padded back
+        // to full windows on every step (bd-9vouw.500).
+        let live = live_register_prefix_len(&self.registers, &self.register_labels);
+        let registers: Vec<Value> = self.registers.value[..live.min(register_len)]
+            .iter_mut()
+            .map(|value| std::mem::replace(value, Value::Undefined))
+            .collect();
+        let register_labels: Vec<Label> = self.register_labels[..live.min(register_label_len)]
+            .iter_mut()
+            .map(|label| std::mem::replace(label, Label::Public))
+            .collect();
+        let registers_value_bytes = self.registers_value_bytes.replace(Some(0));
+        let register_labels_bytes = self.register_labels_bytes.replace(Some(0));
+        let cleared_registers = std::mem::take(&mut self.registers.value);
+        let cleared_labels = std::mem::take(&mut self.register_labels);
+        self.keep_spare_register_files(cleared_registers, cleared_labels);
+        GeneratorExecutionSnapshot {
+            register_len,
+            register_label_len,
             // The core's files are empty now, so nothing past 0 is dirty.
             register_dirty_end: std::mem::take(&mut self.register_dirty_end),
+            registers_value_bytes,
+            register_labels_bytes,
             registers,
             register_labels,
             delegation: self.generator_delegation.take(),
@@ -50183,9 +50366,39 @@ impl InterpreterCore {
             current_module_specifier: self.current_module_specifier.take(),
             active_generated_function_artifact: self.active_generated_function_artifact.take(),
             contained_codegen_grant: None,
-        };
-        execution.trim_cleared_register_tail();
-        execution
+        }
+    }
+
+    /// Keep `registers` and `labels`, every slot cleared, as spare files
+    /// (`spare_register_files`) unless they are longer than the cap; the
+    /// oldest spare goes once there are more than SPARE_REGISTER_FILES.
+    fn keep_spare_register_files(&mut self, registers: Vec<Value>, labels: Vec<Label>) {
+        let cap = SPARE_REGISTER_FILE_WINDOWS.saturating_mul(self.config.max_registers as usize);
+        if registers.len() <= cap && labels.len() <= cap {
+            debug_assert_eq!(
+                live_register_prefix_len(&registers, &labels),
+                0,
+                "a spare register file holds a value or a label (bd-9vouw.500)"
+            );
+            self.spare_register_files.push((registers, labels));
+            if self.spare_register_files.len() > SPARE_REGISTER_FILES {
+                self.spare_register_files.remove(0);
+            }
+        }
+    }
+
+    /// The spare files to refill into a file of `len` values: those of that
+    /// length if any, else new empty ones. A spare of another length stays:
+    /// a step takes one file and installs one, so a spare handed out for
+    /// the wrong length was cut or regrown on every install, and the pool
+    /// never held one of each length (bd-9vouw.500).
+    fn take_spare_register_files(&mut self, len: usize) -> (Vec<Value>, Vec<Label>) {
+        self.spare_register_files
+            .iter()
+            .position(|(registers, _)| registers.len() == len)
+            .map_or_else(Default::default, |index| {
+                self.spare_register_files.remove(index)
+            })
     }
 
     fn async_function_ids_in_call_stack(
@@ -50518,6 +50731,10 @@ impl InterpreterCore {
             .first_mut()
             .map(|label| std::mem::replace(label, Label::Public))
             .unwrap_or(Label::Public);
+        let moved_label_bytes = Self::estimate_label_bytes(&result_label);
+        execution.register_labels_bytes = execution
+            .register_labels_bytes
+            .map(|bytes| bytes.saturating_sub(moved_label_bytes));
         self.closures.replace_activation(
             &mut self.async_functions[suspended_async_id as usize].isolated_execution,
             Some(execution),
@@ -50582,17 +50799,26 @@ impl InterpreterCore {
 
     fn install_generator_execution(&mut self, execution: GeneratorExecutionSnapshot) {
         self.before_seed_surface_write();
-        let mut registers = execution.registers;
-        let mut register_labels = execution.register_labels;
-        if registers.len() < execution.register_len {
-            registers.resize(execution.register_len, Value::Undefined);
-        }
-        if register_labels.len() < execution.register_label_len {
-            register_labels.resize(execution.register_label_len, Label::Public);
-        }
+        // The spare files are cleared throughout, so only the parked prefix
+        // and any difference in length are written (bd-9vouw.500).
+        let (mut registers, mut register_labels) =
+            self.take_spare_register_files(execution.register_len);
+        refill_cleared_file(
+            &mut registers,
+            execution.registers,
+            execution.register_len,
+            Value::Undefined,
+        );
+        refill_cleared_file(
+            &mut register_labels,
+            execution.register_labels,
+            execution.register_label_len,
+            Label::Public,
+        );
         self.registers.value = registers;
-        self.registers_value_bytes.set(None);
-        self.install_register_labels(register_labels, None);
+        self.registers_value_bytes
+            .set(execution.registers_value_bytes);
+        self.install_register_labels(register_labels, execution.register_labels_bytes);
         self.register_dirty_end = execution.register_dirty_end;
         self.generator_delegation = execution.delegation;
         self.active_inline_callback_context_label = execution.active_inline_callback_context_label;
@@ -52482,8 +52708,9 @@ impl InterpreterCore {
             // allocated its capability tag only to drop it (bd-9vouw.348).
             let reentrant_only =
                 compact_instruction.is_none() && self.tier_r_always_reentrant(instr_ref);
-            let instr =
+            let mut instr =
                 (compact_instruction.is_none() && !reentrant_only).then(|| instr_ref.clone());
+            let mut spread_apply_arguments = None;
             self.instructions_executed += 1;
 
             // Checkpoint guard integration: tick on each instruction
@@ -52525,10 +52752,24 @@ impl InterpreterCore {
                 continue;
             }
             if reentrant_only {
-                return Ok(DispatchOutcome::ReentrantInstruction {
-                    instruction_ip: self.ip,
-                    profile_start,
-                });
+                // bd-9vouw.501: a spread call `f(...list)` is the Reflect.apply
+                // hostcall over a fresh array; when building the argument list
+                // is unobservable it runs as the method call `undefined.f(...)`,
+                // the list handed to the CallMethod handler as
+                // `apply_arguments`. Only the reentrant instructions reach this
+                // check: made before the dispatch, it cost every instruction.
+                match self.spread_call_as_method_call(module, instr_ref)? {
+                    Some((call, values)) => {
+                        instr = Some(call);
+                        spread_apply_arguments = Some(values);
+                    }
+                    None => {
+                        return Ok(DispatchOutcome::ReentrantInstruction {
+                            instruction_ip: self.ip,
+                            profile_start,
+                        });
+                    }
+                }
             }
 
             // bd-9vouw.37: a numeric operator with an object operand runs its
@@ -52627,9 +52868,11 @@ impl InterpreterCore {
                     });
                 }
                 Ir3Instruction::Move { dst, src } => {
-                    let result_label = self.unary_operation_label(src)?;
-                    let val = self.read_reg(src)?;
-                    self.write_reg_with_label(dst, val, result_label)?;
+                    if !self.static_move(dst, src) {
+                        let result_label = self.unary_operation_label(src)?;
+                        let val = self.read_reg(src)?;
+                        self.write_reg_with_label(dst, val, result_label)?;
+                    }
                     self.ip += 1;
                 }
                 Ir3Instruction::Jump { target } => {
@@ -53357,6 +53600,52 @@ impl InterpreterCore {
                         };
                     }
 
+                    // bd-9vouw.501: `f.apply(t, list)` and `Reflect.apply(f,
+                    // t, list)` likewise, when building the list is
+                    // unobservable (`unobservable_apply_arguments`): the list
+                    // reaches the frame as overflow registers instead of an
+                    // isolated activation running `f` in a nested run loop,
+                    // which also capped a recursion through apply at the
+                    // reentrant depth. A spread call arrives here rewritten
+                    // from its Reflect.apply hostcall, its list taken.
+                    let mut apply_arguments = spread_apply_arguments.take();
+                    if apply_arguments.is_none()
+                        && let Value::BuiltinFunction(builtin) = &callee_val
+                        && builtin.bound_object.is_none()
+                    {
+                        let operands = match builtin.kind {
+                            BuiltinFunctionKind::FunctionPrototypeApply if args.count >= 2 => {
+                                Some((receiver, args.start, args.start + 1))
+                            }
+                            BuiltinFunctionKind::StaticHostcall
+                                if args.count >= 3
+                                    && &*builtin.module_specifier == "builtin:ReflectApply" =>
+                            {
+                                Some((args.start, args.start + 1, args.start + 2))
+                            }
+                            _ => None,
+                        };
+                        if let Some((function, this, list)) = operands
+                            && let Some(values) = self.unobservable_apply_arguments(
+                                module,
+                                &[receiver, callee],
+                                function,
+                                this,
+                                list,
+                            )?
+                        {
+                            callee = function;
+                            callee_val = self.read_reg(callee)?;
+                            receiver = this;
+                            receiver_val = self.read_reg(receiver)?;
+                            args = RegRange {
+                                start: self.config.max_registers,
+                                count: values.len() as u32,
+                            };
+                            apply_arguments = Some(values);
+                        }
+                    }
+
                     if let Value::BuiltinFunction(builtin) = callee_val {
                         return Ok(DispatchOutcome::BuiltinCall {
                             builtin,
@@ -53728,20 +54017,34 @@ impl InterpreterCore {
                     }
 
                     let (mut arg_vals, mut arg_labels) = self.take_call_argument_scratch();
-                    for i in 0..args.count.min(func.arity) {
-                        let reg = args.start.checked_add(i).ok_or(
-                            InterpreterError::RegisterOutOfBounds {
-                                register: args.start,
-                                max: self.config.max_registers,
-                            },
-                        )?;
-                        arg_vals.push(self.read_reg(reg)?);
-                        arg_labels.push(self.get_register_label(reg)?.clone());
+                    // An apply list (bd-9vouw.501) is registers
+                    // max_registers.. of this frame while the parameters,
+                    // the rest parameter and `arguments` take it, and only
+                    // then, whatever their outcome.
+                    let overflow_depth = match apply_arguments.take() {
+                        Some(values) => Some(self.install_apply_argument_overflow(values)?),
+                        None => None,
+                    };
+                    let bound = (|| -> Result<(), InterpreterError> {
+                        for i in 0..args.count.min(func.arity) {
+                            let reg = args.start.checked_add(i).ok_or(
+                                InterpreterError::RegisterOutOfBounds {
+                                    register: args.start,
+                                    max: self.config.max_registers,
+                                },
+                            )?;
+                            arg_vals.push(self.read_reg(reg)?);
+                            arg_labels.push(self.get_register_label(reg)?.clone());
+                        }
+                        self.mark_inline_callback_started();
+                        self.apply_rest_param(&mut arg_vals, func.rest_param_index, args)?;
+                        self.apply_rest_param_labels(&mut arg_labels, func.rest_param_index, args)?;
+                        self.stage_arguments_object(module, func, func_idx, &callee_val, args)
+                    })();
+                    if let Some(depth) = overflow_depth {
+                        self.restore_argument_overflow(depth);
                     }
-                    self.mark_inline_callback_started();
-                    self.apply_rest_param(&mut arg_vals, func.rest_param_index, args)?;
-                    self.apply_rest_param_labels(&mut arg_labels, func.rest_param_index, args)?;
-                    self.stage_arguments_object(module, func, func_idx, &callee_val, args)?;
+                    bound?;
 
                     self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
@@ -54024,9 +54327,13 @@ impl InterpreterCore {
                         Value::Object(object_id) => Some(*object_id),
                         _ => None,
                     };
-                    let ordinary_own_property_fast_path = object_id.is_some_and(|object_id| {
-                        self.ordinary_own_property_read_fast_path_eligible(object_id, &property_key)
+                    let mut ordinary_own_property_read = object_id.and_then(|object_id| {
+                        self.ordinary_own_property_fast_read(object_id, &property_key)
                     });
+                    let ordinary_own_property_fast_path = ordinary_own_property_read.is_some();
+                    // A data property's stored label from the fast read, for
+                    // the owner-label join below (bd-9vouw.504).
+                    let mut ordinary_own_property_label = None;
                     let has_hook_target = object_id.is_some()
                         || matches!(
                             &obj_val,
@@ -54216,16 +54523,10 @@ impl InterpreterCore {
                                     // as an ordinary property (bd-9vouw.318).
                                     let link = self.ordinary_get_prototype_of(oid)?;
                                     self.prototype_value_for_link(Some(module), link)
-                                } else if ordinary_own_property_fast_path {
-                                    let value = self
-                                    .heap
-                                    .get(oid.0 as usize)
-                                    .and_then(|object| {
-                                        object.own_runtime_property_value(&property_key)
-                                    })
-                                    .expect(
-                                        "ordinary own-property fast-path eligibility was checked",
-                                    );
+                                } else if let Some((value, stored_label)) =
+                                    ordinary_own_property_read.take()
+                                {
+                                    ordinary_own_property_label = stored_label;
                                     self.capture_property_resolution_found(&property_key, oid, 0);
                                     self.resolve_accessor_get(
                                         Some(module),
@@ -54701,7 +55002,13 @@ impl InterpreterCore {
                         .or(function_backing.filter(|_| authoritative_standard_backing.is_none()))
                         .or(primitive_owner)
                     {
-                        let stored_label = self.runtime_property_label(owner, &property_key);
+                        // The fast read's owner is `object_id` itself, and a
+                        // plain object never continues to an intrinsic
+                        // prototype above (`inherited_base`).
+                        let stored_label = match ordinary_own_property_label.take() {
+                            Some(label) => label,
+                            None => self.runtime_property_label(owner, &property_key),
+                        };
                         result_label = self
                             .join_owned_label_with_temporary_budget(result_label, &stored_label)?;
                     }
@@ -57640,17 +57947,19 @@ impl InterpreterCore {
                 self.ip += 1;
             }
             Op::Move => {
-                let result_label = self.unary_operation_label(lhs)?;
-                let value = self.read_reg(lhs)?;
-                self.write_reg_with_label(dst, value, result_label)?;
+                if !self.static_move(dst, lhs) {
+                    let result_label = self.unary_operation_label(lhs)?;
+                    let value = self.read_reg(lhs)?;
+                    self.write_reg_with_label(dst, value, result_label)?;
+                }
                 self.ip += 1;
             }
             Op::Add => {
                 let mut compact_handled = false;
-                if let Some((left, right)) = self.compact_public_int_operands(dst, lhs, rhs) {
+                if let Some((left, right, slot)) = self.compact_public_int_operands(dst, lhs, rhs) {
                     if let Some(sum) = left.checked_add(right) {
                         if sum >= MIN_SAFE_INTEGER && sum <= MAX_SAFE_INTEGER {
-                            self.write_reg_with_label(dst, Value::Int(sum), Label::Public)?;
+                            self.write_static_slot(slot, Value::Int(sum));
                             self.record_tier_i_specialization();
                             compact_handled = true;
                         }
@@ -57666,10 +57975,10 @@ impl InterpreterCore {
             }
             Op::Sub => {
                 let mut compact_handled = false;
-                if let Some((left, right)) = self.compact_public_int_operands(dst, lhs, rhs) {
+                if let Some((left, right, slot)) = self.compact_public_int_operands(dst, lhs, rhs) {
                     if let Some(diff) = left.checked_sub(right) {
                         if diff >= MIN_SAFE_INTEGER && diff <= MAX_SAFE_INTEGER {
-                            self.write_reg_with_label(dst, Value::Int(diff), Label::Public)?;
+                            self.write_static_slot(slot, Value::Int(diff));
                             self.record_tier_i_specialization();
                             compact_handled = true;
                         }
@@ -57684,11 +57993,11 @@ impl InterpreterCore {
             }
             Op::Mul => {
                 let mut compact_handled = false;
-                if let Some((left, right)) = self.compact_public_int_operands(dst, lhs, rhs) {
+                if let Some((left, right, slot)) = self.compact_public_int_operands(dst, lhs, rhs) {
                     if !((left == 0 && right < 0) || (right == 0 && left < 0)) {
                         if let Some(prod) = left.checked_mul(right) {
                             if prod >= MIN_SAFE_INTEGER && prod <= MAX_SAFE_INTEGER {
-                                self.write_reg_with_label(dst, Value::Int(prod), Label::Public)?;
+                                self.write_static_slot(slot, Value::Int(prod));
                                 self.record_tier_i_specialization();
                                 compact_handled = true;
                             }
@@ -57733,10 +58042,10 @@ impl InterpreterCore {
                 let delta: i64 = if instruction.opcode == Op::Inc { 1 } else { -1 };
                 let stepped = self
                     .compact_public_int_operands(dst, lhs, lhs)
-                    .and_then(|(value, _)| value.checked_add(delta))
-                    .filter(|value| (MIN_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(value));
-                if let Some(stepped) = stepped {
-                    self.write_reg_with_label(dst, Value::Int(stepped), Label::Public)?;
+                    .and_then(|(value, _, slot)| Some((value.checked_add(delta)?, slot)))
+                    .filter(|(value, _)| (MIN_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(value));
+                if let Some((stepped, slot)) = stepped {
+                    self.write_static_slot(slot, Value::Int(stepped));
                     self.record_tier_i_specialization();
                 } else {
                     let result_label = self.unary_operation_label(lhs)?;
@@ -57863,7 +58172,12 @@ impl InterpreterCore {
     /// destination growth, dynamic destination ownership, or over-budget base
     /// state falls back before mutation to the canonical helpers.
     #[inline(always)]
-    fn compact_public_int_operands(&self, dst: u32, lhs: u32, rhs: u32) -> Option<(i64, i64)> {
+    fn compact_public_int_operands(
+        &self,
+        dst: u32,
+        lhs: u32,
+        rhs: u32,
+    ) -> Option<(i64, i64, StaticWriteSlot)> {
         if dst >= self.config.max_registers
             || lhs >= self.config.max_registers
             || rhs >= self.config.max_registers
@@ -57879,13 +58193,59 @@ impl InterpreterCore {
         ) else {
             return None;
         };
-        if self.register_labels.get(actual_lhs) != Some(&Label::Public)
-            || self.register_labels.get(actual_rhs) != Some(&Label::Public)
+        if !matches!(self.register_labels.get(actual_lhs), Some(Label::Public))
+            || !matches!(self.register_labels.get(actual_rhs), Some(Label::Public))
             || !self.static_register_write_eligible(actual_dst, &Value::Undefined, &Label::Public)
         {
             return None;
         }
-        Some((*left, *right))
+        Some((*left, *right, StaticWriteSlot(actual_dst)))
+    }
+
+    /// `Move dst, src` when the source value and label own no dynamic bytes
+    /// and the destination is eligible for a static write: the write
+    /// `write_reg_with_label` makes on its static path, without cloning the
+    /// label through a budget check (a static label is zero bytes; the
+    /// eligibility check refuses an over-budget state, which the generic
+    /// path reports) (bd-9vouw.504). False leaves every register untouched.
+    #[inline(always)]
+    fn static_move(&mut self, dst: u32, src: u32) -> bool {
+        if dst >= self.config.max_registers || src >= self.config.max_registers {
+            return false;
+        }
+        let actual_src = self.register_base + src as usize;
+        let actual_dst = self.register_base + dst as usize;
+        let (Some(value), Some(label)) = (
+            self.registers.get(actual_src),
+            self.register_labels.get(actual_src),
+        ) else {
+            return false;
+        };
+        if !Self::static_register_value(value) || !Self::static_register_label(label) {
+            return false;
+        }
+        let (value, label) = (value.clone(), label.clone());
+        if !self.static_register_write_eligible(actual_dst, &value, &label) {
+            return false;
+        }
+        self.note_register_written(actual_dst);
+        self.mutate_registers_by_bytes(0, 0, |registers| registers[actual_dst] = value);
+        self.register_labels[actual_dst] = label;
+        true
+    }
+
+    /// Store a compact operator's Public primitive result in the slot
+    /// `compact_public_int_operands` found eligible: the write
+    /// `write_reg_with_label` makes on its static path, without checking
+    /// eligibility a second time (bd-9vouw.504). Nothing runs between the
+    /// check and this write but the operator's integer arithmetic.
+    #[inline(always)]
+    fn write_static_slot(&mut self, slot: StaticWriteSlot, value: Value) {
+        debug_assert!(Self::static_register_value(&value));
+        let StaticWriteSlot(actual_reg) = slot;
+        self.note_register_written(actual_reg);
+        self.mutate_registers_by_bytes(0, 0, |registers| registers[actual_reg] = value);
+        self.register_labels[actual_reg] = Label::Public;
     }
 
     #[inline]
@@ -57896,7 +58256,7 @@ impl InterpreterCore {
         rhs: u32,
         operator: &str,
     ) -> Result<(), InterpreterError> {
-        if let Some((left, right)) = self.compact_public_int_operands(dst, lhs, rhs) {
+        if let Some((left, right, slot)) = self.compact_public_int_operands(dst, lhs, rhs) {
             // Preserve the canonical interpreter's current numeric comparison
             // projection through f64, including its behavior above 2^53.
             let left = left as f64;
@@ -57908,7 +58268,7 @@ impl InterpreterCore {
                 ">=" => left >= right,
                 _ => unreachable!("compact relational opcode is statically validated"),
             };
-            self.write_reg_with_label(dst, Value::Bool(result), Label::Public)?;
+            self.write_static_slot(slot, Value::Bool(result));
             self.record_tier_i_specialization();
         } else {
             let result_label = self.binary_operation_label(lhs, rhs)?;
@@ -57928,13 +58288,9 @@ impl InterpreterCore {
         strict: bool,
         negate: bool,
     ) -> Result<(), InterpreterError> {
-        if let Some((left, right)) = self.compact_public_int_operands(dst, lhs, rhs) {
+        if let Some((left, right, slot)) = self.compact_public_int_operands(dst, lhs, rhs) {
             let matches = left == right;
-            self.write_reg_with_label(
-                dst,
-                Value::Bool(if negate { !matches } else { matches }),
-                Label::Public,
-            )?;
+            self.write_static_slot(slot, Value::Bool(if negate { !matches } else { matches }));
             self.record_tier_i_specialization();
         } else {
             let result_label = self.binary_operation_label(lhs, rhs)?;
@@ -57953,7 +58309,7 @@ impl InterpreterCore {
         rhs: u32,
         operator: &str,
     ) -> Result<(), InterpreterError> {
-        if let Some((left, right)) = self.compact_public_int_operands(dst, lhs, rhs) {
+        if let Some((left, right, slot)) = self.compact_public_int_operands(dst, lhs, rhs) {
             let left = left as i32;
             let right = right as i32;
             let shift = (right as u32) & 31;
@@ -57966,7 +58322,7 @@ impl InterpreterCore {
                 ">>>" => (left as u32).wrapping_shr(shift) as i64,
                 _ => unreachable!("compact bitwise opcode is statically validated"),
             };
-            self.write_reg_with_label(dst, Value::Int(result), Label::Public)?;
+            self.write_static_slot(slot, Value::Int(result));
             self.record_tier_i_specialization();
         } else {
             let result_label = self.binary_operation_label(lhs, rhs)?;
@@ -63571,41 +63927,75 @@ impl InterpreterCore {
     /// hit remains on the generic path. The caller still runs the typed
     /// property hook, resolves accessors, joins stored-property and destination
     /// labels, and emits the same deterministic property-resolution event.
+    #[cfg(test)]
     fn ordinary_own_property_read_fast_path_eligible(
         &self,
         object_id: ObjectId,
         key: &RuntimePropertyKey,
     ) -> bool {
+        self.ordinary_own_property_read_object(object_id, key)
+            .is_some_and(|object| object.contains_own_runtime_property(key))
+    }
+
+    /// The object of an own-property read the fast path may serve, by the
+    /// exclusions above, whether or not it has the key.
+    fn ordinary_own_property_read_object(
+        &self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> Option<&HeapObject> {
         if key.as_str() == Some("__proto__") {
-            return false;
+            return None;
         }
-        let Some(object) = self.heap.get(object_id.0 as usize) else {
-            return false;
-        };
+        let object = self.heap.get(object_id.0 as usize)?;
         if object.is_import_meta
             || object.prototype.is_some()
             || object.array_buffer.is_some()
             || object.typed_array.is_some()
             || object.data_view.is_some()
             || object.brand() == Some(PROXY_TYPE_TAG)
-            || !object.contains_own_runtime_property(key)
         {
-            return false;
+            return None;
         }
 
-        !self.url_objects.contains_key(&object_id)
-            && !self.url_search_params.contains_key(&object_id)
-            && !self.cluster_facades.contains_key(&object_id)
+        // These host-object tables are empty in almost every program: the
+        // emptiness test spares a lookup per table on every read.
+        fn absent<V>(table: &BTreeMap<ObjectId, V>, object_id: &ObjectId) -> bool {
+            table.is_empty() || !table.contains_key(object_id)
+        }
+        (absent(&self.url_objects, &object_id)
+            && absent(&self.url_search_params, &object_id)
+            && absent(&self.cluster_facades, &object_id)
             && !self
                 .cluster_facades
                 .values()
                 .any(|state| state.settings == object_id)
-            && !self.readable_from_streams.contains_key(&object_id)
-            && !self.readable_terminal_states.contains_key(&object_id)
-            && !self.writable_streams.contains_key(&object_id)
-            && !self.writable_terminal_states.contains_key(&object_id)
-            && !self.loopback_servers.contains_key(&object_id)
-            && !self.loopback_sockets.contains_key(&object_id)
+            && absent(&self.readable_from_streams, &object_id)
+            && absent(&self.readable_terminal_states, &object_id)
+            && absent(&self.writable_streams, &object_id)
+            && absent(&self.writable_terminal_states, &object_id)
+            && absent(&self.loopback_servers, &object_id)
+            && absent(&self.loopback_sockets, &object_id))
+        .then_some(object)
+    }
+
+    /// The fast path's read (bd-9vouw.504): the own property's value, and
+    /// for a data property its stored label, one lookup each. A data
+    /// property's label is final: no code runs between this read and the
+    /// label join. An accessor's getter may delete or relabel the property
+    /// first, so its label is read after the getter, as before.
+    fn ordinary_own_property_fast_read(
+        &self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> Option<(Value, Option<Label>)> {
+        let object = self.ordinary_own_property_read_object(object_id, key)?;
+        let value = object.own_runtime_property_value(key)?;
+        if matches!(value, Value::Accessor { .. }) {
+            return Some((value, None));
+        }
+        let label = self.own_stored_runtime_property_label(object_id, key);
+        Some((value, Some(label)))
     }
 
     fn capture_property_resolution_found(
@@ -72327,7 +72717,9 @@ impl InterpreterCore {
 
         let key = match value {
             Value::Str(key) => key.clone(),
-            Value::Int(number) => JsString::from(number.to_string()),
+            Value::Int(number) => {
+                small_index_key(*number).unwrap_or_else(|| JsString::from(number.to_string()))
+            }
             _ => JsString::from(Self::property_key(value)),
         };
         RuntimePropertyKey::String(key)
@@ -81784,6 +82176,146 @@ impl InterpreterCore {
             .simple_callback_temporary_bytes
             .saturating_sub(reserved);
         result
+    }
+
+    /// bd-9vouw.501: the argument list of `f.apply(t, list)`,
+    /// `Reflect.apply(f, t, list)` or a spread call `f(...list)` (the
+    /// Reflect.apply hostcall over a fresh array) when `f` can run as an
+    /// ordinary frame of this run loop, with the list as its arguments,
+    /// exactly as the isolated activation of `forward_function_invocation`
+    /// would run it: `f` (in `function_register`) is a same-module closure
+    /// or function; no embedder hook and no execution context label is
+    /// active; `labelled_registers` (the call's own operands) and the
+    /// function, receiver and list registers are Public, as are the list's
+    /// mutation label and property labels, so the isolated call's context
+    /// label would be Public; and the list is an ordinary Array whose
+    /// `length` is an Int within MAX_CALL_ARGUMENTS and whose elements
+    /// 0..length are own data properties, so CreateListFromArrayLike's
+    /// [[Get]]s run no getter. Charges the instruction budget as
+    /// `observable_apply_arguments` does: one unit, then one per element.
+    fn unobservable_apply_arguments(
+        &mut self,
+        module: &Ir3Module,
+        labelled_registers: &[u32],
+        function_register: u32,
+        receiver_register: u32,
+        list_register: u32,
+    ) -> Result<Option<Vec<Value>>, InterpreterError> {
+        if self.hook.is_some()
+            || self
+                .active_execution_context_label()
+                .is_some_and(|label| *label != Label::Public)
+        {
+            return Ok(None);
+        }
+        let operands = [function_register, receiver_register, list_register];
+        for &register in labelled_registers.iter().chain(&operands) {
+            if *self.get_register_label(register)? != Label::Public {
+                return Ok(None);
+            }
+        }
+        let function = self.read_reg(function_register)?;
+        if !matches!(function, Value::Closure(_) | Value::Function(_))
+            || self.foreign_closure_module(&function, module)?.is_some()
+        {
+            return Ok(None);
+        }
+        let Value::Object(list) = self.read_reg(list_register)? else {
+            return Ok(None);
+        };
+        if self
+            .object_mutation_labels
+            .get(&list)
+            .is_some_and(|label| *label != Label::Public)
+            || self.active_proxy_record(list)?.is_some()
+        {
+            return Ok(None);
+        }
+        let Some(object) = self.heap.get(list.0 as usize) else {
+            return Ok(None);
+        };
+        if !object.is_array || object.typed_array.is_some() || !object.property_labels.is_empty() {
+            return Ok(None);
+        }
+        let length = match object.properties.get("length") {
+            Some(Value::Int(length)) if (0..=i64::from(MAX_CALL_ARGUMENTS)).contains(length) => {
+                *length as u32
+            }
+            _ => return Ok(None),
+        };
+        let mut values = Vec::with_capacity(length as usize);
+        for index in 0..length {
+            match object.properties.get_index(index) {
+                None | Some(Value::Accessor { .. }) => return Ok(None),
+                Some(value) => values.push(value.clone()),
+            }
+        }
+        for _ in 0..=length {
+            self.json_charge_work()?;
+        }
+        Ok(Some(values))
+    }
+
+    /// The CallMethod a spread call's Reflect.apply hostcall runs as, with
+    /// its argument list, when `unobservable_apply_arguments` allows it
+    /// (bd-9vouw.501); `None` for any other instruction, and while the
+    /// profiler observes instructions.
+    fn spread_call_as_method_call(
+        &mut self,
+        module: &Ir3Module,
+        instruction: &Ir3Instruction,
+    ) -> Result<Option<(Ir3Instruction, Vec<Value>)>, InterpreterError> {
+        let Ir3Instruction::HostCall {
+            capability,
+            args,
+            dst,
+        } = instruction
+        else {
+            return Ok(None);
+        };
+        if self.profiling_data.is_some()
+            || args.count != 3
+            || capability.0 != "builtin:ReflectApply"
+        {
+            return Ok(None);
+        }
+        let Some(values) = self.unobservable_apply_arguments(
+            module,
+            &[],
+            args.start,
+            args.start + 1,
+            args.start + 2,
+        )?
+        else {
+            return Ok(None);
+        };
+        let call = Ir3Instruction::CallMethod {
+            receiver: args.start + 1,
+            callee: args.start,
+            args: RegRange {
+                start: self.config.max_registers,
+                count: values.len() as u32,
+            },
+            dst: *dst,
+        };
+        Ok(Some((call, values)))
+    }
+
+    /// Make `values` (Public) registers `max_registers..` of the active frame
+    /// for the call that binds them, as `stage_argument_overflow` does for a
+    /// synthetic call site (bd-9vouw.501).
+    fn install_apply_argument_overflow(
+        &mut self,
+        values: Vec<Value>,
+    ) -> Result<usize, InterpreterError> {
+        let labels = vec![Label::Public; values.len()];
+        let bytes = Self::estimate_value_vec_bytes(&values).saturating_add(
+            u64::try_from(labels.len())
+                .unwrap_or(u64::MAX)
+                .saturating_mul(std::mem::size_of::<Label>() as u64),
+        );
+        self.check_temporary_memory_budget(bytes)?;
+        Ok(self.install_argument_overflow(values, labels, bytes))
     }
 
     /// CreateListFromArrayLike for apply, not iterable spread. Read length
@@ -102130,9 +102662,16 @@ impl InterpreterCore {
                 registers.resize(physical_frame_end, Value::Undefined);
             }
             // A clear past one window (registers an earlier, deeper frame
-            // left, bd-9vouw.499) stops at the file's end.
+            // left, bd-9vouw.499) stops at the file's end. Only a register
+            // that holds something is written: `fill` cloned `Undefined` into
+            // and dropped every slot of the window on every call
+            // (bd-9vouw.504).
             let end = frame_end.min(registers.len());
-            registers[frame_start..end].fill(Value::Undefined);
+            for register in &mut registers[frame_start..end] {
+                if !matches!(register, Value::Undefined) {
+                    *register = Value::Undefined;
+                }
+            }
         });
         let released_label_bytes = Self::saturating_sum(
             self.register_labels
@@ -102146,7 +102685,11 @@ impl InterpreterCore {
                 .resize(physical_frame_end, Label::Public);
         }
         let label_end = frame_end.min(self.register_labels.len());
-        self.register_labels[frame_start..label_end].fill(Label::Public);
+        for label in &mut self.register_labels[frame_start..label_end] {
+            if !matches!(label, Label::Public) {
+                *label = Label::Public;
+            }
+        }
         self.adjust_register_labels_bytes(released_label_bytes, 0);
         self.estimated_memory_bytes = self
             .estimated_memory_bytes
@@ -104160,6 +104703,42 @@ impl InterpreterCore {
             .unwrap_or(0)
     }
 
+    /// `estimate_value_vec_bytes` of a snapshot's register file plus
+    /// `estimate_label_vec_bytes` of its label file, from the byte totals
+    /// the snapshot carries when it has them (bd-9vouw.500): the transfer
+    /// accounting of every generator step and await summed both files of
+    /// the parked activation and of the caller.
+    fn snapshot_register_files_bytes(execution: &GeneratorExecutionSnapshot) -> u64 {
+        let slots = |len: usize, slot: usize| {
+            u64::try_from(len)
+                .unwrap_or(u64::MAX)
+                .saturating_mul(slot as u64)
+        };
+        let values = match execution.registers_value_bytes {
+            Some(bytes) => {
+                slots(execution.registers.len(), std::mem::size_of::<Value>()).saturating_add(bytes)
+            }
+            None => Self::estimate_value_vec_bytes(&execution.registers),
+        };
+        let labels = match execution.register_labels_bytes {
+            Some(bytes) => slots(
+                execution.register_labels.len(),
+                std::mem::size_of::<Label>(),
+            )
+            .saturating_add(bytes),
+            None => Self::estimate_label_vec_bytes(&execution.register_labels),
+        };
+        debug_assert_eq!(
+            (values, labels),
+            (
+                Self::estimate_value_vec_bytes(&execution.registers),
+                Self::estimate_label_vec_bytes(&execution.register_labels)
+            ),
+            "a parked snapshot's byte totals went stale (bd-9vouw.500)"
+        );
+        values.saturating_add(labels)
+    }
+
     fn estimate_generator_execution_bytes(execution: &GeneratorExecutionSnapshot) -> u64 {
         let pending_abrupt = execution
             .pending_exception
@@ -104192,8 +104771,7 @@ impl InterpreterCore {
                 .map(Self::finally_frame_memory_bytes),
         );
 
-        Self::estimate_value_vec_bytes(&execution.registers)
-            .saturating_add(Self::estimate_label_vec_bytes(&execution.register_labels))
+        Self::snapshot_register_files_bytes(execution)
             .saturating_add(
                 execution
                     .delegation
@@ -104386,22 +104964,6 @@ impl InterpreterCore {
         self.note_registers_written_to(labels.len());
         self.register_labels = labels;
         self.register_labels_bytes.set(bytes);
-    }
-
-    /// The share of [`Self::registers_memory_bytes`] plus
-    /// [`Self::register_labels_memory_bytes`] owned by `range`, which must lie
-    /// within both files.
-    fn register_range_memory_bytes(&self, range: std::ops::Range<usize>) -> u64 {
-        Self::saturating_sum(
-            self.registers[range.clone()]
-                .iter()
-                .map(Self::estimate_value_bytes),
-        )
-        .saturating_add(Self::saturating_sum(
-            self.register_labels[range]
-                .iter()
-                .map(Self::estimate_label_bytes),
-        ))
     }
 
     fn active_inline_callback_context_memory_bytes(&self) -> u64 {
@@ -104974,6 +105536,7 @@ impl InterpreterCore {
         u32::try_from(self.heap.live_len()).unwrap_or(u32::MAX)
     }
 
+    #[inline]
     fn memory_request_exceeds_budget(&self, requested_base_bytes: u64, max_bytes: u64) -> bool {
         let requested_bytes = self.total_memory_bytes_from_base(requested_base_bytes);
         // `u64::MAX` is the saturating overflow sentinel for logical memory
@@ -111504,7 +112067,17 @@ impl InterpreterCore {
         if let Some(value) = self.object_receiver_static_value_call(module, &tag, args)? {
             return Ok(value);
         }
-        self.dispatch_builtin_hostcall(&tag, args, Some(module))
+        // The value call of a static builtin is its hostcall, which counts
+        // itself as a builtin: counted twice, the dispatch looked nested in
+        // another builtin's frame and could not arm a collection, so since
+        // call-time member resolution (2a427674d) `Reflect.construct(C, a)`
+        // ran a constructor allocating past the object cap without one
+        // (bd-9vouw.77). This frame holds only the tag and the argument
+        // registers across the call.
+        self.gc_exit_builtin();
+        let result = self.dispatch_builtin_hostcall(&tag, args, Some(module));
+        self.gc_enter_builtin();
+        result
     }
 
     /// A value call of `Object.is`, `isExtensible`, `preventExtensions`,
@@ -116128,11 +116701,12 @@ mod active_builtin_regressions {
         args: &[Value],
     ) -> Result<Value, InterpreterError> {
         let count = u32::try_from(args.len()).expect("test argument count fits u32");
-        core.mutate_registers(|registers| {
-            for (index, value) in args.iter().enumerate() {
-                registers[index] = value.clone();
-            }
-        });
+        // Accounted writes: a seeded string left in a register is live state
+        // the memory walk counts.
+        for (register, value) in (0..count).zip(args) {
+            core.write_reg(register, value.clone())
+                .expect("test argument register");
+        }
         let module = halted_test_module();
         core.dispatch_builtin_function(
             &module,
@@ -126419,6 +126993,65 @@ mod async_runtime_tests_current {
             core.get_register_label(3).expect("method result label"),
             &Label::Secret
         );
+    }
+
+    /// bd-9vouw.501: `f.apply(t, list)` runs `f` as an ordinary frame only
+    /// while nothing in the call carries a label. The isolated call joins a
+    /// labelled list's label into the callee's context, so a Secret list
+    /// still taints the result; an unlabelled one leaves it Public, and the
+    /// staged overflow is gone once the call returns.
+    #[test]
+    fn apply_with_a_labelled_list_keeps_the_isolated_call_bd_9vouw_501() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::CallMethod {
+                    receiver: 0,
+                    callee: 1,
+                    args: RegRange { start: 2, count: 2 },
+                    dst: 4,
+                },
+                Ir3Instruction::Return { value: 4 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 1,
+                frame_size: 1,
+                name: Some("return_argument".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        for (list_label, expected) in [
+            (Label::Public, Label::Public),
+            (Label::Secret, Label::Secret),
+        ] {
+            let mut core = test_interpreter();
+            let list = core
+                .alloc_array_from_values(&[Value::Int(7)])
+                .expect("argument list");
+            core.mutate_registers(|registers| {
+                registers[0] = Value::Function(0);
+                registers[1] = Value::BuiltinFunction(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::FunctionPrototypeApply,
+                ));
+                registers[2] = Value::Undefined;
+                registers[3] = Value::Object(list);
+            });
+            core.set_register_label(3, list_label.clone())
+                .expect("list label");
+            assert_eq!(
+                core.run_loop(&module).expect("apply returns its argument"),
+                Value::Int(7),
+                "{list_label:?} list"
+            );
+            assert_eq!(
+                core.get_register_label(4).expect("apply result label"),
+                &expected,
+                "{list_label:?} list"
+            );
+            assert!(core.argument_overflow.is_empty());
+        }
     }
 
     #[test]
@@ -141043,6 +141676,83 @@ mod async_runtime_tests_current {
         }
     }
 
+    /// bd-9vouw.504: `static_move` copies a value and label that own no
+    /// dynamic bytes into a destination holding none, label included and with
+    /// the memory estimate unchanged; anything else is left to the accounted
+    /// path, with every register untouched.
+    #[test]
+    fn static_move_copies_only_static_pairs_bd_9vouw_504() {
+        let mut core = test_interpreter();
+        core.mutate_registers(|registers| {
+            registers[0] = Value::Int(5);
+            registers[1] = Value::Undefined;
+            registers[2] = Value::str("owned");
+            registers[3] = Value::Int(1);
+        });
+        core.set_register_label(0, Label::Secret)
+            .expect("source label should be settable");
+        let bytes_before = core.estimated_memory_bytes;
+        assert!(core.static_move(1, 0));
+        assert_eq!(core.read_reg(1).unwrap(), Value::Int(5));
+        assert_eq!(
+            core.get_register_label(1).unwrap(),
+            &Label::Secret,
+            "the source label moves with the value"
+        );
+        assert_eq!(core.estimated_memory_bytes, bytes_before);
+
+        // A string owns bytes as the source or as the replaced destination
+        // value, and a Custom label owns its name.
+        assert!(!core.static_move(3, 2));
+        assert!(!core.static_move(2, 0));
+        core.set_register_label(
+            0,
+            Label::Custom {
+                name: "custom".to_string(),
+                level: 2,
+            },
+        )
+        .expect("custom label should be settable");
+        assert!(!core.static_move(3, 0));
+        assert_eq!(core.read_reg(3).unwrap(), Value::Int(1));
+        assert_eq!(core.get_register_label(3).unwrap(), &Label::Public);
+        assert_eq!(core.read_reg(2).unwrap(), Value::str("owned"));
+        let max_registers = core.config.max_registers;
+        assert!(!core.static_move(max_registers, 1));
+        assert!(!core.static_move(1, max_registers));
+    }
+
+    /// bd-9vouw.504: `join_owned_label_with_temporary_budget` returns the
+    /// owned label for a Public operand without comparing, which is right
+    /// only while Public is the bottom of Label's order, Custom labels of
+    /// level 0 included.
+    #[test]
+    fn public_is_the_bottom_of_the_label_order_bd_9vouw_504() {
+        let core = test_interpreter();
+        for label in [
+            Label::Public,
+            Label::Internal,
+            Label::Confidential,
+            Label::Secret,
+            Label::TopSecret,
+            Label::Custom {
+                name: String::new(),
+                level: 0,
+            },
+            Label::Custom {
+                name: "a".to_string(),
+                level: 0,
+            },
+        ] {
+            assert!(label >= Label::Public, "{label:?}");
+            assert_eq!(
+                core.join_owned_label_with_temporary_budget(label.clone(), &Label::Public)
+                    .unwrap(),
+                label
+            );
+        }
+    }
+
     #[test]
     fn ordinary_own_property_fast_path_excludes_proto_proxy_and_missing_keys() {
         let mut core = test_interpreter();
@@ -141144,6 +141854,82 @@ mod async_runtime_tests_current {
             trace_count_before,
             "a malformed Proxy must not emit an ordinary property-found trace"
         );
+    }
+
+    /// bd-9vouw.504: the fast own-property read returns a data property's
+    /// stored label (the label the [[Get]] owner join reads) from one lookup,
+    /// and no label for an accessor, whose getter runs before the join.
+    #[test]
+    fn ordinary_own_property_fast_read_carries_a_data_label_only_bd_9vouw_504() {
+        let mut core = test_interpreter();
+        let object = core
+            .alloc_object_with_properties(&[("data", Value::Int(7))])
+            .expect("ordinary object should allocate");
+        core.set_own_property_label(object, "data", &Label::Secret)
+            .expect("property label should be settable");
+        let data_key = RuntimePropertyKey::String(JsString::from("data"));
+        assert_eq!(
+            core.ordinary_own_property_fast_read(object, &data_key),
+            Some((Value::Int(7), Some(Label::Secret)))
+        );
+        assert_eq!(
+            core.runtime_property_label(object, &data_key),
+            Label::Secret
+        );
+
+        core.set_object_property(
+            object,
+            "accessor".to_string(),
+            Value::Accessor {
+                get: None,
+                set: None,
+            },
+        )
+        .expect("accessor own property should fit");
+        assert!(matches!(
+            core.ordinary_own_property_fast_read(
+                object,
+                &RuntimePropertyKey::String(JsString::from("accessor")),
+            ),
+            Some((Value::Accessor { .. }, None))
+        ));
+        assert_eq!(
+            core.ordinary_own_property_fast_read(
+                object,
+                &RuntimePropertyKey::String(JsString::from("missing")),
+            ),
+            None
+        );
+        core.set_object_brand(object, PROXY_TYPE_TAG)
+            .expect("proxy marker should fit");
+        assert_eq!(
+            core.ordinary_own_property_fast_read(object, &data_key),
+            None,
+            "a proxy-tagged object keeps the generic path"
+        );
+    }
+
+    /// bd-9vouw.504: a small index's shared key is the decimal key the
+    /// formatted path builds; larger and negative integers keep that path.
+    #[test]
+    fn small_index_keys_are_the_decimal_keys_bd_9vouw_504() {
+        let core = test_interpreter();
+        for number in [0_i64, 7, 10, 1023] {
+            let shared = small_index_key(number).expect("a small index has a shared key");
+            assert_eq!(shared, JsString::from(number.to_string()));
+            assert_eq!(small_index_key(number), Some(shared));
+            assert_eq!(
+                core.executable_property_key_from_value(&Value::Int(number)),
+                RuntimePropertyKey::String(JsString::from(number.to_string()))
+            );
+        }
+        for number in [-1_i64, 1024, i64::MAX] {
+            assert_eq!(small_index_key(number), None);
+            assert_eq!(
+                core.executable_property_key_from_value(&Value::Int(number)),
+                RuntimePropertyKey::String(JsString::from(number.to_string()))
+            );
+        }
     }
 
     /// bd-gqaa4/bd-0zybl: the conservative prior-dst join must not clone a
@@ -150682,6 +151468,184 @@ mod tests {
         assert_eq!(core.registers[max_registers + 5], Value::Undefined);
         assert_eq!(core.register_labels[max_registers + 5], Label::Public);
         assert_eq!(core.register_dirty_end, max_registers + 2);
+    }
+
+    #[test]
+    fn module_execution_restore_keeps_the_parked_dirty_end_bd_9vouw_500() {
+        let mut core = quickjs_test_core();
+        let max_registers = core.config.max_registers as usize;
+        core.write_reg_with_label(3, Value::Int(7), Label::Secret)
+            .expect("caller writes");
+        assert_eq!(core.register_dirty_end, 4);
+
+        // An isolated call starts on files that are clear throughout.
+        let previous_register_bytes = core.registers_memory_bytes();
+        let previous_label_bytes = core.register_context_labels_memory_bytes();
+        let snapshot = core
+            .isolate_module_execution()
+            .expect("isolated snapshot fits");
+        assert_eq!(core.register_dirty_end, 0);
+        let previous_scope_bytes = core.scope_chain_memory_bytes();
+        let previous_call_stack_bytes = core.call_stack_memory_bytes();
+        core.apply_register_context_scope_call_stack_memory_delta(
+            previous_register_bytes,
+            previous_label_bytes,
+            previous_scope_bytes,
+            previous_call_stack_bytes,
+        )
+        .expect("callback setup fits");
+        core.write_reg(5, Value::Int(1)).expect("callee writes");
+        assert_eq!(core.register_dirty_end, 6);
+        core.restore_module_execution(snapshot, true);
+        // The caller's dirty end, not its file's length: the next call
+        // clears only what is dirty.
+        assert!(core.registers.len() >= max_registers);
+        assert_eq!(core.register_dirty_end, 4);
+        assert_eq!(core.read_reg(3).expect("caller register"), Value::Int(7));
+        assert_eq!(core.read_reg(5).expect("caller register"), Value::Undefined);
+
+        // A rollback snapshot is restored the same way.
+        let snapshot = core
+            .snapshot_module_execution()
+            .expect("rollback snapshot fits");
+        core.write_reg(9, Value::Int(2)).expect("setup writes");
+        assert_eq!(core.register_dirty_end, 10);
+        core.restore_module_execution(snapshot, false);
+        assert_eq!(core.register_dirty_end, 4);
+        assert_eq!(core.read_reg(9).expect("rolled back"), Value::Undefined);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    /// A generator stepped from inside a function alternates between the
+    /// caller's file and the activation's, which differ in length. The core
+    /// keeps a spare of each and hands out the one of the length asked for,
+    /// so neither file is cut and regrown on every step (bd-9vouw.500).
+    #[test]
+    fn spare_register_files_are_matched_by_length_bd_9vouw_500() {
+        let mut core = quickjs_test_core();
+        let window = core.config.max_registers as usize;
+        let cleared = |len: usize| (vec![Value::Undefined; len], vec![Label::Public; len]);
+        let (short_values, short_labels) = cleared(window);
+        let (long_values, long_labels) = cleared(2 * window);
+        let short_address = short_values.as_ptr();
+        let long_address = long_values.as_ptr();
+        core.keep_spare_register_files(short_values, short_labels);
+        core.keep_spare_register_files(long_values, long_labels);
+
+        let (values, _) = core.take_spare_register_files(window);
+        assert_eq!(values.as_ptr(), short_address);
+        core.keep_spare_register_files(values, vec![Label::Public; window]);
+        let (values, _) = core.take_spare_register_files(2 * window);
+        assert_eq!(values.as_ptr(), long_address);
+        core.keep_spare_register_files(values, vec![Label::Public; 2 * window]);
+
+        // No spare of the length: new empty files, and the spares stay.
+        let (values, labels) = core.take_spare_register_files(3 * window);
+        assert!(values.is_empty() && labels.is_empty());
+        assert_eq!(core.spare_register_files.len(), 2);
+        // A third spare evicts the oldest.
+        let (third_values, third_labels) = cleared(window / 2);
+        core.keep_spare_register_files(third_values, third_labels);
+        assert_eq!(core.spare_register_files.len(), SPARE_REGISTER_FILES);
+        assert!(
+            core.spare_register_files
+                .iter()
+                .all(|(values, _)| values.as_ptr() != short_address)
+        );
+        // None kept at all: empty files.
+        core.spare_register_files.clear();
+        assert_eq!(core.take_spare_register_files(window).0.len(), 0);
+
+        // A step from inside a function: the caller's file (two windows) is
+        // taken, the activation's (one window) installed, then the reverse.
+        // From the second step on, each install finds its own file.
+        let (caller_values, caller_labels) = cleared(2 * window);
+        let caller_address = caller_values.as_ptr();
+        core.keep_spare_register_files(caller_values, caller_labels);
+        let (values, _) = core.take_spare_register_files(window);
+        assert!(values.is_empty(), "the caller's file is not cut down");
+        let (activation_values, activation_labels) = cleared(window);
+        let activation_address = activation_values.as_ptr();
+        core.keep_spare_register_files(activation_values, activation_labels);
+        let (values, labels) = core.take_spare_register_files(2 * window);
+        assert_eq!(values.as_ptr(), caller_address);
+        core.keep_spare_register_files(values, labels);
+        let (values, _) = core.take_spare_register_files(window);
+        assert_eq!(values.as_ptr(), activation_address);
+    }
+
+    #[test]
+    fn parked_activation_files_are_moved_out_and_refilled_bd_9vouw_500() {
+        let mut core = quickjs_test_core();
+        let max_registers = core.config.max_registers as usize;
+        let text = Value::str("parked across a step");
+        core.write_reg_with_label(1, text.clone(), Label::Secret)
+            .expect("string register");
+        core.write_reg(4, Value::Int(3)).expect("int register");
+        let value_bytes = core.registers_memory_bytes();
+        assert!(value_bytes > 0);
+        let register_len = core.registers.len();
+        let label_len = core.register_labels.len();
+        assert!(register_len >= max_registers);
+
+        let execution = core.take_generator_execution();
+        // The snapshot keeps only the live prefix (bd-9vouw.167) and the
+        // file's cached byte count.
+        assert_eq!(execution.registers.len(), 5);
+        assert_eq!(execution.register_labels.len(), 5);
+        assert_eq!(execution.register_len, register_len);
+        assert_eq!(execution.register_dirty_end, 5);
+        assert_eq!(execution.registers_value_bytes, Some(value_bytes));
+        // The emptied files are the spare, cleared throughout.
+        assert!(core.registers.is_empty());
+        assert_eq!(core.spare_register_files.len(), 1);
+        let (spare_values, spare_labels) = core
+            .spare_register_files
+            .last()
+            .expect("the taken files are the spare");
+        assert_eq!(spare_values.len(), register_len);
+        assert_eq!(spare_labels.len(), label_len);
+        assert!(spare_values.iter().all(|value| *value == Value::Undefined));
+        assert!(spare_labels.iter().all(|label| *label == Label::Public));
+        let spare_address = spare_values.as_ptr();
+
+        core.install_generator_execution(execution);
+        // Refilled in place: no allocation, no padding pass.
+        assert!(core.spare_register_files.is_empty());
+        assert_eq!(core.registers.as_ptr(), spare_address);
+        assert_eq!(core.registers.len(), register_len);
+        assert_eq!(core.register_labels.len(), label_len);
+        assert_eq!(core.read_reg(1).expect("string register"), text);
+        assert_eq!(
+            core.get_register_label(1).expect("string label"),
+            &Label::Secret
+        );
+        assert_eq!(core.read_reg(4).expect("int register"), Value::Int(3));
+        assert!(
+            core.registers[5..]
+                .iter()
+                .all(|value| *value == Value::Undefined)
+        );
+        assert_eq!(core.registers_value_bytes.get(), Some(value_bytes));
+        // The test build's registers_memory_bytes checks the cache against
+        // a walk of the file.
+        assert_eq!(core.registers_memory_bytes(), value_bytes);
+        assert_eq!(core.register_dirty_end, 5);
+
+        // A file longer than the cap is freed rather than kept.
+        let long = max_registers * (SPARE_REGISTER_FILE_WINDOWS + 1);
+        core.mutate_registers(|registers| registers.resize(long, Value::Undefined));
+        core.register_labels.resize(long, Label::Public);
+        let execution = core.take_generator_execution();
+        assert!(core.spare_register_files.is_empty());
+        core.install_generator_execution(execution);
+        assert_eq!(core.registers.len(), long);
+        assert_eq!(core.register_labels.len(), long);
+        assert_eq!(core.read_reg(1).expect("string register"), text);
+        assert_eq!(core.registers_memory_bytes(), value_bytes);
     }
 
     #[test]

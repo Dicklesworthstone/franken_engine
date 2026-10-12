@@ -189,6 +189,7 @@ impl Text {
         }
     }
 
+    #[inline]
     fn as_str(&self) -> &str {
         match self {
             Self::Flat(text) => text,
@@ -212,6 +213,7 @@ impl Text {
 impl Deref for Text {
     type Target = str;
 
+    #[inline]
     fn deref(&self) -> &str {
         self.as_str()
     }
@@ -422,6 +424,7 @@ impl JsString {
     /// Exact `&str` view, available only for well-formed content. Callers
     /// that can tolerate the U+FFFD projection should use [`Deref`] /
     /// [`JsString::as_utf8_projection`] instead.
+    #[inline]
     pub fn as_str(&self) -> Option<&str> {
         match self.shape {
             Shape::WellFormed { .. } => Some(self.utf8.as_str()),

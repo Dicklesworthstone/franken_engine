@@ -746,10 +746,20 @@ fn reachable_cases() -> Vec<(String, &'static str)> {
              const k = counter(); for (let i = 0; i < 1000; i++) k.inc();",
             "String(k.inc())",
         ),
+        (
+            // The async call runs in an isolated nested loop, which collects
+            // while the caller's block scope is parked (bd-9vouw.500: its
+            // frames are pinned and marked when a collection runs).
+            "caller block binding parked across an isolated async call",
+            "async function work() { for (let i = 0; i < 300000; i++) { const g = { i }; } \
+             await null; } let out; { let keep = { v: 8 }; const get = () => keep; \
+             work(); out = get().v; }",
+            "String(out)",
+        ),
     ];
     let node = [
         "499500", "499500", "2450", "1225", "7", "6", "11", "5", "42", "9", "6", "4", "6", "2450",
-        "1001",
+        "1001", "8",
     ];
     cases
         .iter()

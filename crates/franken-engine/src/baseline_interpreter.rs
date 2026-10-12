@@ -47752,11 +47752,6 @@ impl InterpreterCore {
                 ),
             });
         }
-        // Only the restored range of the register file changes, so its bytes
-        // are the register component delta. Measuring the whole file walked
-        // every live frame twice per await.
-        let previous_register_bytes =
-            self.register_range_memory_bytes(saved_register_base..window_end);
         let (saved_registers, saved_register_labels) = {
             let async_function = self
                 .async_functions
@@ -47777,22 +47772,45 @@ impl InterpreterCore {
         // Restore register file
         let reg_start = self.register_base;
 
-        // perf: hot path - use into_iter to avoid cloning each register value
+        // Only the restored window changes, so the bytes leaving and entering
+        // it are the register component delta, and they move the cached file
+        // sums. One pass writes the saved prefix and clears the rest of the
+        // window: summing the window before and after and dropping the caches
+        // walked it twice and the whole file at the next read (bd-9vouw.500).
+        let mut previous_value_bytes = 0u64;
+        let mut next_value_bytes = 0u64;
         self.note_registers_written_to(reg_end);
+        let cached_value_bytes = self.registers_value_bytes.get();
         self.mutate_registers(|r| {
-            for (i, value) in saved_registers.into_iter().enumerate() {
-                r[reg_start + i] = value;
+            let mut saved = saved_registers.into_iter();
+            for slot in &mut r[reg_start..window_end] {
+                let value = saved.next().unwrap_or(Value::Undefined);
+                previous_value_bytes =
+                    previous_value_bytes.saturating_add(Self::estimate_value_bytes(slot));
+                next_value_bytes =
+                    next_value_bytes.saturating_add(Self::estimate_value_bytes(&value));
+                *slot = value;
             }
-            r[reg_end..window_end].fill(Value::Undefined);
         });
-        for (slot, label) in self.register_labels[reg_start..reg_end]
-            .iter_mut()
-            .zip(saved_register_labels)
-        {
+        self.registers_value_bytes
+            .set(cached_value_bytes.map(|bytes| {
+                bytes
+                    .saturating_sub(previous_value_bytes)
+                    .saturating_add(next_value_bytes)
+            }));
+        let mut previous_label_bytes = 0u64;
+        let mut next_label_bytes = 0u64;
+        let mut saved_labels = saved_register_labels.into_iter();
+        for slot in &mut self.register_labels[reg_start..window_end] {
+            let label = saved_labels.next().unwrap_or(Label::Public);
+            previous_label_bytes =
+                previous_label_bytes.saturating_add(Self::estimate_label_bytes(slot));
+            next_label_bytes = next_label_bytes.saturating_add(Self::estimate_label_bytes(&label));
             *slot = label;
         }
-        self.register_labels[reg_end..window_end].fill(Label::Public);
-        self.register_labels_bytes.set(None);
+        self.adjust_register_labels_bytes(previous_label_bytes, next_label_bytes);
+        let previous_register_bytes = previous_value_bytes.saturating_add(previous_label_bytes);
+        let next_register_bytes = next_value_bytes.saturating_add(next_label_bytes);
 
         // Resume execution - now we can safely get the mutable reference
         let async_function = self
@@ -47804,7 +47822,6 @@ impl InterpreterCore {
             })?;
         async_function.phase = AsyncFunctionPhase::Executing;
         let next_async_bytes = Self::estimate_async_function_bytes(async_function);
-        let next_register_bytes = self.register_range_memory_bytes(reg_start..window_end);
         self.estimated_memory_bytes = self
             .estimated_memory_bytes
             .saturating_sub(previous_register_bytes)

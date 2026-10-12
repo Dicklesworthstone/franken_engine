@@ -306,6 +306,9 @@ const DEFAULT_QUICKJS_MAX_REGISTERS: u32 = 256;
 
 /// Default register file size for the throughput profile.
 const DEFAULT_V8_MAX_REGISTERS: u32 = 4096;
+/// Longest file, in `max_registers` windows, the core keeps as its spare
+/// register file (`spare_register_files`); a longer one is freed.
+const SPARE_REGISTER_FILE_WINDOWS: usize = 4;
 /// Default heap object budget for the deterministic profile.
 const DEFAULT_QUICKJS_MAX_HEAP_OBJECTS: u32 = 100_000;
 /// Default heap object budget for the throughput profile.
@@ -10009,6 +10012,14 @@ struct GeneratorExecutionSnapshot {
     /// make the next call after every generator step clear to its end
     /// (bd-9vouw.499).
     register_dirty_end: usize,
+    /// [`InterpreterCore::registers_memory_bytes`] of the files when they
+    /// were parked, if the core had it cached, which
+    /// `install_generator_execution` restores: the trimmed tail and the
+    /// padding that replaces it are cleared slots, which own no bytes
+    /// (bd-9vouw.500). `None` makes the next read sum the file.
+    registers_value_bytes: Option<u64>,
+    /// The same for [`InterpreterCore::register_labels_memory_bytes`].
+    register_labels_bytes: Option<u64>,
     delegation: Option<GeneratorDelegation>,
     active_inline_callback_context_label: Option<Label>,
     call_stack: Vec<CallFrame>,
@@ -10040,14 +10051,7 @@ impl GeneratorExecutionSnapshot {
     /// deterministic lane, 8,192 on the throughput lane) that were almost all
     /// cleared (bd-9vouw.167). `register_len` keeps the length to restore.
     fn trim_cleared_register_tail(&mut self) {
-        let len = self.registers.len().max(self.register_labels.len());
-        let live = (0..len)
-            .rev()
-            .find(|&index| {
-                !matches!(self.registers.get(index), Some(Value::Undefined) | None)
-                    || !matches!(self.register_labels.get(index), Some(Label::Public) | None)
-            })
-            .map_or(0, |index| index + 1);
+        let live = live_register_prefix_len(&self.registers, &self.register_labels);
         if live < self.registers.len() {
             self.registers.truncate(live);
             self.registers.shrink_to_fit();
@@ -10056,6 +10060,30 @@ impl GeneratorExecutionSnapshot {
             self.register_labels.truncate(live);
             self.register_labels.shrink_to_fit();
         }
+    }
+}
+
+/// Length of the files' live prefix: every register past it is undefined
+/// with a Public label, as are the slots one file has past the other's end
+/// (bd-9vouw.167).
+fn live_register_prefix_len(registers: &[Value], register_labels: &[Label]) -> usize {
+    let values_end = registers
+        .iter()
+        .rposition(|value| !matches!(value, Value::Undefined))
+        .map_or(0, |index| index + 1);
+    let labels_end = register_labels
+        .iter()
+        .rposition(|label| !matches!(label, Label::Public))
+        .map_or(0, |index| index + 1);
+    values_end.max(labels_end)
+}
+
+/// Make a file whose every slot is `cleared` hold `prefix` followed by
+/// cleared slots, `len` in all (at least the prefix).
+fn refill_cleared_file<T: Clone>(file: &mut Vec<T>, prefix: Vec<T>, len: usize, cleared: T) {
+    file.resize(len.max(prefix.len()), cleared);
+    for (slot, value) in file.iter_mut().zip(prefix) {
+        *slot = value;
     }
 }
 
@@ -13592,6 +13620,11 @@ struct ModuleExecutionSnapshot {
     /// [`InterpreterCore::register_labels_memory_bytes`] of
     /// `register_labels`, which no one writes while they are parked here.
     register_label_bytes: u64,
+    /// [`InterpreterCore::register_dirty_end`] of these files, which
+    /// `restore_module_execution` restores: the whole file's length would make
+    /// the next call after every isolated call clear to its end
+    /// (bd-9vouw.499).
+    register_dirty_end: usize,
     /// PC-style provenance for an isolated stream/event callback. Keeping one
     /// snapshotted label avoids cloning a Custom label into every register.
     active_inline_callback_context_label: Option<Label>,
@@ -15194,6 +15227,14 @@ pub struct InterpreterCore {
     /// `Undefined`, so a callback neither allocates nor drops `max_registers`
     /// slots. Engine capacity of at most `max_registers` slots, not charged.
     simple_callback_register_pool: Vec<Value>,
+    /// The register and label files `take_generator_execution` emptied, every
+    /// slot undefined with a Public label, which the next
+    /// `install_generator_execution` or `isolate_module_execution` refills
+    /// instead of allocating and clearing whole windows: an `await` or a
+    /// generator step moved four windows through the allocator
+    /// (bd-9vouw.500). Engine capacity of at most
+    /// `SPARE_REGISTER_FILE_WINDOWS` windows a file, not charged.
+    spare_register_files: Option<(Vec<Value>, Vec<Label>)>,
     /// The bytes of the last found-property witness event, kept so a
     /// property read folds its event without allocating a buffer. Engine
     /// capacity (at most PROPERTY_WITNESS_SCRATCH_MAX_CAPACITY bytes kept),
@@ -16603,6 +16644,7 @@ impl InterpreterCore {
             estimated_memory_bytes,
             simple_callback_temporary_bytes: 0,
             simple_callback_register_pool: Vec::new(),
+            spare_register_files: None,
             property_witness_scratch: Vec::new(),
             call_argument_value_scratch: Vec::new(),
             call_argument_label_scratch: Vec::new(),
@@ -37445,8 +37487,11 @@ impl InterpreterCore {
     /// as before, as the overwrite left them.
     fn isolate_module_execution(&mut self) -> Result<ModuleExecutionSnapshot, InterpreterError> {
         let accounted_bytes = self.charge_module_execution_snapshot()?;
-        let fresh_registers = vec![Value::Undefined; self.config.max_registers as usize];
-        let fresh_labels = vec![Label::Public; self.register_labels.len()];
+        // The spare files are cleared throughout (bd-9vouw.500).
+        let (mut fresh_registers, mut fresh_labels) =
+            self.spare_register_files.take().unwrap_or_default();
+        fresh_registers.resize(self.config.max_registers as usize, Value::Undefined);
+        fresh_labels.resize(self.register_labels.len(), Label::Public);
         let register_bytes = self.registers_memory_bytes();
         let registers = std::mem::replace(&mut self.registers.value, fresh_registers);
         // `Undefined` carries no bytes beyond its slot.
@@ -37455,13 +37500,16 @@ impl InterpreterCore {
         let register_labels = std::mem::replace(&mut self.register_labels, fresh_labels);
         // A Public label owns no bytes beyond its slot.
         self.register_labels_bytes.set(Some(0));
-        Ok(self.module_execution_snapshot(
+        let snapshot = self.module_execution_snapshot(
             accounted_bytes,
             registers,
             register_bytes,
             register_labels,
             register_label_bytes,
-        ))
+        );
+        // The fresh files are clear throughout (bd-9vouw.499).
+        self.register_dirty_end = 0;
+        Ok(snapshot)
     }
 
     /// Charge a module-execution snapshot of the current state to the budget
@@ -37493,6 +37541,7 @@ impl InterpreterCore {
             generator_delegation: self.generator_delegation.clone(),
             register_labels,
             register_label_bytes,
+            register_dirty_end: self.register_dirty_end,
             active_inline_callback_context_label: self.active_inline_callback_context_label.clone(),
             call_stack: self.call_stack.to_vec(),
             ip: self.ip,
@@ -37530,6 +37579,8 @@ impl InterpreterCore {
             snapshot.register_labels,
             Some(snapshot.register_label_bytes),
         );
+        // No one writes the files while they are parked (bd-9vouw.499).
+        self.register_dirty_end = snapshot.register_dirty_end;
         self.active_inline_callback_context_label = snapshot.active_inline_callback_context_label;
         self.call_stack
             .replace(snapshot.call_stack, &mut self.closures.cold_cells);
@@ -50089,6 +50140,8 @@ impl InterpreterCore {
             register_len: max_registers,
             register_label_len: max_registers,
             register_dirty_end: max_registers,
+            registers_value_bytes: None,
+            register_labels_bytes: None,
             delegation: None,
             active_inline_callback_context_label: invocation.inline_context_label,
             call_stack: vec![CallFrame {
@@ -50147,15 +50200,34 @@ impl InterpreterCore {
 
     fn take_generator_execution(&mut self) -> GeneratorExecutionSnapshot {
         self.before_seed_surface_write();
-        let registers = std::mem::take(&mut self.registers.value);
-        self.registers_value_bytes.set(Some(0));
-        let register_labels = std::mem::take(&mut self.register_labels);
-        self.register_labels_bytes.set(Some(0));
-        let mut execution = GeneratorExecutionSnapshot {
-            register_len: registers.len(),
-            register_label_len: register_labels.len(),
+        let register_len = self.registers.len();
+        let register_label_len = self.register_labels.len();
+        // The snapshot takes the files' live prefix (the trim of
+        // bd-9vouw.167) by moving each value out, which leaves the core's
+        // files cleared throughout: they become the spare the next install
+        // refills, instead of being truncated, reallocated and padded back
+        // to full windows on every step (bd-9vouw.500).
+        let live = live_register_prefix_len(&self.registers, &self.register_labels);
+        let registers: Vec<Value> = self.registers.value[..live.min(register_len)]
+            .iter_mut()
+            .map(|value| std::mem::replace(value, Value::Undefined))
+            .collect();
+        let register_labels: Vec<Label> = self.register_labels[..live.min(register_label_len)]
+            .iter_mut()
+            .map(|label| std::mem::replace(label, Label::Public))
+            .collect();
+        let registers_value_bytes = self.registers_value_bytes.replace(Some(0));
+        let register_labels_bytes = self.register_labels_bytes.replace(Some(0));
+        let cleared_registers = std::mem::take(&mut self.registers.value);
+        let cleared_labels = std::mem::take(&mut self.register_labels);
+        self.keep_spare_register_files(cleared_registers, cleared_labels);
+        GeneratorExecutionSnapshot {
+            register_len,
+            register_label_len,
             // The core's files are empty now, so nothing past 0 is dirty.
             register_dirty_end: std::mem::take(&mut self.register_dirty_end),
+            registers_value_bytes,
+            register_labels_bytes,
             registers,
             register_labels,
             delegation: self.generator_delegation.take(),
@@ -50183,9 +50255,21 @@ impl InterpreterCore {
             current_module_specifier: self.current_module_specifier.take(),
             active_generated_function_artifact: self.active_generated_function_artifact.take(),
             contained_codegen_grant: None,
-        };
-        execution.trim_cleared_register_tail();
-        execution
+        }
+    }
+
+    /// Keep `registers` and `labels`, every slot cleared, as the spare files
+    /// (`spare_register_files`) unless they are longer than the cap.
+    fn keep_spare_register_files(&mut self, registers: Vec<Value>, labels: Vec<Label>) {
+        let cap = SPARE_REGISTER_FILE_WINDOWS.saturating_mul(self.config.max_registers as usize);
+        if registers.len() <= cap && labels.len() <= cap {
+            debug_assert_eq!(
+                live_register_prefix_len(&registers, &labels),
+                0,
+                "a spare register file holds a value or a label (bd-9vouw.500)"
+            );
+            self.spare_register_files = Some((registers, labels));
+        }
     }
 
     fn async_function_ids_in_call_stack(
@@ -50518,6 +50602,10 @@ impl InterpreterCore {
             .first_mut()
             .map(|label| std::mem::replace(label, Label::Public))
             .unwrap_or(Label::Public);
+        let moved_label_bytes = Self::estimate_label_bytes(&result_label);
+        execution.register_labels_bytes = execution
+            .register_labels_bytes
+            .map(|bytes| bytes.saturating_sub(moved_label_bytes));
         self.closures.replace_activation(
             &mut self.async_functions[suspended_async_id as usize].isolated_execution,
             Some(execution),
@@ -50582,17 +50670,26 @@ impl InterpreterCore {
 
     fn install_generator_execution(&mut self, execution: GeneratorExecutionSnapshot) {
         self.before_seed_surface_write();
-        let mut registers = execution.registers;
-        let mut register_labels = execution.register_labels;
-        if registers.len() < execution.register_len {
-            registers.resize(execution.register_len, Value::Undefined);
-        }
-        if register_labels.len() < execution.register_label_len {
-            register_labels.resize(execution.register_label_len, Label::Public);
-        }
+        // The spare files are cleared throughout, so only the parked prefix
+        // and any difference in length are written (bd-9vouw.500).
+        let (mut registers, mut register_labels) =
+            self.spare_register_files.take().unwrap_or_default();
+        refill_cleared_file(
+            &mut registers,
+            execution.registers,
+            execution.register_len,
+            Value::Undefined,
+        );
+        refill_cleared_file(
+            &mut register_labels,
+            execution.register_labels,
+            execution.register_label_len,
+            Label::Public,
+        );
         self.registers.value = registers;
-        self.registers_value_bytes.set(None);
-        self.install_register_labels(register_labels, None);
+        self.registers_value_bytes
+            .set(execution.registers_value_bytes);
+        self.install_register_labels(register_labels, execution.register_labels_bytes);
         self.register_dirty_end = execution.register_dirty_end;
         self.generator_delegation = execution.delegation;
         self.active_inline_callback_context_label = execution.active_inline_callback_context_label;
@@ -150682,6 +150779,125 @@ mod tests {
         assert_eq!(core.registers[max_registers + 5], Value::Undefined);
         assert_eq!(core.register_labels[max_registers + 5], Label::Public);
         assert_eq!(core.register_dirty_end, max_registers + 2);
+    }
+
+    #[test]
+    fn module_execution_restore_keeps_the_parked_dirty_end_bd_9vouw_500() {
+        let mut core = quickjs_test_core();
+        let max_registers = core.config.max_registers as usize;
+        core.write_reg_with_label(3, Value::Int(7), Label::Secret)
+            .expect("caller writes");
+        assert_eq!(core.register_dirty_end, 4);
+
+        // An isolated call starts on files that are clear throughout.
+        let previous_register_bytes = core.registers_memory_bytes();
+        let previous_label_bytes = core.register_context_labels_memory_bytes();
+        let snapshot = core
+            .isolate_module_execution()
+            .expect("isolated snapshot fits");
+        assert_eq!(core.register_dirty_end, 0);
+        let previous_scope_bytes = core.scope_chain_memory_bytes();
+        let previous_call_stack_bytes = core.call_stack_memory_bytes();
+        core.apply_register_context_scope_call_stack_memory_delta(
+            previous_register_bytes,
+            previous_label_bytes,
+            previous_scope_bytes,
+            previous_call_stack_bytes,
+        )
+        .expect("callback setup fits");
+        core.write_reg(5, Value::Int(1)).expect("callee writes");
+        assert_eq!(core.register_dirty_end, 6);
+        core.restore_module_execution(snapshot, true);
+        // The caller's dirty end, not its file's length: the next call
+        // clears only what is dirty.
+        assert!(core.registers.len() >= max_registers);
+        assert_eq!(core.register_dirty_end, 4);
+        assert_eq!(core.read_reg(3).expect("caller register"), Value::Int(7));
+        assert_eq!(core.read_reg(5).expect("caller register"), Value::Undefined);
+
+        // A rollback snapshot is restored the same way.
+        let snapshot = core
+            .snapshot_module_execution()
+            .expect("rollback snapshot fits");
+        core.write_reg(9, Value::Int(2)).expect("setup writes");
+        assert_eq!(core.register_dirty_end, 10);
+        core.restore_module_execution(snapshot, false);
+        assert_eq!(core.register_dirty_end, 4);
+        assert_eq!(core.read_reg(9).expect("rolled back"), Value::Undefined);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn parked_activation_files_are_moved_out_and_refilled_bd_9vouw_500() {
+        let mut core = quickjs_test_core();
+        let max_registers = core.config.max_registers as usize;
+        let text = Value::str("parked across a step");
+        core.write_reg_with_label(1, text.clone(), Label::Secret)
+            .expect("string register");
+        core.write_reg(4, Value::Int(3)).expect("int register");
+        let value_bytes = core.registers_memory_bytes();
+        assert!(value_bytes > 0);
+        let register_len = core.registers.len();
+        let label_len = core.register_labels.len();
+        assert!(register_len >= max_registers);
+
+        let execution = core.take_generator_execution();
+        // The snapshot keeps only the live prefix (bd-9vouw.167) and the
+        // file's cached byte count.
+        assert_eq!(execution.registers.len(), 5);
+        assert_eq!(execution.register_labels.len(), 5);
+        assert_eq!(execution.register_len, register_len);
+        assert_eq!(execution.register_dirty_end, 5);
+        assert_eq!(execution.registers_value_bytes, Some(value_bytes));
+        // The emptied files are the spare, cleared throughout.
+        assert!(core.registers.is_empty());
+        let (spare_values, spare_labels) = core
+            .spare_register_files
+            .as_ref()
+            .expect("the taken files are the spare");
+        assert_eq!(spare_values.len(), register_len);
+        assert_eq!(spare_labels.len(), label_len);
+        assert!(spare_values.iter().all(|value| *value == Value::Undefined));
+        assert!(spare_labels.iter().all(|label| *label == Label::Public));
+        let spare_address = spare_values.as_ptr();
+
+        core.install_generator_execution(execution);
+        // Refilled in place: no allocation, no padding pass.
+        assert!(core.spare_register_files.is_none());
+        assert_eq!(core.registers.as_ptr(), spare_address);
+        assert_eq!(core.registers.len(), register_len);
+        assert_eq!(core.register_labels.len(), label_len);
+        assert_eq!(core.read_reg(1).expect("string register"), text);
+        assert_eq!(
+            core.get_register_label(1).expect("string label"),
+            &Label::Secret
+        );
+        assert_eq!(core.read_reg(4).expect("int register"), Value::Int(3));
+        assert!(
+            core.registers[5..]
+                .iter()
+                .all(|value| *value == Value::Undefined)
+        );
+        assert_eq!(core.registers_value_bytes.get(), Some(value_bytes));
+        // The test build's registers_memory_bytes checks the cache against
+        // a walk of the file.
+        assert_eq!(core.registers_memory_bytes(), value_bytes);
+        assert_eq!(core.register_dirty_end, 5);
+
+        // A file longer than the cap is freed rather than kept.
+        let long = max_registers * (SPARE_REGISTER_FILE_WINDOWS + 1);
+        core.mutate_registers(|registers| registers.resize(long, Value::Undefined));
+        core.register_labels.resize(long, Label::Public);
+        let execution = core.take_generator_execution();
+        assert!(core.spare_register_files.is_none());
+        core.install_generator_execution(execution);
+        assert_eq!(core.registers.len(), long);
+        assert_eq!(core.register_labels.len(), long);
+        assert_eq!(core.read_reg(1).expect("string register"), text);
+        assert_eq!(core.registers_memory_bytes(), value_bytes);
     }
 
     #[test]

@@ -546,6 +546,8 @@ impl GcMarker {
             register_len: _,
             register_label_len: _,
             register_dirty_end: _,
+            registers_value_bytes: _,
+            register_labels_bytes: _,
             delegation,
             active_inline_callback_context_label: _,
             call_stack,
@@ -592,6 +594,7 @@ impl GcMarker {
             generator_delegation,
             register_labels: _,
             register_label_bytes: _,
+            register_dirty_end: _,
             active_inline_callback_context_label: _,
             call_stack,
             ip: _,
@@ -1690,6 +1693,8 @@ impl InterpreterCore {
             estimated_memory_bytes: _,
             simple_callback_temporary_bytes: _,
             simple_callback_register_pool: _,
+            // Every slot undefined with a Public label.
+            spare_register_files: _,
             property_witness_scratch: _,
             // Empty between calls; a call in setup holds them in a local.
             call_argument_value_scratch: _,

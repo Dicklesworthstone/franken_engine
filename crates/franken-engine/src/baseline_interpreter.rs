@@ -116495,11 +116495,12 @@ mod active_builtin_regressions {
         args: &[Value],
     ) -> Result<Value, InterpreterError> {
         let count = u32::try_from(args.len()).expect("test argument count fits u32");
-        core.mutate_registers(|registers| {
-            for (index, value) in args.iter().enumerate() {
-                registers[index] = value.clone();
-            }
-        });
+        // Accounted writes: a seeded string left in a register is live state
+        // the memory walk counts.
+        for (register, value) in (0..count).zip(args) {
+            core.write_reg(register, value.clone())
+                .expect("test argument register");
+        }
         let module = halted_test_module();
         core.dispatch_builtin_function(
             &module,

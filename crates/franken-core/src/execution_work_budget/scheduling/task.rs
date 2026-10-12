@@ -27,7 +27,7 @@ impl ExecutionTaskControl {
         self.scope.cancel();
     }
 
-    /// True after cancellation, ancestor revocation, or worker scope exit.
+    /// True after cancellation, ancestor revocation, or admission scope exit.
     /// This signal alone is not evidence that the worker has been joined.
     pub fn is_cancelled(&self) -> bool {
         self.scope.is_cancelled()
@@ -170,6 +170,17 @@ impl Drop for ExecutionTask {
     }
 }
 
+// The reservation, not only an optional worker, owns the admission lifetime.
+// Synchronous dispatch, rejected dispatch, queue withdrawal and unwinding all
+// consume that lifetime. Escaped provider signals must not remain usable after
+// the prepaid execution has ended. Cancellation is idempotent and never refunds
+// instruction credits or revokes parent/sibling admissions.
+impl Drop for ExecutionAdmission {
+    fn drop(&mut self) {
+        self.scope.cancel();
+    }
+}
+
 // Captured before spawn: even rejected startup or a dropped spawn closure closes
 // this admission. Declared before the VM call so the interpreter is dropped
 // before normal scope exit; unwinding also always requests cancellation.
@@ -237,3 +248,162 @@ impl ExecutionAdmission {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod admission_lifetime_tests {
+    use super::*;
+    use crate::baseline_interpreter::{InterpreterCore, InterpreterError};
+    use crate::execution_work_budget::ExecutionWorkPool;
+    use crate::execution_work_budget::tests::{PanickingHook, config, module};
+    use std::collections::VecDeque;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    #[test]
+    fn withdrawing_a_queued_admission_closes_only_its_escaped_signals() {
+        let pool = ExecutionWorkPool::new(384);
+        let job = pool.reserve(128).unwrap();
+        let sibling = pool.reserve(128).unwrap();
+        let control = job.task_control();
+        let signal = job.execution_cancellation().unwrap();
+        let mut queue = VecDeque::from([job]);
+        let job = queue.pop_front().unwrap();
+        queue.push_back(job);
+        assert!(
+            !control.is_cancelled(),
+            "moving an admission is not closing it"
+        );
+        assert!(!signal.is_cancelled());
+        drop(queue);
+        assert!(control.is_cancelled());
+        assert!(signal.is_cancelled());
+        signal.reset();
+        assert!(
+            signal.is_cancelled(),
+            "a child cannot reopen a discarded admission"
+        );
+        assert!(!pool.is_revoked());
+        assert!(!sibling.task_control().is_cancelled());
+        assert_eq!(pool.remaining(), 128);
+        sibling
+            .execute(&module("7;"), config(128), "sibling")
+            .unwrap();
+        assert_eq!(pool.remaining(), 128);
+    }
+
+    #[test]
+    fn synchronous_success_preserves_result_and_closes_the_admission() {
+        let source = module("40 + 2;");
+        let expected = InterpreterCore::new(config(128), "sync-lifetime")
+            .execute(&source)
+            .unwrap();
+        let pool = ExecutionWorkPool::new(256);
+        let job = pool.reserve(128).unwrap();
+        let control = job.task_control();
+        let signal = job.execution_cancellation().unwrap();
+        let result = job
+            .execute(&source, config(128), "sync-lifetime")
+            .unwrap();
+        assert_eq!(result.value, expected.value);
+        assert_eq!(result.completion_label, expected.completion_label);
+        assert_eq!(result.instructions_executed, expected.instructions_executed);
+        assert_eq!(result.console_output, expected.console_output);
+        assert!(control.is_cancelled());
+        signal.reset();
+        assert!(signal.is_cancelled());
+        assert_eq!(pool.remaining(), 128);
+        assert!(!pool.is_revoked());
+    }
+
+    #[test]
+    fn synchronous_budget_exhaustion_closes_the_admission() {
+        let pool = ExecutionWorkPool::new(16);
+        let job = pool.reserve(8).unwrap();
+        let control = job.task_control();
+        assert!(matches!(
+            job.execute(&module("while (true) {}"), config(128), "sync-exhaustion"),
+            Err(WorkBudgetError::Interpreter(
+                InterpreterError::BudgetExhausted { budget: 8, .. }
+            ))
+        ));
+        assert!(control.is_cancelled());
+        assert_eq!(pool.remaining(), 8);
+        assert!(!pool.is_revoked());
+    }
+
+    #[test]
+    fn rejected_synchronous_dispatch_closes_the_admission() {
+        let pool = ExecutionWorkPool::new(256);
+        let job = pool.reserve(128).unwrap();
+        let signal = job.execution_cancellation().unwrap();
+        assert!(matches!(
+            job.execute(&module("7;"), config(0), "sync-rejected"),
+            Err(WorkBudgetError::ZeroInstructionBudget)
+        ));
+        assert!(signal.is_cancelled());
+        assert_eq!(pool.remaining(), 128);
+        assert!(!pool.is_revoked());
+    }
+
+    #[test]
+    fn capability_denial_closes_the_admission_without_refund() {
+        let pool = ExecutionWorkPool::new(256);
+        let job = pool.reserve(128).unwrap();
+        let control = job.task_control();
+        let mut denied = config(128);
+        denied.granted_capabilities.clear();
+        assert!(matches!(
+            job.execute(&module("7;"), denied, "sync-denied"),
+            Err(WorkBudgetError::Interpreter(
+                InterpreterError::CapabilityDenied { .. }
+            ))
+        ));
+        assert!(control.is_cancelled());
+        assert_eq!(pool.remaining(), 128);
+        assert!(!pool.is_revoked());
+    }
+
+    #[test]
+    fn native_unwind_closes_synchronous_admission_signals() {
+        let source = module("let object = {}; object;");
+        let pool = ExecutionWorkPool::new(256);
+        let job = pool.reserve(128).unwrap();
+        let control = job.task_control();
+        let signal = job.execution_cancellation().unwrap();
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            job.execute_with_hook(
+                &source,
+                config(128),
+                "sync-panic",
+                Some(Arc::new(PanickingHook)),
+            )
+        }));
+        assert!(
+            outcome.is_err(),
+            "the real native allocation hook must unwind"
+        );
+        assert!(control.is_cancelled());
+        signal.reset();
+        assert!(signal.is_cancelled());
+        assert_eq!(pool.remaining(), 128);
+    }
+
+    #[test]
+    fn caller_reset_cannot_reopen_a_completed_admission() {
+        let pool = ExecutionWorkPool::new(256);
+        let job = pool.reserve(128).unwrap();
+        let caller = CancellationToken::new();
+        let mut current = config(128);
+        current.cancellation_token = Some(caller.clone());
+        let signal = job.execution_cancellation().unwrap();
+        job.execute(&module("7;"), current, "sync-caller").unwrap();
+        assert!(
+            !caller.is_cancelled(),
+            "closing an admission must not cancel its caller"
+        );
+        caller.cancel();
+        caller.reset();
+        signal.reset();
+        assert!(signal.is_cancelled());
+        assert!(!pool.is_revoked());
+    }
+}

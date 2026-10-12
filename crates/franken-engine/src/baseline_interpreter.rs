@@ -111871,7 +111871,17 @@ impl InterpreterCore {
         if let Some(value) = self.object_receiver_static_value_call(module, &tag, args)? {
             return Ok(value);
         }
-        self.dispatch_builtin_hostcall(&tag, args, Some(module))
+        // The value call of a static builtin is its hostcall, which counts
+        // itself as a builtin: counted twice, the dispatch looked nested in
+        // another builtin's frame and could not arm a collection, so since
+        // call-time member resolution (2a427674d) `Reflect.construct(C, a)`
+        // ran a constructor allocating past the object cap without one
+        // (bd-9vouw.77). This frame holds only the tag and the argument
+        // registers across the call.
+        self.gc_exit_builtin();
+        let result = self.dispatch_builtin_hostcall(&tag, args, Some(module));
+        self.gc_enter_builtin();
+        result
     }
 
     /// A value call of `Object.is`, `isExtensible`, `preventExtensions`,

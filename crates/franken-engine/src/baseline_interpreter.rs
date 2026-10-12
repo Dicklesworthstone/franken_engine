@@ -149878,7 +149878,9 @@ mod tests {
         let max_registers = config.max_registers as usize;
         let mut narrow_only_core =
             InterpreterCore::new(config.clone(), "tier-i-exact-narrow-frame");
-        narrow_only_core.enter_stacked_register_frame_for_function(&module, Some(&plan), 2);
+        narrow_only_core
+            .enter_stacked_register_frame_for_function(&module, Some(&plan), 2)
+            .expect("narrow frame entry");
         // The narrow frame's window is the only part of the file that may
         // hold a value after its entry (bd-9vouw.499).
         assert_eq!(narrow_only_core.register_dirty_end, max_registers + 1);
@@ -150581,14 +150583,16 @@ mod tests {
         let mut core = quickjs_test_core();
         let max_registers = core.config.max_registers as usize;
 
-        core.enter_stacked_register_frame(Some(&wide_plan));
+        core.enter_stacked_register_frame(Some(&wide_plan))
+            .expect("wide frame entry");
         core.write_reg_with_label(7, Value::Int(99), Label::Secret)
             .expect("seed stale wide-frame state");
         // Returning restores the caller's window: its base and its width
         // (bd-9vouw.72), so the narrow callee reuses the wide one's slots.
         core.register_base = 0;
         core.register_width = max_registers;
-        core.enter_stacked_register_frame(Some(&narrow_plan));
+        core.enter_stacked_register_frame(Some(&narrow_plan))
+            .expect("narrow frame entry");
 
         // The wide frame's write raised the dirty end past register 7, so the
         // narrow entry cleared it (bd-9vouw.499); only its own window may be

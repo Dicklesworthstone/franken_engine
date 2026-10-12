@@ -105,6 +105,26 @@ pub(super) const TYPED_ARRAY_TO_STRING_TAG: &str = "@@toStringTag";
 /// [`PROTOTYPE_GETTERS`] (bd-9vouw.278).
 pub(super) const SPECIES_GETTER_KEY: &str = "@@species";
 
+/// The [`PROTOTYPE_GETTERS`] rows of a string `key` (no `@@` rows), in table
+/// order (bd-9vouw.504). [[Set]] asks `prototype_getter_at` about every
+/// object on the receiver's prototype chain; scanning the 55 rows cost about
+/// 300 instructions a call, twice per store into a plain object.
+fn prototype_getter_rows(key: &str) -> &'static [usize] {
+    static ROWS: std::sync::OnceLock<std::collections::HashMap<&'static str, Vec<usize>>> =
+        std::sync::OnceLock::new();
+    ROWS.get_or_init(|| {
+        let mut rows = std::collections::HashMap::<&'static str, Vec<usize>>::new();
+        for (index, (_, key, _)) in PROTOTYPE_GETTERS.iter().enumerate() {
+            if !key.starts_with("@@") {
+                rows.entry(*key).or_default().push(index);
+            }
+        }
+        rows
+    })
+    .get(key)
+    .map_or(&[], Vec::as_slice)
+}
+
 /// The table entry a getter's specifier (`"Map.size"`) names.
 pub(super) fn prototype_getter_entry(
     specifier: &str,
@@ -143,13 +163,10 @@ impl InterpreterCore {
             return None;
         };
         let key = key.as_str()?;
-        PROTOTYPE_GETTERS
+        prototype_getter_rows(key)
             .iter()
-            .find(|(owner, entry_key, _)| {
-                *entry_key == key
-                    && !entry_key.starts_with("@@")
-                    && self.builtin_prototypes.get(*owner) == Some(&object)
-            })
+            .map(|&row| &PROTOTYPE_GETTERS[row])
+            .find(|(owner, _, _)| self.builtin_prototypes.get(*owner) == Some(&object))
             .map(|(owner, key, _)| BuiltinFunction::prototype_getter(owner, key))
     }
 
@@ -176,11 +193,11 @@ impl InterpreterCore {
         let Some(key) = key.as_str() else {
             return Ok(None);
         };
-        let Some((owner, key, _)) = PROTOTYPE_GETTERS.iter().find(|(owner, entry_key, _)| {
-            *entry_key == key
-                && !entry_key.starts_with("@@")
-                && self.builtin_prototypes.get(*owner) == Some(&object)
-        }) else {
+        let Some((owner, key, _)) = prototype_getter_rows(key)
+            .iter()
+            .map(|&row| &PROTOTYPE_GETTERS[row])
+            .find(|(owner, _, _)| self.builtin_prototypes.get(*owner) == Some(&object))
+        else {
             return Ok(None);
         };
         let getter = Value::BuiltinFunction(BuiltinFunction::prototype_getter(owner, key));
@@ -553,5 +570,33 @@ impl InterpreterCore {
             });
         }
         Ok(Value::Undefined)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// bd-9vouw.504: the key index lists, for each string key, exactly the
+    /// rows a scan of the table finds, in table order; `@@` rows and unknown
+    /// keys have none.
+    #[test]
+    fn prototype_getter_rows_index_every_string_row_in_table_order() {
+        for (_, key, _) in PROTOTYPE_GETTERS.iter() {
+            let scanned = PROTOTYPE_GETTERS
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, entry_key, _))| entry_key == key && !entry_key.starts_with("@@"))
+                .map(|(row, _)| row)
+                .collect::<Vec<_>>();
+            assert_eq!(prototype_getter_rows(key), scanned.as_slice(), "{key}");
+        }
+        assert!(
+            prototype_getter_rows("size").len() >= 2,
+            "Map and Set share `size`"
+        );
+        assert!(prototype_getter_rows(TYPED_ARRAY_TO_STRING_TAG).is_empty());
+        assert!(prototype_getter_rows(SPECIES_GETTER_KEY).is_empty());
+        assert!(prototype_getter_rows("x").is_empty());
     }
 }

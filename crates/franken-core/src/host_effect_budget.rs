@@ -22,7 +22,9 @@ use frankenengine_extension_host::host_io::{
     HostIoProvider, HostIoRequest, UnrestrictedHostIoControl,
 };
 
-use crate::execution_work_budget::{ExecutionWorkPool, WorkScopeRevocation};
+use crate::execution_work_budget::{
+    ExecutionAdmission, ExecutionTaskControl, ExecutionWorkPool, WorkScopeRevocation,
+};
 
 mod drain;
 mod hierarchy;
@@ -33,6 +35,25 @@ pub use process::BudgetedProcessSpawn;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod admission_tests;
+
+/// A provider can live for a tenant pool or exactly one prepaid execution.
+/// Both bindings retain live ancestor revocation; neither can reset a scope.
+#[derive(Clone)]
+enum EffectScope {
+    WorkPool(WorkScopeRevocation),
+    Admission(ExecutionTaskControl),
+}
+
+impl EffectScope {
+    fn is_revoked(&self) -> bool {
+        match self {
+            Self::WorkPool(scope) => scope.is_revoked(),
+            Self::Admission(scope) => scope.is_cancelled(),
+        }
+    }
+}
 
 /// Trusted-host limits shared across every provider bound to this pool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -206,7 +227,28 @@ impl HostEffectWorkPool {
         BudgetedHostIo {
             provider,
             pool: self.clone(),
-            scope: execution.revocation_signal(),
+            scope: EffectScope::WorkPool(execution.revocation_signal()),
+        }
+    }
+
+    /// Bind I/O to one admission rather than the whole tenant work pool.
+    /// Cancelling, completing or discarding that admission denies future calls
+    /// and reaches controls already handed to cooperative providers. Sibling
+    /// admissions keep their own scopes and share the unchanged effect limits.
+    ///
+    /// Install this wrapper in the admitted execution's host-I/O provider slot.
+    /// Keep the admission alive until dispatch consumes it; binding a provider
+    /// neither consumes it nor grants capabilities. Scope closure requests
+    /// cancellation, not proof of provider drain or rollback of completed I/O.
+    pub fn bind_host_io_for_admission(
+        &self,
+        provider: Arc<dyn HostIoProvider>,
+        admission: &ExecutionAdmission,
+    ) -> BudgetedHostIo {
+        BudgetedHostIo {
+            provider,
+            pool: self.clone(),
+            scope: EffectScope::Admission(admission.task_control()),
         }
     }
 
@@ -301,7 +343,7 @@ impl Drop for EffectPermit {
 pub struct BudgetedHostIo {
     provider: Arc<dyn HostIoProvider>,
     pool: HostEffectWorkPool,
-    scope: WorkScopeRevocation,
+    scope: EffectScope,
 }
 
 impl fmt::Debug for BudgetedHostIo {
@@ -320,7 +362,7 @@ impl fmt::Debug for BudgetedHostIo {
 
 struct EffectControl {
     pool: HostEffectWorkPool,
-    scope: WorkScopeRevocation,
+    scope: EffectScope,
     caller: Arc<dyn HostIoControl>,
     refused: AtomicBool,
 }

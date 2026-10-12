@@ -5,7 +5,9 @@
 //! outcomes without entering this wrapper. Preflight and canonical preparation
 //! are delegated unchanged and do not debit live-operation credits.
 
-use super::{ExecutionWorkPool, HostEffectBudgetError, HostEffectWorkPool, WorkScopeRevocation};
+use super::{
+    EffectScope, ExecutionAdmission, ExecutionWorkPool, HostEffectBudgetError, HostEffectWorkPool,
+};
 use frankenengine_extension_host::process_spawn::{
     ProcessSpawnCapability, ProcessSpawnControl, ProcessSpawnError, ProcessSpawnOutcome,
     ProcessSpawnProvider, ProcessSpawnRequest, ProcessSpawnResponse,
@@ -34,7 +36,27 @@ impl HostEffectWorkPool {
         BudgetedProcessSpawn {
             provider,
             pool: self.clone(),
-            scope: execution.revocation_signal(),
+            scope: EffectScope::WorkPool(execution.revocation_signal()),
+        }
+    }
+
+    /// Bind live process operations and their forwarded controls to one prepaid
+    /// admission. A task's cancellation or ownership exit cannot revoke siblings,
+    /// but it remains visible to the native provider's retained child watchdog.
+    ///
+    /// Install inside the existing journal/attempt-authority boundary just like
+    /// `bind_process_spawn`. Completed spawn handles and typed native failures
+    /// still reach the journal; trusted cleanup remains available after closure.
+    /// This binding does not itself join workers, drain providers or reap children.
+    pub fn bind_process_spawn_for_admission(
+        &self,
+        provider: Arc<dyn ProcessSpawnProvider>,
+        admission: &ExecutionAdmission,
+    ) -> BudgetedProcessSpawn {
+        BudgetedProcessSpawn {
+            provider,
+            pool: self.clone(),
+            scope: EffectScope::Admission(admission.task_control()),
         }
     }
 }
@@ -47,7 +69,7 @@ impl HostEffectWorkPool {
 pub struct BudgetedProcessSpawn {
     provider: Arc<dyn ProcessSpawnProvider>,
     pool: HostEffectWorkPool,
-    scope: WorkScopeRevocation,
+    scope: EffectScope,
 }
 
 impl fmt::Debug for BudgetedProcessSpawn {
@@ -75,7 +97,7 @@ fn budget_error(error: HostEffectBudgetError) -> ProcessSpawnError {
 
 struct ProcessEffectControl {
     pool: HostEffectWorkPool,
-    scope: WorkScopeRevocation,
+    scope: EffectScope,
     caller: Arc<dyn ProcessSpawnControl>,
     refused: AtomicBool,
 }

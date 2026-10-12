@@ -52598,6 +52598,47 @@ impl InterpreterCore {
                 compact_instruction.is_none() && self.tier_r_always_reentrant(instr_ref);
             let instr =
                 (compact_instruction.is_none() && !reentrant_only).then(|| instr_ref.clone());
+            // bd-9vouw.501: a spread call `f(...list)` is the Reflect.apply
+            // hostcall over a fresh array; when building the argument list is
+            // unobservable it runs as the method call `undefined.f(...)`, the
+            // list handed to the CallMethod handler as `apply_arguments`.
+            // The profiler keeps observing the hostcall.
+            let mut spread_apply_arguments = None;
+            let (instr, reentrant_only) = match instr_ref {
+                Ir3Instruction::HostCall {
+                    capability,
+                    args,
+                    dst,
+                } if reentrant_only
+                    && self.profiling_data.is_none()
+                    && args.count == 3
+                    && capability.0 == "builtin:ReflectApply" =>
+                {
+                    match self.unobservable_apply_arguments(
+                        module,
+                        &[],
+                        args.start,
+                        args.start + 1,
+                        args.start + 2,
+                    )? {
+                        Some(values) => {
+                            let call = Ir3Instruction::CallMethod {
+                                receiver: args.start + 1,
+                                callee: args.start,
+                                args: RegRange {
+                                    start: self.config.max_registers,
+                                    count: values.len() as u32,
+                                },
+                                dst: *dst,
+                            };
+                            spread_apply_arguments = Some(values);
+                            (Some(call), false)
+                        }
+                        None => (instr, reentrant_only),
+                    }
+                }
+                _ => (instr, reentrant_only),
+            };
             self.instructions_executed += 1;
 
             // Checkpoint guard integration: tick on each instruction
@@ -53471,6 +53512,52 @@ impl InterpreterCore {
                         };
                     }
 
+                    // bd-9vouw.501: `f.apply(t, list)` and `Reflect.apply(f,
+                    // t, list)` likewise, when building the list is
+                    // unobservable (`unobservable_apply_arguments`): the list
+                    // reaches the frame as overflow registers instead of an
+                    // isolated activation running `f` in a nested run loop,
+                    // which also capped a recursion through apply at the
+                    // reentrant depth. A spread call arrives here rewritten
+                    // from its Reflect.apply hostcall, its list taken.
+                    let mut apply_arguments = spread_apply_arguments.take();
+                    if apply_arguments.is_none()
+                        && let Value::BuiltinFunction(builtin) = &callee_val
+                        && builtin.bound_object.is_none()
+                    {
+                        let operands = match builtin.kind {
+                            BuiltinFunctionKind::FunctionPrototypeApply if args.count >= 2 => {
+                                Some((receiver, args.start, args.start + 1))
+                            }
+                            BuiltinFunctionKind::StaticHostcall
+                                if args.count >= 3
+                                    && &*builtin.module_specifier == "builtin:ReflectApply" =>
+                            {
+                                Some((args.start, args.start + 1, args.start + 2))
+                            }
+                            _ => None,
+                        };
+                        if let Some((function, this, list)) = operands
+                            && let Some(values) = self.unobservable_apply_arguments(
+                                module,
+                                &[receiver, callee],
+                                function,
+                                this,
+                                list,
+                            )?
+                        {
+                            callee = function;
+                            callee_val = self.read_reg(callee)?;
+                            receiver = this;
+                            receiver_val = self.read_reg(receiver)?;
+                            args = RegRange {
+                                start: self.config.max_registers,
+                                count: values.len() as u32,
+                            };
+                            apply_arguments = Some(values);
+                        }
+                    }
+
                     if let Value::BuiltinFunction(builtin) = callee_val {
                         return Ok(DispatchOutcome::BuiltinCall {
                             builtin,
@@ -53842,20 +53929,34 @@ impl InterpreterCore {
                     }
 
                     let (mut arg_vals, mut arg_labels) = self.take_call_argument_scratch();
-                    for i in 0..args.count.min(func.arity) {
-                        let reg = args.start.checked_add(i).ok_or(
-                            InterpreterError::RegisterOutOfBounds {
-                                register: args.start,
-                                max: self.config.max_registers,
-                            },
-                        )?;
-                        arg_vals.push(self.read_reg(reg)?);
-                        arg_labels.push(self.get_register_label(reg)?.clone());
+                    // An apply list (bd-9vouw.501) is registers
+                    // max_registers.. of this frame while the parameters,
+                    // the rest parameter and `arguments` take it, and only
+                    // then, whatever their outcome.
+                    let overflow_depth = match apply_arguments.take() {
+                        Some(values) => Some(self.install_apply_argument_overflow(values)?),
+                        None => None,
+                    };
+                    let bound = (|| -> Result<(), InterpreterError> {
+                        for i in 0..args.count.min(func.arity) {
+                            let reg = args.start.checked_add(i).ok_or(
+                                InterpreterError::RegisterOutOfBounds {
+                                    register: args.start,
+                                    max: self.config.max_registers,
+                                },
+                            )?;
+                            arg_vals.push(self.read_reg(reg)?);
+                            arg_labels.push(self.get_register_label(reg)?.clone());
+                        }
+                        self.mark_inline_callback_started();
+                        self.apply_rest_param(&mut arg_vals, func.rest_param_index, args)?;
+                        self.apply_rest_param_labels(&mut arg_labels, func.rest_param_index, args)?;
+                        self.stage_arguments_object(module, func, func_idx, &callee_val, args)
+                    })();
+                    if let Some(depth) = overflow_depth {
+                        self.restore_argument_overflow(depth);
                     }
-                    self.mark_inline_callback_started();
-                    self.apply_rest_param(&mut arg_vals, func.rest_param_index, args)?;
-                    self.apply_rest_param_labels(&mut arg_labels, func.rest_param_index, args)?;
-                    self.stage_arguments_object(module, func, func_idx, &callee_val, args)?;
+                    bound?;
 
                     self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
@@ -81898,6 +81999,101 @@ impl InterpreterCore {
             .simple_callback_temporary_bytes
             .saturating_sub(reserved);
         result
+    }
+
+    /// bd-9vouw.501: the argument list of `f.apply(t, list)`,
+    /// `Reflect.apply(f, t, list)` or a spread call `f(...list)` (the
+    /// Reflect.apply hostcall over a fresh array) when `f` can run as an
+    /// ordinary frame of this run loop, with the list as its arguments,
+    /// exactly as the isolated activation of `forward_function_invocation`
+    /// would run it: `f` (in `function_register`) is a same-module closure
+    /// or function; no embedder hook and no execution context label is
+    /// active; `labelled_registers` (the call's own operands) and the
+    /// function, receiver and list registers are Public, as are the list's
+    /// mutation label and property labels, so the isolated call's context
+    /// label would be Public; and the list is an ordinary Array whose
+    /// `length` is an Int within MAX_CALL_ARGUMENTS and whose elements
+    /// 0..length are own data properties, so CreateListFromArrayLike's
+    /// [[Get]]s run no getter. Charges the instruction budget as
+    /// `observable_apply_arguments` does: one unit, then one per element.
+    fn unobservable_apply_arguments(
+        &mut self,
+        module: &Ir3Module,
+        labelled_registers: &[u32],
+        function_register: u32,
+        receiver_register: u32,
+        list_register: u32,
+    ) -> Result<Option<Vec<Value>>, InterpreterError> {
+        if self.hook.is_some()
+            || self
+                .active_execution_context_label()
+                .is_some_and(|label| *label != Label::Public)
+        {
+            return Ok(None);
+        }
+        let operands = [function_register, receiver_register, list_register];
+        for &register in labelled_registers.iter().chain(&operands) {
+            if *self.get_register_label(register)? != Label::Public {
+                return Ok(None);
+            }
+        }
+        let function = self.read_reg(function_register)?;
+        if !matches!(function, Value::Closure(_) | Value::Function(_))
+            || self.foreign_closure_module(&function, module)?.is_some()
+        {
+            return Ok(None);
+        }
+        let Value::Object(list) = self.read_reg(list_register)? else {
+            return Ok(None);
+        };
+        if self
+            .object_mutation_labels
+            .get(&list)
+            .is_some_and(|label| *label != Label::Public)
+            || self.active_proxy_record(list)?.is_some()
+        {
+            return Ok(None);
+        }
+        let Some(object) = self.heap.get(list.0 as usize) else {
+            return Ok(None);
+        };
+        if !object.is_array || object.typed_array.is_some() || !object.property_labels.is_empty() {
+            return Ok(None);
+        }
+        let length = match object.properties.get("length") {
+            Some(Value::Int(length)) if (0..=i64::from(MAX_CALL_ARGUMENTS)).contains(length) => {
+                *length as u32
+            }
+            _ => return Ok(None),
+        };
+        let mut values = Vec::with_capacity(length as usize);
+        for index in 0..length {
+            match object.properties.get_index(index) {
+                None | Some(Value::Accessor { .. }) => return Ok(None),
+                Some(value) => values.push(value.clone()),
+            }
+        }
+        for _ in 0..=length {
+            self.json_charge_work()?;
+        }
+        Ok(Some(values))
+    }
+
+    /// Make `values` (Public) registers `max_registers..` of the active frame
+    /// for the call that binds them, as `stage_argument_overflow` does for a
+    /// synthetic call site (bd-9vouw.501).
+    fn install_apply_argument_overflow(
+        &mut self,
+        values: Vec<Value>,
+    ) -> Result<usize, InterpreterError> {
+        let labels = vec![Label::Public; values.len()];
+        let bytes = Self::estimate_value_vec_bytes(&values).saturating_add(
+            u64::try_from(labels.len())
+                .unwrap_or(u64::MAX)
+                .saturating_mul(std::mem::size_of::<Label>() as u64),
+        );
+        self.check_temporary_memory_budget(bytes)?;
+        Ok(self.install_argument_overflow(values, labels, bytes))
     }
 
     /// CreateListFromArrayLike for apply, not iterable spread. Read length
@@ -126533,6 +126729,65 @@ mod async_runtime_tests_current {
             core.get_register_label(3).expect("method result label"),
             &Label::Secret
         );
+    }
+
+    /// bd-9vouw.501: `f.apply(t, list)` runs `f` as an ordinary frame only
+    /// while nothing in the call carries a label. The isolated call joins a
+    /// labelled list's label into the callee's context, so a Secret list
+    /// still taints the result; an unlabelled one leaves it Public, and the
+    /// staged overflow is gone once the call returns.
+    #[test]
+    fn apply_with_a_labelled_list_keeps_the_isolated_call_bd_9vouw_501() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::CallMethod {
+                    receiver: 0,
+                    callee: 1,
+                    args: RegRange { start: 2, count: 2 },
+                    dst: 4,
+                },
+                Ir3Instruction::Return { value: 4 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 1,
+                frame_size: 1,
+                name: Some("return_argument".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        for (list_label, expected) in [
+            (Label::Public, Label::Public),
+            (Label::Secret, Label::Secret),
+        ] {
+            let mut core = test_interpreter();
+            let list = core
+                .alloc_array_from_values(&[Value::Int(7)])
+                .expect("argument list");
+            core.mutate_registers(|registers| {
+                registers[0] = Value::Function(0);
+                registers[1] = Value::BuiltinFunction(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::FunctionPrototypeApply,
+                ));
+                registers[2] = Value::Undefined;
+                registers[3] = Value::Object(list);
+            });
+            core.set_register_label(3, list_label.clone())
+                .expect("list label");
+            assert_eq!(
+                core.run_loop(&module).expect("apply returns its argument"),
+                Value::Int(7),
+                "{list_label:?} list"
+            );
+            assert_eq!(
+                core.get_register_label(4).expect("apply result label"),
+                &expected,
+                "{list_label:?} list"
+            );
+            assert!(core.argument_overflow.is_empty());
+        }
     }
 
     #[test]

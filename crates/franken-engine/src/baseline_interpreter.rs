@@ -7926,6 +7926,34 @@ fn property_resolution_found_payload(
     payload
 }
 
+/// How many small array indices keep a shared decimal key.
+const SMALL_INDEX_KEYS: usize = 1024;
+
+/// The decimal property key of a small non-negative integer, shared per
+/// thread (bd-9vouw.504): `a[i]` formatted a String and then made a shared
+/// copy of it on every access. Key identity is never observable; the keys
+/// are filled on first use, at most SMALL_INDEX_KEYS of them.
+fn small_index_key(number: i64) -> Option<JsString> {
+    thread_local! {
+        static KEYS: std::cell::RefCell<Vec<Option<JsString>>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let index = usize::try_from(number)
+        .ok()
+        .filter(|index| *index < SMALL_INDEX_KEYS)?;
+    KEYS.with(|keys| {
+        let mut keys = keys.borrow_mut();
+        if keys.len() <= index {
+            keys.resize(index + 1, None);
+        }
+        Some(
+            keys[index]
+                .get_or_insert_with(|| JsString::from(index.to_string()))
+                .clone(),
+        )
+    })
+}
+
 /// Replace `payload`'s contents with the found-property witness event's bytes.
 fn write_property_resolution_found_payload(
     payload: &mut Vec<u8>,
@@ -54252,9 +54280,13 @@ impl InterpreterCore {
                         Value::Object(object_id) => Some(*object_id),
                         _ => None,
                     };
-                    let ordinary_own_property_fast_path = object_id.is_some_and(|object_id| {
-                        self.ordinary_own_property_read_fast_path_eligible(object_id, &property_key)
+                    let mut ordinary_own_property_read = object_id.and_then(|object_id| {
+                        self.ordinary_own_property_fast_read(object_id, &property_key)
                     });
+                    let ordinary_own_property_fast_path = ordinary_own_property_read.is_some();
+                    // A data property's stored label from the fast read, for
+                    // the owner-label join below (bd-9vouw.504).
+                    let mut ordinary_own_property_label = None;
                     let has_hook_target = object_id.is_some()
                         || matches!(
                             &obj_val,
@@ -54444,16 +54476,10 @@ impl InterpreterCore {
                                     // as an ordinary property (bd-9vouw.318).
                                     let link = self.ordinary_get_prototype_of(oid)?;
                                     self.prototype_value_for_link(Some(module), link)
-                                } else if ordinary_own_property_fast_path {
-                                    let value = self
-                                    .heap
-                                    .get(oid.0 as usize)
-                                    .and_then(|object| {
-                                        object.own_runtime_property_value(&property_key)
-                                    })
-                                    .expect(
-                                        "ordinary own-property fast-path eligibility was checked",
-                                    );
+                                } else if let Some((value, stored_label)) =
+                                    ordinary_own_property_read.take()
+                                {
+                                    ordinary_own_property_label = stored_label;
                                     self.capture_property_resolution_found(&property_key, oid, 0);
                                     self.resolve_accessor_get(
                                         Some(module),
@@ -54929,7 +54955,13 @@ impl InterpreterCore {
                         .or(function_backing.filter(|_| authoritative_standard_backing.is_none()))
                         .or(primitive_owner)
                     {
-                        let stored_label = self.runtime_property_label(owner, &property_key);
+                        // The fast read's owner is `object_id` itself, and a
+                        // plain object never continues to an intrinsic
+                        // prototype above (`inherited_base`).
+                        let stored_label = match ordinary_own_property_label.take() {
+                            Some(label) => label,
+                            None => self.runtime_property_label(owner, &property_key),
+                        };
                         result_label = self
                             .join_owned_label_with_temporary_budget(result_label, &stored_label)?;
                     }
@@ -63848,41 +63880,75 @@ impl InterpreterCore {
     /// hit remains on the generic path. The caller still runs the typed
     /// property hook, resolves accessors, joins stored-property and destination
     /// labels, and emits the same deterministic property-resolution event.
+    #[cfg(test)]
     fn ordinary_own_property_read_fast_path_eligible(
         &self,
         object_id: ObjectId,
         key: &RuntimePropertyKey,
     ) -> bool {
+        self.ordinary_own_property_read_object(object_id, key)
+            .is_some_and(|object| object.contains_own_runtime_property(key))
+    }
+
+    /// The object of an own-property read the fast path may serve, by the
+    /// exclusions above, whether or not it has the key.
+    fn ordinary_own_property_read_object(
+        &self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> Option<&HeapObject> {
         if key.as_str() == Some("__proto__") {
-            return false;
+            return None;
         }
-        let Some(object) = self.heap.get(object_id.0 as usize) else {
-            return false;
-        };
+        let object = self.heap.get(object_id.0 as usize)?;
         if object.is_import_meta
             || object.prototype.is_some()
             || object.array_buffer.is_some()
             || object.typed_array.is_some()
             || object.data_view.is_some()
             || object.brand() == Some(PROXY_TYPE_TAG)
-            || !object.contains_own_runtime_property(key)
         {
-            return false;
+            return None;
         }
 
-        !self.url_objects.contains_key(&object_id)
-            && !self.url_search_params.contains_key(&object_id)
-            && !self.cluster_facades.contains_key(&object_id)
+        // These host-object tables are empty in almost every program: the
+        // emptiness test spares a lookup per table on every read.
+        fn absent<V>(table: &BTreeMap<ObjectId, V>, object_id: &ObjectId) -> bool {
+            table.is_empty() || !table.contains_key(object_id)
+        }
+        (absent(&self.url_objects, &object_id)
+            && absent(&self.url_search_params, &object_id)
+            && absent(&self.cluster_facades, &object_id)
             && !self
                 .cluster_facades
                 .values()
                 .any(|state| state.settings == object_id)
-            && !self.readable_from_streams.contains_key(&object_id)
-            && !self.readable_terminal_states.contains_key(&object_id)
-            && !self.writable_streams.contains_key(&object_id)
-            && !self.writable_terminal_states.contains_key(&object_id)
-            && !self.loopback_servers.contains_key(&object_id)
-            && !self.loopback_sockets.contains_key(&object_id)
+            && absent(&self.readable_from_streams, &object_id)
+            && absent(&self.readable_terminal_states, &object_id)
+            && absent(&self.writable_streams, &object_id)
+            && absent(&self.writable_terminal_states, &object_id)
+            && absent(&self.loopback_servers, &object_id)
+            && absent(&self.loopback_sockets, &object_id))
+        .then_some(object)
+    }
+
+    /// The fast path's read (bd-9vouw.504): the own property's value, and
+    /// for a data property its stored label, one lookup each. A data
+    /// property's label is final: no code runs between this read and the
+    /// label join. An accessor's getter may delete or relabel the property
+    /// first, so its label is read after the getter, as before.
+    fn ordinary_own_property_fast_read(
+        &self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> Option<(Value, Option<Label>)> {
+        let object = self.ordinary_own_property_read_object(object_id, key)?;
+        let value = object.own_runtime_property_value(key)?;
+        if matches!(value, Value::Accessor { .. }) {
+            return Some((value, None));
+        }
+        let label = self.own_stored_runtime_property_label(object_id, key);
+        Some((value, Some(label)))
     }
 
     fn capture_property_resolution_found(
@@ -72604,7 +72670,9 @@ impl InterpreterCore {
 
         let key = match value {
             Value::Str(key) => key.clone(),
-            Value::Int(number) => JsString::from(number.to_string()),
+            Value::Int(number) => {
+                small_index_key(*number).unwrap_or_else(|| JsString::from(number.to_string()))
+            }
             _ => JsString::from(Self::property_key(value)),
         };
         RuntimePropertyKey::String(key)
@@ -141728,6 +141796,82 @@ mod async_runtime_tests_current {
             trace_count_before,
             "a malformed Proxy must not emit an ordinary property-found trace"
         );
+    }
+
+    /// bd-9vouw.504: the fast own-property read returns a data property's
+    /// stored label (the label the [[Get]] owner join reads) from one lookup,
+    /// and no label for an accessor, whose getter runs before the join.
+    #[test]
+    fn ordinary_own_property_fast_read_carries_a_data_label_only_bd_9vouw_504() {
+        let mut core = test_interpreter();
+        let object = core
+            .alloc_object_with_properties(&[("data", Value::Int(7))])
+            .expect("ordinary object should allocate");
+        core.set_own_property_label(object, "data", &Label::Secret)
+            .expect("property label should be settable");
+        let data_key = RuntimePropertyKey::String(JsString::from("data"));
+        assert_eq!(
+            core.ordinary_own_property_fast_read(object, &data_key),
+            Some((Value::Int(7), Some(Label::Secret)))
+        );
+        assert_eq!(
+            core.runtime_property_label(object, &data_key),
+            Label::Secret
+        );
+
+        core.set_object_property(
+            object,
+            "accessor".to_string(),
+            Value::Accessor {
+                get: None,
+                set: None,
+            },
+        )
+        .expect("accessor own property should fit");
+        assert!(matches!(
+            core.ordinary_own_property_fast_read(
+                object,
+                &RuntimePropertyKey::String(JsString::from("accessor")),
+            ),
+            Some((Value::Accessor { .. }, None))
+        ));
+        assert_eq!(
+            core.ordinary_own_property_fast_read(
+                object,
+                &RuntimePropertyKey::String(JsString::from("missing")),
+            ),
+            None
+        );
+        core.set_object_brand(object, PROXY_TYPE_TAG)
+            .expect("proxy marker should fit");
+        assert_eq!(
+            core.ordinary_own_property_fast_read(object, &data_key),
+            None,
+            "a proxy-tagged object keeps the generic path"
+        );
+    }
+
+    /// bd-9vouw.504: a small index's shared key is the decimal key the
+    /// formatted path builds; larger and negative integers keep that path.
+    #[test]
+    fn small_index_keys_are_the_decimal_keys_bd_9vouw_504() {
+        let core = test_interpreter();
+        for number in [0_i64, 7, 10, 1023] {
+            let shared = small_index_key(number).expect("a small index has a shared key");
+            assert_eq!(shared, JsString::from(number.to_string()));
+            assert_eq!(small_index_key(number), Some(shared));
+            assert_eq!(
+                core.executable_property_key_from_value(&Value::Int(number)),
+                RuntimePropertyKey::String(JsString::from(number.to_string()))
+            );
+        }
+        for number in [-1_i64, 1024, i64::MAX] {
+            assert_eq!(small_index_key(number), None);
+            assert_eq!(
+                core.executable_property_key_from_value(&Value::Int(number)),
+                RuntimePropertyKey::String(JsString::from(number.to_string()))
+            );
+        }
     }
 
     /// bd-gqaa4/bd-0zybl: the conservative prior-dst join must not clone a

@@ -104492,6 +104492,42 @@ impl InterpreterCore {
             .unwrap_or(0)
     }
 
+    /// `estimate_value_vec_bytes` of a snapshot's register file plus
+    /// `estimate_label_vec_bytes` of its label file, from the byte totals
+    /// the snapshot carries when it has them (bd-9vouw.500): the transfer
+    /// accounting of every generator step and await summed both files of
+    /// the parked activation and of the caller.
+    fn snapshot_register_files_bytes(execution: &GeneratorExecutionSnapshot) -> u64 {
+        let slots = |len: usize, slot: usize| {
+            u64::try_from(len)
+                .unwrap_or(u64::MAX)
+                .saturating_mul(slot as u64)
+        };
+        let values = match execution.registers_value_bytes {
+            Some(bytes) => {
+                slots(execution.registers.len(), std::mem::size_of::<Value>()).saturating_add(bytes)
+            }
+            None => Self::estimate_value_vec_bytes(&execution.registers),
+        };
+        let labels = match execution.register_labels_bytes {
+            Some(bytes) => slots(
+                execution.register_labels.len(),
+                std::mem::size_of::<Label>(),
+            )
+            .saturating_add(bytes),
+            None => Self::estimate_label_vec_bytes(&execution.register_labels),
+        };
+        debug_assert_eq!(
+            (values, labels),
+            (
+                Self::estimate_value_vec_bytes(&execution.registers),
+                Self::estimate_label_vec_bytes(&execution.register_labels)
+            ),
+            "a parked snapshot's byte totals went stale (bd-9vouw.500)"
+        );
+        values.saturating_add(labels)
+    }
+
     fn estimate_generator_execution_bytes(execution: &GeneratorExecutionSnapshot) -> u64 {
         let pending_abrupt = execution
             .pending_exception
@@ -104524,8 +104560,7 @@ impl InterpreterCore {
                 .map(Self::finally_frame_memory_bytes),
         );
 
-        Self::estimate_value_vec_bytes(&execution.registers)
-            .saturating_add(Self::estimate_label_vec_bytes(&execution.register_labels))
+        Self::snapshot_register_files_bytes(execution)
             .saturating_add(
                 execution
                     .delegation

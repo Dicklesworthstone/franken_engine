@@ -47287,7 +47287,6 @@ impl InterpreterCore {
         // pushed change, so neither side is re-walked.
         let previous_scope_bytes =
             (!scope_inert_activation).then(|| self.scope_chain_structural_bytes());
-        let callee_frames = (!scope_inert_activation).then(|| self.scope_chain.frames.clone());
         #[cfg(debug_assertions)]
         let walked_scope_before =
             (!scope_inert_activation).then(|| self.scope_chain_memory_bytes());
@@ -47327,13 +47326,18 @@ impl InterpreterCore {
                 Self::terminal_async_failure_label(label)
             });
             let return_ip = frame.return_ip;
-            self.restore_call_frame_state(&mut frame);
+            let callee_frames = if scope_inert_activation {
+                self.restore_call_frame_state(&mut frame);
+                Vec::new()
+            } else {
+                self.restore_call_frame_control_state(&mut frame);
+                self.swap_back_returning_scope_chain(&mut frame)
+            };
             self.ip = return_ip;
             let frame_memory_result = match (previous_scope_bytes, previous_closure_bytes) {
                 (Some(previous_scope_bytes), Some(previous_closure_bytes)) => {
-                    let released_cell_bytes = self.released_frame_cell_payload_bytes(
-                        callee_frames.as_deref().unwrap_or_default(),
-                    );
+                    let released_cell_bytes =
+                        self.released_frame_cell_payload_bytes(&callee_frames);
                     #[cfg(debug_assertions)]
                     self.debug_assert_scope_swap_delta(
                         walked_scope_before.expect("ordinary scope accounting"),
@@ -47405,16 +47409,55 @@ impl InterpreterCore {
     }
 
     fn restore_call_frame_state(&mut self, frame: &mut CallFrame) {
+        self.restore_call_frame_control_state(frame);
+        self.restore_scope_chain_for_frame(frame);
+    }
+
+    /// Everything [`Self::restore_call_frame_state`] restores but the scope
+    /// chain.
+    fn restore_call_frame_control_state(&mut self, frame: &mut CallFrame) {
         self.register_base = frame.register_base;
         self.register_width = frame.register_width;
         self.suspended_abrupt_completions
             .truncate(frame.saved_suspended_abrupt_depth);
         self.finally_frames.truncate(frame.saved_finally_mode_depth);
-        self.restore_scope_chain_for_frame(frame);
         self.pending_exception = frame.saved_pending_exception.take();
         self.pending_exception_label =
             std::mem::replace(&mut frame.saved_pending_exception_label, Label::Public);
         self.pending_return = frame.saved_pending_return.take();
+    }
+
+    /// The scope half of [`Self::restore_call_frame_state`] for the frame
+    /// `complete_return` pops from an activation that replaced the chain,
+    /// giving back the callee frames that leave the chain for
+    /// `released_frame_cell_payload_bytes`. They were cloned before the swap:
+    /// a Vec and a reference count per frame on every return (bd-9vouw.504).
+    /// A plain return also moves the saved chain back instead of cloning it.
+    /// An async settle or a derived constructor's field initializers run code
+    /// before the frame drops, so those keep the frame's copy, and with it
+    /// every map's sharing count, until then, as before.
+    fn swap_back_returning_scope_chain(&mut self, frame: &mut CallFrame) -> Vec<ScopeFrame> {
+        debug_assert_eq!(frame.scope_inert_virtual_scope_bytes, 0);
+        let runs_code_before_drop =
+            frame.async_function_id.is_some() || frame.initialize_derived_this_on_return;
+        let saved = if runs_code_before_drop {
+            frame.saved_scope_chain.clone()
+        } else {
+            frame.saved_scope_chain.take()
+        };
+        match saved {
+            Some(saved) => std::mem::replace(&mut self.scope_chain.frames, saved),
+            None => {
+                let mut left = Vec::new();
+                while self.scope_chain.depth() > frame.saved_scope_depth {
+                    let Some(popped) = self.scope_chain.pop() else {
+                        break;
+                    };
+                    left.push(popped);
+                }
+                left
+            }
+        }
     }
 
     fn settle_async_function(
@@ -49898,14 +49941,18 @@ impl InterpreterCore {
             .as_ref()
             .map(|environment| Self::estimate_scope_chain_bytes(environment))
             .unwrap_or(0);
-        let saved_scope_chain = if captured_env.is_some() {
-            Some(self.snapshot_scope_chain_with_temporary_budget(captured_env_bytes)?)
-        } else {
-            None
-        };
+        if captured_env.is_some() {
+            self.preflight_scope_chain_snapshot_with_temporary_budget(captured_env_bytes)?;
+        }
         let previous_scope_bytes = self.scope_chain_memory_bytes();
         let previous_closure_bytes = self.closures_memory_bytes();
         let previous_call_stack_bytes = self.call_stack_memory_bytes();
+        // The callee's environment replaces the caller's chain below, so the
+        // frame takes the chain itself rather than a copy (bd-9vouw.504);
+        // nothing reads the chain until the environment is in place.
+        let saved_scope_chain = captured_env
+            .is_some()
+            .then(|| std::mem::take(&mut self.scope_chain.frames));
         let pushed_frame = CallFrame {
             return_ip,
             return_reg,
@@ -102615,9 +102662,16 @@ impl InterpreterCore {
                 registers.resize(physical_frame_end, Value::Undefined);
             }
             // A clear past one window (registers an earlier, deeper frame
-            // left, bd-9vouw.499) stops at the file's end.
+            // left, bd-9vouw.499) stops at the file's end. Only a register
+            // that holds something is written: `fill` cloned `Undefined` into
+            // and dropped every slot of the window on every call
+            // (bd-9vouw.504).
             let end = frame_end.min(registers.len());
-            registers[frame_start..end].fill(Value::Undefined);
+            for register in &mut registers[frame_start..end] {
+                if !matches!(register, Value::Undefined) {
+                    *register = Value::Undefined;
+                }
+            }
         });
         let released_label_bytes = Self::saturating_sum(
             self.register_labels
@@ -102631,7 +102685,11 @@ impl InterpreterCore {
                 .resize(physical_frame_end, Label::Public);
         }
         let label_end = frame_end.min(self.register_labels.len());
-        self.register_labels[frame_start..label_end].fill(Label::Public);
+        for label in &mut self.register_labels[frame_start..label_end] {
+            if !matches!(label, Label::Public) {
+                *label = Label::Public;
+            }
+        }
         self.adjust_register_labels_bytes(released_label_bytes, 0);
         self.estimated_memory_bytes = self
             .estimated_memory_bytes

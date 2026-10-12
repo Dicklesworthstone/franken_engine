@@ -306,9 +306,13 @@ const DEFAULT_QUICKJS_MAX_REGISTERS: u32 = 256;
 
 /// Default register file size for the throughput profile.
 const DEFAULT_V8_MAX_REGISTERS: u32 = 4096;
-/// Longest file, in `max_registers` windows, the core keeps as its spare
+/// Longest file, in `max_registers` windows, the core keeps as a spare
 /// register file (`spare_register_files`); a longer one is freed.
 const SPARE_REGISTER_FILE_WINDOWS: usize = 4;
+/// Spare register files the core keeps. A generator stepped from inside a
+/// function alternates between the caller's file and the activation's,
+/// which differ in length: with one spare every install cut or regrew it.
+const SPARE_REGISTER_FILES: usize = 2;
 /// Default heap object budget for the deterministic profile.
 const DEFAULT_QUICKJS_MAX_HEAP_OBJECTS: u32 = 100_000;
 /// Default heap object budget for the throughput profile.
@@ -15232,9 +15236,10 @@ pub struct InterpreterCore {
     /// `install_generator_execution` or `isolate_module_execution` refills
     /// instead of allocating and clearing whole windows: an `await` or a
     /// generator step moved four windows through the allocator
-    /// (bd-9vouw.500). Engine capacity of at most
-    /// `SPARE_REGISTER_FILE_WINDOWS` windows a file, not charged.
-    spare_register_files: Option<(Vec<Value>, Vec<Label>)>,
+    /// (bd-9vouw.500). Engine capacity of at most `SPARE_REGISTER_FILES`
+    /// pairs of at most `SPARE_REGISTER_FILE_WINDOWS` windows a file, not
+    /// charged.
+    spare_register_files: Vec<(Vec<Value>, Vec<Label>)>,
     /// The bytes of the last found-property witness event, kept so a
     /// property read folds its event without allocating a buffer. Engine
     /// capacity (at most PROPERTY_WITNESS_SCRATCH_MAX_CAPACITY bytes kept),
@@ -16644,7 +16649,7 @@ impl InterpreterCore {
             estimated_memory_bytes,
             simple_callback_temporary_bytes: 0,
             simple_callback_register_pool: Vec::new(),
-            spare_register_files: None,
+            spare_register_files: Vec::new(),
             property_witness_scratch: Vec::new(),
             call_argument_value_scratch: Vec::new(),
             call_argument_label_scratch: Vec::new(),
@@ -37489,7 +37494,7 @@ impl InterpreterCore {
         let accounted_bytes = self.charge_module_execution_snapshot()?;
         // The spare files are cleared throughout (bd-9vouw.500).
         let (mut fresh_registers, mut fresh_labels) =
-            self.spare_register_files.take().unwrap_or_default();
+            self.take_spare_register_files(self.config.max_registers as usize);
         fresh_registers.resize(self.config.max_registers as usize, Value::Undefined);
         fresh_labels.resize(self.register_labels.len(), Label::Public);
         let register_bytes = self.registers_memory_bytes();
@@ -50275,8 +50280,9 @@ impl InterpreterCore {
         }
     }
 
-    /// Keep `registers` and `labels`, every slot cleared, as the spare files
-    /// (`spare_register_files`) unless they are longer than the cap.
+    /// Keep `registers` and `labels`, every slot cleared, as spare files
+    /// (`spare_register_files`) unless they are longer than the cap; the
+    /// oldest spare goes once there are more than SPARE_REGISTER_FILES.
     fn keep_spare_register_files(&mut self, registers: Vec<Value>, labels: Vec<Label>) {
         let cap = SPARE_REGISTER_FILE_WINDOWS.saturating_mul(self.config.max_registers as usize);
         if registers.len() <= cap && labels.len() <= cap {
@@ -50285,8 +50291,24 @@ impl InterpreterCore {
                 0,
                 "a spare register file holds a value or a label (bd-9vouw.500)"
             );
-            self.spare_register_files = Some((registers, labels));
+            self.spare_register_files.push((registers, labels));
+            if self.spare_register_files.len() > SPARE_REGISTER_FILES {
+                self.spare_register_files.remove(0);
+            }
         }
+    }
+
+    /// The spare files to refill into a file of `len` values: those of that
+    /// length if any, else the latest kept, else new empty ones.
+    fn take_spare_register_files(&mut self, len: usize) -> (Vec<Value>, Vec<Label>) {
+        let index = self
+            .spare_register_files
+            .iter()
+            .position(|(registers, _)| registers.len() == len)
+            .or_else(|| self.spare_register_files.len().checked_sub(1));
+        index.map_or_else(Default::default, |index| {
+            self.spare_register_files.remove(index)
+        })
     }
 
     fn async_function_ids_in_call_stack(
@@ -50690,7 +50712,7 @@ impl InterpreterCore {
         // The spare files are cleared throughout, so only the parked prefix
         // and any difference in length are written (bd-9vouw.500).
         let (mut registers, mut register_labels) =
-            self.spare_register_files.take().unwrap_or_default();
+            self.take_spare_register_files(execution.register_len);
         refill_cleared_file(
             &mut registers,
             execution.registers,
@@ -151102,6 +151124,47 @@ mod tests {
         );
     }
 
+    /// A generator stepped from inside a function alternates between the
+    /// caller's file and the activation's, which differ in length. The core
+    /// keeps a spare of each and hands out the one of the length asked for,
+    /// so neither file is cut and regrown on every step (bd-9vouw.500).
+    #[test]
+    fn spare_register_files_are_matched_by_length_bd_9vouw_500() {
+        let mut core = quickjs_test_core();
+        let window = core.config.max_registers as usize;
+        let cleared = |len: usize| (vec![Value::Undefined; len], vec![Label::Public; len]);
+        let (short_values, short_labels) = cleared(window);
+        let (long_values, long_labels) = cleared(2 * window);
+        let short_address = short_values.as_ptr();
+        let long_address = long_values.as_ptr();
+        core.keep_spare_register_files(short_values, short_labels);
+        core.keep_spare_register_files(long_values, long_labels);
+
+        let (values, _) = core.take_spare_register_files(window);
+        assert_eq!(values.as_ptr(), short_address);
+        core.keep_spare_register_files(values, vec![Label::Public; window]);
+        let (values, _) = core.take_spare_register_files(2 * window);
+        assert_eq!(values.as_ptr(), long_address);
+        core.keep_spare_register_files(values, vec![Label::Public; 2 * window]);
+
+        // No spare of the length: the latest kept one.
+        let (values, labels) = core.take_spare_register_files(3 * window);
+        assert_eq!(values.as_ptr(), long_address);
+        core.keep_spare_register_files(values, labels);
+        // A third spare evicts the oldest.
+        let (third_values, third_labels) = cleared(window / 2);
+        core.keep_spare_register_files(third_values, third_labels);
+        assert_eq!(core.spare_register_files.len(), SPARE_REGISTER_FILES);
+        assert!(
+            core.spare_register_files
+                .iter()
+                .all(|(values, _)| values.as_ptr() != short_address)
+        );
+        // None kept at all: empty files.
+        core.spare_register_files.clear();
+        assert_eq!(core.take_spare_register_files(window).0.len(), 0);
+    }
+
     #[test]
     fn parked_activation_files_are_moved_out_and_refilled_bd_9vouw_500() {
         let mut core = quickjs_test_core();
@@ -151126,9 +151189,10 @@ mod tests {
         assert_eq!(execution.registers_value_bytes, Some(value_bytes));
         // The emptied files are the spare, cleared throughout.
         assert!(core.registers.is_empty());
+        assert_eq!(core.spare_register_files.len(), 1);
         let (spare_values, spare_labels) = core
             .spare_register_files
-            .as_ref()
+            .last()
             .expect("the taken files are the spare");
         assert_eq!(spare_values.len(), register_len);
         assert_eq!(spare_labels.len(), label_len);
@@ -151138,7 +151202,7 @@ mod tests {
 
         core.install_generator_execution(execution);
         // Refilled in place: no allocation, no padding pass.
-        assert!(core.spare_register_files.is_none());
+        assert!(core.spare_register_files.is_empty());
         assert_eq!(core.registers.as_ptr(), spare_address);
         assert_eq!(core.registers.len(), register_len);
         assert_eq!(core.register_labels.len(), label_len);
@@ -151164,7 +151228,7 @@ mod tests {
         core.mutate_registers(|registers| registers.resize(long, Value::Undefined));
         core.register_labels.resize(long, Label::Public);
         let execution = core.take_generator_execution();
-        assert!(core.spare_register_files.is_none());
+        assert!(core.spare_register_files.is_empty());
         core.install_generator_execution(execution);
         assert_eq!(core.registers.len(), long);
         assert_eq!(core.register_labels.len(), long);

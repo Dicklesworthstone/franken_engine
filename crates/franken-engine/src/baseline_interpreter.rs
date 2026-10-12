@@ -54645,10 +54645,19 @@ impl InterpreterCore {
                                     // stored label into the context, and
                                     // charges the step, before it resolves
                                     // (proxy_aware_get_runtime_property): the
-                                    // same call, at the same point
-                                    // (bd-9vouw.505).
+                                    // same observation, at the same point
+                                    // (bd-9vouw.505). A data property's stored
+                                    // label is in hand (bd-9vouw.504).
                                     if self.active_inline_callback_context_label.is_some() {
-                                        self.reflect_observe_selected_property(oid, &property_key)?;
+                                        match &ordinary_own_property_label {
+                                            Some(label) => {
+                                                self.reflect_observe_own_data_property(oid, label)?
+                                            }
+                                            None => self.reflect_observe_selected_property(
+                                                oid,
+                                                &property_key,
+                                            )?,
+                                        }
                                     }
                                     self.capture_property_resolution_found(&property_key, oid, 0);
                                     self.resolve_accessor_get(
@@ -142242,6 +142251,53 @@ mod async_runtime_tests_current {
                 fast, generic,
                 "fast and generic reads in a callback scope (prototype: {with_prototype})"
             );
+        }
+    }
+
+    /// bd-9vouw.504: the depth-0 observation of an own data property leaves
+    /// the context label, the charged instructions and the estimate exactly
+    /// as reflect_observe_selected_property does, with no shape label or a
+    /// Secret one, a Public or Confidential stored label, and a Public or
+    /// TopSecret starting context.
+    #[test]
+    fn own_data_property_observation_matches_the_selected_property_walk_bd_9vouw_504() {
+        for shape in [None, Some(Label::Secret)] {
+            for stored in [Label::Public, Label::Confidential] {
+                for context in [Label::Public, Label::TopSecret] {
+                    let run = |depth_zero: bool| {
+                        let mut core = test_interpreter();
+                        let object = core
+                            .alloc_object_with_properties(&[("data", Value::Int(7))])
+                            .expect("object should allocate");
+                        if let Some(shape) = &shape {
+                            core.join_object_mutation_label(object, shape)
+                                .expect("shape label should fit");
+                        }
+                        core.set_own_property_label(object, "data", &stored)
+                            .expect("stored label should fit");
+                        core.active_inline_callback_context_label = Some(context.clone());
+                        let key = RuntimePropertyKey::String(JsString::from("data"));
+                        let label = core.own_stored_runtime_property_label(object, &key);
+                        if depth_zero {
+                            core.reflect_observe_own_data_property(object, &label)
+                                .expect("observation should fit");
+                        } else {
+                            core.reflect_observe_selected_property(object, &key)
+                                .expect("observation should fit");
+                        }
+                        (
+                            core.active_inline_callback_context_label.clone(),
+                            core.instructions_executed,
+                            core.estimated_memory_bytes,
+                        )
+                    };
+                    assert_eq!(
+                        run(true),
+                        run(false),
+                        "shape {shape:?}, stored {stored:?}, context {context:?}"
+                    );
+                }
+            }
         }
     }
 

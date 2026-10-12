@@ -547,6 +547,32 @@ impl InterpreterCore {
         })
     }
 
+    /// [`Self::reflect_observe_selected_property`] where its walk stops at
+    /// depth 0: an own data property of a non-proxy object whose stored label
+    /// the caller has read (the own-property fast read). The same charge and
+    /// the same observations, the shape label then the stored label, without
+    /// the proxy check and the two key lookups that find the property again
+    /// (bd-9vouw.504).
+    pub(super) fn reflect_observe_own_data_property(
+        &mut self,
+        object: ObjectId,
+        stored_label: &Label,
+    ) -> Result<(), InterpreterError> {
+        self.json_charge_work()?;
+        let shape = self
+            .object_mutation_labels
+            .get(&object)
+            .into_iter()
+            .chain(self.binary_storage_label_ref(object))
+            .max();
+        if let Some(shape) = shape {
+            self.check_temporary_memory_budget(Self::estimate_label_bytes(shape))?;
+            let shape = shape.clone();
+            self.json_observe_label(shape)?;
+        }
+        self.json_observe_label(stored_label.clone())
+    }
+
     pub(super) fn reflect_admit_mutation_label(
         &mut self,
         object: ObjectId,

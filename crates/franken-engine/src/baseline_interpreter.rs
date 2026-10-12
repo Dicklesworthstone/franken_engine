@@ -8020,6 +8020,8 @@ thread_local! {
     /// can compare it with the fast path on the same object.
     static FORCE_GENERIC_OWN_PROPERTY_READS: std::cell::Cell<bool> =
         const { std::cell::Cell::new(false) };
+    /// Sends every store through the generic [[Set]] (bd-9vouw.504).
+    static FORCE_GENERIC_STORES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// How many small array indices keep a shared decimal key.
@@ -66402,6 +66404,98 @@ impl InterpreterCore {
         Ok(blocking.map(|index| i64::from(index) + 1))
     }
 
+    /// When `[[Set]]` of `key` on `object_id` (its own receiver) takes the
+    /// ordinary path with nothing to observe: the number of objects
+    /// `reflect_observe_selected_property` visits, else `None` (bd-9vouw.504).
+    ///
+    /// It holds for a plain extensible object (no array, wrapper, binary
+    /// storage, Proxy, import.meta or built-in prototype) whose chain is
+    /// ordinary objects without mutation or binary-storage labels, when the
+    /// first object holding `key` has it as a writable data property with a
+    /// Public stored label and no object before it answers through a
+    /// prototype getter or a read-only virtual property. Any active context
+    /// must be Public, as must a pending callback result. The ordinary path's
+    /// observations then add Public to Public and its admissions join Public,
+    /// so what remains of them is one budget check and one charge per object
+    /// visited plus three admissions.
+    fn plain_store_observation_steps(
+        &self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> Option<u32> {
+        #[cfg(test)]
+        if FORCE_GENERIC_STORES.with(std::cell::Cell::get) {
+            return None;
+        }
+        let name = key.as_str()?;
+        if name == "__proto__"
+            || self
+                .active_inline_callback_context_label
+                .as_ref()
+                .is_some_and(|context| !matches!(context, Label::Public))
+            || self
+                .pending_hostcall_result_label
+                .as_ref()
+                .is_some_and(|label| !matches!(label, Label::Public))
+        {
+            return None;
+        }
+        let ordinary = |object: &HeapObject, id: ObjectId| {
+            !(object.is_import_meta
+                || object.is_array
+                || object.primitive_value.is_some()
+                || object.array_buffer.is_some()
+                || object.typed_array.is_some()
+                || object.data_view.is_some()
+                || object.brand() == Some(PROXY_TYPE_TAG)
+                || self.object_mutation_labels.contains_key(&id))
+        };
+        let receiver = self.heap.get(object_id.0 as usize)?;
+        if !ordinary(receiver, object_id)
+            || receiver.is_frozen
+            || self
+                .builtin_prototypes
+                .values()
+                .any(|prototype| *prototype == object_id)
+        {
+            return None;
+        }
+        let mut current = object_id;
+        let mut steps = 0u32;
+        loop {
+            steps += 1;
+            if steps > 32 {
+                return None;
+            }
+            let object = self.heap.get(current.0 as usize)?;
+            if !ordinary(object, current) {
+                return None;
+            }
+            if let Some(found) = object.own_runtime_property_value(key) {
+                let writable_data = !matches!(found, Value::Accessor { .. })
+                    && object.own_property_attributes(key).writable;
+                let public = matches!(
+                    self.own_stored_runtime_property_label(current, key),
+                    Label::Public
+                );
+                // An inherited key is defined on the receiver, which must
+                // take new properties.
+                let definable = current == object_id || receiver.extensible();
+                return (writable_data && public && definable).then_some(steps);
+            }
+            if !self.virtual_property_is_writable(current, key)
+                || self.prototype_getter_at(current, key).is_some()
+            {
+                return None;
+            }
+            match self.observable_prototype_link(object, current) {
+                Some(next) => current = next,
+                // The key is new: [[Set]] defines it on the receiver.
+                None => return receiver.extensible().then_some(steps),
+            }
+        }
+    }
+
     fn proxy_aware_set_runtime_property(
         &mut self,
         module: Option<&Ir3Module>,
@@ -66411,6 +66505,27 @@ impl InterpreterCore {
         receiver: Value,
         depth: u32,
     ) -> Result<bool, InterpreterError> {
+        // bd-9vouw.504: the ordinary store with nothing to observe. Its
+        // effects other than the write: without a context, none; in a Public
+        // one, a budget check of the unchanged state (first made by
+        // observe_scoped_callback_result) and one charge per object
+        // reflect_observe_selected_property visits plus one per admission
+        // (the object, the receiver and the resolved receiver), in that order.
+        // A store into the receiver's own or a new key of a non-array object
+        // ends in set_object_runtime_property.
+        if depth == 0
+            && matches!(&receiver, Value::Object(id) if *id == object_id)
+            && let Some(steps) = self.plain_store_observation_steps(object_id, key)
+        {
+            if self.active_inline_callback_context_label.is_some() {
+                self.check_temporary_memory_budget(0)?;
+                for _ in 0..steps + 3 {
+                    self.json_charge_work()?;
+                }
+            }
+            self.set_object_runtime_property(object_id, key.clone(), value)?;
+            return Ok(true);
+        }
         if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
             return Err(InterpreterError::TypeError {
                 expected: "bounded Proxy set recursion".to_string(),
@@ -142251,6 +142366,181 @@ mod async_runtime_tests_current {
                 fast, generic,
                 "fast and generic reads in a callback scope (prototype: {with_prototype})"
             );
+        }
+    }
+
+    /// bd-9vouw.504: a store the plain fast path takes ends exactly as the
+    /// generic [[Set]] (forced with the test switch): the same outcome,
+    /// receiver and prototype values and stored labels, mutation labels,
+    /// instructions charged, memory estimate, context and pending labels, and
+    /// witness. The stores it must leave to the generic path (inherited
+    /// read-only or accessor, labelled shape or inherited label, frozen,
+    /// non-extensible, array, `__proto__`) are refused and end the same too.
+    /// Each case runs through SetPropertySloppy and SetProperty, entered with
+    /// no context and with a Public one, and as a direct [[Set]] without a
+    /// context.
+    #[test]
+    fn plain_store_fast_path_matches_the_generic_set_bd_9vouw_504() {
+        let cases = [
+            ("new key", "fresh", true),
+            ("own key", "own", true),
+            ("new key on an instance", "fresh", true),
+            ("inherited writable", "inherited", true),
+            ("inherited read-only", "inherited", false),
+            ("inherited accessor", "inherited", false),
+            ("labelled shape", "fresh", false),
+            ("inherited Secret label", "inherited", false),
+            ("frozen", "own", false),
+            ("non-extensible, new key", "fresh", false),
+            ("non-extensible, inherited key", "inherited", false),
+            ("array", "fresh", false),
+            ("__proto__", "__proto__", false),
+        ];
+        let setup = |case: &str| {
+            let mut core = test_interpreter();
+            let (receiver, prototype) = if case == "array" {
+                let array = core
+                    .alloc_array_from_values(&[Value::Int(1)])
+                    .expect("array should allocate");
+                (array, None)
+            } else {
+                let receiver = core
+                    .alloc_object_with_properties(&[("own", Value::Int(1))])
+                    .expect("receiver should allocate");
+                let prototype = core
+                    .alloc_object_with_properties(&[
+                        ("other", Value::Int(2)),
+                        ("inherited", Value::Int(3)),
+                    ])
+                    .expect("prototype should allocate");
+                if case != "new key" && case != "own key" && case != "labelled shape" {
+                    core.mutate_heap(|heap| heap[receiver.0 as usize].prototype = Some(prototype));
+                }
+                (receiver, Some(prototype))
+            };
+            let inherited = RuntimePropertyKey::String(JsString::from("inherited"));
+            match case {
+                "inherited read-only" => core
+                    .set_own_property_attributes(
+                        prototype.unwrap(),
+                        &inherited,
+                        PropertyAttributes {
+                            writable: false,
+                            enumerable: true,
+                            configurable: true,
+                        },
+                    )
+                    .expect("attributes should fit"),
+                "inherited accessor" => core
+                    .set_object_property(
+                        prototype.unwrap(),
+                        "inherited".to_string(),
+                        Value::Accessor {
+                            get: None,
+                            set: None,
+                        },
+                    )
+                    .expect("accessor should fit"),
+                "labelled shape" => core
+                    .join_object_mutation_label(receiver, &Label::Secret)
+                    .expect("shape label should fit"),
+                "inherited Secret label" => core
+                    .set_own_property_label(prototype.unwrap(), "inherited", &Label::Secret)
+                    .expect("label should fit"),
+                "frozen" => core.mutate_heap(|heap| heap[receiver.0 as usize].is_frozen = true),
+                "non-extensible, new key" | "non-extensible, inherited key" => {
+                    core.mutate_heap(|heap| heap[receiver.0 as usize].is_non_extensible = true)
+                }
+                _ => {}
+            }
+            (core, receiver, prototype)
+        };
+        let snapshot = |core: &InterpreterCore,
+                        receiver: ObjectId,
+                        prototype: Option<ObjectId>,
+                        key: &RuntimePropertyKey| {
+            let read = |object: ObjectId| {
+                core.heap
+                    .get(object.0 as usize)
+                    .and_then(|object| object.own_runtime_property_value(key))
+            };
+            format!(
+                "{:?} {:?} {:?} {:?} {:?} {} {} {:?} {:?} {:?}",
+                read(receiver),
+                prototype.map(read),
+                core.own_stored_runtime_property_label(receiver, key),
+                prototype.map(|prototype| core.own_stored_runtime_property_label(prototype, key)),
+                core.object_mutation_labels,
+                core.instructions_executed,
+                core.estimated_memory_bytes,
+                core.active_inline_callback_context_label,
+                core.pending_hostcall_result_label,
+                core.nondeterminism_trace_ref().deterministic_witness,
+            )
+        };
+        for (case, name, fast) in cases {
+            let key = RuntimePropertyKey::String(JsString::from(name));
+            for strict in [false, true] {
+                for context in [None, Some(Label::Public)] {
+                    let module = test_module_with_functions(
+                        vec![
+                            if strict {
+                                Ir3Instruction::SetProperty {
+                                    obj: 0,
+                                    key: 1,
+                                    val: 2,
+                                }
+                            } else {
+                                Ir3Instruction::SetPropertySloppy {
+                                    obj: 0,
+                                    key: 1,
+                                    val: 2,
+                                }
+                            },
+                            Ir3Instruction::Halt,
+                        ],
+                        vec![],
+                    );
+                    let run = |force_generic: bool| {
+                        let (mut core, receiver, prototype) = setup(case);
+                        core.mutate_registers(|registers| {
+                            registers[0] = Value::Object(receiver);
+                            registers[1] = Value::str(name);
+                            registers[2] = Value::Int(9);
+                        });
+                        core.active_inline_callback_context_label = context.clone();
+                        assert_eq!(
+                            core.plain_store_observation_steps(receiver, &key).is_some(),
+                            fast,
+                            "{case}: fast path eligibility"
+                        );
+                        FORCE_GENERIC_STORES.with(|force| force.set(force_generic));
+                        let outcome = core.run_loop(&module);
+                        FORCE_GENERIC_STORES.with(|force| force.set(false));
+                        format!("{outcome:?} {}", snapshot(&core, receiver, prototype, &key))
+                    };
+                    assert_eq!(
+                        run(false),
+                        run(true),
+                        "{case}, strict {strict}, context {context:?}"
+                    );
+                }
+            }
+            let direct = |force_generic: bool| {
+                let (mut core, receiver, prototype) = setup(case);
+                FORCE_GENERIC_STORES.with(|force| force.set(force_generic));
+                let outcome = core.proxy_aware_set_runtime_property(
+                    None,
+                    receiver,
+                    &key,
+                    Value::Int(9),
+                    Value::Object(receiver),
+                    0,
+                );
+                FORCE_GENERIC_STORES.with(|force| force.set(false));
+                format!("{outcome:?} {}", snapshot(&core, receiver, prototype, &key))
+            };
+            assert_eq!(direct(false), direct(true), "{case}, direct [[Set]]");
         }
     }
 

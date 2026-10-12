@@ -10795,6 +10795,14 @@ impl ScopeChain {
         None
     }
 
+    /// Whether any frame binds `name`: `resolve(name).is_some()`, scanning
+    /// from the outermost frame, where a module's CommonJS bindings live
+    /// (bd-9vouw.504: the innermost-first walk cost every PushScope of
+    /// CommonJS code about 18 key comparisons).
+    fn binds(&self, name: &str) -> bool {
+        self.frames.iter().any(|frame| frame.get(name).is_some())
+    }
+
     /// Snapshot current scope chain for closure capture.
     fn snapshot(&self) -> Vec<ScopeFrame> {
         self.frames.clone()
@@ -38959,7 +38967,7 @@ impl InterpreterCore {
             // exports (date-fns), and zod's `(0, exports.makeIssue)(...)`
             // read the caller's `exports` (bd-9vouw.180).
             if self.current_module_specifier.as_deref() != Some(context.module_specifier.as_str())
-                || self.scope_chain.resolve("module").is_some()
+                || self.scope_chain.binds("module")
             {
                 return Ok(());
             }
@@ -141810,6 +141818,30 @@ mod async_runtime_tests_current {
             assert!(!drained_core_trace.is_finalised());
             assert!(drained_core_trace.session_id.is_empty());
         }
+    }
+
+    /// bd-9vouw.504: `ScopeChain::binds` answers `resolve(name).is_some()`
+    /// for a name bound in the outermost, a middle or the innermost frame,
+    /// in two frames, or in none.
+    #[test]
+    fn scope_chain_binds_matches_resolve_bd_9vouw_504() {
+        let mut chain = ScopeChain::new();
+        for _ in 0..4 {
+            chain.push(64).expect("scope depth should fit");
+        }
+        let declare = |chain: &mut ScopeChain, frame: usize, name: &str| {
+            chain.frames[frame].declare(name.to_string(), BindingKind::Var);
+        };
+        declare(&mut chain, 1, "module");
+        declare(&mut chain, 2, "middle");
+        declare(&mut chain, 4, "inner");
+        declare(&mut chain, 0, "twice");
+        declare(&mut chain, 3, "twice");
+        for name in ["module", "middle", "inner", "twice", "absent"] {
+            assert_eq!(chain.binds(name), chain.resolve(name).is_some(), "{name}");
+        }
+        assert!(chain.binds("module"));
+        assert!(!chain.binds("absent"));
     }
 
     /// bd-9vouw.504: `static_move` copies a value and label that own no

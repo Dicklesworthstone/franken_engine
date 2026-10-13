@@ -14,6 +14,52 @@ use super::{JsString, Shape, Text, is_high_surrogate, is_low_surrogate};
 /// not reach the fallback, regardless of the accumulated string's length.
 const MAX_INDEX_DESCENT: usize = 32;
 
+/// Locate a UTF-16 boundary in well-formed UTF-8. A true second component
+/// means the position is between the halves of the astral scalar beginning
+/// at the returned byte. Search from the nearer end; ASCII spans retain a
+/// vectorizable byte check rather than decoding each character.
+fn utf16_boundary(text: &str, length: usize, position: usize) -> (usize, bool) {
+    debug_assert!(position <= length);
+    if position == 0 {
+        return (0, false);
+    }
+    let remaining = length - position;
+    if remaining == 0 {
+        return (text.len(), false);
+    }
+    let bytes = text.as_bytes();
+    if position <= remaining {
+        if bytes[..position].is_ascii() {
+            return (position, false);
+        }
+        let mut offset = position;
+        for (byte, scalar) in text.char_indices() {
+            if offset == 0 {
+                return (byte, false);
+            }
+            let width = scalar.len_utf16();
+            if offset < width {
+                return (byte, true);
+            }
+            offset -= width;
+        }
+    } else {
+        let byte = bytes.len() - remaining;
+        if bytes[byte..].is_ascii() {
+            return (byte, false);
+        }
+        let mut offset = remaining;
+        for (byte, scalar) in text.char_indices().rev() {
+            let width = scalar.len_utf16();
+            if offset <= width {
+                return (byte, offset < width);
+            }
+            offset -= width;
+        }
+    }
+    unreachable!("cached UTF-16 length must agree with well-formed UTF-8")
+}
+
 impl JsString {
     /// Read at an in-range UTF-16 offset in a leaf or an already joined node.
     /// Concatenation children are well-formed, so a surrogate pair cannot
@@ -71,15 +117,18 @@ impl JsString {
         }
         self.with_indexed_piece(unit_index, |piece, index| match &piece.shape {
             Shape::Exact(units) => units.get(index).copied(),
-            Shape::WellFormed { .. } => {
-                let bytes = piece.utf8.as_bytes();
+            Shape::WellFormed { utf16_len } => {
+                let text = piece.utf8.as_str();
                 if piece.is_ascii_text() {
-                    return bytes.get(index).map(|byte| u16::from(*byte));
+                    return text.as_bytes().get(index).map(|byte| u16::from(*byte));
                 }
-                match bytes.get(..=index) {
-                    Some(prefix) if prefix.is_ascii() => Some(u16::from(bytes[index])),
-                    _ => piece.utf8.encode_utf16().nth(index),
-                }
+                let (byte, second) = utf16_boundary(text, *utf16_len, index);
+                let scalar = text[byte..].chars().next()?;
+                let mut units = [0; 2];
+                scalar
+                    .encode_utf16(&mut units)
+                    .get(usize::from(second))
+                    .copied()
             }
         })
     }
@@ -91,31 +140,34 @@ impl JsString {
         if unit_index >= self.utf16_len() {
             return None;
         }
-        self.with_indexed_piece(unit_index, |piece, index| {
-            if piece.is_ascii_text() {
-                return piece
-                    .utf8
-                    .as_bytes()
-                    .get(index)
-                    .map(|byte| u32::from(*byte));
+        self.with_indexed_piece(unit_index, |piece, index| match &piece.shape {
+            Shape::Exact(units) => {
+                // Exact storage already has random access; do not walk its
+                // iterator from zero merely to read one or two units.
+                let first = *units.get(index)?;
+                if is_high_surrogate(first)
+                    && let Some(&second) = units.get(index + 1)
+                    && is_low_surrogate(second)
+                {
+                    let high = u32::from(first) - 0xD800;
+                    let low = u32::from(second) - 0xDC00;
+                    return Some(0x10000 + (high << 10) + low);
+                }
+                Some(u32::from(first))
             }
-            if piece.is_well_formed()
-                && let Some(prefix) = piece.utf8.as_bytes().get(..=index)
-                && prefix.is_ascii()
-            {
-                return Some(u32::from(prefix[index]));
+            Shape::WellFormed { utf16_len } => {
+                let text = piece.utf8.as_str();
+                if piece.is_ascii_text() {
+                    return text.as_bytes().get(index).map(|byte| u32::from(*byte));
+                }
+                let (byte, second) = utf16_boundary(text, *utf16_len, index);
+                let scalar = u32::from(text[byte..].chars().next()?);
+                Some(if second {
+                    0xDC00 + ((scalar - 0x10000) & 0x3FF)
+                } else {
+                    scalar
+                })
             }
-            let mut units = piece.encode_utf16().skip(index);
-            let first = units.next()?;
-            if is_high_surrogate(first)
-                && let Some(second) = units.next()
-                && is_low_surrogate(second)
-            {
-                let high = u32::from(first) - 0xD800;
-                let low = u32::from(second) - 0xDC00;
-                return Some(0x10000 + (high << 10) + low);
-            }
-            Some(u32::from(first))
         })
     }
 
@@ -209,12 +261,28 @@ impl JsString {
                     utf16_len: end - start,
                 },
             },
-            Shape::WellFormed { .. } => {
-                let units: Vec<u16> = self
-                    .utf8
+            Shape::WellFormed { utf16_len } => {
+                let text = self.utf8.as_str();
+                let (byte, second) = utf16_boundary(text, *utf16_len, start);
+                let rest = &text[byte..];
+                let count = end - start;
+                if !second {
+                    // Map the end relative to the located start, so a short
+                    // interior slice does not scan the same prefix twice.
+                    let (stop, split_end) = utf16_boundary(rest, *utf16_len - start, count);
+                    if !split_end {
+                        return Self {
+                            utf8: Text::Flat(Arc::from(&rest[..stop])),
+                            shape: Shape::WellFormed { utf16_len: count },
+                        };
+                    }
+                }
+                // Only cuts inside a pair need exact-unit reconstruction.
+                // Even here, skip from the located scalar, not from zero.
+                let units: Vec<u16> = rest
                     .encode_utf16()
-                    .skip(start)
-                    .take(end - start)
+                    .skip(usize::from(second))
+                    .take(count)
                     .collect();
                 Self::from_code_units(&units)
             }
@@ -556,6 +624,87 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn unicode_boundaries_readers_and_slices_match_utf16_exhaustively() {
+        let alphabet = ['a', '\u{e9}', '\u{20ac}', '\u{1f600}', '\u{10000}'];
+        for a in alphabet {
+            for b in alphabet {
+                for c in alphabet {
+                    for d in alphabet {
+                        let text: String = [a, b, c, d].into_iter().collect();
+                        let units: Vec<u16> = text.encode_utf16().collect();
+                        let string = JsString::from(text.as_str());
+                        for index in 0..=units.len() {
+                            let (byte, second) = utf16_boundary(&text, units.len(), index);
+                            assert!(text.is_char_boundary(byte));
+                            assert_eq!(
+                                text[..byte].encode_utf16().count() + usize::from(second),
+                                index
+                            );
+                            if second {
+                                assert_eq!(text[byte..].chars().next().unwrap().len_utf16(), 2);
+                            }
+                            assert_eq!(string.code_unit_at(index), units.get(index).copied());
+                            assert_eq!(
+                                string.code_point_at(index),
+                                reference_point(&units, index)
+                            );
+                            for end in index..=units.len() {
+                                let slice = string.utf16_slice(index, end);
+                                assert_eq!(slice.code_units_vec(), units[index..end]);
+                                assert_eq!(
+                                    slice.is_well_formed(),
+                                    String::from_utf16(&units[index..end]).is_ok()
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn long_unicode_prefixes_and_suffixes_keep_exact_offsets() {
+        let texts = [
+            format!("{}a\u{1f600}z", "\u{e9}\u{65e5}".repeat(4096)),
+            format!("\u{1f600}{}\u{e9}", "a".repeat(8192)),
+            format!("\u{e9}{}abc", "\u{1f600}".repeat(4096)),
+            format!("{}\u{1f600}", "a".repeat(8192)),
+        ];
+        for text in texts {
+            let units: Vec<u16> = text.encode_utf16().collect();
+            let string = JsString::from(text.as_str());
+            let midpoint = units.len() / 2;
+            let positions = (0..8)
+                .chain(midpoint - 3..midpoint + 3)
+                .chain(units.len() - 8..=units.len());
+            for start in positions {
+                assert_eq!(string.code_unit_at(start), units.get(start).copied());
+                assert_eq!(string.code_point_at(start), reference_point(&units, start));
+                for width in [0, 1, 2, 3, 8, 64] {
+                    let end = (start + width).min(units.len());
+                    assert_eq!(
+                        string.utf16_slice(start, end).code_units_vec(),
+                        units[start..end]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn exact_storage_code_points_handle_a_long_prefix_without_lossy_projection() {
+        let mut units = vec![0x61; 8192];
+        units.extend_from_slice(&[0xD800, 0x62, 0xD83D, 0xDE00, 0xDC00, 0xDFFF]);
+        let string = JsString::from_code_units(&units);
+        assert!(!string.is_well_formed());
+        for index in 8190..=units.len() {
+            assert_eq!(string.code_unit_at(index), units.get(index).copied());
+            assert_eq!(string.code_point_at(index), reference_point(&units, index));
         }
     }
 }

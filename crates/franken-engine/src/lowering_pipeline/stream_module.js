@@ -1923,8 +1923,8 @@
   };
   Transform.prototype._write = function (chunk, encoding, callback) {
     const self = this;
-    const readableState = this._readableState;
-    const writableState = this._writableState;
+    const readableState = self._readableState;
+    const writableState = self._writableState;
     const length = readableState.length;
     this._transform(chunk, encoding, function (error, value) {
       if (error) {
@@ -1975,7 +1975,27 @@
     } else if (options == null) {
       options = {};
     }
-    callback = once(callback);
+    if (typeof callback !== 'function') {
+      throw makeError(TypeError, 'ERR_INVALID_ARG_TYPE', 'The "callback" argument must be a function');
+    }
+    const signal = options.signal;
+    const cancellation = signal === undefined ? null : pipelineCancellation(signal);
+    let removeAbort = nop;
+    const complete = once(callback);
+    callback = function (error) {
+      if (cancellation) {
+        if (!error && cancellation.aborted()) error = cancellation.error();
+        removeAbort();
+        cancellation.abort(error);
+      }
+      return complete.call(this, error);
+    };
+    function onabort() {
+      const error = cancellation.error();
+      const done = callback;
+      cleanup();
+      done.call(stream, error);
+    }
     const readable = options.readable != null ? options.readable : isReadableNodeStream(stream);
     const writable = options.writable != null ? options.writable : isWritableNodeStream(stream);
     const writableState = stream._writableState;
@@ -2030,6 +2050,10 @@
     stream.on('finish', onfinish);
     if (options.error !== false) stream.on('error', onerror);
     stream.on('close', onclose);
+    if (cancellation) {
+      removeAbort = cancellation.listen(onabort);
+      if (cancellation.aborted()) nextTick(onabort);
+    }
     if (closed) {
       nextTick(onclose);
     } else if ((writableState && writableState.errorEmitted) || (readableState && readableState.errorEmitted)) {
@@ -2041,8 +2065,10 @@
       && (readableFinished || isReadable(stream) === false)) {
       nextTick(onclosed);
     }
-    return function cleanup() {
+    function cleanup() {
       callback = nop;
+      removeAbort();
+      if (cancellation) cancellation.abort();
       stream.removeListener('aborted', onclose);
       stream.removeListener('end', onlegacyfinish);
       stream.removeListener('close', onlegacyfinish);
@@ -2050,22 +2076,104 @@
       stream.removeListener('end', onend);
       stream.removeListener('error', onerror);
       stream.removeListener('close', onclose);
-    };
+    }
+    return cleanup;
   }
   function finishedPromise(stream, options) {
-    return new Promise(function (resolve, reject) {
-      eos(stream, options, function (error) {
-        if (error) {
-          reject(error);
-        } else {
-          resolve();
-        }
+    return new PipelinePromise(function (resolve, reject) {
+      const autoCleanup = options != null && options.cleanup === true;
+      let cleanup = nop;
+      let settled = false;
+      cleanup = eos(stream, options, function (error) {
+        settled = true;
+        if (autoCleanup) cleanup();
+        if (error) reject(error);
+        else resolve();
       });
+      // A custom emitter can complete reentrantly during registration.
+      if (autoCleanup && settled) cleanup();
     });
   }
   eos.finished = finishedPromise;
 
   // ---- pipeline ----
+  // Capture cancellation intrinsics before a stage can replace public methods.
+  // AbortSignal.any carries the source's native state even when an earlier
+  // public listener stops propagation. The controller is private to this run.
+  const PipelineController = AbortController;
+  const pipelineApply = Reflect.apply;
+  const pipelineCompose = AbortSignal.any;
+  const pipelineControllerSignal = Object.getOwnPropertyDescriptor(AbortController.prototype, 'signal').get;
+  const pipelineSignalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'aborted').get;
+  const pipelineSignalReason = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'reason').get;
+  const pipelineAbort = AbortController.prototype.abort;
+  const pipelineAddListener = EventTarget.prototype.addEventListener;
+  const pipelineRemoveListener = EventTarget.prototype.removeEventListener;
+  const pipelineDefineProperty = Object.defineProperty;
+  const pipelineCreateObject = Object.create;
+  const pipelineIterator = Symbol.iterator;
+  const PipelinePromise = Promise;
+
+  function pipelineCancellation(outer) {
+    if (outer !== undefined) {
+      try { pipelineApply(pipelineSignalAborted, outer, []); }
+      catch (error) {
+        throw makeError(TypeError, 'ERR_INVALID_ARG_TYPE', 'The "signal" option must be an AbortSignal');
+      }
+    }
+    const controller = new PipelineController();
+    const own = pipelineApply(pipelineControllerSignal, controller, []);
+    let signal = own;
+    if (outer !== undefined) {
+      const pair = [outer, own];
+      const descriptor = pipelineCreateObject(null);
+      descriptor.value = function () {
+        let index = 0;
+        return { next() {
+          if (index++ === 0) return { value: outer, done: false };
+          if (index === 2) return { value: own, done: false };
+          return { value: undefined, done: true };
+        } };
+      };
+      pipelineDefineProperty(pair, pipelineIterator, descriptor);
+      signal = pipelineCompose(pair);
+    }
+    function aborted() { return pipelineApply(pipelineSignalAborted, signal, []); }
+    return {
+      signal: signal,
+      aborted: aborted,
+      error() {
+        const error = makeError(Error, 'ABORT_ERR', 'The operation was aborted');
+        error.name = 'AbortError';
+        const descriptor = pipelineCreateObject(null);
+        descriptor.value = pipelineApply(pipelineSignalReason, signal, []);
+        descriptor.writable = true;
+        descriptor.configurable = true;
+        pipelineDefineProperty(error, 'cause', descriptor);
+        return error;
+      },
+      abort(reason) { pipelineApply(pipelineAbort, controller, [reason]); },
+      listen(callback) {
+        // Synthetic events must not cancel a live run. Register before handing
+        // the signal to any stage, so guest listeners cannot suppress cleanup.
+        function listener() { if (aborted()) callback(); }
+        pipelineApply(pipelineAddListener, signal, ['abort', listener, { once: false, capture: false, passive: false, signal: undefined }]);
+        return function () { pipelineApply(pipelineRemoveListener, signal, ['abort', listener]); };
+      }
+    };
+  }
+  function pipelineRejection(reason) {
+    if (reason) return reason;
+    // Err-first completion cannot represent a falsy rejection. Do not let
+    // throw null/undefined/false strand a live destination (or report success).
+    const error = makeError(Error, 'ERR_STREAM_DESTROYED', 'Pipeline stage rejected without an error');
+    const descriptor = pipelineCreateObject(null);
+    descriptor.value = reason;
+    descriptor.writable = true;
+    descriptor.configurable = true;
+    pipelineDefineProperty(error, 'cause', descriptor);
+    return error;
+  }
   function popCallback(streams) {
     if (typeof streams[streams.length - 1] !== 'function') {
       throw makeError(TypeError, 'ERR_INVALID_ARG_TYPE',
@@ -2078,11 +2186,13 @@
     const streams = Array.prototype.slice.call(arguments);
     return pipelineImpl(streams, once(popCallback(streams)), {});
   }
-  function pipelineDestroyer(stream, reading, writing) {
+  function pipelineDestroyer(stream, reading, writing, settled) {
     let finished = false;
-    stream.on('close', function () { finished = true; });
+    const onclose = function () { finished = true; };
+    stream.on('close', onclose);
     const cleanup = eos(stream, { readable: reading, writable: writing }, function (error) {
       finished = !error;
+      if (settled) settled(error);
     });
     return {
       destroy(error) {
@@ -2090,7 +2200,7 @@
         finished = true;
         destroyer(stream, error || errors.destroyed('pipe'));
       },
-      cleanup: cleanup,
+      cleanup() { cleanup(); stream.removeListener('close', onclose); },
     };
   }
   function makeAsyncIterable(value) {
@@ -2104,178 +2214,223 @@
   }
   async function pumpToNode(iterable, writable, finish, options) {
     let error;
+    let ended = false;
+    let pendingWrites = 0;
     let onresolve = null;
+    const cancellation = options.cancellation;
     function resume(resumeError) {
-      if (resumeError) error = resumeError;
+      if (resumeError && !error) error = resumeError;
       if (onresolve) {
         const callback = onresolve;
         onresolve = null;
         callback();
       }
     }
+    function check() {
+      if (error) throw error;
+      if (cancellation.aborted()) throw cancellation.error();
+    }
     function wait() {
-      return new Promise(function (resolve, reject) {
-        if (error) {
-          reject(error);
-        } else {
-          onresolve = function () {
-            if (error) {
-              reject(error);
-            } else {
-              resolve();
-            }
-          };
-        }
+      return new PipelinePromise(function (resolve, reject) {
+        try { check(); }
+        catch (error) { reject(error); return; }
+        onresolve = function () {
+          try { check(); resolve(); } catch (error) { reject(error); }
+        };
       });
     }
+    const removeAbort = cancellation.listen(function () { resume(cancellation.error()); });
     writable.on('drain', resume);
-    const cleanup = eos(writable, { readable: false }, resume);
+    const cleanup = eos(writable, { readable: false }, function (error) {
+      ended = true;
+      resume(error);
+    });
+    let failure;
     try {
-      if (writable.writableNeedDrain) await wait();
+      check();
+      while (writable.writableNeedDrain) await wait();
       for await (const chunk of iterable) {
-        if (!writable.write(chunk)) await wait();
+        // A producer may resume after downstream cancellation. Never publish
+        // that late result. Throwing here also awaits its IteratorClose.
+        check();
+        pendingWrites++;
+        writable.write(chunk, function (error) { pendingWrites--; resume(error); });
+        while (writable.writableNeedDrain) await wait();
       }
+      check();
+      while (pendingWrites > 0) await wait();
       if (options.end) {
         writable.end();
-        await wait();
+        while (!ended) await wait();
       }
-      finish();
+      check();
     } catch (thrown) {
-      finish(error !== thrown ? aggregateTwoErrors(error, thrown) : thrown);
+      failure = error && error !== thrown ? aggregateTwoErrors(error, thrown) : pipelineRejection(thrown);
     } finally {
       cleanup();
       writable.off('drain', resume);
+      removeAbort();
     }
+    finish(failure);
   }
   function pipelineImpl(streams, callback, options) {
     if (streams.length === 1 && Array.isArray(streams[0])) streams = streams[0];
     if (streams.length < 2) throw errors.missingArgs('streams');
+    const cancellation = pipelineCancellation(options.signal);
     let error;
     let value;
     const destroys = [];
-    let finishCount = 0;
-    const lastStreamCleanup = [];
-    function finish(finishError) {
-      finishImpl(finishError, --finishCount === 0);
+    const cleanups = [];
+    // Setup owns a participant until all streams and asynchronous work have
+    // registered. A synchronous error cannot finish a half-built pipeline.
+    let finishCount = 1;
+    let building = true;
+    let updating = false;
+    let completed = false;
+    let setupThrew = false;
+    let removeAbort = function () {};
+    function participant() {
+      finishCount++;
+      return once(function (error) { finishCount--; finishImpl(error); });
     }
-    function finishImpl(finishError, final) {
+    function finishImpl(finishError) {
+      if (completed) return;
+      if (!error && !finishError && cancellation.aborted()) finishError = cancellation.error();
       if (finishError && (!error || error.code === 'ERR_STREAM_PREMATURE_CLOSE')) error = finishError;
-      if (!error && !final) return;
-      while (destroys.length) destroys.shift()(error);
-      if (final) {
-        if (!error) lastStreamCleanup.forEach(function (cleanup) { cleanup(); });
-        nextTick(callback, error, value);
-      }
-    }
-    let ret;
-    for (let i = 0; i < streams.length; i++) {
-      const stream = streams[i];
-      const reading = i < streams.length - 1;
-      const writing = i > 0;
-      const end = reading || options.end !== false;
-      const isLastStream = i === streams.length - 1;
-      if (isNodeStream(stream)) {
-        if (end) {
-          const handles = pipelineDestroyer(stream, reading, writing);
-          destroys.push(handles.destroy);
-          if (isReadable(stream) && isLastStream) lastStreamCleanup.push(handles.cleanup);
+      if (updating) return;
+      updating = true;
+      try {
+        if (error && !cancellation.aborted()) cancellation.abort(error);
+        if (building) return;
+        if (error || finishCount === 0) {
+          while (destroys.length) destroys.shift()(error);
         }
-        stream.on('error', function onError(streamError) {
-          if (streamError && streamError.name !== 'AbortError' && streamError.code !== 'ERR_STREAM_PREMATURE_CLOSE') {
-            finish(streamError);
-          }
+        if (finishCount !== 0) return;
+        completed = true;
+        removeAbort();
+        // Release the dependent's link to a long-lived external signal even
+        // on success. Function stages receive completion cancellation too.
+        cancellation.abort(error);
+        if (!error) cleanups.forEach(function (cleanup) { cleanup(); });
+        if (!setupThrew) nextTick(callback, error, value);
+      } finally { updating = false; }
+    }
+    function ownStream(stream, reading, writing, end) {
+      const onError = function (error) { finishImpl(error); };
+      stream.on('error', onError);
+      cleanups.push(function () { stream.removeListener('error', onError); });
+      if (end) {
+        const handles = pipelineDestroyer(stream, reading, writing, participant());
+        destroys.push(handles.destroy);
+        cleanups.push(handles.cleanup);
+      } else {
+        // end:false keeps the destination open on success, not on failure.
+        // Destruction is registered before the call so synchronous _destroy
+        // completion cannot escape the participant count.
+        destroys.push(function (error) {
+          if (!error) return;
+          const done = participant();
+          const cleanup = eos(stream, { readable: reading, writable: writing }, done);
+          cleanups.push(cleanup);
+          destroyer(stream, error);
         });
       }
-      if (i === 0) {
-        if (typeof stream === 'function') {
-          ret = stream({ signal: undefined });
-          if (!isIterable(ret)) throw errors.invalidReturn('source');
-        } else if (isIterable(stream) || isNodeStream(stream)) {
-          ret = stream;
-        } else {
-          throw errors.invalidReturn('source');
-        }
-      } else if (typeof stream === 'function') {
-        ret = makeAsyncIterable(ret);
-        ret = stream(ret, { signal: undefined });
-        if (reading) {
-          if (!isIterable(ret, true)) throw errors.invalidReturn('transform[' + (i - 1) + ']');
-        } else {
-          const pt = new PassThrough({ objectMode: true });
-          const then = ret && ret.then;
-          if (typeof then === 'function') {
-            finishCount++;
-            then.call(ret,
-              function (resolved) {
+    }
+    removeAbort = cancellation.listen(function () { finishImpl(cancellation.error()); });
+    if (cancellation.aborted()) finishImpl(cancellation.error());
+    let ret;
+    try {
+      for (let i = 0; i < streams.length; i++) {
+        const stream = streams[i];
+        const reading = i < streams.length - 1;
+        const writing = i > 0;
+        const end = reading || options.end !== false;
+        if (isNodeStream(stream)) ownStream(stream, reading, writing, end);
+        if (i === 0) {
+          if (typeof stream === 'function') {
+            ret = stream({ signal: cancellation.signal });
+            if (!isIterable(ret)) throw errors.invalidReturn('source');
+            if (isNodeStream(ret)) ownStream(ret, true, false, true);
+          } else if (isIterable(stream) || isNodeStream(stream)) {
+            ret = stream;
+          } else {
+            throw errors.invalidReturn('source');
+          }
+        } else if (typeof stream === 'function') {
+          ret = makeAsyncIterable(ret);
+          ret = stream(ret, { signal: cancellation.signal });
+          if (reading) {
+            if (!isIterable(ret, true)) throw errors.invalidReturn('transform[' + (i - 1) + ']');
+            if (isNodeStream(ret)) ownStream(ret, true, false, true);
+          } else {
+            const pt = new PassThrough({ objectMode: true });
+            ownStream(pt, false, true, end);
+            const then = ret && ret.then;
+            if (typeof then === 'function') {
+              const done = participant();
+              const result = ret;
+              new PipelinePromise(function (resolve, reject) {
+                pipelineApply(then, result, [resolve, reject]);
+              }).then(function (resolved) {
+                if (cancellation.aborted()) throw error || cancellation.error();
                 value = resolved;
                 if (resolved != null) pt.write(resolved);
                 if (end) pt.end();
-                nextTick(finish);
-              },
-              function (rejected) {
-                pt.destroy(rejected);
-                nextTick(finish, rejected);
-              });
-          } else if (isIterable(ret, true)) {
-            finishCount++;
-            pumpToNode(ret, pt, finish, { end: end });
-          } else {
-            throw errors.invalidReturn('destination');
+              }).then(function () { done(); }, function (error) { done(pipelineRejection(error)); });
+            } else if (isIterable(ret, true)) {
+              pumpToNode(ret, pt, participant(), { end: end, cancellation: cancellation });
+            } else {
+              throw errors.invalidReturn('destination');
+            }
+            ret = pt;
           }
-          ret = pt;
-          const handles = pipelineDestroyer(ret, false, true);
-          destroys.push(handles.destroy);
-          if (isLastStream) lastStreamCleanup.push(handles.cleanup);
-        }
-      } else if (isNodeStream(stream)) {
-        if (isReadableNodeStream(ret)) {
-          finishCount += 2;
-          const cleanup = pipeStreams(ret, stream, finish, { end: end });
-          if (isReadable(stream) && isLastStream) lastStreamCleanup.push(cleanup);
-        } else if (isIterable(ret)) {
-          finishCount++;
-          pumpToNode(ret, stream, finish, { end: end });
+        } else if (isNodeStream(stream)) {
+          if (isReadableNodeStream(ret) && end) {
+            const cleanup = pipeStreams(ret, stream, participant(), participant());
+            cleanups.push(cleanup);
+          } else if (isIterable(ret) || isReadableNodeStream(ret)) {
+            pumpToNode(makeAsyncIterable(ret), stream, participant(), { end: end, cancellation: cancellation });
+          } else {
+            throw makeError(TypeError, 'ERR_INVALID_ARG_TYPE',
+              'The "val" argument must be an instance of Readable, Iterable, AsyncIterable, ReadableStream, or TransformStream.'
+              + describeReceived(ret));
+          }
+          ret = stream;
         } else {
-          throw makeError(TypeError, 'ERR_INVALID_ARG_TYPE',
-            'The "val" argument must be an instance of Readable, Iterable, AsyncIterable, ReadableStream, or TransformStream.'
-            + describeReceived(ret));
+          throw errors.invalidReturn(reading ? 'transform[' + (i - 1) + ']' : 'destination');
         }
-        ret = stream;
-      } else {
-        ret = Duplex.from ? Duplex.from(stream) : stream;
       }
+    } catch (thrown) {
+      setupThrew = true;
+      finishImpl(pipelineRejection(thrown));
+      throw thrown;
+    } finally {
+      building = false;
+      finishCount--;
+      finishImpl();
     }
     return ret;
   }
-  function pipeStreams(src, dst, finish, options) {
-    let ended = false;
-    dst.on('close', function () {
-      if (!ended) finish(errors.prematureClose());
+  function pipeStreams(src, dst, sourceDone, destinationDone) {
+    function endFn() { dst.end(); }
+    const sourceCleanup = eos(src, { readable: true, writable: false }, function (error) {
+      const readableState = src._readableState;
+      if (error && error.code === 'ERR_STREAM_PREMATURE_CLOSE'
+        && readableState && readableState.ended && !readableState.errored && !readableState.errorEmitted) {
+        src.once('end', sourceDone).once('error', sourceDone);
+      } else { sourceDone(error); }
     });
+    const destinationCleanup = eos(dst, { readable: false, writable: true }, destinationDone);
+    if (isReadableFinished(src)) nextTick(endFn);
+    else src.once('end', endFn);
     src.pipe(dst, { end: false });
-    if (options.end) {
-      function endFn() {
-        ended = true;
-        dst.end();
-      }
-      if (isReadableFinished(src)) {
-        nextTick(endFn);
-      } else {
-        src.once('end', endFn);
-      }
-      eos(src, { readable: true, writable: false }, function (error) {
-        const readableState = src._readableState;
-        if (error && error.code === 'ERR_STREAM_PREMATURE_CLOSE'
-          && readableState && readableState.ended && !readableState.errored && !readableState.errorEmitted) {
-          src.once('end', finish).once('error', finish);
-        } else {
-          finish(error);
-        }
-      });
-    } else {
-      finish();
-    }
-    return eos(dst, { readable: false, writable: true }, finish);
+    return function () {
+      sourceCleanup();
+      destinationCleanup();
+      src.removeListener('end', endFn);
+      src.removeListener('end', sourceDone);
+      src.removeListener('error', sourceDone);
+    };
   }
   function pipelinePromise() {
     const streams = Array.prototype.slice.call(arguments);
@@ -2284,14 +2439,11 @@
     if (last && typeof last === 'object' && !isNodeStream(last) && !isIterable(last)) {
       options = streams.pop();
     }
-    return new Promise(function (resolve, reject) {
+    return new PipelinePromise(function (resolve, reject) {
       pipelineImpl(streams, function (error, value) {
-        if (error) {
-          reject(error);
-        } else {
-          resolve(value);
-        }
-      }, { end: options.end });
+        if (error) reject(error);
+        else resolve(value);
+      }, { end: options.end, signal: options.signal });
     });
   }
 

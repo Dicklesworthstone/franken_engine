@@ -354,17 +354,21 @@ const BUFFER_GLOBALS: [&str; 12] = [
     "btoa",
 ];
 
-const STREAM_GLOBALS: [&str; 15] = [
+const STREAM_GLOBALS: [&str; 19] = [
+    "AbortController",
+    "AbortSignal",
     "AggregateError",
     "Array",
     "Buffer",
     "Error",
+    "EventTarget",
     "Function",
     "Math",
     "Number",
     "Object",
     "Promise",
     "RangeError",
+    "Reflect",
     "Set",
     "String",
     "Symbol",

@@ -121,13 +121,19 @@ pub struct Profiler {
     last_sample_time: Instant,
     /// Number of hotspot-sample boundaries crossed during this run.
     sample_count: u64,
-    instruction_counter: u64,
+    /// Zero disables sampling; otherwise count down to the next sample.
+    instructions_until_sample: u64,
 }
 
 impl Profiler {
     /// Create a new profiler with the given configuration.
     pub fn new(config: ProfilingConfig) -> Self {
         let now = Instant::now();
+        let instructions_until_sample = if config.enable_hotspot_profiling {
+            config.hotspot_sampling_interval
+        } else {
+            0
+        };
         Self {
             config,
             opcodes: Box::new(OpcodeCounters {
@@ -144,31 +150,29 @@ impl Profiler {
             start_time: now,
             last_sample_time: now,
             sample_count: 0,
-            instruction_counter: 0,
+            instructions_until_sample,
         }
     }
 
     /// Record execution of an instruction.
+    #[inline]
     pub fn record_instruction(&mut self, instruction: &Ir3Instruction) {
         if !self.config.enable_instruction_profiling {
             return;
         }
 
         self.opcodes.counts[opcode::index(instruction)] += 1;
-        self.instruction_counter += 1;
 
-        // Hotspot sampling tick: when hotspot profiling is on and the
-        // configured interval has elapsed (in instructions), advance
-        // `last_sample_time`. Callers can observe sampling activity via
-        // `sample_count()` / `last_sample_time()` / `time_since_last_sample()`.
-        if self.config.enable_hotspot_profiling
-            && self.config.hotspot_sampling_interval > 0
-            && self
-                .instruction_counter
-                .is_multiple_of(self.config.hotspot_sampling_interval)
-        {
-            self.last_sample_time = Instant::now();
-            self.sample_count = self.sample_count.saturating_add(1);
+        // Preserve the bd-y9jj9 sample boundaries without variable division
+        // on every opcode. Configuration is immutable after construction;
+        // zero intervals and disabled hotspot profiling leave a zero countdown.
+        if self.instructions_until_sample != 0 {
+            self.instructions_until_sample -= 1;
+            if self.instructions_until_sample == 0 {
+                self.instructions_until_sample = self.config.hotspot_sampling_interval;
+                self.last_sample_time = Instant::now();
+                self.sample_count = self.sample_count.saturating_add(1);
+            }
         }
     }
 
@@ -475,3 +479,7 @@ mod tests {
 #[cfg(test)]
 #[path = "profiling/regressions.rs"]
 mod dense_profiling_regressions;
+
+#[cfg(test)]
+#[path = "profiling/sampling_regressions.rs"]
+mod sampling_countdown_regressions;

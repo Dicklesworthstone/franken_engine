@@ -7,6 +7,8 @@
 
 use super::*;
 
+mod output;
+
 const MAX_STRINGIFY_DEPTH: usize = 200;
 
 #[derive(Default)]
@@ -155,10 +157,7 @@ impl StringifyState {
         if text.len() <= 256 && text.is_ascii() {
             return self.ascii(core, text.as_bytes());
         }
-        for unit in text.encode_utf16() {
-            self.push(core, unit)?;
-        }
-        Ok(())
+        self.units(core, text.encode_utf16())
     }
 
     /// Quote an ASCII payload between the caller's opening/closing quotes.
@@ -223,31 +222,7 @@ impl StringifyState {
             self.quote_ascii(core, bytes)?;
             return self.push(core, u16::from(b'"'));
         }
-        // JSON quoting needs code units, not Unicode scalar values. Preserve
-        // paired surrogates directly and escape only unpaired halves instead
-        // of decoding every scalar and immediately encoding it back to UTF-16.
-        let mut units = text.encode_utf16().peekable();
-        while let Some(unit) = units.next() {
-            match unit {
-                0x22 => self.text(core, "\\\"")?,
-                0x5c => self.text(core, "\\\\")?,
-                0x08 => self.text(core, "\\b")?,
-                0x0c => self.text(core, "\\f")?,
-                0x0a => self.text(core, "\\n")?,
-                0x0d => self.text(core, "\\r")?,
-                0x09 => self.text(core, "\\t")?,
-                0x00..=0x1f | 0xdc00..=0xdfff => self.hex_escape(core, unit)?,
-                0xd800..=0xdbff => {
-                    if let Some(low) = units.next_if(|low| (0xdc00..=0xdfff).contains(low)) {
-                        self.push(core, unit)?;
-                        self.push(core, low)?;
-                    } else {
-                        self.hex_escape(core, unit)?;
-                    }
-                }
-                _ => self.push(core, unit)?,
-            }
-        }
+        self.units(core, output::QuotedUnits::new(text.encode_utf16()))?;
         self.push(core, u16::from(b'"'))
     }
 
@@ -682,8 +657,10 @@ impl InterpreterCore {
                                         });
                                     }
                                 };
-                                for unit in raw.encode_utf16() {
-                                    state.push(self, unit)?;
+                                if raw.is_ascii() {
+                                    state.ascii(self, raw.as_bytes())?;
+                                } else {
+                                    state.units(self, raw.encode_utf16())?;
                                 }
                             }
                             value if value.is_object_like() => {
@@ -835,6 +812,8 @@ impl InterpreterCore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod unicode_batches;
 
     fn core() -> InterpreterCore {
         let mut config = InterpreterConfig::quickjs_defaults();

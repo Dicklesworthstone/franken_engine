@@ -90,6 +90,10 @@ impl InterpreterCore {
             return Err(self.memory_budget_error(requested, self.heap_object_count_u32()));
         }
         let segments = Self::split_segments(&input, &granularity)?;
+        // Records own their properties, but their immutable input text can
+        // share one backing. Copying the whole input for each segment made
+        // grapheme segmentation allocate quadratically in the input length.
+        let input = JsString::from(input);
         let mut records = Vec::with_capacity(segments.len());
         for segment in &segments {
             records.push(Value::Object(self.segment_record(segment, &input)?));
@@ -98,7 +102,7 @@ impl InterpreterCore {
         let object = self.alloc_object_with_prototype(None)?;
         self.set_object_brand(object, "Intl.Segments")?;
         self.set_object_property(object, "__segments".to_string(), Value::Object(list))?;
-        self.set_object_property(object, "__input".to_string(), Value::str(input))?;
+        self.set_object_property(object, "__input".to_string(), Value::Str(input))?;
         let method = |name: &str| {
             Value::BuiltinFunction(BuiltinFunction {
                 kind: BuiltinFunctionKind::IntlMethod,
@@ -153,8 +157,7 @@ impl InterpreterCore {
                 if number.is_nan() { 0.0 } else { number.trunc() }
             }
         };
-        let input = input.to_string();
-        let length = input.encode_utf16().count();
+        let length = input.utf16_len();
         if index < 0.0 || index >= length as f64 {
             return Ok(Value::Undefined);
         }
@@ -170,19 +173,17 @@ impl InterpreterCore {
                     object.properties.get("segment").cloned(),
                 )
             }) {
-                Some((Some(Value::Int(start)), Some(Value::Str(text)))) => {
-                    (start as usize, text.to_string())
-                }
+                Some((Some(Value::Int(start)), Some(Value::Str(text)))) => (start as usize, text),
                 _ => continue,
             };
-            if index >= start && index < start + text.encode_utf16().count() {
+            if index >= start && index - start < text.utf16_len() {
                 let word_like = self.heap.get(record.0 as usize).and_then(|object| {
                     match object.properties.get("isWordLike") {
                         Some(Value::Bool(flag)) => Some(*flag),
                         _ => None,
                     }
                 });
-                let fresh = self.segment_record(&(text, start, word_like), &input)?;
+                let fresh = self.segment_record(&(text.to_string(), start, word_like), &input)?;
                 return Ok(Value::Object(fresh));
             }
         }
@@ -193,7 +194,7 @@ impl InterpreterCore {
     fn segment_record(
         &mut self,
         (text, index, word_like): &Segment,
-        input: &str,
+        input: &JsString,
     ) -> Result<ObjectId, InterpreterError> {
         let mut fields = vec![
             ("segment", Value::str(text.clone())),
@@ -201,7 +202,7 @@ impl InterpreterCore {
                 "index",
                 Value::Int(i64::try_from(*index).unwrap_or(i64::MAX)),
             ),
-            ("input", Value::str(input.to_string())),
+            ("input", Value::Str(input.clone())),
         ];
         if let Some(word_like) = word_like {
             fields.push(("isWordLike", Value::Bool(*word_like)));
@@ -255,5 +256,84 @@ fn dictionary_script(c: char) -> Option<&'static str> {
         0x1780..=0x17FF | 0x19E0..=0x19FF => Some("Khmer"),
         0x1000..=0x109F | 0xA9E0..=0xA9FF | 0xAA60..=0xAA7F => Some("Myanmar"),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn string_property<'a>(core: &'a InterpreterCore, object: ObjectId, key: &str) -> &'a JsString {
+        match core.heap[object.0 as usize].properties.get(key) {
+            Some(Value::Str(text)) => text,
+            other => panic!("expected string property {key}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn segmentation_records_share_input_backing_for_every_granularity() {
+        for granularity in ["grapheme", "word", "sentence"] {
+            let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-sharing");
+            let resolved = core
+                .alloc_object_with_properties(&[("granularity", Value::str(granularity))])
+                .expect("resolved options");
+            let input = "A\u{1f44d}\u{1f3fd} e\u{301}. Next!\r\n".repeat(32);
+            let Value::Object(segments) = core
+                .intl_segment(resolved, input.clone())
+                .expect("segment input")
+            else {
+                panic!("expected Segments object");
+            };
+            let shared = string_property(&core, segments, "__input").clone();
+            assert_eq!(shared.as_str(), Some(input.as_str()));
+            assert_eq!(shared.utf16_len(), input.encode_utf16().count());
+            let Some(Value::Object(list)) = core.heap[segments.0 as usize]
+                .properties
+                .get("__segments")
+                .cloned()
+            else {
+                panic!("expected segment list");
+            };
+            let records = core.array_like_values(list).expect("read segment records");
+            assert!(records.len() > 1, "fixture must exercise repeated records");
+            for record in records {
+                let Value::Object(record) = record else {
+                    panic!("expected segment record");
+                };
+                let stored = string_property(&core, record, "input");
+                // Content equality alone passed with the quadratic copies.
+                // Every result must retain the very same immutable backing.
+                assert!(std::ptr::eq(
+                    stored.as_str().expect("well-formed input"),
+                    shared.as_str().expect("well-formed input"),
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn shared_input_does_not_alias_mutable_record_properties() {
+        let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-identity");
+        let input = JsString::from("x".repeat(1024));
+        let segment = ("x".to_string(), 0, None);
+        let first = core.segment_record(&segment, &input).expect("first record");
+        let second = core.segment_record(&segment, &input).expect("second record");
+        assert_ne!(first, second);
+        for record in [first, second] {
+            assert!(std::ptr::eq(
+                string_property(&core, record, "input")
+                    .as_str()
+                    .expect("well-formed input"),
+                input.as_str().expect("well-formed input"),
+            ));
+        }
+        core.set_object_property(first, "input".to_string(), Value::str("changed"))
+            .expect("replace first record input");
+        assert_eq!(
+            string_property(&core, first, "input").as_str(),
+            Some("changed")
+        );
+        assert_eq!(string_property(&core, second, "input"), &input);
+        assert_eq!(input.utf16_len(), 1024);
     }
 }

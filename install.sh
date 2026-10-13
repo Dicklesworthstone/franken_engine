@@ -15,7 +15,7 @@
 #   --method MODE       auto (default) tries a checksum-verified GitHub release,
 #                       then falls back to a source build. Values: auto|release|source.
 #   --ref REF           Override source ref (otherwise selected release, then main).
-#   --offline TARBALL   Install from a local release tarball; skip all network access.
+#   --offline TARBALL   Install using an adjacent .sha256 sidecar; no network access.
 #   --easy-mode         Auto-update PATH in shell rc files (~/.zshrc, ~/.bashrc).
 #   --verify            Check candidate startup before replacing an existing install.
 #   --force             Reinstall even if the target version is already present.
@@ -176,9 +176,11 @@ setup_proxy() {
 
 compute_sha256() {
   local file="$1"
-  if command_exists sha256sum; then sha256sum "$file" | awk '{print $1}'
-  elif command_exists shasum; then shasum -a 256 "$file" | awk '{print $1}'
-  elif command_exists openssl; then openssl dgst -sha256 "$file" | awk '{print $NF}'
+  # Hash stdin so a filename containing backslashes/newlines cannot change
+  # the digest field into sha256sum's escaped-filename record format.
+  if command_exists sha256sum; then sha256sum < "$file" | awk '{print $1}'
+  elif command_exists shasum; then shasum -a 256 < "$file" | awk '{print $1}'
+  elif command_exists openssl; then openssl dgst -sha256 < "$file" | awk '{print $NF}'
   else die "no SHA-256 tool found (install sha256sum, shasum, or openssl)"; fi
 }
 
@@ -252,21 +254,39 @@ check_already_installed() {
 }
 
 # ── Verification ──────────────────────────────────────────────────────────────
+verify_checksum_file() {
+  local archive="$1" sha_file="$2" expected actual
+  [ "$NO_CHECKSUM" -eq 1 ] && { warn "checksum verification skipped (--no-verify)"; return 0; }
+  [ -f "$sha_file" ] && [ -r "$sha_file" ] || die "missing or unreadable checksum sidecar: $sha_file"
+  # Each per-artifact sidecar must name exactly one digest. Do not silently
+  # accept the first entry in an ambiguous or partially downloaded manifest.
+  # A leading backslash is the standard escaped-filename record marker;
+  # no pathname from the sidecar is ever opened or evaluated.
+  expected="$(LC_ALL=C awk '
+    { sub(/\r$/, "") }
+    NF { records++; if (records == 1) digest = $1 }
+    END {
+      if (substr(digest, 1, 1) == "\\") digest = substr(digest, 2)
+      if (records != 1 || length(digest) != 64 || digest ~ /[^0-9a-fA-F]/) exit 1
+      print tolower(digest)
+    }
+  ' < "$sha_file")" || die "invalid or ambiguous SHA-256 sidecar: $sha_file"
+  actual="$(compute_sha256 "$archive")" || die "cannot hash archive: $archive"
+  [ "$actual" = "$expected" ] || die "SHA-256 mismatch: expected $expected, got $actual"
+  ok "Checksum verified"
+}
+
 verify_checksum() {
   local archive="$1" sha_url="$2"
   [ "$NO_CHECKSUM" -eq 1 ] && { warn "checksum verification skipped (--no-verify)"; return 0; }
   local sha_file; sha_file="${WORK_DIR}/$(basename "$archive").sha256"
   download_file "$sha_url" "$sha_file" || { warn "no .sha256 sidecar for $(basename "$archive")"; return 1; }
-  local expected actual
-  expected="$(awk '{print $1; exit}' "$sha_file")"
-  [ -n "$expected" ] || { warn "empty checksum sidecar"; return 1; }
-  actual="$(compute_sha256 "$archive")"
-  [ "$actual" = "$expected" ] || die "SHA-256 mismatch: expected $expected, got $actual"
-  ok "Checksum verified"
+  verify_checksum_file "$archive" "$sha_file"
 }
 
 verify_sigstore() {
   local archive="$1" sig_url="$2"
+  [ "$NO_CHECKSUM" -eq 1 ] && { warn "signature verification skipped (--no-verify)"; return 0; }
   command_exists cosign || { info "cosign not found — skipping signature verification"; return 0; }
   local bundle; bundle="${WORK_DIR}/$(basename "$archive").sigstore.json"
   download_file "$sig_url" "$bundle" || { info "no sigstore bundle published — skipping"; return 0; }
@@ -348,7 +368,19 @@ install_from_release() {
 install_from_offline() {
   [ -f "$OFFLINE_TARBALL" ] || die "offline tarball not found: $OFFLINE_TARBALL"
   info "Installing from local tarball: $OFFLINE_TARBALL"
-  extract_and_install "$OFFLINE_TARBALL"
+  require_command cp
+  require_command mktemp
+  local staged_dir archive
+  staged_dir="$(mktemp -d "${WORK_DIR}/offline.XXXXXXXX")" \
+    || die "cannot stage offline archive"
+  archive="$staged_dir/archive"
+  cp -- "$OFFLINE_TARBALL" "$archive" || die "cannot copy offline archive: $OFFLINE_TARBALL"
+  # Offline is a transport choice, not permission to bypass integrity checks.
+  # The sidecar must come from a trusted source: a hash alone does not prove
+  # publisher identity. No signature service or network tool is invoked here.
+  # Extract the same private snapshot that was hashed, not a mutable original.
+  verify_checksum_file "$archive" "${OFFLINE_TARBALL}.sha256"
+  extract_and_install "$archive"
 }
 
 # Select only the executable reported by this successful Cargo invocation.

@@ -443,6 +443,7 @@ install_from_source() { printf '%s\n' "$SOURCE_REF" > "$FIXTURE_ROOT/selected-re
         self.assertFalse((self.root / "selected-ref").exists())
 
     def test_offline_mode_needs_no_curl_and_performs_no_network(self) -> None:
+        self.write_offline_checksum()
         result = self.shell(self.main_harness() + r'''
 command_exists() { [ "$1" != curl ] && command -v "$1" >/dev/null 2>&1; }
 main --force --offline "$FIXTURE_ARCHIVE" --verify --dest "$FIXTURE_DEST"
@@ -450,6 +451,132 @@ main --force --offline "$FIXTURE_ARCHIVE" --verify --dest "$FIXTURE_DEST"
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.old.read_bytes(), NEW)
         self.assertFalse((self.root / "selected-ref").exists())
+
+    def write_offline_checksum(self, text: str | None = None) -> None:
+        if text is None:
+            digest = hashlib.sha256(self.archive.read_bytes()).hexdigest()
+            text = digest + "  " + self.archive.name + "\n"
+        Path(str(self.archive) + ".sha256").write_text(text)
+
+    def offline_install(self, *, before: str = "") -> subprocess.CompletedProcess[str]:
+        result = self.shell(r'''
+download_file() { echo forbidden-network >> "$FIXTURE_ROOT/network"; return 99; }
+curl() { echo forbidden-network >> "$FIXTURE_ROOT/network"; return 99; }
+cosign() { echo forbidden-network >> "$FIXTURE_ROOT/network"; return 99; }
+OFFLINE_TARBALL="$FIXTURE_ARCHIVE"
+VERIFY=1
+''' + before + '\nif install_from_offline; then :; else echo "unexpected fallback"; fi')
+        self.assertFalse((self.root / "network").exists(), "offline verification must stay local")
+        return result
+
+    def assert_no_extraction(self) -> None:
+        self.assertEqual(list(self.work.glob("extract*")), [], "verification must precede tar")
+
+    def test_offline_missing_checksum_refuses_before_extraction(self) -> None:
+        self.assert_refused(self.offline_install())
+        self.assert_no_extraction()
+
+    def test_offline_wrong_checksum_refuses_before_extraction(self) -> None:
+        self.write_offline_checksum("0" * 64 + "  release.tar\n")
+        self.assert_refused(self.offline_install())
+        self.assert_no_extraction()
+
+    def test_offline_malformed_or_ambiguous_checksum_refuses(self) -> None:
+        digest = hashlib.sha256(self.archive.read_bytes()).hexdigest()
+        for text in ["", "not-a-digest\n", "a" * 63 + "\n", "g" * 64 + "\n",
+                     digest + "  first\n" + digest + "  second\n"]:
+            with self.subTest(sidecar=text):
+                self.write_offline_checksum(text)
+                self.assert_refused(self.offline_install())
+                self.assert_no_extraction()
+
+    def test_offline_digest_tool_failure_cannot_look_like_verification(self) -> None:
+        digest = hashlib.sha256(self.archive.read_bytes()).hexdigest()
+        self.write_offline_checksum()
+        result = self.offline_install(before=f'compute_sha256() {{ printf "{digest}\\n"; return 74; }}')
+        self.assert_refused(result)
+        self.assert_no_extraction()
+
+    def test_offline_checksum_detects_tampering_of_a_valid_archive(self) -> None:
+        self.write_offline_checksum()
+        # Both archives are valid. Only their payload differs, so tar success
+        # cannot substitute for checksum verification.
+        self.make_archive({"pkg/frankenctl": b"#!/bin/sh\necho tampered\n"})
+        self.assert_refused(self.offline_install())
+        self.assert_no_extraction()
+
+    def test_offline_checksum_accepts_uppercase_crlf_without_network(self) -> None:
+        digest = hashlib.sha256(self.archive.read_bytes()).hexdigest().upper()
+        self.write_offline_checksum(digest + " *release.tar\r\n")
+        result = self.offline_install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.old.read_bytes(), NEW)
+        self.assertIn("Checksum verified", result.stdout)
+
+    def test_offline_checksum_handles_real_escaped_filename_sidecars(self) -> None:
+        unusual = self.root / "archive\\name\nline.tar"
+        unusual.write_bytes(self.archive.read_bytes())
+        self.archive = unusual
+        # Exercise the actual sha256sum escaped-record format, not a model.
+        sidecar = subprocess.check_output(["sha256sum", str(self.archive)], text=True)
+        self.assertTrue(sidecar.startswith("\\"))
+        self.write_offline_checksum(sidecar)
+        result = self.offline_install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.old.read_bytes(), NEW)
+        self.assertIn("Checksum verified", result.stdout)
+
+    def test_offline_verified_archive_still_requires_candidate_startup(self) -> None:
+        self.make_archive({"pkg/frankenctl": b"#!/bin/sh\nexit 23\n"})
+        self.write_offline_checksum()
+        self.assert_refused(self.offline_install())
+
+    def test_offline_extracts_the_verified_snapshot_not_a_changed_original(self) -> None:
+        original = self.archive.read_bytes()
+        self.make_archive({"pkg/frankenctl": b"#!/bin/sh\necho substituted\n"})
+        (self.root / "replacement.tar").write_bytes(self.archive.read_bytes())
+        self.archive.write_bytes(original)
+        self.write_offline_checksum()
+        result = self.offline_install(before=r'''
+tar() {
+  cp "$FIXTURE_ROOT/replacement.tar" "$FIXTURE_ARCHIVE"
+  command tar "$@"
+}
+''')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotEqual(self.archive.read_bytes(), original)
+        self.assertEqual(self.old.read_bytes(), NEW, "only the verified snapshot may be installed")
+
+    def test_offline_staging_copy_failure_preserves_previous_executable(self) -> None:
+        self.write_offline_checksum()
+        result = self.offline_install(before=r'''
+cp() { printf partial-copy > "${@: -1}"; return 28; }
+''')
+        self.assert_refused(result)
+        self.assert_no_extraction()
+
+    def test_explicit_checksum_bypass_does_not_bypass_startup(self) -> None:
+        self.make_archive({"pkg/frankenctl": b"#!/bin/sh\nexit 23\n"})
+        self.assert_refused(self.offline_install(before="NO_CHECKSUM=1"))
+
+    def test_explicit_no_verify_skips_both_checksum_and_sigstore(self) -> None:
+        result = self.shell(r'''
+NO_CHECKSUM=1
+download_file() { echo forbidden-download >> "$FIXTURE_ROOT/network"; return 99; }
+cosign() { echo forbidden-cosign >> "$FIXTURE_ROOT/network"; return 99; }
+verify_checksum "$FIXTURE_ARCHIVE" unused
+verify_sigstore "$FIXTURE_ARCHIVE" unused
+''')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.root / "network").exists())
+
+    def test_online_multiple_checksum_records_cannot_trigger_fallback(self) -> None:
+        setup = self.release_fixture()
+        sidecar = self.root / "sidecar"
+        sidecar.write_text(sidecar.read_text() * 2)
+        self.assert_refused(self.shell(setup + 'if install_from_release v0.2.0; then :; fi'))
+        self.assertNotIn("fallback", (self.root / "downloads").read_text())
+        self.assert_no_extraction()
 
 
 

@@ -93497,9 +93497,19 @@ impl InterpreterCore {
                 // exactly as that store would.
                 let prototype = self.arg_or_undefined(args, 0)?;
                 let parent = self.arg_or_undefined(args, 1)?;
+                // A function is an object too: `class extends Function` links
+                // to the callable %Function.prototype% (bd-9vouw.346) through
+                // its property storage, as Object.setPrototypeOf(o, F) does
+                // (bd-9vouw.98).
+                let callable_link = if parent.is_callable() {
+                    self.prototype_link_for_value(module, &parent)?
+                } else {
+                    None
+                };
                 let link = match parent {
                     Value::Object(parent_id) => Some(Some(parent_id)),
                     Value::Null => Some(None),
+                    _ if callable_link.is_some() => callable_link,
                     // Step 6.g.ii: a superclass whose `prototype` is neither an
                     // object nor null is a TypeError (bd-9vouw.205).
                     _ if matches!(prototype, Value::Object(_)) => {

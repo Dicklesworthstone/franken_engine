@@ -291,6 +291,34 @@ const noop = Function.prototype;
     assert_eq!(eval(source), "7|function|true");
 }
 
+/// bd-9vouw.346: a class extends Function, whose `prototype` is the callable
+/// %Function.prototype%, and a constructor whose `prototype` is a function.
+/// ClassDefinitionEvaluation takes any object there (ES2020 14.6.13 step
+/// 6.g.ii) and links through the function's property storage; both threw
+/// "Class extends value does not have valid prototype property".
+#[test]
+fn a_class_extends_a_constructor_whose_prototype_is_a_function() {
+    let source = r#"
+class Fn extends Function {}
+const fn = new Fn('a', 'return a * 2');
+function P() {}
+P.prototype = function proto() {};
+P.prototype.m = function () { return 'm'; };
+class D extends P {}
+[
+    Object.getPrototypeOf(Fn.prototype) === Function.prototype,
+    fn(21),
+    fn instanceof Fn,
+    fn instanceof Function,
+    typeof fn,
+    Object.getPrototypeOf(D.prototype) === P.prototype,
+    new D().m(),
+    new D() instanceof P
+].join(',');
+"#;
+    assert_eq!(eval(source), "true,42,true,true,function,true,m,true");
+}
+
 /// ES2020 20.2.1 / 17: Math's value properties exist (E, LN2, LN10, LOG2E,
 /// LOG10E, SQRT1_2 and SQRT2 were undefined) and are read-only; the function
 /// members of Math, JSON, Promise and Date are non-enumerable, so

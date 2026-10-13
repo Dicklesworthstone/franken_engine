@@ -9,13 +9,13 @@ use std::collections::BTreeSet;
 
 use super::super::LoweringPipelineError;
 use super::super::with_statement::{
-    FunctionBody, FunctionParts, Outcome, Search, Walk, lexical_names, var_names, walk_expression,
-    walk_function, walk_switch_cases,
+    FunctionBody, FunctionParts, Outcome, Search, Walk, lexical_names, var_names, walk_class,
+    walk_expression, walk_function, walk_statement, walk_switch_cases,
 };
-use super::scoped_walk;
+use super::{loop_head_names, scoped_walk};
 use crate::ast::{
-    BindingPattern, CatchClause, Expression, ParseGoal, SourceSpan, Statement, SwitchCase,
-    SyntaxTree, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
+    BindingPattern, CatchClause, Expression, MethodDefinition, ParseGoal, SourceSpan, Statement,
+    SwitchCase, SyntaxTree, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
 };
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
@@ -94,6 +94,14 @@ pub(super) fn rewrite_fs_requires(
     let mut names = BTreeSet::new();
     var_names(&tree.body, &mut names);
     lexical_names(&tree.body, &mut names);
+    // Imports are module-scope bindings too. Besides keeping an imported
+    // require out of the builtin path, this protects the facade's realm
+    // helpers from imports named Buffer, Promise, WeakMap, and so on.
+    for statement in &tree.body {
+        if let Statement::Import(import) = statement {
+            names.extend(import.clause.binding_names().into_iter().map(str::to_string));
+        }
+    }
     let mut rewritten = tree.clone();
     let mut walker = RequireRewriter {
         scopes: vec![names.clone()],
@@ -189,6 +197,32 @@ impl RequireRewriter {
 impl Walk for RequireRewriter {
     scoped_walk!();
 
+    fn statement(&mut self, statement: &mut Statement) -> Outcome {
+        if let Statement::With(with_statement) = statement {
+            // The object expression runs OUTSIDE the new object environment.
+            // Its own free require can still load the builtin; the body may
+            // instead resolve require through an object getter/unscopables.
+            self.expression(&mut with_statement.object)?;
+            let names = std::iter::once("require".to_string()).collect();
+            return self.scoped(names, |walker| walker.statement(&mut with_statement.body));
+        }
+        let mut names = BTreeSet::new();
+        loop_head_names(statement, &mut names);
+        self.scoped(names, |walker| walk_statement(walker, statement))
+    }
+
+    fn class(
+        &mut self,
+        name: Option<&str>,
+        super_class: Option<&mut Expression>,
+        body: &mut [MethodDefinition],
+    ) -> Outcome {
+        // A named class expression has a private name binding, including
+        // while its heritage is evaluated. It is not an ambient require.
+        let names = name.map(str::to_string).into_iter().collect();
+        self.scoped(names, |walker| walk_class(walker, super_class, body))
+    }
+
     fn expression(&mut self, expression: &mut Expression) -> Outcome {
         if !self.scopes.iter().any(|scope| scope.contains("require"))
             && let Some(member) = require_member(expression)
@@ -215,13 +249,17 @@ mod tests {
     use super::*;
 
     fn parse(source: &str) -> SyntaxTree {
+        parse_goal(source, ParseGoal::Script)
+    }
+
+    fn parse_goal(source: &str, goal: ParseGoal) -> SyntaxTree {
         CanonicalEs2020Parser
             .parse_with_options(
                 ParserSource {
                     label: "fs-rewrite-test.js".into(),
                     text: source.into(),
                 },
-                ParseGoal::Script,
+                goal,
                 &ParserOptions::default(),
             )
             .expect("test source parses")
@@ -271,5 +309,133 @@ mod tests {
         assert_eq!(intrinsic_capability("%FsRead"), Some("fs:read"));
         assert_eq!(intrinsic_capability("%FsWrite"), Some("fs:write"));
         assert_eq!(intrinsic_capability("__franken_fs_write"), None);
+    }
+
+    #[test]
+    fn imported_require_is_never_replaced_by_a_filesystem_intrinsic() {
+        for declaration in [
+            "import require from './loader.js';",
+            "import { require } from './loader.js';",
+            "import { load as require } from './loader.js';",
+            "import * as require from './loader.js';",
+        ] {
+            for specifier in ["fs", "node:fs", "fs/promises", "node:fs/promises"] {
+                let source = format!("{declaration} require('{specifier}');");
+                assert!(
+                    rewrite_fs_requires(&parse_goal(&source, ParseGoal::Module))
+                        .expect("import-aware rewrite")
+                        .is_none(),
+                    "{source}"
+                );
+            }
+        }
+        let tree = parse_goal(
+            "import { require as load } from './loader.js'; require('fs');",
+            ParseGoal::Module,
+        );
+        assert!(rewrite_fs_requires(&tree).expect("free require").is_some());
+    }
+
+    #[test]
+    fn imported_helpers_are_read_from_the_realm_not_the_guest_import() {
+        struct QualifiedGlobals(BTreeSet<String>);
+        impl Walk for QualifiedGlobals {
+            fn expression(&mut self, expression: &mut Expression) -> Outcome {
+                if let Expression::Member { object, property, computed: false, .. } = expression
+                    && matches!(object.as_ref(), Expression::Identifier(name) if name == "globalThis")
+                    && let Expression::Identifier(name) = property.as_ref()
+                {
+                    self.0.insert(name.clone());
+                }
+                walk_expression(self, expression)
+            }
+        }
+        let source = format!(
+            "import {{ {} }} from './guest-helpers.js'; require('fs');",
+            GLOBALS.join(", ")
+        );
+        let mut rewritten = rewrite_fs_requires(&parse_goal(&source, ParseGoal::Module))
+            .expect("rewrite")
+            .expect("free filesystem require");
+        let mut reads = QualifiedGlobals(BTreeSet::new());
+        reads.statement(&mut rewritten.body[0]).expect("walk module prelude");
+        assert_eq!(reads.0, GLOBALS.iter().map(|name| (*name).to_string()).collect());
+    }
+
+    #[test]
+    fn lexical_loop_heads_do_not_become_filesystem_modules() {
+        for source in [
+            "for (let require = loader; ready; step()) { require('fs'); }",
+            "for (const require of loaders) { require('node:fs'); }",
+            "for (let require in loaders) { require('fs/promises'); }",
+            "for (const { require } of loaders) { require('node:fs/promises'); }",
+            "for (let require of require('fs')) {}",
+        ] {
+            assert!(rewrite_fs_requires(&parse(source)).expect("loop scope").is_none(), "{source}");
+        }
+    }
+
+    #[test]
+    fn named_class_scope_includes_heritage_computed_keys_and_methods() {
+        for source in [
+            "const C = class require { method() { return require('fs'); } };",
+            "const C = class require extends require('fs') {};",
+            "const C = class require { [require('fs')]() {} };",
+        ] {
+            assert!(rewrite_fs_requires(&parse(source)).expect("class scope").is_none(), "{source}");
+        }
+    }
+
+    #[test]
+    fn dynamic_object_environment_retains_its_own_require() {
+        for source in [
+            "with (loader) { require('fs'); }",
+            "with (loader) { function f() { return require('node:fs'); } }",
+            "with (outer) { with (inner) { require('fs/promises'); } }",
+        ] {
+            assert!(rewrite_fs_requires(&parse(source)).expect("object scope").is_none(), "{source}");
+        }
+    }
+
+    fn require_count(tree: &SyntaxTree) -> usize {
+        struct Counter(usize);
+        impl Walk for Counter {
+            fn expression(&mut self, expression: &mut Expression) -> Outcome {
+                self.0 += usize::from(require_member(expression).is_some());
+                walk_expression(self, expression)
+            }
+        }
+        let mut tree = tree.clone();
+        let mut counter = Counter(0);
+        counter.statements(&mut tree.body).expect("count requires");
+        counter.0
+    }
+
+    #[test]
+    fn scope_guards_do_not_leak_into_free_siblings() {
+        for source in [
+            "for (const require of loaders) { require('fs'); } require('fs');",
+            "const C = class require { method() { return require('fs'); } }; require('fs');",
+            "with (loader) { require('fs'); } require('fs');",
+        ] {
+            let tree = parse(source);
+            assert_eq!(require_count(&tree), 2);
+            let rewritten = rewrite_fs_requires(&tree).expect("rewrite").expect("free sibling");
+            assert_eq!(rewritten.body.len(), tree.body.len() + 1);
+            assert!(is_module_declaration(&rewritten.body[0]));
+            assert_eq!(require_count(&rewritten), 1, "retain exactly the shadowed call: {source}");
+            assert_eq!(require_count(&tree), 2, "the input AST is immutable");
+            assert!(rewrite_fs_requires(&rewritten).expect("idempotent").is_none());
+        }
+    }
+
+    #[test]
+    fn with_object_expression_is_evaluated_before_the_new_scope() {
+        let tree = parse("with (require('fs')) { require('node:fs'); }");
+        let rewritten = rewrite_fs_requires(&tree).expect("rewrite").expect("object operand");
+        assert_eq!(require_count(&rewritten), 1);
+        let Statement::With(statement) = &rewritten.body[1] else { panic!("with statement"); };
+        assert!(matches!(&statement.object, Expression::Identifier(name) if name == MODULE_BINDING));
+        assert!(rewrite_fs_requires(&rewritten).expect("idempotent").is_none());
     }
 }

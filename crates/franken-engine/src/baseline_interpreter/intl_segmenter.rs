@@ -243,11 +243,37 @@ impl InterpreterCore {
         count: usize,
         index: usize,
     ) -> Result<Value, InterpreterError> {
-        for slot in 0..count {
+        self.segment_containing_with_probe(storage, input, count, index, || {})
+    }
+
+    /// Canonical segments partition the input into nonempty, ordered UTF-16
+    /// intervals. Binary search needs at most floor(log2(count)) + 1 record
+    /// probes, rather than visiting and cloning every preceding record.
+    /// The probe seam measures the actual production path in deterministic
+    /// work-bound tests; the empty production closure specializes away.
+    fn segment_containing_with_probe(
+        &mut self,
+        storage: ObjectId,
+        input: &JsString,
+        count: usize,
+        index: usize,
+        mut probe: impl FnMut(),
+    ) -> Result<Value, InterpreterError> {
+        if index >= input.utf16_len() {
+            return Ok(Value::Undefined);
+        }
+        let (mut low, mut high) = (0, count);
+        while low < high {
             self.json_charge_work()?;
-            let segment = self.segment_data_at(storage, slot)?;
-            if index >= segment.1 && index - segment.1 < segment.0.utf16_len() {
+            probe();
+            let middle = low + (high - low) / 2;
+            let segment = self.segment_data_at(storage, middle)?;
+            if index < segment.1 {
+                high = middle;
+            } else if index - segment.1 < segment.0.utf16_len() {
                 return self.segment_record(&segment, input).map(Value::Object);
+            } else {
+                low = middle + 1;
             }
         }
         Ok(Value::Undefined)
@@ -697,6 +723,115 @@ console.log([...detached].map(x => x.index + ':' + x.segment).join('|'));
             "undefined undefined [object Segmenter String Iterator]",
             "true undefined",
             "0:a|1:👍🏽|5:b",
+        ]);
+    }
+
+    #[test]
+    fn containing_checks_every_utf16_position_with_logarithmic_record_probes() {
+        for granularity in ["grapheme", "word", "sentence"] {
+            let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-search");
+            let text = "A\u{1f44d}\u{1f3fd} e\u{301}. Next!\r\n".repeat(32);
+            let (_, storage) = fixture(&mut core, &text, granularity);
+            let (input, count) = core.segment_storage_info(storage).unwrap();
+            let canonical: Vec<Segment> = (0..count)
+                .map(|slot| core.segment_data_at(storage, slot).unwrap())
+                .collect();
+            assert!(count > 1);
+            let maximum_probes = (usize::BITS - count.leading_zeros()) as usize;
+            // Reverse order starts with the former full-scan worst case and
+            // includes low surrogates, combining marks and CRLF interiors.
+            for index in (0..input.utf16_len()).rev() {
+                let expected = canonical.iter().find(|segment| {
+                    index >= segment.1 && index - segment.1 < segment.0.utf16_len()
+                }).expect("canonical partition covers every code unit");
+                let mut probes = 0;
+                let before = core.heap.len();
+                let found = object(core.segment_containing_with_probe(
+                    storage, &input, count, index, || probes += 1,
+                ).unwrap());
+                assert!(probes > 0 && probes <= maximum_probes, "{granularity} at {index}: {probes}");
+                assert_eq!(core.heap.len() - before, 1, "only the delivered record is allocated");
+                assert_eq!(string_property(&core, found, "segment"), &expected.0);
+                assert_eq!(string_property(&core, found, "input"), &input);
+                let fields = &core.heap[found.0 as usize].properties;
+                assert_eq!(fields.get("index"), Some(&Value::Int(expected.1 as i64)));
+                let word_like = expected.2.map(Value::Bool);
+                assert_eq!(fields.get("isWordLike"), word_like.as_ref());
+            }
+            for index in [input.utf16_len(), usize::MAX] {
+                let mut probes = 0;
+                let before = core.heap.len();
+                let value = core.segment_containing_with_probe(
+                    storage, &input, count, index, || probes += 1,
+                ).unwrap();
+                assert_eq!(value, Value::Undefined);
+                assert_eq!(probes, 0);
+                assert_eq!(core.heap.len(), before);
+            }
+        }
+    }
+
+    #[test]
+    fn containing_empty_and_single_segment_boundaries() {
+        for text in ["", "\u{1f44d}\u{1f3fd}"] {
+            let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-search-boundary");
+            let (_, storage) = fixture(&mut core, text, "grapheme");
+            let (input, count) = core.segment_storage_info(storage).unwrap();
+            assert_eq!(count, usize::from(!text.is_empty()));
+            for index in 0..=input.utf16_len() {
+                let mut probes = 0;
+                let found = core.segment_containing_with_probe(
+                    storage, &input, count, index, || probes += 1,
+                ).unwrap();
+                if index == input.utf16_len() {
+                    assert_eq!(found, Value::Undefined);
+                    assert_eq!(probes, 0);
+                } else {
+                    assert_eq!(probes, 1);
+                    assert_eq!(string_property(&core, object(found), "segment"), &input);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn containing_budget_refusal_precedes_record_read_and_allocation() {
+        let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-search-budget");
+        let (_, storage) = fixture(&mut core, "abc", "grapheme");
+        let (input, count) = core.segment_storage_info(storage).unwrap();
+        core.config.instruction_budget = 0;
+        let before = core.heap.len();
+        let mut probes = 0;
+        assert!(core.segment_containing_with_probe(
+            storage, &input, count, 2, || probes += 1,
+        ).is_err());
+        assert_eq!(probes, 0);
+        assert_eq!(core.heap.len(), before);
+        assert_eq!(core.segment_data_at(storage, 2).unwrap().0.as_str(), Some("c"));
+    }
+
+    #[test]
+    fn containing_public_dispatch_handles_coercion_and_reentrant_mutation() {
+        let source = r#"
+const s = new Intl.Segmenter().segment('a👍🏽b');
+const inputs = [undefined, NaN, -0, 1.9, 3, 5, 6, -1, Infinity, '3'];
+console.log(inputs.map(i => { const v = s.containing(i); return v ? v.index + ':' + v.segment : '-'; }).join('|'));
+const index = { valueOf() { const v = s[Symbol.iterator]().next().value; v.index = 999; v.segment = 'bad'; return 3; } };
+console.log(JSON.stringify(s.containing(index)));
+const old = s.containing(3); old.segment = 'bad';
+console.log(s.containing(3).segment, [...s].map(v => v.segment).join('|'));
+"#;
+        let lines: Vec<String> = crate::HybridRouter::default()
+            .eval(source)
+            .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+            .console_output
+            .into_iter()
+            .map(|entry| entry.message)
+            .collect();
+        assert_eq!(lines, [
+            "0:a|0:a|0:a|1:👍🏽|1:👍🏽|5:b|-|-|-|1:👍🏽",
+            r#"{"segment":"👍🏽","index":1,"input":"a👍🏽b"}"#,
+            "👍🏽 a|👍🏽|b",
         ]);
     }
 }

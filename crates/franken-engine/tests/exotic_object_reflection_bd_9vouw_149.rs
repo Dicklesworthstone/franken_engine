@@ -192,6 +192,30 @@ fn exotic_integrity_of_functions() {
     );
 }
 
+/// Object.seal and Object.isSealed called as values (`const seal = Object.seal`), which
+/// `Object.seal(x)` is too since standard members resolve at call time (2a427674d): a
+/// Proxy's traps run and a refused preventExtensions throws, a built-in or fresh function
+/// is not sealed, and a sealed one is. That path sealed only plain objects and called any
+/// other value sealed.
+#[test]
+fn seal_and_is_sealed_as_value_calls() {
+    let source = "function attempt(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }\n\
+         var refused = new Proxy({}, { preventExtensions() { return false; } });\n\
+         var log = [];\n\
+         var traced = new Proxy({ a: 1 }, {\n\
+           isExtensible(t) { log.push('isExtensible'); return Reflect.isExtensible(t); },\n\
+           ownKeys(t) { log.push('ownKeys'); return Reflect.ownKeys(t); } });\n\
+         var seal = Object.seal, isSealed = Object.isSealed;\n\
+         function f() {}\n\
+         [Object.isSealed(Boolean), isSealed(Boolean), attempt(() => Object.seal(refused)), attempt(() => seal(refused)),\n\
+          Object.isSealed(traced), Object.seal(traced) === traced, Object.isSealed(traced), log.join('/'),\n\
+          Object.isSealed(f), Object.seal(f) === f, isSealed(f), Object.isSealed(1), seal(2)].join(',');";
+    assert_eq!(
+        eval(source),
+        "false,false,TypeError,TypeError,false,true,true,isExtensible/ownKeys/isExtensible/ownKeys,false,true,true,true,2"
+    );
+}
+
 /// A promise a Promise subclass built: for-in and `in` reach that class's prototype (bd-9vouw.137).
 #[test]
 fn exotic_promise_subclass_instances() {

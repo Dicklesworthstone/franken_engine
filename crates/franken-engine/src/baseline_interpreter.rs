@@ -86116,6 +86116,55 @@ impl InterpreterCore {
         Ok(())
     }
 
+    /// Object.seal(O), ES2020 19.1.2.20 / 7.3.14 SetIntegrityLevel "sealed":
+    /// a Proxy through its traps, an object, or a function's (promise's,
+    /// generator's, iterator's) backing object; any other value is returned
+    /// as is. Both the hostcall and a value call run this: since standard
+    /// members resolve at call time (2a427674d), `Object.seal(x)` is a value
+    /// call too.
+    fn object_seal_value(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: Value,
+    ) -> Result<Value, InterpreterError> {
+        if let Some(proxy) = self.integrity_proxy_id(&value)? {
+            if !self.proxy_set_integrity_level(module, proxy, false)? {
+                return Err(InterpreterError::TypeError {
+                    expected: "successful preventExtensions".to_string(),
+                    got: "falsy Proxy trap result".to_string(),
+                });
+            }
+        } else if let Value::Object(object_id) = value {
+            self.seal_object(object_id)?;
+        } else if Self::stores_own_properties_on_backing(&value)
+            && let Some(backing) = self.own_property_holder(module, &value, true)?
+        {
+            self.seal_object(backing)?;
+        }
+        Ok(value)
+    }
+
+    /// Object.isSealed(O), ES2020 19.1.2.15 / 7.3.15 TestIntegrityLevel: a
+    /// Proxy through its traps, an object, or a function's (promise's,
+    /// generator's, iterator's) backing object; any other value is sealed.
+    /// Shared by the hostcall and a value call, as object_seal_value is.
+    fn object_is_sealed_value(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: &Value,
+    ) -> Result<bool, InterpreterError> {
+        if let Some(proxy) = self.integrity_proxy_id(value)? {
+            return self.proxy_test_integrity_level(module, proxy, false);
+        }
+        match value {
+            Value::Object(object_id) => self.object_has_integrity_level(*object_id, false),
+            holder if Self::stores_own_properties_on_backing(holder) => {
+                self.backing_has_integrity_level(module, holder, false)
+            }
+            _ => Ok(true),
+        }
+    }
+
     /// TestIntegrityLevel of a function, promise, generator or iterator
     /// value: its backing object's; false before one exists (it is
     /// extensible) (bd-9vouw.149).
@@ -99859,21 +99908,7 @@ impl InterpreterCore {
                 // Object.seal(O), ES2020 19.1.2.20 / 7.3.14 SetIntegrityLevel
                 // "sealed": non-extensible, every own property non-configurable.
                 let obj_val = self.arg_or_undefined(args, 1)?;
-                if let Some(proxy) = self.integrity_proxy_id(&obj_val)? {
-                    if !self.proxy_set_integrity_level(module, proxy, false)? {
-                        return Err(InterpreterError::TypeError {
-                            expected: "successful preventExtensions".to_string(),
-                            got: "falsy Proxy trap result".to_string(),
-                        });
-                    }
-                } else if let Value::Object(obj_id) = obj_val {
-                    self.seal_object(obj_id)?;
-                } else if Self::stores_own_properties_on_backing(&obj_val)
-                    && let Some(backing) = self.own_property_holder(module, &obj_val, true)?
-                {
-                    self.seal_object(backing)?;
-                }
-                Ok(obj_val)
+                self.object_seal_value(module, obj_val)
             }
 
             // Removed duplicate StringPrototypeSubstr - implementation at line ~11150 is identical
@@ -100067,20 +100102,7 @@ impl InterpreterCore {
             "builtin:ObjectIsSealed" => {
                 // Object.isSealed(O), ES2020 19.1.2.15 / 7.3.15 TestIntegrityLevel.
                 let obj_val = self.arg_or_undefined(args, 1)?;
-                if let Some(proxy) = self.integrity_proxy_id(&obj_val)? {
-                    return Ok(Value::Bool(
-                        self.proxy_test_integrity_level(module, proxy, false)?,
-                    ));
-                }
-                match obj_val {
-                    Value::Object(obj_id) => {
-                        Ok(Value::Bool(self.object_has_integrity_level(obj_id, false)?))
-                    }
-                    ref holder if Self::stores_own_properties_on_backing(holder) => Ok(
-                        Value::Bool(self.backing_has_integrity_level(module, holder, false)?),
-                    ),
-                    _ => Ok(Value::Bool(true)),
-                }
+                Ok(Value::Bool(self.object_is_sealed_value(module, &obj_val)?))
             }
 
             "builtin:StringPrototypeBig" => {
@@ -112433,19 +112455,11 @@ impl InterpreterCore {
                 ObjectIntegrityOperation::PreventExtensions,
                 false,
             )?,
-            "builtin:ObjectSeal" => {
+            "builtin:ObjectSeal" => self.object_seal_value(Some(module), arg(self, 0)?)?,
+            "builtin:ObjectIsSealed" => {
                 let object = arg(self, 0)?;
-                if let Value::Object(object_id) = object {
-                    self.seal_object(object_id)?;
-                }
-                object
+                Value::Bool(self.object_is_sealed_value(Some(module), &object)?)
             }
-            "builtin:ObjectIsSealed" => match arg(self, 0)? {
-                Value::Object(object_id) => {
-                    Value::Bool(self.object_has_integrity_level(object_id, false)?)
-                }
-                _ => Value::Bool(true),
-            },
             _ => return Ok(None),
         }))
     }

@@ -7205,6 +7205,89 @@ impl fmt::Display for Value {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ObjectId(pub u32);
 
+/// The GC remembered set (bd-28ezw) as one bit per heap index
+/// (bd-9vouw.490): every reference write inserts its object, and the
+/// `BTreeSet` it was searched a tree on each write, about 360 instructions,
+/// 7% of an array-literal loop. Same members, same ascending order.
+#[derive(Debug, Clone, Default)]
+struct RememberedSet {
+    words: Vec<u64>,
+    len: usize,
+}
+
+impl RememberedSet {
+    fn slot(object_id: &ObjectId) -> (usize, u64) {
+        ((object_id.0 / 64) as usize, 1u64 << (object_id.0 % 64))
+    }
+
+    /// Add `object_id`; true when it was not a member.
+    pub fn insert(&mut self, object_id: ObjectId) -> bool {
+        let (word, mask) = Self::slot(&object_id);
+        if word >= self.words.len() {
+            self.words.resize(word + 1, 0);
+        }
+        let fresh = self.words[word] & mask == 0;
+        if fresh {
+            self.words[word] |= mask;
+            self.len += 1;
+        }
+        fresh
+    }
+
+    pub fn contains(&self, object_id: &ObjectId) -> bool {
+        let (word, mask) = Self::slot(object_id);
+        self.words.get(word).is_some_and(|bits| bits & mask != 0)
+    }
+
+    /// Remove `object_id`; true when it was a member.
+    pub fn remove(&mut self, object_id: &ObjectId) -> bool {
+        let (word, mask) = Self::slot(object_id);
+        let Some(bits) = self.words.get_mut(word) else {
+            return false;
+        };
+        let present = *bits & mask != 0;
+        if present {
+            *bits &= !mask;
+            self.len -= 1;
+        }
+        present
+    }
+
+    pub fn clear(&mut self) {
+        self.words.clear();
+        self.len = 0;
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// The members in ascending order.
+    pub fn iter(&self) -> impl Iterator<Item = ObjectId> + '_ {
+        self.words.iter().enumerate().flat_map(|(word, &bits)| {
+            (0..64u32)
+                .filter(move |bit| bits & (1u64 << bit) != 0)
+                .map(move |bit| ObjectId(word as u32 * 64 + bit))
+        })
+    }
+
+    pub fn retain(&mut self, mut keep: impl FnMut(&ObjectId) -> bool) {
+        let dropped = self.iter().filter(|id| !keep(id)).collect::<Vec<_>>();
+        for object_id in &dropped {
+            self.remove(object_id);
+        }
+    }
+}
+
+impl PartialEq for RememberedSet {
+    /// Set equality: trailing empty words (left by `remove`) do not count.
+    fn eq(&self, other: &Self) -> bool {
+        self.len == other.len && self.iter().eq(other.iter())
+    }
+}
+
+impl Eq for RememberedSet {}
+
 /// The visited set of one prototype-chain walk, with no heap allocation for
 /// its first [`CHAIN_GUARD_INLINE`] links (bd-9vouw.124): every [[Get]] that
 /// missed an own property, and every label read, built a `BTreeSet` node.
@@ -7932,6 +8015,8 @@ thread_local! {
     /// can compare it with the fast path on the same object.
     static FORCE_GENERIC_OWN_PROPERTY_READS: std::cell::Cell<bool> =
         const { std::cell::Cell::new(false) };
+    /// Sends every store through the generic [[Set]] (bd-9vouw.504).
+    static FORCE_GENERIC_STORES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// How many small array indices keep a shared decimal key.
@@ -10710,6 +10795,14 @@ impl ScopeChain {
             }
         }
         None
+    }
+
+    /// Whether any frame binds `name`: `resolve(name).is_some()`, scanning
+    /// from the outermost frame, where a module's CommonJS bindings live
+    /// (bd-9vouw.504: the innermost-first walk cost every PushScope of
+    /// CommonJS code about 18 key comparisons).
+    fn binds(&self, name: &str) -> bool {
+        self.frames.iter().any(|frame| frame.get(name).is_some())
     }
 
     /// Snapshot current scope chain for closure capture.
@@ -15928,7 +16021,7 @@ pub struct InterpreterCore {
     /// Exact Symbol identities, descriptions, and global registry state.
     symbol_state: SeedTrackedField<RuntimeSymbolState>,
     /// GC remembered set for tracking old->young generation references.
-    gc_remembered_set: BTreeSet<ObjectId>,
+    gc_remembered_set: RememberedSet,
     /// JIT hot path detection counters for function calls.
     jit_function_call_counts: BTreeMap<u32, u64>,
     /// JIT hot path detection counters for loop backedges.
@@ -16895,7 +16988,7 @@ impl InterpreterCore {
             proxy_trap_lookup_depth: 0,
             weakmap_storage: BTreeMap::new(),
             symbol_state: SeedTrackedField::new(RuntimeSymbolState::default()),
-            gc_remembered_set: BTreeSet::new(),
+            gc_remembered_set: RememberedSet::default(),
             jit_function_call_counts: BTreeMap::new(),
             jit_loop_iteration_counts: LoopIterationCounters::default(),
             jit_hot_threshold: 10_000, // Default threshold
@@ -35901,8 +35994,8 @@ impl InterpreterCore {
     }
 
     /// Get a copy of the remembered set for inspection and diagnostics.
-    pub fn gc_get_remembered_set(&self) -> &BTreeSet<ObjectId> {
-        &self.gc_remembered_set
+    pub fn gc_get_remembered_set(&self) -> BTreeSet<ObjectId> {
+        self.gc_remembered_set.iter().collect()
     }
 
     // ---------------------------------------------------------------------------
@@ -38876,7 +38969,7 @@ impl InterpreterCore {
             // exports (date-fns), and zod's `(0, exports.makeIssue)(...)`
             // read the caller's `exports` (bd-9vouw.180).
             if self.current_module_specifier.as_deref() != Some(context.module_specifier.as_str())
-                || self.scope_chain.resolve("module").is_some()
+                || self.scope_chain.binds("module")
             {
                 return Ok(());
             }
@@ -49719,14 +49812,20 @@ impl InterpreterCore {
         }
         let mut active_callee = callee_value;
         let mut active_callee_label = callee_label;
+        // The active callee's default prototype object, which holds its
+        // constructor metadata, field list and HomeObject (bd-9vouw.504).
+        let mut active_default_prototype = None;
         let mut forwarding_depth = 0usize;
         loop {
             if matches!(&active_callee, Value::Str(_)) {
                 break;
             }
+            let default_prototype =
+                self.default_constructor_prototype_for_value(module, &active_callee)?;
             let (_, default_derived, parent, parent_label) =
-                self.derived_constructor_metadata(module, &active_callee)?;
+                self.derived_constructor_metadata_of_prototype(default_prototype)?;
             if !default_derived {
+                active_default_prototype = Some(default_prototype);
                 break;
             }
             if forwarding_depth >= self.config.max_call_depth {
@@ -49854,8 +49953,12 @@ impl InterpreterCore {
             return Ok(());
         }
 
+        let default_prototype = match active_default_prototype {
+            Some(prototype) => prototype,
+            None => self.default_constructor_prototype_for_value(module, &active_callee)?,
+        };
         let (derived_constructor, _, super_value, super_label) =
-            self.derived_constructor_metadata(module, &active_callee)?;
+            self.derived_constructor_metadata_of_prototype(default_prototype)?;
         let function_index = self.constructor_function_index(&active_callee)?;
         let captured_env = match &active_callee {
             Value::Function(_) => None,
@@ -49919,7 +50022,7 @@ impl InterpreterCore {
         // ES2022 [[Construct]]: a base class's instance fields initialize on
         // the new object before its constructor body (and parameter
         // initializers) run; a derived class's once its super() returns.
-        let class_instance_fields = self.class_instance_field_list(module, &active_callee)?;
+        let class_instance_fields = self.class_instance_field_list(default_prototype);
         let class_instance_fields = match (&class_instance_fields, &construct_this) {
             (Some(fields), Some(Value::Object(object_id))) if !derived_constructor => {
                 self.run_class_field_initializers(
@@ -49951,7 +50054,7 @@ impl InterpreterCore {
         self.stage_arguments_object(module, function, function_index, &active_callee, args)?;
         self.run_pre_call_hook(module, &active_callee, function_index, &argument_values)?;
         let super_home_object =
-            self.constructor_super_home_object(module, &active_callee, function_index)?;
+            self.constructor_super_home_object(module, function_index, default_prototype)?;
 
         let scope_depth = self.scope_chain.depth();
         let captured_env_bytes = captured_env
@@ -54544,6 +54647,25 @@ impl InterpreterCore {
                                     ordinary_own_property_read.take()
                                 {
                                     ordinary_own_property_label = stored_label;
+                                    // In a callback scope [[Get]] observes the
+                                    // owner's shape label and the property's
+                                    // stored label into the context, and
+                                    // charges the step, before it resolves
+                                    // (proxy_aware_get_runtime_property): the
+                                    // same observation, at the same point
+                                    // (bd-9vouw.505). A data property's stored
+                                    // label is in hand (bd-9vouw.504).
+                                    if self.active_inline_callback_context_label.is_some() {
+                                        match &ordinary_own_property_label {
+                                            Some(label) => {
+                                                self.reflect_observe_own_data_property(oid, label)?
+                                            }
+                                            None => self.reflect_observe_selected_property(
+                                                oid,
+                                                &property_key,
+                                            )?,
+                                        }
+                                    }
                                     self.capture_property_resolution_found(&property_key, oid, 0);
                                     self.resolve_accessor_get(
                                         Some(module),
@@ -56497,8 +56619,13 @@ impl InterpreterCore {
                         continue;
                     }
 
+                    // The callee's default prototype object holds its
+                    // constructor metadata, its instance field list and its
+                    // HomeObject; resolve it once (bd-9vouw.504).
+                    let default_prototype =
+                        self.default_constructor_prototype_for_value(module, &callee_val)?;
                     let (is_derived, is_default_derived, _, _) =
-                        self.derived_constructor_metadata(module, &callee_val)?;
+                        self.derived_constructor_metadata_of_prototype(default_prototype)?;
                     if is_derived || is_default_derived {
                         if let Err(error) = self.enter_constructor_call(
                             module,
@@ -56562,8 +56689,9 @@ impl InterpreterCore {
                             }
 
                             // Allocate the `this` object for the constructor.
-                            let prototype =
-                                self.constructor_prototype_for_value(module, &callee_val)?;
+                            let prototype = self
+                                .constructor_prototype_other_than_default(module, &callee_val)?
+                                .unwrap_or(default_prototype);
                             let builtin_parent = self.builtin_subclass_ancestor_name(prototype)?;
                             // An ordinary object, never an Array exotic
                             // (OrdinaryCreateFromConstructor, bd-9vouw.152).
@@ -56588,9 +56716,8 @@ impl InterpreterCore {
                             // before its constructor body and parameter
                             // initializers run (derived classes do this in
                             // `enter_constructor_call`, once super() returns).
-                            let fields_initialized = self
-                                .class_instance_field_list(module, &callee_val)
-                                .and_then(|fields| match fields {
+                            let fields_initialized =
+                                match self.class_instance_field_list(default_prototype) {
                                     Some(fields) => self.run_class_field_initializers(
                                         module,
                                         this_val.clone(),
@@ -56598,7 +56725,7 @@ impl InterpreterCore {
                                         &fields,
                                     ),
                                     None => Ok(()),
-                                });
+                                };
                             if let Err(error) = fields_initialized {
                                 match self.route_isolated_explicit_throw(module, error)? {
                                     None => continue,
@@ -56627,8 +56754,11 @@ impl InterpreterCore {
                             self.stage_arguments_object(module, func, func_idx, &callee_val, args)?;
 
                             self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
-                            let super_home_object =
-                                self.constructor_super_home_object(module, &callee_val, func_idx)?;
+                            let super_home_object = self.constructor_super_home_object(
+                                module,
+                                func_idx,
+                                default_prototype,
+                            )?;
 
                             // Push constructor frame with `construct_this`.
                             let scope_depth = self.scope_chain.depth();
@@ -63964,13 +64094,6 @@ impl InterpreterCore {
         if key.as_str() == Some("__proto__") {
             return None;
         }
-        // In a callback scope [[Get]] observes the owner's shape label and
-        // the property's stored label into the context
-        // (reflect_observe_selected_property); only the generic path does
-        // (bd-9vouw.505).
-        if self.active_inline_callback_context_label.is_some() {
-            return None;
-        }
         #[cfg(test)]
         if FORCE_GENERIC_OWN_PROPERTY_READS.with(std::cell::Cell::get) {
             return None;
@@ -66276,6 +66399,98 @@ impl InterpreterCore {
         Ok(blocking.map(|index| i64::from(index) + 1))
     }
 
+    /// When `[[Set]]` of `key` on `object_id` (its own receiver) takes the
+    /// ordinary path with nothing to observe: the number of objects
+    /// `reflect_observe_selected_property` visits, else `None` (bd-9vouw.504).
+    ///
+    /// It holds for a plain extensible object (no array, wrapper, binary
+    /// storage, Proxy, import.meta or built-in prototype) whose chain is
+    /// ordinary objects without mutation or binary-storage labels, when the
+    /// first object holding `key` has it as a writable data property with a
+    /// Public stored label and no object before it answers through a
+    /// prototype getter or a read-only virtual property. Any active context
+    /// must be Public, as must a pending callback result. The ordinary path's
+    /// observations then add Public to Public and its admissions join Public,
+    /// so what remains of them is one budget check and one charge per object
+    /// visited plus three admissions.
+    fn plain_store_observation_steps(
+        &self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> Option<u32> {
+        #[cfg(test)]
+        if FORCE_GENERIC_STORES.with(std::cell::Cell::get) {
+            return None;
+        }
+        let name = key.as_str()?;
+        if name == "__proto__"
+            || self
+                .active_inline_callback_context_label
+                .as_ref()
+                .is_some_and(|context| !matches!(context, Label::Public))
+            || self
+                .pending_hostcall_result_label
+                .as_ref()
+                .is_some_and(|label| !matches!(label, Label::Public))
+        {
+            return None;
+        }
+        let ordinary = |object: &HeapObject, id: ObjectId| {
+            !(object.is_import_meta
+                || object.is_array
+                || object.primitive_value.is_some()
+                || object.array_buffer.is_some()
+                || object.typed_array.is_some()
+                || object.data_view.is_some()
+                || object.brand() == Some(PROXY_TYPE_TAG)
+                || self.object_mutation_labels.contains_key(&id))
+        };
+        let receiver = self.heap.get(object_id.0 as usize)?;
+        if !ordinary(receiver, object_id)
+            || receiver.is_frozen
+            || self
+                .builtin_prototypes
+                .values()
+                .any(|prototype| *prototype == object_id)
+        {
+            return None;
+        }
+        let mut current = object_id;
+        let mut steps = 0u32;
+        loop {
+            steps += 1;
+            if steps > 32 {
+                return None;
+            }
+            let object = self.heap.get(current.0 as usize)?;
+            if !ordinary(object, current) {
+                return None;
+            }
+            if let Some(found) = object.own_runtime_property_value(key) {
+                let writable_data = !matches!(found, Value::Accessor { .. })
+                    && object.own_property_attributes(key).writable;
+                let public = matches!(
+                    self.own_stored_runtime_property_label(current, key),
+                    Label::Public
+                );
+                // An inherited key is defined on the receiver, which must
+                // take new properties.
+                let definable = current == object_id || receiver.extensible();
+                return (writable_data && public && definable).then_some(steps);
+            }
+            if !self.virtual_property_is_writable(current, key)
+                || self.prototype_getter_at(current, key).is_some()
+            {
+                return None;
+            }
+            match self.observable_prototype_link(object, current) {
+                Some(next) => current = next,
+                // The key is new: [[Set]] defines it on the receiver.
+                None => return receiver.extensible().then_some(steps),
+            }
+        }
+    }
+
     fn proxy_aware_set_runtime_property(
         &mut self,
         module: Option<&Ir3Module>,
@@ -66285,6 +66500,27 @@ impl InterpreterCore {
         receiver: Value,
         depth: u32,
     ) -> Result<bool, InterpreterError> {
+        // bd-9vouw.504: the ordinary store with nothing to observe. Its
+        // effects other than the write: without a context, none; in a Public
+        // one, a budget check of the unchanged state (first made by
+        // observe_scoped_callback_result) and one charge per object
+        // reflect_observe_selected_property visits plus one per admission
+        // (the object, the receiver and the resolved receiver), in that order.
+        // A store into the receiver's own or a new key of a non-array object
+        // ends in set_object_runtime_property.
+        if depth == 0
+            && matches!(&receiver, Value::Object(id) if *id == object_id)
+            && let Some(steps) = self.plain_store_observation_steps(object_id, key)
+        {
+            if self.active_inline_callback_context_label.is_some() {
+                self.check_temporary_memory_budget(0)?;
+                for _ in 0..steps + 3 {
+                    self.json_charge_work()?;
+                }
+            }
+            self.set_object_runtime_property(object_id, key.clone(), value)?;
+            return Ok(true);
+        }
         if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
             return Err(InterpreterError::TypeError {
                 expected: "bounded Proxy set recursion".to_string(),
@@ -85857,6 +86093,55 @@ impl InterpreterCore {
         Ok(())
     }
 
+    /// Object.seal(O), ES2020 19.1.2.20 / 7.3.14 SetIntegrityLevel "sealed":
+    /// a Proxy through its traps, an object, or a function's (promise's,
+    /// generator's, iterator's) backing object; any other value is returned
+    /// as is. Both the hostcall and a value call run this: since standard
+    /// members resolve at call time (2a427674d), `Object.seal(x)` is a value
+    /// call too.
+    fn object_seal_value(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: Value,
+    ) -> Result<Value, InterpreterError> {
+        if let Some(proxy) = self.integrity_proxy_id(&value)? {
+            if !self.proxy_set_integrity_level(module, proxy, false)? {
+                return Err(InterpreterError::TypeError {
+                    expected: "successful preventExtensions".to_string(),
+                    got: "falsy Proxy trap result".to_string(),
+                });
+            }
+        } else if let Value::Object(object_id) = value {
+            self.seal_object(object_id)?;
+        } else if Self::stores_own_properties_on_backing(&value)
+            && let Some(backing) = self.own_property_holder(module, &value, true)?
+        {
+            self.seal_object(backing)?;
+        }
+        Ok(value)
+    }
+
+    /// Object.isSealed(O), ES2020 19.1.2.15 / 7.3.15 TestIntegrityLevel: a
+    /// Proxy through its traps, an object, or a function's (promise's,
+    /// generator's, iterator's) backing object; any other value is sealed.
+    /// Shared by the hostcall and a value call, as object_seal_value is.
+    fn object_is_sealed_value(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: &Value,
+    ) -> Result<bool, InterpreterError> {
+        if let Some(proxy) = self.integrity_proxy_id(value)? {
+            return self.proxy_test_integrity_level(module, proxy, false);
+        }
+        match value {
+            Value::Object(object_id) => self.object_has_integrity_level(*object_id, false),
+            holder if Self::stores_own_properties_on_backing(holder) => {
+                self.backing_has_integrity_level(module, holder, false)
+            }
+            _ => Ok(true),
+        }
+    }
+
     /// TestIntegrityLevel of a function, promise, generator or iterator
     /// value: its backing object's; false before one exists (it is
     /// extensible) (bd-9vouw.149).
@@ -93189,9 +93474,19 @@ impl InterpreterCore {
                 // exactly as that store would.
                 let prototype = self.arg_or_undefined(args, 0)?;
                 let parent = self.arg_or_undefined(args, 1)?;
+                // A function is an object too: `class extends Function` links
+                // to the callable %Function.prototype% (bd-9vouw.346) through
+                // its property storage, as Object.setPrototypeOf(o, F) does
+                // (bd-9vouw.98).
+                let callable_link = if parent.is_callable() {
+                    self.prototype_link_for_value(module, &parent)?
+                } else {
+                    None
+                };
                 let link = match parent {
                     Value::Object(parent_id) => Some(Some(parent_id)),
                     Value::Null => Some(None),
+                    _ if callable_link.is_some() => callable_link,
                     // Step 6.g.ii: a superclass whose `prototype` is neither an
                     // object nor null is a TypeError (bd-9vouw.205).
                     _ if matches!(prototype, Value::Object(_)) => {
@@ -99600,21 +99895,7 @@ impl InterpreterCore {
                 // Object.seal(O), ES2020 19.1.2.20 / 7.3.14 SetIntegrityLevel
                 // "sealed": non-extensible, every own property non-configurable.
                 let obj_val = self.arg_or_undefined(args, 1)?;
-                if let Some(proxy) = self.integrity_proxy_id(&obj_val)? {
-                    if !self.proxy_set_integrity_level(module, proxy, false)? {
-                        return Err(InterpreterError::TypeError {
-                            expected: "successful preventExtensions".to_string(),
-                            got: "falsy Proxy trap result".to_string(),
-                        });
-                    }
-                } else if let Value::Object(obj_id) = obj_val {
-                    self.seal_object(obj_id)?;
-                } else if Self::stores_own_properties_on_backing(&obj_val)
-                    && let Some(backing) = self.own_property_holder(module, &obj_val, true)?
-                {
-                    self.seal_object(backing)?;
-                }
-                Ok(obj_val)
+                self.object_seal_value(module, obj_val)
             }
 
             // Removed duplicate StringPrototypeSubstr - implementation at line ~11150 is identical
@@ -99808,20 +100089,7 @@ impl InterpreterCore {
             "builtin:ObjectIsSealed" => {
                 // Object.isSealed(O), ES2020 19.1.2.15 / 7.3.15 TestIntegrityLevel.
                 let obj_val = self.arg_or_undefined(args, 1)?;
-                if let Some(proxy) = self.integrity_proxy_id(&obj_val)? {
-                    return Ok(Value::Bool(
-                        self.proxy_test_integrity_level(module, proxy, false)?,
-                    ));
-                }
-                match obj_val {
-                    Value::Object(obj_id) => {
-                        Ok(Value::Bool(self.object_has_integrity_level(obj_id, false)?))
-                    }
-                    ref holder if Self::stores_own_properties_on_backing(holder) => Ok(
-                        Value::Bool(self.backing_has_integrity_level(module, holder, false)?),
-                    ),
-                    _ => Ok(Value::Bool(true)),
-                }
+                Ok(Value::Bool(self.object_is_sealed_value(module, &obj_val)?))
             }
 
             "builtin:StringPrototypeBig" => {
@@ -105795,21 +106063,38 @@ impl InterpreterCore {
     /// cells stay in the cold ledger. What remains are the cells of frames
     /// the callee pushed, which nothing else reaches.
     fn released_frame_cell_payload_bytes(&self, callee_frames: &[ScopeFrame]) -> u64 {
-        let restored_maps = self
-            .scope_chain
-            .frames
-            .iter()
-            .map(|frame| Rc::as_ptr(&frame.bindings))
-            .collect::<Vec<_>>();
         let cold = &self.closures.cold_cells;
+        // The cells counted so far. Every return runs this and most release
+        // a few cells, so the first ones are kept on the stack and a set
+        // takes the rest: no allocation for a small frame (bd-9vouw.504).
+        let mut recent = [std::ptr::null::<RefCell<ScopeBindingState>>(); 8];
+        let mut recent_len = 0;
         let mut seen = BTreeSet::new();
         let mut total = 0u64;
         for frame in callee_frames {
-            if restored_maps.contains(&Rc::as_ptr(&frame.bindings)) {
+            if self
+                .scope_chain
+                .frames
+                .iter()
+                .any(|restored| Rc::ptr_eq(&restored.bindings, &frame.bindings))
+            {
                 continue;
             }
             for binding in frame.bindings.values() {
-                if !cold.contains(&binding.state) && seen.insert(Rc::as_ptr(&binding.state)) {
+                if cold.contains(&binding.state) {
+                    continue;
+                }
+                let cell = Rc::as_ptr(&binding.state);
+                let first_sight = if recent[..recent_len].contains(&cell) || seen.contains(&cell) {
+                    false
+                } else if recent_len < recent.len() {
+                    recent[recent_len] = cell;
+                    recent_len += 1;
+                    true
+                } else {
+                    seen.insert(cell)
+                };
+                if first_sight {
                     total = total
                         .saturating_add(Self::estimate_binding_cell_payload_bytes(&binding.state));
                 }
@@ -108565,8 +108850,22 @@ impl InterpreterCore {
         module: &Ir3Module,
         value: &Value,
     ) -> Result<ObjectId, InterpreterError> {
+        match self.constructor_prototype_other_than_default(module, value)? {
+            Some(prototype) => Ok(prototype),
+            None => self.default_constructor_prototype_for_value(module, value),
+        }
+    }
+
+    /// GetPrototypeFromConstructor's answer when it is not `value`'s default
+    /// prototype object: a reassigned `prototype` property, or a callable
+    /// proxy's `prototype`. `None` means the default answers.
+    fn constructor_prototype_other_than_default(
+        &mut self,
+        module: &Ir3Module,
+        value: &Value,
+    ) -> Result<Option<ObjectId>, InterpreterError> {
         if let Some((value, _)) = self.constructor_prototype_override(module, value)? {
-            return self.constructed_prototype_link(module, value);
+            return self.constructed_prototype_link(module, value).map(Some);
         }
         // A callable proxy newTarget (bd-9vouw.132): GetPrototypeFromConstructor
         // reads its `prototype` through [[Get]], so its get trap or its target
@@ -108574,9 +108873,9 @@ impl InterpreterCore {
         if Self::is_callable_proxy(value) {
             let key = RuntimePropertyKey::String(JsString::from("prototype"));
             let prototype = self.get_v(module, value, &key)?;
-            return self.constructed_prototype_link(module, prototype);
+            return self.constructed_prototype_link(module, prototype).map(Some);
         }
-        self.default_constructor_prototype_for_value(module, value)
+        Ok(None)
     }
 
     /// GetPrototypeFromConstructor step 3-4 (ES2020 9.1.14) for a
@@ -108636,18 +108935,18 @@ impl InterpreterCore {
     /// `super_value`, the parent constructor: `super.m()` called the
     /// parent's static `m`, and a base class's `super.x` threw
     /// (bd-9vouw.363). `super(...)` still takes the parent constructor from
-    /// `super_value`.
+    /// `super_value`. `default_prototype` is the constructor's
+    /// (default_constructor_prototype_for_value).
     fn constructor_super_home_object(
-        &mut self,
+        &self,
         module: &Ir3Module,
-        constructor: &Value,
         function_index: u32,
+        default_prototype: ObjectId,
     ) -> Result<Option<ObjectId>, InterpreterError> {
         if !self.function_uses_lexical_super(module, function_index)? {
             return Ok(None);
         }
-        let prototype = self.default_constructor_prototype_for_value(module, constructor)?;
-        Ok(Some(prototype))
+        Ok(Some(default_prototype))
     }
 
     fn derived_constructor_metadata(
@@ -108656,6 +108955,18 @@ impl InterpreterCore {
         constructor: &Value,
     ) -> Result<(bool, bool, Value, Label), InterpreterError> {
         let prototype = self.default_constructor_prototype_for_value(module, constructor)?;
+        self.derived_constructor_metadata_of_prototype(prototype)
+    }
+
+    /// derived_constructor_metadata for a constructor whose default
+    /// prototype object is already resolved. The [[Construct]] paths
+    /// resolve it once and read the metadata, the instance field list and
+    /// the HomeObject from it (bd-9vouw.504): an entry in
+    /// `function_prototypes` is only ever inserted, never replaced.
+    fn derived_constructor_metadata_of_prototype(
+        &self,
+        prototype: ObjectId,
+    ) -> Result<(bool, bool, Value, Label), InterpreterError> {
         let object = self
             .heap
             .get(prototype.0 as usize)
@@ -108677,20 +108988,12 @@ impl InterpreterCore {
     }
 
     /// The instance field list of a class constructor (recorded on its
-    /// prototype object by `builtin:ClassDefineField`), if it has fields.
-    fn class_instance_field_list(
-        &mut self,
-        module: &Ir3Module,
-        constructor: &Value,
-    ) -> Result<Option<Value>, InterpreterError> {
-        if !matches!(constructor, Value::Closure(_) | Value::Function(_)) {
-            return Ok(None);
-        }
-        let prototype = self.default_constructor_prototype_for_value(module, constructor)?;
-        Ok(self
-            .heap
-            .get(prototype.0 as usize)
-            .and_then(|object| object.class_fields.as_deref().cloned()))
+    /// default prototype object by `builtin:ClassDefineField`), if it has
+    /// fields.
+    fn class_instance_field_list(&self, default_prototype: ObjectId) -> Option<Value> {
+        self.heap
+            .get(default_prototype.0 as usize)
+            .and_then(|object| object.class_fields.as_deref().cloned())
     }
 
     /// Replace an object's engine-private class field list, charging the
@@ -112156,19 +112459,11 @@ impl InterpreterCore {
                 ObjectIntegrityOperation::PreventExtensions,
                 false,
             )?,
-            "builtin:ObjectSeal" => {
+            "builtin:ObjectSeal" => self.object_seal_value(Some(module), arg(self, 0)?)?,
+            "builtin:ObjectIsSealed" => {
                 let object = arg(self, 0)?;
-                if let Value::Object(object_id) = object {
-                    self.seal_object(object_id)?;
-                }
-                object
+                Value::Bool(self.object_is_sealed_value(Some(module), &object)?)
             }
-            "builtin:ObjectIsSealed" => match arg(self, 0)? {
-                Value::Object(object_id) => {
-                    Value::Bool(self.object_has_integrity_level(object_id, false)?)
-                }
-                _ => Value::Bool(true),
-            },
             _ => return Ok(None),
         }))
     }
@@ -141729,6 +142024,30 @@ mod async_runtime_tests_current {
         }
     }
 
+    /// bd-9vouw.504: `ScopeChain::binds` answers `resolve(name).is_some()`
+    /// for a name bound in the outermost, a middle or the innermost frame,
+    /// in two frames, or in none.
+    #[test]
+    fn scope_chain_binds_matches_resolve_bd_9vouw_504() {
+        let mut chain = ScopeChain::new();
+        for _ in 0..4 {
+            chain.push(64).expect("scope depth should fit");
+        }
+        let declare = |chain: &mut ScopeChain, frame: usize, name: &str| {
+            chain.frames[frame].declare(name.to_string(), BindingKind::Var);
+        };
+        declare(&mut chain, 1, "module");
+        declare(&mut chain, 2, "middle");
+        declare(&mut chain, 4, "inner");
+        declare(&mut chain, 0, "twice");
+        declare(&mut chain, 3, "twice");
+        for name in ["module", "middle", "inner", "twice", "absent"] {
+            assert_eq!(chain.binds(name), chain.resolve(name).is_some(), "{name}");
+        }
+        assert!(chain.binds("module"));
+        assert!(!chain.binds("absent"));
+    }
+
     /// bd-9vouw.504: `static_move` copies a value and label that own no
     /// dynamic bytes into a destination holding none, label included and with
     /// the memory estimate unchanged; anything else is left to the accounted
@@ -141804,6 +142123,53 @@ mod async_runtime_tests_current {
                 label
             );
         }
+    }
+
+    /// bd-9vouw.490: the bitset remembered set answers as the BTreeSet it
+    /// replaces through a deterministic mix of inserts, removes, retains and
+    /// clears: the same insert/remove results, members, ascending order and
+    /// length, and set equality that ignores emptied words.
+    #[test]
+    fn remembered_set_matches_a_btree_set_bd_9vouw_490() {
+        let mut bits = RememberedSet::default();
+        let mut tree = BTreeSet::<ObjectId>::new();
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        for step in 0..4_000u32 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            let id = ObjectId((state % 700) as u32);
+            match state % 11 {
+                0..=5 => assert_eq!(bits.insert(id), tree.insert(id), "insert {id:?}"),
+                6..=8 => assert_eq!(bits.remove(&id), tree.remove(&id), "remove {id:?}"),
+                9 => {
+                    let cut = (state % 700) as u32;
+                    bits.retain(|object| object.0 < cut);
+                    tree.retain(|object| object.0 < cut);
+                }
+                _ if step % 500 == 0 => {
+                    bits.clear();
+                    tree.clear();
+                }
+                _ => {}
+            }
+            assert_eq!(bits.contains(&id), tree.contains(&id));
+            assert_eq!(bits.len(), tree.len());
+        }
+        assert_eq!(
+            bits.iter().collect::<Vec<_>>(),
+            tree.iter().copied().collect::<Vec<_>>()
+        );
+
+        let mut emptied = bits.clone();
+        let extra = ObjectId(10_000);
+        emptied.insert(extra);
+        assert_ne!(emptied, bits);
+        emptied.remove(&extra);
+        assert_eq!(
+            emptied, bits,
+            "an emptied trailing word does not change the set"
+        );
     }
 
     /// bd-9vouw.504: setting a Public label on a property without a stored
@@ -141988,9 +142354,10 @@ mod async_runtime_tests_current {
     /// context), [[Get]] observes the owner's shape label and the property's
     /// stored label into the context (da779790e). The own-property fast path
     /// predates that and skipped it: reading a public key of an object whose
-    /// shape a Secret store labelled left the context Public. The read now
-    /// takes the generic path whenever a context is active, for an object
-    /// with or without a prototype.
+    /// shape a Secret store labelled left the context Public. The fast read
+    /// now makes the same observation, so it matches the generic path (forced
+    /// by the test switch) in value, labels, context, instruction count and
+    /// trace, for an object with or without a prototype.
     #[test]
     fn own_property_read_in_a_callback_scope_observes_the_shape_label_bd_9vouw_505() {
         let module = test_module_with_functions(
@@ -142004,7 +142371,7 @@ mod async_runtime_tests_current {
             ],
             vec![],
         );
-        for with_prototype in [false, true] {
+        let run = |force_generic: bool, with_prototype: bool| {
             let mut core = test_interpreter();
             let object = core
                 .alloc_object_with_properties(&[("data", Value::Int(7))])
@@ -142023,14 +142390,258 @@ mod async_runtime_tests_current {
             });
             core.active_inline_callback_context_label = Some(Label::Public);
             let data = RuntimePropertyKey::String(JsString::from("data"));
-            assert_eq!(core.ordinary_own_property_fast_read(object, &data), None);
-            assert_eq!(core.run_loop(&module), Err(InterpreterError::Halted));
-            assert_eq!(core.read_reg(2).unwrap(), Value::Int(7));
+            assert!(
+                core.ordinary_own_property_fast_read(object, &data)
+                    .is_some(),
+                "the fast read serves the object in a callback scope"
+            );
+            FORCE_GENERIC_OWN_PROPERTY_READS.with(|force| force.set(force_generic));
+            let halted = core.run_loop(&module);
+            FORCE_GENERIC_OWN_PROPERTY_READS.with(|force| force.set(false));
+            assert_eq!(halted, Err(InterpreterError::Halted));
+            (
+                core.read_reg(2).unwrap(),
+                core.get_register_label(2).unwrap().clone(),
+                core.active_inline_callback_context_label.clone(),
+                core.instructions_executed,
+                core.nondeterminism_trace_ref().clone(),
+            )
+        };
+        for with_prototype in [false, true] {
+            let fast = run(false, with_prototype);
+            let generic = run(true, with_prototype);
+            assert_eq!(fast.0, Value::Int(7));
             assert_eq!(
-                core.active_inline_callback_context_label,
+                fast.2,
                 Some(Label::Secret),
                 "the read observes the Secret shape label (prototype: {with_prototype})"
             );
+            assert_eq!(
+                fast, generic,
+                "fast and generic reads in a callback scope (prototype: {with_prototype})"
+            );
+        }
+    }
+
+    /// bd-9vouw.504: a store the plain fast path takes ends exactly as the
+    /// generic [[Set]] (forced with the test switch): the same outcome,
+    /// receiver and prototype values and stored labels, mutation labels,
+    /// instructions charged, memory estimate, context and pending labels, and
+    /// witness. The stores it must leave to the generic path (inherited
+    /// read-only or accessor, labelled shape or inherited label, frozen,
+    /// non-extensible, array, `__proto__`) are refused and end the same too.
+    /// Each case runs through SetPropertySloppy and SetProperty, entered with
+    /// no context and with a Public one, and as a direct [[Set]] without a
+    /// context.
+    #[test]
+    fn plain_store_fast_path_matches_the_generic_set_bd_9vouw_504() {
+        let cases = [
+            ("new key", "fresh", true),
+            ("own key", "own", true),
+            ("new key on an instance", "fresh", true),
+            ("inherited writable", "inherited", true),
+            ("inherited read-only", "inherited", false),
+            ("inherited accessor", "inherited", false),
+            ("labelled shape", "fresh", false),
+            ("inherited Secret label", "inherited", false),
+            ("frozen", "own", false),
+            ("non-extensible, new key", "fresh", false),
+            ("non-extensible, inherited key", "inherited", false),
+            ("array", "fresh", false),
+            ("__proto__", "__proto__", false),
+        ];
+        let setup = |case: &str| {
+            let mut core = test_interpreter();
+            let (receiver, prototype) = if case == "array" {
+                let array = core
+                    .alloc_array_from_values(&[Value::Int(1)])
+                    .expect("array should allocate");
+                (array, None)
+            } else {
+                let receiver = core
+                    .alloc_object_with_properties(&[("own", Value::Int(1))])
+                    .expect("receiver should allocate");
+                let prototype = core
+                    .alloc_object_with_properties(&[
+                        ("other", Value::Int(2)),
+                        ("inherited", Value::Int(3)),
+                    ])
+                    .expect("prototype should allocate");
+                if case != "new key" && case != "own key" && case != "labelled shape" {
+                    core.mutate_heap(|heap| heap[receiver.0 as usize].prototype = Some(prototype));
+                }
+                (receiver, Some(prototype))
+            };
+            let inherited = RuntimePropertyKey::String(JsString::from("inherited"));
+            match case {
+                "inherited read-only" => core
+                    .set_own_property_attributes(
+                        prototype.unwrap(),
+                        &inherited,
+                        PropertyAttributes {
+                            writable: false,
+                            enumerable: true,
+                            configurable: true,
+                        },
+                    )
+                    .expect("attributes should fit"),
+                "inherited accessor" => core
+                    .set_object_property(
+                        prototype.unwrap(),
+                        "inherited".to_string(),
+                        Value::Accessor {
+                            get: None,
+                            set: None,
+                        },
+                    )
+                    .expect("accessor should fit"),
+                "labelled shape" => core
+                    .join_object_mutation_label(receiver, &Label::Secret)
+                    .expect("shape label should fit"),
+                "inherited Secret label" => core
+                    .set_own_property_label(prototype.unwrap(), "inherited", &Label::Secret)
+                    .expect("label should fit"),
+                "frozen" => core.mutate_heap(|heap| heap[receiver.0 as usize].is_frozen = true),
+                "non-extensible, new key" | "non-extensible, inherited key" => {
+                    core.mutate_heap(|heap| heap[receiver.0 as usize].is_non_extensible = true)
+                }
+                _ => {}
+            }
+            (core, receiver, prototype)
+        };
+        let snapshot = |core: &InterpreterCore,
+                        receiver: ObjectId,
+                        prototype: Option<ObjectId>,
+                        key: &RuntimePropertyKey| {
+            let read = |object: ObjectId| {
+                core.heap
+                    .get(object.0 as usize)
+                    .and_then(|object| object.own_runtime_property_value(key))
+            };
+            format!(
+                "{:?} {:?} {:?} {:?} {:?} {} {} {:?} {:?} {:?}",
+                read(receiver),
+                prototype.map(read),
+                core.own_stored_runtime_property_label(receiver, key),
+                prototype.map(|prototype| core.own_stored_runtime_property_label(prototype, key)),
+                core.object_mutation_labels,
+                core.instructions_executed,
+                core.estimated_memory_bytes,
+                core.active_inline_callback_context_label,
+                core.pending_hostcall_result_label,
+                core.nondeterminism_trace_ref().deterministic_witness,
+            )
+        };
+        for (case, name, fast) in cases {
+            let key = RuntimePropertyKey::String(JsString::from(name));
+            for strict in [false, true] {
+                for context in [None, Some(Label::Public)] {
+                    let module = test_module_with_functions(
+                        vec![
+                            if strict {
+                                Ir3Instruction::SetProperty {
+                                    obj: 0,
+                                    key: 1,
+                                    val: 2,
+                                }
+                            } else {
+                                Ir3Instruction::SetPropertySloppy {
+                                    obj: 0,
+                                    key: 1,
+                                    val: 2,
+                                }
+                            },
+                            Ir3Instruction::Halt,
+                        ],
+                        vec![],
+                    );
+                    let run = |force_generic: bool| {
+                        let (mut core, receiver, prototype) = setup(case);
+                        core.mutate_registers(|registers| {
+                            registers[0] = Value::Object(receiver);
+                            registers[1] = Value::str(name);
+                            registers[2] = Value::Int(9);
+                        });
+                        core.active_inline_callback_context_label = context.clone();
+                        assert_eq!(
+                            core.plain_store_observation_steps(receiver, &key).is_some(),
+                            fast,
+                            "{case}: fast path eligibility"
+                        );
+                        FORCE_GENERIC_STORES.with(|force| force.set(force_generic));
+                        let outcome = core.run_loop(&module);
+                        FORCE_GENERIC_STORES.with(|force| force.set(false));
+                        format!("{outcome:?} {}", snapshot(&core, receiver, prototype, &key))
+                    };
+                    assert_eq!(
+                        run(false),
+                        run(true),
+                        "{case}, strict {strict}, context {context:?}"
+                    );
+                }
+            }
+            let direct = |force_generic: bool| {
+                let (mut core, receiver, prototype) = setup(case);
+                FORCE_GENERIC_STORES.with(|force| force.set(force_generic));
+                let outcome = core.proxy_aware_set_runtime_property(
+                    None,
+                    receiver,
+                    &key,
+                    Value::Int(9),
+                    Value::Object(receiver),
+                    0,
+                );
+                FORCE_GENERIC_STORES.with(|force| force.set(false));
+                format!("{outcome:?} {}", snapshot(&core, receiver, prototype, &key))
+            };
+            assert_eq!(direct(false), direct(true), "{case}, direct [[Set]]");
+        }
+    }
+
+    /// bd-9vouw.504: the depth-0 observation of an own data property leaves
+    /// the context label, the charged instructions and the estimate exactly
+    /// as reflect_observe_selected_property does, with no shape label or a
+    /// Secret one, a Public or Confidential stored label, and a Public or
+    /// TopSecret starting context.
+    #[test]
+    fn own_data_property_observation_matches_the_selected_property_walk_bd_9vouw_504() {
+        for shape in [None, Some(Label::Secret)] {
+            for stored in [Label::Public, Label::Confidential] {
+                for context in [Label::Public, Label::TopSecret] {
+                    let run = |depth_zero: bool| {
+                        let mut core = test_interpreter();
+                        let object = core
+                            .alloc_object_with_properties(&[("data", Value::Int(7))])
+                            .expect("object should allocate");
+                        if let Some(shape) = &shape {
+                            core.join_object_mutation_label(object, shape)
+                                .expect("shape label should fit");
+                        }
+                        core.set_own_property_label(object, "data", &stored)
+                            .expect("stored label should fit");
+                        core.active_inline_callback_context_label = Some(context.clone());
+                        let key = RuntimePropertyKey::String(JsString::from("data"));
+                        let label = core.own_stored_runtime_property_label(object, &key);
+                        if depth_zero {
+                            core.reflect_observe_own_data_property(object, &label)
+                                .expect("observation should fit");
+                        } else {
+                            core.reflect_observe_selected_property(object, &key)
+                                .expect("observation should fit");
+                        }
+                        (
+                            core.active_inline_callback_context_label.clone(),
+                            core.instructions_executed,
+                            core.estimated_memory_bytes,
+                        )
+                    };
+                    assert_eq!(
+                        run(true),
+                        run(false),
+                        "shape {shape:?}, stored {stored:?}, context {context:?}"
+                    );
+                }
+            }
         }
     }
 

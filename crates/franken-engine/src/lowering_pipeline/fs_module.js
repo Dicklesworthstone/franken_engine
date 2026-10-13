@@ -19,6 +19,8 @@
   var handles;
   var iteratorKey = Symbol.iterator;
   var asyncIteratorKey = Symbol.asyncIterator;
+  var isView = ArrayBuffer.isView;
+  var NativeAggregateError = AggregateError;
   // The discriminator is the same typed FsOperation argument the old direct
   // call lowering emits. In particular, fd lifecycle operations require write
   // authority. No wrapper performs host I/O outside these two intrinsics.
@@ -504,6 +506,49 @@
     var operations = apply(getHandle, handles, [value]);
     return operations === undefined ? undefined : operations[name];
   }
+  async function writeIterablePath(path, data, options, defaultFlag) {
+    // Resolve user-controlled options and iterator getters before acquiring a
+    // descriptor. In particular, invalid data or pre-abort must not truncate
+    // the destination. The iterator factory itself runs only after open.
+    if (options === undefined || options === null) { options = {}; }
+    if (typeof options === 'string') { options = { encoding: options }; }
+    var settings = fileOptions(options, 'utf8');
+    var flag = options.flag;
+    var mode = options.mode;
+    var flush = options.flush;
+    if (flush !== undefined && typeof flush !== 'boolean') {
+      throw argumentError('options.flush');
+    }
+    checkAbort(settings.signal);
+    var source = iterableSource(data);
+    checkAbort(settings.signal);
+    var fd = openSync(path, flag === undefined ? defaultFlag : flag, mode);
+    var failed = false;
+    var failure;
+    try {
+      for await (var chunk of source) {
+        writeChunk(fd, chunk, settings);
+      }
+      checkAbort(settings.signal);
+      if (flush === true) { fsyncSync(fd); }
+    } catch (error) {
+      // JavaScript can throw undefined/null/false: truthiness cannot represent
+      // whether the writer failed. IteratorClose has already drained here.
+      failed = true;
+      failure = error;
+    }
+    // Only this path owns its fd. Do not use public fs methods or a guest fd
+    // property, and never retry close on a possibly recycled descriptor.
+    try { closeSync(fd); }
+    catch (closeError) {
+      if (failed) {
+        throw new NativeAggregateError([failure, closeError],
+          'Filesystem write and descriptor close both failed');
+      }
+      throw closeError;
+    }
+    if (failed) { throw failure; }
+  }
   var promises = {
     constants: constants,
     open: function open(path, flags, mode) {
@@ -537,6 +582,10 @@
       return new NativePromise(function (resolve, reject) {
         var operation = handleOperation(path, 'writeFile');
         if (operation !== undefined) { resolve(operation(data, options)); return; }
+        if (typeof data !== 'string' && !isBuffer(data) && !isView(data)) {
+          resolve(writeIterablePath(path, data, options, 'w'));
+          return;
+        }
         __franken_fs_write('\0fsop:write', path, data, options, function (error) {
           if (error) { reject(error); } else { resolve(); }
         });
@@ -546,6 +595,10 @@
       return new NativePromise(function (resolve, reject) {
         var operation = handleOperation(path, 'appendFile');
         if (operation !== undefined) { resolve(operation(data, options)); return; }
+        if (typeof data !== 'string' && !isBuffer(data) && !isView(data)) {
+          resolve(writeIterablePath(path, data, options, 'a'));
+          return;
+        }
         __franken_fs_write('\0fsop:append', path, data, options, function (error) {
           if (error) { reject(error); } else { resolve(); }
         });

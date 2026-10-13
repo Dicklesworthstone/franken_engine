@@ -25,7 +25,7 @@ const PLACEHOLDERS: [(&str, &str); 2] = [
     ("__franken_fs_read", "%FsRead"),
     ("__franken_fs_write", "%FsWrite"),
 ];
-const GLOBALS: [&str; 9] = [
+const GLOBALS: [&str; 11] = [
     "Promise",
     "Reflect",
     "TypeError",
@@ -35,6 +35,8 @@ const GLOBALS: [&str; 9] = [
     "Array",
     "WeakMap",
     "Symbol",
+    "ArrayBuffer",
+    "AggregateError",
 ];
 
 pub(super) fn intrinsic_capability(name: &str) -> Option<&'static str> {

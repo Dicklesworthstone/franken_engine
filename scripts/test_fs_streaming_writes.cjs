@@ -28,11 +28,13 @@ function fixture(hook = () => {}) {
       case 'read_fd': return fs.readSync(...args);
       case 'write_fd': return fs.writeSync(...args);
       case 'fsync': return fs.fsyncSync(...args);
+      case 'write': return fs.writeFile(...args);
+      case 'append': return fs.appendFile(...args);
       default: throw new Error(`unexpected operation ${operation}`);
     }
   };
-  const context = { Buffer, Promise, Symbol, WeakMap, Reflect: { apply: Reflect.apply },
-    Error, TypeError, RangeError,
+  const context = { Buffer, Promise, Symbol, WeakMap, ArrayBuffer,
+    Reflect: { apply: Reflect.apply }, Error, TypeError, RangeError, AggregateError,
     __franken_fs_read: (...args) => dispatch('fs_read', ...args),
     __franken_fs_write: (...args) => dispatch('fs_write', ...args) };
   return { facade: vm.runInNewContext(source, context), context, calls,
@@ -370,4 +372,280 @@ test('streamed append preserves open flags and nontruncating descriptor cursor',
   const { facade, file } = fixture();
   assert.equal(await exercise(facade.promises.open, file),
     await exercise(fs.promises.open, file + '-node'));
+});
+
+test('pathname iterables match Node default overwrite, append, encoding and return values', async () => {
+  async function exercise(api, file) {
+    fs.writeFileSync(file, 'old contents');
+    const written = await api.writeFile(file, ['41', Buffer.from('B'), 'c3a9'], 'hex');
+    const appended = await api.appendFile(file, Readable.from(['!', Buffer.from('?')]));
+    return [written, appended, fs.readFileSync(file)];
+  }
+  const { facade, file, calls } = fixture();
+  assert.deepEqual(await exercise(facade.promises, file),
+    await exercise(fs.promises, file + '-node'));
+  assert.equal(operations(calls, 'open').length, 2);
+  assert.equal(operations(calls, 'close_fd').length, 2);
+  assert(calls.every(call => call.authority === 'fs_write'));
+});
+
+test('pathname writes retain explicit flags and modes, including exclusive creation', async () => {
+  const { facade, file, calls } = fixture();
+  await facade.promises.writeFile(file, ['first'], { flag: 'wx', mode: 0o600 });
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  await assert.rejects(facade.promises.writeFile(file, ['forbidden'], { flag: 'wx' }),
+    { code: 'EEXIST' });
+  assert.equal(fs.readFileSync(file, 'utf8'), 'first');
+  await facade.promises.writeFile(file, ['!'], { flag: 'a' });
+  assert.equal(fs.readFileSync(file, 'utf8'), 'first!');
+  assert.equal(operations(calls, 'close_fd').length, 2);
+  assert.deepEqual(operations(calls, 'open')[0].args.slice(1), ['wx', 0o600]);
+});
+
+test('pathname empty iterable still creates or truncates the destination', async () => {
+  const { facade, file, calls } = fixture();
+  fs.writeFileSync(file, 'old');
+  await facade.promises.writeFile(file, []);
+  assert.equal(fs.statSync(file).size, 0);
+  assert.deepEqual(calls.map(call => call.operation), ['open', 'close_fd']);
+});
+
+test('pathname validation and pre-abort occur before open or truncation', async () => {
+  const { facade, file, calls } = fixture();
+  fs.writeFileSync(file, 'preserved');
+  for (const options of [{ encoding: 'nonsense' }, { flush: 'yes' }, 3]) {
+    await assert.rejects(facade.promises.writeFile(file, ['data'], options));
+  }
+  let touched = false;
+  const input = { get [Symbol.asyncIterator]() { touched = true; throw new Error('source'); } };
+  await assert.rejects(facade.promises.writeFile(file, input, {
+    signal: AbortSignal.abort('stop'),
+  }), { code: 'ABORT_ERR', cause: 'stop' });
+  assert.equal(touched, false);
+  await assert.rejects(facade.promises.writeFile(file, {}), { code: 'ERR_INVALID_ARG_TYPE' });
+  assert.equal(operations(calls, 'open').length, 0);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'preserved');
+});
+
+test('pathname option and protocol getters are read once before opening', async () => {
+  const { facade, file, calls } = fixture();
+  const reads = { encoding: 0, signal: 0, flag: 0, mode: 0, flush: 0, iterator: 0 };
+  const options = {};
+  for (const [key, value] of Object.entries({ encoding: 'hex', signal: undefined,
+    flag: 'w', mode: 0o600, flush: false })) {
+    Object.defineProperty(options, key, { get() {
+      assert.equal(operations(calls, 'open').length, 0);
+      reads[key] += 1; return value;
+    } });
+  }
+  const input = { get [Symbol.iterator]() {
+    assert.equal(operations(calls, 'open').length, 0);
+    reads.iterator += 1;
+    return function* () { assert.equal(this, input); yield '41'; yield '42'; };
+  } };
+  await facade.promises.writeFile(file, input, options);
+  assert.deepEqual(Object.values(reads), [1, 1, 1, 1, 1, 1]);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'AB');
+});
+
+test('pathname open refusal does not start the producer or try to close a missing fd', async () => {
+  const denied = Object.assign(new Error('denied'), { code: 'DENIED' });
+  const { facade, file, calls } = fixture((authority, operation) => {
+    if (operation === 'open') { throw denied; }
+  });
+  let started = false;
+  const input = { [Symbol.iterator]() { started = true; return [][Symbol.iterator](); } };
+  await assert.rejects(facade.promises.writeFile(file, input), error => error === denied);
+  assert.equal(started, false);
+  assert.equal(operations(calls, 'close_fd').length, 0);
+  assert.equal(fs.existsSync(file), false);
+});
+
+test('pathname input uses one descriptor across pending producers and path replacement',
+  { timeout: 5000 }, async () => {
+    const { facade, file, calls } = fixture();
+    const started = deferred();
+    const gate = deferred();
+    async function* input() { started.resolve(); yield await gate.promise; yield 'tail'; }
+    const writing = facade.promises.writeFile(file, input());
+    await startedOrFailed(started, writing);
+    fs.renameSync(file, file + '-held');
+    fs.writeFileSync(file, 'replacement');
+    assert.equal(operations(calls, 'close_fd').length, 0);
+    gate.resolve('head');
+    await writing;
+    assert.equal(fs.readFileSync(file, 'utf8'), 'replacement');
+    assert.equal(fs.readFileSync(file + '-held', 'utf8'), 'headtail');
+    assert.equal(operations(calls, 'open').length, 1);
+    assert.equal(operations(calls, 'close_fd').length, 1);
+  });
+
+test('pathname provider failure waits for async iterator cleanup before closing',
+  { timeout: 5000 }, async () => {
+    const failure = Object.assign(new Error('write failure'), { code: 'EIO' });
+    const { facade, file, calls } = fixture((authority, operation) => {
+      if (operation === 'write_fd') { throw failure; }
+    });
+    const cleaning = deferred();
+    const gate = deferred();
+    async function* input() {
+      try { yield 'data'; }
+      finally { cleaning.resolve(); await gate.promise; }
+    }
+    const writing = facade.promises.writeFile(file, input());
+    await startedOrFailed(cleaning, writing);
+    assert.equal(operations(calls, 'close_fd').length, 0);
+    gate.resolve();
+    await assert.rejects(writing, error => error === failure);
+    assert.equal(operations(calls, 'close_fd').length, 1);
+    assert.equal(calls.at(-1).operation, 'close_fd');
+  });
+
+test('pathname producer rejection closes its owned fd and retains partial bytes', async () => {
+  const { facade, file, calls } = fixture();
+  const failure = new Error('source failed');
+  async function* input() { yield 'prefix'; throw failure; }
+  await assert.rejects(facade.promises.appendFile(file, input()), error => error === failure);
+  assert.equal(operations(calls, 'close_fd').length, 1);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'prefix');
+});
+
+test('pathname abort after a chunk stops writes, finalizes input, and closes once', async () => {
+  const controller = new AbortController();
+  const { facade, file, calls } = fixture((authority, operation) => {
+    if (operation === 'write_fd') { controller.abort('stop'); }
+  });
+  let finalized = false;
+  let pulls = 0;
+  async function* input() {
+    try { pulls += 1; yield 'prefix'; pulls += 1; yield 'never'; }
+    finally { finalized = true; }
+  }
+  await assert.rejects(facade.promises.writeFile(file, input(), { signal: controller.signal }),
+    { code: 'ABORT_ERR', cause: 'stop' });
+  assert.equal(finalized, true);
+  assert.equal(pulls, 1);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'prefix');
+  assert.equal(operations(calls, 'close_fd').length, 1);
+});
+
+test('pathname flush syncs after the last chunk and before close', async () => {
+  const { facade, file, calls } = fixture();
+  await facade.promises.writeFile(file, ['one', 'two'], { flush: true });
+  assert.deepEqual(calls.map(call => call.operation),
+    ['open', 'write_fd', 'write_fd', 'fsync', 'close_fd']);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'onetwo');
+});
+
+test('pathname fsync failure rejects but still closes the descriptor', async () => {
+  const failure = Object.assign(new Error('sync failed'), { code: 'EIO' });
+  const { facade, file, calls } = fixture((authority, operation) => {
+    if (operation === 'fsync') { throw failure; }
+  });
+  await assert.rejects(facade.promises.writeFile(file, ['data'], { flush: true }),
+    error => error === failure);
+  assert.equal(operations(calls, 'close_fd').length, 1);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'data');
+});
+
+test('pathname close failure is reported once and never retried', async () => {
+  const failure = Object.assign(new Error('close failed'), { code: 'EIO' });
+  const { facade, file, calls } = fixture((authority, operation) => {
+    if (operation === 'close_fd') { throw failure; }
+  });
+  await assert.rejects(facade.promises.writeFile(file, ['data']), error => error === failure);
+  assert.equal(operations(calls, 'close_fd').length, 1);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'data');
+  // This adapter deliberately retained the real descriptor on close failure;
+  // the suite's held-fd teardown releases it, not the production facade.
+});
+
+test('pathname simultaneous write and close failures retain both errors', async () => {
+  const writeError = Object.assign(new Error('write failed'), { code: 'WRITE_FAILED' });
+  const closeError = Object.assign(new Error('close failed'), { code: 'CLOSE_FAILED' });
+  const { facade, file, calls } = fixture((authority, operation) => {
+    if (operation === 'write_fd') { throw writeError; }
+    if (operation === 'close_fd') { throw closeError; }
+  });
+  await assert.rejects(facade.promises.writeFile(file, ['data']), error => {
+    assert.equal(error.name, 'AggregateError');
+    assert.deepEqual(Array.from(error.errors), [writeError, closeError]);
+    return true;
+  });
+  assert.equal(operations(calls, 'close_fd').length, 1);
+});
+
+test('pathname falsy producer throws are not mistaken for successful completion', async () => {
+  for (const failure of [undefined, null, false, 0]) {
+    const { facade, file, calls } = fixture();
+    function* input() { yield 'prefix'; throw failure; }
+    let rejected = false;
+    try { await facade.promises.writeFile(file, input()); }
+    catch (error) { rejected = true; assert.equal(error, failure); }
+    assert.equal(rejected, true);
+    assert.equal(operations(calls, 'close_fd').length, 1);
+    assert.equal(fs.readFileSync(file, 'utf8'), 'prefix');
+  }
+});
+
+test('pathname streaming ignores replaced public file methods', async () => {
+  const { facade, context, file } = fixture();
+  const fail = () => { throw new Error('public replacement'); };
+  facade.promises.open = fail;
+  facade.openSync = fail;
+  facade.closeSync = fail;
+  facade.writeSync = fail;
+  facade.fsyncSync = fail;
+  context.Promise = fail;
+  context.ArrayBuffer = { isView: fail };
+  context.Reflect.apply = fail;
+  await facade.promises.writeFile(file, ['one', 'two'], { flush: true });
+  assert.equal(fs.readFileSync(file, 'utf8'), 'onetwo');
+});
+
+test('scalar and binary-view pathname writes retain the native callback route', async () => {
+  const { facade, file, calls } = fixture();
+  for (const data of ['text', Buffer.from('buffer'), new Uint8Array([65, 66]),
+    new DataView(new Uint8Array([67, 68]).buffer)]) {
+    await facade.promises.writeFile(file, data);
+  }
+  await facade.promises.appendFile(file, '!');
+  assert.equal(operations(calls, 'open').length, 0);
+  assert.deepEqual(calls.map(call => call.operation), ['write', 'write', 'write', 'write', 'append']);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'CD!');
+});
+
+test('pathname iterator acquisition failures close the descriptor after open', async () => {
+  const failure = new Error('iterator factory failed');
+  for (const input of [
+    { [Symbol.iterator]() { throw failure; } },
+    { [Symbol.asyncIterator]() { return 0; } },
+    { [Symbol.iterator]() { return { get next() { throw failure; } }; } },
+    { [Symbol.asyncIterator]() { return { next() { return Promise.resolve(0); } }; } },
+  ]) {
+    const { facade, file, calls } = fixture();
+    await assert.rejects(facade.promises.writeFile(file, input));
+    assert.equal(operations(calls, 'open').length, 1);
+    assert.equal(operations(calls, 'close_fd').length, 1);
+    assert.equal(operations(calls, 'write_fd').length, 0);
+  }
+});
+
+test('pathname streaming bounds each native request and finishes short writes before pulling', async () => {
+  const { facade, file, calls } = fixture((authority, operation, args) => {
+    if (operation === 'write_fd') {
+      assert(args[3] <= 16384);
+      return fs.writeSync(args[0], args[1], args[2], Math.min(args[3], 3000), args[4]);
+    }
+  });
+  const bytes = Buffer.alloc(50000, 65);
+  async function* input() {
+    yield bytes;
+    assert.equal(fs.statSync(file).size, bytes.length);
+    yield 'tail';
+  }
+  await facade.promises.writeFile(file, input());
+  assert.deepEqual(fs.readFileSync(file), Buffer.concat([bytes, Buffer.from('tail')]));
+  assert.equal(operations(calls, 'open').length, 1);
+  assert.equal(operations(calls, 'close_fd').length, 1);
 });

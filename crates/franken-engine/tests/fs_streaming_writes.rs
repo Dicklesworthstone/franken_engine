@@ -187,3 +187,112 @@ fn iterable_writes_cannot_create_a_file_without_filesystem_write_authority() {
     let error = result.expect_err("FsWrite is still required");
     assert!(error.to_ascii_lowercase().contains("capabil"), "{error}");
 }
+
+#[test]
+fn pathname_iterables_create_append_and_flush_on_the_native_descriptor_path() {
+    let root = tempfile::tempdir().expect("sandbox");
+    let output = run(
+        r#"
+        async function main() {
+          const fs = require('node:fs/promises');
+          await fs.writeFile('data.txt', ['41', Buffer.from('B'), '43'], 'hex');
+          async function* chunks() { yield '!'; yield '?'; }
+          await fs.appendFile('data.txt', chunks(), {flush: true});
+          console.log('done');
+        }
+        main();
+        "#,
+        root.path(),
+        &["fs_write"],
+    )
+    .expect("pathname iterable writes reuse native open/write/sync/close");
+    assert_eq!(output, ["done"]);
+    assert_eq!(std::fs::read(root.path().join("data.txt")).unwrap(), b"ABC!?");
+}
+
+#[test]
+fn pathname_exclusive_creation_and_pre_abort_preserve_existing_contents() {
+    let root = tempfile::tempdir().expect("sandbox");
+    std::fs::write(root.path().join("data.txt"), b"preserved").unwrap();
+    let output = run(
+        r#"
+        async function main() {
+          const fs = require('fs/promises');
+          try { await fs.writeFile('data.txt', ['replace'], {flag: 'wx'}); }
+          catch (error) { console.log(error.code); }
+          const controller = new AbortController();
+          controller.abort('stop');
+          try { await fs.writeFile('data.txt', ['replace'], {signal: controller.signal}); }
+          catch (error) { console.log(error.code, error.cause); }
+        }
+        main();
+        "#,
+        root.path(),
+        &["fs_write"],
+    )
+    .expect("creation flags and cancellation are enforced before truncation");
+    assert_eq!(output, ["EEXIST", "ABORT_ERR stop"]);
+    assert_eq!(std::fs::read(root.path().join("data.txt")).unwrap(), b"preserved");
+}
+
+#[test]
+fn pathname_source_failure_is_observable_and_does_not_rollback_written_bytes() {
+    let root = tempfile::tempdir().expect("sandbox");
+    let output = run(
+        r#"
+        async function main() {
+          const fs = require('fs/promises');
+          async function* chunks() { yield 'prefix'; throw new Error('producer failed'); }
+          try { await fs.writeFile('data.txt', chunks()); }
+          catch (error) { console.log(error.message); }
+          await fs.appendFile('data.txt', ['tail']);
+          console.log('done');
+        }
+        main();
+        "#,
+        root.path(),
+        &["fs_write"],
+    )
+    .expect("source errors reject the write while later writes remain usable");
+    assert_eq!(output, ["producer failed", "done"]);
+    assert_eq!(std::fs::read(root.path().join("data.txt")).unwrap(), b"prefixtail");
+}
+
+#[test]
+fn pathname_streaming_cannot_bypass_native_write_authority() {
+    let root = tempfile::tempdir().expect("sandbox");
+    let result = run(
+        "require('fs/promises').writeFile('denied.txt', ['data']);",
+        root.path(),
+        &["fs_read"],
+    );
+    assert!(!root.path().join("denied.txt").exists());
+    let error = result.expect_err("streamed path writes still require FsWrite");
+    assert!(error.to_ascii_lowercase().contains("capabil"), "{error}");
+}
+
+#[test]
+fn pathname_writer_intrinsics_ignore_guest_lexical_and_public_api_replacements() {
+    let root = tempfile::tempdir().expect("sandbox");
+    let output = run(
+        r#"
+        const ArrayBuffer = 'guest';
+        const AggregateError = 'guest';
+        async function main() {
+          const fs = require('fs');
+          const promises = fs.promises;
+          promises.open = () => { throw new Error('guest open'); };
+          fs.writeSync = () => { throw new Error('guest write'); };
+          fs.closeSync = () => { throw new Error('guest close'); };
+          await promises.writeFile('data.txt', ['safe']);
+          console.log(ArrayBuffer, AggregateError);
+        }
+        main();
+        "#,
+        root.path(),
+        &["fs_write"],
+    )
+    .expect("the writer uses captured realm helpers and private descriptor operations");
+    assert_eq!(output, ["guest guest"]);
+    assert_eq!(std::fs::read(root.path().join("data.txt")).unwrap(), b"safe");
+}

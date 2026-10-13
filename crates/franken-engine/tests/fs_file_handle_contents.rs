@@ -210,3 +210,64 @@ fn vector_reads_do_not_inherit_write_authority() {
     .expect_err("nonempty readv must require FsRead");
     assert!(error.to_ascii_lowercase().contains("capabil"), "{error}");
 }
+
+#[test]
+fn namespace_file_handle_overloads_preserve_cursor_and_ownership() {
+    let root = tempfile::tempdir().expect("sandbox");
+    std::fs::write(root.path().join("data.txt"), b"abcdefghij").unwrap();
+    let output = run(
+        "const WeakMap = 'guest'; const fs = require('fs/promises'); let h; \
+         fs.open('data.txt', 'r+').then(value => { \
+           h = value; return h.read(Buffer.alloc(2)); \
+         }).then(() => fs.writeFile(h, 'XY')).then(() => fs.appendFile(h, 'Z')) \
+         .then(() => fs.readFile(h, 'utf8')).then(text => { \
+           console.log(text, h.fd >= 0); return h.close(); \
+         }).then(() => fs.readFile(h)).catch(error => console.log(error.code));",
+        root.path(),
+        &["fs_read", "fs_write"],
+    )
+    .expect("namespace operations share FileHandle lifecycle state");
+    assert_eq!(output, ["fghij true", "EBADF"]);
+    assert_eq!(
+        std::fs::read(root.path().join("data.txt")).unwrap(),
+        b"abXYZfghij"
+    );
+}
+
+#[test]
+fn namespace_operations_do_not_trust_public_handle_properties() {
+    let root = tempfile::tempdir().expect("sandbox");
+    std::fs::write(root.path().join("data.txt"), b"original").unwrap();
+    let output = run(
+        "const fs = require('fs/promises'); let h; \
+         fs.open('data.txt', 'r+').then(value => { \
+           h = value; Object.defineProperty(h, 'fd', {value: 99999}); \
+           h.readFile = () => { throw new Error('hijacked'); }; \
+           h.writeFile = h.readFile; h.appendFile = h.readFile; \
+           return fs.readFile(h, 'utf8'); \
+         }).then(text => { console.log(text); return fs.writeFile(h, 'AB'); }) \
+         .then(() => fs.appendFile(h, 'CD')).then(() => h.close());",
+        root.path(),
+        &["fs_read", "fs_write"],
+    )
+    .expect("private handle operations ignore guest-writable dispatch properties");
+    assert_eq!(output, ["original"]);
+    assert_eq!(
+        std::fs::read(root.path().join("data.txt")).unwrap(),
+        b"originalABCD"
+    );
+}
+
+#[test]
+fn namespace_handle_reads_still_require_read_authority() {
+    let root = tempfile::tempdir().expect("sandbox");
+    std::fs::write(root.path().join("data.txt"), b"data").unwrap();
+    let error = run(
+        "const fs = require('fs/promises'); \
+         fs.open('data.txt', 'r').then(h => fs.readFile(h));",
+        root.path(),
+        &["fs_write"],
+    )
+    .expect_err("a registered handle is not a substitute for FsRead authority");
+    assert!(error.to_ascii_lowercase().contains("capabil"), "{error}");
+}

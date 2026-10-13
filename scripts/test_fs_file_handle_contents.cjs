@@ -17,7 +17,7 @@ after(() => {
   for (const fd of descriptors) { fs.closeSync(fd); }
   fs.rmSync(root, { recursive: true, force: true });
 });
-function fixture(hook = () => {}) {
+function fixture(hook = () => {}, globals = {}) {
   const calls = [];
   const dispatch = (authority, discriminator, ...args) => {
     const operation = discriminator.slice('\0fsop:'.length);
@@ -38,12 +38,16 @@ function fixture(hook = () => {}) {
       case 'read_fd': return fs.readSync(...args);
       case 'write_fd': return fs.writeSync(...args);
       case 'fsync': return fs.fsyncSync(...args);
+      case 'read': return fs.readFile(...args);
+      case 'write': return fs.writeFile(...args);
+      case 'append': return fs.appendFile(...args);
       default: throw new Error(`unexpected host operation: ${operation}`);
     }
   };
   const context = { Buffer, Promise, Reflect: { apply: Reflect.apply }, Error, TypeError, RangeError,
     __franken_fs_read: (...args) => dispatch('fs_read', ...args),
     __franken_fs_write: (...args) => dispatch('fs_write', ...args) };
+  Object.assign(context, globals);
   return { facade: vm.runInNewContext(source, context), context, calls,
     file: path.join(root, `file-${nextFile++}`) };
 }
@@ -467,4 +471,165 @@ test('vector methods do not dispatch through guest-replaced public helpers', asy
   assert.equal((await handle.readv(buffers, 0)).bytesRead, 4);
   assert.equal(Buffer.concat(buffers).toString(), 'safe');
   await handle.close();
+});
+
+test('fs.promises handle overloads agree with Node and never auto-close caller handles', async () => {
+  async function exercise(promises, file) {
+    fs.writeFileSync(file, 'abcdefghij');
+    const handle = await promises.open(file, 'r+');
+    try {
+      await handle.read(Buffer.alloc(2));
+      const written = await promises.writeFile(handle, 'XY');
+      const appended = await promises.appendFile(handle, Buffer.from('Z'));
+      const text = await promises.readFile(handle, 'utf8');
+      const empty = await promises.readFile(handle);
+      return [written, appended, text, Buffer.isBuffer(empty), empty.length,
+        handle.fd >= 0, fs.readFileSync(file, 'utf8')];
+    } finally { await handle.close(); }
+  }
+  const { facade, file, calls } = fixture();
+  assert.deepEqual(await exercise(facade.promises, file),
+    await exercise(fs.promises, file + '-node'));
+  assert.equal(calls.filter(call => call.operation === 'open').length, 1);
+  assert.equal(calls.filter(call => call.operation === 'close_fd').length, 1);
+  assert.equal(calls.filter(call => /^(read|write|append)$/.test(call.operation)).length, 0);
+});
+
+test('pathname promises keep their native callback path before and after handle registration', async () => {
+  const { facade, file, calls } = fixture();
+  await facade.promises.writeFile(file, 'ab');
+  await facade.promises.appendFile(file, 'cd');
+  assert.equal(await facade.promises.readFile(file, 'utf8'), 'abcd');
+  const handle = await facade.promises.open(file);
+  assert.equal(await facade.promises.readFile(Buffer.from(file), 'utf8'), 'abcd');
+  assert.equal(await facade.promises.readFile(handle, 'utf8'), 'abcd');
+  await handle.close();
+  assert.deepEqual(calls.filter(call => /^(read|write|append)$/.test(call.operation))
+    .map(call => call.operation), ['write', 'append', 'read', 'read']);
+});
+
+test('handle overloads ignore forged public fd values and overwritten public methods', async () => {
+  const { facade, file } = fixture();
+  fs.writeFileSync(file, 'original');
+  fs.writeFileSync(file + '-other', 'other');
+  const handle = await facade.promises.open(file, 'r+');
+  const other = await facade.promises.open(file + '-other', 'r+');
+  Object.defineProperty(handle, 'fd', { value: other.fd });
+  const fail = () => { throw new Error('public method hijacked'); };
+  handle.readFile = fail;
+  handle.writeFile = fail;
+  handle.appendFile = fail;
+  assert.equal(await facade.promises.readFile(handle, 'utf8'), 'original');
+  await facade.promises.writeFile(handle, 'AB', { flag: 'w' });
+  await facade.promises.appendFile(handle, 'CD');
+  await handle.close();
+  await assert.rejects(facade.promises.readFile(handle), { code: 'EBADF' });
+  assert.equal(await facade.promises.readFile(other, 'utf8'), 'other');
+  await other.close();
+  assert.equal(fs.readFileSync(file, 'utf8'), 'originalABCD');
+  assert.equal(fs.readFileSync(file + '-other', 'utf8'), 'other');
+});
+
+test('closed-handle overloads reject asynchronously without any descriptor I/O', async () => {
+  const { facade, file, calls } = fixture();
+  const handle = await facade.promises.open(file, 'w+');
+  await handle.close();
+  const count = calls.length;
+  let inline = true;
+  const pending = facade.promises.readFile(handle).catch(error => {
+    assert.equal(inline, false);
+    assert.equal(error.code, 'EBADF');
+  });
+  inline = false;
+  await pending;
+  await assert.rejects(facade.promises.writeFile(handle, 'late'), { code: 'EBADF' });
+  await assert.rejects(facade.promises.appendFile(handle, 'late'), { code: 'EBADF' });
+  assert.equal(calls.length, count);
+});
+
+test('duck-typed, cloned and proxied handles cannot impersonate a registered handle', async () => {
+  const { facade, file, calls } = fixture();
+  fs.writeFileSync(file, 'untouched');
+  const handle = await facade.promises.open(file, 'r+');
+  let reads = 0;
+  let invoked = 0;
+  const fake = { get fd() { reads += 1; return handle.fd; },
+    readFile() { invoked += 1; }, writeFile() { invoked += 1; }, appendFile() { invoked += 1; } };
+  const clone = { fd: handle.fd, readFile: handle.readFile,
+    writeFile: handle.writeFile, appendFile: handle.appendFile };
+  for (const value of [fake, clone, new Proxy(handle, {})]) {
+    await assert.rejects(facade.promises.readFile(value), { code: 'ERR_INVALID_ARG_TYPE' });
+    await assert.rejects(facade.promises.writeFile(value, 'no'), { code: 'ERR_INVALID_ARG_TYPE' });
+    await assert.rejects(facade.promises.appendFile(value, 'no'), { code: 'ERR_INVALID_ARG_TYPE' });
+  }
+  assert.equal(reads, 0);
+  assert.equal(invoked, 0);
+  assert.equal(calls.filter(call => /^(read|write)_fd$/.test(call.operation)).length, 0);
+  await handle.close();
+  assert.equal(fs.readFileSync(file, 'utf8'), 'untouched');
+});
+
+test('namespace readFile uses the opened descriptor after pathname replacement', async () => {
+  const { facade, file, calls } = fixture();
+  fs.writeFileSync(file, 'held');
+  const handle = await facade.promises.open(file);
+  fs.renameSync(file, file + '-held');
+  fs.writeFileSync(file, 'replacement');
+  assert.equal(await facade.promises.readFile(handle, 'utf8'), 'held');
+  assert.equal(await facade.promises.readFile(file, 'utf8'), 'replacement');
+  assert(handle.fd >= 0);
+  await handle.close();
+  assert.equal(calls.filter(call => call.operation === 'open').length, 1);
+});
+
+test('namespace writeFile pins ownership across a reentrant close in options', async () => {
+  const { facade, file, calls } = fixture();
+  const handle = await facade.promises.open(file, 'w+');
+  let closing;
+  await facade.promises.writeFile(handle, 'x'.repeat(40000), {
+    get encoding() { closing = handle.close(); return 'utf8'; }
+  });
+  await closing;
+  assert.equal(fs.statSync(file).size, 40000);
+  assert.equal(calls.at(-1).operation, 'close_fd');
+  assert.equal(calls.filter(call => call.operation === 'close_fd').length, 1);
+});
+
+test('namespace handle overloads preserve abort failures without I/O', async () => {
+  const { facade, file, calls } = fixture();
+  const handle = await facade.promises.open(file, 'w+');
+  const signal = AbortSignal.abort('cancelled');
+  await assert.rejects(facade.promises.readFile(handle, { signal }),
+    { name: 'AbortError', code: 'ABORT_ERR', cause: 'cancelled' });
+  await assert.rejects(facade.promises.writeFile(handle, 'no', { signal }), { code: 'ABORT_ERR' });
+  await assert.rejects(facade.promises.appendFile(handle, 'no', { signal }), { code: 'ABORT_ERR' });
+  assert.equal(calls.filter(call => /^(read|write)_fd$/.test(call.operation)).length, 0);
+  await handle.close();
+});
+
+test('the handle registry is lazy and initialization failure occurs before opening an fd', async () => {
+  const failure = new Error('registry allocation failed');
+  const FailingWeakMap = new Proxy(WeakMap, { construct() { throw failure; } });
+  const { facade, file, calls } = fixture(undefined, { WeakMap: FailingWeakMap });
+  assert.deepEqual(calls, []);
+  await facade.promises.writeFile(file, 'path-only');
+  await assert.rejects(facade.promises.open(file + '-handle', 'w'), error => error === failure);
+  assert.equal(fs.existsSync(file + '-handle'), false);
+  assert.equal(calls.filter(call => call.operation === 'open').length, 0);
+});
+
+test('the private handle registry uses captured constructor and get/set helpers', async () => {
+  class LocalWeakMap extends WeakMap {}
+  const { facade, context, file } = fixture(undefined, { WeakMap: LocalWeakMap });
+  const fail = () => { throw new Error('replaced registry helper'); };
+  context.WeakMap = fail;
+  LocalWeakMap.prototype.get = fail;
+  LocalWeakMap.prototype.set = fail;
+  context.Reflect.apply = fail;
+  const handle = await facade.promises.open(file, 'w+');
+  await facade.promises.writeFile(handle, 'safe');
+  await handle.close();
+  const reader = await facade.promises.open(file);
+  assert.equal(await facade.promises.readFile(reader, 'utf8'), 'safe');
+  await reader.close();
 });

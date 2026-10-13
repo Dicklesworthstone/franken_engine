@@ -13,6 +13,10 @@
   var bufferToString = Buffer.prototype.toString;
   var bufferCopy = Buffer.prototype.copy;
   var arrayIsArray = Array.isArray;
+  var NativeWeakMap = WeakMap;
+  var getHandle = WeakMap.prototype.get;
+  var setHandle = WeakMap.prototype.set;
+  var handles;
   // The discriminator is the same typed FsOperation argument the old direct
   // call lowering emits. In particular, fd lifecycle operations require write
   // authority. No wrapper performs host I/O outside these two intrinsics.
@@ -342,7 +346,7 @@
         finally { active -= 1; finishClose(); }
       });
     }
-    return {
+    var handle = {
       get fd() { return closing ? -1 : descriptor; },
       close: function () {
         if (closePromise !== undefined) { return closePromise; }
@@ -426,11 +430,30 @@
         });
       }
     };
+    // Keep the original operations in a private identity registry. Neither
+    // a forged fd property nor overwritten public methods can redirect an
+    // fs.promises operation to another descriptor. Keys are weakly held.
+    apply(setHandle, handles, [handle, {
+      readFile: handle.readFile,
+      writeFile: handle.writeFile,
+      appendFile: handle.appendFile
+    }]);
+    return handle;
+  }
+  function handleOperation(value, name) {
+    if (handles === undefined || value === null ||
+        (typeof value !== 'object' && typeof value !== 'function')) { return undefined; }
+    var operations = apply(getHandle, handles, [value]);
+    return operations === undefined ? undefined : operations[name];
   }
   var promises = {
     constants: constants,
     open: function open(path, flags, mode) {
       return new NativePromise(function (resolve) {
+        // Initialize before opening a descriptor: allocation failure must not
+        // strand a newly opened fd. Merely constructing fs still calls no
+        // builtin and creates no registry.
+        if (handles === undefined) { handles = new NativeWeakMap(); }
         if (flags === undefined) { flags = 'r'; }
         resolve(fileHandle(openSync(path, flags, mode)));
       });
@@ -445,6 +468,8 @@
     mkdtemp: asPromise(mkdtempSync),
     readFile: function readFile(path, options) {
       return new NativePromise(function (resolve, reject) {
+        var operation = handleOperation(path, 'readFile');
+        if (operation !== undefined) { resolve(operation(options)); return; }
         __franken_fs_read('\0fsop:read', path, options, function (error, value) {
           if (error) { reject(error); } else { resolve(value); }
         });
@@ -452,6 +477,8 @@
     },
     writeFile: function writeFile(path, data, options) {
       return new NativePromise(function (resolve, reject) {
+        var operation = handleOperation(path, 'writeFile');
+        if (operation !== undefined) { resolve(operation(data, options)); return; }
         __franken_fs_write('\0fsop:write', path, data, options, function (error) {
           if (error) { reject(error); } else { resolve(); }
         });
@@ -459,6 +486,8 @@
     },
     appendFile: function appendFile(path, data, options) {
       return new NativePromise(function (resolve, reject) {
+        var operation = handleOperation(path, 'appendFile');
+        if (operation !== undefined) { resolve(operation(data, options)); return; }
         __franken_fs_write('\0fsop:append', path, data, options, function (error) {
           if (error) { reject(error); } else { resolve(); }
         });

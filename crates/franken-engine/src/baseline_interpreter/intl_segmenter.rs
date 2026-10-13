@@ -21,11 +21,11 @@ use unicode_segmentation::UnicodeSegmentation;
 
 /// One segment: its text, its UTF-16 index in the input and, for word
 /// granularity, whether it is word-like.
-type Segment = (String, usize, Option<bool>);
+type Segment = (JsString, usize, Option<bool>);
 
-/// Upper bound of the native bytes `split_segments` allocates per UTF-16
-/// code unit of input: a `&str` (16), a `Segment` tuple (40) and the owned
-/// segment `String`'s smallest heap block (~32), rounded up.
+/// Preserve the established worst-case admission allowance per UTF-16 code
+/// unit even though segmentation no longer stages full slice and tuple
+/// buffers. Streaming must not silently relax the input memory limit.
 const SEGMENT_NATIVE_BYTES_PER_CODE_UNIT: u64 = 96;
 
 impl InterpreterCore {
@@ -77,27 +77,33 @@ impl InterpreterCore {
             Some(Value::Str(granularity)) => granularity.to_string(),
             _ => "grapheme".to_string(),
         };
-        // `split_segments` builds a slice, a tuple and an owned `String` per
-        // segment natively before any record is charged, so the memory budget
-        // is checked against that transient first: at most one segment per
-        // UTF-16 code unit, `SEGMENT_NATIVE_BYTES_PER_CODE_UNIT` each. Without
-        // this, `segment('a'.repeat(2 ** 24))` allocated ~1.5 GB past a 64 MiB
-        // budget before the first record failed.
+        // Retain the preflight admission check before segmentation begins.
+        // Records are now built and charged as pieces arrive, rather than
+        // after staging a slice vector and a vector of owned segment tuples.
+        // Removing those buffers must not widen the admitted input sizes.
         let code_units = u64::try_from(input.encode_utf16().count()).unwrap_or(u64::MAX);
         let transient = code_units.saturating_mul(SEGMENT_NATIVE_BYTES_PER_CODE_UNIT);
         let requested = self.estimated_memory_bytes.saturating_add(transient);
         if self.memory_request_exceeds_budget(requested, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(requested, self.heap_object_count_u32()));
         }
-        let segments = Self::split_segments(&input, &granularity)?;
+        if granularity == "word"
+            && let Some(script) = input.chars().find_map(dictionary_script)
+        {
+            return Err(Self::intl_segmenter_refusal(script));
+        }
         // Records own their properties, but their immutable input text can
         // share one backing. Copying the whole input for each segment made
         // grapheme segmentation allocate quadratically in the input length.
         let input = JsString::from(input);
-        let mut records = Vec::with_capacity(segments.len());
-        for segment in &segments {
-            records.push(Value::Object(self.segment_record(segment, &input)?));
-        }
+        let text = input
+            .as_str()
+            .expect("Intl.Segmenter input originates from a Rust String");
+        let records = match granularity.as_str() {
+            "word" => self.segment_records(text.split_word_bounds(), &input, true)?,
+            "sentence" => self.segment_records(text.split_sentence_bounds(), &input, false)?,
+            _ => self.segment_records(text.graphemes(true), &input, false)?,
+        };
         let list = self.alloc_array_from_values(&records)?;
         let object = self.alloc_object_with_prototype(None)?;
         self.set_object_brand(object, "Intl.Segments")?;
@@ -183,7 +189,7 @@ impl InterpreterCore {
                         _ => None,
                     }
                 });
-                let fresh = self.segment_record(&(text.to_string(), start, word_like), &input)?;
+                let fresh = self.segment_record(&(text, start, word_like), &input)?;
                 return Ok(Value::Object(fresh));
             }
         }
@@ -197,7 +203,7 @@ impl InterpreterCore {
         input: &JsString,
     ) -> Result<ObjectId, InterpreterError> {
         let mut fields = vec![
-            ("segment", Value::str(text.clone())),
+            ("segment", Value::Str(text.clone())),
             (
                 "index",
                 Value::Int(i64::try_from(*index).unwrap_or(i64::MAX)),
@@ -210,29 +216,26 @@ impl InterpreterCore {
         self.alloc_object_with_properties(&fields)
     }
 
-    /// The segments of `input` at `granularity`, with UTF-16 indices.
-    fn split_segments(input: &str, granularity: &str) -> Result<Vec<Segment>, InterpreterError> {
-        let pieces: Vec<&str> = match granularity {
-            "word" => {
-                if let Some(script) = input.chars().find_map(dictionary_script) {
-                    return Err(Self::intl_segmenter_refusal(script));
-                }
-                input.split_word_bounds().collect()
-            }
-            "sentence" => input.split_sentence_bounds().collect(),
-            _ => input.graphemes(true).collect(),
-        };
+    /// Stream UAX #29 pieces directly into charged record objects. There is
+    /// no full-input slice/tuple staging, and each piece gets one immutable
+    /// text backing shared by all fresh records referring to that segment.
+    fn segment_records<'a>(
+        &mut self,
+        pieces: impl Iterator<Item = &'a str>,
+        input: &JsString,
+        word_granularity: bool,
+    ) -> Result<Vec<Value>, InterpreterError> {
+        let mut records = Vec::new();
         let mut index = 0;
-        Ok(pieces
-            .into_iter()
-            .map(|piece| {
-                let start = index;
-                index += piece.encode_utf16().count();
-                let word_like =
-                    (granularity == "word").then(|| piece.chars().any(char::is_alphanumeric));
-                (piece.to_string(), start, word_like)
-            })
-            .collect())
+        for piece in pieces {
+            let text = JsString::from(piece);
+            let end = index + text.utf16_len();
+            let word_like = word_granularity.then(|| piece.chars().any(char::is_alphanumeric));
+            let record = self.segment_record(&(text, index, word_like), input)?;
+            records.push(Value::Object(record));
+            index = end;
+        }
+        Ok(records)
     }
 
     fn intl_segmenter_refusal(script: &str) -> InterpreterError {
@@ -315,7 +318,7 @@ mod tests {
     fn shared_input_does_not_alias_mutable_record_properties() {
         let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-identity");
         let input = JsString::from("x".repeat(1024));
-        let segment = ("x".to_string(), 0, None);
+        let segment = (JsString::from("x".repeat(512)), 0, None);
         let first = core.segment_record(&segment, &input).expect("first record");
         let second = core.segment_record(&segment, &input).expect("second record");
         assert_ne!(first, second);
@@ -327,6 +330,17 @@ mod tests {
                 input.as_str().expect("well-formed input"),
             ));
         }
+        for record in [first, second] {
+            assert!(std::ptr::eq(
+                string_property(&core, record, "segment")
+                    .as_str()
+                    .expect("well-formed segment"),
+                segment.0.as_str().expect("well-formed segment"),
+            ));
+        }
+        core.set_object_property(first, "segment".to_string(), Value::str("changed"))
+            .expect("replace first record segment");
+        assert_eq!(string_property(&core, second, "segment"), &segment.0);
         core.set_object_property(first, "input".to_string(), Value::str("changed"))
             .expect("replace first record input");
         assert_eq!(
@@ -335,5 +349,71 @@ mod tests {
         );
         assert_eq!(string_property(&core, second, "input"), &input);
         assert_eq!(input.utf16_len(), 1024);
+    }
+
+    #[test]
+    fn streamed_records_preserve_utf16_boundaries_and_word_flags() {
+        let input = JsString::from("A\u{1f44d}\u{1f3fd} e\u{301}.\r\n");
+        let text = input.as_str().expect("well-formed input");
+        let expected = [
+            ("A", 0, true),
+            ("\u{1f44d}\u{1f3fd}", 1, false),
+            (" ", 5, false),
+            ("e\u{301}", 6, true),
+            (".", 8, false),
+            ("\r\n", 9, false),
+        ];
+        for word_granularity in [false, true] {
+            let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-stream");
+            let records = if word_granularity {
+                core.segment_records(text.split_word_bounds(), &input, true)
+            } else {
+                core.segment_records(text.graphemes(true), &input, false)
+            }
+            .expect("stream records");
+            assert_eq!(records.len(), expected.len());
+            for (record, (piece, index, word_like)) in records.into_iter().zip(expected) {
+                let Value::Object(record) = record else {
+                    panic!("expected segment record");
+                };
+                assert_eq!(string_property(&core, record, "segment").as_str(), Some(piece));
+                let properties = &core.heap[record.0 as usize].properties;
+                assert_eq!(properties.get("index"), Some(&Value::Int(index)));
+                let flag = word_granularity.then_some(Value::Bool(word_like));
+                assert_eq!(properties.get("isWordLike"), flag.as_ref());
+            }
+        }
+        let mut core = InterpreterCore::new(InterpreterConfig::default(), "sentence-stream");
+        let records = core
+            .segment_records(text.split_sentence_bounds(), &input, false)
+            .expect("stream sentence");
+        assert_eq!(records.len(), 1);
+        let Value::Object(record) = records[0].clone() else {
+            panic!("expected sentence record");
+        };
+        assert_eq!(string_property(&core, record, "segment"), &input);
+        assert_eq!(
+            core.heap[record.0 as usize].properties.get("index"),
+            Some(&Value::Int(0))
+        );
+        assert!(
+            !core.heap[record.0 as usize]
+                .properties
+                .contains_key("isWordLike")
+        );
+    }
+
+    #[test]
+    fn empty_segment_stream_does_not_allocate_records() {
+        let mut core = InterpreterCore::new(InterpreterConfig::default(), "empty-segments");
+        let input = JsString::from("");
+        let before = core.heap.len();
+        for word_granularity in [false, true] {
+            let records = core
+                .segment_records(std::iter::empty::<&str>(), &input, word_granularity)
+                .expect("empty stream");
+            assert!(records.is_empty());
+            assert_eq!(core.heap.len(), before);
+        }
     }
 }

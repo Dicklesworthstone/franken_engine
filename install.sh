@@ -14,7 +14,7 @@
 #   --dest DIR          Install the binary directly into DIR (overrides --prefix).
 #   --method MODE       auto (default) tries a checksum-verified GitHub release,
 #                       then falls back to a source build. Values: auto|release|source.
-#   --ref REF           Git ref for the source build path (default: main).
+#   --ref REF           Override source ref (otherwise selected release, then main).
 #   --offline TARBALL   Install from a local release tarball; skip all network access.
 #   --easy-mode         Auto-update PATH in shell rc files (~/.zshrc, ~/.bashrc).
 #   --verify            Check candidate startup before replacing an existing install.
@@ -28,6 +28,7 @@
 #   asset      : frankenctl-<target-triple>.tar.xz
 #   checksum   : frankenctl-<target-triple>.tar.xz.sha256       (sha256sum format)
 #   signature  : frankenctl-<target-triple>.tar.xz.sigstore.json (cosign, optional)
+# Source builds require git, cargo and python3 (to read Cargo artifact JSON).
 #
 set -euo pipefail
 umask 022
@@ -44,6 +45,8 @@ PREFIX="${DEFAULT_PREFIX}"
 DEST=""
 METHOD="auto"
 SOURCE_REF="${FRANKEN_ENGINE_REF:-main}"
+SOURCE_REF_EXPLICIT=0
+[ -z "${FRANKEN_ENGINE_REF:-}" ] || SOURCE_REF_EXPLICIT=1
 OFFLINE_TARBALL=""
 EASY=0
 VERIFY=0
@@ -348,26 +351,92 @@ install_from_offline() {
   extract_and_install "$OFFLINE_TARBALL"
 }
 
+# Select only the executable reported by this successful Cargo invocation.
+# CARGO_TARGET_DIR, build.target and build.target-dir can all change its path.
+# Never infer it from a guessed target/release directory or parse JSON with sed.
+cargo_built_executable() {
+  python3 - "$1" "$2" "$BINARY_NAME" <<'PYTHON'
+import json
+import os
+import sys
+
+messages, manifest, binary = sys.argv[1:]
+manifest = os.path.realpath(manifest)
+executables = set()
+finished = False
+try:
+    with open(messages, encoding="utf-8") as stream:
+        for line in stream:
+            # Cargo shims may print informational non-JSON lines to stdout.
+            if not line.lstrip().startswith("{"):
+                continue
+            event = json.loads(line)
+            reason = event.get("reason")
+            if reason == "build-finished":
+                if finished or event.get("success") is not True:
+                    raise ValueError("Cargo did not report one successful build")
+                finished = True
+            elif reason == "compiler-artifact":
+                if finished:
+                    raise ValueError("artifact appeared after build completion")
+                target = event.get("target", {})
+                if target.get("name") != binary or target.get("kind") != ["bin"]:
+                    continue
+                if event.get("profile", {}).get("test") is not False:
+                    continue
+                origin = event.get("manifest_path")
+                if not isinstance(origin, str) or os.path.realpath(origin) != manifest:
+                    continue
+                executable = event.get("executable")
+                if not isinstance(executable, str) or not os.path.isabs(executable):
+                    raise ValueError("binary artifact has no absolute executable path")
+                if any(character in executable for character in "\0\r\n"):
+                    raise ValueError("binary artifact path cannot be represented safely in Bash")
+                executables.add(executable)
+    if not finished or len(executables) != 1:
+        raise ValueError("expected one frankenctl executable from a completed build")
+    executable = executables.pop()
+    if not os.path.isfile(executable) or not os.access(executable, os.X_OK):
+        raise ValueError("reported binary is not an executable file")
+    print(executable)
+except (OSError, ValueError, TypeError, AttributeError) as error:
+    print(f"Cannot select Cargo executable: {error}", file=sys.stderr)
+    sys.exit(1)
+PYTHON
+}
+
 install_from_source() {
   require_command git
   command_exists cargo || die "cargo is required for the source build; install Rust via rustup, or use a published release"
+  require_command python3
   local src="${WORK_DIR}/source" url="https://github.com/${OWNER}/${REPO}.git"
-  mkdir -p "$src"
-  info "Cloning ${REPO}@${SOURCE_REF} for source build"
-  if ! git clone --filter=blob:none --depth 1 --branch "$SOURCE_REF" "$url" "$src" 2>/dev/null; then
-    (cd "$src" && git init -q && git remote add origin "$url" \
-       && git fetch --depth 1 origin "$SOURCE_REF" && git checkout -q --detach FETCH_HEAD) \
-      || die "failed to fetch ${REPO}@${SOURCE_REF}"
-  fi
+  local revision lock_sha built messages="${WORK_DIR}/cargo-build.jsonl"
+  mkdir -p "$src" || die "cannot create source directory: $src"
+  info "Fetching ${REPO}@${SOURCE_REF} for source build"
+  # One path for branches, tags and immutable commit IDs; do not retry a
+  # failed fetch by silently changing source identity or reusing a partial clone.
+  (cd "$src" && git init -q && git remote add origin "$url" \
+     && git fetch --depth 1 -- origin "$SOURCE_REF" \
+     && git checkout -q --detach FETCH_HEAD) \
+    || die "failed to fetch ${REPO}@${SOURCE_REF}"
+  revision="$(git -C "$src" rev-parse --verify 'HEAD^{commit}')" \
+    || die "cannot identify fetched source commit"
+  [ -f "$src/Cargo.lock" ] || die "source has no Cargo.lock: ${REPO}@${revision}"
+  lock_sha="$(compute_sha256 "$src/Cargo.lock")" || die "cannot hash source Cargo.lock"
+  info "Source commit: $revision; Cargo.lock SHA-256: $lock_sha"
   info "Building $BINARY_NAME from source (Standalone Mode — this can take a while)"
   # --no-default-features is what makes this build standalone: the default
   # feature set pulls in sibling control-plane crates by absolute /dp path,
   # which only exist in the upstream dev monorepo.
-  run_with_spinner "cargo build --release (standalone)" \
-    env RCH_CARGO_WRAPPER_BYPASS=1 \
-    cargo build --release --no-default-features --manifest-path "$src/Cargo.toml" -p "$CARGO_PACKAGE" --bin "$BINARY_NAME"
-  local built="$src/target/release/$BINARY_NAME"
-  [ -x "$built" ] || die "expected built binary at $built"
+  # Invoke the caller's normal Cargo shim, with its admission and target/cache
+  # environment untouched. Keep rendered diagnostics on stderr, and capture
+  # only the machine-readable build stream. --locked forbids lockfile updates.
+  (cd "$src" && cargo build --release --locked --no-default-features \
+    --message-format=json-render-diagnostics --manifest-path "$src/Cargo.toml" \
+    -p "$CARGO_PACKAGE" --bin "$BINARY_NAME" > "$messages") \
+    || die "source build failed for ${REPO}@${revision}; previous install unchanged"
+  built="$(cargo_built_executable "$messages" "$src/crates/franken-engine/Cargo.toml")" \
+    || die "Cargo did not produce a usable $BINARY_NAME for ${REPO}@${revision}"
   install_binary "$built"
 }
 
@@ -430,7 +499,7 @@ parse_args() {
       --prefix)  shift; [ $# -gt 0 ] || die "--prefix requires a path"; PREFIX="$1" ;;
       --dest)    shift; [ $# -gt 0 ] || die "--dest requires a dir"; DEST="$1" ;;
       --method)  shift; [ $# -gt 0 ] || die "--method requires auto|release|source"; METHOD="$1" ;;
-      --ref)     shift; [ $# -gt 0 ] || die "--ref requires a git ref"; SOURCE_REF="$1" ;;
+      --ref)     shift; [ $# -gt 0 ] && [ -n "$1" ] || die "--ref requires a git ref"; SOURCE_REF="$1"; SOURCE_REF_EXPLICIT=1 ;;
       --offline) shift; [ $# -gt 0 ] || die "--offline requires a tarball path"; OFFLINE_TARBALL="$1"; METHOD="offline" ;;
       --easy-mode) EASY=1 ;;
       --verify)    VERIFY=1 ;;
@@ -444,18 +513,24 @@ parse_args() {
     shift
   done
   case "$METHOD" in auto|release|source|offline) ;; *) die "unsupported --method: $METHOD" ;; esac
+  if [ "$SOURCE_REF_EXPLICIT" -eq 0 ] && [ -n "$VERSION" ]; then
+    SOURCE_REF="$VERSION"
+  fi
 }
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 main() {
   parse_args "$@"
-  require_command curl
+  if [ "$METHOD" = "auto" ] || [ "$METHOD" = "release" ]; then
+    require_command curl
+  fi
   setup_proxy
   banner
   detect_platform
   info "Platform: ${TARGET} — install prefix: ${DEST:-$PREFIX}"
 
-  WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/frankenctl-install.XXXXXXXX")"
+  WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/frankenctl-install.XXXXXXXX")" \
+    || die "cannot create installer workspace"
   acquire_lock
   preflight_checks
 
@@ -476,6 +551,8 @@ main() {
         install_completions; maybe_add_path; self_test; final_summary; return 0
       fi
       [ "$METHOD" = "release" ] && die "release install failed for tag $tag"
+      # A missing asset is not permission to compile a different revision.
+      [ "$SOURCE_REF_EXPLICIT" -eq 1 ] || SOURCE_REF="$tag"
       warn "no usable release asset for ${TARGET}; falling back to source build"
     else
       [ "$METHOD" = "release" ] && die "no published GitHub releases found for ${OWNER}/${REPO}"

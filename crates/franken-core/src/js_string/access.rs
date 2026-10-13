@@ -564,7 +564,7 @@ mod tests {
                 let units: Vec<u16> = text.encode_utf16().collect();
                 let (start, end) = if prepend {
                     drop(expected.splice(0..0, units.iter().copied()));
-                    rope = piece.concat(&piece);
+                    rope = piece.concat(&rope);
                     (0, 12)
                 } else {
                     expected.extend_from_slice(&units);

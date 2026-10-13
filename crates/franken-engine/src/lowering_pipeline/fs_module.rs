@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use super::super::LoweringPipelineError;
 use super::super::with_statement::{
     FunctionBody, FunctionParts, Outcome, Search, Walk, lexical_names, var_names, walk_class,
-    walk_expression, walk_function, walk_statement, walk_switch_cases,
+    walk_expression, walk_function, walk_pattern, walk_statement, walk_switch_cases,
 };
 use super::{loop_head_names, scoped_walk};
 use crate::ast::{
@@ -91,6 +91,9 @@ pub(super) fn rewrite_fs_requires(
     {
         return Ok(None);
     }
+    if let Some(rewritten) = direct_fs_calls(tree)? {
+        return Ok(Some(rewritten));
+    }
     let mut names = BTreeSet::new();
     var_names(&tree.body, &mut names);
     lexical_names(&tree.body, &mut names);
@@ -128,6 +131,119 @@ pub(super) fn rewrite_fs_requires(
         }),
     );
     Ok(Some(rewritten))
+}
+
+/// Lower synchronous call-only uses at their original source sites. Inlining
+/// the entire filesystem facade made these programs inherit the potential
+/// flows of every unused method (bd-15w28). This uses the SAME native operation
+/// table and protected intrinsics as that facade, not a different I/O backend.
+///
+/// Selection is whole-program: any observable module/function value, unknown
+/// require, or source binding named require keeps the original object path.
+/// In particular, never mix an inlined method with a mutable module object.
+fn direct_fs_calls(tree: &SyntaxTree) -> Result<Option<SyntaxTree>, LoweringPipelineError> {
+    let mut rewritten = tree.clone();
+    let mut walker = DirectFsCalls {
+        compatible: true,
+        calls: 0,
+    };
+    walker.statements(&mut rewritten.body)?;
+    Ok((walker.compatible && walker.calls != 0).then_some(rewritten))
+}
+
+struct DirectFsCalls {
+    compatible: bool,
+    calls: usize,
+}
+
+impl Walk for DirectFsCalls {
+    fn statement(&mut self, statement: &mut Statement) -> Outcome {
+        // Imports and dynamic object environments can supply a different
+        // loader or expose a module alias. Keep their existing scoped rewrite.
+        if matches!(statement, Statement::Import(_) | Statement::With(_)) {
+            self.compatible = false;
+        }
+        if let Statement::FunctionDeclaration(function) = statement
+            && function.name.as_deref() == Some("require")
+        {
+            self.compatible = false;
+        }
+        walk_statement(self, statement)
+    }
+
+    fn pattern(&mut self, pattern: &mut BindingPattern) -> Outcome {
+        if pattern.binding_names().contains(&"require") {
+            self.compatible = false;
+        }
+        walk_pattern(self, pattern)
+    }
+
+    fn function(&mut self, function: FunctionParts<'_>) -> Outcome {
+        if function.own_name == Some("require") {
+            self.compatible = false;
+        }
+        walk_function(self, function)
+    }
+
+    fn catch_clause(&mut self, clause: &mut CatchClause) -> Outcome {
+        if clause.parameter.as_deref() == Some("require") {
+            self.compatible = false;
+        }
+        self.block(&mut clause.body.body)
+    }
+
+    fn class(
+        &mut self,
+        name: Option<&str>,
+        super_class: Option<&mut Expression>,
+        body: &mut [MethodDefinition],
+    ) -> Outcome {
+        if name == Some("require") {
+            self.compatible = false;
+        }
+        walk_class(self, super_class, body)
+    }
+
+    fn expression(&mut self, expression: &mut Expression) -> Outcome {
+        if let Expression::Call { callee, arguments, .. } = expression
+            && let Expression::Member { object, property, computed: false, .. } = callee.as_ref()
+            && require_member(object) == Some(None)
+            && let Some(method) = super::super::well_formed_static_name(property)
+            && let Some(spec) = super::super::fs_sync_builtin_spec(method)
+            && arguments.len() >= spec.min_args
+            && arguments.len() <= spec.max_args
+            && !arguments.iter().any(|argument| matches!(argument, Expression::SpreadElement(_)))
+        {
+            for argument in arguments.iter_mut() {
+                self.expression(argument)?;
+            }
+            // A wrapper forwards its complete formal-parameter list. Preserve
+            // omitted option values and evaluate each source argument once, in
+            // order. Extra/spread arguments stay on the ordinary call path.
+            arguments.resize(spec.max_args, Expression::UndefinedLiteral);
+            // Always distinguish the operation from the guest path, including
+            // read/write: a filename must never become dispatch metadata.
+            arguments.insert(0, Expression::StringLiteral(
+                format!("\0fsop:{}", spec.operation.as_str()).into(),
+            ));
+            **callee = Expression::Identifier(match spec.capability {
+                "fs:read" => "%FsRead",
+                "fs:write" => "%FsWrite",
+                _ => return Err(LoweringPipelineError::InvariantViolation {
+                    detail: "filesystem operation has no protected intrinsic",
+                }),
+            }.to_string());
+            self.calls += 1;
+            return Ok(());
+        }
+        if matches!(expression, Expression::Identifier(name) if name == "require") {
+            // This includes escaping require, unclaimed/unknown methods,
+            // callback/Promise APIs and bare module values. Discard ALL
+            // tentative call-site rewrites if any such use is present.
+            self.compatible = false;
+        }
+        walk_expression(self, expression)
+    }
 }
 
 fn module_source(names: &BTreeSet<String>) -> Result<Expression, LoweringPipelineError> {
@@ -437,5 +553,91 @@ mod tests {
         let Statement::With(statement) = &rewritten.body[1] else { panic!("with statement"); };
         assert!(matches!(&statement.object, Expression::Identifier(name) if name == MODULE_BINDING));
         assert!(rewrite_fs_requires(&rewritten).expect("idempotent").is_none());
+    }
+
+    #[test]
+    fn direct_sync_calls_use_protected_operations_without_a_module_prelude() {
+        for (method, arguments, discriminator, intrinsic, arity) in [
+            ("readFileSync", "'input'", "read", "%FsRead", 3),
+            ("writeFileSync", "'output', 'bytes'", "write", "%FsWrite", 4),
+            ("appendFileSync", "'output', 'bytes'", "append", "%FsWrite", 4),
+            ("statSync", "'input'", "stat", "%FsRead", 3),
+            ("readSync", "fd, buffer, 0, 4, null", "read_fd", "%FsRead", 6),
+            ("writeSync", "fd, buffer, 0, 4, null", "write_fd", "%FsWrite", 6),
+            ("closeSync", "fd", "close_fd", "%FsWrite", 2),
+        ] {
+            for specifier in ["fs", "node:fs"] {
+                let source = format!("require('{specifier}').{method}({arguments});");
+                let tree = parse(&source);
+                let original = serde_json::to_value(&tree).unwrap();
+                let rewritten = rewrite_fs_requires(&tree).unwrap().expect("direct call");
+                assert_eq!(rewritten.body.len(), 1);
+                let Statement::Expression(statement) = &rewritten.body[0] else { panic!("call"); };
+                let Expression::Call { callee, arguments, span } = &statement.expression else { panic!("call"); };
+                assert!(matches!(callee.as_ref(), Expression::Identifier(name) if name == intrinsic));
+                assert_eq!(arguments.len(), arity);
+                assert_eq!(arguments[0], Expression::StringLiteral(format!("\0fsop:{discriminator}").into()));
+                let Statement::Expression(original_statement) = &tree.body[0] else { panic!("call"); };
+                let Expression::Call { span: original_span, .. } = &original_statement.expression else { panic!("call"); };
+                assert_eq!(span, original_span);
+                assert_eq!(serde_json::to_value(&tree).unwrap(), original);
+                assert!(rewrite_fs_requires(&rewritten).unwrap().is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn direct_calls_preserve_arguments_and_discriminator_like_guest_paths() {
+        let tree = parse("require('fs').readFileSync(path(), encoding());");
+        let rewritten = direct_fs_calls(&tree).unwrap().unwrap();
+        let Statement::Expression(original) = &tree.body[0] else { panic!("call"); };
+        let Statement::Expression(lowered) = &rewritten.body[0] else { panic!("call"); };
+        let Expression::Call { arguments: before, .. } = &original.expression else { panic!("args"); };
+        let Expression::Call { arguments: after, .. } = &lowered.expression else { panic!("args"); };
+        assert_eq!(&after[1..], before.as_slice(), "each operand appears exactly once in order");
+        let tree = parse("require('fs').readFileSync('\\0fsop:unlink');");
+        let rewritten = direct_fs_calls(&tree).unwrap().unwrap();
+        let Statement::Expression(statement) = &rewritten.body[0] else { panic!("call"); };
+        let Expression::Call { arguments, .. } = &statement.expression else { panic!("args"); };
+        assert_eq!(arguments[0], Expression::StringLiteral("\0fsop:read".into()));
+        assert_eq!(arguments[1], Expression::StringLiteral("\0fsop:unlink".into()));
+    }
+
+    #[test]
+    fn one_observable_or_unsupported_use_keeps_the_complete_module_path() {
+        for suffix in [
+            "const fs = require('fs');",
+            "const read = require('fs').readFileSync;",
+            "require('fs').readFileSync = replacement;",
+            "require('fs/promises').readFile('x');",
+            "require('fs').readFile('x', callback);",
+            "require('fs').readFileSync(...args);",
+            "require('fs').readFileSync('x', 'utf8', extra());",
+            "require('fs')[method]('x');",
+            "require(name);",
+            "const loader = require;",
+        ] {
+            let tree = parse(&format!("require('fs').readFileSync('input'); {suffix}"));
+            let original = serde_json::to_value(&tree).unwrap();
+            assert!(direct_fs_calls(&tree).unwrap().is_none(), "{suffix}");
+            let rewritten = rewrite_fs_requires(&tree).unwrap().unwrap();
+            assert!(is_module_declaration(&rewritten.body[0]), "{suffix}");
+            assert_eq!(serde_json::to_value(&tree).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn direct_calls_never_claim_a_shadowed_or_dynamic_loader() {
+        for source in [
+            "function f(require) { require('fs').readFileSync('x'); }",
+            "function require() {} require('fs').readFileSync('x');",
+            "const f = function require() { require('fs').readFileSync('x'); };",
+            "for (const require of loaders) { require('fs').readFileSync('x'); }",
+            "try {} catch (require) { require('fs').readFileSync('x'); }",
+            "const C = class require { method() { require('fs').readFileSync('x'); } };",
+            "with (object) { require('fs').readFileSync('x'); }",
+        ] {
+            assert!(direct_fs_calls(&parse(source)).unwrap().is_none(), "{source}");
+        }
     }
 }

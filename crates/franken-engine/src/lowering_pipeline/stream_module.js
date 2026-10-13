@@ -2273,7 +2273,7 @@
     }
     finish(failure);
   }
-  function pipelineImpl(streams, callback, options) {
+  function pipelineImpl(streams, callback, options, setController) {
     if (streams.length === 1 && Array.isArray(streams[0])) streams = streams[0];
     if (streams.length < 2) throw errors.missingArgs('streams');
     const cancellation = pipelineCancellation(options.signal);
@@ -2337,6 +2337,9 @@
       }
     }
     removeAbort = cancellation.listen(function () { finishImpl(cancellation.error()); });
+    if (setController !== undefined) {
+      setController(finishImpl, cancellation, function () { return error; });
+    }
     if (cancellation.aborted()) finishImpl(cancellation.error());
     let ret;
     try {
@@ -2447,6 +2450,233 @@
     });
   }
 
+  // ---- composition ----
+  const composeReadableFrom = Readable.from;
+  const composeIsBuffer = Buffer.isBuffer;
+
+  function composeSource(source) {
+    if (isReadableNodeStream(source)) return source;
+    if (typeof source === 'string' || composeIsBuffer(source) || isIterable(source)) {
+      return composeReadableFrom(source);
+    }
+    throw makeError(TypeError, 'ERR_INVALID_ARG_TYPE',
+      'The first composition stage must be a readable stream, iterable, or function');
+  }
+
+  function composeStreams(stages, signal) {
+    if (stages.length === 0) throw errors.missingArgs('streams');
+    // Validate before invoking factories, subscribing, or starting any source.
+    if (signal !== undefined) {
+      try { pipelineApply(pipelineSignalAborted, signal, []); }
+      catch (error) {
+        throw makeError(TypeError, 'ERR_INVALID_ARG_TYPE', 'The "signal" option must be an AbortSignal');
+      }
+    }
+    for (let i = 0; i < stages.length; i++) {
+      const stage = stages[i];
+      if (typeof stage === 'function') continue;
+      if (isNodeStream(stage)) {
+        if (isDestroyed(stage) || (i > 0 && !isWritableNodeStream(stage))
+          || (i < stages.length - 1 && !isReadableNodeStream(stage))) {
+          throw makeError(TypeError, 'ERR_INVALID_ARG_VALUE', 'Invalid composition stream at index ' + i);
+        }
+      } else if (i !== 0 || !(typeof stage === 'string' || composeIsBuffer(stage) || isIterable(stage))) {
+        throw makeError(TypeError, 'ERR_INVALID_ARG_TYPE', 'Invalid composition stage at index ' + i);
+      }
+    }
+    if (stages.length === 1 && stages[0] instanceof Duplex && signal === undefined) {
+      return stages[0];
+    }
+
+    let head;
+    let outputReadable = true;
+    if (typeof stages[0] === 'function') {
+      // A function in compose is a transform/sink over input, not a pipeline
+      // source factory. The private stream supplies demand-driven async input.
+      head = new PassThrough({ objectMode: true });
+      stages.unshift(head);
+    } else if (stages.length === 1 && isWritableNodeStream(stages[0])
+      && !isReadableNodeStream(stages[0])) {
+      const sink = stages[0];
+      head = new PassThrough({ objectMode: !!sink.writableObjectMode,
+        highWaterMark: sink.writableHighWaterMark });
+      stages.unshift(head);
+    } else {
+      stages[0] = composeSource(stages[0]);
+      if (isWritableNodeStream(stages[0])) head = stages[0];
+      if (stages.length === 1) {
+        const source = stages[0];
+        stages.push(new PassThrough({ objectMode: !!source.readableObjectMode,
+          highWaterMark: source.readableHighWaterMark }));
+      }
+    }
+    const last = stages.length - 1;
+    if (typeof stages[last] === 'function') {
+      const operation = stages[last];
+      stages[last] = function (input, options) {
+        const result = operation(input, options);
+        if (isIterable(result, true)) return result;
+        const then = result && result.then;
+        if (typeof then !== 'function') throw errors.invalidReturn('destination');
+        outputReadable = false;
+        return new PipelinePromise(function (resolve, reject) {
+          pipelineApply(then, result, [resolve, reject]);
+        }).then(function (value) {
+          if (value !== undefined && value !== null) {
+            throw makeError(TypeError, 'ERR_INVALID_RETURN_VALUE',
+              'A composition sink function must resolve to null or undefined');
+          }
+        });
+      };
+    } else {
+      outputReadable = isReadableNodeStream(stages[last]);
+    }
+
+    let duplex;
+    let stop = nop;
+    let pipelineError = function () {};
+    let removeStopListener = nop;
+    let innerDone = false;
+    let innerError;
+    let destroyCallback;
+    let destroyError;
+    let writeCallback;
+    let finalCallback;
+    let reading = false;
+    let pumping = false;
+    let tailEnded = false;
+    function finishWrite(error) {
+      const callback = writeCallback;
+      writeCallback = undefined;
+      if (callback) callback(error);
+    }
+    function finishFinal(error) {
+      const callback = finalCallback;
+      finalCallback = undefined;
+      if (callback) callback(error);
+    }
+    function cleanup() {
+      if (outputReadable) {
+        tail.removeListener('readable', drain);
+        tail.removeListener('end', onend);
+      }
+    }
+    function finishDestroy() {
+      if (!destroyCallback || !innerDone) return;
+      const callback = destroyCallback;
+      destroyCallback = undefined;
+      cleanup();
+      const error = destroyError || innerError;
+      finishWrite(error || errors.destroyed('write'));
+      finishFinal(error || errors.destroyed('end'));
+      callback(error);
+    }
+    function complete(error) {
+      removeStopListener();
+      innerDone = true;
+      innerError = error;
+      stop = nop;
+      if (!duplex) return;
+      if (destroyCallback) finishDestroy();
+      else if (error) duplex.destroy(error);
+      else finishFinal();
+    }
+    // The private stop endpoint uses the same pipeline owner and participant
+    // count, preserving the original error and awaiting all admitted cleanup.
+    // It is not exposed through public pipeline options.
+    const tail = pipelineImpl(stages, complete, { signal: signal },
+      function (controller, cancellation, currentError) {
+        stop = controller;
+        pipelineError = currentError;
+        removeStopListener = cancellation.listen(function () {
+          // Observe stop immediately; do not leave the outer stream writable
+          // while an inner async destructor or IteratorClose is still pending.
+          const error = currentError();
+          if (duplex && error) duplex.destroy(error);
+        });
+      });
+    function drain() {
+      if (!reading || pumping || duplex.destroyed || tailEnded) return;
+      pumping = true;
+      try {
+        while (reading && !duplex.destroyed) {
+          const chunk = tail.read();
+          if (chunk === null) break;
+          reading = duplex.push(chunk);
+        }
+      } catch (error) { duplex.destroy(error); }
+      finally { pumping = false; }
+    }
+    function onend() {
+      if (tailEnded) return;
+      tailEnded = true;
+      reading = false;
+      if (!duplex.destroyed) duplex.push(null);
+    }
+    try {
+      duplex = new Duplex({
+        readable: outputReadable,
+        writable: head !== undefined,
+        readableObjectMode: outputReadable && !!tail.readableObjectMode,
+        writableObjectMode: head !== undefined && !!head.writableObjectMode,
+        readableHighWaterMark: outputReadable ? tail.readableHighWaterMark : undefined,
+        writableHighWaterMark: head === undefined ? undefined : head.writableHighWaterMark,
+        read() { reading = true; drain(); },
+        write(chunk, encoding, callback) {
+          const pending = once(callback);
+          writeCallback = pending;
+          const written = once(function (error) {
+            if (writeCallback === pending) writeCallback = undefined;
+            pending(error);
+          });
+          try { head.write(chunk, encoding, written); }
+          catch (error) { written(error); }
+        },
+        final(callback) {
+          finalCallback = once(callback);
+          try { head.end(); }
+          catch (error) { finishFinal(error); return; }
+          if (innerDone) finishFinal(innerError);
+        },
+        destroy(error, callback) {
+          // Readable EOF can auto-destroy a read-only outer stream one tick
+          // before the inner pipeline reports completion. Drain that successful
+          // close instead of turning natural EOF into cancellation.
+          const finishedSides = (!outputReadable || duplex.readableEnded)
+            && (head === undefined || duplex.writableFinished);
+          destroyError = error || (innerDone ? innerError : finishedSides ? undefined : makeAbortError());
+          destroyCallback = callback;
+          reading = false;
+          if (!innerDone && destroyError) stop(destroyError);
+          finishDestroy();
+        }
+      });
+      if (outputReadable) {
+        tail.on('readable', drain);
+        tail.on('end', onend);
+        if (tail.readableEnded) nextTick(onend);
+      }
+    } catch (error) {
+      // Endpoint getters and listener registration are guest-observable. A
+      // failure after pipeline startup must not strand its acquired stages.
+      if (duplex) { duplex.on('error', nop); duplex.destroy(error); }
+      else stop(error);
+      throw error;
+    }
+    const failure = pipelineError();
+    if (failure) duplex.destroy(failure);
+    return duplex;
+  }
+  function compose() {
+    return composeStreams(Array.prototype.slice.call(arguments), undefined);
+  }
+  function readableCompose(stage, options) {
+    if (options !== undefined && (options === null || typeof options !== 'object')) {
+      throw makeError(TypeError, 'ERR_INVALID_ARG_TYPE', 'The "options" argument must be an object');
+    }
+    return composeStreams([this, stage], options === undefined ? undefined : options.signal);
+  }
+
   // ---- module object ----
   const promises = { pipeline: pipelinePromise, finished: finishedPromise };
   Stream.Stream = Stream;
@@ -2456,6 +2686,10 @@
   Stream.Transform = Transform;
   Stream.PassThrough = PassThrough;
   Stream.pipeline = pipeline;
+  Stream.compose = compose;
+  Object.defineProperty(Readable.prototype, 'compose', {
+    value: readableCompose, writable: true, configurable: true
+  });
   Stream.finished = eos;
   Stream.destroy = destroyer;
   Stream.isReadable = isReadable;

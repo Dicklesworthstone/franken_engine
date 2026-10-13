@@ -23,7 +23,7 @@ const code = section('  function makeError(', '  function isUint8Array(')
   + section('  // ---- finished (end-of-stream) ----', '  // ---- module object ----');
 function fixture() {
   const context = {
-    AbortController, AbortSignal, EventTarget, Reflect, Object, Array, Symbol, Promise,
+    AbortController, AbortSignal, EventTarget, Reflect, Object, Array, Symbol, Promise, Buffer,
     Error, TypeError, AggregateError,
     Readable: native.Readable, PassThrough: native.PassThrough, Duplex: native.Duplex,
     nextTick: process.nextTick,

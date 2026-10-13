@@ -120,10 +120,88 @@ impl JsString {
     }
 
     /// The code units from `start` to `end` (clamped UTF-16 offsets). A
-    /// boundary inside a surrogate pair preserves the lone half.
+    /// boundary inside a surrogate pair preserves the lone half. Empty and
+    /// whole-string slices need no materialization; other rope slices reuse
+    /// covered subtrees and copy only the boundary fragments.
     pub fn utf16_slice(&self, start: usize, end: usize) -> JsString {
-        let end = end.min(self.utf16_len());
+        let length = self.utf16_len();
+        let end = end.min(length);
         let start = start.min(end);
+        if start == end {
+            return Self::empty();
+        }
+        if start == 0 && end == length {
+            return self.settled();
+        }
+        self.slice_rope(start, end)
+            .unwrap_or_else(|| self.slice_flat(start, end))
+    }
+
+    /// Visit only intersecting pieces, in order, without retaining unrelated
+    /// ancestors. The work budget bounds both pointer chasing and temporary
+    /// pieces, including for slices crossing a coalesced append boundary.
+    /// Exhaustion falls back on the original root, settling it once instead
+    /// of repeatedly walking a deep chain for sequential interior slices.
+    fn slice_rope(&self, start: usize, end: usize) -> Option<Self> {
+        let Text::Concat(root) = &self.utf8 else {
+            return None;
+        };
+        if root.joined.get().is_some() {
+            return None;
+        }
+        let mut pending = Vec::new();
+        let mut piece = self.clone();
+        let mut range = (start, end);
+        let mut result: Option<Self> = None;
+        let mut descents = 0;
+        loop {
+            let (start, end) = range;
+            let chunk = if start == 0 && end == piece.utf16_len() {
+                piece.settled()
+            } else {
+                if let Text::Concat(node) = &piece.utf8
+                    && node.joined.get().is_none()
+                    && let Some([left, right]) = node.parts()
+                {
+                    if descents == MAX_INDEX_DESCENT {
+                        return None;
+                    }
+                    descents += 1;
+                    let split = left.utf16_len();
+                    if end <= split {
+                        piece = left;
+                    } else if start >= split {
+                        piece = right;
+                        range = (start - split, end - split);
+                    } else {
+                        pending.push((right, 0, end - split));
+                        piece = left;
+                        range = (start, split);
+                    }
+                    continue;
+                }
+                // If a concurrent join released the parts, its published
+                // buffer is now available to the flat reader.
+                piece.slice_flat(start, end)
+            };
+            result = Some(match result {
+                Some(prefix) => prefix.concat(&chunk),
+                None => chunk,
+            });
+            match pending.pop() {
+                Some((next, start, end)) => {
+                    piece = next;
+                    range = (start, end);
+                }
+                None => return result,
+            }
+        }
+    }
+
+    /// Read a leaf, a published joined buffer, or the bounded-work fallback.
+    /// Keeping this separate prevents the fallback from re-entering the
+    /// rope traversal at the same root.
+    fn slice_flat(&self, start: usize, end: usize) -> Self {
         match &self.shape {
             Shape::WellFormed { .. } if self.is_ascii_text() => Self {
                 utf8: Text::Flat(Arc::from(&self.utf8[start..end])),
@@ -321,5 +399,163 @@ mod tests {
         assert!(pending.is_empty());
         assert_eq!(text, format!("before:{expected}"));
         assert_eq!(child.code_point_at(1100), Some(0x1f600));
+    }
+
+    #[test]
+    fn empty_and_whole_slices_do_not_materialize_a_rope() {
+        let rope = JsString::from("a".repeat(1100))
+            .concat(&JsString::from("\u{1f600}".repeat(300)));
+        let length = rope.utf16_len();
+        for (start, end) in [(0, 0), (8, 3), (length, length), (usize::MAX, usize::MAX)] {
+            assert!(rope.utf16_slice(start, end).is_empty());
+            assert_unjoined(&rope);
+        }
+        let whole = rope.utf16_slice(0, usize::MAX);
+        let (Text::Concat(original), Text::Concat(sliced)) = (&rope.utf8, &whole.utf8) else {
+            panic!("a whole slice should share its concatenation");
+        };
+        assert!(Arc::ptr_eq(original, sliced));
+        assert_unjoined(&rope);
+    }
+
+    #[test]
+    fn append_and_prepend_slices_preserve_lazy_storage_across_piece_boundaries() {
+        let texts = ["abc", "x\u{e9}", "a\u{1f600}b"];
+        for prepend in [false, true] {
+            let initial = "prefix".repeat(300);
+            let mut expected: Vec<u16> = initial.encode_utf16().collect();
+            let mut rope = JsString::from(initial);
+            for round in 0..2048 {
+                let text = texts[round % texts.len()];
+                let piece = JsString::from(text);
+                let units: Vec<u16> = text.encode_utf16().collect();
+                let (start, end) = if prepend {
+                    drop(expected.splice(0..0, units.iter().copied()));
+                    rope = piece.concat(&rope);
+                    (0, 12)
+                } else {
+                    expected.extend_from_slice(&units);
+                    rope = rope.concat(&piece);
+                    (expected.len() - 12, expected.len())
+                };
+                // The window extends beyond the new piece, and periodically
+                // across the 1024-byte coalescing boundary, not just within
+                // an immediate flat child.
+                assert_eq!(
+                    rope.utf16_slice(start, end).code_units_vec(),
+                    expected[start..end],
+                    "round={round} prepend={prepend}"
+                );
+                assert_eq!(
+                    rope.utf16_slice(end - 1, end).code_units_vec(),
+                    expected[end - 1..end]
+                );
+                assert_unjoined(&rope);
+            }
+        }
+    }
+
+    #[test]
+    fn cross_piece_slices_preserve_all_utf16_boundary_kinds() {
+        let texts = [
+            "a".repeat(1100),
+            "\u{1f600}\u{e9}".repeat(400),
+            "\u{65e5}\u{1f603}".repeat(400),
+            "z".repeat(1100),
+        ];
+        let pieces = texts.each_ref().map(|text| JsString::from(text.as_str()));
+        let rope = pieces[0]
+            .concat(&pieces[1])
+            .concat(&pieces[2].concat(&pieces[3]));
+        let expected: Vec<u16> = texts.concat().encode_utf16().collect();
+        let mut positions = vec![0, 1, expected.len() - 1, expected.len()];
+        let mut boundary = 0;
+        for text in texts.iter().take(3) {
+            boundary += text.encode_utf16().count();
+            positions.extend(boundary - 3..=boundary + 3);
+        }
+        for &start in &positions {
+            for &end in &positions {
+                if start >= end || (start == 0 && end == expected.len()) {
+                    continue;
+                }
+                let slice = rope.utf16_slice(start, end);
+                assert_eq!(slice.code_units_vec(), expected[start..end], "{start}..{end}");
+                assert_eq!(
+                    slice.is_well_formed(),
+                    String::from_utf16(&expected[start..end]).is_ok()
+                );
+                assert_unjoined(&rope);
+            }
+        }
+    }
+
+    #[test]
+    fn covered_subtree_slice_shares_only_the_requested_subtree() {
+        let a = JsString::from("a".repeat(1100));
+        let b = JsString::from("b".repeat(1100));
+        let c = JsString::from("c".repeat(1100));
+        let covered = a.concat(&b);
+        let rope = covered.concat(&c);
+        let slice = rope.utf16_slice(0, covered.utf16_len());
+        let (Text::Concat(original), Text::Concat(sliced)) = (&covered.utf8, &slice.utf8) else {
+            panic!("a covered subtree should be shared, not copied");
+        };
+        assert!(Arc::ptr_eq(original, sliced));
+        assert_eq!(slice.retained_bytes(24), covered.retained_bytes(24));
+        assert!(slice.retained_bytes(24) < rope.retained_bytes(24));
+        assert_unjoined(&covered);
+        assert_unjoined(&rope);
+    }
+
+    #[test]
+    fn deep_interior_slice_settles_the_root_once() {
+        let piece = JsString::from("x".repeat(CONCAT_COPY_MAX_BYTES + 1));
+        for prepend in [false, true] {
+            let mut rope = piece.clone();
+            for _ in 0..MAX_INDEX_DESCENT + 16 {
+                rope = if prepend {
+                    piece.concat(&rope)
+                } else {
+                    rope.concat(&piece)
+                };
+            }
+            let start = if prepend { rope.utf16_len() - 2 } else { 1 };
+            assert_unjoined(&rope);
+            assert_eq!(rope.utf16_slice(start, start + 1).as_str(), Some("x"));
+            let Text::Concat(node) = &rope.utf8 else {
+                unreachable!()
+            };
+            let joined = node.joined.get().expect("bounded fallback must settle root");
+            assert!(node.parts().is_none());
+            assert_eq!(rope.utf16_slice(2, 4).as_str(), Some("xx"));
+            assert!(Arc::ptr_eq(joined, node.joined.get().unwrap()));
+        }
+    }
+
+    #[test]
+    fn flat_and_exact_slices_match_clamped_code_unit_ranges() {
+        let alphabet = [0x61, 0xE9, 0xD800, 0xDC00, 0xDFFF];
+        for a in alphabet {
+            for b in alphabet {
+                for c in alphabet {
+                    let units = [a, b, c];
+                    let string = JsString::from_code_units(&units);
+                    let positions = [0, 1, 2, 3, 4, usize::MAX];
+                    for start in positions {
+                        for end in positions {
+                            let stop = end.min(units.len());
+                            let begin = start.min(stop);
+                            let slice = string.utf16_slice(start, end);
+                            assert_eq!(slice.code_units_vec(), units[begin..stop]);
+                            assert_eq!(
+                                slice.is_well_formed(),
+                                String::from_utf16(&units[begin..stop]).is_ok()
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 }

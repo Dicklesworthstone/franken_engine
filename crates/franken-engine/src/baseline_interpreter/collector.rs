@@ -1039,23 +1039,37 @@ impl InterpreterCore {
         if !self.gc_context_is_safe() || self.gc.builtin_depth > 1 {
             return None;
         }
-        let mut marker = self.gc_new_marker();
-        marker.deferred_scope_frames = Some(Vec::new());
+        // A pinned value is kept as it is: a collection marks it with
+        // GcMarker::value, which marks what marking it now would. Only an
+        // execution needs a marker here, to gather its values and defer its
+        // scope frames. Every callback built one (seven mark tables, and a
+        // zeroed chunk for each table a pin lands in) and dropped it
+        // (bd-9vouw.504).
+        let mut values = Vec::new();
+        let mut marker: Option<GcMarker> = None;
         let mut async_functions_from: Option<usize> = None;
         for pin in pins {
             match pin {
-                GcPin::Value(value) => marker.value(value),
+                GcPin::Value(value) => values.push((*value).clone()),
                 GcPin::AsyncFunctionsFrom(id) => {
                     async_functions_from =
                         Some(async_functions_from.map_or(*id, |from| from.min(*id)));
                 }
-                GcPin::ModuleExecution(execution) => marker.module_execution(execution),
-                GcPin::GeneratorExecution(execution) => marker.generator_execution(execution),
+                GcPin::ModuleExecution(execution) => marker
+                    .get_or_insert_with(|| self.gc_new_deferring_marker())
+                    .module_execution(execution),
+                GcPin::GeneratorExecution(execution) => marker
+                    .get_or_insert_with(|| self.gc_new_deferring_marker())
+                    .generator_execution(execution),
             }
         }
-        let scope_frames = marker.deferred_scope_frames.take().unwrap_or_default();
+        let mut scope_frames = Vec::new();
+        if let Some(mut marker) = marker {
+            scope_frames = marker.deferred_scope_frames.take().unwrap_or_default();
+            values.extend(Self::gc_marked_values(&marker));
+        }
         self.gc.nested_pins.push(NestedPins {
-            values: Self::gc_marked_values(&marker),
+            values,
             scope_frames,
             async_functions_from,
         });
@@ -1072,6 +1086,14 @@ impl InterpreterCore {
             self.gc.safe_depth = previous;
             self.gc.nested_pins.pop();
         }
+    }
+
+    /// A marker that keeps the scope frames it meets instead of marking
+    /// their bindings (`NestedPins::scope_frames`).
+    fn gc_new_deferring_marker(&self) -> GcMarker {
+        let mut marker = self.gc_new_marker();
+        marker.deferred_scope_frames = Some(Vec::new());
+        marker
     }
 
     fn gc_new_marker(&self) -> GcMarker {
@@ -2287,6 +2309,88 @@ mod tests {
             Ok(Err(error)) => format!("error: {error:?}"),
             Err(_) => "panic".to_string(),
         }
+    }
+
+    /// gc_arm_nested keeps pinned values as they are, where it kept the roots
+    /// a marker derived from them (bd-9vouw.504). A collection marks each
+    /// pinned value with GcMarker::value, so the two must mark the same
+    /// entries, for every kind of value a pin can hold.
+    #[test]
+    fn marking_pinned_values_marks_what_their_derived_roots_mark() {
+        let mut promise_resolve = BuiltinFunction::new_kind(BuiltinFunctionKind::PromiseResolve);
+        promise_resolve.bound_object = Some(14);
+        let mut iterator_next = BuiltinFunction::new_kind(BuiltinFunctionKind::IteratorNext);
+        iterator_next.iterator_handle = Some(15);
+        let values = [
+            Value::Object(ObjectId(3)),
+            Value::Closure(5),
+            Value::GeneratorFunction(6),
+            Value::AsyncFunction(7),
+            Value::AsyncGeneratorFunction(8),
+            Value::Promise(9),
+            Value::Iterator(10),
+            Value::Generator(11),
+            Value::AsyncGeneratorObject(12),
+            Value::BuiltinFunction(BuiltinFunction::bound_to(
+                BuiltinFunctionKind::FunctionPrototype,
+                ObjectId(13),
+            )),
+            Value::BuiltinFunction(promise_resolve),
+            Value::BuiltinFunction(iterator_next),
+            Value::Accessor {
+                get: Some(Arc::new(Value::Object(ObjectId(16)))),
+                set: Some(Arc::new(Value::Closure(17))),
+            },
+            Value::Object(ObjectId(3)),
+            Value::str("s"),
+            Value::Int(1),
+            Value::Undefined,
+        ];
+        let tables = 32;
+        let new_marker = || GcMarker::new(tables, tables, tables, tables, tables, tables, tables);
+        let mut direct = new_marker();
+        values.iter().for_each(|value| direct.value(value));
+        let mut derived = new_marker();
+        InterpreterCore::gc_marked_values(&direct)
+            .iter()
+            .for_each(|value| derived.value(value));
+        let marks = |marker: &GcMarker| -> Vec<[bool; 6]> {
+            (0..tables)
+                .map(|id| {
+                    [
+                        marker.objects.is_marked(id),
+                        marker.closures.is_marked(id),
+                        marker.promises.is_marked(id),
+                        marker.iterators.is_marked(id),
+                        marker.generators.is_marked(id),
+                        marker.async_generators.is_marked(id),
+                    ]
+                })
+                .collect()
+        };
+        assert_eq!(marks(&direct), marks(&derived));
+        let marked = marks(&direct);
+        for (id, table) in [
+            (3, 0),
+            (13, 0),
+            (16, 0),
+            (5, 1),
+            (8, 1),
+            (17, 1),
+            (9, 2),
+            (14, 2),
+            (10, 3),
+            (15, 3),
+            (11, 4),
+            (12, 5),
+        ] {
+            assert!(marked[id][table], "entry {id} of table {table} is marked");
+        }
+        assert_eq!(
+            marked.iter().flatten().filter(|mark| **mark).count(),
+            14,
+            "nothing else is marked"
+        );
     }
 
     /// Only the outermost builtin at a run-loop level may arm a nested loop

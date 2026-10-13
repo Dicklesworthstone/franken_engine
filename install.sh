@@ -17,7 +17,7 @@
 #   --ref REF           Git ref for the source build path (default: main).
 #   --offline TARBALL   Install from a local release tarball; skip all network access.
 #   --easy-mode         Auto-update PATH in shell rc files (~/.zshrc, ~/.bashrc).
-#   --verify            Run `frankenctl --version` self-test after install.
+#   --verify            Check candidate startup before replacing an existing install.
 #   --force             Reinstall even if the target version is already present.
 #   --no-verify         Skip checksum + signature verification (testing only).
 #   --quiet             Suppress non-error output.
@@ -180,7 +180,10 @@ compute_sha256() {
 }
 
 # frankenctl exposes `frankenctl version` (subcommand), not `--version`.
-bin_version() { "$DEST_DIR/$BINARY_NAME" version 2>/dev/null || "$DEST_DIR/$BINARY_NAME" --version 2>/dev/null; }
+bin_version() {
+  local bin="${1:-$DEST_DIR/$BINARY_NAME}"
+  "$bin" version 2>/dev/null || "$bin" --version 2>/dev/null
+}
 
 # Map OS/arch → Rust target triple (matches the dsr release matrix / DCG installer).
 detect_platform() {
@@ -276,19 +279,43 @@ verify_sigstore() {
 # ── Install ───────────────────────────────────────────────────────────────────
 install_binary() {
   require_command install
-  mkdir -p "$DEST_DIR"
-  install -m 0755 "$1" "$DEST_DIR/$BINARY_NAME"
-  ok "Installed $BINARY_NAME → $DEST_DIR/$BINARY_NAME"
+  require_command mktemp
+  require_command mv
+  local source="$1" destination="$DEST_DIR/$BINARY_NAME" staged
+  [ -f "$source" ] && [ -x "$source" ] || die "not an executable file: $source"
+  mkdir -p "$DEST_DIR" || die "cannot create install dir: $DEST_DIR"
+  [ ! -d "$destination" ] || die "install destination is a directory: $destination"
+  # Stage on the destination filesystem: publication is a rename, never a
+  # truncating write into a working (or currently executing) installation.
+  # Explicit guards are necessary: release installation runs inside an if,
+  # where Bash disables errexit throughout the nested function calls.
+  staged="$(mktemp "$DEST_DIR/.${BINARY_NAME}.XXXXXXXX")" \
+    || die "cannot stage installation in $DEST_DIR"
+  install -m 0755 "$source" "$staged" \
+    || die "cannot stage $BINARY_NAME; previous install unchanged (candidate: $staged)"
+  self_test "$staged"
+  mv -f -- "$staged" "$destination" \
+    || die "cannot publish $BINARY_NAME; candidate retained at $staged"
+  ok "Installed $BINARY_NAME → $destination"
 }
 
 extract_and_install() {
-  local archive="$1" extract_dir="${WORK_DIR}/extract"
+  local archive="$1" extract_dir candidates candidate bin="" count=0
   require_command tar
-  mkdir -p "$extract_dir"
-  tar -xf "$archive" -C "$extract_dir"   # tar auto-detects .xz/.gz
-  local bin
-  bin="$(find "$extract_dir" -type f -name "$BINARY_NAME" -perm -u+x | head -n1)"
-  [ -n "$bin" ] || die "archive did not contain an executable $BINARY_NAME"
+  require_command find
+  require_command mktemp
+  extract_dir="$(mktemp -d "${WORK_DIR}/extract.XXXXXXXX")" \
+    || die "cannot create archive extraction directory"
+  # Never use a partially extracted executable after tar returns an error.
+  tar -xf "$archive" -C "$extract_dir" || die "archive extraction failed: $archive"
+  candidates="${WORK_DIR}/binary-candidates"
+  find "$extract_dir" -type f -name "$BINARY_NAME" -perm -u+x -print0 > "$candidates" \
+    || die "cannot inspect extracted archive: $archive"
+  while IFS= read -r -d '' candidate; do
+    count=$((count + 1))
+    bin="$candidate"
+  done < "$candidates"
+  [ "$count" -eq 1 ] || die "archive must contain exactly one executable $BINARY_NAME (found $count)"
   install_binary "$bin"
 }
 
@@ -376,8 +403,9 @@ maybe_add_path() {
 self_test() {
   [ "$VERIFY" -eq 1 ] || return 0
   info "Running self-test"
-  bin_version >/dev/null 2>&1 \
-    && ok "Self-test passed" || warn "Self-test: could not run $BINARY_NAME"
+  local bin="${1:-$DEST_DIR/$BINARY_NAME}"
+  bin_version "$bin" >/dev/null 2>&1 || die "self-test failed: could not run $bin"
+  ok "Self-test passed"
 }
 
 final_summary() {

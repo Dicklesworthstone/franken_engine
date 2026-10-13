@@ -225,47 +225,6 @@ impl DeterministicEventWitness {
         self.absorb(value);
         self.event_count = self.event_count.saturating_add(1);
     }
-
-    /// [`Self::fold`] of the concatenation of `pieces`, without joining them:
-    /// the same digest, word for word (bd-9vouw.504). A found property read
-    /// built its payload in a buffer only to fold it, about 500 instructions
-    /// per read.
-    pub fn fold_pieces(&mut self, source: NondeterminismSource, pieces: &[&[u8]]) {
-        let source = source.as_str().as_bytes();
-        self.absorb(&(source.len() as u64).to_be_bytes());
-        self.absorb(source);
-        let len = pieces.iter().map(|piece| piece.len()).sum::<usize>();
-        self.absorb(&(len as u64).to_be_bytes());
-        let mut digest = self.digest;
-        let mut word = [0_u8; 8];
-        let mut filled = 0;
-        for piece in pieces {
-            let mut bytes = *piece;
-            if filled > 0 {
-                let take = (8 - filled).min(bytes.len());
-                word[filled..filled + take].copy_from_slice(&bytes[..take]);
-                filled += take;
-                bytes = &bytes[take..];
-                if filled < 8 {
-                    continue;
-                }
-                digest = Self::mix(digest, u64::from_le_bytes(word));
-                filled = 0;
-            }
-            let (words, tail) = bytes.as_chunks::<8>();
-            for whole in words {
-                digest = Self::mix(digest, u64::from_le_bytes(*whole));
-            }
-            word[..tail.len()].copy_from_slice(tail);
-            filled = tail.len();
-        }
-        if filled > 0 {
-            word[filled..].fill(0);
-            digest = Self::mix(digest, u64::from_le_bytes(word));
-        }
-        self.digest = digest;
-        self.event_count = self.event_count.saturating_add(1);
-    }
 }
 
 /// Nondeterminism trace: a complete record of all nondeterministic decisions.
@@ -301,11 +260,6 @@ impl NondeterminismTrace {
     /// individually for forensics.
     pub fn witness_deterministic(&mut self, source: NondeterminismSource, value: &[u8]) {
         self.deterministic_witness.fold(source, value);
-    }
-
-    /// [`Self::witness_deterministic`] of a value given in pieces.
-    pub fn witness_deterministic_pieces(&mut self, source: NondeterminismSource, pieces: &[&[u8]]) {
-        self.deterministic_witness.fold_pieces(source, pieces);
     }
 
     /// Record a nondeterminism event.
@@ -4982,36 +4936,6 @@ mod tests {
                 witness_of(&[(pr.clone(), &changed)]),
                 "flipping byte {index} must change the witness"
             );
-        }
-    }
-
-    /// bd-9vouw.504: folding a value in pieces gives the digest of folding the
-    /// whole value, for every split of values from 0 to 40 bytes into one,
-    /// two or three pieces (empty pieces included), after an earlier event.
-    #[test]
-    fn witness_fold_of_pieces_equals_the_fold_of_the_whole_bd_9vouw_504() {
-        let pr = NondeterminismSource::PropertyResolution;
-        let source = b"property_found:key=length,object_id=12,depth=3,abcdefghijklmn";
-        for len in 0..=40 {
-            let value = &source[..len];
-            let mut whole = DeterministicEventWitness::default();
-            whole.fold(NondeterminismSource::TimerRead, b"earlier");
-            whole.fold(pr.clone(), value);
-            for first in 0..=len {
-                for second in first..=len {
-                    let mut pieces = DeterministicEventWitness::default();
-                    pieces.fold(NondeterminismSource::TimerRead, b"earlier");
-                    pieces.fold_pieces(
-                        pr.clone(),
-                        &[&value[..first], &value[first..second], &value[second..]],
-                    );
-                    assert_eq!(pieces, whole, "len {len}, split {first}/{second}");
-                }
-            }
-            let mut single = DeterministicEventWitness::default();
-            single.fold(NondeterminismSource::TimerRead, b"earlier");
-            single.fold_pieces(pr.clone(), &[value]);
-            assert_eq!(single, whole, "len {len}, one piece");
         }
     }
 

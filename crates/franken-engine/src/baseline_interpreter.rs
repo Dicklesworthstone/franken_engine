@@ -7895,13 +7895,8 @@ fn decimal_u32_len(value: u32) -> usize {
     }
 }
 
-fn append_decimal_u32(bytes: &mut Vec<u8>, value: u32) {
+fn append_decimal_u32(bytes: &mut Vec<u8>, mut value: u32) {
     let mut digits = [0u8; 10];
-    bytes.extend_from_slice(decimal_u32_digits(&mut digits, value));
-}
-
-/// `value` in decimal, written at the end of `digits`.
-fn decimal_u32_digits(digits: &mut [u8; 10], mut value: u32) -> &[u8] {
     let mut start = digits.len();
     loop {
         start -= 1;
@@ -7911,7 +7906,7 @@ fn decimal_u32_digits(digits: &mut [u8; 10], mut value: u32) -> &[u8] {
             break;
         }
     }
-    &digits[start..]
+    bytes.extend_from_slice(&digits[start..]);
 }
 
 impl RuntimePropertyKey {
@@ -64165,27 +64160,9 @@ impl InterpreterCore {
         object_id: ObjectId,
         depth: u32,
     ) {
-        // Deterministic decision: fold, don't record (bd-9vouw.18). A
-        // well-formed string key's diagnostic bytes are its own, so the
-        // payload's pieces are folded where they are, the same digest as the
-        // joined payload (bd-9vouw.504).
-        if let Some(text) = key.as_str().filter(|text| !text.starts_with("~pk~")) {
-            let mut object_digits = [0u8; 10];
-            let mut depth_digits = [0u8; 10];
-            let pieces: [&[u8]; 6] = [
-                b"property_found:key=",
-                text.as_bytes(),
-                b",object_id=",
-                decimal_u32_digits(&mut object_digits, object_id.0),
-                b",depth=",
-                decimal_u32_digits(&mut depth_digits, depth),
-            ];
-            self.nondeterminism_trace
-                .witness_deterministic_pieces(NondeterminismSource::PropertyResolution, &pieces);
-            return;
-        }
-        // Other keys go through a reused buffer: a Vec per property read was
-        // malloc and free on every found [[Get]].
+        // Deterministic decision: fold, don't record (bd-9vouw.18). The bytes
+        // go through a reused buffer: a Vec per property read was malloc and
+        // free on every found [[Get]].
         let mut payload = std::mem::take(&mut self.property_witness_scratch);
         write_property_resolution_found_payload(&mut payload, key, object_id, depth);
         self.nondeterminism_trace
@@ -142664,42 +142641,6 @@ mod async_runtime_tests_current {
                         "shape {shape:?}, stored {stored:?}, context {context:?}"
                     );
                 }
-            }
-        }
-    }
-
-    /// bd-9vouw.504: the property-found witness folded from pieces equals the
-    /// witness of the joined payload, for plain, empty, long,
-    /// `~pk~`-prefixed, lone-surrogate and Symbol keys at several object ids
-    /// and depths.
-    #[test]
-    fn property_found_witness_pieces_match_the_joined_payload_bd_9vouw_504() {
-        let mut core = test_interpreter();
-        let symbol = core
-            .allocate_private_symbol(Some(JsString::from("s")))
-            .expect("symbol should allocate");
-        let keys = [
-            RuntimePropertyKey::String(JsString::from("length")),
-            RuntimePropertyKey::String(JsString::from("")),
-            RuntimePropertyKey::String(JsString::from(
-                "a much longer property name past two words",
-            )),
-            RuntimePropertyKey::String(JsString::from("~pk~escaped")),
-            RuntimePropertyKey::String(JsString::from_code_units(&[0xD800])),
-            RuntimePropertyKey::Symbol(symbol),
-        ];
-        for key in &keys {
-            for (object, depth) in [(0u32, 0u32), (7, 1), (123_456, 40), (u32::MAX, u32::MAX)] {
-                let mut expected = core.nondeterminism_trace_ref().deterministic_witness;
-                let mut payload = Vec::new();
-                write_property_resolution_found_payload(&mut payload, key, ObjectId(object), depth);
-                expected.fold(NondeterminismSource::PropertyResolution, &payload);
-                core.capture_property_resolution_found(key, ObjectId(object), depth);
-                assert_eq!(
-                    core.nondeterminism_trace_ref().deterministic_witness,
-                    expected,
-                    "{key:?} {object} {depth}"
-                );
             }
         }
     }

@@ -11,6 +11,8 @@
 
 use super::*;
 
+mod encoder;
+
 /// The internal-slot tags of encoder and decoder instances.
 pub(super) const TEXT_ENCODER_TYPE: &str = "TextEncoder";
 pub(super) const TEXT_DECODER_TYPE: &str = "TextDecoder";
@@ -159,8 +161,10 @@ impl InterpreterCore {
             "encode" => {
                 self.text_codec_receiver(&receiver, TEXT_ENCODER_TYPE, method)?;
                 let text = self.text_codec_input_string(args)?;
-                let bytes = utf8_of_code_units(text.encode_utf16()).into_bytes();
-                Ok(Value::Object(self.alloc_uint8_array_from_bytes(&bytes)?))
+                // The canonical projection already implements USVString's
+                // lone-surrogate replacement; do not transcode it twice.
+                let bytes = text.as_utf8_projection().as_bytes();
+                Ok(Value::Object(self.alloc_uint8_array_from_bytes(bytes)?))
             }
             "encodeInto" => {
                 self.text_codec_receiver(&receiver, TEXT_ENCODER_TYPE, method)?;
@@ -179,21 +183,7 @@ impl InterpreterCore {
                         .to_string(),
                     got: destination.type_name().to_string(),
                 })?;
-                // Whole characters only: stop before one whose UTF-8 does not
-                // fit. `read` counts UTF-16 code units consumed.
-                let mut encoded = Vec::new();
-                let mut read = 0usize;
-                for unit in char::decode_utf16(text.encode_utf16()) {
-                    let units_read = unit.as_ref().map_or(1, |ch| ch.len_utf16());
-                    let ch = unit.unwrap_or(char::REPLACEMENT_CHARACTER);
-                    let mut buffer = [0u8; 4];
-                    let utf8 = ch.encode_utf8(&mut buffer).as_bytes();
-                    if encoded.len() + utf8.len() > view.byte_length {
-                        break;
-                    }
-                    encoded.extend_from_slice(utf8);
-                    read += units_read;
-                }
+                let (encoded, read) = encoder::encoded_prefix(&text, view.byte_length);
                 let written = encoded.len();
                 let offset = view.byte_offset;
                 // A transferred or shrunk buffer leaves the view with length 0
@@ -204,7 +194,7 @@ impl InterpreterCore {
                     .get_mut(offset..offset.saturating_add(written))
                 {
                     Some(destination) => {
-                        destination.copy_from_slice(&encoded);
+                        destination.copy_from_slice(encoded);
                         true
                     }
                     None => written == 0,

@@ -531,7 +531,7 @@ impl InterpreterCore {
     /// PromiseResolve's Get(then) must use the native property machinery, not
     /// the own-data-only helper used by the legacy Promise callback subset.
     /// Read it exactly once under the await context, including prototype and
-    /// getter provenance, and feed closure thenables to the existing job queue.
+    /// getter provenance, and feed callable thenables to the existing job queue.
     /// Return the observation label separately: the await reaction must retain
     /// it even when a resolving capability later supplies a public value.
     fn async_generator_thenable_source(
@@ -559,16 +559,24 @@ impl InterpreterCore {
                 let resolution = (|| {
                     this.observe_scoped_callback_result()?;
                     let label = this.json_parse_context_label()?;
-                    if let Value::Closure(then_id) = then {
+                    // Use the same callable adapter as Promise resolution.
+                    // Bound functions, callable proxies, builtins and async
+                    // functions are callable too; none may be fulfilled as an
+                    // ordinary object just because it lacks a closure-table ID.
+                    // Register the already-read method: a second Get(then)
+                    // could execute a getter again or select another method.
+                    if let Some(handler) =
+                        this.promise_reaction_handler_from_value(then, "thenable then")?
+                    {
                         this.enqueue_resolve_thenable(
                             promise,
-                            crate::closure_model::ClosureHandle(then_id),
+                            handler,
                             Value::Object(object),
                             label.clone(),
                         )?;
                     } else {
-                        // Preserve the shared Promise lane's callable coverage.
-                        // Never look up then twice: a getter can replace itself.
+                        // A non-callable then still fulfills with the original
+                        // object, without invoking a guest .call property.
                         this.fulfill_promise(
                             promise,
                             Self::value_to_js_value(&Value::Object(object)),
@@ -1857,5 +1865,245 @@ mod tests {
             core.promise_store.get(request).unwrap().label,
             Label::Secret
         );
+    }
+
+    #[test]
+    fn non_closure_thenables_queue_the_original_callable_receiver_and_label() {
+        use crate::promise_model::Microtask;
+
+        for method in [
+            "(function (resolve) { resolve(42); }).bind(null)",
+            "new Proxy(function (resolve) { resolve(42); }, {})",
+            "Array.prototype.forEach",
+            "async function (resolve) { resolve(42); }",
+        ] {
+            let source = format!(
+                "async function* values() {{ yield 1; }} const it = values(); \
+                 const input = {{ marker: 1771, then: {method} }};"
+            );
+            let (mut core, id, _) = request_core_with_source(Label::Public, &source);
+            let object = ObjectId(
+                core.heap
+                    .iter()
+                    .position(|entry| entry.properties.get("marker") == Some(&Value::Int(1771)))
+                    .expect("source object") as u32,
+            );
+            let then = core.heap[object.0 as usize]
+                .properties
+                .get("then")
+                .expect("source method")
+                .clone();
+            assert!(!matches!(then, Value::Closure(_)), "{method}");
+            core.join_direct_object_mutation_label(object, &Label::Secret)
+                .unwrap();
+            assert!(core.event_loop.microtasks.is_empty());
+            let (source, label) = core
+                .async_generator_thenable_source(id, object, &Label::Public)
+                .unwrap();
+            assert_eq!(label, Label::Secret);
+            assert_eq!(core.promise_store.get(source).unwrap().state, PromiseState::Pending);
+            assert_eq!(core.event_loop.microtasks.pending_count(), 1);
+            assert!(core.active_inline_callback_context_label.is_none());
+            assert_accounting(&core);
+
+            let Microtask::ResolveThenable {
+                promise,
+                then_handler,
+                thenable,
+                label,
+            } = core.event_loop.microtasks.dequeue().expect("thenable job")
+            else {
+                panic!("must enqueue resolution, not fulfillment");
+            };
+            assert_eq!(promise, source);
+            assert_eq!(core.promise_reaction_callee(then_handler).unwrap(), then);
+            assert_eq!(core.js_value_to_value(&thenable), Value::Object(object));
+            assert_eq!(label, Label::Secret);
+            core.sync_estimated_memory_bytes().unwrap();
+            assert_accounting(&core);
+        }
+    }
+
+    fn assert_callable_then_fixture(source: &str, expected: &str) {
+        let tree = CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: "async-generator-callable-then.js".into(),
+                    text: source.into(),
+                },
+                ParseGoal::Script,
+                &ParserOptions::default(),
+            )
+            .expect("callable-then source parses");
+        let module = lower_ir0_to_ir3(
+            &Ir0Module::from_syntax_tree(tree, "async-generator-callable-then.js"),
+            &LoweringContext::new("thenables", "native-callables", "builtin-only"),
+        )
+        .expect("callable-then source lowers")
+        .ir3;
+        for throughput in [false, true] {
+            for stress in [None, Some(7)] {
+                let mut config = if throughput {
+                    InterpreterConfig::v8_defaults()
+                } else {
+                    InterpreterConfig::quickjs_defaults()
+                };
+                config.instruction_budget = 1_000_000;
+                config.granted_capabilities = [
+                    RuntimeCapability::VmDispatch,
+                    RuntimeCapability::HeapAllocate,
+                    RuntimeCapability::Builtin,
+                    RuntimeCapability::Console,
+                ]
+                .into_iter()
+                .collect();
+                let mut core = InterpreterCore::new(config, "callable-then");
+                core.set_gc_stress_interval(stress);
+                let result = core.execute(&module).expect("native thenable execution");
+                let actual = result
+                    .console_output
+                    .iter()
+                    .map(|entry| entry.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert_eq!(actual, expected, "throughput={throughput}, GC={stress:?}");
+                assert_accounting(&core);
+            }
+        }
+    }
+
+    const BOUND_THEN_SOURCE: &str = r#"
+const receiver = { answer: 41 }; let calls = 0;
+function fulfill(extra, resolve, reject) {
+  calls++; resolve(this.answer + extra); reject('late'); throw 'after resolution';
+}
+const input = { then: fulfill.bind(receiver, 1) };
+async function* values() { yield input; yield await input; return input; }
+(async () => {
+  const it = values(); const first = it.next(), second = it.next(), third = it.next();
+  const a = await first, b = await second, c = await third;
+  console.log(a.value, a.done, b.value, b.done, c.value, c.done, calls);
+})().catch(error => console.log('FAIL', error));
+"#;
+    const BOUND_THEN_EXPECTED: &str = "42 false 42 false 42 true 3";
+
+    #[test]
+    fn bound_then_runs_for_yield_body_await_and_return_with_once_only_resolution() {
+        assert_callable_then_fixture(BOUND_THEN_SOURCE, BOUND_THEN_EXPECTED);
+    }
+
+    const PROXY_THEN_SOURCE: &str = r#"
+const events = []; const marker = {}; let input;
+const method = new Proxy(function (resolve) {
+  events.push(this === input ? 'receiver' : 'wrong receiver'); resolve(marker);
+}, { apply(target, receiver, args) {
+  events.push('apply'); return Reflect.apply(target, receiver, args);
+} });
+const prototype = { get then() {
+  events.push('get');
+  Object.defineProperty(this, 'then', { value: () => { throw 'second lookup'; } });
+  return method;
+} };
+input = Object.create(prototype);
+async function* values() { yield input; }
+(async () => {
+  const pending = values().next(); events.push('after');
+  queueMicrotask(() => events.push('tick'));
+  const item = await pending;
+  console.log(item.value === marker, item.done, events.join(':'));
+})().catch(error => console.log('FAIL', error));
+"#;
+    const PROXY_THEN_EXPECTED: &str = "true false get:after:apply:receiver:tick";
+
+    #[test]
+    fn inherited_then_getter_is_read_once_and_proxy_call_runs_as_a_job() {
+        assert_callable_then_fixture(PROXY_THEN_SOURCE, PROXY_THEN_EXPECTED);
+    }
+
+    const BUILTIN_THEN_SOURCE: &str = r#"
+const first = {}, second = {};
+async function* values(input) { yield input; }
+(async () => {
+  const direct = { 0: first, 1: second, length: 2, then: Array.prototype.forEach };
+  const bound = { then: Array.prototype.forEach.bind([first, second]) };
+  console.log((await values(direct).next()).value === first,
+              (await values(bound).next()).value === first);
+  try { await values({ then: Reflect.apply }).next(); }
+  catch (error) { console.log(error.name); }
+  const plain = { then: { call() { throw 'not callable'; } } };
+  console.log((await values(plain).next()).value === plain);
+})().catch(error => console.log('FAIL', error));
+"#;
+    const BUILTIN_THEN_EXPECTED: &str = "true true\nTypeError\ntrue";
+
+    #[test]
+    fn builtin_then_observes_receiver_first_resolution_and_native_exceptions() {
+        assert_callable_then_fixture(BUILTIN_THEN_SOURCE, BUILTIN_THEN_EXPECTED);
+    }
+
+    const RETURN_REJECTION_SOURCE: &str = r#"
+const reason = {}; const events = [];
+const input = { then: (function (resolve, reject) {
+  reject(reason); resolve(99); throw 'too late';
+}).bind(null) };
+async function* values() {
+  try { yield 0; }
+  catch (error) { yield error === reason ? 'caught' : 'wrong reason'; }
+  finally { events.push('finally'); }
+}
+(async () => {
+  const it = values(); const first = await it.next();
+  const returned = await it.return(input); const last = await it.next();
+  console.log(first.value, returned.value, returned.done, last.done, events.join(':'));
+})().catch(error => console.log('FAIL', error));
+"#;
+    const RETURN_REJECTION_EXPECTED: &str = "0 caught false true finally";
+
+    #[test]
+    fn bound_then_rejection_on_return_reenters_the_suspended_catch_and_finally() {
+        assert_callable_then_fixture(RETURN_REJECTION_SOURCE, RETURN_REJECTION_EXPECTED);
+    }
+
+    const ASYNC_THEN_SOURCE: &str = r#"
+const input = { then: async function (resolve) { await 0; resolve(17); } };
+async function* values() { yield input; }
+async function* empty() {}
+(async () => {
+  console.log((await values().next()).value);
+  const it = empty(); await it.next();
+  const value = { then: (function (resolve) { resolve(23); }).bind(null) };
+  const returned = it.return(value), following = it.next();
+  const a = await returned, b = await following;
+  console.log(a.value, a.done, b.value, b.done);
+})().catch(error => console.log('FAIL', error));
+"#;
+    const ASYNC_THEN_EXPECTED: &str = "17\n23 true undefined true";
+
+    #[test]
+    fn async_then_and_completed_return_keep_fifo_request_completion() {
+        assert_callable_then_fixture(ASYNC_THEN_SOURCE, ASYNC_THEN_EXPECTED);
+    }
+
+    const DELEGATED_THEN_SOURCE: &str = r#"
+const marker = { then: resolve => resolve('must not unwrap delegated value') };
+function supply(resolve) { resolve(this); }
+const iterable = { [Symbol.asyncIterator]() {
+  let index = 0;
+  return { next() {
+    const result = index++ === 0 ? { value: marker, done: false } : { value: 32, done: true };
+    return { then: supply.bind(result) };
+  } };
+} };
+async function* values() { return yield* iterable; }
+(async () => {
+  const it = values(); const a = await it.next(), b = await it.next();
+  console.log(a.value === marker, a.done, b.value, b.done);
+})().catch(error => console.log('FAIL', error));
+"#;
+    const DELEGATED_THEN_EXPECTED: &str = "true false 32 true";
+
+    #[test]
+    fn delegation_awaits_callable_result_then_without_unwrapping_its_yielded_value() {
+        assert_callable_then_fixture(DELEGATED_THEN_SOURCE, DELEGATED_THEN_EXPECTED);
     }
 }

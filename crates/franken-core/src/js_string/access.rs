@@ -14,6 +14,46 @@ use super::{JsString, Shape, Text, is_high_surrogate, is_low_surrogate};
 /// not reach the fallback, regardless of the accumulated string's length.
 const MAX_INDEX_DESCENT: usize = 32;
 
+/// Inspect at most this many bytes at either end when proving that a long
+/// string's interior is ASCII. No index table or per-string cache is needed.
+const ASCII_FRINGE_BYTES: usize = 32;
+
+/// Short scans are cheaper than the proof. This also puts an eligible index
+/// strictly inside the middle, beyond either inspected fringe.
+const ASCII_MIDDLE_MIN_DISTANCE: usize = 256;
+
+/// A direct byte offset when the cached lengths prove the middle is ASCII.
+/// Every non-ASCII scalar contributes a strictly positive UTF-8-byte minus
+/// UTF-16-unit excess: 1 for two-byte BMP, 2 for three-byte BMP or astral.
+/// If the two fringes account for ALL that excess, there cannot be another
+/// non-ASCII scalar in the middle. Repeated indexing of `"é" + long_ascii`
+/// then does bounded work instead of rescanning a growing prefix each time.
+fn ascii_middle_boundary(text: &str, length: usize, position: usize) -> Option<usize> {
+    if position < ASCII_MIDDLE_MIN_DISTANCE || length - position < ASCII_MIDDLE_MIN_DISTANCE {
+        return None;
+    }
+    let excess = text.len() - length;
+    if excess == 0 {
+        return Some(position);
+    }
+    // Dense Unicode cannot fit in the fringes; do not scan them speculatively.
+    if excess > 2 * ASCII_FRINGE_BYTES {
+        return None;
+    }
+    let mut prefix_end = ASCII_FRINGE_BYTES;
+    while !text.is_char_boundary(prefix_end) {
+        prefix_end -= 1;
+    }
+    let mut suffix_start = text.len() - ASCII_FRINGE_BYTES;
+    while !text.is_char_boundary(suffix_start) {
+        suffix_start += 1;
+    }
+    // Round INWARD so the proof never charges a partial scalar's excess.
+    let prefix_excess = prefix_end - text[..prefix_end].encode_utf16().count();
+    let suffix_excess = text.len() - suffix_start - text[suffix_start..].encode_utf16().count();
+    (prefix_excess + suffix_excess == excess).then_some(position + prefix_excess)
+}
+
 /// Locate a UTF-16 boundary in well-formed UTF-8. A true second component
 /// means the position is between the halves of the astral scalar beginning
 /// at the returned byte. Search from the nearer end; ASCII spans retain a
@@ -26,6 +66,9 @@ fn utf16_boundary(text: &str, length: usize, position: usize) -> (usize, bool) {
     let remaining = length - position;
     if remaining == 0 {
         return (text.len(), false);
+    }
+    if let Some(byte) = ascii_middle_boundary(text, length, position) {
+        return (byte, false);
     }
     let bytes = text.as_bytes();
     if position <= remaining {
@@ -705,6 +748,111 @@ mod tests {
         for index in 8190..=units.len() {
             assert_eq!(string.code_unit_at(index), units.get(index).copied());
             assert_eq!(string.code_point_at(index), reference_point(&units, index));
+        }
+    }
+
+    #[test]
+    fn sparse_unicode_fringes_prove_direct_middle_access() {
+        let fringes = [
+            ("", "\u{1f600}"),
+            ("\u{e9}", ""),
+            ("\u{20ac}\u{1f600}", "\u{df}"),
+            ("\u{d7ff}\u{e000}", "\u{10000}\u{10ffff}"),
+        ];
+        for width in [1024, 8192, 131072] {
+            for (prefix, suffix) in fringes {
+                let text = format!("{prefix}{}{suffix}", "a".repeat(width));
+                let length = text.encode_utf16().count();
+                let string = JsString::from(text.as_str());
+                let excess = prefix.len() - prefix.encode_utf16().count();
+                for index in [256, 512, length / 2, length - 256] {
+                    // Exercise the bounded proof itself, not only an answer
+                    // the old linear fallback could also produce.
+                    assert_eq!(
+                        ascii_middle_boundary(&text, length, index),
+                        Some(index + excess)
+                    );
+                    assert_eq!(
+                        utf16_boundary(&text, length, index),
+                        (index + excess, false)
+                    );
+                    assert_eq!(string.code_unit_at(index), Some(u16::from(b'a')));
+                    assert_eq!(string.code_point_at(index), Some(u32::from(b'a')));
+                    assert_eq!(
+                        string.utf16_slice(index, index + 7).as_str(),
+                        Some("aaaaaaa")
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn interior_unicode_cannot_pass_the_ascii_middle_proof() {
+        for scalar in ['\u{e9}', '\u{20ac}', '\u{1f600}', '\u{10ffff}'] {
+            let text = format!(
+                "\u{e9}{}{scalar}{}\u{1f600}",
+                "a".repeat(1024),
+                "b".repeat(1024)
+            );
+            let units: Vec<u16> = text.encode_utf16().collect();
+            let string = JsString::from(text.as_str());
+            for index in [256, 1024, 1025, 1026, 1027, units.len() - 256] {
+                assert_eq!(ascii_middle_boundary(&text, units.len(), index), None);
+                assert_eq!(string.code_unit_at(index), units.get(index).copied());
+                assert_eq!(string.code_point_at(index), reference_point(&units, index));
+            }
+        }
+    }
+
+    #[test]
+    fn ascii_middle_proof_never_counts_a_split_fringe_scalar() {
+        for scalar in ['\u{e9}', '\u{20ac}', '\u{1f600}'] {
+            for pad in ASCII_FRINGE_BYTES - scalar.len_utf8() + 1..ASCII_FRINGE_BYTES {
+                let padding = "x".repeat(pad);
+                let middle = "a".repeat(2048);
+                for text in [
+                    format!("{padding}{scalar}{middle}"),
+                    format!("{middle}{scalar}{padding}"),
+                ] {
+                    let units: Vec<u16> = text.encode_utf16().collect();
+                    let index = units.len() / 2;
+                    // The non-ASCII scalar straddles the probe boundary.
+                    // Rounding inward must leave its excess unaccounted for.
+                    assert_eq!(ascii_middle_boundary(&text, units.len(), index), None);
+                    let (byte, second) = utf16_boundary(&text, units.len(), index);
+                    assert!(!second);
+                    assert_eq!(text[..byte].encode_utf16().count(), index);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ascii_middle_proof_preserves_short_dense_and_edge_boundaries() {
+        for text in [
+            String::from("a\u{1f600}z"),
+            "\u{e9}\u{1f600}".repeat(512),
+            format!("\u{1f600}{}\u{20ac}", "a".repeat(640)),
+            format!(
+                "{}{}{}",
+                "\u{1f600}".repeat(8),
+                "a".repeat(640),
+                "\u{20ac}".repeat(10)
+            ),
+        ] {
+            let units: Vec<u16> = text.encode_utf16().collect();
+            let string = JsString::from(text.as_str());
+            for index in 0..=units.len() {
+                let (byte, second) = utf16_boundary(&text, units.len(), index);
+                assert!(text.is_char_boundary(byte));
+                assert_eq!(
+                    text[..byte].encode_utf16().count() + usize::from(second),
+                    index
+                );
+                assert_eq!(string.code_unit_at(index), units.get(index).copied());
+                assert_eq!(string.code_point_at(index), reference_point(&units, index));
+            }
         }
     }
 }

@@ -7,6 +7,10 @@
   var bufferAlloc = Buffer.alloc;
   var bufferFrom = Buffer.from;
   var isBuffer = Buffer.isBuffer;
+  var isEncoding = Buffer.isEncoding;
+  var bufferConcat = Buffer.concat;
+  var bufferSlice = Buffer.prototype.subarray;
+  var bufferToString = Buffer.prototype.toString;
   // The discriminator is the same typed FsOperation argument the old direct
   // call lowering emits. In particular, fd lifecycle operations require write
   // authority. No wrapper performs host I/O outside these two intrinsics.
@@ -167,6 +171,81 @@
     }
     return { offset: offset, length: length };
   }
+  function fileOptions(options, defaultEncoding) {
+    if (options === undefined || options === null) { options = {}; }
+    if (typeof options === 'string') { options = { encoding: options }; }
+    if (typeof options !== 'object') { throw argumentError('options'); }
+    var encoding = options.encoding;
+    if (encoding === undefined || encoding === null) { encoding = defaultEncoding; }
+    if (encoding !== null && !isEncoding(encoding)) {
+      var error = new TypeError('Invalid encoding: ' + encoding);
+      error.code = 'ERR_INVALID_ARG_VALUE';
+      throw error;
+    }
+    var signal = options.signal;
+    if (signal !== undefined && (signal === null || typeof signal !== 'object' ||
+        typeof signal.aborted !== 'boolean')) {
+      throw argumentError('options.signal');
+    }
+    return { encoding: encoding, signal: signal };
+  }
+  function checkAbort(signal) {
+    if (signal !== undefined && signal.aborted) {
+      var error = new Error('The operation was aborted');
+      error.name = 'AbortError';
+      error.code = 'ABORT_ERR';
+      error.cause = signal.reason;
+      throw error;
+    }
+  }
+  function checkedCount(count, length, syscall, requireProgress) {
+    if (typeof count !== 'number' || count % 1 !== 0 || count < 0 ||
+        count > length || (requireProgress && count === 0)) {
+      var error = new Error('Invalid byte count from filesystem provider');
+      error.code = 'EIO';
+      error.syscall = syscall;
+      throw error;
+    }
+    return count;
+  }
+  function readContents(fd, options) {
+    options = fileOptions(options, null);
+    var chunks = [];
+    var total = 0;
+    // A short read is not EOF (pipes and interrupted reads can return less
+    // than requested). Only a zero count ends the descriptor stream.
+    for (;;) {
+      checkAbort(options.signal);
+      var chunk = bufferAlloc(16384);
+      var count = checkedCount(readSync(fd, chunk, 0, chunk.length, null),
+        chunk.length, 'read', false);
+      checkAbort(options.signal);
+      if (count === 0) { break; }
+      chunks[chunks.length] = count === chunk.length ? chunk :
+        apply(bufferSlice, chunk, [0, count]);
+      total += count;
+    }
+    var result = bufferConcat(chunks, total);
+    return options.encoding === null ? result :
+      apply(bufferToString, result, [options.encoding]);
+  }
+  function writeContents(fd, data, options) {
+    options = fileOptions(options, 'utf8');
+    checkAbort(options.signal);
+    if (typeof data === 'string') { data = bufferFrom(data, options.encoding); }
+    if (!isBuffer(data)) { throw argumentError('data (expected string or Buffer)'); }
+    var offset = 0;
+    while (offset < data.length) {
+      checkAbort(options.signal);
+      var length = data.length - offset;
+      if (length > 16384) { length = 16384; }
+      // Continue partial writes, but reject a non-progressing provider rather
+      // than hanging or reporting success with truncated data.
+      offset += checkedCount(writeSync(fd, data, offset, length, null),
+        length, 'write', true);
+    }
+    checkAbort(options.signal);
+  }
   // Descriptor ownership stays in this closure, never in a guest-writable fd
   // property. These methods use the existing synchronous descriptor effects
   // with Promise completion, not an off-thread I/O backend. Buffer/string I/O
@@ -213,6 +292,17 @@
       },
       sync: function () {
         return perform('fsync', function (fd) { fsyncSync(fd); });
+      },
+      readFile: function (options) {
+        return perform('readFile', function (fd) { return readContents(fd, options); });
+      },
+      writeFile: function (data, options) {
+        return perform('writeFile', function (fd) { writeContents(fd, data, options); });
+      },
+      appendFile: function (data, options) {
+        // Like Node, appendFile on an existing handle uses that descriptor's
+        // open flags and current offset; it does not reopen or truncate a path.
+        return perform('writeFile', function (fd) { writeContents(fd, data, options); });
       },
       read: function (buffer, offset, length, position) {
         return perform('read', function (fd) {

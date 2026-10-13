@@ -170,7 +170,7 @@ impl InterpreterCore {
                     Value::Object(object_id) => self
                         .heap
                         .get(object_id.0 as usize)
-                        .and_then(|object| object.typed_array.clone())
+                        .and_then(|object| object.typed_array.as_deref().cloned())
                         .filter(|view| view.kind == TypedArrayKind::Uint8),
                     _ => None,
                 }
@@ -272,6 +272,9 @@ impl InterpreterCore {
                     // Decoders from older heap snapshots have no pending bytes.
                     _ => DecodeState::default(),
                 };
+                // Whether this call finishes what an earlier streaming call
+                // left buffered (incomplete bytes, the BOM decision).
+                let carried = state.streaming;
                 // Incomplete bytes and the BOM decision carry information into
                 // later calls. Admit that provenance before publishing state;
                 // a public suffix must not declassify a secret prefix.
@@ -289,6 +292,17 @@ impl InterpreterCore {
                     expected: format!("valid {encoding} data"),
                     got: format!("The encoded data was not valid for encoding {encoding}"),
                 })?;
+                // The text such a call returns depends on the buffered bytes,
+                // so it carries the decoder's provenance, not only this
+                // call's arguments: "\u20ac" from a secret E2 82 and a public
+                // AC was Public.
+                if carried && let Some(state_label) = self.object_mutation_labels.get(&decoder) {
+                    let pending = self
+                        .pending_hostcall_result_label
+                        .as_ref()
+                        .map_or_else(|| state_label.clone(), |pending| pending.join(state_label));
+                    self.replace_pending_hostcall_result_label(Some(pending))?;
+                }
                 Ok(Value::Str(JsString::from_code_units(&units)))
             }
             _ => Err(InterpreterError::TypeError {
@@ -351,7 +365,7 @@ impl InterpreterCore {
         let buffer = self
             .heap
             .get(view.0 as usize)
-            .and_then(|object| object.typed_array.as_ref())
+            .and_then(|object| object.typed_array.as_deref())
             .map(|typed_array| typed_array.buffer)
             .ok_or_else(|| InterpreterError::TypeError {
                 expected: "typed-array view".to_string(),
@@ -801,8 +815,17 @@ mod streaming_decoder_tests {
         )
         .unwrap()
         .ir3;
-        let mut core =
-            InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "decoder-carry-label");
+        // The grants a program's execution has: without HeapAllocate the
+        // allocation helpers refuse before the label checks below.
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]
+        .into_iter()
+        .collect();
+        let mut core = InterpreterCore::new(config, "decoder-carry-label");
         let decoder = core
             .construct_text_decoder(None, RegRange { start: 0, count: 0 })
             .unwrap();

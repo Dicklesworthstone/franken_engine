@@ -1,14 +1,15 @@
 //! bd-qmy52: `require('querystring')` and `require('os')` as pure-compute
 //! builtins.
 //!
-//! The lowering pipeline recognizes `const qs = require('querystring')` /
-//! `const os = require('os')` bindings that are actually USED as a recognized
-//! builtin (usage-gated exactly like the fs/http/path aliases), elides the
-//! require declaration, and rewrites member calls to `builtin:Querystring*` /
-//! `builtin:Os*` hostcalls. The deterministic `os` property constants
+//! querystring is a first-class realm module (bd-305gi): its extracted,
+//! destructured and deferred methods call the same `builtin:Querystring*`
+//! hostcalls as the original direct-call facade. The lowering pipeline still
+//! recognizes `const os = require('os')` bindings used as an os builtin,
+//! elides that declaration and rewrites calls to `builtin:Os*` hostcalls.
+//! The deterministic `os` property constants
 //! (`os.EOL`, `os.devNull`) lower to string literals and `os.constants` to a
 //! 0-arg `builtin:OsConstants` hostcall allocating the nested
-//! `{ signals, errno, priority }` object. Bare/unused aliases keep the
+//! `{ signals, errno, priority }` object. Bare/unused os aliases keep the
 //! ambient-authority denial (fail-closed contract pinned below).
 //!
 //! The `os` builtins return FIXED engine-contained values (the engine has no
@@ -18,6 +19,11 @@
 //! `franken_node/crates/franken-node/tests/fixtures/compat_corpus/{querystring,os}/`.
 
 use frankenengine_engine::HybridRouter;
+use frankenengine_engine::ast::ParseGoal;
+use frankenengine_engine::baseline_interpreter::LaneChoice;
+use frankenengine_engine::execution_orchestrator::{
+    ExecutionOrchestrator, ExtensionPackage, LabFixtureExecutionOrchestratorExt, OrchestratorConfig,
+};
 
 /// Evaluate `src` and return the console output messages joined by newlines
 /// (one line per `console.log`, args joined by single spaces — matching bun).
@@ -739,14 +745,12 @@ fn os_spread_call_routes_through_reflect_apply() {
 // -------------------------------------------------------------------------
 
 #[test]
-fn unused_querystring_alias_keeps_ambient_denial() {
-    // The fail-closed contract (mirror of the fs/path usage gates): a
-    // bare/unused `const qs = require('querystring')` is NOT recognized, so
-    // the require call still hits the ambient-authority lowering denial.
-    let err = eval_err("const qs = require('querystring');\nconsole.log('reached');");
-    assert!(
-        err.contains("ambient authority violation"),
-        "expected ambient-authority denial for unused querystring alias, got: {err}"
+fn unused_querystring_alias_loads_without_filesystem_authority_bd_305gi() {
+    // bd-305gi replaces the old syntactic usage gate: loading a pure module
+    // is valid even when the program only detects its presence.
+    assert_eq!(
+        eval_console("const qs = require('querystring');\nconsole.log('reached');"),
+        "reached"
     );
 }
 
@@ -760,15 +764,12 @@ fn unused_os_alias_keeps_ambient_denial() {
 }
 
 #[test]
-fn querystring_usage_only_inside_function_body_stays_fail_closed() {
-    // Function bodies are opaque to the usage scan (fail-closed): a usage
-    // reachable only through a function body does NOT confirm the alias.
-    let err = eval_err(
-        "const qs = require('querystring');\nfunction f() { return qs.escape('a b'); }\nconsole.log(f());",
-    );
-    assert!(
-        err.contains("ambient authority violation"),
-        "expected ambient-authority denial for function-body-only usage, got: {err}"
+fn querystring_usage_inside_function_body_uses_the_module_bd_305gi() {
+    assert_eq!(
+        eval_console(
+            "const qs = require('querystring');\nfunction f() { return qs.escape('a b'); }\nconsole.log(f());",
+        ),
+        "a%20b"
     );
 }
 
@@ -785,18 +786,301 @@ fn os_usage_only_inside_function_body_stays_fail_closed() {
 
 #[test]
 fn unrecognized_method_does_not_confirm_the_aliases() {
-    // `qs.notAMethod` / `os.notAMethod` are outside the recognized sets; with
-    // no other usage the aliases stay unconfirmed and the requires denied.
-    let err = eval_err("const qs = require('querystring');\nconsole.log(qs.notAMethod('x'));");
-    assert!(
-        err.contains("ambient authority violation"),
-        "expected ambient-authority denial for unrecognized-method-only usage, got: {err}"
+    // querystring is an ordinary module: an absent method throws TypeError
+    // at invocation, so feature detection and catch handlers can work.
+    assert_eq!(
+        eval_console(
+            "const qs = require('querystring'); try { qs.notAMethod('x'); } \
+             catch (error) { console.log(error instanceof TypeError); }",
+        ),
+        "true"
     );
+    // os still uses the pre-existing syntactic facade.
     let err = eval_err("const os = require('os');\nconsole.log(os.notAMethod());");
     assert!(
         err.contains("ambient authority violation"),
         "expected ambient-authority denial for unrecognized-method-only usage, got: {err}"
     );
+}
+
+#[test]
+fn querystring_module_values_and_detached_methods_work_bd_305gi() {
+    assert_eq!(
+        eval_console(
+            r#"
+                const qs = require('querystring');
+                const { parse, stringify, escape, unescape } = require('node:querystring');
+                const alias = qs;
+                function invoke(fn, value) { return fn(value); }
+                console.log(typeof qs, typeof parse, alias === require('node:querystring'));
+                console.log(qs.parse === qs.decode, qs.stringify === qs.encode);
+                console.log(parse.name, parse.length, stringify.name, stringify.length,
+                    escape.name, escape.length, unescape.name, unescape.length);
+                console.log(parse('a=one&a=two').a.join(','));
+                console.log(stringify({ a: ['one', 'two'], b: 'a b' }));
+                console.log(invoke(escape, 'a b'), unescape('a%20b'));
+                const key = 'escape';
+                console.log(qs[key]('x+y'));
+            "#,
+        ),
+        "object function true\ntrue true\nparse 4 stringify 4 qsEscape 1 qsUnescape 2\none,two\na=one&a=two&b=a%20b\na%20b a b\nx%2By"
+    );
+}
+
+#[test]
+fn querystring_methods_observe_property_mutation_bd_305gi() {
+    assert_eq!(
+        eval_console(
+            r#"
+                const qs = require('querystring');
+                const original = qs.escape;
+                qs.escape = value => 'wrapped:' + original(value);
+                console.log(qs.escape('a b'));
+                console.log(require('node:querystring').escape('c d'));
+                delete qs.escape;
+                console.log(typeof qs.escape, original('e f'));
+            "#,
+        ),
+        "wrapped:a%20b\nwrapped:c%20d\nundefined e%20f"
+    );
+}
+
+fn run_querystring_commonjs(
+    source: &str,
+    sibling: Option<&str>,
+    lane: LaneChoice,
+    builtin: bool,
+) -> Result<Vec<String>, String> {
+    run_querystring_commonjs_with_environment(source, sibling, lane, builtin, None)
+}
+
+fn run_querystring_commonjs_with_environment(
+    source: &str,
+    sibling: Option<&str>,
+    lane: LaneChoice,
+    builtin: bool,
+    environment: Option<std::collections::BTreeMap<String, String>>,
+) -> Result<Vec<String>, String> {
+    let root = tempfile::tempdir().expect("module root");
+    let entry = root.path().join("entry.cjs");
+    std::fs::write(&entry, source).expect("entry source");
+    if let Some(source) = sibling {
+        std::fs::write(root.path().join("sibling.cjs"), source).expect("sibling source");
+    }
+    let mut capabilities = vec![
+        "vm_dispatch".to_string(),
+        "heap_allocate".to_string(),
+        "console".to_string(),
+        "module_load".to_string(),
+    ];
+    if builtin {
+        capabilities.push("builtin".to_string());
+    }
+    if environment.is_some() {
+        capabilities.push("env_read".to_string());
+    }
+    let package = ExtensionPackage {
+        extension_id: "querystring-module-values".to_string(),
+        source: source.to_string(),
+        source_file: Some(entry.display().to_string()),
+        module_root: Some(root.path().display().to_string()),
+        capabilities,
+        version: "1.0.0".to_string(),
+        metadata: Default::default(),
+    };
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig {
+        force_lane: Some(lane),
+        parse_goal: ParseGoal::Script,
+        commonjs_entry: true,
+        ..OrchestratorConfig::default()
+    });
+    if let Some(environment) = environment {
+        let provider =
+            frankenengine_extension_host::host_io::EnvironmentSnapshotHostIo::new(environment)
+                .expect("explicit environment fixture");
+        orchestrator.set_host_io(std::sync::Arc::new(provider), None);
+    }
+    orchestrator
+        .execute(&package)
+        .map(|result| {
+            result
+                .console_output
+                .into_iter()
+                .map(|entry| entry.message)
+                .collect()
+        })
+        .map_err(|error| format!("{error:?}"))
+}
+
+#[test]
+fn querystring_dynamic_require_shares_realm_module_across_files_bd_305gi() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let lines = run_querystring_commonjs(
+            r#"
+                const qs = require('querystring');
+                const name = 'node:querystring';
+                const dynamic = require(name);
+                const sibling = require('./sibling.cjs');
+                console.log(qs === dynamic, qs === sibling, qs.parse === sibling.decode);
+                console.log(qs.marker, sibling.stringify({ a: 'b c' }));
+                const load = require;
+                console.log(load('querystring') === qs);
+            "#,
+            Some(
+                "const name = 'querystring'; const qs = require(name); \
+                 qs.marker = 'from-sibling'; module.exports = qs;",
+            ),
+            lane,
+            true,
+        )
+        .unwrap_or_else(|error| panic!("{lane:?}: {error}"));
+        assert_eq!(
+            lines,
+            ["true true true", "from-sibling a=b%20c", "true"],
+            "{lane:?}"
+        );
+    }
+}
+
+#[test]
+fn querystring_dynamic_methods_keep_the_builtin_capability_gate_bd_305gi() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let error = run_querystring_commonjs(
+            "const name = 'querystring'; const parse = require(name).parse; parse('a=1');",
+            None,
+            lane,
+            false,
+        )
+        .expect_err("extracting a method must not grant Builtin authority");
+        assert!(error.contains("CapabilityDenied"), "{lane:?}: {error}");
+        assert!(
+            error.contains("builtin:QuerystringParse"),
+            "{lane:?}: {error}"
+        );
+    }
+}
+
+#[test]
+fn querystring_cross_file_replacement_keeps_captured_secret_provenance_bd_305gi() {
+    // Reflect.set is an internal labeled transfer. Ordinary property stores
+    // have an Internal static clearance and refuse this closure before the
+    // parent can observe the cached module, so use the explicit reflective
+    // operation to exercise the actual result and egress boundary.
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let error = run_querystring_commonjs_with_environment(
+            "const qs = require('querystring'); require('./sibling.cjs'); \
+             console.log(qs.escape('public input'));",
+            Some(
+                "const qs = require('node:querystring'); \
+                 const captured = process.env.PRIVATE_KEY; \
+                 Reflect.set(qs, 'escape', () => captured);",
+            ),
+            lane,
+            true,
+            Some(std::collections::BTreeMap::from([(
+                "PRIVATE_KEY".to_string(),
+                "secret-fixture".to_string(),
+            )])),
+        )
+        .expect_err("a cached module may contain a sibling's Secret-returning closure");
+        assert!(
+            error.contains("console:log:confidentiality"),
+            "{lane:?}: the replacement must run and its result must stop at the sink: {error}"
+        );
+    }
+}
+
+#[test]
+fn querystring_detached_methods_do_not_declassify_secret_inputs_bd_305gi() {
+    use frankenengine_engine::baseline_interpreter::{
+        InterpreterConfig, InterpreterCore, InterpreterError, Value,
+    };
+    use frankenengine_engine::capability::RuntimeCapability;
+    use frankenengine_engine::hash_tiers::ContentHash;
+    use frankenengine_engine::ifc_artifacts::Label;
+    use frankenengine_engine::ir_contract::{CapabilityTag, Ir3Instruction, Ir3Module, RegRange};
+
+    // A literal's spelling is not provenance. Seed the same bytes with two
+    // real labels, then extract and call the realm module's native method.
+    // This bypasses the static analysis and checks the runtime sink itself.
+    let mut module = Ir3Module::new(ContentHash::compute(b"querystring-ifc"), "querystring-ifc");
+    module.constant_pool = vec!["escape".into()];
+    module.instructions = vec![
+        Ir3Instruction::HostCall {
+            capability: CapabilityTag("builtin:QuerystringModule".into()),
+            args: RegRange { start: 0, count: 0 },
+            dst: 1,
+        },
+        Ir3Instruction::LoadStr {
+            dst: 2,
+            pool_index: 0,
+        },
+        Ir3Instruction::GetProperty {
+            obj: 1,
+            key: 2,
+            dst: 3,
+        },
+        Ir3Instruction::Call {
+            callee: 3,
+            args: RegRange { start: 0, count: 1 },
+            dst: 4,
+        },
+        Ir3Instruction::HostCall {
+            capability: CapabilityTag("console:log".into()),
+            args: RegRange { start: 4, count: 1 },
+            dst: 5,
+        },
+        Ir3Instruction::Return { value: 4 },
+    ];
+
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for input_label in [Label::Public, Label::Secret] {
+            let mut config = match lane {
+                LaneChoice::QuickJs => InterpreterConfig::quickjs_defaults(),
+                LaneChoice::V8 => InterpreterConfig::v8_defaults(),
+            };
+            config.granted_capabilities = [
+                RuntimeCapability::VmDispatch,
+                RuntimeCapability::HeapAllocate,
+                RuntimeCapability::Builtin,
+                RuntimeCapability::Console,
+            ]
+            .into_iter()
+            .collect();
+            let mut core = InterpreterCore::new(config, "querystring-ifc");
+            core.seed_register(0, Value::str("sensitive value"))
+                .expect("seed querystring argument");
+            core.set_register_label(0, input_label.clone())
+                .expect("label querystring argument");
+
+            let outcome = core.execute(&module);
+            assert_eq!(
+                core.get_register_label(4).expect("transformed label"),
+                &input_label,
+                "{lane:?}: the extracted method must preserve input provenance"
+            );
+            if input_label == Label::Public {
+                assert_eq!(
+                    outcome.expect("Public input may reach the console").value,
+                    Value::str("sensitive%20value"),
+                    "{lane:?}"
+                );
+                assert_eq!(core.console_output().len(), 1, "{lane:?}");
+                assert_eq!(
+                    core.console_output()[0].message,
+                    "sensitive%20value",
+                    "{lane:?}"
+                );
+            } else {
+                assert!(
+                    matches!(&outcome, Err(InterpreterError::CapabilityDenied { capability })
+                        if capability == "console:log:confidentiality"),
+                    "{lane:?}: Secret input must be refused at the sink: {outcome:?}"
+                );
+                assert!(core.console_output().is_empty(), "{lane:?}");
+            }
+        }
+    }
 }
 
 #[test]

@@ -1127,7 +1127,7 @@ fn run_external_backend(
             } else if output.status.success() {
                 DifferentialBackendStatus::Completed
             } else if output.status.code() == Some(1)
-                && canonical_js_exception_line(&stderr).is_some()
+                && canonical_js_exception_line_for(spec.runtime_id, &stderr).is_some()
             {
                 DifferentialBackendStatus::Failed
             } else {
@@ -2379,13 +2379,35 @@ fn canonical_exception_v2(
         return (Some(namespace.to_string()), Some(namespace.to_string()));
     }
 
-    let Some((kind, message)) = canonical_js_exception_line(&receipt.stderr) else {
+    let Some((kind, message)) = canonical_js_exception_line_for(receipt.backend, &receipt.stderr)
+    else {
         return (None, None);
     };
     (
         Some(canonicalize_exception_kind(kind)),
         Some(canonicalize_message_class(message)),
     )
+}
+
+/// [`canonical_js_exception_line`] for `backend`'s stderr. Bun prints an
+/// uncaught plain `Error` as `error: <message>` (lowercase, every other kind
+/// as `Kind: message`), so for the Bun receipt that line is kind `Error`; a
+/// Bun lane throwing `new Error(...)` was a generic nonzero exit (degraded)
+/// and kept every all-fail-same Error program from consensus (bd-rvpy0).
+fn canonical_js_exception_line_for(
+    backend: DifferentialBackend,
+    stderr: &str,
+) -> Option<(&str, &str)> {
+    canonical_js_exception_line(stderr).or_else(|| {
+        if backend != DifferentialBackend::BunStable {
+            return None;
+        }
+        stderr.lines().find_map(|line| {
+            line.trim()
+                .strip_prefix("error: ")
+                .map(|message| ("Error", message.trim()))
+        })
+    })
 }
 
 fn canonical_js_exception_line(stderr: &str) -> Option<(&str, &str)> {

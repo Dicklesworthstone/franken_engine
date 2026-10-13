@@ -313,12 +313,14 @@ fn adversarial_vectors() -> Vec<JsConformanceVector> {
             "eval.runtime.fault",
             Some("failed to parse module '<function-constructor>'"),
         ),
+        // An invalid parameter list is a SyntaxError the program could catch,
+        // as in Node (bd-9vouw.424); uncaught here.
         JsConformanceVector::engine_error(
             "fc-adv-syntax-error-parameter",
             CATEGORY_ADVERSARIAL,
             r#"new Function("x-", "return x;");"#,
             "eval.runtime.fault",
-            Some("failed to parse module '<function-constructor>'"),
+            Some("SyntaxError: invalid binding pattern: `x-`"),
         ),
         // -- adversarial budget exhaustion: runtime, deterministic limit -----
         JsConformanceVector::engine_error(

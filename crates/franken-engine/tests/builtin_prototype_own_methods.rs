@@ -70,6 +70,227 @@ fn a_real_own_property_still_wins_over_the_virtual_builtin() {
     assert_eq!(eval(source), "7 false true includes true");
 }
 
+/// bd-9vouw.346: %Function.prototype% is a built-in function whose [[Call]]
+/// ignores its receiver and arguments and returns undefined (ES2020 19.2.3).
+/// These exercise both invocation and the callback IsCallable checks.
+#[test]
+fn function_prototype_is_a_callable_noop_in_direct_and_callback_positions() {
+    let source = r#"
+const noop = Function.prototype;
+let evaluated = 0;
+const ignored = { valueOf() { throw new Error('must not coerce'); } };
+const mapped = [1, 2].map(noop);
+[
+    typeof noop,
+    Function.prototype(++evaluated, ignored) === undefined,
+    noop(ignored) === undefined,
+    noop.call(ignored, 1, 2) === undefined,
+    noop.apply(ignored, [1, 2]) === undefined,
+    Reflect.apply(noop, ignored, [1, 2]) === undefined,
+    (null || Function.prototype)(ignored) === undefined,
+    mapped.length,
+    mapped[0] === undefined,
+    mapped[1] === undefined,
+    [1, 2].filter(noop).length,
+    [1, 2].every(noop),
+    [1, 2].some(noop),
+    evaluated,
+    Object.prototype.toString.call(noop),
+    noop.toString()
+].join('|');
+"#;
+    assert_eq!(
+        eval(source),
+        "function|true|true|true|true|true|true|2|true|true|0|false|false|1|\
+         [object Function]|function () { [native code] }"
+    );
+}
+
+#[test]
+fn function_prototype_callable_and_property_backing_share_canonical_identity() {
+    let source = r#"
+const noop = Function.prototype;
+function F() {}
+noop.shared = 17;
+const inherited = Object.create(noop);
+Object.setPrototypeOf(F, noop);
+[
+    Object.getPrototypeOf(Function) === noop,
+    Object.getPrototypeOf(F) === noop,
+    Object.getPrototypeOf(Array.prototype.map) === noop,
+    Object.getPrototypeOf(Object.getPrototypeOf(function* () {})) === noop,
+    Object.getPrototypeOf(noop) === Object.prototype,
+    Object.getPrototypeOf(inherited) === noop,
+    Object.getOwnPropertyDescriptor(Function, 'prototype').value === noop,
+    noop.constructor === Function,
+    Object.prototype.valueOf.call(noop) === noop,
+    noop.isPrototypeOf(F),
+    noop.isPrototypeOf(inherited),
+    noop instanceof Object,
+    noop instanceof Function,
+    inherited instanceof Function,
+    inherited.shared,
+    F.shared,
+    noop.propertyIsEnumerable('shared'),
+    Object.keys(noop).join(','),
+    F instanceof Function,
+    Function instanceof Function
+].join('|');
+"#;
+    assert_eq!(
+        eval(source),
+        "true|true|true|true|true|true|true|true|true|true|true|true|false|true|\
+         17|17|true|shared|true|true"
+    );
+}
+
+#[test]
+fn function_prototype_own_metadata_and_symbol_properties_remain_observable() {
+    let source = r#"
+const noop = Function.prototype;
+const length = Object.getOwnPropertyDescriptor(noop, 'length');
+const name = Object.getOwnPropertyDescriptor(noop, 'name');
+const names = Object.getOwnPropertyNames(noop).sort().join(',');
+const hasInstance = Object.getOwnPropertyDescriptor(noop, Symbol.hasInstance);
+const initial = [
+    noop.length, noop.name === '',
+    length.value, length.writable, length.enumerable, length.configurable,
+    name.value === '', name.writable, name.enumerable, name.configurable,
+    noop.hasOwnProperty('length'), noop.hasOwnProperty('name'),
+    noop.hasOwnProperty('prototype'), 'prototype' in noop,
+    names,
+    Reflect.ownKeys(noop).length,
+    hasInstance.value === noop[Symbol.hasInstance],
+    hasInstance.writable, hasInstance.enumerable, hasInstance.configurable
+].join('|');
+Object.defineProperty(noop, Symbol.toStringTag, {
+    get() { return this === noop ? 'Noop' : 'Other'; }, configurable: true
+});
+initial + '|' + Object.prototype.toString.call(noop) + '|' +
+    Reflect.get(noop, Symbol.toStringTag, {}) + '|' +
+    Object.getOwnPropertySymbols(noop).length;
+"#;
+    assert_eq!(
+        eval(source),
+        "0|true|0|false|false|true|true|false|false|true|true|true|false|false|\
+         apply,arguments,bind,call,caller,constructor,length,name,toString|10|true|false|false|false|\
+         [object Noop]|Other|2"
+    );
+}
+
+#[test]
+fn function_prototype_metadata_deletion_and_prototype_changes_use_its_real_storage() {
+    let source = r#"
+const noop = Function.prototype;
+const removed = [delete noop.length, delete noop.name,
+    noop.length === undefined, noop.name === undefined,
+    Object.getOwnPropertyDescriptor(noop, 'length') === undefined,
+    noop.hasOwnProperty('name')].join('|');
+Object.defineProperty(noop, 'name', { value: 'empty', configurable: true });
+Object.defineProperty(noop, 'length', { value: 3, configurable: true });
+const parent = { extra: 9 };
+Object.setPrototypeOf(noop, parent);
+const changed = [noop.name, noop.length, noop.extra,
+    Object.getPrototypeOf(noop) === parent, typeof noop,
+    noop() === undefined].join('|');
+Object.setPrototypeOf(noop, null);
+removed + '|' + changed + '|' + [Object.getPrototypeOf(noop) === null,
+    noop.__proto__ === undefined, 'hasOwnProperty' in noop,
+    Reflect.get(noop, 'hasOwnProperty') === undefined, 'call' in noop,
+    delete noop.call, 'call' in noop, typeof noop].join('|');
+"#;
+    assert_eq!(
+        eval(source),
+        "true|true|true|true|true|false|empty|3|9|true|function|true|\
+         true|true|false|true|true|true|false|function"
+    );
+}
+
+#[test]
+fn function_prototype_is_not_a_constructor_even_when_bound_or_proxied() {
+    let source = r#"
+const noop = Function.prototype;
+const bound = noop.bind(null, 1);
+const proxied = new Proxy(noop, {});
+let errors = [];
+function reject(thunk) {
+    try { thunk(); errors.push('accepted'); }
+    catch (error) { errors.push(error.name); }
+}
+reject(function () { new noop(); });
+reject(function () { new bound(); });
+reject(function () { new proxied(); });
+reject(function () { Reflect.construct(noop, []); });
+reject(function () { Reflect.construct(function () {}, [], noop); });
+reject(function () { return {} instanceof noop; });
+errors.join(',') + '|' + [typeof bound, bound() === undefined,
+    typeof proxied, proxied() === undefined,
+    noop[Symbol.hasInstance](1)].join('|');
+"#;
+    assert_eq!(
+        eval(source),
+        "TypeError,TypeError,TypeError,TypeError,TypeError,TypeError|\
+         function|true|function|true|false"
+    );
+}
+
+#[test]
+fn promise_handlers_accept_function_prototype_as_a_noop() {
+    let source = r#"
+Promise.resolve(41).then(Function.prototype).then(function (value) {
+    console.log(value === undefined ? 'fulfilled-undefined' : 'wrong-value');
+});
+Promise.reject(42).catch(Function.prototype).then(function (value) {
+    console.log(value === undefined ? 'recovered-undefined' : 'wrong-value');
+});
+"#;
+    let outcome = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"));
+    let lines: Vec<_> = outcome
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(lines, ["fulfilled-undefined", "recovered-undefined"]);
+}
+
+#[test]
+fn function_prototype_keeps_callable_identity_through_proxy_prototype_traps() {
+    let source = r#"
+const noop = Function.prototype;
+const target = Object.preventExtensions(Object.create(noop));
+const proxy = new Proxy(target, { getPrototypeOf() { return noop; } });
+let observed = '';
+const sink = new Proxy({}, {
+    setPrototypeOf(target, prototype) {
+        observed = typeof prototype + ':' + (prototype === noop);
+        return true;
+    }
+});
+Object.setPrototypeOf(sink, noop);
+[
+    Object.getPrototypeOf(proxy) === noop,
+    Reflect.getPrototypeOf(proxy) === noop,
+    observed
+].join('|');
+"#;
+    assert_eq!(eval(source), "true|true|function:true");
+}
+
+#[test]
+fn function_prototype_metadata_is_visible_in_reducer_callbacks() {
+    let source = r#"
+const noop = Function.prototype;
+[
+    [1].reduce(function (total) { return total + noop.length; }, 7),
+    [1].reduce(function () { return typeof noop.call; }, ''),
+    [1].reduce(function () { return noop.name === ''; }, false)
+].join('|');
+"#;
+    assert_eq!(eval(source), "7|function|true");
+}
+
 /// ES2020 20.2.1 / 17: Math's value properties exist (E, LN2, LN10, LOG2E,
 /// LOG10E, SQRT1_2 and SQRT2 were undefined) and are read-only; the function
 /// members of Math, JSON, Promise and Date are non-enumerable, so

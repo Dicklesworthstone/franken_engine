@@ -1,8 +1,9 @@
 //! Native JSON.parse regressions through the source parser, lowering, and VM.
 //!
 //! These cases use guest functions, getters, mutations and exceptions rather
-//! than a host-side substitute for the reviver. The contract here is ES2020;
-//! the newer reviver context/source argument is not part of this implementation.
+//! than a host-side substitute for the reviver. The contract is ES2020 plus
+//! JSON.parse source text access (the reviver's third, context argument;
+//! bd-9vouw.380), as Node v22 runs it.
 
 #![forbid(unsafe_code)]
 
@@ -87,7 +88,7 @@ fn reviver_runs_postorder_with_holder_this_and_es_key_order() {
         log(seen.join('|'));
         log(result[2], result[10], result.b.x, result.a.join(','));
         "#,
-        &["holder true 2", "2|10|x|b|0|1|a|", "4 20 2 6,8"],
+        &["holder true 3", "2|10|x|b|0|1|a|", "4 20 2 6,8"],
     );
 }
 

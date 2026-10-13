@@ -8,7 +8,6 @@
 //!
 //! Expected output is what Node v22.2.0 prints for the same program (console
 //! lines joined with `\n`). Not covered here, and still different from Node:
-//! class constructors print as `[Function: A]` rather than `[class A]`, and
 //! error stacks carry the engine's own frames and messages.
 //!
 //! No mocks: real source through the public `HybridRouter::eval` path.
@@ -32,6 +31,17 @@ fn check(source: &str, node: &str) {
         console_of(source),
         node,
         "`{source}` must print what Node v22.2.0 prints"
+    );
+}
+
+/// A class prints as a class (bd-9vouw.442): `[class A]`, `[class B extends
+/// A]` (a built-in parent too), `(anonymous)`, with its static properties.
+/// It printed as `[Function: A]`.
+#[test]
+fn classes_print_as_classes() {
+    check(
+        "class A {} class B extends A {} class C { static x = 1 } class D extends Array {} console.log(A, B, C, D, [class {}], { k: B, f() {} })",
+        "[class A] [class B extends A] [class C] { x: 1 } [class D extends Array] [ [class (anonymous)] ] { k: [class B extends A], f: [Function: f] }",
     );
 }
 

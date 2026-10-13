@@ -17,8 +17,6 @@
 //! escapes the sink check. Every rendered value is charged as native work.
 //!
 //! Known differences from Node:
-//! - class constructors print as functions (`[Function: A]`, not
-//!   `[class A]`);
 //! - the engine unboxes `new Number(1)`;
 //! - `Symbol.toStringTag` getters are not run;
 //! - `%o` renders like `%O` at depth 4, without hidden properties;
@@ -694,7 +692,7 @@ impl InterpreterCore {
             .heap
             .get(id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
-        let boxed = match &object.primitive_value {
+        let boxed = match object.primitive_value.as_deref() {
             Some(Value::Int(_) | Value::Float(_)) => Some("BoxedNumber"),
             Some(Value::Str(_)) => Some("BoxedString"),
             Some(Value::Bool(_)) => Some("BoxedBoolean"),
@@ -1008,7 +1006,29 @@ impl InterpreterCore {
             _ => "Function",
         };
         let name = self.inspect_function_name(state.module, value);
-        let base = if name.is_empty() {
+        // A class prints as Node's getClassBase does: `[class A]`,
+        // `[class B extends A]` (bd-9vouw.442); its source text tells it from
+        // a function, as in Node.
+        let is_class = self
+            .function_source_text(state.module, value)
+            .is_some_and(|text| text.starts_with("class") && text.ends_with('}'));
+        let base = if is_class {
+            let mut base = if name.is_empty() {
+                "class (anonymous)".to_string()
+            } else {
+                format!("class {name}")
+            };
+            if let Some(module) = state.module
+                && let Some(parent) = self.derived_constructor_parent(module, value)
+            {
+                let parent_name = self.inspect_function_name(state.module, &parent);
+                if !parent_name.is_empty() {
+                    base.push_str(" extends ");
+                    base.push_str(&parent_name);
+                }
+            }
+            format!("[{base}]")
+        } else if name.is_empty() {
             format!("[{kind} (anonymous)]")
         } else {
             format!("[{kind}: {name}]")
@@ -1401,7 +1421,7 @@ impl InterpreterCore {
             return Ok("[Object]".to_string());
         };
         let is_array = object.is_array;
-        let typed_array = object.typed_array.clone();
+        let typed_array = object.typed_array.as_deref().cloned();
         let array_buffer = object.array_buffer.is_some();
         let constructor = self.inspect_constructor_name(state.module, id);
         let internal = self.inspect_internal_type(id);

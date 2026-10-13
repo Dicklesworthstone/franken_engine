@@ -15,11 +15,11 @@
 //! @@method.
 //!
 //! @@matchAll constructs its matcher through @@species with the observable
-//! flags and copies `lastIndex` (ES2024 22.2.6.9).
+//! flags and copies `lastIndex` (ES2024 22.2.6.9); its RegExpStringIterator
+//! runs one RegExpExec per `next` (bd-9vouw.498).
 //!
-//! No-claim: the RegExpStringIterator collects its matches when @@matchAll
-//! is called (it is not lazy) and is an array iterator; `lastIndex` writes
-//! reach object receivers only (a function receiver's are not modeled).
+//! No-claim: `lastIndex` writes reach object receivers only (a function
+//! receiver's are not modeled).
 
 use super::*;
 
@@ -747,8 +747,10 @@ impl InterpreterCore {
         Ok(matcher)
     }
 
-    /// ES2024 22.2.6.9 RegExp.prototype[@@matchAll], with the
-    /// RegExpStringIterator's matches (22.2.9.2.1) collected now.
+    /// ES2024 22.2.6.9 RegExp.prototype[@@matchAll]. The iterator runs
+    /// RegExpExec when `next` is called (22.2.9.2.1): the matches were all
+    /// collected here, so a guest `exec` ran, and threw, at the @@matchAll
+    /// call, and the iterator was an Array Iterator (bd-9vouw.498).
     fn regexp_symbol_match_all_generic(
         &mut self,
         module: &Ir3Module,
@@ -769,26 +771,130 @@ impl InterpreterCore {
             "lastIndex",
             Self::protocol_number(last_index),
         )?;
-        let units = input.code_units_vec();
-        let mut matches = Vec::new();
-        loop {
-            self.charge_property_copy_work()?;
-            let result = self.regexp_exec_generic(module, &matcher, input, label)?;
-            if matches!(result, Value::Null) {
-                break;
-            }
-            if !global {
-                matches.push(result);
-                break;
-            }
+        self.create_regexp_string_iterator(matcher, input.clone(), global, full_unicode, label)
+    }
+
+    /// One step of %RegExpStringIteratorPrototype%.next (ES2024 22.2.9.2.1)
+    /// for a matcher whose reads are observable: RegExpExec, then, for a
+    /// global matcher, ToString(Get(match, "0")) and past an empty match the
+    /// `lastIndex` Get, ToLength and Set. `None` once RegExpExec finds no
+    /// match. `label` is the matchAll arguments' label, which a guest call
+    /// receives and the result carries (bd-9vouw.498).
+    pub(super) fn regexp_string_iterator_step_generic(
+        &mut self,
+        module: &Ir3Module,
+        rx: &Value,
+        input: &JsString,
+        global: bool,
+        full_unicode: bool,
+        label: &Label,
+    ) -> Result<Option<Value>, InterpreterError> {
+        // Guest code runs below while native locals hold values: no
+        // collection until this returns.
+        self.gc_nested_request = None;
+        let result = self.regexp_exec_generic(module, rx, input, label)?;
+        if !matches!(result, Value::Null) && global {
             let matched = self.protocol_get(module, &result, "0")?;
             if self.protocol_to_string(module, matched)?.utf16_len() == 0 {
-                self.regexp_protocol_step_past_empty(module, &matcher, &units, full_unicode)?;
+                let last_index = self.protocol_get(module, rx, "lastIndex")?;
+                let this_index = self.protocol_to_length(module, last_index)?;
+                // AdvanceStringIndex by code unit lookups: the subject's
+                // whole code-unit vector per empty match would make a run
+                // of empty matches quadratic.
+                let surrogate_pair = full_unicode
+                    && this_index + 1.0 < input.utf16_len() as f64
+                    && input
+                        .code_unit_at(this_index as usize)
+                        .is_some_and(|unit| (0xD800..=0xDBFF).contains(&unit))
+                    && input
+                        .code_unit_at(this_index as usize + 1)
+                        .is_some_and(|unit| (0xDC00..=0xDFFF).contains(&unit));
+                let next = this_index + if surrogate_pair { 2.0 } else { 1.0 };
+                self.protocol_set(module, rx, "lastIndex", Self::protocol_number(next))?;
             }
-            matches.push(result);
         }
-        let array = self.alloc_array_from_values(&matches)?;
-        self.array_prototype_iterator_for_receiver(Value::Object(array), "values")
+        let joined = self
+            .pending_hostcall_result_label
+            .as_ref()
+            .unwrap_or(&Label::Public)
+            .join(label);
+        self.replace_pending_hostcall_result_label(Some(joined))?;
+        Ok((!matches!(result, Value::Null)).then_some(result))
+    }
+
+    /// String.prototype.matchAll steps 4-5 (ES2024 22.1.3.14) for a pattern
+    /// that supplied no @@matchAll (undefined, null, a primitive, or an
+    /// object whose @@matchAll is undefined or null): rx = RegExpCreate(
+    /// regexp, "g"), whose source is ToString(regexp) (empty for undefined),
+    /// then Invoke(rx, @@matchAll, « S »), which calls whatever
+    /// %RegExp.prototype%[@@matchAll] is now (a replacement, or a TypeError
+    /// once it is deleted). The intrinsic one ran for every such pattern
+    /// (bd-9vouw.498).
+    pub(super) fn string_match_all_created_regexp(
+        &mut self,
+        module: &Ir3Module,
+        input: JsString,
+        regexp: Value,
+        label: &Label,
+    ) -> Result<Value, InterpreterError> {
+        // Guest code runs below while native locals hold values: no
+        // collection until this returns.
+        self.gc_nested_request = None;
+        let source = match regexp {
+            Value::Undefined => String::new(),
+            other => self
+                .protocol_to_string(module, other)?
+                .as_utf8_projection()
+                .to_string(),
+        };
+        let rx = self.alloc_regexp_object(source, "g".to_string())?;
+        let rx_value = Value::Object(rx);
+        let key = RuntimePropertyKey::Symbol(WellKnownSymbol::MatchAll.id());
+        if !self.regexp_uses_builtin_symbol_method(rx, &key) {
+            let method = self.prototype_chain_get_with_receiver_runtime(
+                Some(module),
+                rx,
+                &key,
+                rx_value.clone(),
+            )?;
+            match method {
+                Value::BuiltinFunction(builtin)
+                    if builtin.kind == BuiltinFunctionKind::RegExpSymbolMethod
+                        && builtin.display_name() == "@@matchAll" => {}
+                method if method.is_callable() => {
+                    let (result, result_label) = self
+                        .invoke_inline_method_call_with_argument_label(
+                            Some(module),
+                            method,
+                            rx_value,
+                            vec![Value::Str(input)],
+                            Some(label.clone()),
+                        )?;
+                    self.replace_pending_hostcall_result_label(Some(label.join(&result_label)))?;
+                    return Ok(result);
+                }
+                other => {
+                    return Err(InterpreterError::TypeError {
+                        expected: "callable RegExp.prototype[Symbol.matchAll]".to_string(),
+                        got: other.type_name().to_string(),
+                    });
+                }
+            }
+        }
+        if self.regexp_is_pristine(&rx_value) {
+            return self.string_match_all_value(&input, &rx_value, label);
+        }
+        self.regexp_symbol_method_generic(
+            module,
+            "@@matchAll",
+            &rx_value,
+            Value::Str(input),
+            Value::Undefined,
+            label,
+        )?
+        .ok_or_else(|| InterpreterError::InternalError {
+            details: "@@matchAll left the RegExp protocol".to_string(),
+        })
     }
 
     /// ES2024 22.2.6.14 RegExp.prototype[@@split].

@@ -8,6 +8,7 @@
 pub(super) const BUILTIN_FUNCTION_LENGTHS: &[(&str, &str, u8)] = &[
     ("%IteratorHelperPrototype%", "next", 0),
     ("%IteratorHelperPrototype%", "return", 0),
+    ("%RegExpStringIteratorPrototype%", "next", 0),
     ("%WrapForValidIteratorPrototype%", "next", 0),
     ("%WrapForValidIteratorPrototype%", "return", 0),
     ("AbortController.prototype", "abort", 0),
@@ -92,6 +93,7 @@ pub(super) const BUILTIN_FUNCTION_LENGTHS: &[(&str, &str, u8)] = &[
     ("Buffer", "concat", 2),
     ("Buffer", "from", 3),
     ("Buffer", "isBuffer", 1),
+    ("Buffer", "isEncoding", 1),
     ("DataView.prototype", "getBigInt64", 1),
     ("DataView.prototype", "getBigUint64", 1),
     ("DataView.prototype", "getFloat32", 1),
@@ -564,6 +566,10 @@ pub(super) const BUILTIN_FUNCTION_LENGTHS: &[(&str, &str, u8)] = &[
     ("globalThis", "setTimeout", 5),
     ("globalThis", "structuredClone", 0),
     ("globalThis", "unescape", 1),
+    ("querystring", "parse", 4),
+    ("querystring", "qsEscape", 1),
+    ("querystring", "qsUnescape", 2),
+    ("querystring", "stringify", 4),
 ];
 
 /// `length` of the built-in `owner.key`, if the table lists it.

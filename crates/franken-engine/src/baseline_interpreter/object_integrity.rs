@@ -48,11 +48,9 @@ impl InterpreterCore {
             Some(id) => id,
             None => self.alloc_primitive_wrapper(receiver)?,
         };
-        let key_value = self.arg_or_undefined(args, 0)?;
-        let key_value = self.property_key_primitive(module, key_value)?;
-        let key = self.executable_property_key_from_value(&key_value);
-        let getter = method.ends_with("Getter__");
-        if method.starts_with("__define") {
+        // Annex B.2.2.2-3 step 2: a non-callable function is a TypeError
+        // before ToPropertyKey(P) runs the key's toString (bd-9vouw.316).
+        let defined_function = if method.starts_with("__define") {
             let function = self.arg_or_undefined(args, 1)?;
             if !function.is_callable() {
                 return Err(InterpreterError::TypeError {
@@ -60,6 +58,15 @@ impl InterpreterCore {
                     got: function.type_name().to_string(),
                 });
             }
+            Some(function)
+        } else {
+            None
+        };
+        let key_value = self.arg_or_undefined(args, 0)?;
+        let key_value = self.property_key_primitive(module, key_value)?;
+        let key = self.executable_property_key_from_value(&key_value);
+        let getter = method.ends_with("Getter__");
+        if let Some(function) = defined_function {
             let fields = PropertyDescriptorFields {
                 value: None,
                 writable: None,
@@ -495,27 +502,34 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
         function: &Value,
     ) -> Result<Value, InterpreterError> {
+        if let Value::BuiltinFunction(builtin) = function
+            && builtin.kind == BuiltinFunctionKind::FunctionPrototype
+            && let Some(backing) = Self::builtin_function_property_object(builtin)
+        {
+            let link = self.ordinary_get_prototype_of(backing)?;
+            return Ok(self.prototype_value_for_link(module, link));
+        }
         if let Some(module) = module {
             let is_constructor_candidate = match function {
                 Value::Function(_) => true,
                 Value::Closure(id) => !self.closure_method_metadata.contains_key(id),
                 _ => false,
             };
+            // A derived class's constructor inherits from its parent; for
+            // `extends null` that is %Function.prototype% (ES2020 14.6.13
+            // step 6.e.ii), the default below (bd-9vouw.325).
             if is_constructor_candidate
                 && let Ok((true, _, parent, _)) =
                     self.derived_constructor_metadata(module, function)
+                && parent != Value::Null
             {
                 return Ok(parent);
             }
             if let Some(backing) = self.function_own_property_object(module, function)?
-                && let Some(prototype) = self
-                    .heap
-                    .get(backing.0 as usize)
-                    .and_then(|object| object.prototype)
+                && let Some(object) = self.heap.get(backing.0 as usize)
+                && (object.prototype.is_some() || object.is_null_prototype)
             {
-                return Ok(self
-                    .function_value_for_backing(module, prototype)
-                    .unwrap_or(Value::Object(prototype)));
+                return Ok(self.prototype_value_for_link(Some(module), object.prototype));
             }
         }
         // ES2020 22.2.5: every concrete typed array constructor's
@@ -544,9 +558,9 @@ impl InterpreterCore {
                 BuiltinFunction::function_constructor(),
             ));
         }
-        Ok(Value::Object(self.ensure_builtin_prototype(
+        self.builtin_prototype_value(
             Self::function_intrinsic_prototype_name(function).unwrap_or("Function"),
-        )?))
+        )
     }
 
     /// [[SetPrototypeOf]] of a user function value (`Object.setPrototypeOf(D,
@@ -570,7 +584,7 @@ impl InterpreterCore {
             Value::Null => None,
             Value::Object(id) => Some(*id),
             callable if callable.is_callable() => {
-                match self.ensure_function_own_property_object(module, callable)? {
+                match self.own_property_holder(Some(module), callable, true)? {
                     Some(parent_backing) => Some(parent_backing),
                     None => return Ok(true),
                 }
@@ -619,9 +633,9 @@ impl InterpreterCore {
             Value::Null => Some(None),
             Value::Object(id) => Some(Some(*id)),
             Value::BuiltinFunction(builtin)
-                if builtin.kind == BuiltinFunctionKind::CallableProxy =>
+                if Self::builtin_function_property_object(builtin).is_some() =>
             {
-                Some(Some(Self::callable_proxy_record_id(builtin)?))
+                Self::builtin_function_property_object(builtin).map(Some)
             }
             callable if callable.is_callable() => match module {
                 Some(module) => self
@@ -645,6 +659,12 @@ impl InterpreterCore {
         let Some(id) = link else {
             return Value::Null;
         };
+        if self.builtin_prototypes.get("Function") == Some(&id) {
+            return Value::BuiltinFunction(BuiltinFunction::bound_to(
+                BuiltinFunctionKind::FunctionPrototype,
+                id,
+            ));
+        }
         if let Some(module) = module
             && self.heap.get(id.0 as usize).is_some_and(|object| {
                 ["length", "name"].iter().all(|key| {
@@ -670,6 +690,11 @@ impl InterpreterCore {
     fn integrity_prototype(value: &Value) -> Result<Option<ObjectId>, InterpreterError> {
         match value {
             Value::Object(id) => Ok(Some(*id)),
+            Value::BuiltinFunction(builtin)
+                if Self::builtin_function_property_object(builtin).is_some() =>
+            {
+                Ok(Self::builtin_function_property_object(builtin))
+            }
             Value::Null => Ok(None),
             other => Err(Self::integrity_type_error(
                 "object or null prototype",
@@ -736,7 +761,7 @@ impl InterpreterCore {
         Ok(result)
     }
 
-    fn object_set_prototype(
+    pub(super) fn object_set_prototype(
         &mut self,
         module: Option<&Ir3Module>,
         id: ObjectId,
@@ -751,7 +776,7 @@ impl InterpreterCore {
                 "setPrototypeOf",
                 vec![
                     self.proxy_trap_target(id, target),
-                    prototype.map_or(Value::Null, Value::Object),
+                    self.prototype_value_for_link(module, prototype),
                 ],
             )?
             else {
@@ -1211,6 +1236,11 @@ impl InterpreterCore {
                 return Ok(descriptor);
             }
             if let Some(descriptor) = self.prototype_getter_descriptor(object_id, key)? {
+                return Ok(descriptor);
+            }
+            if let Some(Value::Str(text)) = self.primitive_wrapper_value(object_id).cloned()
+                && let Some(descriptor) = self.string_own_property_descriptor(&text, key)?
+            {
                 return Ok(descriptor);
             }
             return self.own_property_descriptor_value(object_id, key);

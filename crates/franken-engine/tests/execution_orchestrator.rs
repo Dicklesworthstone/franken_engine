@@ -575,6 +575,125 @@ fn guardplane_enabled_execution_records_instruction_risk_metadata() {
     );
 }
 
+#[test]
+fn hostcall_guard_has_signed_contained_witness_before_console_effect_bd_9vouw_7() {
+    use frankenengine_engine::baseline_interpreter::LaneChoice;
+    use frankenengine_engine::expected_loss_selector::ContainmentAction;
+    use frankenengine_engine::ir_contract::ExecutionOutcome;
+
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let config = OrchestratorConfig {
+            force_lane: Some(lane),
+            ..OrchestratorConfig::default()
+        };
+        let authority = RuntimeEvidenceAuthority::generate_runtime_owned(
+            "hostcall-guard-runtime",
+            SecurityEpoch::from_raw(1),
+            1,
+            None,
+        )
+        .expect("runtime-owned evidence authority");
+        let mut orch = ExecutionOrchestrator::try_new_with_runtime_authority(config, authority)
+            .expect("production orchestrator");
+        let pkg = package_with_metadata(
+            "ext-hostcall-guard",
+            "console.log('forbidden'); console.log('also forbidden');",
+            &[
+                ("guardplane.enable_instruction_hooks", "true"),
+                ("capability_witness.trust_level", "trusted"),
+                ("capability_witness.denied_capabilities", "console:log"),
+            ],
+        );
+        let result = orch.execute(&pkg).expect("containment remains structured");
+        assert_ne!(result.containment_action, ContainmentAction::Allow);
+        assert!(
+            result.console_output.is_empty(),
+            "the observed hostcall must stop BEFORE capture"
+        );
+        assert_eq!(result.ir4_witness.outcome, ExecutionOutcome::Contained);
+        let terminal = result
+            .evidence_entries
+            .iter()
+            .find(|entry| {
+                entry
+                    .metadata
+                    .get("guardplane_hostcall_capability")
+                    .map(String::as_str)
+                    == Some("console:log")
+            })
+            .expect("signed hostcall decision");
+        assert_ne!(
+            terminal
+                .metadata
+                .get("guardplane_action")
+                .map(String::as_str),
+            Some("allow")
+        );
+        assert_eq!(
+            terminal
+                .metadata
+                .get("guardplane_hostcall_allowed")
+                .map(String::as_str),
+            Some("true")
+        );
+        let count = terminal.metadata["guardplane_instruction_count"]
+            .parse::<u64>()
+            .unwrap();
+        assert!(count > 0 && count <= result.instructions_executed);
+        let actual_hash = result.ir4_witness.content_hash();
+        assert_eq!(
+            result.evidence_entries[0].metadata["ir4_witness_hash"],
+            actual_hash.to_hex()
+        );
+        EvidenceChainArtifact::new(
+            result.evidence_entries.clone(),
+            result.evidence_chain_receipt.clone(),
+        )
+        .verify_genesis(
+            &orch.evidence_verification_identity(),
+            orch.evidence_ledger_id(),
+            &result.trace_id,
+        )
+        .expect("runtime authority authenticates the complete containment evidence");
+        let mut forged_completion = result.ir4_witness.clone();
+        forged_completion.outcome = ExecutionOutcome::Completed;
+        assert_ne!(
+            forged_completion.content_hash(),
+            actual_hash,
+            "the signed witness commits the interruption"
+        );
+    }
+}
+
+#[test]
+fn hostcall_guard_preserves_benign_completion_bd_9vouw_7() {
+    let mut orch = ExecutionOrchestrator::with_defaults();
+    let pkg = package_with_metadata(
+        "ext-hostcall-benign",
+        "console.log('first'); console.log('second'); 42;",
+        &[
+            ("guardplane.enable_instruction_hooks", "true"),
+            ("capability_witness.trust_level", "trusted"),
+        ],
+    );
+    let result = orch
+        .execute(&pkg)
+        .expect("authorized ordinary calls continue");
+    assert_eq!(result.execution_value, "42");
+    assert_eq!(
+        result
+            .console_output
+            .iter()
+            .map(|entry| entry.message.as_str())
+            .collect::<Vec<_>>(),
+        ["first", "second"]
+    );
+    assert_eq!(
+        result.ir4_witness.outcome,
+        frankenengine_engine::ir_contract::ExecutionOutcome::Completed
+    );
+}
+
 // -----------------------------------------------------------------------
 // 4. Empty source returns error
 // -----------------------------------------------------------------------

@@ -6,8 +6,9 @@
 //! through GetSetRecord: a numeric `size` and callable `has` and `keys`. Each
 //! method picks, by the two sizes, whether it walks the receiver and asks
 //! `other.has`, or walks `other.keys()`; those calls are guest code and their
-//! order is observable. The receiver's elements are walked from a snapshot
-//! taken when the method starts.
+//! order is observable. Intersection and the predicates walk live storage;
+//! difference walks its private copy. Union and symmetricDifference initialize
+//! the keys iterator before copying, including its observable `next` getter.
 
 use super::*;
 
@@ -28,6 +29,12 @@ struct SetRecord {
     size: f64,
     has: Value,
     keys: Value,
+}
+
+/// GetIteratorFromMethod captures `next` once, before iteration starts.
+struct SetRecordKeys {
+    iterator: Value,
+    next: Value,
 }
 
 impl InterpreterCore {
@@ -56,27 +63,29 @@ impl InterpreterCore {
             label = label.join(collection_label);
         }
         let record = self.get_set_record(module, other, &mut label)?;
-        let this_values = self.set_values_snapshot(this_id);
-        let this_size = this_values.len() as f64;
+        let this_size = self.set_data_size(this_id) as f64;
         let result = match method {
             "union" => {
-                let result = self.new_set_from(&this_values)?;
-                self.for_each_set_record_key(module, &record, |core, value| {
+                let keys = self.set_record_keys(module, &record)?;
+                let result = self.copy_set_data(this_id)?;
+                self.for_each_set_record_key(module, keys, |core, value| {
                     core.set_collection_add(result, value)?;
                     Ok(true)
                 })?;
                 Value::Object(result)
             }
             "intersection" => {
-                let result = self.new_set_from(&[])?;
+                let result = self.alloc_empty_set()?;
                 if this_size <= record.size {
-                    for value in this_values {
-                        if self.set_record_has(module, &record, &value)? {
-                            self.set_collection_add(result, value)?;
+                    self.for_each_live_set_value(this_id, |core, value| {
+                        if core.set_record_has(module, &record, &value)? {
+                            core.set_collection_add(result, value)?;
                         }
-                    }
+                        Ok(true)
+                    })?;
                 } else {
-                    self.for_each_set_record_key(module, &record, |core, value| {
+                    let keys = self.set_record_keys(module, &record)?;
+                    self.for_each_set_record_key(module, keys, |core, value| {
                         if core.collection_has(this_id, "Set", "__values", &value) {
                             core.set_collection_add(result, value)?;
                         }
@@ -86,15 +95,19 @@ impl InterpreterCore {
                 Value::Object(result)
             }
             "difference" => {
-                let result = self.new_set_from(&this_values)?;
+                let result = self.copy_set_data(this_id)?;
                 if this_size <= record.size {
-                    for value in this_values {
-                        if self.set_record_has(module, &record, &value)? {
-                            self.collection_delete(result, "Set", "__values", &value)?;
+                    // Unlike intersection, difference visits the original
+                    // copied entries even if `has` clears the receiver.
+                    self.for_each_live_set_value(result, |core, value| {
+                        if core.set_record_has(module, &record, &value)? {
+                            core.collection_delete(result, "Set", "__values", &value)?;
                         }
-                    }
+                        Ok(true)
+                    })?;
                 } else {
-                    self.for_each_set_record_key(module, &record, |core, value| {
+                    let keys = self.set_record_keys(module, &record)?;
+                    self.for_each_set_record_key(module, keys, |core, value| {
                         core.collection_delete(result, "Set", "__values", &value)?;
                         Ok(true)
                     })?;
@@ -102,8 +115,9 @@ impl InterpreterCore {
                 Value::Object(result)
             }
             "symmetricDifference" => {
-                let result = self.new_set_from(&this_values)?;
-                self.for_each_set_record_key(module, &record, |core, value| {
+                let keys = self.set_record_keys(module, &record)?;
+                let result = self.copy_set_data(this_id)?;
+                self.for_each_set_record_key(module, keys, |core, value| {
                     if core.collection_has(this_id, "Set", "__values", &value) {
                         core.collection_delete(result, "Set", "__values", &value)?;
                     } else {
@@ -116,19 +130,18 @@ impl InterpreterCore {
             "isSubsetOf" => {
                 let mut subset = this_size <= record.size;
                 if subset {
-                    for value in this_values {
-                        if !self.set_record_has(module, &record, &value)? {
-                            subset = false;
-                            break;
-                        }
-                    }
+                    self.for_each_live_set_value(this_id, |core, value| {
+                        subset = core.set_record_has(module, &record, &value)?;
+                        Ok(subset)
+                    })?;
                 }
                 Value::Bool(subset)
             }
             "isSupersetOf" => {
                 let mut superset = this_size >= record.size;
                 if superset {
-                    self.for_each_set_record_key(module, &record, |core, value| {
+                    let keys = self.set_record_keys(module, &record)?;
+                    self.for_each_set_record_key(module, keys, |core, value| {
                         superset = core.collection_has(this_id, "Set", "__values", &value);
                         Ok(superset)
                     })?;
@@ -138,14 +151,13 @@ impl InterpreterCore {
             "isDisjointFrom" => {
                 let mut disjoint = true;
                 if this_size <= record.size {
-                    for value in this_values {
-                        if self.set_record_has(module, &record, &value)? {
-                            disjoint = false;
-                            break;
-                        }
-                    }
+                    self.for_each_live_set_value(this_id, |core, value| {
+                        disjoint = !core.set_record_has(module, &record, &value)?;
+                        Ok(disjoint)
+                    })?;
                 } else {
-                    self.for_each_set_record_key(module, &record, |core, value| {
+                    let keys = self.set_record_keys(module, &record)?;
+                    self.for_each_set_record_key(module, keys, |core, value| {
                         disjoint = !core.collection_has(this_id, "Set", "__values", &value);
                         Ok(disjoint)
                     })?;
@@ -233,16 +245,13 @@ impl InterpreterCore {
             .is_truthy())
     }
 
-    /// Walk `other.keys()` (GetIteratorFromMethod, then IteratorStepValue),
-    /// handing each value (-0 canonicalized to +0) to `visit` until it
-    /// returns false or the iterator is done. Stopping early closes the
-    /// iterator (its `return`), as IteratorClose does.
-    fn for_each_set_record_key(
+    /// Acquire both parts of the iterator record before copying receiver data.
+    /// Calling `keys` and reading `next` may each mutate that receiver.
+    fn set_record_keys(
         &mut self,
         module: &Ir3Module,
         record: &SetRecord,
-        mut visit: impl FnMut(&mut Self, Value) -> Result<bool, InterpreterError>,
-    ) -> Result<(), InterpreterError> {
+    ) -> Result<SetRecordKeys, InterpreterError> {
         let iterator = self.invoke_inline_method_call(
             Some(module),
             record.keys.clone(),
@@ -256,11 +265,23 @@ impl InterpreterCore {
             });
         }
         let next = self.get_v(module, &iterator, &Self::set_record_key("next"))?;
+        Ok(SetRecordKeys { iterator, next })
+    }
+
+    /// IteratorStepValue over an already acquired record. An early normal
+    /// completion closes the iterator; a failed `next`/`done`/`value` does not.
+    fn for_each_set_record_key(
+        &mut self,
+        module: &Ir3Module,
+        keys: SetRecordKeys,
+        mut visit: impl FnMut(&mut Self, Value) -> Result<bool, InterpreterError>,
+    ) -> Result<(), InterpreterError> {
         loop {
+            self.json_charge_work()?;
             let step = self.invoke_inline_method_call(
                 Some(module),
-                next.clone(),
-                iterator.clone(),
+                keys.next.clone(),
+                keys.iterator.clone(),
                 Vec::new(),
             )?;
             if !step.is_object_like() {
@@ -277,7 +298,7 @@ impl InterpreterCore {
             }
             let value = self.get_v(module, &step, &Self::set_record_key("value"))?;
             if !visit(self, Self::collection_canonical_member(value))? {
-                return self.close_set_record_keys(module, iterator);
+                return self.close_set_record_keys(module, keys.iterator);
             }
         }
     }
@@ -314,24 +335,56 @@ impl InterpreterCore {
         RuntimePropertyKey::String(JsString::from(name))
     }
 
-    /// The Set's elements in insertion order.
-    fn set_values_snapshot(&self, set_id: ObjectId) -> Vec<Value> {
-        let Some(storage) = self.collection_storage_id(set_id, "Set", "__values") else {
-            return Vec::new();
-        };
-        let mut values = Vec::new();
-        while let Some((_, value)) = self.collection_entry_at(storage, values.len()) {
-            values.push(value);
-        }
-        values
+    /// Size comes from internal storage, never an overridable `size` getter.
+    fn set_data_size(&self, set_id: ObjectId) -> usize {
+        self.collection_storage_id(set_id, "Set", "__values")
+            .and_then(|storage| self.heap.get(storage.0 as usize))
+            .map_or(0, |storage| storage.properties.len())
     }
 
-    /// A new Set (with %Set.prototype%) holding `values` in order.
-    fn new_set_from(&mut self, values: &[Value]) -> Result<ObjectId, InterpreterError> {
-        let set_id = self.alloc_empty_set()?;
-        for value in values {
-            self.set_collection_add(set_id, value.clone())?;
-        }
-        Ok(set_id)
+    /// Copy directly into charged heap storage instead of building an
+    /// unmetered, full-size temporary Vec before allocating the result.
+    fn copy_set_data(&mut self, source: ObjectId) -> Result<ObjectId, InterpreterError> {
+        let result = self.alloc_empty_set()?;
+        self.for_each_live_set_value(source, |core, value| {
+            core.set_collection_add(result, value)?;
+            Ok(true)
+        })?;
+        Ok(result)
+    }
+
+    /// Share forEach's mutation-aware cursor protocol. Deletion compacts
+    /// storage and moves cursors back; clear resets them; appended and
+    /// deleted-then-reinserted entries remain visible. No guest iterator or
+    /// overridden Set method is consulted. Nested walks own distinct slots.
+    fn for_each_live_set_value(
+        &mut self,
+        set_id: ObjectId,
+        mut visit: impl FnMut(&mut Self, Value) -> Result<bool, InterpreterError>,
+    ) -> Result<(), InterpreterError> {
+        let storage = self
+            .collection_storage_id(set_id, "Set", "__values")
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "Set algebra lost its internal storage".to_string(),
+            })?;
+        let depth = self.collection_for_each_cursors.len();
+        self.collection_for_each_cursors.push((storage, 0));
+        let outcome = (|| {
+            loop {
+                self.json_charge_work()?;
+                let index = self.collection_for_each_cursors[depth].1;
+                let Some((_, value)) = self.collection_entry_at(storage, index) else {
+                    return Ok(());
+                };
+                self.collection_for_each_cursors[depth].1 = index.saturating_add(1);
+                if !visit(self, value)? {
+                    return Ok(());
+                }
+            }
+        })();
+        // Also remove the cursor after callback throws, cancellation and
+        // budget refusal, without rolling back guest-visible mutations.
+        self.collection_for_each_cursors.truncate(depth);
+        outcome
     }
 }

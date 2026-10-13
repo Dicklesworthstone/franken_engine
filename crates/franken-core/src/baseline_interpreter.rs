@@ -15978,7 +15978,9 @@ impl InterpreterCore {
     }
 
     fn estimate_js_string_bytes(text: &JsString) -> u64 {
-        let projected = Self::estimate_string_bytes(text.as_utf8_projection());
+        // retained_bytes does not join a concatenation; estimating
+        // through &str would (bd-9vouw.468).
+        let projected = text.retained_bytes(MEMORY_ESTIMATE_STRING_BASE_BYTES);
         if text.is_well_formed() {
             projected
         } else {

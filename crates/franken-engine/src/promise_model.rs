@@ -347,6 +347,31 @@ pub enum Microtask {
         result_promise: PromiseHandle,
         label: Label,
     },
+    /// PromiseResolveThenableJob for a native promise whose `then` is the
+    /// intrinsic %Promise.prototype.then% (bd-9vouw.323). With `settle`
+    /// false it is that job: its `then` call adopts `source`, a pending one
+    /// through a forwarding reaction, a settled one by queueing the reaction
+    /// job, which is this task with `settle` true and settles `promise`.
+    AdoptNative {
+        /// Promise being resolved.
+        promise: PromiseHandle,
+        /// The native promise it adopts.
+        source: PromiseHandle,
+        /// Whether this is the reaction job that settles `promise`.
+        settle: bool,
+        /// IFC label.
+        label: Label,
+    },
+    /// A `queueMicrotask(callback)` job (bd-9vouw.478): the callback is
+    /// called with no arguments, where a reaction handler gets the settled
+    /// value, and no promise receives its completion: a throw is an uncaught
+    /// exception, as in Node.
+    QueuedCallback {
+        /// The callback to call.
+        handler: ClosureHandle,
+        /// IFC label of the job.
+        label: Label,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -840,6 +865,9 @@ pub(crate) fn estimate_microtask_payload_memory_bytes(task: &Microtask) -> u64 {
             thenable, label, ..
         } => estimate_js_value_memory_bytes(thenable)
             .saturating_add(estimate_label_memory_bytes(label)),
+        Microtask::AdoptNative { label, .. } | Microtask::QueuedCallback { label, .. } => {
+            estimate_label_memory_bytes(label)
+        }
     }
 }
 
@@ -1949,6 +1977,13 @@ impl MicrotaskQueue {
                 | Microtask::PromiseRejection { result_promise, .. }
                 | Microtask::PromiseCombinator { result_promise, .. } => visit(*result_promise),
                 Microtask::ResolveThenable { promise, .. } => visit(*promise),
+                Microtask::AdoptNative {
+                    promise, source, ..
+                } => {
+                    visit(*promise);
+                    visit(*source);
+                }
+                Microtask::QueuedCallback { .. } => {}
             }
         }
     }
@@ -1961,10 +1996,12 @@ impl MicrotaskQueue {
                 Microtask::PromiseReaction {
                     handler: Some(handler),
                     ..
-                } => visit(*handler),
+                }
+                | Microtask::QueuedCallback { handler, .. } => visit(*handler),
                 Microtask::PromiseReaction { handler: None, .. }
                 | Microtask::PromiseRejection { .. }
-                | Microtask::PromiseCombinator { .. } => {}
+                | Microtask::PromiseCombinator { .. }
+                | Microtask::AdoptNative { .. } => {}
                 Microtask::ResolveThenable { then_handler, .. } => visit(*then_handler),
             }
         }
@@ -1979,6 +2016,7 @@ impl MicrotaskQueue {
                 | Microtask::PromiseCombinator { argument, .. } => visit(argument),
                 Microtask::PromiseRejection { reason, .. } => visit(reason),
                 Microtask::ResolveThenable { thenable, .. } => visit(thenable),
+                Microtask::AdoptNative { .. } | Microtask::QueuedCallback { .. } => {}
             }
         }
     }

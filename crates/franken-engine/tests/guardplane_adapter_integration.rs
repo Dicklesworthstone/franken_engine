@@ -35,6 +35,442 @@ use frankenengine_engine::security_epoch::SecurityEpoch;
 // Test Helpers
 // ===========================================================================
 
+struct StopHostcall {
+    calls: std::sync::atomic::AtomicUsize,
+    capability: &'static str,
+    allowed_before_stop: usize,
+    action: HookAction,
+}
+
+impl InterpreterHook for StopHostcall {
+    fn pre_property_access(
+        &self,
+        _ctx: &HookContext,
+        _target: &ObjectId,
+        _key: &String,
+    ) -> HookAction {
+        HookAction::Allow
+    }
+
+    fn pre_call(
+        &self,
+        _ctx: &HookContext,
+        _callee: &frankenengine_engine::baseline_interpreter::FunctionRef,
+        _args: &[frankenengine_engine::baseline_interpreter::Value],
+    ) -> HookAction {
+        HookAction::Allow
+    }
+
+    fn pre_allocation(
+        &self,
+        _ctx: &HookContext,
+        _kind: frankenengine_engine::baseline_interpreter::AllocKind,
+        _size: usize,
+    ) -> HookAction {
+        HookAction::Allow
+    }
+
+    fn pre_import(&self, _ctx: &HookContext, _specifier: &str) -> HookAction {
+        HookAction::Allow
+    }
+
+    fn pre_hostcall(&self, ctx: &HookContext, capability: &str, allowed: bool) -> HookAction {
+        assert!(
+            allowed,
+            "the test must reach the authorized host-effect path"
+        );
+        assert!(ctx.instruction_count > 0);
+        if capability != self.capability {
+            return HookAction::Allow;
+        }
+        let index = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if index < self.allowed_before_stop {
+            HookAction::Allow
+        } else {
+            self.action.clone()
+        }
+    }
+}
+
+#[test]
+fn hostcall_hook_stops_before_second_real_write_in_both_lanes_bd_9vouw_7() {
+    use frankenengine_engine::baseline_interpreter::{
+        ChallengeToken, InterpreterConfig, LaneChoice, LaneRouter,
+    };
+    use frankenengine_engine::capability::RuntimeCapability;
+    use frankenengine_engine::hash_tiers::ContentHash;
+    use frankenengine_engine::ir_contract::{CapabilityTag, Ir3Instruction, Ir3Module, RegRange};
+    use frankenengine_extension_host::host_io::{
+        HostIoRecorder, HostIoRequest, InMemoryHostIoTranscript, SandboxedHostIo,
+    };
+    use std::sync::Arc;
+
+    let mut module = Ir3Module::new(ContentHash::compute(b"hostcall-guard"), "hostcall-guard");
+    module.constant_pool = ["first.txt", "committed", "second.txt", "third.txt"]
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    module.instructions = vec![
+        Ir3Instruction::LoadStr {
+            dst: 0,
+            pool_index: 0,
+        },
+        Ir3Instruction::LoadStr {
+            dst: 1,
+            pool_index: 1,
+        },
+        Ir3Instruction::HostCall {
+            capability: CapabilityTag("fs:write".into()),
+            args: RegRange { start: 0, count: 2 },
+            dst: 2,
+        },
+        Ir3Instruction::LoadStr {
+            dst: 0,
+            pool_index: 2,
+        },
+        Ir3Instruction::HostCall {
+            capability: CapabilityTag("fs:write".into()),
+            args: RegRange { start: 0, count: 2 },
+            dst: 2,
+        },
+        Ir3Instruction::LoadStr {
+            dst: 0,
+            pool_index: 3,
+        },
+        Ir3Instruction::HostCall {
+            capability: CapabilityTag("fs:write".into()),
+            args: RegRange { start: 0, count: 2 },
+            dst: 2,
+        },
+        Ir3Instruction::Halt,
+    ];
+
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for action in [
+            HookAction::Challenge(ChallengeToken {
+                token: "review".into(),
+            }),
+            HookAction::Sandbox,
+            HookAction::Suspend,
+            HookAction::Terminate("stop".into()),
+            HookAction::Quarantine("stop".into()),
+        ] {
+            let directory = tempfile::tempdir().expect("host-effect sandbox");
+            let transcript = Arc::new(InMemoryHostIoTranscript::recording());
+            let recorder: Arc<dyn HostIoRecorder> = transcript.clone();
+            let provider = Arc::new(SandboxedHostIo::with_root(directory.path()).unwrap());
+            let grants = BTreeSet::from([
+                RuntimeCapability::VmDispatch,
+                RuntimeCapability::HeapAllocate,
+                RuntimeCapability::FsWrite,
+            ]);
+            let mut deterministic = InterpreterConfig::quickjs_defaults();
+            deterministic.granted_capabilities = grants.clone();
+            let mut throughput = InterpreterConfig::v8_defaults();
+            throughput.granted_capabilities = grants;
+            let mut router = LaneRouter::with_configs(deterministic, throughput);
+            router.set_host_io(provider, Some(recorder));
+            let hook = Arc::new(StopHostcall {
+                calls: std::sync::atomic::AtomicUsize::new(0),
+                capability: "fs:write",
+                allowed_before_stop: 1,
+                action: action.clone(),
+            });
+            let result = router
+                .execute_with_hook(&module, "hostcall-guard", Some(lane), Some(hook.clone()))
+                .unwrap();
+            assert_eq!(result.result.requested_hook_action, Some(action));
+            assert_eq!(hook.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+            assert_eq!(
+                std::fs::read(directory.path().join("first.txt")).unwrap(),
+                b"committed"
+            );
+            assert!(!directory.path().join("second.txt").exists());
+            assert!(!directory.path().join("third.txt").exists());
+            let entries = transcript.entries();
+            assert_eq!(
+                entries.len(),
+                1,
+                "only the performed effect belongs in the transcript"
+            );
+            assert!(
+                matches!(&entries[0].0, HostIoRequest::FsWrite { path, .. } if path == "first.txt")
+            );
+            assert!(entries[0].1.is_ok());
+        }
+    }
+}
+
+#[test]
+fn deferred_request_end_checks_live_hostcall_guard_in_both_lanes_bd_9vouw_7() {
+    use frankenengine_engine::baseline_interpreter::{InterpreterConfig, LaneChoice, LaneRouter};
+    use frankenengine_engine::capability::RuntimeCapability;
+    use frankenengine_engine::hash_tiers::ContentHash;
+    use frankenengine_engine::ir_contract::{CapabilityTag, Ir3Instruction, Ir3Module, RegRange};
+    use frankenengine_extension_host::host_io::{
+        DenyAllHostIo, HostIoRecorder, InMemoryHostIoTranscript,
+    };
+    use std::sync::Arc;
+
+    // Force the legacy deferred ClientRequest path independently of the
+    // current HTTP facade. Creation is authorized; its later effect is stopped.
+    let mut module = Ir3Module::new(ContentHash::compute(b"deferred-guard"), "deferred-guard");
+    module.constant_pool = ["http://fixture.invalid/", "end"]
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    module.instructions = vec![
+        Ir3Instruction::LoadStr {
+            dst: 0,
+            pool_index: 0,
+        },
+        Ir3Instruction::HostCall {
+            capability: CapabilityTag("net:client_request".into()),
+            args: RegRange { start: 0, count: 1 },
+            dst: 1,
+        },
+        Ir3Instruction::LoadStr {
+            dst: 2,
+            pool_index: 1,
+        },
+        Ir3Instruction::GetProperty {
+            obj: 1,
+            key: 2,
+            dst: 3,
+        },
+        Ir3Instruction::CallMethod {
+            receiver: 1,
+            callee: 3,
+            args: RegRange { start: 0, count: 0 },
+            dst: 4,
+        },
+        Ir3Instruction::Halt,
+    ];
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let grants = BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::NetworkEgress,
+        ]);
+        let mut deterministic = InterpreterConfig::quickjs_defaults();
+        deterministic.granted_capabilities = grants.clone();
+        let mut throughput = InterpreterConfig::v8_defaults();
+        throughput.granted_capabilities = grants;
+        let mut router = LaneRouter::with_configs(deterministic, throughput);
+        let transcript = Arc::new(InMemoryHostIoTranscript::recording());
+        let recorder: Arc<dyn HostIoRecorder> = transcript.clone();
+        router.set_host_io(Arc::new(DenyAllHostIo), Some(recorder));
+        let hook = Arc::new(StopHostcall {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            capability: "net:request",
+            allowed_before_stop: 0,
+            action: HookAction::Suspend,
+        });
+        let result = router
+            .execute_with_hook(&module, "deferred-guard", Some(lane), Some(hook.clone()))
+            .unwrap();
+        assert_eq!(
+            result.result.requested_hook_action,
+            Some(HookAction::Suspend)
+        );
+        assert_eq!(hook.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(
+            result.result.hostcall_decisions.iter().any(|decision| {
+                decision.capability.0 == "net:client_request" && decision.allowed
+            })
+        );
+        assert!(
+            transcript.entries().is_empty(),
+            "the provider must not be reached"
+        );
+    }
+}
+
+#[test]
+fn environment_hook_preserves_exact_denials_and_canonical_authority_bd_9vouw_7() {
+    use frankenengine_engine::baseline_interpreter::{
+        InterpreterConfig, LaneChoice, LaneRouter, Value,
+    };
+    use frankenengine_engine::capability::RuntimeCapability;
+    use frankenengine_engine::guardplane_adapter::GuardplaneOperation;
+    use frankenengine_engine::hash_tiers::ContentHash;
+    use frankenengine_engine::ifc_artifacts::Label;
+    use frankenengine_engine::ir_contract::{CapabilityTag, Ir3Instruction, Ir3Module, RegRange};
+    use frankenengine_extension_host::host_io::{
+        EnvironmentSnapshotHostIo, HostIoRecorder, HostIoRequest, InMemoryHostIoTranscript,
+    };
+    use std::sync::Arc;
+
+    let mut module = Ir3Module::new(ContentHash::compute(b"env-hook-alias"), "env-hook-alias");
+    module.constant_pool = vec!["PRIVATE_KEY".into()];
+    module.instructions = vec![
+        Ir3Instruction::LoadStr {
+            dst: 0,
+            pool_index: 0,
+        },
+        Ir3Instruction::HostCall {
+            capability: CapabilityTag("env:read".into()),
+            args: RegRange { start: 0, count: 1 },
+            dst: 1,
+        },
+        Ir3Instruction::Return { value: 1 },
+    ];
+
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for denied in [None, Some("env:read"), Some("env_read")] {
+            let grants = BTreeSet::from([
+                RuntimeCapability::VmDispatch,
+                RuntimeCapability::HeapAllocate,
+                RuntimeCapability::EnvRead,
+            ]);
+            let mut deterministic = InterpreterConfig::quickjs_defaults();
+            deterministic.granted_capabilities = grants.clone();
+            let mut throughput = InterpreterConfig::v8_defaults();
+            throughput.granted_capabilities = grants;
+            let mut router = LaneRouter::with_configs(deterministic, throughput);
+            let transcript = Arc::new(InMemoryHostIoTranscript::recording());
+            let recorder: Arc<dyn HostIoRecorder> = transcript.clone();
+            let provider = Arc::new(
+                EnvironmentSnapshotHostIo::new(BTreeMap::from([(
+                    "PRIVATE_KEY".to_string(),
+                    "snapshot-value".to_string(),
+                )]))
+                .expect("explicit bounded snapshot"),
+            );
+            router.set_host_io(provider, Some(recorder));
+            let mut context = trusted_context();
+            if let Some(denied) = denied {
+                context.denied_capabilities.insert(denied.to_string());
+            }
+            let adapter = Arc::new(create_adapter(context, LossMatrix::balanced()));
+            let result = router
+                .execute_with_hook(&module, "env-hook-alias", Some(lane), Some(adapter.clone()))
+                .expect("the hostcall is authorized even when its hook contains it");
+            let records = adapter.decision_records();
+            let hostcall = records
+                .iter()
+                .find(|record| {
+                    matches!(
+                        &record.operation,
+                        GuardplaneOperation::Hostcall { capability, allowed: true }
+                            if capability == "env:read"
+                    )
+                })
+                .expect("the real hostcall reaches the hook with its exact operation tag");
+            if denied.is_some() {
+                assert_ne!(hostcall.action, HookAction::Allow, "{lane:?}: {denied:?}");
+                assert_eq!(
+                    result.result.requested_hook_action,
+                    Some(hostcall.action.clone()),
+                    "the exact operation or its canonical authority must stop dispatch"
+                );
+                assert!(transcript.entries().is_empty(), "no snapshot value is read");
+            } else {
+                assert_eq!(result.result.requested_hook_action, None);
+                assert_eq!(result.result.value, Value::str("snapshot-value"));
+                assert_eq!(result.result.completion_label, Label::Secret);
+                let entries = transcript.entries();
+                assert_eq!(entries.len(), 1);
+                assert!(matches!(
+                    &entries[0].0,
+                    HostIoRequest::EnvRead { name } if name == "PRIVATE_KEY"
+                ));
+                assert!(entries[0].1.is_ok());
+                assert!(
+                    result.result.hostcall_decisions.iter().any(|decision| {
+                        decision.capability.0 == "env_read" && decision.allowed
+                    })
+                );
+                assert!(
+                    result
+                        .result
+                        .hostcall_decisions
+                        .iter()
+                        .all(|decision| decision.capability.0 != "env:read")
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn hostcall_adapter_records_real_denials_and_folds_pure_builtins_bd_9vouw_7() {
+    let adapter = create_adapter(trusted_context(), LossMatrix::balanced());
+    let ctx = adversarial_hook_context(1, "hostcall");
+    for _ in 0..100 {
+        assert_eq!(
+            adapter.pre_hostcall(&ctx, "builtin:JSONParse", true),
+            HookAction::Allow
+        );
+    }
+    assert_eq!(adapter.summary().decision_count, 0);
+    adapter.pre_hostcall(&ctx, "fs:write", false);
+    let records = adapter.decision_records();
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].operation,
+        frankenengine_engine::guardplane_adapter::GuardplaneOperation::Hostcall {
+            capability: "fs:write".into(),
+            allowed: false,
+        }
+    );
+    assert_ne!(records[0].action, HookAction::Allow);
+}
+
+#[test]
+fn hostcall_witness_denials_match_tags_and_canonical_authority_bd_9vouw_7() {
+    for (capability, denied) in [
+        ("fs:write", "fs:write"),
+        ("fs:write", "fs_write"),
+        ("console:log", "console"),
+        ("net:request", "network_egress"),
+        ("builtin:JSONParse", "builtin:JSONParse"),
+        ("builtin:JSONParse", "builtin"),
+    ] {
+        let mut context = trusted_context();
+        context.denied_capabilities.insert(denied.to_string());
+        let adapter = create_adapter(context, LossMatrix::balanced());
+        let action = adapter.pre_hostcall(
+            &adversarial_hook_context(1, "witness-denial"),
+            capability,
+            true,
+        );
+        assert_ne!(action, HookAction::Allow, "{capability}: {denied}");
+        let records = adapter.decision_records();
+        assert_eq!(records.len(), 1, "an explicit denial cannot be folded");
+        assert_eq!(
+            records[0].operation,
+            frankenengine_engine::guardplane_adapter::GuardplaneOperation::Hostcall {
+                capability: capability.to_string(),
+                allowed: true,
+            }
+        );
+    }
+}
+
+#[test]
+fn hostcall_witness_declaration_never_overrides_a_real_denial_bd_9vouw_7() {
+    for declared in ["fs:write", "fs_write"] {
+        let mut context = trusted_context();
+        context.required_capabilities = BTreeSet::from([declared.to_string()]);
+        context.declared_capabilities = BTreeSet::from(["fs_write".to_string()]);
+        let adapter = create_adapter(context, LossMatrix::balanced());
+        let action = adapter.pre_hostcall(
+            &adversarial_hook_context(1, "authority-denial"),
+            "fs:write",
+            false,
+        );
+        assert_ne!(action, HookAction::Allow, "{declared}");
+        assert_eq!(
+            adapter.decision_records()[0].operation,
+            frankenengine_engine::guardplane_adapter::GuardplaneOperation::Hostcall {
+                capability: "fs:write".to_string(),
+                allowed: false,
+            }
+        );
+    }
+}
+
 fn adversarial_hook_context(instruction_count: u64, adversarial_pattern: &str) -> HookContext {
     HookContext {
         extension_id: format!("adv:{}", adversarial_pattern),

@@ -11,9 +11,9 @@
 //!
 //! No-claim: destructuring `var` declarations and destructuring for-in/for-of
 //! heads that bind through the object are still refused. `arguments` is never
-//! looked up in the object. Array.prototype[@@unscopables] is still not a
-//! readable object here; `with (array)` applies its names directly. The
-//! franken-core twin still refuses `with`.
+//! looked up in the object. Array.prototype[@@unscopables] is the object
+//! `with (array)` consults (bd-9vouw.341). The franken-core twin still
+//! refuses `with`.
 
 #![forbid(unsafe_code)]
 

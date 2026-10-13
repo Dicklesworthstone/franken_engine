@@ -94,10 +94,10 @@ fn taxonomy_cases() -> Vec<ParserTaxonomyCase> {
         // ── Syntax — UnsupportedSyntax ────────────────────────────────────
         ParserTaxonomyCase {
             id: "FE-PARSER-SYNTAX-UNTERMINATED-STRING",
-            description: "String literal with no closing quote rejected as UnsupportedSyntax",
+            description: "String literal with no closing quote is proven-invalid syntax (bd-9vouw.420)",
             category: ParserErrorCategory::Syntax,
             source: "var x = \"unterminated",
-            expected_code: Some(ParseErrorCode::UnsupportedSyntax),
+            expected_code: Some(ParseErrorCode::InvalidSyntax),
         },
         ParserTaxonomyCase {
             id: "FE-PARSER-SYNTAX-UNMATCHED-BRACE",

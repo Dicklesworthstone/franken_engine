@@ -432,8 +432,15 @@ pub fn prepare_source_entry_for_public_entrypoints(
             })
         }
         SourceLanguage::TypeScript => {
+            // `<T>value` is a type assertion in a `.ts` file and a JSX element
+            // in a `.tsx` one, so only the file's name decides (bd-9vouw.426).
+            let assertion_free_source = if has_angle_assertion_syntax(source_label) {
+                type_erasure::erase_angle_assertions(&hashbang_prepared_source)
+            } else {
+                hashbang_prepared_source
+            };
             let normalization_output = normalize_typescript_to_es2020(
-                &hashbang_prepared_source,
+                &assertion_free_source,
                 &TsNormalizationConfig::default(),
                 trace_id,
                 decision_id,
@@ -457,13 +464,27 @@ pub fn prepare_source_entry_for_public_entrypoints(
     }
 }
 
+/// A `.ts`, `.mts` or `.cts` file, whose `<T>value` is a type assertion (a
+/// `.tsx` file has JSX there instead).
+fn has_angle_assertion_syntax(source_label: &str) -> bool {
+    let label = source_label.to_ascii_lowercase();
+    [".ts", ".mts", ".cts"]
+        .iter()
+        .any(|extension| label.ends_with(extension))
+}
+
 fn normalize_hashbang_for_es2020_parser(source: &str) -> (String, bool) {
     let source_without_bom = source.strip_prefix('\u{feff}').unwrap_or(source);
     if !source_without_bom.starts_with("#!") {
         return (source.to_string(), false);
     }
 
-    let hashbang_line_end = source.find('\n').unwrap_or(source.len());
+    // The hashbang comment ends at the first line terminator of any kind
+    // (ES2023 12.5): with `\r` line endings, `\n` alone blanked the whole
+    // file and the run failed as an empty source.
+    let hashbang_line_end = source
+        .find(['\n', '\r', '\u{2028}', '\u{2029}'])
+        .unwrap_or(source.len());
     let mut normalized = String::with_capacity(source.len());
     for _ in 0..hashbang_line_end {
         normalized.push(' ');
@@ -631,7 +652,7 @@ pub fn normalize_typescript_to_es2020(
     decisions.push(build_decision(
         "enum_lowering",
         enum_lowered != current,
-        "Simple enum declarations lowered to ES2020 object freeze forms.",
+        "Enum declarations lowered to TypeScript's enum objects (numeric members map back to names).",
     ));
     current = enum_lowered;
 
@@ -900,7 +921,7 @@ fn normalize_newlines(source: &str) -> String {
     source.replace("\r\n", "\n").replace('\r', "\n")
 }
 
-fn source_label_has_typescript_extension(source_label: &str) -> bool {
+pub(crate) fn source_label_has_typescript_extension(source_label: &str) -> bool {
     let lower = source_label.trim().to_ascii_lowercase();
     [".ts", ".tsx", ".mts", ".cts"]
         .iter()
@@ -1328,7 +1349,8 @@ fn find_import_export_statement_end(source: &str, start: usize) -> Option<usize>
 
 fn rewrite_type_only_import_export_statement(statement: &str) -> Option<String> {
     let start = statement.find(|ch: char| !ch.is_ascii_whitespace())?;
-    if starts_with_keyword(statement, start, "import") {
+    let is_import = starts_with_keyword(statement, start, "import");
+    if is_import {
         let after_import = next_code_token_index(statement, start + "import".len())?;
         if starts_with_keyword(statement, after_import, "type")
             && import_type_keyword_uses_type_only_syntax(statement, after_import)
@@ -1348,7 +1370,30 @@ fn rewrite_type_only_import_export_statement(statement: &str) -> Option<String> 
         return None;
     }
 
-    let brace_start = find_top_level_char(statement, start, '{')?;
+    // Only an import or export clause lists specifiers: `export { ... }`,
+    // `import { ... }`, `import Default, { ... }`. The first brace of any
+    // other statement is a declaration's body or an object literal
+    // (`export interface Q { type: string }`, `export const o = { type: 1 }`),
+    // whose `type:` member was dropped as a type-only specifier
+    // (bd-9vouw.433).
+    let keyword_len = if is_import {
+        "import".len()
+    } else {
+        "export".len()
+    };
+    let first = next_code_token_index(statement, start + keyword_len)?;
+    let brace_start = if statement[first..].starts_with('{') {
+        first
+    } else if is_import
+        && let Some(default_end) = skip_identifier(statement, first)
+        && let Some(comma) = next_code_token_index(statement, default_end)
+        && statement[comma..].starts_with(',')
+    {
+        next_code_token_index(statement, comma + 1)
+            .filter(|brace| statement[*brace..].starts_with('{'))?
+    } else {
+        return None;
+    };
     let brace_end = find_matching_delimiter(statement, brace_start, '{', '}')?;
     let (runtime_specifiers, removed_any) =
         filter_runtime_named_specifiers(&statement[brace_start + 1..brace_end]);
@@ -1538,6 +1583,15 @@ fn next_code_scan_char(
                 }
 
                 let index = *cursor;
+                // A regular expression literal is one code token: a quote or
+                // bracket inside it opens nothing (bd-9vouw.436).
+                if bytes[index] == b'/'
+                    && slash_starts_regex(&source[..index])
+                    && let Some(end) = regex_literal_end(source, index)
+                {
+                    *cursor = end;
+                    return Some((index, '/'));
+                }
                 let ch = source[index..]
                     .chars()
                     .next()
@@ -1764,6 +1818,17 @@ where
                     }
                 }
 
+                // A regular expression literal is copied whole: a quote in
+                // it (`/[<>:"|?*]/u`) opened a string that hid the rest of
+                // the file from every rewrite (bd-9vouw.436).
+                if bytes[index] == b'/'
+                    && slash_starts_regex(&output)
+                    && let Some(end) = regex_literal_end(source, index)
+                {
+                    output.push_str(&source[index..end]);
+                    index = end;
+                    continue;
+                }
                 let ch = source[index..]
                     .chars()
                     .next()
@@ -1873,6 +1938,61 @@ fn is_identifier_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || matches!(ch, '_' | '$')
 }
 
+/// Whether a `/` after `preceding` (the code before it) starts a regular
+/// expression literal rather than a division: what precedes it cannot end
+/// an operand (the start, an operator or opening punctuation, or a keyword
+/// such as `return`).
+fn slash_starts_regex(preceding: &str) -> bool {
+    let preceding = preceding.trim_end();
+    let Some(last) = preceding.chars().next_back() else {
+        return true;
+    };
+    if is_identifier_char(last) {
+        let word_start = preceding
+            .char_indices()
+            .rev()
+            .find(|(_, ch)| !is_identifier_char(*ch))
+            .map_or(0, |(index, ch)| index + ch.len_utf8());
+        return matches!(
+            &preceding[word_start..],
+            "return"
+                | "typeof"
+                | "case"
+                | "do"
+                | "else"
+                | "in"
+                | "instanceof"
+                | "new"
+                | "delete"
+                | "void"
+                | "throw"
+                | "yield"
+                | "await"
+                | "of"
+        );
+    }
+    !matches!(last, ')' | ']' | '"' | '\'' | '`' | '.') && !last.is_alphanumeric()
+}
+
+/// The end of the regular expression literal whose `/` is at `start`, or
+/// `None` when a line ends first (then the `/` was not one).
+fn regex_literal_end(source: &str, start: usize) -> Option<usize> {
+    let mut in_class = false;
+    let mut escaped = false;
+    for (offset, ch) in source[start + 1..].char_indices() {
+        match ch {
+            '\n' | '\r' | '\u{2028}' | '\u{2029}' => return None,
+            _ if escaped => escaped = false,
+            '\\' => escaped = true,
+            '[' => in_class = true,
+            ']' => in_class = false,
+            '/' if !in_class => return Some(start + 1 + offset + 1),
+            _ => {}
+        }
+    }
+    None
+}
+
 fn has_token_boundary_before(source: &str, index: usize) -> bool {
     source[..index]
         .chars()
@@ -1967,6 +2087,18 @@ fn statement_uses_type_only_import_export_syntax(statement: &str) -> bool {
     let Some(brace_start) = find_top_level_char(statement, start, '{') else {
         return false;
     };
+    // `import data from './d.json' with { type: 'json' }`: a brace after
+    // `with` (or the older `assert`) holds import attributes, not named
+    // specifiers, and `type: 'json'` is no TypeScript `type` modifier
+    // (bd-9vouw.387).
+    let before_brace = statement[..brace_start].trim_end();
+    if ["with", "assert"].iter().any(|keyword| {
+        before_brace
+            .strip_suffix(keyword)
+            .is_some_and(|head| !head.ends_with(is_identifier_char))
+    }) {
+        return false;
+    }
     let Some(brace_end) = find_matching_delimiter(statement, brace_start, '{', '}') else {
         return false;
     };
@@ -2186,12 +2318,12 @@ fn parse_namespace_exports(body: &str) -> Result<Vec<String>, TsNormalizationErr
             });
         };
 
-        let declaration = if let Some(value) = strip_leading_keyword(exported, "const") {
-            value
+        let (keyword, declaration) = if let Some(value) = strip_leading_keyword(exported, "const") {
+            ("const", value)
         } else if let Some(value) = strip_leading_keyword(exported, "let") {
-            value
+            ("let", value)
         } else if let Some(value) = strip_leading_keyword(exported, "var") {
-            value
+            ("var", value)
         } else if is_exported_function_declaration(exported) {
             assignments.extend(render_namespace_export_function(exported)?);
             cursor = statement_end;
@@ -2214,7 +2346,14 @@ fn parse_namespace_exports(body: &str) -> Result<Vec<String>, TsNormalizationErr
             });
         }
 
-        assignments.push(format!("  ns.{symbol} = {};", rhs.trim()));
+        // The member is also a local of the namespace body, so the body's
+        // functions and later initializers can name it (bd-9vouw.416); a
+        // later write to it inside the body does not reach the namespace
+        // object (TypeScript rewrites such names to the object's property).
+        assignments.push(format!(
+            "  ns.{symbol} = {}; {keyword} {symbol} = ns.{symbol};",
+            rhs.trim()
+        ));
         cursor = statement_end;
     }
 
@@ -2432,156 +2571,517 @@ fn parse_class_declaration_name(class_declaration: &str) -> Option<String> {
     }
 }
 
+/// TypeScript `enum` declarations (also `const enum` and `export enum`;
+/// `declare enum` is ambient and erased) lowered to the object TypeScript
+/// itself emits (bd-9vouw.413): `var E; (function (__enum) { ... })(E ||
+/// (E = {}));`, a plain mutable object whose numeric members also map back
+/// from value to name (`E[E.A] === "A"`), and whose declarations merge.
+/// Members count up from the previous numeric value at run time, so they
+/// may follow a computed initializer, and each member is a local constant
+/// of the enum body, so an initializer can name an earlier member (`AB = A
+/// | B`). A declaration starts a line and may span lines; the replacement
+/// keeps the source's line count. The earlier lowering handled a whole enum
+/// on one line only and emitted a frozen object without the reverse
+/// mapping; a multi-line enum stayed as is and failed when it ran.
 fn lower_simple_enums(source: &str) -> String {
-    let mut out = Vec::<String>::new();
-
-    for line in source.lines() {
-        let trimmed = line.trim();
-        if !trimmed.starts_with("enum ") {
-            out.push(line.to_string());
-            continue;
-        }
-
-        let Some(rest) = trimmed.strip_prefix("enum ") else {
-            out.push(line.to_string());
-            continue;
-        };
-        let Some(brace_start) = rest.find('{') else {
-            out.push(line.to_string());
-            continue;
-        };
-        let Some(brace_end) = rest.rfind('}') else {
-            out.push(line.to_string());
-            continue;
-        };
-
-        let enum_name = rest[..brace_start].trim();
-        let body = rest[brace_start + 1..brace_end].trim();
-        if enum_name.is_empty() {
-            out.push(line.to_string());
-            continue;
-        }
-
-        let mut entries = Vec::<String>::new();
-        let mut numeric_counter = 0i64;
-
-        for raw_member in body.split(',') {
-            let member = raw_member.trim();
-            if member.is_empty() {
-                continue;
+    let mut out = String::with_capacity(source.len() + 64);
+    let mut cursor = 0;
+    while cursor < source.len() {
+        let line_end = source[cursor..]
+            .find('\n')
+            .map_or(source.len(), |offset| cursor + offset);
+        let line = &source[cursor..line_end];
+        if let Some(head) = enum_declaration_head(line)
+            && let Some(close) = matching_enum_brace(source, cursor + head.brace_offset)
+        {
+            let span = &source[cursor..=close];
+            let body = &source[cursor + head.brace_offset + 1..close];
+            if !head.declare {
+                out.push_str(&line[..line.len() - line.trim_start().len()]);
+                out.push_str(&enum_emission(&head, body));
             }
-
-            if let Some((name, value)) = member.split_once('=') {
-                let key = name.trim();
-                let value_trimmed = value.trim();
-                if key.is_empty() {
-                    continue;
-                }
-                entries.push(format!("{key}: {value_trimmed}"));
-                if let Ok(parsed) = value_trimmed.parse::<i64>() {
-                    numeric_counter = parsed.saturating_add(1);
-                }
-            } else {
-                let key = member;
-                entries.push(format!("{key}: {numeric_counter}"));
-                numeric_counter = numeric_counter.saturating_add(1);
-            }
-        }
-
-        if entries.is_empty() {
-            out.push(line.to_string());
+            out.extend(std::iter::repeat_n('\n', span.matches('\n').count()));
+            cursor = close + 1;
             continue;
         }
-
-        out.push(format!(
-            "const {enum_name} = Object.freeze({{{}}});",
-            entries.join(", ")
-        ));
+        let next = (line_end + 1).min(source.len());
+        out.push_str(&source[cursor..next]);
+        cursor = next;
     }
-
-    out.join("\n")
+    out
 }
 
-fn lower_constructor_parameter_properties(source: &str) -> String {
-    let mut out = Vec::<String>::new();
+struct EnumDeclarationHead<'a> {
+    export: bool,
+    declare: bool,
+    name: &'a str,
+    brace_offset: usize,
+}
 
-    for line in source.lines() {
-        let trimmed = line.trim();
-        if !trimmed.starts_with("constructor(") {
-            out.push(line.to_string());
-            continue;
-        }
-
-        let Some(args_start) = trimmed.find('(') else {
-            out.push(line.to_string());
-            continue;
-        };
-        let Some(args_end) = trimmed.find(')') else {
-            out.push(line.to_string());
-            continue;
-        };
-
-        let args_text = &trimmed[args_start + 1..args_end];
-        let mut normalized_args = Vec::<String>::new();
-        let mut injected_assignments = Vec::<String>::new();
-
-        for argument in args_text.split(',') {
-            let raw_arg = argument.trim();
-            if raw_arg.is_empty() {
-                continue;
-            }
-
-            let (visibility, remaining) = if let Some(rest) = raw_arg.strip_prefix("private ") {
-                (Some("private"), rest)
-            } else if let Some(rest) = raw_arg.strip_prefix("public ") {
-                (Some("public"), rest)
-            } else if let Some(rest) = raw_arg.strip_prefix("protected ") {
-                (Some("protected"), rest)
-            } else {
-                (None, raw_arg)
-            };
-
-            let no_readonly = remaining
-                .strip_prefix("readonly ")
-                .unwrap_or(remaining)
-                .trim();
-
-            let param_name = no_readonly.split(':').next().unwrap_or(no_readonly).trim();
-
-            normalized_args.push(no_readonly.to_string());
-
-            if visibility.is_some() && !param_name.is_empty() {
-                injected_assignments.push(format!("this.{param_name} = {param_name};"));
-            }
-        }
-
-        let mut rebuilt = String::new();
-        rebuilt.push_str("constructor(");
-        rebuilt.push_str(&normalized_args.join(", "));
-        rebuilt.push(')');
-
-        if let Some(brace_open) = trimmed.find('{') {
-            let body_start = brace_open + 1;
-            let body_end = trimmed.rfind('}').unwrap_or(trimmed.len());
-            let existing_body = trimmed[body_start..body_end].trim();
-            rebuilt.push_str(" {");
-            if !injected_assignments.is_empty() {
-                rebuilt.push(' ');
-                rebuilt.push_str(&injected_assignments.join(" "));
-            }
-            if !existing_body.is_empty() {
-                rebuilt.push(' ');
-                rebuilt.push_str(existing_body);
-            }
-            rebuilt.push_str(" }");
-        } else {
-            rebuilt.push(';');
-        }
-
-        out.push(rebuilt);
+/// `[export] [declare] [const] enum Name {` at the start of `line`.
+fn enum_declaration_head(line: &str) -> Option<EnumDeclarationHead<'_>> {
+    let mut rest = line.trim_start();
+    let mut take = |keyword: &str| {
+        let after = rest.strip_prefix(keyword)?;
+        after.starts_with(char::is_whitespace).then(|| {
+            rest = after.trim_start();
+        })
+    };
+    let export = take("export").is_some();
+    let declare = take("declare").is_some();
+    let _ = take("const");
+    take("enum")?;
+    let name_len = rest
+        .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '$'))
+        .unwrap_or(rest.len());
+    let name = &rest[..name_len];
+    if name.is_empty() || name.starts_with(|ch: char| ch.is_ascii_digit()) {
+        return None;
     }
+    let after_name = &rest[name_len..];
+    if !after_name.trim_start().starts_with('{') {
+        return None;
+    }
+    let brace_offset = line.len() - after_name.trim_start().len();
+    Some(EnumDeclarationHead {
+        export,
+        declare,
+        name,
+        brace_offset,
+    })
+}
 
-    out.join("\n")
+/// The index of the `}` closing the `{` at `open`, skipping strings,
+/// template literals and comments.
+fn matching_enum_brace(source: &str, open: usize) -> Option<usize> {
+    matching_close(source, open, b'{', b'}')
+}
+
+/// The index of the `close_byte` matching the `open_byte` at `open`,
+/// skipping strings, template literals and comments.
+fn matching_close(source: &str, open: usize, open_byte: u8, close_byte: u8) -> Option<usize> {
+    let bytes = source.as_bytes();
+    let mut depth = 0usize;
+    let mut index = open;
+    while index < bytes.len() {
+        match bytes[index] {
+            byte if byte == open_byte => depth += 1,
+            byte if byte == close_byte => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            quote @ (b'\'' | b'"' | b'`') => {
+                index += 1;
+                while index < bytes.len() && bytes[index] != quote {
+                    if bytes[index] == b'\\' {
+                        index += 1;
+                    }
+                    index += 1;
+                }
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'/') => {
+                while index < bytes.len() && bytes[index] != b'\n' {
+                    index += 1;
+                }
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                index += 2;
+                while index + 1 < bytes.len() && !(bytes[index] == b'*' && bytes[index + 1] == b'/')
+                {
+                    index += 1;
+                }
+                index += 1;
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    None
+}
+
+/// The members of an enum body: (name as written, initializer), split at
+/// top-level commas with comments removed.
+fn enum_members(body: &str) -> Vec<(String, Option<String>)> {
+    let mut members = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0i32;
+    let mut chars = body.chars().peekable();
+    let finish = |text: &mut String, members: &mut Vec<(String, Option<String>)>| {
+        let member = text.trim();
+        if !member.is_empty() {
+            let (name, initializer) = match top_level_equals(member) {
+                Some(at) => (
+                    member[..at].trim().to_string(),
+                    Some(member[at + 1..].trim().to_string()),
+                ),
+                None => (member.to_string(), None),
+            };
+            members.push((name, initializer));
+        }
+        text.clear();
+    };
+    while let Some(ch) = chars.next() {
+        match ch {
+            '/' if chars.peek() == Some(&'/') => {
+                for next in chars.by_ref() {
+                    if next == '\n' {
+                        break;
+                    }
+                }
+                current.push(' ');
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut previous = ' ';
+                for next in chars.by_ref() {
+                    if previous == '*' && next == '/' {
+                        break;
+                    }
+                    previous = next;
+                }
+                current.push(' ');
+            }
+            '\'' | '"' | '`' => {
+                current.push(ch);
+                while let Some(next) = chars.next() {
+                    current.push(next);
+                    if next == '\\' {
+                        if let Some(escaped) = chars.next() {
+                            current.push(escaped);
+                        }
+                    } else if next == ch {
+                        break;
+                    }
+                }
+            }
+            '(' | '[' | '{' => {
+                depth += 1;
+                current.push(ch);
+            }
+            ')' | ']' | '}' => {
+                depth -= 1;
+                current.push(ch);
+            }
+            ',' if depth == 0 => finish(&mut current, &mut members),
+            _ => current.push(ch),
+        }
+    }
+    finish(&mut current, &mut members);
+    members
+}
+
+/// The index of a member's `=` (not part of `==`, `===`, `<=`, `>=`, `!=`
+/// or `=>`) outside brackets and quotes.
+fn top_level_equals(member: &str) -> Option<usize> {
+    let bytes = member.as_bytes();
+    let mut depth = 0i32;
+    let mut quote = None;
+    for (index, &byte) in bytes.iter().enumerate() {
+        if let Some(open) = quote {
+            if byte == open && bytes[index - 1] != b'\\' {
+                quote = None;
+            }
+            continue;
+        }
+        match byte {
+            b'\'' | b'"' | b'`' => quote = Some(byte),
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b'=' if depth == 0
+                && bytes.get(index + 1) != Some(&b'=')
+                && bytes.get(index + 1) != Some(&b'>')
+                && !matches!(
+                    index.checked_sub(1).map(|i| bytes[i]),
+                    Some(b'=' | b'!' | b'<' | b'>')
+                ) =>
+            {
+                return Some(index);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn enum_emission(head: &EnumDeclarationHead<'_>, body: &str) -> String {
+    let name = head.name;
+    let mut code = format!(
+        "{}var {name}; (function (__enum) {{ let __enum_next = 0;",
+        if head.export { "export " } else { "" }
+    );
+    // The value of a member without an initializer when it is known here
+    // (after literal integers only, as TypeScript folds it); otherwise the
+    // body counts on at run time.
+    let mut known_next = Some(0i64);
+    for (member, initializer) in enum_members(body) {
+        let key = if member.starts_with(['"', '\'']) {
+            member.clone()
+        } else {
+            format!("\"{member}\"")
+        };
+        let value = match initializer {
+            Some(initializer) => {
+                known_next = initializer
+                    .parse::<i64>()
+                    .ok()
+                    .and_then(|value| value.checked_add(1));
+                initializer
+            }
+            None => match known_next {
+                Some(next) => {
+                    known_next = next.checked_add(1);
+                    next.to_string()
+                }
+                None => "__enum_next".to_string(),
+            },
+        };
+        code.push_str(&format!(
+            " {{ const __value = ({value}); __enum[{key}] = __value; if (typeof __value === \"number\") {{ __enum[__value] = {key}; __enum_next = __value + 1; }} }}"
+        ));
+        let identifier = !member.starts_with(['"', '\''])
+            && member
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '$')
+            && !member.starts_with(|ch: char| ch.is_ascii_digit())
+            && !is_enum_member_reserved(&member);
+        if identifier {
+            code.push_str(&format!(" const {member} = __enum[{key}];"));
+        }
+    }
+    code.push_str(&format!(" }})({name} || ({name} = {{}}));"));
+    code
+}
+
+/// Reserved words cannot be the local constant of a member of that name
+/// (the member itself is still created).
+fn is_enum_member_reserved(name: &str) -> bool {
+    matches!(
+        name,
+        "break"
+            | "case"
+            | "catch"
+            | "class"
+            | "const"
+            | "continue"
+            | "debugger"
+            | "default"
+            | "delete"
+            | "do"
+            | "else"
+            | "enum"
+            | "export"
+            | "extends"
+            | "false"
+            | "finally"
+            | "for"
+            | "function"
+            | "if"
+            | "import"
+            | "in"
+            | "instanceof"
+            | "new"
+            | "null"
+            | "return"
+            | "super"
+            | "switch"
+            | "this"
+            | "throw"
+            | "true"
+            | "try"
+            | "typeof"
+            | "var"
+            | "void"
+            | "while"
+            | "with"
+            | "yield"
+            | "let"
+            | "static"
+            | "implements"
+            | "interface"
+            | "package"
+            | "private"
+            | "protected"
+            | "public"
+            | "await"
+            | "arguments"
+            | "eval"
+    )
+}
+
+/// TypeScript parameter properties (`constructor(private readonly x: T)`):
+/// the modifiers (`public`, `private`, `protected`, `readonly`,
+/// `override`, in any combination) are removed from the parameter and the
+/// constructor body assigns `this.x = x` first, or right after its
+/// top-level `super(...)` call, as TypeScript emits it (bd-9vouw.414). The
+/// parameter list and the body may span lines and the class may be written
+/// on one line; only the modifier words are removed, so the line count is
+/// kept. The earlier lowering read a `constructor(` that started a line
+/// with its whole parameter list on that line, closed a multi-line body
+/// early and assigned before `super()`.
+fn lower_constructor_parameter_properties(source: &str) -> String {
+    rewrite_outside_strings_and_comments(source, |source, index, output| {
+        if !starts_with_keyword(source, index, "constructor") {
+            return None;
+        }
+        let after_keyword = index + "constructor".len();
+        let open = after_keyword
+            + (source[after_keyword..].len() - source[after_keyword..].trim_start().len());
+        if source.as_bytes().get(open) != Some(&b'(') {
+            return None;
+        }
+        let close = matching_close(source, open, b'(', b')')?;
+        let (parameters, names) = strip_parameter_property_modifiers(&source[open + 1..close]);
+        if names.is_empty() {
+            return None;
+        }
+        let after_close = close + 1;
+        let body_open =
+            after_close + (source[after_close..].len() - source[after_close..].trim_start().len());
+        if source.as_bytes().get(body_open) != Some(&b'{') {
+            // A constructor without a body (a signature) keeps the stripped
+            // parameter list and ends its member with `;`, as the line-based
+            // lowering this replaced did.
+            output.push_str(&source[index..=open]);
+            output.push_str(&parameters);
+            output.push(')');
+            if source.as_bytes().get(body_open) != Some(&b';') {
+                output.push(';');
+            }
+            return Some(after_close);
+        }
+        let body_close = matching_close(source, body_open, b'{', b'}')?;
+        let insert_at =
+            super_call_statement_end(source, body_open + 1, body_close).unwrap_or(body_open + 1);
+        output.push_str(&source[index..=open]);
+        output.push_str(&parameters);
+        output.push_str(&source[close..insert_at]);
+        for name in &names {
+            output.push_str(&format!(" this.{name} = {name};"));
+        }
+        output.push(' ');
+        Some(insert_at)
+    })
+}
+
+/// A constructor's parameter list with the parameter-property modifiers
+/// (and the `?` of an optional property) removed in place, and the names
+/// of the parameters that had them.
+fn strip_parameter_property_modifiers(parameters: &str) -> (String, Vec<String>) {
+    const MODIFIERS: [&str; 5] = ["public", "private", "protected", "readonly", "override"];
+    let mut out = String::with_capacity(parameters.len());
+    let mut names = Vec::new();
+    for (index, segment) in split_top_level_commas(parameters).into_iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        let leading = &segment[..segment.len() - segment.trim_start().len()];
+        let mut rest = segment.trim_start();
+        let mut modified = false;
+        while let Some(keyword) = MODIFIERS.iter().find(|keyword| {
+            rest.strip_prefix(**keyword)
+                .is_some_and(|after| after.starts_with(char::is_whitespace))
+        }) {
+            rest = rest[keyword.len()..].trim_start();
+            modified = true;
+        }
+        out.push_str(leading);
+        if !modified {
+            out.push_str(rest);
+            continue;
+        }
+        let name_len = rest
+            .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '$'))
+            .unwrap_or(rest.len());
+        let name = &rest[..name_len];
+        if !name.is_empty() {
+            names.push(name.to_string());
+        }
+        out.push_str(name);
+        let after_name = &rest[name_len..];
+        out.push_str(after_name.strip_prefix('?').unwrap_or(after_name));
+    }
+    (out, names)
+}
+
+/// `text` split at commas outside brackets, quotes and template literals,
+/// each part with its surrounding white space.
+fn split_top_level_commas(text: &str) -> Vec<&str> {
+    let bytes = text.as_bytes();
+    let mut parts = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0;
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            quote @ (b'\'' | b'"' | b'`') => {
+                index += 1;
+                while index < bytes.len() && bytes[index] != quote {
+                    if bytes[index] == b'\\' {
+                        index += 1;
+                    }
+                    index += 1;
+                }
+            }
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b',' if depth == 0 => {
+                parts.push(&text[start..index]);
+                start = index + 1;
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    parts.push(&text[start..]);
+    parts
+}
+
+/// The end of the first top-level `super(...)` call statement (with its
+/// `;`) between `start` and `end` of a constructor body, if any.
+fn super_call_statement_end(source: &str, start: usize, end: usize) -> Option<usize> {
+    let bytes = source.as_bytes();
+    let mut depth = 0i32;
+    let mut index = start;
+    while index < end {
+        match bytes[index] {
+            quote @ (b'\'' | b'"' | b'`') => {
+                index += 1;
+                while index < end && bytes[index] != quote {
+                    if bytes[index] == b'\\' {
+                        index += 1;
+                    }
+                    index += 1;
+                }
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'/') => {
+                while index < end && bytes[index] != b'\n' {
+                    index += 1;
+                }
+            }
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b's' if depth == 0 && starts_with_keyword(source, index, "super") => {
+                let after = index + "super".len();
+                let open =
+                    after + (source[after..end].len() - source[after..end].trim_start().len());
+                if bytes.get(open) == Some(&b'(') {
+                    let close = matching_close(source, open, b'(', b')')?;
+                    let rest = &source[close + 1..end];
+                    let semicolon = rest.len() - rest.trim_start().len();
+                    return Some(if rest.trim_start().starts_with(';') {
+                        close + 1 + semicolon + 1
+                    } else {
+                        close + 1
+                    });
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    None
 }
 
 fn normalize_definite_assignment_assertions(source: &str) -> String {
@@ -2821,13 +3321,24 @@ const value: number = 1;
         )
         .expect("normalization should pass");
 
+        // TypeScript's enum object (bd-9vouw.413): a var initialized by an
+        // IIFE, members counting from the previous numeric value.
         assert!(
             output
                 .normalized_source
-                .contains("const Status = Object.freeze(")
+                .contains("var Status; (function (__enum) {")
         );
-        assert!(output.normalized_source.contains("Ready: 0"));
-        assert!(output.normalized_source.contains("Busy"));
+        assert!(
+            output
+                .normalized_source
+                .contains("const __value = (0); __enum[\"Ready\"] = __value;")
+        );
+        assert!(
+            output
+                .normalized_source
+                .contains("const __value = (3); __enum[\"Busy\"] = __value;")
+        );
+        assert!(!output.normalized_source.contains("Object.freeze"));
     }
 
     #[test]
@@ -3056,7 +3567,9 @@ export const version = 1;
             vec![
                 "  function run() { return 1; }".to_string(),
                 "  ns.run = run;".to_string(),
-                "  ns.version = 1;".to_string(),
+                // The member is a local of the namespace body too
+                // (bd-9vouw.416).
+                "  ns.version = 1; const version = ns.version;".to_string(),
             ]
         );
     }
@@ -3576,8 +4089,17 @@ abstract class Base { }"#;
             "p",
         )
         .expect("operation should succeed for valid inputs");
-        assert!(output.normalized_source.contains("Up: 10"));
-        assert!(output.normalized_source.contains("Down: 11"));
+        // `Down` counts on from `Up` at run time (bd-9vouw.413).
+        assert!(
+            output
+                .normalized_source
+                .contains("const __value = (10); __enum[\"Up\"] = __value;")
+        );
+        assert!(
+            output
+                .normalized_source
+                .contains("const __value = (11); __enum[\"Down\"] = __value;")
+        );
     }
 
     #[test]
@@ -3606,8 +4128,33 @@ abstract class Base { }"#;
             "p",
         )
         .expect("operation should succeed for valid inputs");
-        // Empty body → entries is empty → line passes through
-        assert!(output.normalized_source.contains("enum Empty"));
+        // An empty enum is still an (empty) enum object (bd-9vouw.413).
+        assert!(
+            output
+                .normalized_source
+                .contains("var Empty; (function (__enum)")
+        );
+        assert!(!output.normalized_source.contains("enum Empty"));
+    }
+
+    /// bd-9vouw.413: a multi-line enum (the usual formatting) is lowered
+    /// too, the replacement keeps the line count, `declare enum` is erased
+    /// and `const enum` and `export enum` are lowered like `enum`.
+    #[test]
+    fn multi_line_declare_const_and_export_enums_bd_9vouw_413() {
+        let source = "enum Color {\n  Red,\n  Green = 5, // five\n}\ndeclare enum A { X }\nconst enum B { Y = 1 << 1 }\nexport enum C { Z }\nconsole.log(Color.Green);";
+        let lowered = lower_simple_enums(source);
+        assert_eq!(lowered.lines().count(), source.lines().count(), "{lowered}");
+        assert!(
+            lowered.starts_with("var Color; (function (__enum) {"),
+            "{lowered}"
+        );
+        assert!(lowered.contains("const __value = (5); __enum[\"Green\"] = __value;"));
+        assert!(!lowered.contains("enum A"), "{lowered}");
+        assert!(lowered.contains("var B; (function (__enum)"));
+        assert!(lowered.contains("const __value = (1 << 1); __enum[\"Y\"]"));
+        assert!(lowered.contains("export var C; (function (__enum)"));
+        assert!(lowered.ends_with("console.log(Color.Green);"));
     }
 
     #[test]
@@ -3621,9 +4168,17 @@ abstract class Base { }"#;
             "p",
         )
         .expect("operation should succeed for valid inputs");
-        assert!(output.normalized_source.contains("Object.freeze"));
-        assert!(output.normalized_source.contains(r#"Red: "RED""#));
-        assert!(output.normalized_source.contains(r#"Blue: "BLUE""#));
+        // String members keep their values; only numbers map back.
+        assert!(
+            output
+                .normalized_source
+                .contains(r#"const __value = ("RED"); __enum["Red"] = __value;"#)
+        );
+        assert!(
+            output
+                .normalized_source
+                .contains(r#"const __value = ("BLUE"); __enum["Blue"] = __value;"#)
+        );
     }
 
     // --- Constructor parameter property edge cases ---
@@ -3822,6 +4377,44 @@ abstract class Base { }"#;
         let source = "import type, { keep } from \"pkg\";";
         let result = elide_type_only_imports(source);
         assert_eq!(result, source);
+    }
+
+    /// bd-9vouw.436: a quote inside a regular expression literal opens no
+    /// string, so the declarations after it are still erased; a division
+    /// stays a division.
+    #[test]
+    fn regex_literals_with_quotes_do_not_hide_later_type_declarations() {
+        let source = "const R = /[<>:\"|?*]/u;\nconst S = /it's/;\nconst half = 10 / 2;\ntype Entry = { a: boolean };\ninterface Shape { b: number }\nconst n = R.test('x') ? half : 2;";
+        let output = normalize_typescript_to_es2020(
+            source,
+            &TsNormalizationConfig::default(),
+            "trace",
+            "decision",
+            "policy",
+        )
+        .expect("regex literals should not break normalization");
+        let normalized = &output.normalized_source;
+        assert!(!normalized.contains("type Entry"), "{normalized}");
+        assert!(!normalized.contains("interface Shape"), "{normalized}");
+        assert!(normalized.contains("/[<>:\"|?*]/u"), "{normalized}");
+        assert!(normalized.contains("/it's/"), "{normalized}");
+        assert!(normalized.contains("10 / 2"), "{normalized}");
+    }
+
+    /// bd-9vouw.433: only an import or export clause lists specifiers; a
+    /// `type:` member of a declaration body or an object literal is kept.
+    #[test]
+    fn elide_type_only_imports_leaves_declaration_bodies_and_object_literals() {
+        for source in [
+            "export const config = { type: \"json\", n: 1 };",
+            "export interface Q { type: string; n: number }",
+            "export default { type: \"a\" };",
+            "export function f(o = { type: 1 }) { return o; }",
+            "export class K { type = 1; }",
+            "import Default, { type } from \"pkg\";",
+        ] {
+            assert_eq!(elide_type_only_imports(source), source, "{source}");
+        }
     }
 
     #[test]
@@ -4321,6 +4914,30 @@ abstract class Base { }"#;
         );
     }
 
+    #[test]
+    fn import_attributes_are_not_type_modifiers_bd_9vouw_387() {
+        for source in [
+            "import data from './data.json' with { type: 'json' };",
+            "import * as ns from './data.json' with {type:'json'};",
+            "import './data.json' with { type: 'json' };",
+            "export { default } from './data.json' with { type: 'json' };",
+            "import data from './data.json' assert { type: 'json' };",
+        ] {
+            assert_eq!(
+                classify_source_language(Some("app.mjs"), source),
+                SourceLanguage::JavaScript,
+                "{source}"
+            );
+        }
+        assert_eq!(
+            classify_source_language(
+                Some("app.mjs"),
+                "import { type Foo } from './foo' with { type: 'json' };"
+            ),
+            SourceLanguage::TypeScript
+        );
+    }
+
     /// zxcvbn's bundle holds 240 KB string literals. The classifier blanks
     /// literals to spaces and used to test "statement start" (a backward scan
     /// over whitespace) at every blank position: quadratic, 59 s of a 61 s
@@ -4466,6 +5083,39 @@ abstract class Base { }"#;
         assert!(!prepared.prepared_source.starts_with("#!"));
         assert!(!prepared.prepared_source.starts_with("//"));
         assert!(prepared.prepared_source.contains("\n\"use strict\";"));
+    }
+
+    /// A hashbang line ends at any line terminator: with `\r` line endings
+    /// the whole file was blanked and `frankenctl run` failed as an empty
+    /// source (Node v22.2.0 runs such a file).
+    #[test]
+    fn prepare_public_source_entry_hashbang_ends_at_any_line_terminator() {
+        for terminator in ["\r", "\r\n", "\u{2028}", "\u{2029}"] {
+            let source = format!(
+                "#! /usr/bin/env node{terminator}\"use strict\";{terminator}const value = 1;"
+            );
+            let prepared = prepare_source_entry_for_public_entrypoints(
+                &source,
+                "fixture.js",
+                "trace-js-hashbang",
+                "decision-js-hashbang",
+                "policy-js-hashbang",
+            )
+            .expect("hashbang source preparation should succeed");
+            let expected_tail = format!("{terminator}\"use strict\";{terminator}const value = 1;");
+            assert!(
+                prepared.prepared_source.ends_with(&expected_tail),
+                "{terminator:?}: {:?}",
+                prepared.prepared_source
+            );
+            assert!(
+                prepared.prepared_source[..prepared.prepared_source.len() - expected_tail.len()]
+                    .chars()
+                    .all(|ch| ch == ' '),
+                "{terminator:?}: {:?}",
+                prepared.prepared_source
+            );
+        }
     }
 
     #[test]

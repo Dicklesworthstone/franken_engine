@@ -2121,6 +2121,16 @@ struct ParseExecutionContext<'a> {
     pattern_depth: u64,
     /// Whether the current parsing context is in strict mode.
     strict_mode: bool,
+    /// Code whose `this` is the script's: a Script's top-level code and the
+    /// arrow functions in it (bd-9vouw.417). That `this` is the global
+    /// object, in strict code too (ES2020 15.1.10 ScriptEvaluation), so its
+    /// reads convert as sloppy ones do. A module's top-level `this` is
+    /// undefined and a function's is its call's.
+    script_this: bool,
+    /// The source is a Module, whose code (function bodies included) may
+    /// use `import.meta`; in a Script it is an early SyntaxError (ES2020
+    /// 15.1.1, bd-9vouw.455).
+    module_goal: bool,
     /// True only while parsing an object concise method (or a lexically nested
     /// arrow). Bare `super` remains invalid; this admits only `super.x` and
     /// `super[x]` where the resulting closure receives a [[HomeObject]].
@@ -2150,7 +2160,16 @@ struct ParseExecutionContext<'a> {
     /// and class comes from in the source, so Function.prototype.toString
     /// can return that source text.
     function_sources: FunctionSourceMap,
+    /// Tagged templates parsed so far: each call site's key for the
+    /// runtime's template-object cache (bd-9vouw.343).
+    template_sites: u32,
 }
+
+/// The intrinsic a tagged template's strings argument calls:
+/// `%TemplateObject(site, [cooked...], [raw...])` answers the call site's one
+/// frozen template object (ES2020 12.2.9.3). `%` cannot start a source
+/// identifier, so no program can name it.
+pub(crate) const TEMPLATE_OBJECT_INTRINSIC: &str = "%TemplateObject";
 
 /// The parse text is the source with its comments blanked to spaces (same
 /// byte offsets), merged into logical lines whose separators are
@@ -2399,13 +2418,51 @@ fn is_comment_only_line(line: &LogicalLine) -> bool {
 fn line_starts_call_or_index(line: &str) -> bool {
     let code = strip_comments_to_whitespace(line);
     let code = code.trim_start();
-    code.starts_with('(') || code.starts_with('[')
+    // No semicolon is inserted before a template either: `tag` newline
+    // `` `x` `` is a tagged template (bd-9vouw.448).
+    code.starts_with('(') || code.starts_with('[') || code.starts_with('`')
+}
+
+/// Whether a line starts with a `/` that is not a comment: after a line that
+/// ends an expression it is a division operator (bd-9vouw.362).
+fn line_starts_division(line: &str) -> bool {
+    line.starts_with('/') && !line.starts_with("//") && !line.starts_with("/*")
 }
 
 /// Whether a logical line ends with something an argument list or index can
 /// follow: `)`, `]`, a literal or an identifier that is not a keyword ending
 /// a statement head (`return`, `break`, ...), outside import and export
 /// declarations.
+/// Whether `text` ends with the keyword of a restricted production
+/// (`return`, `break`, `continue`, `throw`, `yield`; ES2020 11.9.1) and the
+/// next line's leading operator could begin that keyword's operand: a
+/// unary `+`/`-`, or the `*` of `yield*`. A semicolon is inserted before
+/// such a token after a line break, so the line does not continue:
+/// `return` newline `+ 1` returns undefined, and `yield` newline `* 1` is
+/// `yield;` and a SyntaxError (bd-9vouw.444). Other operators (`: b`,
+/// `, b`) still continue (`c ? yield` newline `: yield`). A word after a `.`
+/// is a property name (`it.return`). Only the line's tail is read: a long
+/// statement continued line by line is not rescanned per line.
+fn restricted_keyword_ends_before(text: &str, unary_operator: bool, star: bool) -> bool {
+    if !(unary_operator || star) {
+        return false;
+    }
+    let code = text.trim_end();
+    let word_start = code
+        .char_indices()
+        .rev()
+        .find(|(_, c)| !(*c == '_' || *c == '$' || c.is_alphanumeric()))
+        .map_or(0, |(index, c)| index + c.len_utf8());
+    if code[..word_start].trim_end().ends_with('.') {
+        return false;
+    }
+    match &code[word_start..] {
+        "yield" => unary_operator || star,
+        "return" | "break" | "continue" | "throw" => unary_operator,
+        _ => false,
+    }
+}
+
 fn previous_line_ends_expression(text: &str) -> bool {
     let code = strip_comments_to_whitespace(text);
     let code = code.trim_end();
@@ -2421,6 +2478,11 @@ fn previous_line_ends_expression(text: &str) -> bool {
         .rev()
         .find(|(_, c)| !is_identifier_char(*c))
         .map_or(0, |(index, c)| index + c.len_utf8());
+    // A Statement-position `let` is an identifier: `if (a) let\n(b)` calls
+    // it, and `if (a) let\n[b] = c` stays one statement, which is an error.
+    if &code[word_start..] == "let" && ends_with_statement_position_let(code) {
+        return true;
+    }
     if matches!(
         &code[word_start..],
         "return"
@@ -2451,8 +2513,57 @@ fn previous_line_ends_expression(text: &str) -> bool {
         .last()
         .is_some_and(|(_, _, clause)| {
             let clause = strip_leading_labels(clause).trim_start();
-            starts_with_keyword(clause, "import") || starts_with_keyword(clause, "export")
+            (starts_with_keyword(clause, "import") || starts_with_keyword(clause, "export"))
+                && !export_function_header_awaits_parameters(clause)
         })
+}
+
+/// `clause` after a leading `export` and an optional `default`.
+fn strip_export_keywords(clause: &str) -> Option<&str> {
+    let rest = clause
+        .strip_prefix("export")
+        .filter(|rest| rest.starts_with(char::is_whitespace))?
+        .trim_start();
+    Some(
+        rest.strip_prefix("default")
+            .filter(|rest| rest.starts_with(char::is_whitespace))
+            .map_or(rest, str::trim_start),
+    )
+}
+
+/// An exported function declaration whose parameter list starts on a later
+/// line (`export function c` newline `(a) {`; TypeScript's multi-line type
+/// parameters leave that once erased): the `(` line continues it as it
+/// continues an unexported one (bd-9vouw.434).
+fn export_function_header_awaits_parameters(clause: &str) -> bool {
+    let Some(rest) = strip_export_keywords(clause) else {
+        return false;
+    };
+    let rest = rest
+        .strip_prefix("async")
+        .filter(|rest| rest.starts_with(char::is_whitespace))
+        .map_or(rest, str::trim_start);
+    starts_with_keyword(rest, "function") && !rest.contains('(')
+}
+
+/// Whether `text` ends with a `let` that is a whole Statement: the body of
+/// an `if`, `else`, loop or `with` header or of a label (`if (a) let`,
+/// `L: let`). A Statement is never a lexical declaration, so that `let` is
+/// an identifier and a line break after it ends its expression statement
+/// unless the next line continues the expression (ES2020 13.5 lookahead,
+/// 11.9.1): `if (a) let\nx = 1` is `if (a) let;` then `x = 1;`.
+fn ends_with_statement_position_let(text: &str) -> bool {
+    let code = strip_comments_to_whitespace(text);
+    let Some(before) = code.trim_end().strip_suffix("let") else {
+        return false;
+    };
+    if before.ends_with(|ch: char| ch == '_' || ch == '$' || ch == '.' || ch.is_alphanumeric()) {
+        return false;
+    }
+    let before = before.trim_end();
+    let tail = text_after_last_top_level_terminator(before).trim();
+    (!tail.is_empty() && strip_leading_labels(tail).is_empty())
+        || statement_header_takes_unbraced_body(before)
 }
 
 fn logical_line_from_buffer(
@@ -2481,10 +2592,15 @@ fn logical_line_from_buffer(
     })
 }
 
+/// Keywords after which a `/` starts a regular expression literal. `await`
+/// is one wherever the engine parses it (module code and async functions;
+/// as a script identifier it is refused): `typeof await /x.y/g`
+/// (bd-9vouw.391).
 fn merge_logical_lines_keyword_allows_regex(identifier: &str) -> bool {
     matches!(
         identifier,
-        "case"
+        "await"
+            | "case"
             | "delete"
             | "in"
             | "instanceof"
@@ -2537,7 +2653,20 @@ fn line_ends_with_update_operator(line: &str) -> bool {
     if !matches!(last, '+' | '-') {
         return false;
     }
-    tail.chars().rev().take_while(|ch| *ch == last).count() % 2 == 0
+    if tail.chars().rev().take_while(|ch| *ch == last).count() % 2 != 0 {
+        return false;
+    }
+    // Only a postfix update (right after an operand on this line) ends the
+    // line. A `++` / `--` with no operand before it (alone on its line, or
+    // after an operator) is a prefix of the next line's operand: no line
+    // terminator may precede a postfix operator (ES2020 11.9.1), so
+    // `x\n++\ny` is `x; ++y` and `z = x\n+\n++\ny` is `z = x + ++y`
+    // (bd-9vouw.391).
+    tail.trim_end_matches(last)
+        .trim_end()
+        .chars()
+        .last()
+        .is_some_and(|ch| is_identifier_continue(ch) || matches!(ch, ')' | ']' | '\'' | '"' | '`'))
 }
 
 fn merge_logical_lines_requires_continuation(
@@ -2559,11 +2688,15 @@ fn merge_logical_lines_requires_continuation(
     // `return` and `yield` are restricted productions (ES2020 11.9.1): a line
     // break after them ends the statement (`return\n  x` returns undefined),
     // so they do not continue onto the next line.
-    if matches!(
-        trailing_identifier,
-        "throw" | "typeof" | "void" | "delete" | "case"
-    ) {
+    if matches!(trailing_identifier, "typeof" | "void" | "delete" | "case") {
         return true;
+    }
+    // `throw [no LineTerminator here] Expression` (ES2020 13.14): a line
+    // ending in the keyword `throw` does not take the next line as its
+    // argument; alone it is a SyntaxError (bd-9vouw.402). After a `.` the
+    // word is a property name (`it.throw` newline `(err)`), which continues.
+    if trailing_identifier == "throw" {
+        return trailing_identifier_follows_dot;
     }
     // Operator keywords that cannot end an expression: babel's istanbul
     // output writes `var d = new\n/*istanbul ignore start*/\n_base[...]()`
@@ -2572,11 +2705,13 @@ fn merge_logical_lines_requires_continuation(
     // and `class` still need a name or body: istanbul splits
     // `function\n/*istanbul ignore start*/\n_default\n...(start, ...) {`
     // (bd-9vouw.212). `async` is absent: a line break after it is an ASI
-    // boundary (`async\nfunction f() {}` is two statements).
+    // boundary (`async\nfunction f() {}` is two statements). `with` starts a
+    // with statement or an import attributes clause (`from './a.json' with`
+    // newline `{ type: 'json' }`), never ends one (bd-9vouw.429).
     if !trailing_identifier_follows_dot
         && matches!(
             trailing_identifier,
-            "new" | "in" | "instanceof" | "extends" | "function" | "class"
+            "new" | "in" | "instanceof" | "extends" | "function" | "class" | "with"
         )
     {
         return true;
@@ -2601,7 +2736,15 @@ fn line_starts_with_continuation_operator(line: &str) -> Option<LeadingOperator>
     let first = *bytes.first()?;
     let second = bytes.get(1).copied();
     match first {
-        b'|' | b'&' | b'?' | b':' | b',' | b'*' | b'%' | b'^' | b'=' => {
+        // `<` and `>` cannot begin an expression either: a line starting
+        // with a relational or shift operator (`>>`, `<=`, `>>>`) continues
+        // the previous one (bd-9vouw.391). In script code a leading `<!--`
+        // was blanked as a comment before this pass.
+        // `=>` after a line break is never an arrow (ArrowParameters [no
+        // LineTerminator here] `=>`): the line does not continue, and alone
+        // it is a SyntaxError (bd-9vouw.398).
+        b'=' if second == Some(b'>') => None,
+        b'|' | b'&' | b'?' | b':' | b',' | b'*' | b'%' | b'^' | b'=' | b'<' | b'>' => {
             Some(LeadingOperator::BinaryOnly)
         }
         b'!' if second == Some(b'=') => Some(LeadingOperator::BinaryOnly),
@@ -2633,10 +2776,32 @@ enum LeadingOperator {
 /// the string/regex/comment state machine in `merge_logical_lines` so the
 /// regex-vs-division heuristic and comment boundaries are detected identically.
 pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
+    strip_comments_to_whitespace_with(text, false).0
+}
+
+/// [`strip_comments_to_whitespace`] for source parsed with `goal`: Script
+/// source also has the HTML-like comments of ES2020 Annex B.1.3 (Module
+/// source does not; there `<!--` and `-->` are operators). `<!--` starts a
+/// single-line comment anywhere outside a literal; `-->` starts one only
+/// at the start of a line: after the start of the input or a line
+/// terminator, with only white space and single-line `/* */` comments
+/// before it, or right after a `/* */` comment that holds a line
+/// terminator (which counts as one).
+/// Also says whether a `/*` comment is still open at the end of the input,
+/// which is a SyntaxError (bd-9vouw.402).
+fn strip_comments_to_whitespace_for_goal(text: &str, goal: ParseGoal) -> (String, bool) {
+    strip_comments_to_whitespace_with(text, goal == ParseGoal::Script)
+}
+
+fn strip_comments_to_whitespace_with(text: &str, html_comments: bool) -> (String, bool) {
     let mut out = String::with_capacity(text.len());
     let mut quotes = QuoteState::default();
     let mut in_block_comment = false;
     let mut in_line_comment = false;
+    // Whether a `-->` here would start an HTML close comment, and whether
+    // the open block comment holds a line terminator.
+    let mut at_line_start = true;
+    let mut block_comment_has_line_terminator = false;
     let mut in_regex_literal = false;
     let mut regex_in_char_class = false;
     let mut escaped = false;
@@ -2651,6 +2816,7 @@ pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
         if in_line_comment {
             if is_ecmascript_line_terminator(ch) {
                 in_line_comment = false;
+                at_line_start = true;
                 out.push(ch);
             } else {
                 push_blanked(&mut out, ch);
@@ -2663,7 +2829,9 @@ pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
                 push_blanked(&mut out, '*');
                 push_blanked(&mut out, '/');
                 in_block_comment = false;
+                at_line_start |= block_comment_has_line_terminator;
             } else if is_ecmascript_line_terminator(ch) {
+                block_comment_has_line_terminator = true;
                 out.push(ch);
             } else {
                 push_blanked(&mut out, ch);
@@ -2671,6 +2839,7 @@ pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
             continue;
         }
         if quotes.active() {
+            at_line_start = false;
             // A comment inside a template substitution is code, not template
             // text (`${/* @__PURE__ */ f()}`, as bundlers emit). Neither
             // `/*` nor `//` can start a regular expression.
@@ -2683,6 +2852,7 @@ pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
                 push_blanked(&mut out, next);
                 if next == '*' {
                     in_block_comment = true;
+                    block_comment_has_line_terminator = false;
                 } else {
                     in_line_comment = true;
                 }
@@ -2712,6 +2882,33 @@ pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
             }
             continue;
         }
+        if html_comments {
+            let mut ahead = chars.clone();
+            let html_comment = match ch {
+                '<' => {
+                    ahead.next() == Some('!')
+                        && ahead.next() == Some('-')
+                        && ahead.next() == Some('-')
+                }
+                '-' if at_line_start => ahead.next() == Some('-') && ahead.next() == Some('>'),
+                _ => false,
+            };
+            if html_comment {
+                // The rest of the line, `!--` / `->` included, is blanked
+                // by the line-comment state.
+                in_line_comment = true;
+                push_blanked(&mut out, ch);
+                continue;
+            }
+        }
+        if is_ecmascript_line_terminator(ch) {
+            at_line_start = true;
+        } else if !(ch.is_whitespace()
+            || ch == '\u{feff}'
+            || (ch == '/' && matches!(chars.peek(), Some('/' | '*'))))
+        {
+            at_line_start = false;
+        }
         match ch {
             '/' => match chars.peek() {
                 Some('/') => {
@@ -2722,6 +2919,7 @@ pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
                 }
                 Some('*') => {
                     in_block_comment = true;
+                    block_comment_has_line_terminator = false;
                     trailing_identifier_closed = true;
                     push_blanked(&mut out, '/');
                     chars.next();
@@ -2758,8 +2956,36 @@ pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
                 last_significant = Some(ch);
                 trailing_identifier.clear();
             }
+            // TAB and FF are white space like SP, but the statement
+            // dispatch matches keywords followed by a space (`function `,
+            // `class `, `with `), so `function<TAB>w() {}` declared
+            // nothing (bd-9vouw.459). Outside literals they become spaces,
+            // byte for byte.
+            '\t' | '\u{c}' => {
+                out.push(' ');
+                trailing_identifier_closed = true;
+            }
             ch if ch.is_ascii_whitespace() || is_ecmascript_line_terminator(ch) => {
                 out.push(ch);
+                trailing_identifier_closed = true;
+            }
+            // ZERO WIDTH NO-BREAK SPACE is WhiteSpace (ES2020 11.2), but
+            // Rust's trimming and splitting do not treat it as white space,
+            // so outside literals it is blanked like a comment (bd-9vouw.407).
+            // A byte order mark before a hashbang is kept: merge_logical_lines
+            // skips a `#!` first line after it (bd-21nbg).
+            '\u{feff}' if out.is_empty() && text.starts_with("\u{feff}#!") => out.push(ch),
+            '\u{feff}' => {
+                push_blanked(&mut out, ch);
+                trailing_identifier_closed = true;
+            }
+            // So are VT, NBSP and the other Zs spaces, which the scanners
+            // after this pass do not count as white space either:
+            // `x<VT>=<VT>1` and `function<TAB><PS>w(<FF>)<NBSP>{}` did not
+            // parse (bd-9vouw.459). Blanked byte for byte outside literals;
+            // U+0085 is no ECMAScript white space.
+            ch if ch != '\u{85}' && ch.is_whitespace() && !is_ecmascript_line_terminator(ch) => {
+                push_blanked(&mut out, ch);
                 trailing_identifier_closed = true;
             }
             ch if ch.is_ascii_alphabetic() || ch == '_' || ch == '$' => {
@@ -2787,7 +3013,7 @@ pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
             }
         }
     }
-    out
+    (out, in_block_comment)
 }
 
 /// String / template-literal state shared by the source scanners
@@ -3423,6 +3649,9 @@ fn statement_header_awaits_body(statement: &str) -> bool {
     if tail.is_empty() || has_top_level_open_brace(tail) || tail.ends_with(';') {
         return false;
     }
+    // An exported declaration's header awaits its body as the bare one does
+    // (`export class K` newline `{`, bd-9vouw.434).
+    let tail = strip_export_keywords(tail).unwrap_or(tail);
     if ["else", "do", "try", "finally"].contains(&tail) || starts_with_keyword(tail, "class") {
         return true;
     }
@@ -3454,6 +3683,13 @@ fn statement_header_awaits_body(statement: &str) -> bool {
 }
 
 fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
+    merge_logical_lines_with(text, true)
+}
+
+/// [`merge_logical_lines`], skipping a `#!` first line only when `text` is
+/// the whole source: a block or function body starting with `#!` is not a
+/// hashbang comment but a SyntaxError (ES2022 12.5, bd-9vouw.402).
+fn merge_logical_lines_with(text: &str, initial_hashbang: bool) -> Vec<LogicalLine> {
     let physical_lines = physical_line_segments(text);
     let mut result = Vec::with_capacity(16);
     let mut current_text = String::new();
@@ -3485,7 +3721,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
         let line = physical_line.content;
         let line_ending = physical_line.terminator;
 
-        if line_idx == 0 {
+        if line_idx == 0 && initial_hashbang {
             let line_without_bom = line.strip_prefix('\u{feff}').unwrap_or(line);
             if line_without_bom.starts_with("#!") {
                 byte_offset = byte_offset.saturating_add(segment.len());
@@ -3524,6 +3760,11 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                         !prev.text.ends_with(';')
                             && (operator == LeadingOperator::BinaryOnly
                                 || !prev.text.ends_with('}'))
+                            && !restricted_keyword_ends_before(
+                                &prev.text,
+                                operator == LeadingOperator::UnaryOrBinary,
+                                trimmed_line.starts_with('*'),
+                            )
                     })
                 });
             // A physical newline cannot terminate a try/catch/finally or
@@ -3563,10 +3804,17 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
             let body_continues_header = !trimmed_line.starts_with('{')
                 && previous_clause.is_some_and(statement_header_takes_unbraced_body);
             // `else` on its own line after an unbraced consequent
-            // (`if (a) x();\nelse y();`), and a do statement's `while` on its
-            // own line (`do\n  i++;\nwhile (c);`).
+            // (`if (a) x();\nelse y();`), also after the `;` that ends it
+            // (`if (a) continue\n; else {}`; after a block consequent that
+            // `;` is an empty statement ending the if), and a do statement's
+            // `while` on its own line (`do\n  i++;\nwhile (c);`).
+            let semicolon_else = trimmed_line
+                .strip_prefix(';')
+                .is_some_and(|after| starts_with_keyword(after.trim_start(), "else"));
             let clause_continues_statement = previous_clause.is_some_and(|clause| {
-                (starts_with_keyword(trimmed_line, "else") && clause_takes_else(clause))
+                ((starts_with_keyword(trimmed_line, "else")
+                    || (semicolon_else && !clause.ends_with('}')))
+                    && clause_takes_else(clause))
                     || (starts_with_keyword(trimmed_line, "while")
                         && do_statement_awaits_while(clause))
             });
@@ -3578,7 +3826,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
             // dropped. A previous line ending with `;`, a `}` (a block or a
             // declaration), a keyword that cannot end an expression, or an
             // import/export declaration still ends there.
-            let paren_continues_previous = line_starts_call_or_index(trimmed_line) && {
+            let previous_ends_expression = || {
                 let comment_lines = result
                     .iter()
                     .rev()
@@ -3587,7 +3835,16 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                 result.len() > comment_lines
                     && previous_line_ends_expression(&result[result.len() - 1 - comment_lines].text)
             };
-            if paren_continues_previous {
+            let paren_continues_previous =
+                line_starts_call_or_index(trimmed_line) && previous_ends_expression();
+            // So does a line starting with `/` (not a comment): after an
+            // expression the goal symbol is InputElementDiv, so it is a
+            // division, not a regex starting a new statement. `x = 18\n/\n2`
+            // is 18 / 2 and `a\n/g/i` is a / g / i, as Node reads them;
+            // both were split into a second statement (bd-9vouw.362).
+            let division_continues_previous =
+                line_starts_division(trimmed_line) && previous_ends_expression();
+            if paren_continues_previous || division_continues_previous {
                 while result.last().is_some_and(is_comment_only_line) {
                     result.pop();
                 }
@@ -3599,6 +3856,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                 || body_continues_header
                 || clause_continues_statement
                 || paren_continues_previous
+                || division_continues_previous
             {
                 let prev = result.pop().expect("checked non-empty above");
                 current_text = prev.text;
@@ -3618,7 +3876,12 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                     trimmed_source_offset,
                 );
                 current_start_line = prev.start_line;
-                last_significant = None;
+                // A line merged as a division follows an operand: its
+                // leading `/` divides. With no token before it the scanner
+                // read `/ 2` as a regex start and missed that a lone `/`
+                // line awaits its right operand, so `x = 18\n/ 2\n/\n9`
+                // split before `9` (bd-9vouw.362).
+                last_significant = division_continues_previous.then_some(')');
                 trailing_identifier.clear();
             } else {
                 current_text.clear();
@@ -3634,7 +3897,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                 );
             }
         } else {
-            if quotes.active() {
+            if quotes.active() || in_regex_literal {
                 append_source_fragment(
                     &mut current_text,
                     &mut current_source_boundaries,
@@ -3642,7 +3905,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                     byte_offset,
                 );
             } else {
-                let preserve_leading_whitespace = in_block_comment || in_regex_literal;
+                let preserve_leading_whitespace = in_block_comment;
                 let (fragment, fragment_source_offset) = if preserve_leading_whitespace {
                     (line, byte_offset)
                 } else {
@@ -3783,7 +4046,12 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                     last_significant = Some(ch);
                     trailing_identifier.clear();
                 }
-                ch if ch.is_ascii_whitespace() => trailing_identifier_closed = true,
+                // Every ECMAScript WhiteSpace (ES2020 11.2), not only ASCII:
+                // a trailing NBSP or VT after `delete` made it the line's
+                // last token, so `delete` ended the statement (bd-9vouw.454).
+                ch if ch == '\u{feff}' || (ch.is_whitespace() && ch != '\u{85}') => {
+                    trailing_identifier_closed = true;
+                }
                 ch if ch.is_ascii_alphabetic() || ch == '_' || ch == '$' => {
                     if trailing_identifier_closed {
                         trailing_identifier.clear();
@@ -3817,8 +4085,12 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
         // Preserve physical line terminators while a quoted token is open.
         // The exact string cooker must distinguish a backslash continuation
         // (which removes the terminator) from a raw ECMAScript line terminator
-        // (whose validity depends on the literal grammar).
-        if quotes.active() && !line_ending.is_empty() {
+        // (whose validity depends on the literal grammar). A regular
+        // expression literal open at a line's end has a line terminator in
+        // its body, which no escape makes valid (ES2020 11.8.5): it is kept
+        // too, so the parser reports the SyntaxError. Joined with a space,
+        // `/` newline `/` read as the valid `/ /` (bd-9vouw.444).
+        if (quotes.active() || in_regex_literal) && !line_ending.is_empty() {
             append_source_fragment(
                 &mut current_text,
                 &mut current_source_boundaries,
@@ -3826,6 +4098,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                 byte_offset.saturating_add(line.len()),
             );
             quotes.line_break();
+            escaped = false;
         }
 
         byte_offset = byte_offset.saturating_add(segment.len());
@@ -3842,7 +4115,10 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                     last_significant,
                     trailing_identifier.as_str(),
                     trailing_identifier_follows_dot,
-                ))
+                )
+                || (trailing_identifier == "let"
+                    && !trailing_identifier_follows_dot
+                    && ends_with_statement_position_let(&current_text)))
         {
             if let Some(logical_line) = logical_line_from_buffer(
                 &current_text,
@@ -3973,6 +4249,8 @@ fn parse_source(
         statement_depth: 0,
         pattern_depth: 0,
         strict_mode: goal == ParseGoal::Module,
+        script_this: goal == ParseGoal::Script,
+        module_goal: goal == ParseGoal::Module,
         super_property_allowed: false,
         await_context: goal == ParseGoal::Module,
         yield_context: false,
@@ -3981,6 +4259,7 @@ fn parse_source(
         formal_parameters: false,
         private_name_scopes: Vec::new(),
         function_sources: FunctionSourceMap::default(),
+        template_sites: 0,
     };
 
     if source_bytes > options.budget.max_source_bytes {
@@ -4009,7 +4288,15 @@ fn parse_source(
         ));
     }
 
-    let stripped = strip_comments_to_whitespace(text);
+    let (stripped, unterminated_comment) = strip_comments_to_whitespace_for_goal(text, goal);
+    if unterminated_comment {
+        return Err(ParseError::new(
+            ParseErrorCode::InvalidSyntax,
+            "unterminated comment: `/*` has no closing `*/`",
+            source_label.to_string(),
+            None,
+        ));
+    }
     let mut logical_lines = merge_logical_lines(&stripped);
     let source_line_terminators = source_line_terminator_ranges(text);
     let mut statements = Vec::with_capacity(8);
@@ -4055,18 +4342,26 @@ fn parse_source(
             boundaries: std::mem::take(&mut logical_line.source_boundaries),
         });
         for (statement_text, span) in segments {
-            statements.extend(parse_module_statement_segment(
-                statement_text,
-                goal,
-                span,
-                &mut context,
-            )?);
+            let mut remaining = Some(statement_text);
+            while let Some(text) = remaining {
+                let (statement_text, tail) = split_after_do_while(text);
+                statements.extend(parse_module_statement_segment(
+                    statement_text,
+                    goal,
+                    span,
+                    &mut context,
+                )?);
+                remaining = tail;
+            }
         }
         context.function_sources.frames.pop();
     }
 
     if !context.strict_mode {
         apply_annex_b_block_functions(&mut statements, &[]);
+    }
+    if goal == ParseGoal::Module {
+        reject_duplicate_export_names(&statements, source_label)?;
     }
     let source_len = to_u64(text.len(), source_label, None)?;
     let (end_line, end_column) = source_end_position(text, source_label)?;
@@ -4076,6 +4371,82 @@ fn parse_source(
         body: statements,
         span,
     })
+}
+
+/// An import or export declaration is a ModuleItem: it may stand only at a
+/// module's top level, not in a block, a branch, a loop body, a label or a
+/// function body (ES2020 15.2). The statement being parsed is nested when
+/// its statement depth is above 1; such a declaration reached lowering and
+/// failed with "Value stack underflow during lowering" (bd-9vouw.392).
+fn reject_nested_module_declaration(
+    context: &ParseExecutionContext<'_>,
+    keyword: &str,
+    span: &SourceSpan,
+) -> ParseResult<()> {
+    if context.statement_depth > 1 {
+        return Err(ParseError::new(
+            ParseErrorCode::InvalidSyntax,
+            format!("an {keyword} declaration may only appear at the top level of a module"),
+            context.source_label.to_string(),
+            Some(*span),
+        ));
+    }
+    Ok(())
+}
+
+/// ES2020 15.2.1.1: it is a Syntax Error if the ExportedNames of a module
+/// contain a duplicate (`export { a }; export { b as a }`, two default
+/// exports, `export * as ns` beside `export { ns }`). A plain `export *`
+/// exports no name of its own (bd-9vouw.392).
+fn reject_duplicate_export_names(statements: &[Statement], source_label: &str) -> ParseResult<()> {
+    let mut seen = BTreeSet::new();
+    for statement in statements {
+        let Statement::Export(export) = statement else {
+            continue;
+        };
+        for name in exported_names(&export.kind) {
+            if !seen.insert(name.clone()) {
+                return Err(ParseError::new(
+                    ParseErrorCode::InvalidSyntax,
+                    format!("duplicate export name `{name}`"),
+                    source_label.to_string(),
+                    Some(export.span),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The names an export declaration adds to the module's ExportedNames.
+fn exported_names(kind: &ExportKind) -> Vec<String> {
+    let clause = match kind {
+        ExportKind::Default(_) => return vec!["default".to_string()],
+        ExportKind::NamedClause(clause) => clause.canonical_head(),
+    };
+    let clause = clause.trim();
+    // A string export name is an encoded word of the head (bd-9vouw.429):
+    // `{ a as "x" }` and `{ b as x }` export the same name.
+    if let Some(namespace) = clause.strip_prefix("* as ") {
+        return vec![decode_module_export_name(namespace.trim())];
+    }
+    let Some(inner) = clause
+        .strip_prefix('{')
+        .and_then(|rest| rest.strip_suffix('}'))
+    else {
+        return Vec::new();
+    };
+    inner
+        .split(',')
+        .map(str::trim)
+        .filter(|specifier| !specifier.is_empty())
+        .map(
+            |specifier| match specifier.split_whitespace().collect::<Vec<_>>().as_slice() {
+                [_, "as", exported] => decode_module_export_name(exported),
+                _ => decode_module_export_name(specifier),
+            },
+        )
+        .collect()
 }
 
 fn parse_module_statement_segment(
@@ -4110,6 +4481,40 @@ fn parse_named_declaration_export(
     }
 
     let declaration_text = rest.trim_start();
+    if let Some(default_text) = declaration_text
+        .strip_prefix("default")
+        .filter(|after| after.starts_with(char::is_whitespace))
+        .map(str::trim_start)
+        && starts_named_exportable_declaration(default_text)
+        && default_declaration_name(default_text).is_some()
+    {
+        // `export default function A() {}` (also `function*`, `async
+        // function`, `async function*` and `class A {}`) declares the local
+        // binding A and exports it as `default` (ES2020 15.2.3.5: its
+        // ExportEntry has LocalName "A"), as `export { A as default }` does.
+        // An anonymous declaration keeps the default-expression form.
+        let declaration_span =
+            span_after_prefix(&span, statement.len().saturating_sub(default_text.len()));
+        let declaration =
+            parse_statement(default_text, ParseGoal::Module, declaration_span, context)?;
+        let [name] = export_names_for_declaration(&declaration, &span, context.source_label)?
+            .try_into()
+            .map_err(|_| {
+                ParseError::new(
+                    ParseErrorCode::InvalidSyntax,
+                    "a default export declaration declares exactly one name",
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                )
+            })?;
+        return Ok(Some(vec![
+            declaration,
+            Statement::Export(ExportDeclaration {
+                kind: ExportKind::NamedClause(format!("{{ {name} as default }}").into()),
+                span,
+            }),
+        ]));
+    }
     if declaration_text.is_empty()
         || declaration_text.starts_with("default")
         || declaration_text.starts_with('{')
@@ -4161,6 +4566,28 @@ fn span_after_prefix(span: &SourceSpan, prefix_len: usize) -> SourceSpan {
         span.end_line,
         span.end_column,
     )
+}
+
+/// The binding name of a function or class declaration's head
+/// (`function* A(`, `async function A(`, `class A extends B {`), or `None`
+/// for an anonymous one (`function (`, `class {`, `class extends B {`).
+fn default_declaration_name(text: &str) -> Option<&str> {
+    let head = if let Some(after) = text.strip_prefix("class") {
+        after
+    } else {
+        let after = text
+            .strip_prefix("async")
+            .map_or(text, str::trim_start)
+            .strip_prefix("function")?
+            .trim_start();
+        after.strip_prefix('*').unwrap_or(after)
+    };
+    let head = head.trim_start();
+    let end = head
+        .find(|ch: char| !(ch == '\\' || is_identifier_continue(ch)))
+        .unwrap_or(head.len());
+    let name = &head[..end];
+    (!name.is_empty() && name != "extends" && is_identifier(name)).then_some(name)
 }
 
 fn starts_named_exportable_declaration(statement: &str) -> bool {
@@ -4261,6 +4688,28 @@ fn ends_with_expression_keyword(prefix: &str) -> bool {
         word,
         "in" | "instanceof" | "typeof" | "void" | "delete" | "return" | "throw" | "yield" | "await"
     ) && !trimmed[..word_start].trim_end().ends_with('.')
+}
+
+/// Whether `prefix` ends with a keyword after which an operand starts, so a
+/// following `+`/`-` is a sign: `typeof`, `void`, `delete`, `in`,
+/// `instanceof`, and `await` / `yield` where the context makes them
+/// operators (elsewhere they are identifiers: `await - 1` subtracts). A `.`
+/// before the word makes it a property name.
+fn ends_with_unary_operand_keyword(prefix: &str, context: &ParseExecutionContext<'_>) -> bool {
+    let trimmed = prefix.trim_end();
+    let word_start = trimmed
+        .char_indices()
+        .rev()
+        .take_while(|(_, ch)| is_identifier_continue(*ch))
+        .last()
+        .map_or(trimmed.len(), |(index, _)| index);
+    let keyword = match &trimmed[word_start..] {
+        "typeof" | "void" | "delete" | "in" | "instanceof" => true,
+        "await" => context.await_context,
+        "yield" => context.yield_context,
+        _ => false,
+    };
+    keyword && !trimmed[..word_start].trim_end().ends_with('.')
 }
 
 /// Whether `prefix`, the text before a `{`, ends with the header of a
@@ -4602,6 +5051,20 @@ fn parse_statement_inner(
             span,
         }));
     }
+    // `debugger;` (ES2020 13.16) does nothing when no debugger is attached,
+    // as the empty statement does. It was read as a reference to a variable
+    // named `debugger` and threw a ReferenceError (bd-9vouw.452).
+    let trimmed_statement = statement.trim();
+    if trimmed_statement == "debugger"
+        || trimmed_statement
+            .strip_suffix(';')
+            .is_some_and(|keyword| keyword.trim_end() == "debugger")
+    {
+        return Ok(Statement::Block(BlockStatement {
+            body: Vec::new(),
+            span,
+        }));
+    }
     if starts_import_declaration(statement) {
         if goal == ParseGoal::Script {
             return Err(ParseError::new(
@@ -4611,6 +5074,7 @@ fn parse_statement_inner(
                 Some(span),
             ));
         }
+        reject_nested_module_declaration(context, "import", &span)?;
         return parse_import(statement, context.source_label, span).map(Statement::Import);
     }
 
@@ -4623,10 +5087,15 @@ fn parse_statement_inner(
                 Some(span),
             ));
         }
+        reject_nested_module_declaration(context, "export", &span)?;
         return parse_export(statement, span, context).map(Statement::Export);
     }
 
-    if let Some(kind) = parse_variable_declaration_kind(statement) {
+    if let Some(kind) = parse_variable_declaration_kind(statement)
+        && (kind != VariableDeclarationKind::Let
+            || context.strict_mode
+            || let_starts_lexical_declaration(&statement["let".len()..]))
+    {
         return parse_variable_declaration(statement, kind, span, context)
             .map(Statement::VariableDeclaration);
     }
@@ -4650,6 +5119,17 @@ fn parse_statement_inner(
         || statement.starts_with("return(")
         || keyword_followed_by_expression_start(statement, "return")
     {
+        // A module's top-level statement list is not a function body, so a
+        // `return` among its statements is a SyntaxError (ES2020 15.2.1.1;
+        // a CommonJS file's top level is, and keeps it) (bd-9vouw.392).
+        if goal == ParseGoal::Module && context.statement_depth == 1 {
+            return Err(ParseError::new(
+                ParseErrorCode::InvalidSyntax,
+                "a return statement may not appear at the top level of a module",
+                context.source_label.to_string(),
+                Some(span),
+            ));
+        }
         return self::parse_return_statement(statement, span, context);
     }
     if statement.starts_with("throw ")
@@ -4697,12 +5177,23 @@ fn parse_statement_inner(
     // label must be a real IdentifierReference — reserved words are rejected.
     if let Some(colon_idx) = leading_label_colon(statement) {
         let label = statement[..colon_idx].trim();
-        if is_identifier(label) && !is_unconditional_reserved_keyword(label) {
+        if is_identifier(label) {
             // ES2020 13.1.1: `yield` is not a label inside a generator or in
             // strict code, nor `await` inside an async function or a module,
             // however it is spelled (`yield`).
             let name = decode_identifier_escapes(label);
             let name = name.as_deref().unwrap_or(label);
+            // A reserved word is no label either, however it is spelled
+            // (`true: ;`, `nul\u006c: ;`); `true:` reached the runtime as an
+            // unsupported expression (bd-9vouw.427).
+            if is_unconditional_reserved_keyword(name) {
+                return Err(ParseError::new(
+                    ParseErrorCode::InvalidSyntax,
+                    format!("`{name}` is a reserved word and cannot be a label"),
+                    context.source_label.to_string(),
+                    Some(span),
+                ));
+            }
             if (name == "yield" && (context.yield_context || context.strict_mode))
                 || (name == "await"
                     && (context.await_context
@@ -4710,7 +5201,7 @@ fn parse_statement_inner(
                         || goal == ParseGoal::Module))
             {
                 return Err(ParseError::new(
-                    ParseErrorCode::UnsupportedSyntax,
+                    ParseErrorCode::InvalidSyntax,
                     format!("`{name}` cannot be a label here"),
                     context.source_label.to_string(),
                     Some(span),
@@ -4877,18 +5368,24 @@ fn parse_import(
         ));
     }
 
-    if let Some(source) = parse_quoted_string(body) {
-        return Ok(ImportDeclaration {
-            clause: ImportClause::SideEffect,
-            binding: None,
-            source,
-            span,
-        });
+    if body.starts_with(['\'', '"']) {
+        let source_text = strip_import_attributes(body, source_label, &span)?;
+        if let Some(source) = parse_quoted_string(source_text) {
+            return Ok(ImportDeclaration {
+                clause: ImportClause::SideEffect,
+                binding: None,
+                source,
+                span,
+            });
+        }
     }
 
+    // Every import form is supported (ES2022 16.2.2, string names
+    // included), so a declaration that fits none is a SyntaxError
+    // (bd-9vouw.429), as below.
     let (binding_raw, source_raw) = split_import_from(body).ok_or_else(|| {
         ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "import declaration must be `import <binding-clause> from <quoted-source>` or `import <quoted-source>`",
             source_label.to_string(),
             Some(span.clone()),
@@ -4896,9 +5393,24 @@ fn parse_import(
     })?;
 
     let clause = parse_import_binding_clause(binding_raw.trim(), source_label, &span)?;
-    let source = parse_quoted_string(source_raw.trim()).ok_or_else(|| {
+    // Module code is strict: `eval` and `arguments` cannot be bound
+    // (ES2020 12.1.1), as an import binding either (bd-9vouw.392).
+    if let Some(name) = clause
+        .binding_names()
+        .into_iter()
+        .find(|name| matches!(*name, "eval" | "arguments"))
+    {
+        return Err(ParseError::new(
+            ParseErrorCode::InvalidSyntax,
+            format!("`{name}` cannot be an import binding in strict module code"),
+            source_label.to_string(),
+            Some(span),
+        ));
+    }
+    let source_text = strip_import_attributes(source_raw.trim(), source_label, &span)?;
+    let source = parse_quoted_string(source_text).ok_or_else(|| {
         ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "import source must be quoted",
             source_label.to_string(),
             Some(span.clone()),
@@ -4911,6 +5423,126 @@ fn parse_import(
         source,
         span,
     })
+}
+
+/// Split an import attributes clause (ES2025 16.2.2 WithClause: `with {
+/// type: 'json' }`) off the module specifier text that starts `text`, and
+/// return the specifier text alone. The clause has string-valued entries
+/// keyed by identifier names or strings, with no key repeated (a
+/// SyntaxError). The engine supports `type: 'json'` on a `.json` specifier
+/// (the module loader loads `.json` files as JSON modules); any other
+/// attribute or a JSON type on another specifier is refused as
+/// unsupported rather than loaded as something else.
+fn strip_import_attributes<'a>(
+    text: &'a str,
+    source_label: &str,
+    span: &SourceSpan,
+) -> ParseResult<&'a str> {
+    let error = |code, message: &str| {
+        ParseError::new(code, message, source_label.to_string(), Some(span.clone()))
+    };
+    let Some(quote) = text.chars().next().filter(|ch| matches!(ch, '\'' | '"')) else {
+        return Ok(text);
+    };
+    let mut escaped = false;
+    let mut source_end = None;
+    for (index, ch) in text.char_indices().skip(1) {
+        match ch {
+            _ if escaped => escaped = false,
+            '\\' => escaped = true,
+            ch if ch == quote => {
+                source_end = Some(index + ch.len_utf8());
+                break;
+            }
+            _ => {}
+        }
+    }
+    let Some(source_end) = source_end else {
+        return Ok(text);
+    };
+    let (source_text, rest) = text.split_at(source_end);
+    let rest = rest.trim();
+    let rest = rest.strip_suffix(';').map_or(rest, str::trim_end);
+    if rest.is_empty() {
+        return Ok(source_text);
+    }
+    let Some(entries) = rest
+        .strip_prefix("with")
+        .map(str::trim_start)
+        .and_then(|after| after.strip_prefix('{'))
+        .and_then(|after| after.strip_suffix('}'))
+    else {
+        return Ok(text);
+    };
+    let mut seen = BTreeSet::new();
+    let mut json = false;
+    for entry in without_trailing_specifier_comma(entries.trim()).split(',') {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            if entries.trim().is_empty() {
+                break;
+            }
+            return Err(error(
+                ParseErrorCode::InvalidSyntax,
+                "import attributes contain an empty entry",
+            ));
+        }
+        let Some((key, value)) = entry.split_once(':') else {
+            return Err(error(
+                ParseErrorCode::InvalidSyntax,
+                "an import attribute is `key: 'value'`",
+            ));
+        };
+        let key = key.trim();
+        let key = match parse_quoted_string(key) {
+            Some(key) => key.to_string(),
+            None if is_identifier(key) => canonicalize_identifier(key),
+            None => {
+                return Err(error(
+                    ParseErrorCode::InvalidSyntax,
+                    "an import attribute key is an identifier name or a string",
+                ));
+            }
+        };
+        let Some(value) = parse_quoted_string(value.trim()) else {
+            return Err(error(
+                ParseErrorCode::InvalidSyntax,
+                "an import attribute value is a string",
+            ));
+        };
+        if !seen.insert(key.clone()) {
+            return Err(error(
+                ParseErrorCode::InvalidSyntax,
+                "duplicate import attribute key",
+            ));
+        }
+        if key == "type" && value == "json" {
+            json = true;
+        } else if key != "type" {
+            // A key the host does not support is a SyntaxError
+            // (AllImportAttributesSupported, ES2025 16.2.1.7.1; Node
+            // supports `type` only), not a refusal (bd-9vouw.429).
+            return Err(error(
+                ParseErrorCode::InvalidSyntax,
+                "unsupported import attribute key (only `type` is supported)",
+            ));
+        } else {
+            return Err(error(
+                ParseErrorCode::UnsupportedSyntax,
+                "unsupported import attribute (only `type: 'json'` is supported)",
+            ));
+        }
+    }
+    if json
+        && !parse_quoted_string(source_text)
+            .is_some_and(|source| source.to_string().to_ascii_lowercase().ends_with(".json"))
+    {
+        return Err(error(
+            ParseErrorCode::UnsupportedSyntax,
+            "`type: 'json'` is supported for `.json` module specifiers only",
+        ));
+    }
+    Ok(source_text)
 }
 
 fn parse_import_binding_clause(
@@ -4974,7 +5606,7 @@ fn parse_import_binding_clause(
     }
 
     Err(ParseError::new(
-        ParseErrorCode::UnsupportedSyntax,
+        ParseErrorCode::InvalidSyntax,
         "unsupported import binding clause; supported forms: default, namespace (`* as ns`), named (`{ a, b as c }`), and default+namespace/named",
         source_label.to_string(),
         Some(span.clone()),
@@ -4991,6 +5623,164 @@ fn without_trailing_specifier_comma(list: &str) -> &str {
         Some(rest) if !rest.trim().is_empty() => rest,
         _ => list,
     }
+}
+
+/// The entries of a named import or export list (the text between its
+/// braces), split at the commas outside string literals: a string module
+/// export name (`{ "a, b" as c }`, ES2022 16.2.2 ModuleExportName) may hold
+/// one (bd-9vouw.429).
+fn split_module_specifier_list(list: &str) -> Vec<&str> {
+    let mut entries = Vec::new();
+    let mut start = 0;
+    let mut quote = None;
+    let mut escaped = false;
+    for (index, ch) in list.char_indices() {
+        match quote {
+            Some(_) if escaped => escaped = false,
+            Some(_) if ch == '\\' => escaped = true,
+            Some(open) if ch == open => quote = None,
+            Some(_) => {}
+            None if matches!(ch, '"' | '\'') => quote = Some(ch),
+            None if ch == ',' => {
+                entries.push(&list[start..index]);
+                start = index + 1;
+            }
+            None => {}
+        }
+    }
+    entries.push(&list[start..]);
+    entries
+}
+
+/// The words of one import or export specifier (`a as b`, `"x y" as z`):
+/// split at white space outside string literals, a string literal being a
+/// word of its own (`"x"as z`).
+fn module_specifier_words(specifier: &str) -> Vec<&str> {
+    let mut words = Vec::new();
+    let mut start: Option<usize> = None;
+    let mut quote = None;
+    let mut escaped = false;
+    for (index, ch) in specifier.char_indices() {
+        match quote {
+            Some(_) if escaped => escaped = false,
+            Some(_) if ch == '\\' => escaped = true,
+            Some(open) if ch == open => {
+                quote = None;
+                if let Some(begin) = start.filter(|begin| specifier[*begin..].starts_with(open)) {
+                    words.push(&specifier[begin..index + ch.len_utf8()]);
+                    start = None;
+                }
+            }
+            Some(_) => {}
+            None if ch.is_whitespace() => {
+                if let Some(begin) = start.take() {
+                    words.push(&specifier[begin..index]);
+                }
+            }
+            None => {
+                if matches!(ch, '"' | '\'') {
+                    if let Some(begin) = start.take() {
+                        words.push(&specifier[begin..index]);
+                    }
+                    quote = Some(ch);
+                }
+                start.get_or_insert(index);
+            }
+        }
+    }
+    if let Some(begin) = start {
+        words.push(&specifier[begin..]);
+    }
+    words
+}
+
+/// The index of the `}` closing a named import or export list in `text`,
+/// the text after its `{`, outside string literals.
+fn module_specifier_list_close(text: &str) -> Option<usize> {
+    let mut quote = None;
+    let mut escaped = false;
+    for (index, ch) in text.char_indices() {
+        match quote {
+            Some(_) if escaped => escaped = false,
+            Some(_) if ch == '\\' => escaped = true,
+            Some(open) if ch == open => quote = None,
+            Some(_) => {}
+            None if matches!(ch, '"' | '\'') => quote = Some(ch),
+            None if ch == '}' => return Some(index),
+            None => {}
+        }
+    }
+    None
+}
+
+/// `word` as a ModuleExportName (ES2022 16.2.2): an identifier name as it
+/// is written, or a string literal's value, with whether it was a string.
+/// A string that is not well-formed Unicode (a lone surrogate) is an early
+/// error (IsStringWellFormedUnicode). `Ok(None)` when `word` is neither.
+fn module_export_name(word: &str) -> Result<Option<(String, bool)>, &'static str> {
+    if word.starts_with(['"', '\'']) {
+        let Some(value) = parse_quoted_string(word) else {
+            return Ok(None);
+        };
+        return value
+            .as_str()
+            .map(|name| Some((name.to_string(), true)))
+            .ok_or("a string module export name must be well-formed Unicode");
+    }
+    Ok(is_identifier(word).then(|| (word.to_string(), false)))
+}
+
+/// An export name as one word of a canonical export clause head: a name
+/// spelled as an identifier as it is (the head's readers take a bare word's
+/// text as the name); any other name (from a string literal) quoted, with
+/// every character but ASCII letters, digits, `_` and `$` written
+/// `\u{hex}`, so the readers still split the head at commas and white
+/// space. decode_module_export_name reverses it (bd-9vouw.429).
+pub(crate) fn encode_module_export_name(name: &str) -> String {
+    if is_identifier(name) {
+        return name.to_string();
+    }
+    let mut word = String::with_capacity(name.len() + 2);
+    word.push('"');
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '$') {
+            word.push(ch);
+        } else {
+            word.push_str(&format!("\\u{{{:x}}}", u32::from(ch)));
+        }
+    }
+    word.push('"');
+    word
+}
+
+/// The export name a word of a canonical export clause head stands for:
+/// encode_module_export_name's inverse; an identifier is itself.
+pub(crate) fn decode_module_export_name(word: &str) -> String {
+    let Some(mut rest) = word
+        .strip_prefix('"')
+        .and_then(|inner| inner.strip_suffix('"'))
+    else {
+        return word.to_string();
+    };
+    let mut name = String::with_capacity(rest.len());
+    while let Some(index) = rest.find("\\u{") {
+        name.push_str(&rest[..index]);
+        let after = &rest[index + 3..];
+        let decoded = after.find('}').and_then(|close| {
+            u32::from_str_radix(&after[..close], 16)
+                .ok()
+                .and_then(char::from_u32)
+                .map(|ch| (ch, close))
+        });
+        let Some((ch, close)) = decoded else {
+            name.push_str(&rest[index..]);
+            return name;
+        };
+        name.push(ch);
+        rest = &after[close + 1..];
+    }
+    name.push_str(rest);
+    name
 }
 
 fn parse_namespace_import_binding(clause: &str) -> Option<String> {
@@ -5017,23 +5807,19 @@ fn is_named_import_clause(clause: &str) -> bool {
         return true;
     }
 
-    for specifier in without_trailing_specifier_comma(inner).split(',') {
+    for specifier in split_module_specifier_list(without_trailing_specifier_comma(inner)) {
         let specifier = specifier.trim();
         if specifier.is_empty() {
             return false;
         }
 
-        let mut parts = specifier.split_whitespace();
-        // SAFETY: specifier is non-empty after early return check above
-        let first = parts.next().expect("serde serialization should succeed");
-        let second = parts.next();
-        let third = parts.next();
-        let fourth = parts.next();
-
-        let is_valid = match (second, third, fourth) {
-            (None, None, None) => is_module_binding_identifier(first),
-            (Some("as"), Some(local), None) => {
-                is_identifier(first) && is_module_binding_identifier(local)
+        // The imported name may be a string (`import { "a-b" as c }`,
+        // bd-9vouw.429); parse_named_import_specifiers checks its value.
+        let is_valid = match module_specifier_words(specifier).as_slice() {
+            [binding] => is_module_binding_identifier(binding),
+            [name, "as", local] => {
+                (is_identifier(name) || name.starts_with(['"', '\'']))
+                    && is_module_binding_identifier(local)
             }
             _ => false,
         };
@@ -5072,7 +5858,7 @@ fn parse_named_import_specifiers(
     let mut specifiers = Vec::with_capacity(4);
     let mut seen_local = BTreeSet::new();
 
-    for specifier in without_trailing_specifier_comma(inner).split(',') {
+    for specifier in split_module_specifier_list(without_trailing_specifier_comma(inner)) {
         let specifier = specifier.trim();
         if specifier.is_empty() {
             return Err(ParseError::new(
@@ -5083,16 +5869,10 @@ fn parse_named_import_specifiers(
             ));
         }
 
-        let mut parts = specifier.split_whitespace();
-        // SAFETY: specifier is non-empty after early return check above
-        let import_name = parts.next().expect("serde serialization should succeed");
-        let second = parts.next();
-        let third = parts.next();
-        let fourth = parts.next();
-
-        let (import_name, local_name) = match (second, third, fourth) {
-            (None, None, None) => (import_name, import_name),
-            (Some("as"), Some(local), None) => (import_name, local),
+        let words = module_specifier_words(specifier);
+        let (import_name, local_name) = match words.as_slice() {
+            [name] => (*name, *name),
+            [name, "as", local] => (*name, *local),
             _ => {
                 return Err(ParseError::new(
                     ParseErrorCode::UnsupportedSyntax,
@@ -5103,7 +5883,30 @@ fn parse_named_import_specifiers(
             }
         };
 
-        if !is_identifier(import_name) || !is_identifier(local_name) {
+        // An imported name is a ModuleExportName: a string names an export
+        // that is not an identifier, and needs `as` and a binding
+        // (ES2022 16.2.2 ImportSpecifier, bd-9vouw.429).
+        let import_name = match module_export_name(import_name) {
+            Err(message) => {
+                return Err(ParseError::new(
+                    ParseErrorCode::InvalidSyntax,
+                    message,
+                    source_label.to_string(),
+                    Some(span.clone()),
+                ));
+            }
+            Ok(Some((_, true))) if words.len() == 1 => {
+                return Err(ParseError::new(
+                    ParseErrorCode::InvalidSyntax,
+                    "a string import name needs `as` and a binding",
+                    source_label.to_string(),
+                    Some(span.clone()),
+                ));
+            }
+            Ok(Some((name, _))) => name,
+            Ok(None) => String::new(),
+        };
+        if import_name.is_empty() || !is_identifier(local_name) {
             return Err(ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
                 "named import specifier must use identifiers",
@@ -5114,7 +5917,7 @@ fn parse_named_import_specifiers(
 
         if !seen_local.insert(local_name.to_string()) {
             return Err(ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
+                ParseErrorCode::InvalidSyntax,
                 "import binding has already been declared",
                 source_label.to_string(),
                 Some(span.clone()),
@@ -5122,7 +5925,7 @@ fn parse_named_import_specifiers(
         }
 
         specifiers.push(ImportSpecifier {
-            import_name: import_name.to_string(),
+            import_name,
             local_name: local_name.to_string(),
         });
     }
@@ -5179,9 +5982,11 @@ fn parse_star_export_clause(
     source_label: &str,
     span: &SourceSpan,
 ) -> ParseResult<NamedExportClause> {
+    // Every star export form is supported, the string alias included, so
+    // one that fits none is a SyntaxError (bd-9vouw.429).
     let error = |message: &str| {
         ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             message,
             source_label.to_string(),
             Some(span.clone()),
@@ -5190,17 +5995,26 @@ fn parse_star_export_clause(
     let rest = rest.trim_start();
     let (head, after_head) = match rest
         .strip_prefix("as")
-        .filter(|tail| tail.starts_with(char::is_whitespace))
+        .filter(|tail| tail.starts_with(|ch: char| ch.is_whitespace() || ch == '"' || ch == '\''))
     {
         Some(tail) => {
             let tail = tail.trim_start();
-            let alias_len = tail
-                .find(|ch: char| !is_identifier_continue(ch))
-                .unwrap_or(tail.len());
-            let alias = &tail[..alias_len];
-            if !alias.chars().next().is_some_and(is_identifier_start) {
-                return Err(error("`export * as` needs an export name"));
-            }
+            // `export * as "a-b" from` names the namespace with a string
+            // (ES2022 16.2.3 ModuleExportName).
+            let alias_len = if tail.starts_with(['"', '\'']) {
+                module_specifier_words(tail)
+                    .first()
+                    .map_or(0, |word| word.len())
+            } else {
+                tail.find(|ch: char| !is_identifier_continue(ch))
+                    .unwrap_or(tail.len())
+            };
+            let alias = match module_export_name(&tail[..alias_len]) {
+                Err(message) => return Err(error(message)),
+                Ok(Some((alias, true))) => encode_module_export_name(&alias),
+                Ok(Some((alias, false))) => alias,
+                Ok(None) => return Err(error("`export * as` needs an export name")),
+            };
             (format!("* as {alias}"), &tail[alias_len..])
         }
         None => ("*".to_string(), rest),
@@ -5215,8 +6029,11 @@ fn parse_star_export_clause(
                 "star export must be `export * from <quoted-source>` or `export * as <name> from <quoted-source>`",
             )
         })?;
+    // `export * from 'm' with { ... }` carries import attributes as an
+    // import does (ES2025 16.2.3).
+    let source_text = strip_import_attributes(source_raw, source_label, span)?;
     let source =
-        parse_quoted_string(source_raw).ok_or_else(|| error("export source must be quoted"))?;
+        parse_quoted_string(source_text).ok_or_else(|| error("export source must be quoted"))?;
     Ok(NamedExportClause::new(head, Some(source)))
 }
 
@@ -5225,105 +6042,124 @@ fn parse_named_export_clause(
     source_label: &str,
     span: &SourceSpan,
 ) -> ParseResult<NamedExportClause> {
+    // Every named export form is supported, string names included
+    // (ES2022 16.2.3), so a clause that fits none is a SyntaxError
+    // (bd-9vouw.429).
+    let error = |message: &str| {
+        ParseError::new(
+            ParseErrorCode::InvalidSyntax,
+            message,
+            source_label.to_string(),
+            Some(span.clone()),
+        )
+    };
     let clause = clause.trim();
     let Some(inner_and_trailing) = clause.strip_prefix('{') else {
-        return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
-            "named export clause must start with `{`",
-            source_label.to_string(),
-            Some(span.clone()),
-        ));
+        return Err(error("named export clause must start with `{`"));
     };
 
-    let Some(close_index) = inner_and_trailing.find('}') else {
-        return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
-            "named export clause is missing `}`",
-            source_label.to_string(),
-            Some(span.clone()),
-        ));
+    let Some(close_index) = module_specifier_list_close(inner_and_trailing) else {
+        return Err(error("named export clause is missing `}`"));
     };
 
     let specifiers = &inner_and_trailing[..close_index];
-    validate_named_export_specifiers(specifiers, source_label, span)?;
-
-    let without_comma = without_trailing_specifier_comma(specifiers);
-    let canonical_head = if without_comma.len() == specifiers.len() {
-        canonicalize_whitespace(&clause[..close_index + 2])
-    } else {
-        canonicalize_whitespace(&format!("{{{without_comma}}}"))
-    };
     let trailing = inner_and_trailing[close_index + 1..].trim();
     let source = if !trailing.is_empty() {
         let Some(source_raw) = trailing.strip_prefix("from").map(str::trim_start) else {
-            return Err(ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
+            return Err(error(
                 "named export trailing clause must be `from <quoted-source>`",
-                source_label.to_string(),
-                Some(span.clone()),
             ));
         };
-
-        Some(parse_quoted_string(source_raw).ok_or_else(|| {
-            ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
-                "export source must be quoted",
-                source_label.to_string(),
-                Some(span.clone()),
-            )
-        })?)
+        // `export { a } from 'm' with { ... }` carries import attributes as
+        // an import does (ES2025 16.2.3).
+        let source_text = strip_import_attributes(source_raw, source_label, span)?;
+        Some(
+            parse_quoted_string(source_text)
+                .ok_or_else(|| error("export source must be quoted"))?,
+        )
     } else {
         None
+    };
+    let string_name_head =
+        validate_named_export_specifiers(specifiers, source.is_some(), source_label, span)?;
+
+    let without_comma = without_trailing_specifier_comma(specifiers);
+    let canonical_head = if let Some(head) = string_name_head {
+        head
+    } else if without_comma.len() == specifiers.len() {
+        canonicalize_whitespace(&clause[..close_index + 2])
+    } else {
+        canonicalize_whitespace(&format!("{{{without_comma}}}"))
     };
 
     Ok(NamedExportClause::new(canonical_head, source))
 }
 
+/// Check a named export list (the text between its braces). Each entry is
+/// `name` or `name as alias`, each name an identifier or a string
+/// (ES2022 16.2.3 ModuleExportName); a string names a local binding only in
+/// `export { ... } from` (an early error otherwise). When a string name is
+/// present, the clause's canonical head, its names written by
+/// encode_module_export_name (bd-9vouw.429).
 fn validate_named_export_specifiers(
     specifiers: &str,
+    has_source: bool,
     source_label: &str,
     span: &SourceSpan,
-) -> ParseResult<()> {
+) -> ParseResult<Option<String>> {
     let specifiers = specifiers.trim();
     if specifiers.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
+    let error = |code: ParseErrorCode, message: &str| {
+        ParseError::new(code, message, source_label.to_string(), Some(span.clone()))
+    };
+    let malformed = "unsupported named export specifier; expected `name` or `name as alias`";
 
-    for specifier in without_trailing_specifier_comma(specifiers).split(',') {
+    let mut entries = Vec::new();
+    let mut has_string_name = false;
+    for specifier in split_module_specifier_list(without_trailing_specifier_comma(specifiers)) {
         let specifier = specifier.trim();
         if specifier.is_empty() {
-            return Err(ParseError::new(
+            return Err(error(
                 ParseErrorCode::UnsupportedSyntax,
                 "named export specifier list contains an empty entry",
-                source_label.to_string(),
-                Some(span.clone()),
             ));
         }
 
-        let mut parts = specifier.split_whitespace();
-        // SAFETY: specifier is non-empty after early return check above
-        let local = parts.next().expect("serde serialization should succeed");
-        let second = parts.next();
-        let third = parts.next();
-        let fourth = parts.next();
-
-        let valid = match (second, third, fourth) {
-            (None, None, None) => is_identifier(local),
-            (Some("as"), Some(exported), None) => is_identifier(local) && is_identifier(exported),
-            _ => false,
+        let words = module_specifier_words(specifier);
+        let (local, exported) = match words.as_slice() {
+            [local] => (*local, None),
+            [local, "as", exported] => (*local, Some(*exported)),
+            _ => return Err(error(ParseErrorCode::InvalidSyntax, malformed)),
         };
-
-        if !valid {
-            return Err(ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
-                "unsupported named export specifier; expected `name` or `name as alias`",
-                source_label.to_string(),
-                Some(span.clone()),
+        // A name as a word of the canonical head: an identifier as written,
+        // a string encoded.
+        let head_word = |word: &str| match module_export_name(word) {
+            Err(message) => Err(error(ParseErrorCode::InvalidSyntax, message)),
+            Ok(None) => Err(error(ParseErrorCode::InvalidSyntax, malformed)),
+            Ok(Some((name, true))) => Ok((encode_module_export_name(&name), true)),
+            Ok(Some((name, false))) => Ok((name, false)),
+        };
+        let (local, local_is_string) = head_word(local)?;
+        if local_is_string && !has_source {
+            return Err(error(
+                ParseErrorCode::InvalidSyntax,
+                "a string names a local binding only in `export { ... } from`",
             ));
+        }
+        has_string_name |= local_is_string;
+        match exported {
+            None => entries.push(local),
+            Some(exported) => {
+                let (exported, exported_is_string) = head_word(exported)?;
+                has_string_name |= exported_is_string;
+                entries.push(format!("{local} as {exported}"));
+            }
         }
     }
 
-    Ok(())
+    Ok(has_string_name.then(|| format!("{{ {} }}", entries.join(", "))))
 }
 
 // ---------------------------------------------------------------------------
@@ -5446,9 +6282,12 @@ fn parse_binding_pattern_inner(
         return Ok(BindingPattern::Identifier(name));
     }
 
+    // Every binding pattern form is handled above (identifier, `{...}`,
+    // `[...]`, `...rest`, `= default`), so anything else is invalid, not
+    // unsupported: `x[yield]`, `x?.y`, `get x() {}`, `-->` (bd-9vouw.424).
     Err(ParseError::new(
-        ParseErrorCode::UnsupportedSyntax,
-        format!("unsupported binding pattern: `{trimmed}`"),
+        ParseErrorCode::InvalidSyntax,
+        format!("invalid binding pattern: `{trimmed}`"),
         context.source_label.to_string(),
         Some(span.clone()),
     ))
@@ -5530,7 +6369,7 @@ fn parse_object_binding_pattern(
 
         if seen_rest {
             return Err(ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
+                ParseErrorCode::InvalidSyntax,
                 "rest element must be the absolute last property in object pattern (no trailing commas allowed)",
                 context.source_label.to_string(),
                 Some(span.clone()),
@@ -5577,6 +6416,15 @@ fn parse_object_binding_pattern(
         if let Some(colon_pos) = find_top_level_colon_in_pattern(seg) {
             let key_src = seg[..colon_pos].trim();
             let value_src = seg[colon_pos + 1..].trim();
+            // A property name is never a private name: `{ #x: x } = this`
+            // is a SyntaxError (bd-9vouw.398).
+            if key_src.starts_with('#') {
+                return Err(invalid_syntax_error(
+                    "a private name cannot be a destructuring key",
+                    span,
+                    context,
+                ));
+            }
             let key = parse_contextual_static_property_key(
                 key_src,
                 span,
@@ -5625,7 +6473,7 @@ fn parse_contextual_static_property_key(
             .map(Expression::StringLiteral)
             .ok_or_else(|| {
                 ParseError::new(
-                    ParseErrorCode::UnsupportedSyntax,
+                    ParseErrorCode::InvalidSyntax,
                     format!("invalid quoted {construct} property key: `{source}`"),
                     context.source_label.to_string(),
                     Some(span.clone()),
@@ -5649,6 +6497,16 @@ fn parse_contextual_static_property_key(
     }
     // `\u` escapes in an IdentifierName key denote the same property name as
     // the characters they spell (`{ \u0061: 1 }.a`, ES2020 11.6).
+    // Only characters an IdentifierName may hold: an escape spelling `#`
+    // or U+0000 makes no key (bd-9vouw.397).
+    if source.contains('\\') && !is_identifier(source) {
+        return Err(ParseError::new(
+            ParseErrorCode::InvalidSyntax,
+            format!("invalid escaped {construct} property key: `{source}`"),
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
     Ok(Expression::Identifier(canonicalize_identifier(source)))
 }
 
@@ -5693,6 +6551,19 @@ fn parse_array_binding_pattern(
     }
 
     let segments = split_pattern_elements(inner);
+    // `[...x,]`: nothing follows a rest element, not even a trailing comma
+    // (ES2020 13.3.3; `for ([...x,] of xs)` was accepted, bd-9vouw.402).
+    if inner.trim_end().ends_with(',')
+        && segments
+            .last()
+            .is_some_and(|segment| segment.trim_start().starts_with("..."))
+    {
+        return Err(invalid_syntax_error(
+            "rest element must be the last element in array pattern",
+            span,
+            context,
+        ));
+    }
     let mut elements = Vec::with_capacity(segments.len());
 
     for segment in &segments {
@@ -5713,7 +6584,7 @@ fn parse_array_binding_pattern(
         .collect();
     if rest_positions.len() > 1 {
         return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "array pattern has more than one rest element",
             context.source_label.to_string(),
             Some(span.clone()),
@@ -5723,7 +6594,7 @@ fn parse_array_binding_pattern(
         // Rest must be the absolute last element (no trailing commas/holes allowed after it)
         if pos != elements.len() - 1 {
             return Err(ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
+                ParseErrorCode::InvalidSyntax,
                 "rest element must be the last element in array pattern",
                 context.source_label.to_string(),
                 Some(span.clone()),
@@ -5794,6 +6665,15 @@ fn parse_variable_declaration_kind(statement: &str) -> Option<VariableDeclaratio
         }
     }
     None
+}
+
+/// ES2020 13.3.1: `let` starts a lexical declaration only before a binding
+/// identifier or pattern. Before anything else sloppy code reads it as an
+/// identifier (`let = 1`, the body `let` of `if (a) let;`).
+fn let_starts_lexical_declaration(after_let: &str) -> bool {
+    after_let.trim_start().chars().next().is_some_and(|ch| {
+        ch == '[' || ch == '{' || ch == '_' || ch == '$' || ch == '\\' || ch.is_alphabetic()
+    })
 }
 
 fn parse_variable_declaration(
@@ -5994,7 +6874,16 @@ fn parse_expression(
     // be the receiver for a postfix chain, e.g. `/ab/.test("xabz")`.
     if let Some((end, pattern, flags)) = leading_regexp_literal(expression) {
         let tail = expression[end..].trim_start();
-        if tail.is_empty() {
+        // The flags are every IdentifierPart after the slash, so malformed
+        // flags are an early error whatever follows (`/a/instanceof R`,
+        // bd-9vouw.406); the literal's own check reports them.
+        let mut seen_flags = String::new();
+        let flags_well_formed = flags.chars().all(|flag| {
+            let fresh = "dgimsuvy".contains(flag) && !seen_flags.contains(flag);
+            seen_flags.push(flag);
+            fresh
+        }) && !(flags.contains('u') && flags.contains('v'));
+        if tail.is_empty() || !flags_well_formed {
             return regexp_literal_expression(pattern, flags, span, context);
         }
         // A top-level binary operator after the chain binds looser than it
@@ -6024,17 +6913,20 @@ fn parse_expression(
     // split `yield 1+1` at the `+` and leave the generator yielding the first
     // operand (bd-hoplz bug #2). The prefix tests mirror the yield/await arms in
     // `parse_primary_expression`, which performs the actual parse.
-    let yields_assignment_expr = expression.strip_prefix("yield").is_some_and(|rest| {
-        rest.is_empty()
-            || rest.starts_with(' ')
-            || rest.starts_with('*')
-            || rest.starts_with(';')
-            || rest.starts_with(')')
-            || rest.starts_with('}')
-    });
-    let awaits_unary_expr = expression
-        .strip_prefix("await")
-        .is_some_and(|rest| rest.starts_with(' ') || rest.starts_with('('));
+    let yields_assignment_expr = !yield_names_identifier_operand(expression, context)
+        && expression.strip_prefix("yield").is_some_and(|rest| {
+            rest.is_empty()
+                || rest.starts_with(' ')
+                || rest.starts_with('*')
+                || rest.starts_with(';')
+                || rest.starts_with(')')
+                || rest.starts_with('}')
+                || yield_operand_follows_directly(rest, context)
+        });
+    let awaits_unary_expr = !await_names_identifier_operand(expression, context)
+        && expression
+            .strip_prefix("await")
+            .is_some_and(|rest| rest.starts_with(' ') || rest.starts_with('('));
     if yields_assignment_expr || awaits_unary_expr {
         return parse_primary_expression(expression, span, context, recursion_depth);
     }
@@ -6065,7 +6957,7 @@ fn parse_primary_expression(
 
     // ES2022: a private name is an operand only in `o.#x` and `#x in o`.
     if whole_private_name(expression).is_some() {
-        return Err(unsupported_expression_syntax_error(
+        return Err(invalid_syntax_error(
             "a private name is only valid in `o.#x` or `#x in o`",
             span,
             context,
@@ -6088,7 +6980,11 @@ fn parse_primary_expression(
             })
             .is_some();
         if !valid {
-            return Err(unsupported_expression_syntax_error(
+            // Every string literal parse_quoted_expression_string refuses is
+            // invalid (an unterminated literal, a malformed \x/\u escape, a
+            // legacy octal or \8/\9 escape in strict code): a SyntaxError
+            // (bd-9vouw.420).
+            return Err(invalid_syntax_error(
                 "unterminated or malformed string literal",
                 span,
                 context,
@@ -6104,6 +7000,14 @@ fn parse_primary_expression(
         return regexp_literal_expression(pattern, flags, span, context);
     }
 
+    if let Some(message) = invalid_numeric_literal_message(expression, context.strict_mode) {
+        return Err(ParseError::new(
+            ParseErrorCode::InvalidSyntax,
+            message,
+            context.source_label.to_string(),
+            Some(*span),
+        ));
+    }
     if let Some(value) = parse_bigint_numeric_literal(expression) {
         return Ok(Expression::BigIntLiteral(value));
     }
@@ -6111,10 +7015,11 @@ fn parse_primary_expression(
     // (`0e0n`, `1.5n`, `.5n`) is a SyntaxError (ES2020 11.8.3); it was
     // evaluated as some other expression.
     if is_malformed_bigint_literal(expression) {
-        return Err(unsupported_expression_syntax_error(
+        return Err(ParseError::new(
+            ParseErrorCode::InvalidSyntax,
             "invalid BigInt literal: no fraction or exponent is allowed",
-            span,
-            context,
+            context.source_label.to_string(),
+            Some(*span),
         ));
     }
 
@@ -6142,24 +7047,23 @@ fn parse_primary_expression(
     if expression == "null" {
         return Ok(Expression::NullLiteral);
     }
-    if expression == "undefined" {
-        return Ok(Expression::UndefinedLiteral);
-    }
     if expression == "this" {
-        return Ok(if context.strict_mode {
+        return Ok(if context.strict_mode && !context.script_this {
             Expression::This
         } else {
             Expression::SloppyThis
         });
     }
     if expression == "super" {
-        return Err(unsupported_expression_syntax_error(
-            "super expressions are not supported",
+        return Err(invalid_syntax_error(
+            "'super' keyword unexpected here",
             span,
             context,
         ));
     }
-    if let Some(rest) = expression.strip_prefix("await") {
+    if let Some(rest) = expression.strip_prefix("await")
+        && !await_names_identifier_operand(expression, context)
+    {
         if rest.starts_with(' ') {
             if !context.await_context {
                 return Err(ParseError::new(
@@ -6170,7 +7074,7 @@ fn parse_primary_expression(
                 ));
             }
             if context.formal_parameters {
-                return Err(unsupported_expression_syntax_error(
+                return Err(invalid_syntax_error(
                     "an `await` expression cannot be in a parameter list",
                     span,
                     context,
@@ -6181,7 +7085,7 @@ fn parse_primary_expression(
         }
         if rest.starts_with('(') && context.await_context {
             if context.formal_parameters {
-                return Err(unsupported_expression_syntax_error(
+                return Err(invalid_syntax_error(
                     "an `await` expression cannot be in a parameter list",
                     span,
                     context,
@@ -6195,13 +7099,18 @@ fn parse_primary_expression(
     // Inside an async function or module `await` is an operator and needs
     // its operand: a bare `await` is a SyntaxError (ES2020 14.7.1, 15.2.1.1).
     if expression == "await" && (context.await_context || context.static_block_await) {
-        return Err(unsupported_expression_syntax_error(
+        return Err(invalid_syntax_error(
             "`await` is reserved here and needs an operand",
             span,
             context,
         ));
     }
 
+    // Outside a generator, sloppy `yield` followed by an operator that
+    // continues the expression (`yield + x`, `yield * 2`, `yield(1)`) is the
+    // identifier `yield` as an operand: neither branch below applies, and the
+    // operator splitting further on parses it (bd-9vouw.396).
+    let yield_identifier_operand = yield_names_identifier_operand(expression, context);
     // yield expression: `yield expr` or `yield* expr` (delegation)
     if let Some(rest) = expression.strip_prefix("yield")
         && (rest.starts_with(' ')
@@ -6211,18 +7120,19 @@ fn parse_primary_expression(
             || rest.starts_with(')')
             || rest.starts_with('}'))
         && !context.yield_context
+        && !yield_identifier_operand
     {
         // Outside a generator `yield` is an IdentifierReference, reserved in
         // strict code (ES2020 12.1.1); it never starts a yield expression.
         if context.strict_mode {
-            return Err(unsupported_expression_syntax_error(
+            return Err(invalid_syntax_error(
                 "`yield` is a reserved word in strict mode code",
                 span,
                 context,
             ));
         }
         if !rest.trim().is_empty() {
-            return Err(unsupported_expression_syntax_error(
+            return Err(invalid_syntax_error(
                 "a `yield` expression is only valid in a generator",
                 span,
                 context,
@@ -6231,21 +7141,33 @@ fn parse_primary_expression(
         return Ok(Expression::Identifier("yield".to_string()));
     }
     if let Some(rest) = expression.strip_prefix("yield")
+        && !yield_identifier_operand
         && (rest.starts_with(' ')
             || rest.starts_with('*')
             || rest.is_empty()
             || rest.starts_with(';')
             || rest.starts_with(')')
-            || rest.starts_with('}'))
+            || rest.starts_with('}')
+            || yield_operand_follows_directly(rest, context))
     {
         if context.formal_parameters {
-            return Err(unsupported_expression_syntax_error(
+            return Err(invalid_syntax_error(
                 "a `yield` expression cannot be in a parameter list",
                 span,
                 context,
             ));
         }
+        let gap = &rest[..rest.len() - rest.trim_start().len()];
         let rest = rest.trim_start();
+        // `yield [no LineTerminator here] *` (ES2020 14.4): after a line
+        // break the `*` cannot start a delegation (bd-9vouw.398).
+        if rest.starts_with('*') && gap.contains(['\n', '\r', '\u{2028}', '\u{2029}']) {
+            return Err(invalid_syntax_error(
+                "a line break cannot separate `yield` from its `*`",
+                span,
+                context,
+            ));
+        }
         let (delegate, rest) = if let Some(after_star) = rest.strip_prefix('*') {
             (true, after_star.trim_start())
         } else {
@@ -6268,11 +7190,13 @@ fn parse_primary_expression(
         return Ok(Expression::Yield { argument, delegate });
     }
 
-    // new expression: `new Foo(args)`
-    if let Some(rest) = expression
-        .strip_prefix("new ")
-        .or_else(|| expression.strip_prefix("new\t"))
-    {
+    // new expression: `new Foo(args)`. The keyword ends at any white space
+    // or at the `(` of a parenthesized callee, as minifiers write it
+    // (`new(function () {...})`, `new(F)`); those were read as a call of a
+    // reference to `new` (bd-9vouw.454).
+    if let Some(rest) = expression.strip_prefix("new").filter(|rest| {
+        rest.starts_with(|ch: char| ch == '(' || ch == '\u{feff}' || ch.is_whitespace())
+    }) {
         return parse_new_expression(rest.trim(), span, context, recursion_depth);
     }
 
@@ -6323,9 +7247,14 @@ fn parse_primary_expression(
         return parse_class_expression(expression, span, context);
     }
 
-    // Template literal: `text ${expr} text`
-    if expression.starts_with('`') && expression.ends_with('`') {
-        return parse_template_literal(expression, span, context, recursion_depth);
+    // Template literal: `text ${expr} text`. Only when that one template is
+    // the whole expression: in `a``b` the template `a` closes first and is
+    // the tag of `b` (bd-9vouw.342), a call that throws Node's TypeError.
+    if expression.starts_with('`')
+        && expression.ends_with('`')
+        && find_top_level_template_start(expression) == Some(0)
+    {
+        return parse_template_literal(expression, span, context, recursion_depth, false);
     }
 
     // Parenthesized expression.
@@ -6380,8 +7309,8 @@ fn parse_primary_expression(
     }
 
     if has_valid_quoted_prefix {
-        return Err(unsupported_expression_syntax_error(
-            "unsupported or malformed string-literal postfix expression",
+        return Err(invalid_syntax_error(
+            "malformed string-literal postfix expression",
             span,
             context,
         ));
@@ -6408,17 +7337,75 @@ fn parse_primary_expression(
         // `import` is only an ImportCall callee (handled with its arguments)
         // or `import.meta`; a bare reference is a SyntaxError.
         if expression == "import" {
-            return Err(unsupported_expression_syntax_error(
+            return Err(invalid_syntax_error(
                 "`import` must be called: import(specifier)",
                 span,
                 context,
             ));
         }
-        return Ok(Expression::Identifier(canonicalize_identifier(expression)));
+        let name = canonicalize_identifier(expression);
+        // A reserved word spelled with a unicode escape is still reserved
+        // (ES2020 11.6.2, 12.1.1): `await` in an async function and
+        // `yield` in a generator or strict code are SyntaxErrors, not
+        // references (bd-9vouw.394).
+        if expression.contains('\\')
+            && (is_unconditional_reserved_keyword(&name)
+                || (name == "await" && context.await_context)
+                || (name == "yield" && (context.yield_context || context.strict_mode))
+                || (context.strict_mode && is_strict_mode_reserved_word(&name)))
+        {
+            return Err(ParseError::new(
+                ParseErrorCode::InvalidSyntax,
+                format!("keyword `{name}` must not contain escaped characters"),
+                context.source_label.to_string(),
+                Some(*span),
+            ));
+        }
+        // An operator keyword with nothing to operate on is no expression:
+        // `throw;` read as a reference to a variable named `throw`
+        // (bd-9vouw.402).
+        if matches!(
+            expression,
+            "throw" | "typeof" | "void" | "delete" | "new" | "in" | "instanceof"
+        ) {
+            return Err(invalid_syntax_error(
+                "an operator keyword needs an operand",
+                span,
+                context,
+            ));
+        }
+        // Nor is any other reserved word a reference (`case = 1`,
+        // `else = 1`, bd-9vouw.427), `(debugger)` included: the statement
+        // `debugger;` is parsed before expressions (bd-9vouw.452).
+        if is_unconditional_reserved_keyword(&name) {
+            return Err(invalid_syntax_error(
+                "a reserved word cannot be an identifier reference",
+                span,
+                context,
+            ));
+        }
+        // In strict code the strict-mode reserved words are no references
+        // either (ES2020 12.1.1): `"use strict"; public = 42` parsed and
+        // ran into a ReferenceError, and in a strict function body it
+        // parsed silently (bd-9vouw.447). A strict `yield` was refused
+        // above.
+        if context.strict_mode && is_strict_mode_reserved_word(&name) {
+            return Err(invalid_syntax_error(
+                "a strict-mode reserved word cannot be an identifier reference",
+                span,
+                context,
+            ));
+        }
+        return Ok(Expression::Identifier(name));
     }
 
+    // Two expressions with no operator between them are no expression
+    // (bd-9vouw.396: InvalidSyntax, so Function(), eval and module loading
+    // throw a catchable SyntaxError; in the land58 Test262 census this
+    // message met no Node-passing positive source but `new Function({})`,
+    // whose `[object Object]` body that test expects to be a SyntaxError).
     if is_unseparated_expression_sequence(expression) {
-        return Err(unsupported_expression_syntax_error(
+        return Err(invalid_syntax_error(
             "unseparated expression sequence",
             span,
             context,
@@ -6452,7 +7439,233 @@ fn parse_primary_expression(
         ));
     }
 
+    // Unary operators with no operand: `++;` read as `+(+)` with a deferred
+    // raw `+`, so `x` newline `++;` ran (bd-9vouw.402).
+    if !expression.is_empty()
+        && expression
+            .bytes()
+            .all(|byte| matches!(byte, b'+' | b'-' | b'!' | b'~'))
+    {
+        return Err(invalid_syntax_error(
+            "a unary operator needs an operand",
+            span,
+            context,
+        ));
+    }
+
+    // Private names (`#x in o`, `o.#x`) were parsed above; any other `#`
+    // starts no expression, such as a `#!` line inside a body, which only
+    // the first line of a source may be (bd-9vouw.402).
+    if expression.starts_with('#') {
+        return Err(invalid_syntax_error(
+            "`#` starts no expression here",
+            span,
+            context,
+        ));
+    }
+
+    if let Some(message) = raw_expression_early_error(expression) {
+        return Err(invalid_syntax_error(message, span, context));
+    }
+
     Ok(Expression::Raw(canonicalize_whitespace(expression)))
+}
+
+/// Why an expression the parser did not recognise cannot be an expression at
+/// all, for shapes no ECMAScript expression has. Such source is a SyntaxError
+/// before anything runs, not an `Expression::Raw` that throws only when it is
+/// evaluated, after the statements before it ran (bd-9vouw.444):
+/// - a `/` opening no complete regular expression literal, whose body met a
+///   line terminator (`/` newline `/`, ES2020 11.8.5);
+/// - a `.` that is no decimal point and has no object before it (`.source`
+///   on its own line after a `;`, `._`);
+/// - outside every literal, a backslash that is no `\u` escape of an
+///   identifier character (`var\u0020x`, `\u003B`, `this\u002Ex`, ES2020
+///   11.6.1.1), or a character that is no white space, line terminator,
+///   punctuator or identifier character (U+180E, ES2020 11.2);
+/// - an escaped `async` before `function` or arrow parameters
+///   (`\u0061sync function f() {}`): a keyword contains no escapes (ES2020
+///   11.6.2).
+fn raw_expression_early_error(expression: &str) -> Option<&'static str> {
+    if expression.starts_with('/') && leading_regexp_literal(expression).is_none() {
+        return Some("unterminated regular expression literal");
+    }
+    if let Some(after_dot) = expression.strip_prefix('.')
+        && !after_dot.starts_with(|ch: char| ch == '.' || ch.is_ascii_digit())
+    {
+        return Some("a member access needs an object before its `.`");
+    }
+    let mut word_end = 0;
+    while let Some(ch) = expression[word_end..].chars().next() {
+        word_end += if ch == '\\' {
+            match identifier_escape_len(&expression[word_end..]) {
+                Some(len) => len,
+                None => break,
+            }
+        } else if is_identifier_continue(ch) {
+            ch.len_utf8()
+        } else {
+            break;
+        };
+    }
+    let word = &expression[..word_end];
+    if word.contains('\\') && canonicalize_identifier(word) == "async" {
+        let rest = expression[word_end..].trim_start();
+        let arrow_parameters = if rest.starts_with('(') {
+            extract_balanced(rest, '(', ')')
+                .is_some_and(|(_, tail)| tail.trim_start().starts_with("=>"))
+        } else {
+            let name_end = rest
+                .find(|ch: char| !is_identifier_continue(ch))
+                .unwrap_or(rest.len());
+            name_end > 0 && rest[name_end..].trim_start().starts_with("=>")
+        };
+        if starts_with_keyword(rest, "function") || arrow_parameters {
+            return Some("keyword `async` must not contain escaped characters");
+        }
+    }
+    // Two operands with no operator between them: a number or a plain name,
+    // then a name (`1 method(){}`, a class field's initializer running into
+    // the next element on its line, bd-9vouw.450).
+    let mut tokens = expression.splitn(2, char::is_whitespace);
+    let first = tokens.next().unwrap_or("");
+    let second = tokens.next().unwrap_or("").trim_start();
+    let operand_word = |word: &str| {
+        is_identifier(word)
+            && !is_unconditional_reserved_keyword(word)
+            && !matches!(
+                word,
+                "async" | "await" | "yield" | "let" | "get" | "set" | "static" | "of" | "as"
+            )
+    };
+    let second_word_end = second
+        .find(|ch: char| !is_identifier_continue(ch))
+        .unwrap_or(second.len());
+    let numeric = |word: &str| {
+        parse_bigint_numeric_literal(word).is_some()
+            || parse_i64_numeric_literal(word).is_some()
+            || parse_f64_numeric_literal(word).is_some()
+    };
+    if (operand_word(first) || numeric(first))
+        && second.starts_with(is_identifier_start)
+        && !matches!(
+            &second[..second_word_end],
+            "in" | "instanceof" | "of" | "as"
+        )
+    {
+        return Some("two expressions with no operator between them");
+    }
+    // A statement keyword starts no expression (`if{};else{}`, `try(e){}`,
+    // `catch(){}`): the statement parser did not take it (bd-9vouw.451).
+    let leading_word_end = expression
+        .find(|ch: char| !is_identifier_continue(ch))
+        .unwrap_or(expression.len());
+    if matches!(
+        &expression[..leading_word_end],
+        "if" | "else"
+            | "for"
+            | "while"
+            | "do"
+            | "try"
+            | "catch"
+            | "finally"
+            | "switch"
+            | "case"
+            | "default"
+            | "break"
+            | "continue"
+            | "return"
+            | "throw"
+            | "var"
+            | "const"
+            | "with"
+            | "debugger"
+            | "export"
+            | "enum"
+            | "extends"
+    ) {
+        return Some("a statement keyword cannot start an expression");
+    }
+    // A bracketed operand followed by a name with no operator between them
+    // (`{index = 0;} index++`, `[1] x`), and a `;` outside every bracket and
+    // literal with code after it (`a; b`): no expression has either
+    // (bd-9vouw.451).
+    if expression.starts_with(['{', '[', '(']) {
+        let (open, close) = match expression.as_bytes()[0] {
+            b'{' => ('{', '}'),
+            b'[' => ('[', ']'),
+            _ => ('(', ')'),
+        };
+        if let Some((_, after)) = extract_balanced(expression, open, close) {
+            let after = after.trim_start();
+            let word_end = after
+                .find(|ch: char| !is_identifier_continue(ch))
+                .unwrap_or(after.len());
+            if after.starts_with(is_identifier_start)
+                && !matches!(&after[..word_end], "in" | "instanceof" | "of" | "as")
+            {
+                return Some("two expressions with no operator between them");
+            }
+        }
+    }
+    if has_top_level_semicolon(expression) {
+        return Some("a `;` cannot be inside an expression");
+    }
+    // A call followed by a block (`gen() {}`): a method definition outside a
+    // class or object literal, as a field initializer running into the next
+    // line reads `x = 42` newline `*gen() {}` (bd-9vouw.450).
+    if let Some(open) = expression.find('(') {
+        let head = expression[..open].trim_end();
+        if !head.is_empty()
+            && head.split('.').all(operand_word)
+            && extract_balanced(&expression[open..], '(', ')')
+                .is_some_and(|(_, after)| after.trim_start().starts_with('{'))
+        {
+            return Some("a call cannot be followed by a block");
+        }
+    }
+    let mut quotes = QuoteState::default();
+    let mut chars = expression.char_indices().peekable();
+    while let Some((index, ch)) = chars.next() {
+        if quotes.active() {
+            quotes.advance_char(ch);
+            continue;
+        }
+        if ch == '/' && quotes.open_regex_at(expression, index) {
+            continue;
+        }
+        if quotes.open_char(ch) || (ch.is_ascii() && ch != '\\') {
+            continue;
+        }
+        if ch == '\\' {
+            let escape_end = identifier_escape_len(&expression[index..])
+                .map(|len| index + len)
+                .filter(|&end| {
+                    decode_identifier_escapes(&expression[index..end])
+                        .is_some_and(|decoded| decoded.chars().all(is_identifier_continue))
+                });
+            let Some(escape_end) = escape_end else {
+                return Some("a `\\` outside a literal must escape an identifier character");
+            };
+            while chars.next_if(|&(next, _)| next < escape_end).is_some() {}
+        } else if !(is_identifier_continue(ch)
+            || (ch.is_whitespace() && ch != '\u{85}')
+            || ch == '\u{feff}')
+        {
+            return Some("invalid character outside a literal");
+        }
+    }
+    None
+}
+
+/// The byte length of the `\uXXXX` or `\u{X...}` escape at the start of
+/// `text`, if it has that shape (its digits are checked when decoded).
+fn identifier_escape_len(text: &str) -> Option<usize> {
+    let rest = text.strip_prefix("\\u")?;
+    match rest.strip_prefix('{') {
+        Some(braced) => braced.find('}').map(|close| 3 + close + 1),
+        None => rest.get(..4).map(|_| 6),
+    }
 }
 
 fn is_unseparated_expression_sequence(expression: &str) -> bool {
@@ -6561,6 +7774,16 @@ fn try_parse_arrow_function(
         let (params_src, after_params) = extract_balanced(rest, '(', ')')?;
         let after = after_params.trim_start();
         let body_src = after.strip_prefix("=>")?;
+        // ArrowParameters [no LineTerminator here] `=>` (ES2020 14.2).
+        if after_params[..after_params.len() - after.len()]
+            .contains(['\n', '\r', '\u{2028}', '\u{2029}'])
+        {
+            return Some(Err(invalid_syntax_error(
+                "a line break cannot come before `=>`",
+                span,
+                context,
+            )));
+        }
         let body_src = body_src.trim();
         let directive_source = if body_src.starts_with('{') {
             extract_balanced(body_src, '{', '}')
@@ -6601,6 +7824,16 @@ fn try_parse_arrow_function(
         let param_name = rest[..arrow_pos].trim();
         if !is_identifier(param_name) {
             return None;
+        }
+        if rest[..arrow_pos]
+            .trim_start()
+            .contains(['\n', '\r', '\u{2028}', '\u{2029}'])
+        {
+            return Some(Err(invalid_syntax_error(
+                "a line break cannot come before `=>`",
+                span,
+                context,
+            )));
         }
         let body_src = rest[arrow_pos + 2..].trim();
         // The parameter is a BindingIdentifier: reserved words (`yield` in
@@ -6782,7 +8015,7 @@ fn parse_arrow_body(
                 // follows its block body (`() => {} = 1`, `() => {}.x`) but
                 // the `;` ending its statement, which some callers keep.
                 if !matches!(after_block.trim(), "" | ";") {
-                    return Err(unsupported_expression_syntax_error(
+                    return Err(invalid_syntax_error(
                         "unexpected token after an arrow function body",
                         span,
                         context,
@@ -6888,7 +8121,7 @@ fn parse_new_expression(
     if let Some(after) = rest.trim_start().strip_prefix("import")
         && after.trim_start().starts_with('(')
     {
-        return Err(unsupported_expression_syntax_error(
+        return Err(invalid_syntax_error(
             "import() cannot be used with `new`",
             span,
             context,
@@ -6974,11 +8207,15 @@ fn parse_new_expression(
 // Template literal parsing
 // ---------------------------------------------------------------------------
 
+/// `tagged`: the template is a tagged template's, whose `NotEscapeSequence`
+/// shapes (`\01`, `\8`, `\xg`, `\u{110000}`) are not errors but cook to
+/// undefined (ES2018 template literal revision; `cook_template_quasi`).
 fn parse_template_literal(
     expression: &str,
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
     recursion_depth: u64,
+    tagged: bool,
 ) -> ParseResult<Expression> {
     // ES2020 §11.8.6 TemplateCharacter — the entire template literal MUST
     // be terminated by a backtick. The tokeniser at `scan_template_literal`
@@ -7015,9 +8252,9 @@ fn parse_template_literal(
             // non-octal decimal escapes, and malformed hex/unicode escapes.
             // The lexer was previously fail-open on all of these (bd-no788
             // cases 4 and 5).
-            if let Err(message) = validate_template_escape_sequence(bytes, i) {
+            if !tagged && let Err(message) = validate_template_escape_sequence(bytes, i) {
                 return Err(ParseError::new(
-                    ParseErrorCode::UnsupportedSyntax,
+                    ParseErrorCode::InvalidSyntax,
                     message,
                     context.source_label.to_string(),
                     Some(span.clone()),
@@ -7292,11 +8529,15 @@ fn try_parse_assignment(
             let left =
                 match parse_assignment_target_expression(lhs, span, context, recursion_depth + 1) {
                     Ok(e) => e,
-                    Err(e) => return Some(Err(e)),
+                    Err(e) => match web_compat_call_target(lhs, op, span, context, recursion_depth)
+                    {
+                        Some(call) => call,
+                        None => return Some(Err(e)),
+                    },
                 };
             if assignment_target_has_optional_chain(&left) {
                 return Some(Err(ParseError::new(
-                    ParseErrorCode::UnsupportedSyntax,
+                    ParseErrorCode::InvalidSyntax,
                     "optional chaining cannot be used as an assignment target",
                     context.source_label.to_string(),
                     Some(span.clone()),
@@ -7304,6 +8545,21 @@ fn try_parse_assignment(
             }
             if let Err(error) = reject_strict_eval_arguments_target(&left, span, context) {
                 return Some(Err(error));
+            }
+            // A parenthesized object or array literal is a value, not a
+            // destructuring pattern: `({}) = 1`, `([a]) = b` (ES2020
+            // 12.15.1; `(a) = 1` and `({}).x = 1` stay fine, bd-9vouw.402).
+            if lhs.starts_with('(')
+                && matches!(
+                    left,
+                    Expression::ArrayLiteral(_) | Expression::ObjectLiteral(_)
+                )
+            {
+                return Some(Err(invalid_syntax_error(
+                    "a parenthesized literal is not an assignment target",
+                    span,
+                    context,
+                )));
             }
             let right = match parse_expression(rhs, span, context, recursion_depth + 1) {
                 Ok(e) => e,
@@ -7480,6 +8736,29 @@ fn try_parse_conditional(
                     Ok(e) => e,
                     Err(e) => return Some(Err(e)),
                 };
+                // A yield with an operand takes the whole conditional as that
+                // operand: `yield 1 ? a : b` is `yield (1 ? a : b)`, which
+                // the yield path parses. It was refused below as a yield
+                // condition (bd-9vouw.461).
+                if matches!(
+                    test,
+                    Expression::Yield {
+                        argument: Some(_),
+                        ..
+                    }
+                ) && !test_src.starts_with('(')
+                {
+                    return None;
+                }
+                // The condition is a ShortCircuitExpression: `yield ? a : b`
+                // is a SyntaxError, `(yield) ? a : b` is not (bd-9vouw.398).
+                if matches!(test, Expression::Yield { .. }) && !test_src.starts_with('(') {
+                    return Some(Err(invalid_syntax_error(
+                        "a `yield` expression cannot be the condition of `?:`",
+                        span,
+                        context,
+                    )));
+                }
                 let consequent =
                     match parse_expression(consequent_src, span, context, recursion_depth + 1) {
                         Ok(e) => e,
@@ -7774,12 +9053,17 @@ fn try_parse_binary(
                 // belonging to the right operand, not a binary split point —
                 // e.g. the `-` in `2 * -3`, `a - -b`, or `2 ** -1`. Skipping it
                 // lets the real binary operator win the split.
+                // After a keyword operator (`typeof -1`, `void +x`, `delete
+                // -x`, `a instanceof -b`, and `await` / `yield` where they are
+                // operators) the sign is unary too (bd-9vouw.390): `typeof -1`
+                // split into an identifier `typeof` minus 1.
                 let unary_sign = matches!(op, BinaryOperator::Add | BinaryOperator::Subtract)
                     && !ends_with_postfix_update(lhs)
-                    && lhs
+                    && (lhs
                         .as_bytes()
                         .last()
-                        .is_none_or(|&c| is_operator_context_byte(c));
+                        .is_none_or(|&c| is_operator_context_byte(c))
+                        || ends_with_unary_operand_keyword(lhs, context));
                 let exponent_sign = matches!(op, BinaryOperator::Add | BinaryOperator::Subtract)
                     && is_decimal_exponent_sign(bytes, i);
                 if !lhs.is_empty() && rhs.is_empty() && !unary_sign && !exponent_sign {
@@ -7843,6 +9127,17 @@ fn try_parse_binary(
             let operand_depth = recursion_depth
                 .saturating_add(1)
                 .saturating_add(terms.div_ceil(FOLDED_CHAIN_TERMS_PER_RECURSION_LEVEL));
+            if op == BinaryOperator::NullishCoalescing {
+                let mut operand_start = 0;
+                for &(position, length, _) in
+                    chain.iter().chain(std::iter::once(&(expr.len(), 0, op)))
+                {
+                    if has_top_level_logical_and_or(&expr[operand_start..position]) {
+                        return Some(Err(mixed_nullish_coalescing_error(span, context)));
+                    }
+                    operand_start = position + length;
+                }
+            }
             let mut start = 0;
             let mut folded: Option<Expression> = None;
             let mut pending_op = None;
@@ -7852,6 +9147,11 @@ fn try_parse_binary(
                     Ok(e) => e,
                     Err(e) => return Some(Err(e)),
                 };
+                if let Some(error) =
+                    unparenthesized_yield_binary_operand(operand_src, &operand, span, context)
+                {
+                    return Some(Err(error));
+                }
                 folded = Some(match (folded, pending_op) {
                     (Some(left), Some(previous)) => Expression::Binary {
                         operator: previous,
@@ -7868,6 +9168,11 @@ fn try_parse_binary(
                 Ok(e) => e,
                 Err(e) => return Some(Err(e)),
             };
+            if let Some(error) =
+                unparenthesized_yield_binary_operand(last_src, &last, span, context)
+            {
+                return Some(Err(error));
+            }
             return Some(Ok(Expression::Binary {
                 operator: pending_op.expect("a chain has at least two operators"),
                 left: Box::new(folded.expect("a chain has at least two operands")),
@@ -7877,6 +9182,19 @@ fn try_parse_binary(
     }
     let lhs_src = expr[..best_pos].trim();
     let rhs_src = expr[best_pos + best_len..].trim();
+    if op == BinaryOperator::NullishCoalescing
+        && (has_top_level_logical_and_or(lhs_src) || has_top_level_logical_and_or(rhs_src))
+    {
+        return Some(Err(mixed_nullish_coalescing_error(span, context)));
+    }
+    if op == BinaryOperator::Exponentiate && starts_with_unary_operator(lhs_src, context) {
+        return Some(Err(ParseError::new(
+            ParseErrorCode::InvalidSyntax,
+            "a unary expression cannot be the base of `**`: parenthesize it",
+            context.source_label.to_string(),
+            Some(*span),
+        )));
+    }
     // ES2022 `#x in obj`: a private name is an operand only here.
     let private_in_operand = matches!(op, BinaryOperator::In)
         .then(|| whole_private_name(lhs_src))
@@ -7896,11 +9214,90 @@ fn try_parse_binary(
         Ok(e) => e,
         Err(e) => return Some(Err(e)),
     };
+    for (operand_src, operand) in [(lhs_src, &left), (rhs_src, &right)] {
+        if let Some(error) =
+            unparenthesized_yield_binary_operand(operand_src, operand, span, context)
+        {
+            return Some(Err(error));
+        }
+    }
     Some(Ok(Expression::Binary {
         operator: op,
         left: Box::new(left),
         right: Box::new(right),
     }))
+}
+
+/// Whether `text` begins with a unary operator applied to the rest (`-`,
+/// `+`, `!`, `~`, `typeof`, `void`, `delete`, and `await` where it is an
+/// operator). The base of `**` is an UpdateExpression (ES2016 12.6), so
+/// `-3 ** 2` and `typeof 1 ** 2` are SyntaxErrors; a prefix `++`/`--` is
+/// an UpdateExpression and allowed (bd-9vouw.395).
+fn starts_with_unary_operator(text: &str, context: &ParseExecutionContext<'_>) -> bool {
+    let text = text.trim_start();
+    if text.starts_with("++") || text.starts_with("--") {
+        return false;
+    }
+    if text.starts_with(['-', '+', '!', '~']) {
+        return true;
+    }
+    ["typeof", "void", "delete", "await"].iter().any(|keyword| {
+        (*keyword != "await" || context.await_context)
+            && text
+                .strip_prefix(keyword)
+                .is_some_and(|rest| !rest.starts_with(is_identifier_continue))
+    })
+}
+
+fn mixed_nullish_coalescing_error(
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseError {
+    ParseError::new(
+        ParseErrorCode::InvalidSyntax,
+        "`??` cannot be mixed with `&&` or `||` without parentheses",
+        context.source_label.to_string(),
+        Some(*span),
+    )
+}
+
+/// Whether `text` has an `&&` or `||` outside parentheses, brackets, braces
+/// and literals. `??` does not mix with them without parentheses (ES2020
+/// 12.13: `a || b ?? c` and `a ?? b && c` are SyntaxErrors) (bd-9vouw.395).
+fn has_top_level_logical_and_or(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut depth: i64 = 0;
+    let mut quotes = QuoteState::default();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if quotes.active() {
+            quotes.advance(b);
+            i += 1;
+            continue;
+        }
+        if b == b'/' && quotes.open_regex_at(text, i) {
+            i += 1;
+            continue;
+        }
+        match b {
+            b'\'' | b'"' | b'`' => {
+                quotes.open(b);
+            }
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b'&' | b'|'
+                if depth == 0
+                    && bytes.get(i + 1) == Some(&b)
+                    && bytes.get(i + 2) != Some(&b'=') =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    false
 }
 
 /// Whether `lhs` ends with a postfix `++`/`--` (the update follows an
@@ -7968,11 +9365,14 @@ fn match_binary_operator_at(expr: &str, i: usize) -> Option<(BinaryOperator, usi
     // (`o.in.x`, `o.in?.x`, `o.instanceof`; arktype reads `inner.in?.rawIn`),
     // not an operator. Whitespace is permitted between a dot and its property
     // name, including Unicode whitespace (`o. in`, `o.\u{00a0}instanceof`).
+    // Right after a `/` neither is an operator: after a regular expression
+    // literal they are its flags (`/a/instanceof` is a SyntaxError), and
+    // after a division no operand precedes them (bd-9vouw.406).
     if remaining >= 10 && &bytes[i..i + 10] == b"instanceof" {
         let before_ok = expr[..i]
             .chars()
             .next_back()
-            .is_none_or(|c| !is_identifier_continue(c) && !matches!(c, '#' | '.'));
+            .is_none_or(|c| !is_identifier_continue(c) && !matches!(c, '#' | '.' | '/'));
         let after_ok = expr[i + 10..]
             .chars()
             .next()
@@ -7985,7 +9385,7 @@ fn match_binary_operator_at(expr: &str, i: usize) -> Option<(BinaryOperator, usi
         let before_ok = expr[..i]
             .chars()
             .next_back()
-            .is_none_or(|c| !is_identifier_continue(c) && !matches!(c, '#' | '.'));
+            .is_none_or(|c| !is_identifier_continue(c) && !matches!(c, '#' | '.' | '/'));
         let after_ok = expr[i + 2..]
             .chars()
             .next()
@@ -8134,30 +9534,16 @@ fn try_parse_unary_prefix(
                 .next()
                 .is_some_and(|next| !is_identifier_continue(next))
         {
-            // `NaN` and `Infinity` parse as number literals everywhere else,
-            // but the operand of `delete NaN` / `delete (Infinity)` is a
-            // reference to the global object's non-configurable property:
-            // false, and an early error in strict code. As literals they
-            // deleted a value and answered true.
-            let mut operand = rest.trim();
-            while let Some(inner) = operand.strip_prefix('(').and_then(|o| o.strip_suffix(')')) {
-                operand = inner.trim();
-            }
-            let arg =
-                if matches!(op, UnaryOperator::Delete) && matches!(operand, "NaN" | "Infinity") {
-                    Expression::Identifier(operand.to_string())
-                } else {
-                    match parse_expression(rest.trim(), span, context, recursion_depth + 1) {
-                        Ok(e) => e,
-                        Err(e) => return Some(Err(e)),
-                    }
-                };
+            let arg = match parse_expression(rest.trim(), span, context, recursion_depth + 1) {
+                Ok(expression) => expression,
+                Err(error) => return Some(Err(error)),
+            };
             // bd-9vouw.136: a strict-mode delete throws where a sloppy one
             // answers false, and of a bare identifier it is an early error
             // (ES2020 12.5.3.1).
             let op = if matches!(op, UnaryOperator::Delete) && context.strict_mode {
                 if matches!(arg, Expression::Identifier(_)) {
-                    return Some(Err(unsupported_expression_syntax_error(
+                    return Some(Err(invalid_syntax_error(
                         "delete of an unqualified identifier in strict mode",
                         span,
                         context,
@@ -8171,7 +9557,7 @@ fn try_parse_unary_prefix(
             if matches!(op, UnaryOperator::Delete | UnaryOperator::StrictDelete)
                 && is_private_member_expression(&arg)
             {
-                return Some(Err(unsupported_expression_syntax_error(
+                return Some(Err(invalid_syntax_error(
                     "private fields can not be deleted",
                     span,
                     context,
@@ -8222,6 +9608,85 @@ fn try_parse_unary_prefix(
     None
 }
 
+/// Whether `expression` starts with `yield` naming an identifier operand:
+/// outside a generator in non-strict code, followed by an operator that
+/// continues the expression (`yield + x`, `yield * 2`, `yield(1)`), so it is
+/// parsed as an operand rather than a yield expression (bd-9vouw.396).
+/// Whether, in a generator, `yield` is followed with no space by a token that
+/// can only begin its operand: `yield(x)`, `yield[a, b]`, `yield/re/g`,
+/// `yield{}`, `yield"s"`, `yield!0`, as minifiers write them. They were read
+/// as a call or member of a bare `yield`, so `const r = yield(1)` yielded
+/// undefined and then called the resumed value (bd-9vouw.460).
+fn yield_operand_follows_directly(rest: &str, context: &ParseExecutionContext<'_>) -> bool {
+    context.yield_context && rest.starts_with(['(', '[', '{', '/', '"', '\'', '`', '!', '~'])
+}
+
+fn yield_names_identifier_operand(expression: &str, context: &ParseExecutionContext<'_>) -> bool {
+    !context.yield_context
+        && !context.strict_mode
+        && expression
+            .strip_prefix("yield")
+            .is_some_and(keyword_identifier_continues_expression)
+}
+
+/// Whether `expression` starts with `await` naming an identifier operand:
+/// in script code outside async functions and class static blocks, where
+/// `await` is an identifier (ES2020 12.1.1), followed by an operator that
+/// continues the expression (`await + 1`, `await instanceof F`).
+fn await_names_identifier_operand(expression: &str, context: &ParseExecutionContext<'_>) -> bool {
+    !context.await_context
+        && !context.static_block_await
+        && expression
+            .strip_prefix("await")
+            .is_some_and(keyword_identifier_continues_expression)
+}
+
+/// Whether the text after a `yield` or `await` that names an identifier
+/// continues an expression with it as the operand: a binary, assignment,
+/// conditional or comma operator, `in` or `instanceof`, a call, member
+/// access or tagged template.
+fn keyword_identifier_continues_expression(rest: &str) -> bool {
+    // `yieldx` is another identifier.
+    if rest.chars().next().is_some_and(is_identifier_continue) {
+        return false;
+    }
+    let after = rest.trim_start();
+    let mut chars = after.chars();
+    match chars.next() {
+        Some(
+            '+' | '-' | '*' | '/' | '%' | '<' | '>' | '=' | '&' | '|' | '^' | '?' | ',' | '.' | '['
+            | '(' | '`',
+        ) => true,
+        Some('!') => chars.next() == Some('='),
+        Some(_) => ["instanceof", "in"].iter().any(|keyword| {
+            after
+                .strip_prefix(keyword)
+                .is_some_and(|tail| !tail.chars().next().is_some_and(is_identifier_continue))
+        }),
+        None => false,
+    }
+}
+
+/// A binary operator's operands are narrower than an AssignmentExpression,
+/// which a yield expression is: in a generator `yield 3 + yield 4` and
+/// `yield || yield` are SyntaxErrors, `3 + (yield 4)` is fine (ES2020
+/// 12.7-12.13, bd-9vouw.398).
+fn unparenthesized_yield_binary_operand(
+    operand_src: &str,
+    operand: &Expression,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> Option<ParseError> {
+    (matches!(operand, Expression::Yield { .. }) && !operand_src.trim_start().starts_with('('))
+        .then(|| {
+            invalid_syntax_error(
+                "a `yield` expression cannot be an operand of a binary operator",
+                span,
+                context,
+            )
+        })
+}
+
 /// A unary operator's operand is a UnaryExpression, which a yield expression
 /// is not: `void yield` in a generator is a SyntaxError, `void (yield)` is
 /// fine (ES2020 12.5).
@@ -8233,7 +9698,7 @@ fn unparenthesized_yield_operand(
 ) -> Option<ParseError> {
     (matches!(operand, Expression::Yield { .. }) && !operand_src.trim_start().starts_with('('))
         .then(|| {
-            unsupported_expression_syntax_error(
+            invalid_syntax_error(
                 "a `yield` expression cannot be the operand of a unary operator",
                 span,
                 context,
@@ -8296,7 +9761,16 @@ fn try_parse_update(
         }
         let target = parse_expression(operand_src, span, context, recursion_depth + 1).ok()?;
         if !is_simple_update_target(&target) {
-            return reject_non_assignable_update_target(&target, span, context);
+            if let Some(rejection) =
+                reject_non_assignable_update_target(&target, operand_src, span, context)
+            {
+                return Some(rejection);
+            }
+            // A non-strict call target (Annex B) is admitted above and lowers
+            // to its ReferenceError (bd-9vouw.408); others parse elsewhere.
+            if !matches!(target, Expression::Call { .. }) {
+                return None;
+            }
         }
         if let Err(error) = reject_strict_eval_arguments_target(&target, span, context) {
             return Some(Err(error));
@@ -8325,7 +9799,16 @@ fn try_parse_update(
         }
         let target = parse_expression(operand_src, span, context, recursion_depth + 1).ok()?;
         if !is_simple_update_target(&target) {
-            return reject_non_assignable_update_target(&target, span, context);
+            if let Some(rejection) =
+                reject_non_assignable_update_target(&target, operand_src, span, context)
+            {
+                return Some(rejection);
+            }
+            // A non-strict call target (Annex B) is admitted above and lowers
+            // to its ReferenceError (bd-9vouw.408); others parse elsewhere.
+            if !matches!(target, Expression::Call { .. }) {
+                return None;
+            }
         }
         if let Err(error) = reject_strict_eval_arguments_target(&target, span, context) {
             return Some(Err(error));
@@ -8397,15 +9880,34 @@ fn reject_reserved_identifier_reference(
 }
 
 /// ES2020 12.15.1, 12.4.1: in strict code `eval` and `arguments` are not
-/// assignment or update targets (`arguments <<= 20`, `eval++`).
+/// assignment or update targets (`arguments <<= 20`, `eval++`), in a
+/// destructuring pattern either (`[arguments] = []`, `({ eval } = {})`,
+/// bd-9vouw.402).
 fn reject_strict_eval_arguments_target(
     target: &Expression,
     span: &SourceSpan,
     context: &ParseExecutionContext<'_>,
 ) -> ParseResult<()> {
+    // The first `eval` or `arguments` the target writes; a default value
+    // (`[x = arguments] = []`) is read, not written.
+    fn restricted_name(target: &Expression) -> Option<&str> {
+        match target {
+            Expression::Identifier(name) if matches!(name.as_str(), "eval" | "arguments") => {
+                Some(name.as_str())
+            }
+            Expression::ArrayLiteral(elements) => {
+                elements.iter().flatten().find_map(restricted_name)
+            }
+            Expression::ObjectLiteral(properties) => properties
+                .iter()
+                .find_map(|property| restricted_name(&property.value)),
+            Expression::SpreadElement(inner) => restricted_name(inner),
+            Expression::Assignment { left, .. } => restricted_name(left),
+            _ => None,
+        }
+    }
     if context.strict_mode
-        && let Expression::Identifier(name) = target
-        && matches!(name.as_str(), "eval" | "arguments")
+        && let Some(name) = restricted_name(target)
     {
         return Err(ParseError::new(
             ParseErrorCode::InvalidSyntax,
@@ -8417,34 +9919,105 @@ fn reject_strict_eval_arguments_target(
     Ok(())
 }
 
+/// Annex B "function calls as assignment targets" (web compatibility):
+/// in non-strict code a call is an assignment target for `=`, the arithmetic and bitwise compound
+/// operators and `++` / `--` (not `&&=`, `||=`, `??=`, nor inside a
+/// destructuring pattern). It parses, and evaluating it calls the function
+/// and then throws a ReferenceError before the value is evaluated
+/// (bd-9vouw.408). The call for `lhs` when that applies, else `None`.
+fn web_compat_call_target(
+    lhs: &str,
+    operator: AssignmentOperator,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+    recursion_depth: u64,
+) -> Option<Expression> {
+    if context.strict_mode
+        || matches!(
+            operator,
+            AssignmentOperator::LogicalAndAssign
+                | AssignmentOperator::LogicalOrAssign
+                | AssignmentOperator::NullishCoalescingAssign
+        )
+    {
+        return None;
+    }
+    parse_expression(lhs, span, context, recursion_depth + 1)
+        .ok()
+        .filter(|target| is_web_compat_call_target(lhs, target))
+}
+
+/// Whether `target`, parsed from `source`, is a call that Annex B admits as
+/// an assignment target: a CallExpression (parenthesized or not), but not
+/// an `import()` or `super()` call, a tagged template, or a comma sequence,
+/// all of which also parse as calls (a sequence `(a, b)` is a call of a
+/// synthetic arrow function) and are never targets (the qn70 census found
+/// `import('') = 1` and `(x, y) = 1` accepted, bd-9vouw.408).
+fn is_web_compat_call_target(source: &str, target: &Expression) -> bool {
+    let Expression::Call { callee, .. } = target else {
+        return false;
+    };
+    if matches!(callee.as_ref(), Expression::Super)
+        || matches!(callee.as_ref(), Expression::Identifier(name) if name == "import")
+    {
+        return false;
+    }
+    let mut source = source.trim();
+    while let Some((inner, rest)) = extract_balanced(source, '(', ')')
+        && rest.trim().is_empty()
+    {
+        source = inner.trim();
+    }
+    !source.ends_with('`') && first_top_level_byte(source, b',').is_none()
+}
+
 fn reject_non_assignable_update_target(
     target: &Expression,
+    operand_src: &str,
     span: &SourceSpan,
     context: &ParseExecutionContext<'_>,
 ) -> Option<ParseResult<Expression>> {
-    if matches!(
-        target,
-        Expression::Call { .. }
-            | Expression::OptionalCall { .. }
-            | Expression::OptionalMember { .. }
-            | Expression::This
-            | Expression::SloppyThis
-            | Expression::NewTarget
-            | Expression::ImportMeta
-            | Expression::StringLiteral(_)
-            | Expression::NumericLiteral(_)
-            | Expression::BigIntLiteral(_)
-            | Expression::FloatLiteral(_)
-            | Expression::BooleanLiteral(_)
-            | Expression::NullLiteral
-            | Expression::TemplateLiteral { .. }
-            | Expression::RegExpLiteral { .. }
-            | Expression::ArrowFunction { .. }
-            | Expression::Function { .. }
-            | Expression::ClassExpression { .. }
-    ) {
+    // A call is a web-compat update target in non-strict code (Annex B).
+    let web_compat_call = !context.strict_mode && is_web_compat_call_target(operand_src, target);
+    if !web_compat_call
+        && matches!(
+            target,
+            Expression::Call { .. }
+                | Expression::OptionalCall { .. }
+                | Expression::OptionalMember { .. }
+                | Expression::This
+                | Expression::SloppyThis
+                | Expression::NewTarget
+                | Expression::ImportMeta
+                | Expression::StringLiteral(_)
+                | Expression::NumericLiteral(_)
+                | Expression::BigIntLiteral(_)
+                | Expression::FloatLiteral(_)
+                | Expression::BooleanLiteral(_)
+                | Expression::NullLiteral
+                | Expression::TemplateLiteral { .. }
+                | Expression::RegExpLiteral { .. }
+                | Expression::ArrowFunction { .. }
+                | Expression::Function { .. }
+                | Expression::ClassExpression { .. }
+        )
+    {
         return Some(Err(invalid_syntax_error(
             "invalid update target: this expression cannot be incremented or decremented",
+            span,
+            context,
+        )));
+    }
+    // A parenthesized operand is as assignable as what it holds (ES2020
+    // AssignmentTargetType of a ParenthesizedExpression): `(x)++` and
+    // `(o.p)++` are updates, but `(yield)++` and `++(a + b)` are not
+    // (bd-9vouw.449). Unparenthesized operands are left to the paths that
+    // split them (`yield x++`). A call keeps its Annex B handling above.
+    let parenthesized = operand_src.starts_with('(')
+        && extract_balanced(operand_src, '(', ')').is_some_and(|(_, rest)| rest.trim().is_empty());
+    if parenthesized && !matches!(target, Expression::Call { .. }) {
+        return Some(Err(invalid_syntax_error(
+            "invalid update target: a parenthesized expression that is no reference",
             span,
             context,
         )));
@@ -8482,15 +10055,29 @@ fn try_parse_postfix(
         let callee_src = expr[..template_start].trim();
         let template_src = expr[template_start..].trim();
         if !callee_src.is_empty() && template_src.starts_with('`') && template_src.ends_with('`') {
+            // An optional chain cannot be a template's tag (ES2020 12.3.1.1:
+            // `a?.b`x``); a parenthesized one can (bd-9vouw.448).
+            if has_top_level_optional_chain(callee_src) {
+                return Some(Err(invalid_syntax_error(
+                    "an optional chain cannot tag a template",
+                    span,
+                    context,
+                )));
+            }
             let callee = match parse_expression(callee_src, span, context, recursion_depth + 1) {
                 Ok(e) => e,
                 Err(e) => return Some(Err(e)),
             };
-            let template =
-                match parse_template_literal(template_src, span, context, recursion_depth + 1) {
-                    Ok(e) => e,
-                    Err(e) => return Some(Err(e)),
-                };
+            let template = match parse_template_literal(
+                template_src,
+                span,
+                context,
+                recursion_depth + 1,
+                true,
+            ) {
+                Ok(e) => e,
+                Err(e) => return Some(Err(e)),
+            };
             // ES2020 §12.2.9: a tagged template `tag`q0${e0}q1…`` invokes
             // `tag(stringsArray, e0, e1, …)` where `stringsArray` holds the
             // COOKED quasis (bd-1lrbw). The previous desugar passed the whole
@@ -8526,57 +10113,23 @@ fn try_parse_postfix(
                 .iter()
                 .map(|quasi| Some(Expression::StringLiteral(quasi.clone().into())))
                 .collect();
-            // ES2020 §12.2.9: the strings array carries a `.raw` sibling array
-            // (used by String.raw and `tag` functions reading `s.raw[i]`). An
-            // ArrayLiteral cannot carry an extra property, so wrap the cooked
-            // array in an immediately-applied arrow that sets `.raw` and returns
-            // it: `((__tt_strings) => { __tt_strings.raw = [<raw>]; return
-            // __tt_strings; })([<cooked>])`. `__tt_strings` is the cooked array
-            // passed by reference (a heap object), so the member assignment
-            // mutates the shared object — no closure-write-back concern (that bug
-            // is about reassigning OUTER let bindings, not mutating a param's
-            // object). CAVEAT: this allocates the strings object per evaluation;
-            // ES2020 §12.2.9 specifies per-call-site caching (same array identity
-            // across evaluations), which a parser desugar cannot provide — a
-            // memoized runtime template-strings intrinsic is the long-term fix
-            // (the cooked-only bd-1lrbw desugar already had this non-memoization).
-            let strings_param = "__tt_strings".to_string();
-            let raw_arrow = Expression::ArrowFunction {
-                params: vec![FunctionParam {
-                    pattern: BindingPattern::Identifier(strings_param.clone()),
-                    span: span.clone(),
-                }],
-                body: ArrowBody::Block(BlockStatement {
-                    body: vec![
-                        Statement::Expression(ExpressionStatement {
-                            expression: Expression::Assignment {
-                                operator: AssignmentOperator::Assign,
-                                left: Box::new(Expression::Member {
-                                    object: Box::new(Expression::Identifier(strings_param.clone())),
-                                    property: Box::new(Expression::Identifier("raw".to_string())),
-                                    computed: false,
-                                    span: None,
-                                }),
-                                right: Box::new(Expression::ArrayLiteral(raw_strings)),
-                                assignment_strictness: AssignmentStrictness::from_strict_mode(
-                                    context.strict_mode,
-                                ),
-                            },
-                            span: span.clone(),
-                        }),
-                        Statement::Return(ReturnStatement {
-                            argument: Some(Expression::Identifier(strings_param.clone())),
-                            span: span.clone(),
-                        }),
-                    ],
-                    span: span.clone(),
-                }),
-                is_async: false,
-                source_text: None,
-            };
+            // ES2020 12.2.9.3 GetTemplateObject: the strings array (its `raw`
+            // sibling a frozen non-enumerable property) is created once per
+            // call site and realm, frozen, and every evaluation of the site
+            // passes that same object, so a tag can key a cache on it (lit,
+            // styled-components, graphql-tag). The runtime intrinsic keeps one
+            // per (module, site); the site is this parse's ordinal of tagged
+            // templates (bd-9vouw.343).
+            context.template_sites = context.template_sites.saturating_add(1);
             let strings_with_raw = Expression::Call {
-                callee: Box::new(raw_arrow),
-                arguments: vec![Expression::ArrayLiteral(cooked_strings)],
+                callee: Box::new(Expression::Identifier(
+                    TEMPLATE_OBJECT_INTRINSIC.to_string(),
+                )),
+                arguments: vec![
+                    Expression::StringLiteral(context.template_sites.to_string().into()),
+                    Expression::ArrayLiteral(cooked_strings),
+                    Expression::ArrayLiteral(raw_strings),
+                ],
                 span: None,
             };
             let mut arguments = Vec::with_capacity(expressions.len() + 1);
@@ -8616,7 +10169,7 @@ fn try_parse_postfix(
             };
         let callee = if callee_src == "super" && !optional {
             if context.super_call == SuperCallContext::Forbidden {
-                return Some(Err(unsupported_expression_syntax_error(
+                return Some(Err(invalid_syntax_error(
                     "'super' keyword unexpected here: super() is only valid in a derived class constructor",
                     span,
                     context,
@@ -8633,7 +10186,7 @@ fn try_parse_postfix(
                     .iter()
                     .any(|argument| matches!(argument, Expression::SpreadElement(_)))
             {
-                return Some(Err(unsupported_expression_syntax_error(
+                return Some(Err(invalid_syntax_error(
                     "import() takes one specifier and an optional options argument",
                     span,
                     context,
@@ -8681,8 +10234,8 @@ fn try_parse_postfix(
             )));
         }
         if object_src == "super" && !context.super_property_allowed {
-            return Some(Err(unsupported_expression_syntax_error(
-                "super expressions are not supported",
+            return Some(Err(invalid_syntax_error(
+                "'super' keyword unexpected here",
                 span,
                 context,
             )));
@@ -8735,14 +10288,28 @@ fn try_parse_postfix(
         let private_name = whole_private_name(property_src);
         // `o.# x`: a private name has no whitespace after its `#`.
         if private_name.is_none() && property_src.starts_with('#') {
-            return Some(Err(unsupported_expression_syntax_error(
+            return Some(Err(invalid_syntax_error(
                 "invalid private name after `.`",
                 span,
                 context,
             )));
         }
+        // A property name spelled with escapes must decode to an
+        // IdentifierName: an escaped `#` does not make a private name
+        // (bd-9vouw.397).
+        if private_name.is_none()
+            && property_src.contains('\\')
+            && decode_identifier_escapes(property_src).is_some()
+            && !is_identifier(property_src)
+        {
+            return Some(Err(invalid_syntax_error(
+                "invalid escaped property name after `.`",
+                span,
+                context,
+            )));
+        }
         if optional && !is_identifier(property_src) && private_name.is_none() {
-            return Some(Err(optional_chaining_syntax_error(
+            return Some(Err(invalid_syntax_error(
                 "optional chaining property access requires an identifier after `?.`",
                 span,
                 context,
@@ -8752,7 +10319,7 @@ fn try_parse_postfix(
             && !object_src.is_empty()
         {
             if object_src == "super" {
-                return Some(Err(unsupported_expression_syntax_error(
+                return Some(Err(invalid_syntax_error(
                     "super has no private members (`super.#x`)",
                     span,
                     context,
@@ -8783,16 +10350,34 @@ fn try_parse_postfix(
             }));
         }
         if object_src == "super" && !context.super_property_allowed {
-            return Some(Err(unsupported_expression_syntax_error(
-                "super expressions are not supported",
+            return Some(Err(invalid_syntax_error(
+                "'super' keyword unexpected here",
                 span,
                 context,
             )));
         }
         if object_src == "new" && property_src == "target" {
+            // A script's own code and its arrows are in no function, where
+            // `new.target` is an early SyntaxError (ES2020 15.1.1); it
+            // parsed and ran (bd-9vouw.448). Function bodies, parameters,
+            // methods and class field initializers clear `script_this`.
+            if context.script_this {
+                return Some(Err(invalid_syntax_error(
+                    "`new.target` is only valid in a function",
+                    span,
+                    context,
+                )));
+            }
             return Some(Ok(Expression::NewTarget));
         }
         if object_src == "import" && property_src == "meta" {
+            if !context.module_goal {
+                return Some(Err(invalid_syntax_error(
+                    "`import.meta` is only valid in a module",
+                    span,
+                    context,
+                )));
+            }
             return Some(Ok(Expression::ImportMeta));
         }
         if !object_src.is_empty() && is_identifier(property_src) {
@@ -8940,12 +10525,17 @@ fn assignment_target_has_optional_chain(target: &Expression) -> bool {
     }
 }
 
-/// Find the first top-level backtick that begins a trailing template literal.
+/// Find the top-level backtick that begins the last (trailing) template
+/// literal. In `tag`a``b`` the trailing `b` template's tag is the tagged
+/// template `tag`a`` (ES2020 12.3: MemberExpression TemplateLiteral), so
+/// the split is before the last template; splitting before the first read
+/// `a``b` as one template.
 fn find_top_level_template_start(s: &str) -> Option<usize> {
     let mut quotes = QuoteState::default();
     let mut paren_depth = 0usize;
     let mut bracket_depth = 0usize;
     let mut brace_depth = 0usize;
+    let mut last = None;
 
     for (index, ch) in s.char_indices() {
         if quotes.active() {
@@ -8966,19 +10556,19 @@ fn find_top_level_template_start(s: &str) -> Option<usize> {
             ']' => bracket_depth = bracket_depth.saturating_sub(1),
             '{' => brace_depth = brace_depth.saturating_add(1),
             '}' => brace_depth = brace_depth.saturating_sub(1),
-            '`' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
-                return Some(index);
-            }
-            // A template nested in an argument or index is opaque
-            // (bd-9vouw.41); its text must not move the bracket depths.
+            // A top-level template is a candidate; its text, like a nested
+            // template's (bd-9vouw.41), must not move the bracket depths.
             '`' => {
+                if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 {
+                    last = Some(index);
+                }
                 quotes.open_char(ch);
             }
             _ => {}
         }
     }
 
-    None
+    last
 }
 
 /// Find the first top-level `(`…`)` pair in `s` — the open `(` that appears at
@@ -9269,7 +10859,7 @@ fn parse_assignment_target_expression(
     // The specific diagnostic first: `config?.theme = value`.
     if assignment_target_has_optional_chain(&target) {
         return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "optional chaining cannot be used as an assignment target",
             context.source_label.to_string(),
             Some(span.clone()),
@@ -9323,7 +10913,7 @@ fn parse_array_literal(
                 && (index + 1 != parts.len()
                     || matches!(target.as_ref(), Expression::Assignment { .. }))
             {
-                return Err(unsupported_expression_syntax_error(
+                return Err(invalid_syntax_error(
                     "assignment rest element must be last, without a default or trailing comma",
                     span,
                     context,
@@ -9446,7 +11036,7 @@ fn parse_object_literal(
                 try_parse_object_accessor(p, span, context, recursion_depth)?
         {
             if assignment_pattern {
-                return Err(unsupported_expression_syntax_error(
+                return Err(invalid_syntax_error(
                     "accessors are not assignment patterns",
                     span,
                     context,
@@ -9511,7 +11101,9 @@ fn parse_object_literal(
                 }
                 (left.as_ref().clone(), value)
             } else {
-                return Err(unsupported_expression_syntax_error(
+                // `({ a = 1 })` outside a pattern, `({ 0 })`, `({ [a] })`: no
+                // shorthand form is valid here (bd-9vouw.421).
+                return Err(invalid_syntax_error(
                     "invalid object shorthand property",
                     span,
                     context,
@@ -9526,7 +11118,36 @@ fn parse_object_literal(
             });
         }
     }
+    // ES2020 12.2.6.1: outside an assignment pattern, an object literal
+    // defines `__proto__` by a plain data property at most once; computed,
+    // shorthand, method and accessor forms do not count (bd-9vouw.421).
+    if !assignment_pattern
+        && properties
+            .iter()
+            .filter(|property| is_proto_data_property(property))
+            .count()
+            > 1
+    {
+        return Err(invalid_syntax_error(
+            "duplicate __proto__ property in an object literal",
+            span,
+            context,
+        ));
+    }
     Ok(Expression::ObjectLiteral(properties))
+}
+
+/// A `__proto__: value` or `"__proto__": value` property, which sets the
+/// object's prototype (ES2020 B.3.1).
+fn is_proto_data_property(property: &ObjectProperty) -> bool {
+    !property.computed
+        && !property.shorthand
+        && matches!(property.kind, ObjectPropertyKind::Data)
+        && match &property.key {
+            Expression::Identifier(name) => name == "__proto__",
+            Expression::StringLiteral(value) => value.as_str() == Some("__proto__"),
+            _ => false,
+        }
 }
 
 fn object_accessor_tail<'a>(part: &'a str, prefix: &str) -> Option<&'a str> {
@@ -9855,10 +11476,20 @@ fn parse_comma_separated_exprs(
     }
     let parts = split_top_level_commas(trimmed);
     let mut exprs = Vec::with_capacity(4);
-    for part in &parts {
+    for (index, part) in parts.iter().enumerate() {
         let p = part.trim();
         if p.is_empty() {
-            continue;
+            // Only a trailing comma after an element leaves an empty part
+            // (`f(a,)`). An elision (`f(1,,2)`, `f(,)`) was dropped, so
+            // `f(1,,2)` called f(1, 2) (bd-9vouw.453).
+            if index > 0 && index + 1 == parts.len() {
+                continue;
+            }
+            return Err(invalid_syntax_error(
+                "a comma-separated list cannot have an empty element",
+                span,
+                context,
+            ));
         }
         exprs.push(parse_expression(p, span, context, recursion_depth + 1)?);
     }
@@ -10100,6 +11731,168 @@ fn radix_digits_to_decimal(digits: &str, radix: u32) -> Option<String> {
     Some(decimal)
 }
 
+/// The index of the `.` in `text` (a numeric-looking token) that starts a
+/// member access on the number before it, when a name follows that `.`:
+/// a `.` after the decimal point, after an exponent or a BigInt `n`, or
+/// after a hexadecimal, octal, binary or legacy octal integer, none of
+/// which take a fraction. The first `.` of a decimal literal is its
+/// decimal point.
+fn numeric_member_access_dot(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let prefixed = bytes.first() == Some(&b'0')
+        && bytes
+            .get(1)
+            .is_some_and(|byte| matches!(byte, b'x' | b'X' | b'o' | b'O' | b'b' | b'B'));
+    let legacy_octal_integer = |end: usize| {
+        end > 1
+            && bytes[0] == b'0'
+            && bytes[1..end]
+                .iter()
+                .all(|byte| (b'0'..=b'7').contains(byte))
+    };
+    let mut seen_decimal_point = false;
+    let mut seen_exponent_or_suffix = false;
+    for (index, &byte) in bytes.iter().enumerate() {
+        match byte {
+            b'.' => {
+                let member = prefixed
+                    || seen_decimal_point
+                    || seen_exponent_or_suffix
+                    || legacy_octal_integer(index);
+                if member {
+                    let name_follows = bytes.get(index + 1).is_some_and(|next| {
+                        next.is_ascii_alphabetic() || matches!(next, b'_' | b'$')
+                    });
+                    return name_follows.then_some(index);
+                }
+                seen_decimal_point = true;
+            }
+            b'e' | b'E' if !prefixed => seen_exponent_or_suffix = true,
+            b'n' => seen_exponent_or_suffix = true,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Why a primary expression spelled as a numeric literal (starting with a
+/// digit, or `.` and a digit) is not one, by the NumericLiteral grammar of
+/// ES2020 11.8.3 and ES2021 numeric separators, or `None` when it is valid
+/// or not numeric-looking. Such a token was left to a deferred "unsupported
+/// expression syntax" error, so a program containing it parsed and ran
+/// until the token was evaluated, and `08n` / a strict-mode `010` were
+/// accepted (bd-9vouw.393).
+fn invalid_numeric_literal_message(text: &str, strict: bool) -> Option<&'static str> {
+    let bytes = text.as_bytes();
+    let first = *bytes.first()?;
+    if !(first.is_ascii_digit() || (first == b'.' && bytes.get(1).is_some_and(u8::is_ascii_digit)))
+    {
+        return None;
+    }
+    if text.contains('\\') {
+        return Some("a numeric literal cannot contain an escape sequence");
+    }
+    // Only a lone token is judged here (member access and calls on a number
+    // are split off before this point).
+    let token_char = |index: usize, byte: u8| {
+        byte.is_ascii_alphanumeric()
+            || matches!(byte, b'_' | b'.')
+            || (matches!(byte, b'+' | b'-') && index > 0 && matches!(bytes[index - 1], b'e' | b'E'))
+    };
+    if !bytes
+        .iter()
+        .enumerate()
+        .all(|(index, &byte)| token_char(index, byte))
+    {
+        return None;
+    }
+    // A member access on the number reaches here unsplit (`1..toString`,
+    // `1.5e3.valueOf`, `0x1F.toString`): only the literal before its `.`
+    // is judged. The decimal point itself is no member access, so `1._5`
+    // and `1.toString` stay invalid (bd-9vouw.393).
+    if let Some(dot) = numeric_member_access_dot(text) {
+        return invalid_numeric_literal_message(&text[..dot], strict);
+    }
+    let separators_valid =
+        |digits: &str| !digits.starts_with('_') && !digits.ends_with('_') && !digits.contains("__");
+    if let Some(rest) = text
+        .strip_prefix("0x")
+        .or_else(|| text.strip_prefix("0X"))
+        .map(|rest| (rest, 16))
+        .or_else(|| {
+            text.strip_prefix("0o")
+                .or_else(|| text.strip_prefix("0O"))
+                .map(|rest| (rest, 8))
+        })
+        .or_else(|| {
+            text.strip_prefix("0b")
+                .or_else(|| text.strip_prefix("0B"))
+                .map(|rest| (rest, 2))
+        })
+    {
+        let (digits, radix) = rest;
+        let digits = digits.strip_suffix('n').unwrap_or(digits);
+        let valid = !digits.is_empty()
+            && separators_valid(digits)
+            && digits.chars().all(|ch| ch == '_' || ch.is_digit(radix));
+        return (!valid).then_some("invalid hexadecimal, octal or binary literal");
+    }
+    let is_bigint = text.ends_with('n');
+    let body = text.strip_suffix('n').unwrap_or(text);
+    if body.len() > 1 && body.starts_with('0') && body.as_bytes()[1].is_ascii_digit() {
+        // A legacy octal (`010`) or non-octal decimal (`08`) integer.
+        if is_bigint {
+            return Some("a BigInt literal cannot have a leading zero");
+        }
+        if body.contains('_') {
+            return Some("a numeric separator cannot appear in a literal with a leading zero");
+        }
+        if strict {
+            return Some(
+                "legacy octal and leading-zero decimal literals are not allowed in strict mode",
+            );
+        }
+        let integer_end = body.find(['.', 'e', 'E']).unwrap_or(body.len());
+        let (integer, rest) = body.split_at(integer_end);
+        if !integer.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Some("invalid numeric literal");
+        }
+        let legacy_octal = integer.bytes().all(|byte| (b'0'..=b'7').contains(&byte));
+        if rest.is_empty() {
+            return None;
+        }
+        if legacy_octal {
+            return Some("a legacy octal literal has no fraction or exponent");
+        }
+        // A NonOctalDecimalIntegerLiteral (`08.5`, `09e1`) takes a fraction
+        // and exponent like a decimal literal: checked below.
+    } else if body.starts_with("0_") {
+        return Some("a numeric separator cannot follow a leading zero");
+    }
+    // DecimalLiteral: digits [. digits] [e [+-] digits], with each digit run
+    // obeying the separator rules.
+    let (mantissa, exponent) = match body.find(['e', 'E']) {
+        Some(index) => (&body[..index], Some(&body[index + 1..])),
+        None => (body, None),
+    };
+    let (integer, fraction) = match mantissa.split_once('.') {
+        Some((integer, fraction)) => (integer, Some(fraction)),
+        None => (mantissa, None),
+    };
+    let digit_run = |run: &str, may_be_empty: bool| {
+        (may_be_empty && run.is_empty())
+            || (!run.is_empty()
+                && separators_valid(run)
+                && run.chars().all(|ch| ch == '_' || ch.is_ascii_digit()))
+    };
+    let valid = digit_run(integer, fraction.is_some())
+        && fraction.is_none_or(|fraction| digit_run(fraction, !integer.is_empty()))
+        && exponent.is_none_or(|exponent| {
+            digit_run(exponent.strip_prefix(['+', '-']).unwrap_or(exponent), false)
+        });
+    (!valid).then_some("invalid numeric literal")
+}
+
 /// Parse a floating-point numeric literal: decimal (1.5), leading dot (.5),
 /// trailing dot (1.), or scientific notation (1e10, 1.5e-3).
 fn parse_f64_numeric_literal(input: &str) -> Option<f64> {
@@ -10108,16 +11901,9 @@ fn parse_f64_numeric_literal(input: &str) -> Option<f64> {
         return None;
     }
 
-    // Handle special values
-    if trimmed == "Infinity" {
-        return Some(f64::INFINITY);
-    }
-    if trimmed == "-Infinity" {
-        return Some(f64::NEG_INFINITY);
-    }
-    if trimmed == "NaN" {
-        return Some(f64::NAN);
-    }
+    // NaN and Infinity are identifier references, not numeric literals.
+    // Scope resolution decides whether they name an immutable global value
+    // or a local binding (bd-9vouw.296/.313).
 
     // Strip numeric separators
     let unsigned = trimmed.strip_prefix(['-', '+']).unwrap_or(trimmed);
@@ -10452,10 +12238,11 @@ fn regexp_literal_expression(
     span: &SourceSpan,
     context: &ParseExecutionContext<'_>,
 ) -> ParseResult<Expression> {
+    // The same check makes `new RegExp(...)` throw a SyntaxError at run time.
     if let Some(message) = crate::baseline_interpreter::regexp_literal_early_error(&pattern, &flags)
     {
         return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             message,
             context.source_label.to_string(),
             Some(span.clone()),
@@ -10661,15 +12448,18 @@ fn leading_regexp_literal(input: &str) -> Option<(usize, String, String)> {
             // Found closing slash
             let pattern = &input[1..i];
             let rest = &input[i + 1..];
-            // Parse flags (d, g, i, m, s, u, v, y)
+            // RegularExpressionFlags are every IdentifierPart character (and
+            // escape) after the slash; regexp_literal_early_error rejects any
+            // that is not one of `dgimsuvy`, so `/./G` and `/./\u0067` are
+            // SyntaxErrors rather than a literal followed by a name.
             let mut flags = String::new();
             let mut end = i + 1;
             for (offset, fc) in rest.char_indices() {
-                if matches!(fc, 'g' | 'i' | 'm' | 's' | 'u' | 'y' | 'd' | 'v') {
+                if is_identifier_continue(fc) || fc == '\\' {
                     flags.push(fc);
                     end = i + 1 + offset + fc.len_utf8();
                 } else {
-                    // Stop at non-flag character (could be operator or whitespace)
+                    // An operator, whitespace or punctuator ends the flags.
                     break;
                 }
             }
@@ -11739,7 +13529,7 @@ fn parse_body_statements(
     if trimmed.is_empty() {
         return Ok(Vec::new());
     }
-    let mut logical_lines = merge_logical_lines(trimmed);
+    let mut logical_lines = merge_logical_lines_with(trimmed, false);
     let mut stmts = Vec::with_capacity(8);
 
     for ll in &mut logical_lines {
@@ -11752,8 +13542,17 @@ fn parse_body_statements(
             boundaries: std::mem::take(&mut ll.source_boundaries),
         });
         for (_start, _end, text) in segments {
-            let inner_span = span.clone();
-            stmts.push(parse_statement(text, goal, inner_span, context)?);
+            let mut remaining = Some(text);
+            while let Some(text) = remaining {
+                let (statement_text, tail) = split_after_do_while(text);
+                stmts.push(parse_statement(
+                    statement_text,
+                    goal,
+                    span.clone(),
+                    context,
+                )?);
+                remaining = tail;
+            }
         }
         context.function_sources.frames.pop();
     }
@@ -12295,19 +14094,7 @@ fn reject_context_reserved_binding(
 ) -> ParseResult<()> {
     let reserved = ((context.await_context || context.static_block_await) && name == "await")
         || (context.yield_context && name == "yield")
-        || (context.strict_mode
-            && matches!(
-                name,
-                "implements"
-                    | "interface"
-                    | "let"
-                    | "package"
-                    | "private"
-                    | "protected"
-                    | "public"
-                    | "static"
-                    | "yield"
-            ));
+        || (context.strict_mode && is_strict_mode_reserved_word(name));
     if reserved {
         return Err(ParseError::new(
             ParseErrorCode::InvalidSyntax,
@@ -12317,6 +14104,67 @@ fn reject_context_reserved_binding(
         ));
     }
     Ok(())
+}
+
+fn is_strict_mode_reserved_word(name: &str) -> bool {
+    matches!(
+        name,
+        "implements"
+            | "interface"
+            | "let"
+            | "package"
+            | "private"
+            | "protected"
+            | "public"
+            | "static"
+            | "yield"
+    )
+}
+
+/// ES2020 14.1.2, 14.4.1, 14.7.1: the BindingIdentifier of a function,
+/// generator or async function. It is an IdentifierName that is not a
+/// reserved word (an escape does not make one usable), bound by its decoded
+/// spelling: `function a\u0062() {}` declares `ab`. `strict` is whether the
+/// name is strict code (the enclosing code is strict, or the body has a
+/// "use strict" directive); `yield_reserved` and `await_reserved` are the
+/// [Yield] and [Await] parameters the grammar gives the name.
+fn function_binding_name(
+    raw: &str,
+    strict: bool,
+    yield_reserved: bool,
+    await_reserved: bool,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<String> {
+    let invalid = |message: String| {
+        Err(ParseError::new(
+            ParseErrorCode::InvalidSyntax,
+            message,
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ))
+    };
+    if !is_identifier(raw) {
+        return invalid(format!("invalid function name `{raw}`"));
+    }
+    let name = canonicalize_identifier(raw);
+    if is_unconditional_reserved_keyword(&name) {
+        return invalid(if name == raw {
+            format!("`{name}` is a reserved word and cannot be a function name")
+        } else {
+            format!("keyword `{name}` must not contain escaped characters")
+        });
+    }
+    reject_strict_restricted_binding(&name, strict, span, context)?;
+    if (strict && is_strict_mode_reserved_word(&name))
+        || (yield_reserved && name == "yield")
+        || (await_reserved && name == "await")
+    {
+        return invalid(format!(
+            "`{name}` is a reserved word here and cannot be a function name"
+        ));
+    }
+    Ok(name)
 }
 
 /// ES2020 14.1.2, 14.2.1, 14.3.1: a function whose own body has a
@@ -12391,6 +14239,173 @@ fn has_use_strict_directive(source: &str) -> bool {
     }
 }
 
+/// ES2020 13.2.1, 13.12.1 and 13.15.1: the let, const, class and function
+/// declarations directly in a block, in a switch's case clauses or in a
+/// try, catch or finally block are its lexically declared names. A second
+/// declaration of one of them is a SyntaxError unless both are plain
+/// function declarations in non-strict code (B.3.3.4), and so are a `var`
+/// of the same name anywhere in the block (nested blocks and loop heads
+/// included, nested functions not) and a catch parameter of that name.
+/// Returns the first name in conflict.
+fn block_lexical_redeclaration<'a>(
+    statements: impl Iterator<Item = &'a Statement> + Clone,
+    strict: bool,
+    catch_parameter: Option<&str>,
+) -> Option<String> {
+    // Each lexically declared name, and whether every declaration of it so
+    // far is a plain function declaration.
+    let mut lexical: BTreeMap<&str, bool> = BTreeMap::new();
+    for mut statement in statements.clone() {
+        while let Statement::Labeled(labeled) = statement {
+            statement = &labeled.body;
+        }
+        let declared: Vec<(&str, bool)> = match statement {
+            Statement::FunctionDeclaration(function) => function
+                .name
+                .as_deref()
+                .map(|name| (name, !function.is_async && !function.is_generator))
+                .into_iter()
+                .collect(),
+            Statement::ClassDeclaration(class) => class
+                .name
+                .as_deref()
+                .map(|name| (name, false))
+                .into_iter()
+                .collect(),
+            Statement::VariableDeclaration(declaration)
+                if declaration.kind != VariableDeclarationKind::Var =>
+            {
+                declaration
+                    .declarations
+                    .iter()
+                    .flat_map(|declarator| declarator.pattern.binding_names())
+                    .map(|name| (name, false))
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
+        for (name, plain_function) in declared {
+            if let Some(previous_plain_function) = lexical.insert(name, plain_function)
+                && (strict || !(plain_function && previous_plain_function))
+            {
+                return Some(name.to_string());
+            }
+        }
+    }
+    if lexical.is_empty() {
+        return None;
+    }
+    if let Some(parameter) = catch_parameter
+        && lexical.contains_key(parameter)
+    {
+        return Some(parameter.to_string());
+    }
+    let mut var_names = BTreeSet::new();
+    for statement in statements {
+        collect_var_declared_names(statement, &mut var_names);
+    }
+    var_names
+        .into_iter()
+        .find(|name| lexical.contains_key(name.as_str()))
+}
+
+/// VarDeclaredNames of one statement (ES2020 13.1.5): its `var`
+/// declarations, nested blocks, clauses and loop heads included, nested
+/// functions and classes not.
+fn collect_var_declared_names(statement: &Statement, names: &mut BTreeSet<String>) {
+    match statement {
+        Statement::VariableDeclaration(declaration)
+            if declaration.kind == VariableDeclarationKind::Var =>
+        {
+            for declarator in &declaration.declarations {
+                names.extend(
+                    declarator
+                        .pattern
+                        .binding_names()
+                        .into_iter()
+                        .map(str::to_string),
+                );
+            }
+        }
+        Statement::Block(block) => {
+            for nested in &block.body {
+                collect_var_declared_names(nested, names);
+            }
+        }
+        Statement::If(if_statement) => {
+            collect_var_declared_names(&if_statement.consequent, names);
+            if let Some(alternate) = &if_statement.alternate {
+                collect_var_declared_names(alternate, names);
+            }
+        }
+        Statement::For(for_statement) => {
+            if let Some(init) = &for_statement.init {
+                collect_var_declared_names(init, names);
+            }
+            collect_var_declared_names(&for_statement.body, names);
+        }
+        Statement::ForIn(ForInStatement {
+            binding,
+            binding_kind,
+            body,
+            ..
+        })
+        | Statement::ForOf(ForOfStatement {
+            binding,
+            binding_kind,
+            body,
+            ..
+        }) => {
+            if *binding_kind == Some(VariableDeclarationKind::Var) {
+                names.extend(binding.binding_names().into_iter().map(str::to_string));
+            }
+            collect_var_declared_names(body, names);
+        }
+        Statement::While(WhileStatement { body, .. })
+        | Statement::DoWhile(DoWhileStatement { body, .. })
+        | Statement::With(WithStatement { body, .. })
+        | Statement::Labeled(LabeledStatement { body, .. }) => {
+            collect_var_declared_names(body, names);
+        }
+        Statement::TryCatch(try_statement) => {
+            for nested in &try_statement.block.body {
+                collect_var_declared_names(nested, names);
+            }
+            if let Some(handler) = &try_statement.handler {
+                for nested in &handler.body.body {
+                    collect_var_declared_names(nested, names);
+                }
+            }
+            if let Some(finalizer) = &try_statement.finalizer {
+                for nested in &finalizer.body {
+                    collect_var_declared_names(nested, names);
+                }
+            }
+        }
+        Statement::Switch(switch_statement) => {
+            for case in &switch_statement.cases {
+                for nested in &case.consequent {
+                    collect_var_declared_names(nested, names);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn block_redeclaration_error(
+    name: &str,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseError {
+    ParseError::new(
+        ParseErrorCode::InvalidSyntax,
+        format!("identifier '{name}' has already been declared in this block"),
+        context.source_label.to_string(),
+        Some(span.clone()),
+    )
+}
+
 fn parse_block_statement(
     statement: &str,
     goal: ParseGoal,
@@ -12406,6 +14421,9 @@ fn parse_block_statement(
         )
     })?;
     let body = parse_body_statements(inner, goal, &span, context)?;
+    if let Some(name) = block_lexical_redeclaration(body.iter(), context.strict_mode, None) {
+        return Err(block_redeclaration_error(&name, &span, context));
+    }
     Ok(Statement::Block(BlockStatement { body, span }))
 }
 
@@ -12422,7 +14440,7 @@ fn parse_if_statement(
         .trim_start();
     let (condition_src, rest) = extract_balanced(after_if, '(', ')').ok_or_else(|| {
         ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "if statement requires a parenthesized condition",
             context.source_label.to_string(),
             Some(span.clone()),
@@ -12761,6 +14779,120 @@ fn split_for_header(header: &str) -> Option<(&str, &str, &str)> {
     ))
 }
 
+/// Whether `text` has an `in` operator outside every bracket, string,
+/// template and regular expression literal, and outside the middle branch of
+/// a conditional (`c ? a in b : d`, which is AssignmentExpression[+In]):
+/// `a in b`, but not `(a in b)`, `o.in`, `{ in: 1 }`, `'in'` or a name such
+/// as `inner`.
+fn has_top_level_in_operator(text: &str) -> bool {
+    let is_word_byte = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'$' || b >= 0x80;
+    let bytes = text.as_bytes();
+    let mut depth: i64 = 0;
+    let mut open_conditionals = 0usize;
+    let mut quotes = QuoteState::default();
+    let mut last_significant = 0u8;
+    for (i, &b) in bytes.iter().enumerate() {
+        if quotes.active() {
+            quotes.advance(b);
+            continue;
+        }
+        if b == b'/' && quotes.open_regex_at(text, i) {
+            last_significant = b'/';
+            continue;
+        }
+        match b {
+            b'\'' | b'"' | b'`' => {
+                quotes.open(b);
+            }
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            // A conditional's `?`, not `??` or `?.` (`a?.5:b` is one).
+            b'?' if depth == 0
+                && bytes.get(i + 1) != Some(&b'?')
+                && (i == 0 || bytes[i - 1] != b'?')
+                && !(bytes.get(i + 1) == Some(&b'.')
+                    && !bytes.get(i + 2).is_some_and(u8::is_ascii_digit)) =>
+            {
+                open_conditionals += 1;
+            }
+            b':' if depth == 0 && open_conditionals > 0 => open_conditionals -= 1,
+            b'i' if depth == 0
+                && open_conditionals == 0
+                && bytes.get(i + 1) == Some(&b'n')
+                && !bytes.get(i + 2).is_some_and(|&next| is_word_byte(next))
+                && (i == 0 || !is_word_byte(bytes[i - 1]))
+                && last_significant != b'.' =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+        if !b.is_ascii_whitespace() {
+            last_significant = b;
+        }
+    }
+    false
+}
+
+/// Whether `text` has a `;` outside every bracket and literal with more code
+/// after it (`a; b`). A final `;` may be the statement's own terminator.
+fn has_top_level_semicolon(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut depth: i64 = 0;
+    let mut quotes = QuoteState::default();
+    for (i, &b) in bytes.iter().enumerate() {
+        if quotes.active() {
+            quotes.advance(b);
+            continue;
+        }
+        if b == b'/' && quotes.open_regex_at(text, i) {
+            continue;
+        }
+        match b {
+            b'\'' | b'"' | b'`' => {
+                quotes.open(b);
+            }
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b';' if depth == 0 && !text[i + 1..].trim().is_empty() => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Whether `text` has an optional chain `?.` outside every bracket and
+/// literal: `a?.b`, `a?.[0]`, but not `(a?.b)` or `c?.5:d`.
+fn has_top_level_optional_chain(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut depth: i64 = 0;
+    let mut quotes = QuoteState::default();
+    for (i, &b) in bytes.iter().enumerate() {
+        if quotes.active() {
+            quotes.advance(b);
+            continue;
+        }
+        if b == b'/' && quotes.open_regex_at(text, i) {
+            continue;
+        }
+        match b {
+            b'\'' | b'"' | b'`' => {
+                quotes.open(b);
+            }
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b'?' if depth == 0
+                && bytes.get(i + 1) == Some(&b'.')
+                && !bytes.get(i + 2).is_some_and(u8::is_ascii_digit) =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 fn parse_for_statement(
     statement: &str,
     goal: ParseGoal,
@@ -12785,7 +14917,7 @@ fn parse_for_statement(
     };
     let (header_src, rest) = extract_balanced(after_for, '(', ')').ok_or_else(|| {
         ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "for statement requires a parenthesized header",
             context.source_label.to_string(),
             Some(span.clone()),
@@ -12796,6 +14928,28 @@ fn parse_for_statement(
         return parse_statement(&desugared, goal, span, context);
     }
 
+    // `for (async of` is excluded by a lookahead (ES2020 13.7.5): it would
+    // start an async arrow. `for await (async of x)` is not, nor is the
+    // C-style `for (async of => {}; ;)`, whose initializer is that arrow
+    // (bd-9vouw.453).
+    if !is_await
+        && split_for_header(header_src).is_none()
+        && header_src
+            .trim_start()
+            .strip_prefix("async")
+            .filter(|after| after.starts_with(char::is_whitespace))
+            .map(str::trim_start)
+            .is_some_and(|after| {
+                starts_with_keyword(after, "of")
+                    && !after["of".len()..].trim_start().starts_with("=>")
+            })
+    {
+        return Err(invalid_syntax_error(
+            "a for-of loop's target cannot be `async`",
+            &span,
+            context,
+        ));
+    }
     // Detect for-in / for-of before trying semicolon split.
     if let Some(forin) = try_parse_for_in_of(header_src, rest, &span, goal, context)? {
         return Ok(forin);
@@ -12814,13 +14968,23 @@ fn parse_for_statement(
         .filter(|(_, _, update)| split_for_header(&format!("{update};")).is_none());
     let Some((init_src, cond_src, update_src)) = parts else {
         return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "for statement header must have three semicolon-separated parts",
             context.source_label.to_string(),
             Some(span),
         ));
     };
 
+    // The initializer is an Expression[~In] / declaration list[~In] (ES2020
+    // 13.7.4): an `in` operator in it must be parenthesized
+    // (`for ('' in {} ? 0 : 0; ;)`, bd-9vouw.446).
+    if has_top_level_in_operator(init_src) {
+        return Err(invalid_syntax_error(
+            "an `in` operator in a for statement's initializer must be parenthesized",
+            &span,
+            context,
+        ));
+    }
     let init = if init_src.is_empty() {
         None
     } else if let Some(kind) = parse_variable_declaration_kind(init_src) {
@@ -12897,6 +15061,12 @@ fn try_parse_for_in_of(
     let Some((keyword, split_pos)) = find_for_in_of_keyword(header) else {
         return Ok(None);
     };
+    // Two top-level `;` make a C-style header whatever its first clause
+    // holds: `for (a in arr;1;)` read as a for-in over the "expression"
+    // `arr;1;`, which threw only when the loop ran (bd-9vouw.446).
+    if split_for_header(header).is_some() {
+        return Ok(None);
+    }
 
     let lhs = header[..split_pos].trim();
     let rhs = header[split_pos + keyword.len()..].trim();
@@ -12937,6 +15107,15 @@ fn try_parse_for_in_of(
             let assign = if lhs.starts_with(['[', '{']) {
                 match parse_expression(&target, span, context, 1) {
                     Ok(assign) if destructuring_assignment_has_member_target(&assign) => assign,
+                    // A member of a literal (`for ([let][1] in o)`, sloppy):
+                    // the bracket group is the member's object, not a
+                    // pattern (bd-9vouw.424).
+                    Ok(assign)
+                        if matches!(&assign, Expression::Assignment { left, .. }
+                            if matches!(left.as_ref(), Expression::Member { .. })) =>
+                    {
+                        assign
+                    }
                     _ => return Err(error),
                 }
             } else if lhs
@@ -12999,7 +15178,7 @@ fn try_parse_for_in_of(
                 && matches!(**left, BindingPattern::Identifier(_)))
         {
             return Err(ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
+                ParseErrorCode::InvalidSyntax,
                 format!("for-{keyword} loop variable declaration may not have an initializer"),
                 context.source_label.to_string(),
                 Some(span.clone()),
@@ -13010,6 +15189,15 @@ fn try_parse_for_in_of(
         // (strict `let`, which `for (let in o)` reaches) is an early error
         // (bd-9vouw.233).
         reject_reserved_identifier_reference(name, span, context)?;
+    } else if matches!(binding, BindingPattern::AssignmentPattern { .. }) {
+        // A for-in/of target is a LeftHandSideExpression: `for (a = 0 in o)`
+        // assigns nothing (only Annex B's `var` head has an initializer,
+        // bd-9vouw.446).
+        return Err(invalid_syntax_error(
+            "a for-in/of target cannot have an initializer",
+            span,
+            context,
+        ));
     }
 
     let body_src = rest.trim();
@@ -13073,6 +15261,9 @@ fn for_in_of_statement(
 /// - an awaited `next()` per step;
 /// - on break, return or throw from the body, an awaited `return()`
 ///   (AsyncIteratorClose). No close after `next()` throws or reports done.
+///   After a throw, getting, calling or awaiting `return` cannot replace the
+///   body's exception: its errors are dropped (ES2022 AsyncIteratorClose
+///   returns a throw completion before the close's own).
 ///
 /// Before this, `for await` ran as a synchronous for-of: an async
 /// generator's `next()` promise was taken as the iteration result, and the
@@ -13115,14 +15306,19 @@ fn desugar_for_await_of(header: &str, body: &str) -> Option<String> {
          let __franken_fa_sync = __franken_fa_am == null; \
          let __franken_fa_it = __franken_fa_sync ? __franken_fa_src[Symbol.iterator]() : \
          __franken_fa_am.call(__franken_fa_src); \
-         let __franken_fa_fin = false; \
+         let __franken_fa_fin = false; let __franken_fa_thrown = false; \
          try {{ while (true) {{ __franken_fa_fin = true; \
          let __franken_fa_r = await __franken_fa_it.next(); \
          if (__franken_fa_r.done) break; \
          __franken_fa_fin = false; \
          {bind} {body}{body_terminator} }} }} \
-         finally {{ if (!__franken_fa_fin) {{ let __franken_fa_ret = __franken_fa_it.return; \
-         if (__franken_fa_ret != null) await __franken_fa_ret.call(__franken_fa_it); }} }} }}"
+         catch (__franken_fa_e) {{ __franken_fa_thrown = true; throw __franken_fa_e; }} \
+         finally {{ if (!__franken_fa_fin) {{ if (__franken_fa_thrown) {{ \
+         try {{ let __franken_fa_ret = __franken_fa_it.return; \
+         if (__franken_fa_ret != null) await __franken_fa_ret.call(__franken_fa_it); }} \
+         catch (__franken_fa_ignored) {{}} }} else {{ \
+         let __franken_fa_ret = __franken_fa_it.return; \
+         if (__franken_fa_ret != null) await __franken_fa_ret.call(__franken_fa_it); }} }} }} }}"
     ))
 }
 
@@ -13229,7 +15425,7 @@ fn parse_while_statement(
         .trim_start();
     let (condition_src, rest) = extract_balanced(after_while, '(', ')').ok_or_else(|| {
         ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "while statement requires a parenthesized condition",
             context.source_label.to_string(),
             Some(span.clone()),
@@ -13315,6 +15511,99 @@ fn do_condition_while_index(after_do: &str) -> Option<usize> {
     found
 }
 
+/// A do-while statement ends at the `)` of its condition, with a `;` right
+/// after it: ES2020 11.9.1 inserts that semicolon even on the same line, so
+/// `do x++; while (x < 3) f();` is two statements. The segment splitter
+/// keeps a do statement's `while` with it and so can hand over the next
+/// statement too; this splits it off. The do-while parse read only the
+/// condition and silently dropped the rest (`do { } while (0) x = 42;`
+/// never assigned), or refused an unbraced body (bd-9vouw.410).
+fn split_after_do_while(text: &str) -> (&str, Option<&str>) {
+    let trimmed = text.trim_start();
+    if !starts_with_keyword(trimmed, "do") {
+        return (text, None);
+    }
+    let Some(len) = do_while_statement_len(trimmed) else {
+        return (text, None);
+    };
+    let end = text.len() - trimmed.len() + len;
+    let tail = text[end..].trim();
+    if tail.is_empty() {
+        (text, None)
+    } else {
+        (&text[..end], Some(tail))
+    }
+}
+
+/// The byte length of the do-while statement `text` starts with (through
+/// its condition's `)` and a `;` right after it), when its body is a block,
+/// another do-while or a simple statement ending at its first top-level
+/// `;`; `None` for any other body, which is left to the existing parse.
+fn do_while_statement_len(text: &str) -> Option<usize> {
+    let after_do = text.strip_prefix("do")?;
+    if after_do.starts_with(is_identifier_continue) {
+        return None;
+    }
+    let body = after_do.trim_start();
+    let body_offset = text.len() - body.len();
+    let body_len = if body.starts_with('{') {
+        let (_, rest) = extract_balanced(body, '{', '}')?;
+        body.len() - rest.len()
+    } else if starts_with_keyword(body, "do") {
+        do_while_statement_len(body)?
+    } else if [
+        "if", "for", "while", "with", "switch", "try", "function", "class", "let", "const", "async",
+    ]
+    .iter()
+    .any(|keyword| starts_with_keyword(body, keyword))
+        || find_top_level_colon(body).is_some_and(|colon| is_identifier(body[..colon].trim()))
+    {
+        return None;
+    } else {
+        first_top_level_byte(body, b';')? + 1
+    };
+    let after_body = &text[body_offset + body_len..];
+    let rest = after_body.trim_start().strip_prefix("while")?;
+    if rest.starts_with(is_identifier_continue) {
+        return None;
+    }
+    let condition = rest.trim_start();
+    let (_, tail) = extract_balanced(condition, '(', ')')?;
+    let after_condition = tail.trim_start();
+    Some(if after_condition.starts_with(';') {
+        text.len() - after_condition.len() + 1
+    } else {
+        text.len() - tail.len()
+    })
+}
+
+/// The index of the first `target` byte of `text` outside brackets, quotes,
+/// template literals and regular expression literals.
+fn first_top_level_byte(text: &str, target: u8) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut depth: i64 = 0;
+    let mut quotes = QuoteState::default();
+    for (index, &byte) in bytes.iter().enumerate() {
+        if quotes.active() {
+            quotes.advance(byte);
+            continue;
+        }
+        if byte == b'/' && quotes.open_regex_at(text, index) {
+            continue;
+        }
+        match byte {
+            b'\'' | b'"' | b'`' => {
+                quotes.open(byte);
+            }
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            byte if byte == target && depth == 0 => return Some(index),
+            _ => {}
+        }
+    }
+    None
+}
+
 fn parse_do_while_statement(
     statement: &str,
     goal: ParseGoal,
@@ -13339,7 +15628,7 @@ fn parse_do_while_statement(
     } else {
         let while_idx = do_condition_while_index(after_do).ok_or_else(|| {
             ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
+                ParseErrorCode::InvalidSyntax,
                 "do-while statement requires 'while' after body",
                 context.source_label.to_string(),
                 Some(span.clone()),
@@ -13364,14 +15653,27 @@ fn parse_do_while_statement(
 
     let rest = rest.trim();
     let rest = rest.strip_prefix("while").unwrap_or(rest).trim_start();
-    let (condition_src, _) = extract_balanced(rest, '(', ')').ok_or_else(|| {
+    let (condition_src, after_condition) = extract_balanced(rest, '(', ')').ok_or_else(|| {
         ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "do-while requires a parenthesized condition after 'while'",
             context.source_label.to_string(),
             Some(span.clone()),
         )
     })?;
+    // split_after_do_while separates a statement that follows the condition
+    // on the same line; one it could not separate is refused, never dropped
+    // (bd-9vouw.410).
+    let after_condition = after_condition.trim_start();
+    let after_condition = after_condition.strip_prefix(';').unwrap_or(after_condition);
+    if !after_condition.trim().is_empty() {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "a statement after a do-while condition on the same line is not separated here",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
     let condition = parse_expression_allowing_sequence(condition_src.trim(), &span, context, 1)?;
 
     Ok(Statement::DoWhile(DoWhileStatement {
@@ -13397,6 +15699,18 @@ fn parse_return_statement(
         // (bd-h5m8u; mirrors bd-qxkli/bd-j4l7k).
         Some(parse_expression_allowing_sequence(body, &span, context, 1)?)
     };
+    // ES2020 13.10.1: in an async generator, `return expr` awaits expr
+    // before the return completion exists (a rejection still reaches this
+    // frame's catch and finally); `return;` and falling off the end do not
+    // await (bd-9vouw.351). The lowering and the runtime settle the
+    // completion at once.
+    let argument = argument.map(|argument| {
+        if context.await_context && context.yield_context {
+            Expression::Await(Box::new(argument))
+        } else {
+            argument
+        }
+    });
     Ok(Statement::Return(ReturnStatement { argument, span }))
 }
 
@@ -13405,14 +15719,25 @@ fn parse_throw_statement(
     span: SourceSpan,
     context: &mut ParseExecutionContext<'_>,
 ) -> ParseResult<Statement> {
-    let body = statement.strip_prefix("throw").unwrap_or("").trim();
+    let after_keyword = statement.strip_prefix("throw").unwrap_or("");
+    let body = after_keyword.trim();
     let body = body.strip_suffix(';').unwrap_or(body).trim();
     if body.is_empty() {
         return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "throw statement requires an argument",
             context.source_label.to_string(),
             Some(span),
+        ));
+    }
+    // `throw [no LineTerminator here] Expression` (ES2020 13.14): the
+    // argument may not start on a later line (bd-9vouw.402).
+    let gap = &after_keyword[..after_keyword.len() - after_keyword.trim_start().len()];
+    if gap.contains(['\n', '\r', '\u{2028}', '\u{2029}']) {
+        return Err(invalid_syntax_error(
+            "a line break cannot follow `throw`",
+            &span,
+            context,
         ));
     }
     // ES2020 §14.14: ThrowStatement argument is an Expression (sequence
@@ -13442,13 +15767,16 @@ fn parse_try_catch_statement(
     // Parse the try block.
     let (try_inner, rest) = extract_balanced(after_try, '{', '}').ok_or_else(|| {
         ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "try statement requires a braced block",
             context.source_label.to_string(),
             Some(span.clone()),
         )
     })?;
     let try_body = parse_body_statements(try_inner, goal, &span, context)?;
+    if let Some(name) = block_lexical_redeclaration(try_body.iter(), context.strict_mode, None) {
+        return Err(block_redeclaration_error(&name, &span, context));
+    }
     let try_block = BlockStatement {
         body: try_body,
         span: span.clone(),
@@ -13472,7 +15800,7 @@ fn parse_try_catch_statement(
             let parameter = p.trim();
             if parameter.is_empty() {
                 return Err(ParseError::new(
-                    ParseErrorCode::UnsupportedSyntax,
+                    ParseErrorCode::InvalidSyntax,
                     "catch clause parameter cannot be empty",
                     context.source_label.to_string(),
                     Some(span.clone()),
@@ -13504,6 +15832,11 @@ fn parse_try_catch_statement(
             )
         })?;
         let mut catch_body = parse_body_statements(catch_inner, goal, &span, context)?;
+        if let Some(name) =
+            block_lexical_redeclaration(catch_body.iter(), context.strict_mode, param.as_deref())
+        {
+            return Err(block_redeclaration_error(&name, &span, context));
+        }
         if let Some(pattern) = destructured_parameter {
             let binding = format!("let {pattern} = {CATCH_PATTERN_PARAMETER};");
             let mut prologue = parse_body_statements(&binding, goal, &span, context)?;
@@ -13538,6 +15871,11 @@ fn parse_try_catch_statement(
                 )
             })?;
         let finally_body = parse_body_statements(finally_inner, goal, &span, context)?;
+        if let Some(name) =
+            block_lexical_redeclaration(finally_body.iter(), context.strict_mode, None)
+        {
+            return Err(block_redeclaration_error(&name, &span, context));
+        }
         (
             Some(BlockStatement {
                 body: finally_body,
@@ -13551,7 +15889,7 @@ fn parse_try_catch_statement(
 
     if handler.is_none() && finalizer.is_none() {
         return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "try statement requires at least a catch or finally clause",
             context.source_label.to_string(),
             Some(span),
@@ -13587,7 +15925,7 @@ fn parse_switch_statement(
         .trim_start();
     let (disc_src, rest) = extract_balanced(after_switch, '(', ')').ok_or_else(|| {
         ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "switch statement requires a parenthesized discriminant",
             context.source_label.to_string(),
             Some(span.clone()),
@@ -13631,15 +15969,21 @@ fn parse_switch_statement(
                 span: span.clone(),
             });
             remaining = next.trim();
-        } else if remaining.starts_with("default") {
-            let after_default = remaining
-                .strip_prefix("default")
-                .unwrap_or(remaining)
-                .trim_start();
-            let after_default = after_default
-                .strip_prefix(':')
-                .unwrap_or(after_default)
-                .trim();
+        } else if let Some(after_default) = remaining
+            .strip_prefix("default")
+            .map(str::trim_start)
+            .and_then(|rest| rest.strip_prefix(':'))
+        {
+            // ES2020 13.12: a CaseBlock has at most one DefaultClause.
+            if cases.iter().any(|case: &SwitchCase| case.test.is_none()) {
+                return Err(ParseError::new(
+                    ParseErrorCode::InvalidSyntax,
+                    "switch statement has more than one default clause",
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                ));
+            }
+            let after_default = after_default.trim();
             let (consequent_src, next) = split_at_next_case(after_default);
             let consequent = parse_body_statements(consequent_src.trim(), goal, &span, context)?;
             cases.push(SwitchCase {
@@ -13649,11 +15993,25 @@ fn parse_switch_statement(
             });
             remaining = next.trim();
         } else {
-            // Skip whitespace or unexpected content.
-            break;
+            // A switch body holds only case and default clauses; anything
+            // else (a statement before the first clause, `default` without
+            // its colon) is a SyntaxError, not content to drop.
+            return Err(ParseError::new(
+                ParseErrorCode::InvalidSyntax,
+                "switch body must consist of case and default clauses",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            ));
         }
     }
 
+    if let Some(name) = block_lexical_redeclaration(
+        cases.iter().flat_map(|case| case.consequent.iter()),
+        context.strict_mode,
+        None,
+    ) {
+        return Err(block_redeclaration_error(&name, &span, context));
+    }
     Ok(Statement::Switch(SwitchStatement {
         discriminant,
         cases,
@@ -13896,10 +16254,28 @@ fn parse_function_expression_with_super(
             Some(span.clone()),
         )
     })?;
+    // An expression's name is scoped to the function itself, so its own kind
+    // gives [Yield] and [Await] (ES2020 14.1: `function
+    // BindingIdentifier[~Yield, ~Await]`, `function *
+    // BindingIdentifier[+Yield, ~Await]`, `async function
+    // BindingIdentifier[~Yield, +Await]`).
+    let name = name
+        .map(|raw| {
+            function_binding_name(
+                &raw,
+                context.strict_mode || has_use_strict_directive(body_src),
+                is_generator,
+                is_async,
+                span,
+                context,
+            )
+        })
+        .transpose()?;
     let goal = ParseGoal::Script;
     let saved_super_property_allowed = context.super_property_allowed;
     context.super_property_allowed = super_property_allowed;
     let saved_super_call = std::mem::replace(&mut context.super_call, SuperCallContext::Forbidden);
+    let saved_script_this = std::mem::replace(&mut context.script_this, false);
     let parsed = with_function_context(is_async, is_generator, context, |context| {
         with_function_strict_mode(body_src, false, context, |context| {
             let params = parse_arrow_params(params_src, span, context)?;
@@ -13914,6 +16290,7 @@ fn parse_function_expression_with_super(
     });
     context.super_property_allowed = saved_super_property_allowed;
     context.super_call = saved_super_call;
+    context.script_this = saved_script_this;
     let (params, body_stmts, strict) = parsed?;
 
     Ok(Expression::Function {
@@ -13996,7 +16373,7 @@ fn parse_class_parts(
     let (super_class, rest) = if let Some(after_extends) = rest.strip_prefix("extends ") {
         let brace = class_heritage_body_brace(after_extends).ok_or_else(|| {
             ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
+                ParseErrorCode::InvalidSyntax,
                 "class extends clause requires a braced body",
                 context.source_label.to_string(),
                 Some(span.clone()),
@@ -14120,6 +16497,19 @@ fn parse_class_body(
     let parsed = parse_class_body_members(body, derived, span, context);
     let scope = context.private_name_scopes.pop().unwrap_or_default();
     let methods = parsed?;
+    // ES2022 15.7.1: at most one "constructor" in a class body.
+    if methods
+        .iter()
+        .filter(|method| matches!(method.kind, MethodKind::Constructor))
+        .nth(1)
+        .is_some()
+    {
+        return Err(invalid_syntax_error(
+            "a class may have only one constructor",
+            span,
+            context,
+        ));
+    }
     for name in scope.referenced {
         if scope.declared.contains_key(&name) {
             continue;
@@ -14145,7 +16535,14 @@ fn private_name_prefix_len(text: &str) -> usize {
         return 0;
     }
     let name_len = after_hash.len() - skip_identifier_name(after_hash).len();
-    if name_len == 0 { 0 } else { name_len + 1 }
+    // Escapes must spell identifier characters: `#\u200D_x` starts with a
+    // zero-width joiner, which only continues a name (bd-9vouw.397).
+    let name = &after_hash[..name_len];
+    if name_len == 0 || (name.contains('\\') && !is_identifier(name)) {
+        0
+    } else {
+        name_len + 1
+    }
 }
 
 /// `text` as a private name (`#x`, escapes canonicalized) when it is exactly
@@ -14195,7 +16592,7 @@ fn undeclared_private_name_error(
     context: &ParseExecutionContext<'_>,
 ) -> ParseError {
     ParseError::new(
-        ParseErrorCode::UnsupportedSyntax,
+        ParseErrorCode::InvalidSyntax,
         format!("Private field '{name}' must be declared in an enclosing class"),
         context.source_label.to_string(),
         Some(span.clone()),
@@ -14211,8 +16608,13 @@ fn declare_private_name(
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
 ) -> ParseResult<()> {
+    // The two early errors are SyntaxErrors; a declaration with no class
+    // body around it is a parser fault, not invalid source.
     let conflict = if name == "#constructor" {
-        Some("classes may not have a private element named '#constructor'".to_string())
+        Some((
+            ParseErrorCode::InvalidSyntax,
+            "classes may not have a private element named '#constructor'".to_string(),
+        ))
     } else if let Some(scope) = context.private_name_scopes.last_mut() {
         use PrivateNameDeclaration::{Accessor, Getter, Setter};
         let merged = match (scope.declared.get(name).copied(), declaration) {
@@ -14230,17 +16632,21 @@ fn declare_private_name(
                 scope.declared.insert(name.to_string(), merged);
                 None
             }
-            None => Some(format!("private name '{name}' is declared more than once")),
+            None => Some((
+                ParseErrorCode::InvalidSyntax,
+                format!("private name '{name}' is declared more than once"),
+            )),
         }
     } else {
-        Some(format!(
-            "private name '{name}' declared outside a class body"
+        Some((
+            ParseErrorCode::UnsupportedSyntax,
+            format!("private name '{name}' declared outside a class body"),
         ))
     };
     match conflict {
         None => Ok(()),
-        Some(message) => Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+        Some((code, message)) => Err(ParseError::new(
+            code,
             message,
             context.source_label.to_string(),
             Some(span.clone()),
@@ -14274,6 +16680,7 @@ fn parse_class_static_block(
     context.super_property_allowed = true;
     let saved_super_call =
         std::mem::replace(&mut context.super_call, SuperCallContext::ClassElement);
+    let saved_script_this = std::mem::replace(&mut context.script_this, false);
     let parsed = with_function_context(false, false, context, |context| {
         let saved_static_block_await = std::mem::replace(&mut context.static_block_await, true);
         let parsed = with_function_strict_mode(body_src, true, context, |context| {
@@ -14284,6 +16691,7 @@ fn parse_class_static_block(
     });
     context.super_property_allowed = saved_super_property_allowed;
     context.super_call = saved_super_call;
+    context.script_this = saved_script_this;
     let body = parsed?;
     // ES2022 15.7.1 ClassStaticBlockBody early errors: no `return`, no
     // `break`/`continue` that leaves the block, and (as for a field
@@ -14301,7 +16709,7 @@ fn parse_class_static_block(
     });
     if let Some(found) = forbidden {
         return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             format!("a class static block may not contain `{found}`"),
             context.source_label.to_string(),
             Some(span.clone()),
@@ -14445,7 +16853,7 @@ fn parse_class_body_members(
         };
         if rest.starts_with('#') && field_key_end == 0 {
             return Err(ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
+                ParseErrorCode::InvalidSyntax,
                 format!("invalid private name in class element `{segment}`"),
                 context.source_label.to_string(),
                 Some(span.clone()),
@@ -14520,7 +16928,7 @@ fn parse_class_body_members(
             || class_member_is_field(&rest[key_end..])
         {
             return Err(ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
+                ParseErrorCode::InvalidSyntax,
                 format!("malformed class element: `{}`", segment.trim()),
                 context.source_label.to_string(),
                 Some(span.clone()),
@@ -14567,6 +16975,19 @@ fn parse_class_body_members(
                 true,
             )
         } else {
+            // `field method() {}`: two names on one line are two elements
+            // with no `;` and no line break for ASI (bd-9vouw.397).
+            if let Some((first, gap_and_rest)) = method_name.split_once([' ', '\t'])
+                && is_identifier(first)
+                && !gap_and_rest.contains(['\n', '\r', '\u{2028}', '\u{2029}'])
+                && gap_and_rest.trim_start().starts_with(is_identifier_start)
+            {
+                return Err(invalid_syntax_error(
+                    "class elements on one line need a `;` between them",
+                    span,
+                    context,
+                ));
+            }
             (
                 parse_contextual_static_property_key(
                     method_name,
@@ -14647,6 +17068,7 @@ fn parse_class_body_members(
             SuperCallContext::Forbidden
         };
         let saved_super_call = std::mem::replace(&mut context.super_call, super_call);
+        let saved_script_this = std::mem::replace(&mut context.script_this, false);
         let parsed = with_function_context(is_async, is_generator, context, |context| {
             with_function_strict_mode(body_src, true, context, |context| {
                 let params = parse_arrow_params(params_src, span, context)?;
@@ -14661,6 +17083,7 @@ fn parse_class_body_members(
         });
         context.super_property_allowed = saved_super_property_allowed;
         context.super_call = saved_super_call;
+        context.script_this = saved_script_this;
         let (params, body_stmts) = parsed?;
 
         methods.push(MethodDefinition {
@@ -14739,15 +17162,32 @@ fn split_class_field_asi(text: &str) -> (&str, Option<&str>) {
             '\n' if depth == 0 => {
                 let head = text[..index].trim_end();
                 let tail = text[index + 1..].trim_start();
+                // A head ending in a keyword operator awaits its operand:
+                // `a = x` newline `in` newline `z` is `a = x in z`, which
+                // split before `z` (Test262 fields-asi-5, bd-9vouw.457).
+                let trailing_word_start = head
+                    .char_indices()
+                    .rev()
+                    .find(|&(_, ch)| !is_identifier_continue(ch))
+                    .map_or(0, |(index, ch)| index + ch.len_utf8());
+                let ends_with_operator_keyword =
+                    matches!(
+                        &head[trailing_word_start..],
+                        "in" | "instanceof" | "typeof" | "void" | "delete" | "new"
+                    ) && !head[..trailing_word_start].trim_end().ends_with('.');
                 let head_is_complete = !head.is_empty()
+                    && !ends_with_operator_keyword
                     && !head.ends_with([
                         '=', '+', '-', '*', '/', '%', '&', '|', '^', '!', '~', '<', '>', '?', ':',
                         ',', '.', '(', '[', '{',
                     ])
                     || head.ends_with("++")
                     || head.ends_with("--");
+                // After an initializer a `*` multiplies: `x = 42` newline
+                // `*gen() {}` gets no semicolon and is a SyntaxError
+                // (bd-9vouw.450), unlike `x` newline `*gen() {}` above.
                 let tail_starts_element = tail.chars().next().is_some_and(|c| {
-                    c.is_alphanumeric() || matches!(c, '_' | '$' | '#' | '*' | '\'' | '"')
+                    c.is_alphanumeric() || matches!(c, '_' | '$' | '#' | '\'' | '"')
                 }) && !starts_with_keyword(tail, "in")
                     && !starts_with_keyword(tail, "instanceof");
                 if head_is_complete && tail_starts_element {
@@ -14976,7 +17416,7 @@ fn parse_class_field(
     let text = text.strip_suffix(';').unwrap_or(text).trim_end();
     let malformed = |context: &ParseExecutionContext<'_>| {
         ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             format!("malformed class field: `{text}`"),
             context.source_label.to_string(),
             Some(span.clone()),
@@ -15034,8 +17474,10 @@ fn parse_class_field(
             Some(source) if !source.is_empty() => {
                 let saved_super_call =
                     std::mem::replace(&mut context.super_call, SuperCallContext::ClassElement);
+                let saved_script_this = std::mem::replace(&mut context.script_this, false);
                 let value = parse_expression(source, span, context, 1);
                 context.super_call = saved_super_call;
+                context.script_this = saved_script_this;
                 Some(value?)
             }
             Some(_) => return Err(malformed(context)),
@@ -15060,7 +17502,7 @@ fn parse_class_field(
     // through arrow functions, not ordinary ones) or call `super(...)`.
     if let Some(found) = value.as_ref().and_then(field_initializer_forbidden) {
         return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             format!("a class field initializer may not contain `{found}`"),
             context.source_label.to_string(),
             Some(span.clone()),
@@ -15142,10 +17584,17 @@ fn class_member_is_field(member: &str) -> bool {
         _ => skip_identifier_name(member),
     };
     // `get`, `set` and `static` continue across a line break (`get <LF> x()
-    // {}` is a getter); `async` does not (no LineTerminator after it).
+    // {}` is a getter); `async` does not (no LineTerminator after it). An
+    // accessor cannot be a generator, so `get <LF> *m() {}` is a field `get`
+    // and a generator method, while `static <LF> *m() {}` is one static
+    // generator (bd-9vouw.334).
     let key = &member[..member.len() - after_key.len()];
-    if !matches!(key, "get" | "set" | "static") && !key.is_empty() && ends_at_line_break(after_key)
-    {
+    let continues_across_line_break = match key {
+        "static" => true,
+        "get" | "set" => !after_key.trim_start().starts_with('*'),
+        _ => false,
+    };
+    if !continues_across_line_break && !key.is_empty() && ends_at_line_break(after_key) {
         return true;
     }
     // Look past a computed key: in `get [x = 1]() {}` or `[k = 'm']() {}` the
@@ -15282,7 +17731,7 @@ fn parse_function_declaration(
         // Extract name up to '('.
         let paren_idx = rest.find('(').ok_or_else(|| {
             ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
+                ParseErrorCode::InvalidSyntax,
                 "function declaration requires a parameter list",
                 context.source_label.to_string(),
                 Some(span.clone()),
@@ -15301,7 +17750,7 @@ fn parse_function_declaration(
 
     if name.is_none() {
         return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "function declarations require a binding name",
             context.source_label.to_string(),
             Some(span),
@@ -15331,16 +17780,23 @@ fn parse_function_declaration(
     let source_text = context
         .function_sources
         .text_of(&statement[..statement.len() - after_body.len()]);
-    if let Some(name) = name.as_deref() {
-        reject_strict_restricted_binding(
-            name,
-            context.strict_mode || has_use_strict_directive(body_src),
-            &span,
-            context,
-        )?;
-    }
+    // A declaration binds its name in the enclosing code, whose [Yield] and
+    // [Await] apply (ES2020 14.1: `BindingIdentifier[?Yield, ?Await]`).
+    let name = name
+        .map(|raw| {
+            function_binding_name(
+                &raw,
+                context.strict_mode || has_use_strict_directive(body_src),
+                context.yield_context,
+                context.await_context || context.static_block_await,
+                &span,
+                context,
+            )
+        })
+        .transpose()?;
     let goal = ParseGoal::Script; // Function bodies use script goal.
     let saved_super_call = std::mem::replace(&mut context.super_call, SuperCallContext::Forbidden);
+    let saved_script_this = std::mem::replace(&mut context.script_this, false);
     let parsed = with_function_context(is_async, is_generator, context, |context| {
         with_function_strict_mode(body_src, false, context, |context| {
             let params = parse_arrow_params(params_src, &span, context)?;
@@ -15354,6 +17810,7 @@ fn parse_function_declaration(
         })
     });
     context.super_call = saved_super_call;
+    context.script_this = saved_script_this;
     let (params, body_stmts, strict) = parsed?;
 
     Ok(Statement::FunctionDeclaration(FunctionDeclaration {
@@ -15783,11 +18240,12 @@ mod tests {
             Expression::StringLiteral(value) if value.code_units_vec() == [0x0000, 0x0038]
         ));
 
+        // A SyntaxError, as in Node (bd-9vouw.444), not a refusal.
         for source in ["\"a\nb\"", "\"a\rb\"", "\"a\r\nb\""] {
             let error = CanonicalEs2020Parser
                 .parse(source, ParseGoal::Script)
                 .expect_err("raw LF/CRLF in a quoted literal must fail closed");
-            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+            assert_eq!(error.code, ParseErrorCode::InvalidSyntax, "{source:?}");
         }
     }
 
@@ -15860,7 +18318,8 @@ mod tests {
             let error = CanonicalEs2020Parser
                 .parse(source, ParseGoal::Script)
                 .expect_err("malformed quoted source must fail closed");
-            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+            // A SyntaxError, as in Node (bd-9vouw.444), not a refusal.
+            assert_eq!(error.code, ParseErrorCode::InvalidSyntax, "{source:?}");
         }
     }
 
@@ -15942,7 +18401,7 @@ mod tests {
             let error = parser
                 .parse(source, ParseGoal::Script)
                 .expect_err("strict Script code must reject legacy decimal escapes");
-            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+            assert_eq!(error.code, ParseErrorCode::InvalidSyntax, "{source:?}");
         }
 
         parser
@@ -15962,7 +18421,7 @@ mod tests {
             let error = parser
                 .parse(source, ParseGoal::Module)
                 .expect_err("Module code is strict and must reject legacy decimal escapes");
-            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+            assert_eq!(error.code, ParseErrorCode::InvalidSyntax, "{source:?}");
         }
 
         parser
@@ -15991,7 +18450,8 @@ mod tests {
             let error = CanonicalEs2020Parser
                 .parse(source, ParseGoal::Script)
                 .expect_err("malformed quoted postfix source must fail closed");
-            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+            // A SyntaxError, as in Node (bd-9vouw.444), not a refusal.
+            assert_eq!(error.code, ParseErrorCode::InvalidSyntax, "{source:?}");
         }
     }
 
@@ -16156,14 +18616,21 @@ mod tests {
     }
 
     #[test]
-    fn undefined_literal_is_parsed() {
+    fn global_value_names_are_identifier_references() {
         let parser = CanonicalEs2020Parser;
-        let tree = parser.parse("undefined", ParseGoal::Script).expect("parse");
-        match &tree.body[0] {
-            Statement::Expression(expr) => {
-                assert_eq!(expr.expression, Expression::UndefinedLiteral);
+        for (source, name) in [
+            ("undefined", "undefined"),
+            ("NaN", "NaN"),
+            ("Infinity", "Infinity"),
+            (r"undef\u0069ned", "undefined"),
+        ] {
+            let tree = parser.parse(source, ParseGoal::Script).expect("parse");
+            match &tree.body[0] {
+                Statement::Expression(expr) => {
+                    assert_eq!(expr.expression, Expression::Identifier(name.to_string()));
+                }
+                _ => panic!("expected expression statement"),
             }
-            _ => panic!("expected expression statement"),
         }
     }
 
@@ -16341,7 +18808,7 @@ mod tests {
         let err = parser
             .parse("var x = \"unterminated", ParseGoal::Script)
             .expect_err("unterminated string literal must fail-closed");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     }
 
     #[test]
@@ -16356,6 +18823,377 @@ mod tests {
                 ParseErrorCode::InvalidSyntax,
                 "wrong code for `{source}`",
             );
+        }
+    }
+
+    // bd-9vouw.444: shapes no expression has are SyntaxErrors before the
+    // source runs, not `Expression::Raw` that throws only when evaluated: a
+    // regular expression literal broken by a line terminator, a leading `.`
+    // member access, an escape or character outside a literal that is no
+    // identifier character, an escaped `async` keyword.
+    #[test]
+    fn unrecognised_expressions_of_no_expression_shape_are_early_errors() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "/\n/",
+            "/\r/",
+            "/\u{2028}/",
+            "/\u{2029}/",
+            "/a\\\n/",
+            "x;\n/\n/;",
+            "x;\n.source;",
+            "._",
+            "var\\u0020x;",
+            "var\\u000Ax;",
+            "\\u003B;",
+            "this\\u002Ex;",
+            "\\u007B\\u007D",
+            "var\u{180e}foo;",
+            "\\u0061sync function f() {}",
+            "\\u0061sync () => {}",
+        ] {
+            let err = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err(&format!("`{source}` must be a SyntaxError"));
+            assert_eq!(
+                err.code,
+                ParseErrorCode::InvalidSyntax,
+                "wrong code for `{source}`: {}",
+                err.message
+            );
+        }
+        for source in [
+            "var re = /[/]/g;\nre.test('a/b');",
+            "var half = .5;",
+            "var \\u{61}b = 1;\n\\u{61}b;",
+            "var a = [1];\na\n  .map(String);",
+            "var s = 'line\\\nbreak';",
+        ] {
+            parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|err| panic!("`{source}` must parse: {}", err.message));
+        }
+    }
+
+    // bd-9vouw.446: a C-style for header's initializer is [~In], a header
+    // with two top-level `;` is never a for-in, and a for-in/of target has no
+    // initializer outside Annex B's sloppy `var` head.
+    #[test]
+    fn for_headers_reject_bare_in_initializers_and_target_initializers() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "for (a in arr;1;) { break; }",
+            "for (var a in arr;1;) { break; }",
+            "for (1 in arr;1;) { break; }",
+            "for ('' in {} ? 0 : 0; false; ) ;",
+            "for (true ? 0 : 0 in {}; false; ) ;",
+            "var a; for (a = 0 in {});",
+        ] {
+            let err = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err(&format!("`{source}` must be a SyntaxError"));
+            assert_eq!(
+                err.code,
+                ParseErrorCode::InvalidSyntax,
+                "wrong code for `{source}`: {}",
+                err.message
+            );
+        }
+        for source in [
+            "for (true ? '' in o : p; false; ) ;",
+            "for (var k = ('a' in o); false;) ;",
+            "for (var f = function () { return 'a' in o; }; false;) ;",
+            "for (var q = {in: 1}; false;) ;",
+            "for (a.in = 0; false;) ;",
+            "for (var s = 'in', inner = 1; false;) ;",
+            "for (var x = a ?? b; false;) ;",
+            "for (var a = 0 in {});",
+            "for (var k in o) ;",
+            "for (; 'a' in o; ) break;",
+        ] {
+            parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|err| panic!("`{source}` must parse: {}", err.message));
+        }
+    }
+
+    // bd-9vouw.447: in strict code the strict-mode reserved words are no
+    // identifier references; sloppy code and property names keep them.
+    #[test]
+    fn strict_mode_reserved_words_are_not_references_in_strict_code() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "'use strict';\npublic = 42;",
+            "function f() {\n  'use strict';\n  return interface;\n}",
+            "'use strict';\nvoid {\n  get x() {\n    public = 42;\n  }\n};",
+            "'use strict';\nvar n = package + 1;",
+        ] {
+            let err = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err(&format!("`{source}` must be a SyntaxError"));
+            assert_eq!(
+                err.code,
+                ParseErrorCode::InvalidSyntax,
+                "wrong code for `{source}`: {}",
+                err.message
+            );
+        }
+        for source in [
+            "var public = 1;\npublic = 2;",
+            "'use strict';\nvar o = { public: 1 };\no.public = 2;",
+            "'use strict';\nclass C { static m() { return 1; } }",
+            "function f() { return private; }",
+        ] {
+            parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|err| panic!("`{source}` must parse: {}", err.message));
+        }
+    }
+
+    // bd-9vouw.448: `new.target` outside every function (a script's own
+    // code and its arrows) and an optional chain tagging a template are
+    // SyntaxErrors; no semicolon is inserted before a template, so a line
+    // starting with one continues the expression before it.
+    #[test]
+    fn new_target_outside_functions_and_optional_chain_tags_are_rejected() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "new.target;",
+            "() => {\n  new.target;\n};",
+            "var a = {fn() {}};\na?.fn`hello`;",
+            "null?.fn\n  `hello`;",
+            "var a = [];\na?.[0]`x`;",
+        ] {
+            let err = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err(&format!("`{source}` must be a SyntaxError"));
+            assert_eq!(
+                err.code,
+                ParseErrorCode::InvalidSyntax,
+                "wrong code for `{source}`: {}",
+                err.message
+            );
+        }
+        for source in [
+            "function f() { return new.target; }",
+            "class C { constructor() { this.t = new.target; } }",
+            "function f() { return () => new.target; }",
+            "function f(a = new.target) { return a; }",
+            "class C { x = new.target; }",
+            "var a = { b: (s) => s[0] };\nvar r = (a?.b)`x`;",
+        ] {
+            parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|err| panic!("`{source}` must parse: {}", err.message));
+        }
+        let texts: Vec<String> = merge_logical_lines("var r = tag\n`x`;")
+            .into_iter()
+            .map(|line| line.text)
+            .collect();
+        assert_eq!(texts, ["var r = tag `x`;"]);
+    }
+
+    // bd-9vouw.449: a parenthesized update operand is as assignable as what
+    // it holds.
+    #[test]
+    fn parenthesized_update_operands_must_be_references() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "function* g() { (yield)++; }",
+            "function* g() { ++(yield); }",
+            "var a, b; (a + b)++;",
+            "async function f() { (await 1)++; }",
+        ] {
+            let err = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err(&format!("`{source}` must be a SyntaxError"));
+            assert_eq!(
+                err.code,
+                ParseErrorCode::InvalidSyntax,
+                "wrong code for `{source}`: {}",
+                err.message
+            );
+        }
+        for source in [
+            "var x = 1; (x)++;",
+            "var o = {p: 1}; (o.p)++; ++(o.p);",
+            "function* g() { var x = 0; yield x++; }",
+            "var x = 1; ((x))--;",
+        ] {
+            parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|err| panic!("`{source}` must parse: {}", err.message));
+        }
+    }
+
+    // bd-9vouw.450: a class field's initializer gets no semicolon before a
+    // `*` on the next line, nor before another element on its own line.
+    #[test]
+    fn class_field_initializers_do_not_end_before_a_star_or_on_their_line() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "class C {\n  x = 42\n  *gen() {}\n}",
+            "class C {\n  x = 42\n  y = 1\n  *gen() {}\n}",
+            "class C {\n  field = 1 method(){}\n}",
+        ] {
+            let err = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err(&format!("`{source}` must be a SyntaxError"));
+            assert_eq!(
+                err.code,
+                ParseErrorCode::InvalidSyntax,
+                "wrong code for `{source}`: {}",
+                err.message
+            );
+        }
+        for source in [
+            "class C {\n  x\n  *gen() {}\n}",
+            "class C {\n  x = 42;\n  *gen() {}\n}",
+            "var obj = {};\nclass C {\n  x = obj\n  ['lol'] = 42\n}",
+        ] {
+            parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|err| panic!("`{source}` must parse: {}", err.message));
+        }
+    }
+
+    // bd-9vouw.451: a statement keyword leading an expression, a bracketed
+    // operand followed by a name, and a `;` inside an expression are
+    // SyntaxErrors before anything runs.
+    #[test]
+    fn statement_keywords_and_unseparated_groups_are_not_expressions() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "if{};else{}",
+            "try(e1){\n}\ncatch(e){}",
+            "catch(){}\nfinally{}",
+            "var r = [1] x;",
+            "var arr = [];\nfor({index=0; index+=1;} index++<=10; index*2;) {}",
+        ] {
+            let err = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err(&format!("`{source}` must be a SyntaxError"));
+            assert_eq!(
+                err.code,
+                ParseErrorCode::InvalidSyntax,
+                "wrong code for `{source}`: {}",
+                err.message
+            );
+        }
+        for source in [
+            "var o = {}, a, b;\nvar t = [1] in o;",
+            "var u = ({}) instanceof Object;",
+            "var a, b;\nvar k = (a, b);",
+            "var o = {};\nvar w = {}\nw = 1;",
+        ] {
+            parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|err| panic!("`{source}` must parse: {}", err.message));
+        }
+    }
+
+    // bd-9vouw.452: `debugger` is a statement, parsed before expressions;
+    // as an expression it is a reserved word.
+    #[test]
+    fn debugger_is_a_statement_and_no_expression() {
+        let parser = CanonicalEs2020Parser;
+        for source in ["debugger;", "debugger", "if (x) debugger;", "l: debugger;"] {
+            let tree = parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|err| panic!("`{source}` must parse: {}", err.message));
+            assert!(
+                !format!("{tree:?}").contains("Identifier(\"debugger\")"),
+                "`{source}` must not reference a variable `debugger`"
+            );
+        }
+        let err = parser
+            .parse("(debugger);", ParseGoal::Script)
+            .expect_err("`(debugger)` is a SyntaxError");
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax, "{}", err.message);
+    }
+
+    // bd-9vouw.453: an argument or sequence list has no elisions (only an
+    // argument list's trailing comma), and `for (async of` is excluded.
+    #[test]
+    fn list_elisions_and_for_async_of_are_rejected() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "function f() {}\nf(1,,2);",
+            "function f() {}\nf(,);",
+            "function F() {}\nnew F(1,,2);",
+            "var async;\nfor (async of [1]) ;",
+            "var x = (1,,2);",
+        ] {
+            let err = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err(&format!("`{source}` must be a SyntaxError"));
+            assert_eq!(
+                err.code,
+                ParseErrorCode::InvalidSyntax,
+                "wrong code for `{source}`: {}",
+                err.message
+            );
+        }
+        for source in [
+            "function f() {}\nf(1,);",
+            "function F() {}\nnew F(1,);",
+            "var async;\nfor (async in {}) ;",
+        ] {
+            parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|err| panic!("`{source}` must parse: {}", err.message));
+        }
+    }
+
+    // bd-9vouw.455: `import.meta` belongs to module code, function bodies
+    // included; in a script it is a SyntaxError.
+    #[test]
+    fn import_meta_is_module_only() {
+        let parser = CanonicalEs2020Parser;
+        for source in ["import.meta;", "function f() { return import.meta.url; }"] {
+            let err = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err(&format!("`{source}` must be a SyntaxError in a script"));
+            assert_eq!(err.code, ParseErrorCode::InvalidSyntax, "{}", err.message);
+            parser
+                .parse(source, ParseGoal::Module)
+                .unwrap_or_else(|err| panic!("`{source}` must parse in a module: {}", err.message));
+        }
+    }
+
+    // bd-9vouw.457: a class field whose initializer ends a line with a
+    // keyword operator continues onto the next line (Test262 fields-asi-5).
+    #[test]
+    fn class_field_initializer_continues_after_a_keyword_operator_line() {
+        let parser = CanonicalEs2020Parser;
+        let source =
+            "var x = 0, y = 1, z = [42];\nclass C {\n  a = x\n  in\n  z\n  b = y\n  in\n  z\n}";
+        parser
+            .parse(source, ParseGoal::Script)
+            .unwrap_or_else(|err| panic!("fields-asi-5 must parse: {}", err.message));
+    }
+
+    // bd-9vouw.459: every ECMAScript WhiteSpace separates tokens, not only
+    // the ASCII ones (Test262 assignment/white-space.js and
+    // function/line-terminator.js).
+    #[test]
+    fn non_ascii_white_space_separates_tokens() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "var x;\nx\u{b}=\u{b}1;\nx\u{a0}=\u{a0}2;\nx\u{3000}=\u{3000}3;",
+            "function\tw() {}\nw();",
+            "function\t\u{2029}w(\u{c})\u{a0}{\n}\nw();",
+        ] {
+            let tree = parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|err| panic!("`{source}` must parse: {}", err.message));
+            assert!(tree.body.len() >= 2, "{tree:?}");
+            if source.starts_with("function") {
+                assert!(
+                    matches!(&tree.body[0], Statement::FunctionDeclaration(f) if f.name.as_deref() == Some("w")),
+                    "`{source}` must declare w: {tree:?}"
+                );
+            }
         }
     }
 
@@ -17054,7 +19892,9 @@ mod tests {
         let err = parser
             .parse("import * from 'pkg'", ParseGoal::Module)
             .expect_err("namespace import without alias must fail");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        // A SyntaxError, not a refusal: every import and export form is
+        // supported (bd-9vouw.429).
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     }
 
     #[test]
@@ -17063,7 +19903,9 @@ mod tests {
         let err = parser
             .parse("import { run as } from 'pkg'", ParseGoal::Module)
             .expect_err("invalid named import alias must fail");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        // A SyntaxError, not a refusal: every import and export form is
+        // supported (bd-9vouw.429).
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     }
 
     #[test]
@@ -17072,7 +19914,9 @@ mod tests {
         let err = parser
             .parse("import for from 'pkg'", ParseGoal::Module)
             .expect_err("keyword default import binding must fail");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        // A SyntaxError, not a refusal: every import and export form is
+        // supported (bd-9vouw.429).
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     }
 
     #[test]
@@ -17081,7 +19925,9 @@ mod tests {
         let err = parser
             .parse("import * as for from 'pkg'", ParseGoal::Module)
             .expect_err("keyword namespace import binding must fail");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        // A SyntaxError, not a refusal: every import and export form is
+        // supported (bd-9vouw.429).
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     }
 
     #[test]
@@ -17090,7 +19936,9 @@ mod tests {
         let err = parser
             .parse("import { run as for } from 'pkg'", ParseGoal::Module)
             .expect_err("keyword named import binding must fail");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        // A SyntaxError, not a refusal: every import and export form is
+        // supported (bd-9vouw.429).
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     }
 
     // -----------------------------------------------------------------------
@@ -17239,7 +20087,8 @@ mod tests {
             let error = CanonicalEs2020Parser
                 .parse(source, ParseGoal::Module)
                 .expect_err(source);
-            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source}");
+            // A SyntaxError, as in Node (bd-9vouw.429), not a refusal.
+            assert_eq!(error.code, ParseErrorCode::InvalidSyntax, "{source}");
         }
     }
 
@@ -17476,7 +20325,9 @@ mod tests {
         let err = parser
             .parse("export { run as }", ParseGoal::Module)
             .expect_err("invalid named export alias must fail");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        // A SyntaxError, not a refusal: every import and export form is
+        // supported (bd-9vouw.429).
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     }
 
     #[test]
@@ -17485,7 +20336,9 @@ mod tests {
         let err = parser
             .parse("export { run } from pkg", ParseGoal::Module)
             .expect_err("export source must be quoted");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        // A SyntaxError, not a refusal: every import and export form is
+        // supported (bd-9vouw.429).
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     }
 
     #[test]
@@ -17494,7 +20347,9 @@ mod tests {
         let err = parser
             .parse("export run", ParseGoal::Module)
             .expect_err("unsupported export clause must fail");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        // A SyntaxError, not a refusal: every import and export form is
+        // supported (bd-9vouw.429).
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     }
 
     // -----------------------------------------------------------------------
@@ -19600,17 +22455,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_f64_numeric_literal_special_values() {
-        assert_eq!(parse_f64_numeric_literal("Infinity"), Some(f64::INFINITY));
-        assert_eq!(
-            parse_f64_numeric_literal("-Infinity"),
-            Some(f64::NEG_INFINITY)
-        );
-        assert!(
-            parse_f64_numeric_literal("NaN")
-                .expect("serde serialization should succeed")
-                .is_nan()
-        );
+    fn global_value_names_are_not_numeric_literals() {
+        assert_eq!(parse_f64_numeric_literal("Infinity"), None);
+        assert_eq!(parse_f64_numeric_literal("-Infinity"), None);
+        assert_eq!(parse_f64_numeric_literal("NaN"), None);
+        // An overflowing numeric literal is still a number, independently
+        // of any source binding named Infinity.
+        assert_eq!(parse_f64_numeric_literal("1e999"), Some(f64::INFINITY));
     }
 
     #[test]
@@ -20281,6 +23132,8 @@ mod tests {
             statement_depth: 0,
             pattern_depth: 0,
             strict_mode: false,
+            script_this: true,
+            module_goal: false,
             super_property_allowed: false,
             await_context: false,
             yield_context: false,
@@ -20289,6 +23142,7 @@ mod tests {
             formal_parameters: false,
             private_name_scopes: Vec::new(),
             function_sources: FunctionSourceMap::default(),
+            template_sites: 0,
         };
         parse_statement(source, ParseGoal::Script, span, &mut context)
     }
@@ -20740,16 +23594,48 @@ mod tests {
     }
 
     /// `this` is sloppy in a script and strict in a module or after a
-    /// "use strict" directive (bd-9vouw.118).
+    /// "use strict" directive (bd-9vouw.118), except that a script's
+    /// top-level `this`, its arrows' included, is the global object even in
+    /// strict code, which the SloppyThis conversion yields (bd-9vouw.417).
     #[test]
     fn this_expression() {
+        fn returned(statement: &Statement) -> &Expression {
+            match statement {
+                Statement::Return(ReturnStatement {
+                    argument: Some(argument),
+                    ..
+                }) => argument,
+                other => panic!("expected return, got {other:?}"),
+            }
+        }
         let tree = parse_script("this");
         assert!(matches!(first_expr(&tree), Expression::SloppyThis));
         let strict = parse_script("'use strict'; this");
         assert!(matches!(
             &strict.body[1],
-            Statement::Expression(statement) if matches!(statement.expression, Expression::This)
+            Statement::Expression(statement)
+                if matches!(statement.expression, Expression::SloppyThis)
         ));
+        let strict_arrow = parse_script("'use strict'; () => this");
+        let Statement::Expression(statement) = &strict_arrow.body[1] else {
+            panic!("expected an expression statement");
+        };
+        let Expression::ArrowFunction { body, .. } = &statement.expression else {
+            panic!("expected an arrow, got {:?}", statement.expression);
+        };
+        assert!(matches!(
+            body,
+            ArrowBody::Expression(expression) if matches!(**expression, Expression::SloppyThis)
+        ));
+        let strict_function = parse_script("'use strict'; function f() { return this; }");
+        let Statement::FunctionDeclaration(function) = &strict_function.body[1] else {
+            panic!("expected a function declaration");
+        };
+        assert!(matches!(returned(&function.body.body[0]), Expression::This));
+        let module = CanonicalEs2020Parser
+            .parse("this", ParseGoal::Module)
+            .expect("parse should succeed");
+        assert!(matches!(first_expr(&module), Expression::This));
     }
 
     #[test]
@@ -21305,7 +24191,7 @@ mod tests {
         let err = parser
             .parse("function () { return 1 }", ParseGoal::Script)
             .expect_err("anonymous function statement must fail");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
         assert!(err.message.contains("binding name"));
     }
 
@@ -21315,7 +24201,7 @@ mod tests {
         let err = parser
             .parse("function* () { yield 1 }", ParseGoal::Script)
             .expect_err("anonymous generator statement must fail");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
         assert!(err.message.contains("binding name"));
     }
 
@@ -21419,6 +24305,97 @@ mod tests {
         assert!(!stripped.contains("Should"));
         // The newline that terminates the comment is preserved.
         assert!(stripped.ends_with('\n'));
+    }
+
+    #[test]
+    fn html_like_comments_are_script_only_bd_9vouw_322() {
+        let src = "a <!--b\n--> c\n/*\n*/ --> d\nx-->y\n'<!--'\n";
+        let (script, _) = strip_comments_to_whitespace_for_goal(src, ParseGoal::Script);
+        assert_eq!(script.len(), src.len(), "byte length must be preserved");
+        assert_eq!(
+            script, "a      \n     \n  \n        \nx-->y\n'<!--'\n",
+            "`<!--` anywhere and `-->` at a line start are comments; after code \
+             `-->` is `--` `>`, and string text is untouched"
+        );
+        let (module, _) = strip_comments_to_whitespace_for_goal(src, ParseGoal::Module);
+        assert_eq!(module, "a <!--b\n--> c\n  \n   --> d\nx-->y\n'<!--'\n");
+        assert_eq!(strip_comments_to_whitespace(src), module);
+    }
+
+    #[test]
+    fn import_attributes_bd_9vouw_387() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "import data from './d.json' with { type: 'json' };",
+            "import * as ns from \"./d.json\" with { \"type\": \"json\", }",
+            "import './d.json' with { type: 'json' }",
+            "import data from './d.json' with {}",
+            "import x from './x.js'",
+        ] {
+            let tree = parser.parse(source, ParseGoal::Module).expect(source);
+            assert!(
+                matches!(tree.body.as_slice(), [Statement::Import(_)]),
+                "{source}"
+            );
+        }
+        for (source, code) in [
+            (
+                "import d from './d.json' with { type: 'json', type: 'json' }",
+                ParseErrorCode::InvalidSyntax,
+            ),
+            (
+                "import d from './d.json' with { type: json }",
+                ParseErrorCode::InvalidSyntax,
+            ),
+            (
+                "import d from './d.css' with { type: 'css' }",
+                ParseErrorCode::UnsupportedSyntax,
+            ),
+            (
+                "import d from './d.js' with { type: 'json' }",
+                ParseErrorCode::UnsupportedSyntax,
+            ),
+        ] {
+            let error = parser.parse(source, ParseGoal::Module).expect_err(source);
+            assert_eq!(error.code, code, "{source}");
+        }
+    }
+
+    #[test]
+    fn default_declaration_names_bd_9vouw_386() {
+        for (head, name) in [
+            ("function A() {}", Some("A")),
+            ("function* G() {}", Some("G")),
+            ("function *G() {}", Some("G")),
+            ("async function F() {}", Some("F")),
+            ("async function* AG() {}", Some("AG")),
+            ("class K extends B {}", Some("K")),
+            ("class $k{}", Some("$k")),
+            ("function () {}", None),
+            ("function() {}", None),
+            ("async function* () {}", None),
+            ("class {}", None),
+            ("class extends B {}", None),
+        ] {
+            assert_eq!(default_declaration_name(head), name, "{head}");
+        }
+        let tree = CanonicalEs2020Parser
+            .parse(
+                "export default class K {}\nexport { K as alias };",
+                ParseGoal::Module,
+            )
+            .expect("parse");
+        assert!(
+            matches!(
+                tree.body.as_slice(),
+                [
+                    Statement::ClassDeclaration(_),
+                    Statement::Export(_),
+                    Statement::Export(_)
+                ]
+            ),
+            "a named default declaration is the declaration plus `export {{ K as default }}`"
+        );
     }
 
     #[test]
@@ -21719,6 +24696,72 @@ mod tests {
             texts,
             ["var a = /x/", "var b = /[^#/:?]+/", "var e = 6 / 3"]
         );
+    }
+
+    #[test]
+    fn merge_logical_lines_restricted_keyword_ends_before_an_operand_start() {
+        // bd-9vouw.444: after `return`/`yield` and a line break, a token that
+        // could begin their operand starts a new statement (ASI); other
+        // operators still continue the expression.
+        let texts = |source: &str| -> Vec<String> {
+            merge_logical_lines(source)
+                .into_iter()
+                .map(|line| line.text)
+                .collect()
+        };
+        assert_eq!(texts("return\n+ 1"), ["return", "+ 1"]);
+        assert_eq!(texts("return\n- 1"), ["return", "- 1"]);
+        assert_eq!(texts("yield\n* 1"), ["yield", "* 1"]);
+        assert_eq!(texts("x = c ? yield\n: yield"), ["x = c ? yield : yield"]);
+        assert_eq!(texts("it.return\n+ 1"), ["it.return + 1"]);
+        assert_eq!(texts("total = a\n+ b"), ["total = a + b"]);
+        let parser = CanonicalEs2020Parser;
+        let err = parser
+            .parse("function* g() {\n  yield\n  * 1\n}", ParseGoal::Script)
+            .expect_err("`yield` newline `* 1` is a SyntaxError");
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax, "{}", err.message);
+    }
+
+    #[test]
+    fn merge_logical_lines_semicolon_before_else_continues_the_if() {
+        // bd-9vouw.465: the `;` that ends an unbraced consequent may start
+        // the next line, before the `else` (Test262 continue/12.7-1.js).
+        let texts = |source: &str| -> Vec<String> {
+            merge_logical_lines(source)
+                .into_iter()
+                .map(|line| line.text)
+                .collect()
+        };
+        assert_eq!(
+            texts("if (a) continue\n; else {}"),
+            ["if (a) continue ; else {}"]
+        );
+        assert_eq!(
+            texts("if (a) k = 1\n; else k = 2"),
+            ["if (a) k = 1 ; else k = 2"]
+        );
+        // Not after a statement that takes no else.
+        assert_eq!(texts("k = 1\n; else k = 2"), ["k = 1", "; else k = 2"]);
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "for (;;) {\n  if (a) continue\n  ; else {}\n}",
+            "function f(x) {\n  if (x) return\n  ; else return 7;\n}",
+            "if (a) k = 1\n; else k = 2",
+        ] {
+            let tree = parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|err| panic!("`{source}` must parse: {}", err.message));
+            let debug = format!("{tree:?}");
+            assert!(
+                debug.contains("alternate: Some("),
+                "`{source}` must keep its else branch: {debug}"
+            );
+        }
+        // A `;` after a block consequent ends the if: the else is an error.
+        let err = parser
+            .parse("if (a) {}\n; else {}", ParseGoal::Script)
+            .expect_err("`if (a) {}` newline `; else {}` is a SyntaxError");
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax, "{}", err.message);
     }
 
     #[test]
@@ -22527,7 +25570,7 @@ process.exit(attackSucceeded ? 0 : 1);"#,
         let err = parser
             .parse(r"const s = `octal \01 escape`", ParseGoal::Script)
             .expect_err("legacy octal escape should fail");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     }
 
     #[test]
@@ -22538,7 +25581,7 @@ process.exit(attackSucceeded ? 0 : 1);"#,
         let err = parser
             .parse(r"const s = `bad \9 escape`", ParseGoal::Script)
             .expect_err("non-octal decimal escape should fail");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     }
 
     #[test]
@@ -22568,7 +25611,7 @@ process.exit(attackSucceeded ? 0 : 1);"#,
         let err = parser
             .parse(r"const s = `bad unicode \u{XYZ}`", ParseGoal::Script)
             .expect_err("non-hex \\u{...} escape should fail");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     }
 
     #[test]
@@ -22578,7 +25621,7 @@ process.exit(attackSucceeded ? 0 : 1);"#,
         let err = parser
             .parse(r"const s = `over \u{110000} max`", ParseGoal::Script)
             .expect_err("out-of-range code point should fail");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     }
 
     #[test]
@@ -22588,7 +25631,7 @@ process.exit(attackSucceeded ? 0 : 1);"#,
         let err = parser
             .parse(r"const s = `bad hex \xZZ here`", ParseGoal::Script)
             .expect_err("non-hex \\xNN escape should fail");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     }
 
     #[test]
@@ -22940,6 +25983,12 @@ process.exit(attackSucceeded ? 0 : 1);"#,
         );
         assert_eq!(find_matching_open_paren("f(`)${`(`}`)"), Some(1));
         assert_eq!(find_top_level_template_start("tag(`)`)`x`"), Some(8));
+        // bd-9vouw.342: the last of chained templates.
+        assert_eq!(find_top_level_template_start("rec`x``y``z`"), Some(9));
+        assert_eq!(find_top_level_template_start("t`${`a`}``b`"), Some(9));
+        // A template used as a tag: `a` closes before `b` opens.
+        assert_eq!(find_top_level_template_start("`a``b`"), Some(3));
+        assert_eq!(find_top_level_template_start("`a${`b`}c`"), Some(0));
         let segments: Vec<&str> = split_statement_segments("a(`;${`;`}`); b;")
             .into_iter()
             .map(|(_, _, text)| text)

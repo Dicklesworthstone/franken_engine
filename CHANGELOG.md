@@ -2,6 +2,77 @@
 
 This is a synthesized, agent-facing changelog for the full history of `franken_engine`.
 
+## v0.3.0 — 2026-10-08
+
+Second GitHub Release in the `v0.2.0` line of work. It covers about 2,270
+commits on `main` since `v0.2.0`, most of them JavaScript-semantics repairs
+found by running real npm packages. `frankenctl` reports `0.3.0` (the
+`frankenengine-core` and `frankenengine-engine` crates are staged at
+`0.3.0`). The release ships the same three native archives as `v0.2.0`,
+each with a `.sha256` sidecar: Linux x86_64 GNU (glibc 2.28 floor), macOS
+arm64 and Windows x86_64 MSVC, all built standalone
+(`--no-default-features`).
+
+### Language and runtime
+
+- **Shared memory and buffers:** `SharedArrayBuffer` as a global, `Atomics`
+  (read-modify-write, `wait` on the deterministic clock, `notify`,
+  `waitAsync`), resizable `ArrayBuffer`s, growable `SharedArrayBuffer`s and
+  `ArrayBuffer.prototype.transfer`, `BigInt64Array` / `BigUint64Array`, and
+  the full set of `DataView` accessors.
+- **New built-ins:** `Blob` (parts, type, size, slice, text, arrayBuffer),
+  `Intl.Segmenter` over UAX #29 (with `\p{RGI_Emoji}` under the `v` flag),
+  `AggregateError`, `String.prototype.matchAll` and `$<name>` replacement
+  templates, `%TypedArray%.prototype.toReversed/toSorted/with`,
+  `Date.prototype[@@toPrimitive]`, and `Reflect.defineProperty` /
+  `Reflect.getOwnPropertyDescriptor`.
+- **Semantics:** per-function strictness reaches IR3 (`arguments.callee`,
+  `%ThrowTypeError%`, `Function.prototype.caller/arguments`), ES2022 public
+  class fields, `Error` `cause`, `Function.prototype.toString` returns
+  source text, symbols as `WeakMap` keys, and the Annex B block-function,
+  `RegExp.prototype.compile` and `Date` `getYear`/`setYear` behaviours.
+- **Modules:** dynamic `import()`, first-class `events`, `timers`, `assert`,
+  `string_decoder`, `os` and capability-gated `fs` modules, `require.resolve`,
+  and CommonJS entry points with a bounded module root
+  (`frankenctl run --goal commonjs --module-root`).
+- **Host effects:** shared, revocable host-effect and host-I/O budgets
+  across tenant scopes, with bounded drain on revocation.
+
+### Release-blocker fixes (found by independent review against `v0.2.0`)
+
+- **`new Blob(parts)`** charged its bytes only once every part was copied;
+  each part, and the collection of an iterable's parts, is now checked
+  against the memory budget first.
+- **`Intl.Segmenter.prototype.segment`** checks its native per-segment
+  transient against the memory budget before splitting.
+- **`Array.prototype.copyWithin`** on a holey array or an array-like is
+  metered per step again on a direct call (bd-9vouw.112).
+- **`TextEncoder.prototype.encodeInto`** into a view over a transferred or
+  shrunk buffer writes nothing instead of panicking.
+- The architecture-inventory tool parses `Cargo.toml` as a document under
+  `toml` 1.x.
+
+Non-blocking findings from the same review are tracked in
+[#5](https://github.com/Dicklesworthstone/franken_engine/issues/5).
+
+### Dependencies
+
+- Semver-compatible refresh of the lockfile; `lz4_flex` 0.14, `zstd` 0.14,
+  `brotli` 9, `base64` 0.23, `num-bigint` 0.5, `criterion` 0.8 (dev) and
+  `toml` 1. `wait4` stays 0.1: 0.2's `wait4()` consumes the `Child`.
+- Held for a dedicated migration: the RustCrypto 0.11 generation with
+  `ed25519-dalek` 3, `rand` 0.10, `syn` 3 and `rcgen` 0.14; the `fp-*`
+  crates stay pinned at 0.2.
+
+### Known issues
+
+- Evidence produced by default runs is not yet bound to a runtime-owned
+  signing key, and live evidence entries are not yet hash-chained; replay
+  does not yet require an external authenticity anchor. These predate
+  `v0.2.0` and are tracked as bd-90u6o, bd-8yhg4 and bd-mpu1z.
+- The pre-existing test and lint debt recorded in
+  [#3](https://github.com/Dicklesworthstone/franken_engine/issues/3) remains.
+
 ## v0.2.0 — 2026-10-04
 
 First GitHub Release since `v0.1.0` (2026-05-29). It covers about 2,900

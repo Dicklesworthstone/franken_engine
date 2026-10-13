@@ -121,7 +121,8 @@ fn parser_rejects_keyword_module_import_bindings() {
     let error = parser
         .parse("import { run as for } from \"pkg\";", ParseGoal::Module)
         .expect_err("module import binding with keyword local name must fail");
-    assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
+    // An early SyntaxError, as in Node, since bd-9vouw.429.
+    assert_eq!(error.code, ParseErrorCode::InvalidSyntax);
 }
 
 #[test]
@@ -1296,7 +1297,7 @@ fn parser_rejects_optional_chain_assignment_target() {
     let err = parser
         .parse(source, ParseGoal::Script)
         .expect_err("optional chaining assignment target should fail");
-    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     assert_eq!(
         err.message,
         "optional chaining cannot be used as an assignment target"
@@ -1326,7 +1327,7 @@ fn parser_rejects_invalid_optional_chain_property_form() {
     let err = parser
         .parse(source, ParseGoal::Script)
         .expect_err("invalid optional property should fail");
-    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     assert_eq!(
         err.message,
         "optional chaining property access requires an identifier after `?.`"
@@ -1504,12 +1505,21 @@ fn parser_tagged_meta_frontier_accepts_tagged_template_expressions() {
 
 #[test]
 fn parser_tagged_meta_frontier_accepts_new_target_meta_property() {
+    // `new.target` is a meta property of function code. At a script's top
+    // level it is an early SyntaxError (ES2020 15.1.1), which this test
+    // asserted parsed until bd-9vouw.448.
     let parser = CanonicalEs2020Parser;
-    let source = "const target = new.target";
+    parser
+        .parse("const target = new.target", ParseGoal::Script)
+        .expect_err("new.target outside a function is a SyntaxError");
+    let source = "function f() { const target = new.target; }";
     let tree = parser
         .parse(source, ParseGoal::Script)
-        .expect("new.target should parse");
-    let Statement::VariableDeclaration(declaration) = &tree.body[0] else {
+        .expect("new.target should parse in a function");
+    let Statement::FunctionDeclaration(function) = &tree.body[0] else {
+        panic!("expected a function declaration");
+    };
+    let Statement::VariableDeclaration(declaration) = &function.body.body[0] else {
         panic!("expected variable declaration for new.target source");
     };
     assert!(matches!(
@@ -1577,8 +1587,8 @@ fn parser_tagged_meta_frontier_rejects_super_member_expression() {
     let err = parser
         .parse(source, ParseGoal::Script)
         .expect_err("super member expression should fail");
-    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
-    assert_eq!(err.message, "super expressions are not supported");
+    assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
+    assert_eq!(err.message, "'super' keyword unexpected here");
     assert_eq!(err.span, Some(single_line_source_span(source)));
 }
 
@@ -1589,8 +1599,8 @@ fn parser_tagged_meta_frontier_rejects_super_computed_member_expression() {
     let err = parser
         .parse(source, ParseGoal::Script)
         .expect_err("super computed member expression should fail");
-    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
-    assert_eq!(err.message, "super expressions are not supported");
+    assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
+    assert_eq!(err.message, "'super' keyword unexpected here");
     assert_eq!(err.span, Some(single_line_source_span(source)));
 }
 
@@ -1619,7 +1629,7 @@ fn parser_tagged_meta_frontier_parses_super_call_expression_bd_ppfz7() {
     let err = parser
         .parse("super()", ParseGoal::Script)
         .expect_err("a SuperCall outside a derived constructor is a SyntaxError");
-    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     assert!(
         err.message.contains("'super' keyword unexpected here"),
         "{}",
@@ -1634,8 +1644,8 @@ fn parser_tagged_meta_frontier_rejects_bare_super_expression() {
     let err = parser
         .parse(source, ParseGoal::Script)
         .expect_err("bare super expression should fail");
-    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
-    assert_eq!(err.message, "super expressions are not supported");
+    assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
+    assert_eq!(err.message, "'super' keyword unexpected here");
     assert_eq!(err.span, Some(single_line_source_span(source)));
 }
 
@@ -1774,7 +1784,7 @@ fn parser_strict_and_module_code_reject_legacy_decimal_escapes_bd_xcqzp() {
         let error = parser
             .parse(source, ParseGoal::Script)
             .expect_err("strict Script code must reject legacy decimal escapes");
-        assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+        assert_eq!(error.code, ParseErrorCode::InvalidSyntax, "{source:?}");
     }
 
     parser
@@ -1794,7 +1804,7 @@ fn parser_strict_and_module_code_reject_legacy_decimal_escapes_bd_xcqzp() {
         let error = parser
             .parse(source, ParseGoal::Module)
             .expect_err("Module code must reject legacy decimal escapes");
-        assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+        assert_eq!(error.code, ParseErrorCode::InvalidSyntax, "{source:?}");
     }
 
     parser

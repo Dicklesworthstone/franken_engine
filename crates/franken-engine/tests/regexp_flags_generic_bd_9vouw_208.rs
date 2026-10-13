@@ -296,9 +296,9 @@ console.log(JSON.stringify('\u{1F600}'.match(uu)), JSON.stringify('\u{1F600}'.ma
 /// match (it was a TypeError); String.prototype.matchAll rejects a RegExp
 /// whose observable flags lack "g"; a subclass's exec runs once per match
 /// plus the final null; the receiver's lastIndex is left alone. Expected
-/// lines are Node v22.2.0's output, captured programmatically.
-///
-/// No-claim: the iterator's matches are collected when @@matchAll is called.
+/// lines are Node v22.2.0's output, captured programmatically. The iterator
+/// runs exec per `next` since bd-9vouw.498
+/// (tests/regexp_string_iterator_bd_9vouw_476.rs pins when each exec runs).
 #[test]
 fn regexp_match_all_reads_flags_bd_9vouw_257() {
     let source = r##"function attempt(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }

@@ -41,18 +41,35 @@ enum Layout {
     Japanese,
 }
 
+/// The layout of a locale, region by region where its regions differ: fr-CA
+/// (`2024-02-09 03 h 05 min 09 s`) and fr-CH (`09.02.2024`) are not
+/// French's layout, so they are refused rather than formatted as fr
+/// (bd-9vouw.462). Every German region Node v22.2.0 was checked with shares
+/// one layout.
 fn layout(locale: Option<&str>) -> Result<Layout, String> {
     let tag = locale.unwrap_or("en-US");
     let lower = tag.to_ascii_lowercase().replace('_', "-");
-    let language = lower.split('-').next().unwrap_or("");
-    match (language, lower.as_str()) {
-        (_, "en" | "en-us") => Ok(Layout::UnitedStates),
-        (_, "en-gb") => Ok(Layout::Britain),
+    let mut subtags = lower.split('-');
+    let language = subtags.next().unwrap_or("");
+    let rest: Vec<&str> = subtags.collect();
+    // An extension (`-u-hc-h23`, `-u-ca-…`) can change the layout: refused.
+    let has_extension = rest.iter().any(|subtag| subtag.len() == 1);
+    let region = rest.iter().copied().find(|subtag| {
+        (subtag.len() == 2 && subtag.bytes().all(|b| b.is_ascii_alphabetic()))
+            || (subtag.len() == 3 && subtag.bytes().all(|b| b.is_ascii_digit()))
+    });
+    match (language, region) {
+        _ if has_extension => Err(format!(
+            "locale {tag:?} (extensions are not formatted for dates)"
+        )),
+        ("en", None | Some("us" | "ph")) => Ok(Layout::UnitedStates),
+        ("en", Some("gb")) => Ok(Layout::Britain),
         ("de", _) => Ok(Layout::German),
-        ("fr", _) => Ok(Layout::French),
-        ("ja", _) => Ok(Layout::Japanese),
+        ("fr", None | Some("fr" | "be" | "lu" | "ma" | "sn")) => Ok(Layout::French),
+        ("ja", None | Some("jp")) => Ok(Layout::Japanese),
         _ => Err(format!(
-            "locale {tag:?} (formatted date locales: en-US, en-GB, de, fr, ja)"
+            "locale {tag:?} (formatted date locales: en, en-US, en-PH, en-GB, de, fr, fr-FR, \
+             fr-BE, fr-LU, fr-MA, fr-SN, ja, ja-JP)"
         )),
     }
 }
@@ -639,6 +656,22 @@ mod tests {
             DateLocaleKind::Time,
         ]
         .map(|kind| format_date_locale(fields, locale, kind).expect("format"))
+    }
+
+    #[test]
+    fn regions_with_another_layout_are_refused() {
+        // Node v22.2.0, TZ=UTC (bd-9vouw.462): fr-BE and en-PH share their
+        // language's layout; fr-CA (`2021-01-03 00 h 07 min 09 s`), fr-CH
+        // (`03.01.2021`) and a locale with an extension do not.
+        assert_eq!(all(EARLY, Some("fr-BE")), all(EARLY, Some("fr-FR")));
+        assert_eq!(all(EARLY, Some("en-PH")), all(EARLY, Some("en-US")));
+        assert_eq!(all(EARLY, Some("de-CH")), all(EARLY, Some("de-DE")));
+        for locale in ["fr-CA", "fr-CH", "en-AU", "ja-US", "en-US-u-hc-h23"] {
+            assert!(
+                format_date_locale(EARLY, Some(locale), DateLocaleKind::Date).is_err(),
+                "{locale} must be refused"
+            );
+        }
     }
 
     #[test]

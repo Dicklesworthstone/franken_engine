@@ -1,0 +1,86 @@
+name: Runtime Value Provenance
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/franken-engine/src/baseline_interpreter*'
+      - 'crates/franken-engine/src/baseline_interpreter/**'
+      - 'crates/franken-engine/src/parser.rs'
+      - 'crates/franken-engine/src/lowering_pipeline.rs'
+      - 'crates/franken-engine/tests/crypto_builtin_bd_2z157.rs'
+      - 'crates/franken-engine/tests/global_value_property_targets_bd_9vouw_373.rs'
+      - 'crates/franken-engine/tests/standard_global_values_bd_9vouw_17.rs'
+      - 'crates/franken-engine/tests/parser_edge_cases.rs'
+      - 'crates/franken-engine/tests/parser_arena_conformance.rs'
+      - 'crates/franken-engine/tests/snapshots/ast_parser_golden_integration__basic_literals.snap'
+      - '.github/workflows/runtime-value-provenance.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  array-ifc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      RUSTUP_TOOLCHAIN: nightly-2026-09-21
+      CARGO_BUILD_JOBS: '1'
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_TERM_COLOR: never
+    steps:
+      # First-party shell steps respect the repository's owner-only Actions
+      # policy. Fetch only the event's immutable revision; use no credentials.
+      - name: Check out the exact event revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init .
+          git -c http.userAgent='OpenAI File Downloader, XaiImageApiFetch/1.0' fetch --depth=1 \
+            "https://github.com/${GITHUB_REPOSITORY}.git" "${GITHUB_SHA}"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+      - name: Install pinned Rust
+        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component clippy --component rustfmt
+      - name: Check workspace formatting
+        run: cargo fmt --check
+      - name: Execute array confidentiality and callback regressions
+        if: always()
+        run: |
+          cargo test --locked -p frankenengine-engine --no-default-features --no-fail-fast \
+            --test crypto_builtin_bd_2z157 --test array_species_bd_9vouw_94 \
+            --test array_every_map_callbacks -- --nocapture --test-threads=1
+      - name: Execute identifier resolution and parser regressions
+        if: always()
+        run: |
+          cargo test --locked -p frankenengine-engine --no-default-features --no-fail-fast \
+            --test standard_global_values_bd_9vouw_17 \
+            --test global_value_property_targets_bd_9vouw_373 \
+            --test parser_edge_cases --test parser_arena_conformance \
+            --test ast_parser_golden_integration -- --nocapture --test-threads=1
+      - name: Execute focused native provenance and scope regressions
+        if: always()
+        shell: bash
+        run: |
+          failed=0
+          for test_filter in \
+            bd_9vouw_110 \
+            array_aggregate_reads_ \
+            immutable_global_references_keep_the_literal_fast_path \
+            module_and_commonjs_bindings_shadow_immutable_global_names \
+            global_value_names_; do
+            cargo test --locked -p frankenengine-engine --no-default-features \
+              --lib "$test_filter" -- --nocapture --test-threads=1 || failed=1
+          done
+          exit "$failed"
+      - name: Check all workspace targets
+        if: always()
+        run: cargo check --locked --all-targets
+      - name: Lint all workspace targets
+        if: always()
+        run: cargo clippy --locked --all-targets -- -D warnings

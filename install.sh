@@ -99,14 +99,14 @@ draw_box() {
   local max_width=0 esc; esc=$(printf '\033')
   local strip="s/${esc}\\[[0-9;]*m//g"
   local line stripped len i
-  for line in "${lines[@]}"; do
+  for line in ${lines[@]+"${lines[@]}"}; do
     stripped=$(printf '%b' "$line" | LC_ALL=C sed "$strip"); len=${#stripped}
     [ "$len" -gt "$max_width" ] && max_width=$len
   done
   local inner=$((max_width + 4)) border=""
   for ((i=0; i<inner; i++)); do border+="═"; done
   printf "\033[%sm╔%s╗\033[0m\n" "$color" "$border"
-  for line in "${lines[@]}"; do
+  for line in ${lines[@]+"${lines[@]}"}; do
     stripped=$(printf '%b' "$line" | LC_ALL=C sed "$strip"); len=${#stripped}
     local pad=$((max_width - len)) pad_str=""
     for ((i=0; i<pad; i++)); do pad_str+=" "; done
@@ -209,12 +209,12 @@ download_url() { printf 'https://github.com/%s/%s/releases/download/%s/%s\n' "$O
 latest_release_api_url() { printf 'https://api.github.com/repos/%s/%s/releases/latest\n' "$OWNER" "$REPO"; }
 
 download_file() {
-  curl -fL --retry 3 --retry-delay 1 --connect-timeout 15 "${PROXY_ARGS[@]}" -o "$2" "$1" 2>/dev/null
+  curl -fL --retry 3 --retry-delay 1 --connect-timeout 15 ${PROXY_ARGS[@]+"${PROXY_ARGS[@]}"} -o "$2" "$1" 2>/dev/null
 }
 
 discover_latest_release_tag() {
   local response tag
-  response="$(curl -fsSL "${PROXY_ARGS[@]}" "$(latest_release_api_url)" 2>/dev/null)" || return 1
+  response="$(curl -fsSL ${PROXY_ARGS[@]+"${PROXY_ARGS[@]}"} "$(latest_release_api_url)" 2>/dev/null)" || return 1
   tag="$(printf '%s\n' "$response" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
   [ -n "$tag" ] || return 1
   printf '%s\n' "$tag"

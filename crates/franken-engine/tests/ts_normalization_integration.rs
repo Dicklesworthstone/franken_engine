@@ -1739,9 +1739,22 @@ fn normalize_strips_parameter_type_annotations() {
 fn normalize_enum_with_string_values() {
     let source = r#"enum Direction { Up = "UP", Down = "DOWN" }"#;
     let output = normalize(source).unwrap();
-    assert!(output.normalized_source.contains("Object.freeze"));
-    assert!(output.normalized_source.contains(r#"Up: "UP""#));
-    assert!(output.normalized_source.contains(r#"Down: "DOWN""#));
+    // TypeScript's enum object form (bd-9vouw.413).
+    assert!(
+        output
+            .normalized_source
+            .contains("var Direction; (function (__enum)")
+    );
+    assert!(
+        output
+            .normalized_source
+            .contains(r#"const __value = ("UP"); __enum["Up"] = __value;"#)
+    );
+    assert!(
+        output
+            .normalized_source
+            .contains(r#"const __value = ("DOWN"); __enum["Down"] = __value;"#)
+    );
 }
 
 #[test]
@@ -2231,12 +2244,37 @@ fn normalize_runtime_default_import_named_type_with_named_clause_is_preserved() 
 fn normalize_multiple_enums() {
     let source = "enum A { X, Y }\nenum B { P = 10, Q }";
     let output = normalize(source).unwrap();
-    assert!(output.normalized_source.contains("const A = Object.freeze"));
-    assert!(output.normalized_source.contains("const B = Object.freeze"));
-    assert!(output.normalized_source.contains("X: 0"));
-    assert!(output.normalized_source.contains("Y: 1"));
-    assert!(output.normalized_source.contains("P: 10"));
-    assert!(output.normalized_source.contains("Q: 11"));
+    // TypeScript's enum object form (bd-9vouw.413), values folded.
+    assert!(
+        output
+            .normalized_source
+            .contains("var A; (function (__enum)")
+    );
+    assert!(
+        output
+            .normalized_source
+            .contains("var B; (function (__enum)")
+    );
+    assert!(
+        output
+            .normalized_source
+            .contains("const __value = (0); __enum[\"X\"] = __value;")
+    );
+    assert!(
+        output
+            .normalized_source
+            .contains("const __value = (1); __enum[\"Y\"] = __value;")
+    );
+    assert!(
+        output
+            .normalized_source
+            .contains("const __value = (10); __enum[\"P\"] = __value;")
+    );
+    assert!(
+        output
+            .normalized_source
+            .contains("const __value = (11); __enum[\"Q\"] = __value;")
+    );
 }
 
 #[test]
@@ -2413,28 +2451,69 @@ fn enrichment_export_type_alias_stripped() {
 fn enrichment_enum_numeric_auto_increment() {
     let source = "enum Status { Ready, Active, Done }";
     let output = normalize(source).unwrap();
-    assert!(output.normalized_source.contains("Ready: 0"));
-    assert!(output.normalized_source.contains("Active: 1"));
-    assert!(output.normalized_source.contains("Done: 2"));
-    assert!(output.normalized_source.contains("Object.freeze"));
+    // TypeScript's enum object form (bd-9vouw.413), values folded.
+    assert!(
+        output
+            .normalized_source
+            .contains("const __value = (0); __enum[\"Ready\"] = __value;")
+    );
+    assert!(
+        output
+            .normalized_source
+            .contains("const __value = (1); __enum[\"Active\"] = __value;")
+    );
+    assert!(
+        output
+            .normalized_source
+            .contains("const __value = (2); __enum[\"Done\"] = __value;")
+    );
+    assert!(
+        output
+            .normalized_source
+            .contains("var Status; (function (__enum)")
+    );
 }
 
 #[test]
 fn enrichment_enum_explicit_numeric_values() {
     let source = "enum Level { Low = 1, Medium = 5, High = 10 }";
     let output = normalize(source).unwrap();
-    assert!(output.normalized_source.contains("Low: 1"));
-    assert!(output.normalized_source.contains("Medium: 5"));
-    assert!(output.normalized_source.contains("High: 10"));
+    assert!(
+        output
+            .normalized_source
+            .contains("const __value = (1); __enum[\"Low\"] = __value;")
+    );
+    assert!(
+        output
+            .normalized_source
+            .contains("const __value = (5); __enum[\"Medium\"] = __value;")
+    );
+    assert!(
+        output
+            .normalized_source
+            .contains("const __value = (10); __enum[\"High\"] = __value;")
+    );
 }
 
 #[test]
 fn enrichment_enum_mixed_explicit_and_auto() {
     let source = "enum Priority { Low, Medium = 5, High }";
     let output = normalize(source).unwrap();
-    assert!(output.normalized_source.contains("Low: 0"));
-    assert!(output.normalized_source.contains("Medium: 5"));
-    assert!(output.normalized_source.contains("High: 6"));
+    assert!(
+        output
+            .normalized_source
+            .contains("const __value = (0); __enum[\"Low\"] = __value;")
+    );
+    assert!(
+        output
+            .normalized_source
+            .contains("const __value = (5); __enum[\"Medium\"] = __value;")
+    );
+    assert!(
+        output
+            .normalized_source
+            .contains("const __value = (6); __enum[\"High\"] = __value;")
+    );
 }
 
 #[test]

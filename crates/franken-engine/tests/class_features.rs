@@ -622,7 +622,7 @@ mod class_runtime_execution_tests {
     fn super_outside_a_method_fails_closed_at_parser() {
         let err = run_err("function f() { return super.x; }\nf();\n");
         assert!(
-            err.starts_with("parse:") && err.contains("super expressions are not supported"),
+            err.starts_with("parse:") && err.contains("'super' keyword unexpected here"),
             "super outside a method must be rejected fail-closed by the parser, got: {err}"
         );
     }

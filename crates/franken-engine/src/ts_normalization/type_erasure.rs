@@ -35,6 +35,29 @@ pub(super) fn erase(source: &str) -> String {
     eraser.finish()
 }
 
+/// Erase TypeScript's prefix type assertions (`<T>value`), syntax only a
+/// `.ts` file has: in a `.tsx` file the same text is a JSX element
+/// (bd-9vouw.426). A generic arrow function (`<T>(x: T) => x`) is left to
+/// [`erase`], as is everything else.
+pub(super) fn erase_angle_assertions(source: &str) -> String {
+    let Some(tokens) = tokenize(source) else {
+        return source.to_owned();
+    };
+    let Some(pairs) = delimiter_pairs(&tokens) else {
+        return source.to_owned();
+    };
+    let mut eraser = Eraser {
+        source,
+        removed: vec![false; tokens.len()],
+        tokens,
+        pairs,
+        spans: Vec::new(),
+        module_marker: None,
+    };
+    eraser.erase_prefix_assertions();
+    eraser.finish()
+}
+
 fn analyze(source: &str, depth: usize) -> Option<Eraser<'_>> {
     if depth >= MAX_TYPE_DEPTH {
         return None;
@@ -142,11 +165,18 @@ impl Eraser<'_> {
                 if self.text(cursor) == "..." {
                     cursor += 1;
                 }
-                // Parameter-property lowering still owns these modifiers.
+                // Parameter-property lowering still owns these modifiers. A
+                // modifier word followed by no binding is the parameter's
+                // own name (`override: unknown`, bd-9vouw.435).
                 while matches!(
                     self.text(cursor),
                     "public" | "private" | "protected" | "readonly" | "override"
-                ) {
+                ) && (self
+                    .tokens
+                    .get(cursor + 1)
+                    .is_some_and(|token| token.kind == Kind::Word)
+                    || matches!(self.text(cursor + 1), "{" | "["))
+                {
                     cursor += 1;
                 }
             }
@@ -269,20 +299,63 @@ impl Eraser<'_> {
             .contains(['\n', '\r', '\u{2028}', '\u{2029}'])
     }
 
+    /// Whether the word at `index` is a class member modifier followed by
+    /// the member it modifies (a name, `[`, `#`, `*`, or `{` after `static`).
+    fn member_modifier_at(&self, index: usize) -> bool {
+        matches!(
+            self.text(index),
+            "public"
+                | "private"
+                | "protected"
+                | "readonly"
+                | "static"
+                | "declare"
+                | "abstract"
+                | "override"
+                | "async"
+                | "get"
+                | "set"
+                | "accessor"
+        ) && (self
+            .tokens
+            .get(index + 1)
+            .is_some_and(|token| token.kind == Kind::Word)
+            || matches!(self.text(index + 1), "[" | "#" | "*")
+            || (self.text(index) == "static" && self.text(index + 1) == "{"))
+    }
+
     fn initializer_end(&self, mut cursor: usize, end: usize, field: bool) -> usize {
         let start = cursor;
         while cursor < end {
             if matches!(self.text(cursor), "," | ";" | ")" | "}") {
                 break;
             }
+            // A line starting the next member ends a field's initializer
+            // (ASI): `name:`, `name =`, `name(`, or a modifier before a
+            // member name (`private busy: boolean = false`, `static count
+            // = 0`, `protected get total()`). The modifier form was read
+            // as part of the initializer above it, so its modifier was
+            // never erased (bd-9vouw.432).
             if field
                 && cursor > start
                 && self.newline_before(cursor)
                 && self.tokens[cursor].kind == Kind::Word
-                && matches!(self.text(cursor + 1), ":" | "?" | "!" | "=" | "(")
+                && (matches!(self.text(cursor + 1), ":" | "?" | "!" | "=" | "(")
+                    || self.member_modifier_at(cursor))
                 && !matches!(self.text(cursor - 1), "." | "?." | "?" | ":" | "=" | "=>")
             {
                 break;
+            }
+            // A call's type arguments (`new Map<K, V>()`) hold commas that do
+            // not end the initializer; the expression pass erases them later
+            // (bd-9vouw.432).
+            if field
+                && self.text(cursor) == "<"
+                && let Some(after) = self.expression_type_arguments_end(cursor)
+                && self.text(after) == "("
+            {
+                cursor = after;
+                continue;
             }
             cursor = self.group_end(cursor).unwrap_or(cursor + 1);
         }
@@ -838,6 +911,49 @@ mod tests {
 
     // Mark the exact erased spans. Everything else, including whitespace and
     // runtime colons, must remain byte-for-byte identical to the source.
+    /// Like [`check`], for [`erase_angle_assertions`] (bd-9vouw.426).
+    fn check_assertions(marked: &str) {
+        let mut source = String::new();
+        let mut expected = String::new();
+        let mut rest = marked;
+        while let Some(open) = rest.find('⟦') {
+            source.push_str(&rest[..open]);
+            expected.push_str(&rest[..open]);
+            rest = &rest[open + '⟦'.len_utf8()..];
+            let close = rest.find('⟧').expect("closed test marker");
+            source.push_str(&rest[..close]);
+            expected.extend(std::iter::repeat_n(' ', rest[..close].len()));
+            rest = &rest[close + '⟧'.len_utf8()..];
+        }
+        source.push_str(rest);
+        expected.push_str(rest);
+        assert_eq!(
+            erase_angle_assertions(&source),
+            expected,
+            "source: {source}"
+        );
+    }
+
+    #[test]
+    fn prefix_type_assertions_are_erased_bd_9vouw_426() {
+        check_assertions("const a = ⟦<Box>⟧raw;");
+        check_assertions("const b = (⟦<any>⟧raw).v + 1;");
+        check_assertions("const c = ⟦<number>⟧⟦<unknown>⟧\"7\";");
+        check_assertions("const d = ⟦<Array<string>>⟧[\"x\"];");
+        check_assertions("const e = ⟦<{ v: number }>⟧raw;");
+        check_assertions("function f(i) { return ⟦<string>⟧i; }");
+        check_assertions("if (ok) ⟦<T>⟧x.run();");
+        check_assertions("const i = 1 < 2 ? ⟦<number>⟧3 : 4;");
+        check_assertions("[⟦<number>⟧1].map(⟦<(n: number) => number>⟧((n) => n));");
+        // Generic arrows, comparisons and calls keep their angle brackets.
+        check_assertions("const g = <T>(x: T): T => x;");
+        check_assertions("const h = <T,>(x: T) => [x];");
+        check_assertions("const k = a < b && c > d;");
+        check_assertions("const m = f<number>(1);");
+        check_assertions("const n = async <T>(x: T) => x;");
+        check_assertions("const r = /<b>x/.test(\"<T>x\");");
+    }
+
     pub(super) fn check(marked: &str) {
         let mut source = String::new();
         let mut expected = String::new();
@@ -957,6 +1073,13 @@ mod tests {
         );
         check("function rest(first⟦?: number⟧, ...values⟦: number[]⟧) { return values; }");
         check("function receiverOnly(⟦this: object⟧) { return this; }");
+    }
+
+    /// bd-9vouw.435: a parameter named like a parameter-property modifier.
+    #[test]
+    fn modifier_named_parameters_keep_their_annotations_erased() {
+        check("function pick(evidence⟦: Evidence⟧, override⟦: unknown⟧) { return override; }");
+        check("function pick(readonly⟦?: boolean⟧, count⟦: number⟧ = 1) { return readonly; }");
     }
 
     #[test]

@@ -19,7 +19,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 hex = "0.4"
 sha2 = "0.10"
-toml = "0.8"
+toml = "1"
 
 [dev-dependencies]
 anyhow = { workspace = true }

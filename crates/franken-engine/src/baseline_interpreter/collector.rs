@@ -130,6 +130,11 @@ pub(super) struct GcState {
     builtin_depth: u32,
     /// `builtin_depth` of each enclosing run loop, restored on exit.
     builtin_depth_stack: Vec<u32>,
+    /// How many scope frames and binding cells the last collection visited:
+    /// the next one reserves that much in its visited sets up front instead
+    /// of growing them by rehashing (3% of babel-standalone's run).
+    last_visited_frames: usize,
+    last_visited_cells: usize,
     /// Planted negative for the root-coverage tests: skip the registers,
     /// call frames, scope chain and realm globals.
     #[cfg(test)]
@@ -150,6 +155,12 @@ pub(super) enum GcPin<'a> {
 #[derive(Debug, Clone, Default)]
 struct NestedPins {
     values: Vec<Value>,
+    /// Scope frames those Rust frames hold, whose bindings a collection
+    /// marks then. Marking every binding when the loop was armed made each
+    /// await and isolated call walk the caller's whole scope chain, the
+    /// global frame included (bd-9vouw.500); the cells are shared, so their
+    /// values when a collection runs are the ones the frames hold.
+    scope_frames: Vec<ScopeFrame>,
     /// Async-function records with at least this id, which the caller reads
     /// once the loop returns (the record its isolated call created, and any
     /// it must reject if the call fails), completed or not.
@@ -265,6 +276,9 @@ struct GcMarker {
     async_generator_stack: Vec<u32>,
     visited_frames: AddressSet,
     visited_cells: AddressSet,
+    /// When set, `scope_frames` keeps the frames here instead of marking
+    /// their bindings (`gc_arm_nested`'s `NestedPins::scope_frames`).
+    deferred_scope_frames: Option<Vec<ScopeFrame>>,
 }
 
 impl GcMarker {
@@ -295,6 +309,7 @@ impl GcMarker {
             async_generator_stack: Vec::new(),
             visited_frames: AddressSet::default(),
             visited_cells: AddressSet::default(),
+            deferred_scope_frames: None,
         }
     }
 
@@ -467,6 +482,10 @@ impl GcMarker {
     }
 
     fn scope_frames(&mut self, frames: &[ScopeFrame]) {
+        if let Some(deferred) = &mut self.deferred_scope_frames {
+            deferred.extend_from_slice(frames);
+            return;
+        }
         for frame in frames {
             self.scope_frame(frame);
         }
@@ -540,6 +559,9 @@ impl GcMarker {
             register_labels: _,
             register_len: _,
             register_label_len: _,
+            register_dirty_end: _,
+            registers_value_bytes: _,
+            register_labels_bytes: _,
             delegation,
             active_inline_callback_context_label: _,
             call_stack,
@@ -582,8 +604,11 @@ impl GcMarker {
         let ModuleExecutionSnapshot {
             accounted_bytes: _,
             registers,
+            register_bytes: _,
             generator_delegation,
             register_labels: _,
+            register_label_bytes: _,
+            register_dirty_end: _,
             active_inline_callback_context_label: _,
             call_stack,
             ip: _,
@@ -1015,6 +1040,7 @@ impl InterpreterCore {
             return None;
         }
         let mut marker = self.gc_new_marker();
+        marker.deferred_scope_frames = Some(Vec::new());
         let mut async_functions_from: Option<usize> = None;
         for pin in pins {
             match pin {
@@ -1027,8 +1053,10 @@ impl InterpreterCore {
                 GcPin::GeneratorExecution(execution) => marker.generator_execution(execution),
             }
         }
+        let scope_frames = marker.deferred_scope_frames.take().unwrap_or_default();
         self.gc.nested_pins.push(NestedPins {
             values: Self::gc_marked_values(&marker),
+            scope_frames,
             async_functions_from,
         });
         let previous = self
@@ -1159,9 +1187,13 @@ impl InterpreterCore {
             self.generators.len(),
             self.async_generators.len(),
         );
+        marker.visited_frames.reserve(self.gc.last_visited_frames);
+        marker.visited_cells.reserve(self.gc.last_visited_cells);
         self.gc_mark_roots(&mut marker)?;
         self.gc_drain(&mut marker);
         self.gc_mark_ephemerons(&mut marker);
+        self.gc.last_visited_frames = marker.visited_frames.len();
+        self.gc.last_visited_cells = marker.visited_cells.len();
 
         #[cfg(debug_assertions)]
         let drift_before = self
@@ -1665,11 +1697,25 @@ impl InterpreterCore {
             process_spawn: _,
             host_effect_journal: _,
             timer_effect_authority: _,
+            // A flow label, no heap reference.
+            entry_flow_label_ceiling: _,
             registers,
+            // A byte count of the register file.
+            registers_value_bytes: _,
+            // A byte count of the register label file.
+            register_labels_bytes: _,
+            template_objects,
             call_stack,
             heap: _,
             estimated_memory_bytes: _,
             simple_callback_temporary_bytes: _,
+            simple_callback_register_pool: _,
+            // Every slot undefined with a Public label.
+            spare_register_files: _,
+            property_witness_scratch: _,
+            // Empty between calls; a call in setup holds them in a local.
+            call_argument_value_scratch: _,
+            call_argument_label_scratch: _,
             json_parse_temporary_bytes: _,
             module_snapshot_in_flight_bytes: _,
             temporarily_suspended_execution_bytes: _,
@@ -1722,7 +1768,7 @@ impl InterpreterCore {
             register_base: _,
             register_width: _,
             native_run_loop_depth: _,
-            stacked_register_frame_clear_width_high_water: _,
+            register_dirty_end: _,
             top_level_compact_tier1: _,
             entry_frame_widths: _,
             catch_frames: _,
@@ -1839,10 +1885,14 @@ impl InterpreterCore {
             promise_combinators,
             // Keyed by the promises they watch.
             promise_combinator_watchers,
+            // Byte counts, no references.
+            promise_combinators_bytes: _,
+            promise_combinator_watchers_bytes: _,
+            // Ids of arrays a native join frame is holding: no new references.
+            array_join_stack: _,
             next_promise_combinator_id: _,
             module_state,
             pending_async_module_import,
-            pending_cyclic_import_binding: _,
             active_cjs_context,
             current_module_specifier: _,
             active_generated_function_artifact: _,
@@ -1977,6 +2027,10 @@ impl InterpreterCore {
                     .map(|(_, function)| function),
             )
             .for_each(|value| m.value(value));
+        self.gc
+            .nested_pins
+            .iter()
+            .for_each(|pins| m.scope_frames(&pins.scope_frames));
         if let Some(from) = self
             .gc
             .nested_pins
@@ -1995,6 +2049,9 @@ impl InterpreterCore {
         // Intrinsics.
         function_prototypes.values().for_each(|id| m.object(*id));
         builtin_prototypes.values().for_each(|id| m.object(*id));
+        // A tagged template's call site answers its one template object on
+        // every evaluation (bd-9vouw.343).
+        template_objects.values().for_each(|id| m.object(*id));
         // A forEach in progress keeps its collection's storage.
         collection_for_each_cursors
             .iter()

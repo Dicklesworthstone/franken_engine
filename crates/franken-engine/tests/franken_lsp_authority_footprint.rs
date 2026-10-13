@@ -53,7 +53,7 @@ fn lsp_publishes_authority_diagnostics_hover_and_code_lens() {
                     "uri": uri,
                     "languageId": "javascript",
                     "version": 1,
-                    "text": "const greeting = \"hello\";\nconst secret = process.env.SECRET_KEY;\n"
+                    "text": "const greeting = \"hello\";\nconst secret = process.env;\n"
                 }
             }
         }),

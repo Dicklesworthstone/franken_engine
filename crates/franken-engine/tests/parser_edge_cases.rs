@@ -125,20 +125,22 @@ fn import_dollar_binding_is_valid_identifier() {
     }
 }
 
+// Malformed import declarations are SyntaxErrors (InvalidSyntax), as in
+// Node, not refusals (bd-9vouw.429).
 #[test]
-fn import_without_from_keyword_is_unsupported() {
+fn import_without_from_keyword_is_a_syntax_error() {
     let err = parser()
         .parse("import x 'pkg'", ParseGoal::Module)
         .unwrap_err();
-    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
 }
 
 #[test]
-fn import_with_unquoted_source_is_unsupported() {
+fn import_with_unquoted_source_is_a_syntax_error() {
     let err = parser()
         .parse("import x from pkg", ParseGoal::Module)
         .unwrap_err();
-    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     assert!(err.message.contains("quoted"));
 }
 
@@ -147,7 +149,7 @@ fn import_with_numeric_binding_is_invalid_identifier() {
     let err = parser()
         .parse("import 123 from 'pkg'", ParseGoal::Module)
         .unwrap_err();
-    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
 }
 
 #[test]
@@ -443,7 +445,9 @@ fn null_and_undefined_literals_are_parsed() {
     }
     match &tree_undef.body[0] {
         Statement::Expression(expr) => {
-            assert!(matches!(&expr.expression, Expression::UndefinedLiteral));
+            assert!(
+                matches!(&expr.expression, Expression::Identifier(name) if name == "undefined")
+            );
         }
         _ => panic!("expected expression"),
     }
@@ -1220,7 +1224,7 @@ fn for_header_with_a_fourth_part_is_a_parse_error() {
         "for (;;;) {}",
     ] {
         let err = parser().parse(source, ParseGoal::Script).unwrap_err();
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax, "{source}");
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax, "{source}");
     }
     // A `;` nested in the update clause is not a fourth part.
     parser()

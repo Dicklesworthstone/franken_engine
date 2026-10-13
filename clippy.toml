@@ -1,0 +1,8 @@
+# JsString (crates/franken-core/src/js_string.rs) keeps a long concatenation
+# as a node that caches its joined bytes in a OnceLock and releases its parts
+# behind a Mutex (bd-9vouw.468). Its Eq, Ord, Debug and serde read only the
+# string's content, which never changes after construction, so a map keyed by
+# JsString does not have a mutable key. Every other type is still checked by
+# clippy::mutable_key_type. (This replaces clippy's default list, bytes::Bytes,
+# which the workspace does not use.)
+ignore-interior-mutability = ["frankenengine_core::js_string::JsString"]

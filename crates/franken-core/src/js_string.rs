@@ -22,25 +22,34 @@
 //!   `String::from_utf16_lossy` projection (each lone surrogate rendered as
 //!   U+FFFD). [`Deref`]`<Target = str>`, [`fmt::Display`], and `AsRef<str>`
 //!   expose this projection, so byte-oriented and display-oriented callers
-//!   keep the exact pre-existing behaviour for well-formed strings.
-//! - `units` carries the exact UTF-16 code units and is populated **iff**
-//!   the sequence contains at least one unpaired surrogate (the canonical
-//!   invariant). Exact-semantics callers use [`JsString::encode_utf16`] /
-//!   [`JsString::code_units_vec`]. Because the inherent `encode_utf16`
-//!   shadows `str::encode_utf16` reached through `Deref`, existing
-//!   UTF-16-indexing call sites observe exact code units automatically.
+//!   keep the exact pre-existing behaviour for well-formed strings. A long
+//!   concatenation of well-formed strings keeps its two parts and joins
+//!   their bytes on first read (bd-9vouw.468); [`JsString::len`],
+//!   [`JsString::utf16_len`] and memory estimates
+//!   ([`JsString::retained_bytes`]) do not join it.
+//! - `shape` is `Exact(units)`, the exact UTF-16 code units, **iff** the
+//!   sequence contains at least one unpaired surrogate (the canonical
+//!   invariant), and otherwise `WellFormed { utf16_len }`: the UTF-16 length,
+//!   counted once when the string is built, so `length` and indexing do not
+//!   rescan the text (bd-9vouw.467). Exact-semantics callers use
+//!   [`JsString::encode_utf16`] / [`JsString::code_units_vec`]. Because the
+//!   inherent `encode_utf16` shadows `str::encode_utf16` reached through
+//!   `Deref`, existing UTF-16-indexing call sites observe exact code units
+//!   automatically.
 //!
 //! # Canonical invariant
 //!
-//! `units.is_some()` ⇔ the logical string contains ≥ 1 lone surrogate, and
-//! then `utf8 == String::from_utf16_lossy(units)`. Constructors enforce this
+//! `shape` is `Exact(units)` ⇔ the logical string contains ≥ 1 lone
+//! surrogate, and then `utf8 == String::from_utf16_lossy(units)`; otherwise
+//! it is `WellFormed` with `utf8`'s UTF-16 length. Constructors enforce this
 //! ([`JsString::from_code_units`] re-checks well-formedness, which also means
 //! an adjacent high+low surrogate pair produced by concatenation *heals* into
 //! the supplementary code point, per ES string-concatenation semantics).
 //!
 //! Under the invariant the derived `PartialEq`/`Eq`/`Ord` are semantically
-//! correct and deterministic: a well-formed string can never equal a string
-//! holding a lone surrogate (their `units` fields differ), and two
+//! correct and deterministic (the UTF-8 bytes compare by content whether
+//! they are one buffer or a concatenation): a well-formed string can never
+//! equal a string holding a lone surrogate (their `shape` fields differ), and two
 //! lone-surrogate strings compare by projection first with the exact units as
 //! tiebreak. For well-formed strings, ordering and equality are exactly the
 //! previous `Arc<str>` byte semantics, so no existing content hash, golden,
@@ -78,7 +87,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::marker::PhantomData;
 use std::ops::Deref;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use crate::deterministic_serde::CanonicalValue;
 
@@ -91,22 +100,294 @@ const WTF16_MAP_KEY: &str = "$wtf16";
 ///
 /// See the module docs for the canonical invariant and the equality /
 /// ordering / serialization contracts.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct JsString {
-    /// UTF-8 projection. Exact when `units` is `None`; the
+    /// UTF-8 projection. Exact when `shape` is `WellFormed`; the
     /// `String::from_utf16_lossy` projection otherwise.
-    utf8: Arc<str>,
-    /// Exact UTF-16 code units, present iff the content contains at least
-    /// one unpaired surrogate.
-    units: Option<Arc<[u16]>>,
+    utf8: Text,
+    shape: Shape,
+}
+
+// Value stays 40 bytes only while JsString stays 32.
+const _: () = assert!(std::mem::size_of::<JsString>() == 32);
+
+/// Concatenations shorter than this many UTF-8 bytes are copied into one
+/// buffer; so is an append whose result's last piece stays within it, and a
+/// prepend whose first piece does. Copying at most this much per `+` keeps
+/// each append constant time while concatenation nodes stay a small fraction
+/// of the bytes they join.
+const CONCAT_COPY_MAX_BYTES: usize = 1024;
+
+/// Bytes one concatenation node occupies, with its `Arc` counters: the cost
+/// per node that [`JsString::retained_bytes`] charges.
+pub const CONCAT_NODE_BYTES: usize =
+    std::mem::size_of::<Concat>() + 2 * std::mem::size_of::<usize>();
+
+/// A [`JsString`]'s UTF-8 bytes: one shared buffer, or two well-formed
+/// strings joined by [`JsString::concat`] whose bytes are copied together the
+/// first time something reads them as one `str` (bd-9vouw.468). `s += piece`
+/// in a loop then copies each piece about once, where one buffer per result
+/// copied the whole accumulated string on every append. 16 bytes, as
+/// `Arc<str>` was: the `Concat` pointer sits beside the `Flat` pointer's
+/// niche.
+#[derive(Clone)]
+enum Text {
+    Flat(Arc<str>),
+    Concat(Arc<Concat>),
+}
+
+/// Two well-formed strings joined, with what readers and memory accounting
+/// need without joining them.
+struct Concat {
+    /// The two parts, until the node is joined: from then on the joined bytes
+    /// are all it keeps, so a string read between appends does not retain
+    /// every earlier joined copy through the chain.
+    parts: Mutex<Option<[JsString; 2]>>,
+    /// UTF-8 length of the joined bytes.
+    byte_len: usize,
+    /// The nodes and pieces under this node, fixed when it is built.
+    tree: ConcatParts,
+    /// The joined bytes, made on first read.
+    joined: OnceLock<Arc<str>>,
+}
+
+/// The concatenation nodes and flat pieces a string built by
+/// [`JsString::concat`] was made of, counted once per occurrence (a subtree
+/// shared by both parts counts twice). All zero for a flat string.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ConcatParts {
+    pub nodes: usize,
+    pub pieces: usize,
+    pub piece_bytes: usize,
+}
+
+impl ConcatParts {
+    /// The counts for a node over `left` and `right`.
+    fn joining(left: &JsString, right: &JsString) -> Self {
+        let [left, right] = [left, right].map(|part| match &part.utf8 {
+            Text::Flat(text) => Self {
+                nodes: 0,
+                pieces: 1,
+                piece_bytes: text.len(),
+            },
+            Text::Concat(node) => node.tree,
+        });
+        Self {
+            nodes: left.nodes.saturating_add(right.nodes).saturating_add(1),
+            pieces: left.pieces.saturating_add(right.pieces),
+            piece_bytes: left.piece_bytes.saturating_add(right.piece_bytes),
+        }
+    }
+}
+
+impl Text {
+    /// The UTF-8 length, without joining.
+    fn len(&self) -> usize {
+        match self {
+            Self::Flat(text) => text.len(),
+            Self::Concat(node) => node.byte_len,
+        }
+    }
+
+    #[inline]
+    fn as_str(&self) -> &str {
+        match self {
+            Self::Flat(text) => text,
+            Self::Concat(node) => node.joined_text(),
+        }
+    }
+
+    /// The same bytes, as one buffer when this concatenation was already
+    /// joined, so a new node does not keep the old one alive.
+    fn settled(&self) -> Self {
+        match self {
+            Self::Concat(node) => match node.joined.get() {
+                Some(joined) => Self::Flat(Arc::clone(joined)),
+                None => self.clone(),
+            },
+            Self::Flat(_) => self.clone(),
+        }
+    }
+}
+
+impl Deref for Text {
+    type Target = str;
+
+    #[inline]
+    fn deref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl PartialEq for Text {
+    fn eq(&self, other: &Self) -> bool {
+        if let (Self::Concat(left), Self::Concat(right)) = (self, other)
+            && Arc::ptr_eq(left, right)
+        {
+            return true;
+        }
+        self.len() == other.len() && self.as_str() == other.as_str()
+    }
+}
+
+impl Eq for Text {}
+
+impl PartialOrd for Text {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Text {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.as_str().cmp(other.as_str())
+    }
+}
+
+impl fmt::Debug for Text {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self.as_str(), f)
+    }
+}
+
+impl Concat {
+    fn new(left: JsString, right: JsString) -> Self {
+        Self {
+            byte_len: left.utf8.len() + right.utf8.len(),
+            tree: ConcatParts::joining(&left, &right),
+            parts: Mutex::new(Some([left, right])),
+            joined: OnceLock::new(),
+        }
+    }
+
+    /// The two parts, or `None` once the node is joined.
+    fn parts(&self) -> Option<[JsString; 2]> {
+        self.parts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn joined_text(&self) -> &str {
+        if let Some(joined) = self.joined.get() {
+            return joined;
+        }
+        let joined = self.joined.get_or_init(|| self.join());
+        // Released only after `joined` is set: a reader that finds no parts
+        // finds the joined bytes. Dropped outside the lock.
+        let parts = self
+            .parts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        drop(parts);
+        joined
+    }
+
+    /// The bytes of every piece, left to right, gathered with an explicit
+    /// stack: a string appended to many times is a chain that deep.
+    fn join(&self) -> Arc<str> {
+        let mut text = String::with_capacity(self.byte_len);
+        let mut pending: Vec<JsString> = Vec::new();
+        if let Some([left, right]) = self.parts() {
+            pending.push(right);
+            pending.push(left);
+        }
+        while let Some(part) = pending.pop() {
+            match &part.utf8 {
+                Text::Flat(flat) => text.push_str(flat),
+                Text::Concat(node) => match node.joined.get() {
+                    Some(joined) => text.push_str(joined),
+                    None => {
+                        if let Some([left, right]) = node.parts() {
+                            pending.push(right);
+                            pending.push(left);
+                        }
+                    }
+                },
+            }
+        }
+        Arc::from(text)
+    }
+}
+
+impl Drop for Concat {
+    /// Releases a chain of uniquely owned nodes one at a time; the recursive
+    /// drop glue would overflow the stack on a long append chain.
+    fn drop(&mut self) {
+        let mut pending: Vec<[JsString; 2]> = Vec::new();
+        let mut next = self
+            .parts
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        while let Some(parts) = next {
+            for part in parts {
+                if let Text::Concat(node) = part.utf8
+                    && let Some(mut node) = Arc::into_inner(node)
+                    && let Some(inner) = node
+                        .parts
+                        .get_mut()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .take()
+                {
+                    pending.push(inner);
+                }
+            }
+            next = pending.pop();
+        }
+    }
+}
+
+/// What a [`JsString`]'s UTF-8 bytes cannot tell in constant time. It is
+/// 16 bytes, as `Option<Arc<[u16]>>` was: the length sits beside the `Arc`
+/// pointer's niche. `WellFormed` is declared first so the derived order
+/// still puts well-formed content before exact units, as `None` did.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum Shape {
+    /// No lone surrogate: `utf8` is exact, and has this many UTF-16 code
+    /// units. It equals `utf8.len()` exactly when the text is ASCII.
+    WellFormed { utf16_len: usize },
+    /// The exact code units, at least one of them an unpaired surrogate.
+    Exact(Arc<[u16]>),
+}
+
+// Preserve the historical Debug shape (`utf8`, `units`): the cached length
+// is derived metadata, not an observable.
+impl fmt::Debug for JsString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let units = match &self.shape {
+            Shape::WellFormed { .. } => None,
+            Shape::Exact(units) => Some(units),
+        };
+        f.debug_struct("JsString")
+            .field("utf8", &self.utf8)
+            .field("units", &units)
+            .finish()
+    }
 }
 
 impl JsString {
     /// The empty string.
     pub fn empty() -> Self {
+        Self::well_formed(Arc::from(""))
+    }
+
+    /// A well-formed string, its UTF-16 length counted from the UTF-8 bytes
+    /// without decoding: ASCII is one unit per byte, otherwise every byte
+    /// that starts a character is one unit and a four-byte lead (a
+    /// supplementary character) one more.
+    fn well_formed(utf8: Arc<str>) -> Self {
+        let utf16_len = if utf8.is_ascii() {
+            utf8.len()
+        } else {
+            utf8.bytes().fold(0, |count, byte| {
+                count + usize::from(byte & 0xC0 != 0x80) + usize::from(byte >= 0xF0)
+            })
+        };
         Self {
-            utf8: Arc::from(""),
-            units: None,
+            utf8: Text::Flat(utf8),
+            shape: Shape::WellFormed { utf16_len },
         }
     }
 
@@ -117,12 +398,14 @@ impl JsString {
     pub fn from_code_units(units: &[u16]) -> Self {
         match String::from_utf16(units) {
             Ok(text) => Self {
-                utf8: Arc::from(text),
-                units: None,
+                utf8: Text::Flat(Arc::from(text)),
+                shape: Shape::WellFormed {
+                    utf16_len: units.len(),
+                },
             },
             Err(_) => Self {
-                utf8: Arc::from(String::from_utf16_lossy(units)),
-                units: Some(Arc::from(units)),
+                utf8: Text::Flat(Arc::from(String::from_utf16_lossy(units))),
+                shape: Shape::Exact(Arc::from(units)),
             },
         }
     }
@@ -130,16 +413,22 @@ impl JsString {
     /// True when the content is well-formed UTF-16 (no lone surrogates), in
     /// which case the UTF-8 projection is exact.
     pub fn is_well_formed(&self) -> bool {
-        self.units.is_none()
+        matches!(self.shape, Shape::WellFormed { .. })
+    }
+
+    /// True when the content is ASCII: one UTF-16 unit per UTF-8 byte.
+    fn is_ascii_text(&self) -> bool {
+        matches!(self.shape, Shape::WellFormed { utf16_len } if utf16_len == self.utf8.len())
     }
 
     /// Exact `&str` view, available only for well-formed content. Callers
     /// that can tolerate the U+FFFD projection should use [`Deref`] /
     /// [`JsString::as_utf8_projection`] instead.
+    #[inline]
     pub fn as_str(&self) -> Option<&str> {
-        match self.units {
-            None => Some(&self.utf8),
-            Some(_) => None,
+        match self.shape {
+            Shape::WellFormed { .. } => Some(self.utf8.as_str()),
+            Shape::Exact(_) => None,
         }
     }
 
@@ -155,12 +444,17 @@ impl JsString {
     /// reachable through `Deref`, so UTF-16-indexing call sites observe the
     /// real code units (including lone surrogates) rather than the lossy
     /// projection's units.
+    #[inline]
     pub fn encode_utf16(&self) -> CodeUnits<'_> {
         CodeUnits {
-            inner: match &self.units {
-                None => CodeUnitsInner::WellFormed(self.utf8.encode_utf16()),
-                Some(units) => CodeUnitsInner::Exact(units.iter().copied()),
+            inner: match &self.shape {
+                Shape::WellFormed { .. } if self.is_ascii_text() => {
+                    CodeUnitsInner::Ascii(self.utf8.as_bytes().iter())
+                }
+                Shape::WellFormed { .. } => CodeUnitsInner::WellFormed(self.utf8.encode_utf16()),
+                Shape::Exact(units) => CodeUnitsInner::Exact(units.iter().copied()),
             },
+            remaining: self.utf16_len(),
         }
     }
 
@@ -176,9 +470,9 @@ impl JsString {
     /// Content with lone surrogates uses the same `$wtf16` tag as serde and
     /// records every exact UTF-16 code unit as an unsigned integer.
     pub fn canonical_value(&self) -> CanonicalValue {
-        match &self.units {
-            None => CanonicalValue::String(self.utf8.to_string()),
-            Some(units) => {
+        match &self.shape {
+            Shape::WellFormed { .. } => CanonicalValue::String(self.utf8.to_string()),
+            Shape::Exact(units) => {
                 let mut map = BTreeMap::new();
                 map.insert(
                     WTF16_MAP_KEY.to_string(),
@@ -194,28 +488,160 @@ impl JsString {
         }
     }
 
-    /// The ECMAScript `length` of the string: its UTF-16 code-unit count.
+    /// The ECMAScript `length` of the string: its UTF-16 code-unit count,
+    /// kept since the string was built. Counting it on each call made every
+    /// `s.length`, `s[i]` and `charCodeAt` on a long string proportional to
+    /// its length (bd-9vouw.403, bd-9vouw.467).
     pub fn utf16_len(&self) -> usize {
-        match &self.units {
-            Some(units) => units.len(),
-            None => self.utf8.encode_utf16().count(),
+        match &self.shape {
+            Shape::WellFormed { utf16_len } => *utf16_len,
+            Shape::Exact(units) => units.len(),
         }
     }
 
+    /// The UTF-8 projection's byte length. This inherent method shadows
+    /// `str::len` reached through [`Deref`], so length checks and memory
+    /// estimates on a concatenation do not join it (bd-9vouw.468).
+    pub fn len(&self) -> usize {
+        self.utf8.len()
+    }
+
+    /// True for the empty string; shadows `str::is_empty` like
+    /// [`JsString::len`].
+    pub fn is_empty(&self) -> bool {
+        self.utf8.len() == 0
+    }
+
+    /// The concatenation nodes and pieces this string was built from; all
+    /// zero for a flat string.
+    pub fn concat_parts(&self) -> ConcatParts {
+        match &self.utf8 {
+            Text::Flat(_) => ConcatParts::default(),
+            Text::Concat(node) => node.tree,
+        }
+    }
+
+    /// The bytes this string's UTF-8 storage holds, for memory estimates,
+    /// with `buffer_base_bytes` charged per buffer: a flat string is one
+    /// buffer of its length. A concatenation holds its nodes and pieces
+    /// until it is joined and then only the joined buffer, which is no
+    /// longer than its piece bytes, so nodes plus pieces bound it in both
+    /// states. Fixed when the string is built, so an estimate does not
+    /// change when the string is later joined (bd-9vouw.468). The copy made
+    /// while joining is transient, like other temporaries.
+    pub fn retained_bytes(&self, buffer_base_bytes: u64) -> u64 {
+        let to_u64 = |count: usize| u64::try_from(count).unwrap_or(u64::MAX);
+        match &self.utf8 {
+            Text::Flat(text) => buffer_base_bytes.saturating_add(to_u64(text.len())),
+            Text::Concat(node) => to_u64(node.tree.nodes)
+                .saturating_mul(to_u64(CONCAT_NODE_BYTES))
+                .saturating_add(to_u64(node.tree.pieces).saturating_mul(buffer_base_bytes))
+                .saturating_add(to_u64(node.tree.piece_bytes)),
+        }
+    }
+
+    /// The UTF-16 code unit at `unit_index`, or `None` out of range. In ASCII
+    /// text it is the byte there; otherwise, when the text up to that index
+    /// is ASCII, the byte there too, found without decoding the prefix
+    /// (bd-9vouw.403).
+    pub fn code_unit_at(&self, unit_index: usize) -> Option<u16> {
+        match &self.shape {
+            Shape::Exact(units) => units.get(unit_index).copied(),
+            Shape::WellFormed { .. } => {
+                let bytes = self.utf8.as_bytes();
+                if self.is_ascii_text() {
+                    return bytes.get(unit_index).map(|byte| u16::from(*byte));
+                }
+                match bytes.get(..=unit_index) {
+                    Some(prefix) if prefix.is_ascii() => Some(u16::from(bytes[unit_index])),
+                    _ => self.utf8.encode_utf16().nth(unit_index),
+                }
+            }
+        }
+    }
+
+    /// The code units from `start` to `end` (UTF-16 offsets, clamped to the
+    /// string) as a string; a boundary inside a surrogate pair keeps the lone
+    /// half. ASCII text is sliced as bytes and other well-formed text decoded
+    /// only up to `end`, so `slice`/`substring`/`substr` no longer copy the
+    /// whole string into code units on every call (bd-9vouw.467).
+    pub fn utf16_slice(&self, start: usize, end: usize) -> JsString {
+        let end = end.min(self.utf16_len());
+        let start = start.min(end);
+        match &self.shape {
+            Shape::WellFormed { .. } if self.is_ascii_text() => Self {
+                utf8: Text::Flat(Arc::from(&self.utf8[start..end])),
+                shape: Shape::WellFormed {
+                    utf16_len: end - start,
+                },
+            },
+            Shape::WellFormed { .. } => {
+                let units: Vec<u16> = self
+                    .utf8
+                    .encode_utf16()
+                    .skip(start)
+                    .take(end - start)
+                    .collect();
+                Self::from_code_units(&units)
+            }
+            Shape::Exact(units) => Self::from_code_units(&units[start..end]),
+        }
+    }
+
+    /// Whether every exact code unit is ASCII, without scanning the backing.
+    /// Every non-ASCII scalar (or projected lone surrogate) uses more UTF-8
+    /// bytes than UTF-16 units, so equality of the lengths is sufficient.
+    /// This intentionally shadows `str::is_ascii` reached through Deref.
+    #[inline]
+    pub fn is_ascii(&self) -> bool {
+        self.is_ascii_text()
+    }
+
     /// ES string concatenation over exact code units. When both operands are
-    /// well-formed this is a plain UTF-8 concatenation (the pre-existing fast
-    /// path); otherwise the exact unit sequences are joined and re-normalized,
-    /// which heals a trailing high surrogate against a leading low surrogate
-    /// into the supplementary code point.
+    /// well-formed this is a UTF-8 concatenation: short results are copied
+    /// into one buffer, longer ones become a concatenation node joined on
+    /// first read (bd-9vouw.468). Otherwise the exact unit sequences are
+    /// joined and re-normalized, which heals a trailing high surrogate
+    /// against a leading low surrogate into the supplementary code point.
     pub fn concat(&self, other: &JsString) -> JsString {
-        if self.units.is_none() && other.units.is_none() {
-            let mut text = String::with_capacity(self.utf8.len() + other.utf8.len());
-            text.push_str(&self.utf8);
-            text.push_str(&other.utf8);
-            return Self {
-                utf8: Arc::from(text),
-                units: None,
+        if self.utf16_len() == 0 {
+            return other.clone();
+        }
+        if other.utf16_len() == 0 {
+            return self.clone();
+        }
+        if let (Shape::WellFormed { utf16_len: left }, Shape::WellFormed { utf16_len: right }) =
+            (&self.shape, &other.shape)
+        {
+            let shape = Shape::WellFormed {
+                utf16_len: left + right,
             };
+            if self.utf8.len() + other.utf8.len() < CONCAT_COPY_MAX_BYTES {
+                return Self::copied(self, other, shape);
+            }
+            let (head, tail) = (self.settled(), other.settled());
+            // Appending a short piece to a node whose last piece is short:
+            // copy the two into a new last piece instead of adding a node.
+            if let Text::Concat(node) = &head.utf8
+                && let Text::Flat(_) = &tail.utf8
+                && let Some([first, last]) = node.parts()
+                && let Text::Flat(_) = &last.utf8
+                && last.utf8.len() + tail.utf8.len() <= CONCAT_COPY_MAX_BYTES
+            {
+                let last = Self::copied(&last, &tail, last.joined_shape(&tail));
+                return Self::joined(first, last, shape);
+            }
+            // The mirror case for prepending.
+            if let Text::Concat(node) = &tail.utf8
+                && let Text::Flat(_) = &head.utf8
+                && let Some([first, last]) = node.parts()
+                && let Text::Flat(_) = &first.utf8
+                && head.utf8.len() + first.utf8.len() <= CONCAT_COPY_MAX_BYTES
+            {
+                let first = Self::copied(&head, &first, head.joined_shape(&first));
+                return Self::joined(first, last, shape);
+            }
+            return Self::joined(head, tail, shape);
         }
         let mut units: Vec<u16> = Vec::with_capacity(self.utf16_len() + other.utf16_len());
         units.extend(self.encode_utf16());
@@ -223,11 +649,60 @@ impl JsString {
         Self::from_code_units(&units)
     }
 
+    /// The same string, its concatenation node replaced by the joined bytes
+    /// when it was already joined.
+    fn settled(&self) -> JsString {
+        Self {
+            utf8: self.utf8.settled(),
+            shape: self.shape.clone(),
+        }
+    }
+
+    /// The shape of two well-formed strings concatenated.
+    fn joined_shape(&self, other: &JsString) -> Shape {
+        Shape::WellFormed {
+            utf16_len: self.utf16_len() + other.utf16_len(),
+        }
+    }
+
+    /// Two well-formed strings copied into one buffer.
+    fn copied(left: &JsString, right: &JsString, shape: Shape) -> JsString {
+        let mut text = String::with_capacity(left.utf8.len() + right.utf8.len());
+        text.push_str(&left.utf8);
+        text.push_str(&right.utf8);
+        Self {
+            utf8: Text::Flat(Arc::from(text)),
+            shape,
+        }
+    }
+
+    /// Two well-formed strings under a concatenation node.
+    fn joined(left: JsString, right: JsString, shape: Shape) -> JsString {
+        Self {
+            utf8: Text::Concat(Arc::new(Concat::new(left, right))),
+            shape,
+        }
+    }
+
     /// ES2020 `CodePointAt`: the Unicode code point at UTF-16 code-unit
     /// index `unit_index`. A valid high+low surrogate pair combines into its
     /// supplementary code point; an unpaired surrogate yields its own code
     /// unit value; out of range yields `None`. (bd-rdnhc)
     pub fn code_point_at(&self, unit_index: usize) -> Option<u32> {
+        // An ASCII unit is never half of a surrogate pair (bd-9vouw.403).
+        if self.is_ascii_text() {
+            return self
+                .utf8
+                .as_bytes()
+                .get(unit_index)
+                .map(|byte| u32::from(*byte));
+        }
+        if self.is_well_formed()
+            && let Some(prefix) = self.utf8.as_bytes().get(..=unit_index)
+            && prefix.is_ascii()
+        {
+            return Some(u32::from(prefix[unit_index]));
+        }
         let mut units = self.encode_utf16().skip(unit_index);
         let first = units.next()?;
         if is_high_surrogate(first)
@@ -247,7 +722,11 @@ impl JsString {
     /// single-unit element rather than the U+FFFD projection. For well-formed
     /// content this is exactly the per-`char` split. (bd-rdnhc)
     pub fn code_point_elements(&self) -> Vec<JsString> {
-        let units = self.code_units_vec();
+        // Stream UTF-8 scalars directly, or borrow the existing exact backing.
+        // Neither case needs a temporary UTF-16 copy of the entire string.
+        let Shape::Exact(units) = &self.shape else {
+            return self.utf8.chars().map(Self::from).collect();
+        };
         let mut elements = Vec::new();
         let mut index = 0;
         while index < units.len() {
@@ -273,6 +752,9 @@ impl JsString {
     /// U+1F600 sorts *below* U+FF5A here (0xD83D < 0xFF5A) but above it under
     /// code-point order. (bd-rdnhc)
     pub fn utf16_cmp(&self, other: &JsString) -> std::cmp::Ordering {
+        if self.is_ascii() && other.is_ascii() {
+            return self.utf8.cmp(&other.utf8);
+        }
         self.encode_utf16().cmp(other.encode_utf16())
     }
 
@@ -284,16 +766,37 @@ impl JsString {
     ///
     /// Matching takes O(n + m) work and O(m) scratch for n haystack units
     /// and m needle units; the haystack is never materialized as a vector.
+    /// Well-formed strings use native byte search without UTF-16 or
+    /// failure-table allocation. Only lone-surrogate inputs need KMP.
     pub fn utf16_index_of(&self, needle: &JsString, from: usize) -> Option<usize> {
         let haystack_len = self.utf16_len();
         let from = from.min(haystack_len);
-        let needle_units = needle.code_units_vec();
-        if needle_units.is_empty() {
+        let needle_len = needle.utf16_len();
+        if needle_len == 0 {
             return Some(from);
         }
-        if needle_units.len() > haystack_len - from {
+        if needle_len > haystack_len - from {
             return None;
         }
+        if self.is_ascii() {
+            if !needle.is_ascii() {
+                return None;
+            }
+            // Every byte boundary is a code-unit boundary in ASCII.
+            return self.utf8[from..]
+                .find(needle.utf8.as_str())
+                .map(|index| from + index);
+        }
+        if self.is_well_formed() && needle.is_well_formed() {
+            // A well-formed needle cannot begin at the low half of a pair.
+            // Round a split starting position up to the next scalar boundary.
+            let (byte_start, unit_start) = utf8_search_boundary(&self.utf8, from, true);
+            let suffix = &self.utf8[byte_start..];
+            return suffix
+                .find(needle.utf8.as_str())
+                .map(|index| unit_start + suffix[..index].encode_utf16().count());
+        }
+        let needle_units = needle.code_units_vec();
         search_utf16_units(self.encode_utf16().skip(from), &needle_units, false)
             .map(|index| from + index)
     }
@@ -302,22 +805,80 @@ impl JsString {
     /// `needle`'s exact unit sequence occurs (ES `String.prototype.lastIndexOf`
     /// grain). An empty needle matches at `min(from, length)`. (bd-rdnhc)
     ///
-    /// Uses the same linear-time, needle-sized-scratch matcher as indexOf,
-    /// retaining overlapping matches while streaming the allowed prefix.
+    /// Uses native reverse byte search for well-formed strings, or the
+    /// linear-time, needle-sized-scratch matcher for lone-surrogate inputs.
+    /// Both retain overlaps and bound the match's start, not its end, by `from`.
     pub fn utf16_last_index_of(&self, needle: &JsString, from: usize) -> Option<usize> {
         let haystack_len = self.utf16_len();
-        let needle_units = needle.code_units_vec();
-        if needle_units.is_empty() {
+        let needle_len = needle.utf16_len();
+        if needle_len == 0 {
             return Some(from.min(haystack_len));
         }
-        if needle_units.len() > haystack_len {
+        if needle_len > haystack_len {
             return None;
         }
-        let start = from.min(haystack_len - needle_units.len());
-        // start <= haystack_len - needle_units.len(), so this cannot overflow.
-        let end = start + needle_units.len();
+        let start = from.min(haystack_len - needle_len);
+        // start <= haystack_len - needle_len, so this cannot overflow.
+        let end = start + needle_len;
+        if self.is_ascii() {
+            if !needle.is_ascii() {
+                return None;
+            }
+            return self.utf8[..end].rfind(needle.utf8.as_str());
+        }
+        if self.is_well_formed() && needle.is_well_formed() {
+            if from >= haystack_len - needle_len {
+                // The usual unbounded reverse search needs no forward scan
+                // to locate `from`. Count from the nearer end of the match.
+                return self.utf8.rfind(needle.utf8.as_str()).map(|index| {
+                    if index <= self.utf8.len() / 2 {
+                        self.utf8[..index].encode_utf16().count()
+                    } else {
+                        haystack_len - self.utf8[index..].encode_utf16().count()
+                    }
+                });
+            }
+            let (byte_start, unit_start) = utf8_search_boundary(&self.utf8, from, false);
+            // Include the whole needle for a match starting at byte_start.
+            // Clamp without overflow, then round the end DOWN: every actual
+            // UTF-8 match already ends at a scalar boundary. This excludes no
+            // permitted match, and no match can start later than byte_start.
+            let mut byte_end = byte_start + needle.utf8.len().min(self.utf8.len() - byte_start);
+            while !self.utf8.is_char_boundary(byte_end) {
+                byte_end -= 1;
+            }
+            return self.utf8[..byte_end]
+                .rfind(needle.utf8.as_str())
+                .map(|index| unit_start - self.utf8[index..byte_start].encode_utf16().count());
+        }
+        let needle_units = needle.code_units_vec();
         search_utf16_units(self.encode_utf16().take(end), &needle_units, true)
     }
+}
+
+/// Map a UTF-16 position in well-formed UTF-8 to a scalar boundary. An
+/// astral scalar straddling `position` rounds up for indexOf and down for
+/// lastIndexOf. Return both coordinates so callers do not rescan the prefix.
+fn utf8_search_boundary(text: &str, position: usize, round_up: bool) -> (usize, usize) {
+    if position == 0 {
+        return (0, 0);
+    }
+    let mut units = 0;
+    for (byte, ch) in text.char_indices() {
+        if units == position {
+            return (byte, units);
+        }
+        let next = units + ch.len_utf16();
+        if next > position {
+            return if round_up {
+                (byte + ch.len_utf8(), next)
+            } else {
+                (byte, units)
+            };
+        }
+        units = next;
+    }
+    (text.len(), units)
 }
 
 /// KMP over exact code units. Only the needle and its failure function need
@@ -413,58 +974,51 @@ impl fmt::Display for JsString {
 
 impl From<&str> for JsString {
     fn from(value: &str) -> Self {
-        Self {
-            utf8: Arc::from(value),
-            units: None,
-        }
+        Self::well_formed(Arc::from(value))
     }
 }
 
 impl From<String> for JsString {
     fn from(value: String) -> Self {
-        Self {
-            utf8: Arc::from(value),
-            units: None,
-        }
+        Self::well_formed(Arc::from(value))
     }
 }
 
 impl From<Arc<str>> for JsString {
     fn from(value: Arc<str>) -> Self {
-        Self {
-            utf8: value,
-            units: None,
-        }
+        Self::well_formed(value)
     }
 }
 
 impl From<char> for JsString {
     fn from(value: char) -> Self {
+        // Avoid a temporary heap-allocated String for a single code point.
+        let mut buffer = [0_u8; 4];
+        let text: &str = value.encode_utf8(&mut buffer);
         Self {
-            utf8: Arc::from(value.to_string()),
-            units: None,
+            utf8: Text::Flat(Arc::from(text)),
+            shape: Shape::WellFormed {
+                utf16_len: value.len_utf16(),
+            },
         }
     }
 }
 
 impl From<&String> for JsString {
     fn from(value: &String) -> Self {
-        Self {
-            utf8: Arc::from(value.as_str()),
-            units: None,
-        }
+        Self::well_formed(Arc::from(value.as_str()))
     }
 }
 
 impl PartialEq<str> for JsString {
     fn eq(&self, other: &str) -> bool {
-        self.units.is_none() && *self.utf8 == *other
+        self.is_well_formed() && self.utf8.len() == other.len() && *self.utf8 == *other
     }
 }
 
 impl PartialEq<&str> for JsString {
     fn eq(&self, other: &&str) -> bool {
-        self.units.is_none() && *self.utf8 == **other
+        self.is_well_formed() && self.utf8.len() == other.len() && *self.utf8 == **other
     }
 }
 
@@ -472,10 +1026,12 @@ impl PartialEq<&str> for JsString {
 #[derive(Clone)]
 pub struct CodeUnits<'a> {
     inner: CodeUnitsInner<'a>,
+    remaining: usize,
 }
 
 #[derive(Clone)]
 enum CodeUnitsInner<'a> {
+    Ascii(std::slice::Iter<'a, u8>),
     WellFormed(std::str::EncodeUtf16<'a>),
     Exact(std::iter::Copied<std::slice::Iter<'a, u16>>),
 }
@@ -483,20 +1039,75 @@ enum CodeUnitsInner<'a> {
 impl Iterator for CodeUnits<'_> {
     type Item = u16;
 
+    #[inline]
     fn next(&mut self) -> Option<u16> {
-        match &mut self.inner {
+        let unit = match &mut self.inner {
+            CodeUnitsInner::Ascii(iter) => iter.next().copied().map(u16::from),
             CodeUnitsInner::WellFormed(iter) => iter.next(),
             CodeUnitsInner::Exact(iter) => iter.next(),
+        };
+        self.remaining -= usize::from(unit.is_some());
+        unit
+    }
+
+    #[inline]
+    fn nth(&mut self, n: usize) -> Option<u16> {
+        if n >= self.remaining {
+            // Exhaust without decoding, even for usize::MAX. Replacing the
+            // inner iterator also keeps subsequent next/fold/last consistent.
+            self.inner = CodeUnitsInner::Ascii(b"".iter());
+            self.remaining = 0;
+            return None;
+        }
+        let unit = match &mut self.inner {
+            CodeUnitsInner::Ascii(iter) => iter.nth(n).copied().map(u16::from),
+            CodeUnitsInner::WellFormed(iter) => iter.nth(n),
+            CodeUnitsInner::Exact(iter) => iter.nth(n),
+        };
+        // n < remaining, so n + 1 cannot overflow.
+        self.remaining -= n + 1;
+        unit
+    }
+
+    #[inline]
+    fn count(self) -> usize {
+        self.remaining
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+
+    fn last(self) -> Option<u16> {
+        match self.inner {
+            CodeUnitsInner::Ascii(mut iter) => iter.next_back().copied().map(u16::from),
+            CodeUnitsInner::WellFormed(iter) => iter.last(),
+            CodeUnitsInner::Exact(mut iter) => iter.next_back(),
         }
     }
 
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        match &self.inner {
-            CodeUnitsInner::WellFormed(iter) => iter.size_hint(),
-            CodeUnitsInner::Exact(iter) => iter.size_hint(),
+    fn fold<B, F>(self, init: B, mut f: F) -> B
+    where
+        F: FnMut(B, u16) -> B,
+    {
+        // Dispatch once for streaming consumers rather than once per unit.
+        match self.inner {
+            CodeUnitsInner::Ascii(iter) => iter.fold(init, |acc, &byte| f(acc, u16::from(byte))),
+            CodeUnitsInner::WellFormed(iter) => iter.fold(init, f),
+            CodeUnitsInner::Exact(iter) => iter.fold(init, f),
         }
     }
 }
+
+impl ExactSizeIterator for CodeUnits<'_> {
+    #[inline]
+    fn len(&self) -> usize {
+        self.remaining
+    }
+}
+
+impl std::iter::FusedIterator for CodeUnits<'_> {}
 
 impl fmt::Debug for CodeUnits<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -509,9 +1120,9 @@ impl Serialize for JsString {
     where
         S: Serializer,
     {
-        match &self.units {
-            None => serializer.serialize_str(&self.utf8),
-            Some(units) => {
+        match &self.shape {
+            Shape::WellFormed { .. } => serializer.serialize_str(&self.utf8),
+            Shape::Exact(units) => {
                 use serde::ser::SerializeMap;
                 let mut map = serializer.serialize_map(Some(1))?;
                 map.serialize_entry(WTF16_MAP_KEY, units.as_ref())?;
@@ -1195,6 +1806,96 @@ mod tests {
 
     // --- ES-semantics helpers (bd-rdnhc) ----------------------------------
 
+    /// bd-9vouw.403: the byte-counting `utf16_len` and the ASCII-prefix
+    /// `code_unit_at` / `code_point_at` agree with decoding the units, for
+    /// ASCII, two- and three-byte, supplementary and lone-surrogate text, at
+    /// every index and one past the end.
+    #[test]
+    fn fast_unit_access_matches_decoding_bd_9vouw_403() {
+        let samples = [
+            JsString::empty(),
+            JsString::from("abc"),
+            JsString::from("h\u{e9}llo"),
+            JsString::from("\u{65e5}\u{672c}\u{8a9e}"),
+            JsString::from("a\u{1f600}b"),
+            JsString::from("\u{1f600}"),
+            JsString::from("abc\u{e9}xyz"),
+            JsString::from_code_units(&[0x61, 0xD800, 0x62]),
+            JsString::from_code_units(&[0xDC00]),
+        ];
+        for sample in samples {
+            let units: Vec<u16> = sample.encode_utf16().collect();
+            assert_eq!(sample.utf16_len(), units.len(), "{sample:?}");
+            for index in 0..=units.len() {
+                assert_eq!(
+                    sample.code_unit_at(index),
+                    units.get(index).copied(),
+                    "{sample:?} {index}"
+                );
+                let decoded = {
+                    let mut rest = units.iter().copied().skip(index);
+                    rest.next().map(|first| match rest.next() {
+                        Some(second)
+                            if (0xD800..0xDC00).contains(&first)
+                                && (0xDC00..0xE000).contains(&second) =>
+                        {
+                            0x10000
+                                + ((u32::from(first) - 0xD800) << 10)
+                                + (u32::from(second) - 0xDC00)
+                        }
+                        _ => u32::from(first),
+                    })
+                };
+                assert_eq!(sample.code_point_at(index), decoded, "{sample:?} {index}");
+            }
+        }
+    }
+
+    /// bd-9vouw.467: the UTF-16 length a string keeps from construction is
+    /// the decoded count however it was built (concatenation adds lengths,
+    /// a char, an owned String, serde), `utf16_slice` equals slicing the
+    /// decoded units for every range, and the kept length costs no space.
+    #[test]
+    fn kept_length_and_slices_match_decoding_bd_9vouw_467() {
+        let healed = JsString::from_code_units(&[0x61, 0xD83D])
+            .concat(&JsString::from_code_units(&[0xDE00, 0x62]));
+        assert!(healed.is_well_formed());
+        let samples = [
+            JsString::from("abc").concat(&JsString::from("defg")),
+            JsString::from("h\u{e9}").concat(&JsString::from("\u{1f600}x")),
+            JsString::from('\u{1f600}'),
+            JsString::from('z'),
+            JsString::from(String::from("\u{65e5}a")),
+            JsString::from(Arc::<str>::from("ascii only")),
+            serde_json::from_str::<JsString>("\"j\\u00e9son\"").expect("string"),
+            serde_json::from_str::<JsString>("{\"$wtf16\":[97,55296,98]}").expect("units"),
+            healed,
+            JsString::from_code_units(&[0xD800]).concat(&JsString::from("tail")),
+            JsString::empty(),
+        ];
+        for sample in samples {
+            let units: Vec<u16> = sample.encode_utf16().collect();
+            assert_eq!(sample.utf16_len(), units.len(), "{sample:?}");
+            for start in 0..=units.len() {
+                for end in start..=units.len() {
+                    let slice = sample.utf16_slice(start, end);
+                    assert_eq!(
+                        slice,
+                        JsString::from_code_units(&units[start..end]),
+                        "{sample:?} {start}..{end}"
+                    );
+                    assert_eq!(slice.utf16_len(), end - start, "{sample:?} {start}..{end}");
+                }
+            }
+            // Out-of-range bounds clamp instead of panicking.
+            assert_eq!(
+                sample.utf16_slice(units.len() + 3, units.len() + 9),
+                JsString::empty()
+            );
+        }
+        assert_eq!(std::mem::size_of::<JsString>(), 32);
+    }
+
     #[test]
     fn code_point_at_is_unit_indexed_and_combines_pairs() {
         let s = JsString::from("a\u{1F600}b"); // units [61, D83D, DE00, 62]
@@ -1428,5 +2129,254 @@ mod tests {
             [1_u16, 2, 3][index]
         });
         assert_eq!(search_utf16_units(haystack, &[2, 3], false), Some(1));
+    }
+
+    /// Every observable of `concat`'s result against the same text in one
+    /// buffer, without and then with joining.
+    fn assert_same_string(built: &JsString, expected: &str) {
+        let flat = JsString::from(expected);
+        let units: Vec<u16> = expected.encode_utf16().collect();
+        assert_eq!(built.len(), expected.len());
+        assert_eq!(built.is_empty(), expected.is_empty());
+        assert_eq!(built.utf16_len(), units.len());
+        assert!(built.is_well_formed());
+        for index in [
+            0,
+            1,
+            units.len() / 3,
+            units.len() / 2,
+            units.len().saturating_sub(1),
+        ] {
+            assert_eq!(
+                built.code_unit_at(index),
+                units.get(index).copied(),
+                "{index}"
+            );
+            assert_eq!(
+                built.code_point_at(index),
+                flat.code_point_at(index),
+                "{index}"
+            );
+        }
+        let (start, end) = (units.len() / 4, units.len() / 2);
+        assert_eq!(built.utf16_slice(start, end), flat.utf16_slice(start, end));
+        assert_eq!(built, &flat);
+        assert_eq!(built.cmp(&flat), std::cmp::Ordering::Equal);
+        assert!(*built < JsString::from(format!("{expected}~")));
+        assert_eq!(built.as_str(), Some(expected));
+        assert_eq!(built, expected);
+        assert_eq!(built.to_string(), expected);
+        assert_eq!(format!("{built:?}"), format!("{flat:?}"));
+        assert_eq!(built.canonical_value(), flat.canonical_value());
+        assert_eq!(
+            serde_json::to_string(built).expect("serialize"),
+            serde_json::to_string(&flat).expect("serialize")
+        );
+        assert!(built.encode_utf16().eq(units.iter().copied()));
+    }
+
+    #[test]
+    fn appends_build_concatenations_joined_on_first_read_bd_9vouw_468() {
+        let pieces = [
+            JsString::from("abcdefg"),
+            JsString::from("h\u{e9}\u{1f600}"),
+        ];
+        let mut built = JsString::empty();
+        let mut expected = String::new();
+        for round in 0..20_000 {
+            let piece = &pieces[round % 2];
+            built = built.concat(piece);
+            expected.push_str(piece);
+        }
+        // Short last pieces are merged up to CONCAT_COPY_MAX_BYTES, so the
+        // nodes stay a small fraction of the bytes; each byte sits in exactly
+        // one piece.
+        let parts = built.concat_parts();
+        assert!(parts.nodes >= 1, "{parts:?}");
+        assert!(
+            parts.nodes <= expected.len() / (CONCAT_COPY_MAX_BYTES - 12) + 1,
+            "{parts:?}"
+        );
+        assert_eq!(parts.pieces, parts.nodes + 1);
+        assert_eq!(parts.piece_bytes, expected.len());
+        let retained = built.retained_bytes(24);
+        assert_eq!(
+            retained,
+            (parts.nodes * CONCAT_NODE_BYTES + parts.pieces * 24 + parts.piece_bytes) as u64
+        );
+        // Nodes plus pieces bound the joined buffer the string keeps later.
+        assert!(retained >= JsString::from(expected.as_str()).retained_bytes(24));
+        assert_same_string(&built, &expected);
+        // Joining does not change what an estimate charges.
+        assert_eq!(built.concat_parts(), parts);
+        assert_eq!(built.retained_bytes(24), retained);
+
+        // Prepending merges the first piece the same way.
+        let mut built = JsString::empty();
+        for round in 0..20_000 {
+            built = pieces[round % 2].concat(&built);
+        }
+        let expected: String = (0..20_000)
+            .rev()
+            .map(|round| pieces[round % 2].as_utf8_projection())
+            .collect();
+        let parts = built.concat_parts();
+        assert!(
+            parts.nodes <= expected.len() / (CONCAT_COPY_MAX_BYTES - 12) + 1,
+            "{parts:?}"
+        );
+        assert_same_string(&built, &expected);
+
+        // Short results stay one buffer.
+        let short = JsString::from("ab").concat(&JsString::from("cd"));
+        assert_eq!(short.concat_parts(), ConcatParts::default());
+        assert_eq!(short.retained_bytes(24), 24 + 4);
+        // Concatenating the empty string keeps the other operand.
+        assert_eq!(built.concat(&JsString::empty()).concat_parts(), parts);
+    }
+
+    #[test]
+    fn long_concatenation_chains_join_and_drop_without_recursion_bd_9vouw_468() {
+        // Pieces longer than CONCAT_COPY_MAX_BYTES are never merged: one node
+        // per append, a chain as deep as the append count.
+        let piece = JsString::from("x".repeat(CONCAT_COPY_MAX_BYTES + 1));
+        let mut deep = piece.clone();
+        for _ in 0..200_000 {
+            deep = deep.concat(&piece);
+        }
+        assert_eq!(
+            deep.concat_parts(),
+            ConcatParts {
+                nodes: 200_000,
+                pieces: 200_001,
+                piece_bytes: 200_001 * (CONCAT_COPY_MAX_BYTES + 1),
+            }
+        );
+        assert_eq!(deep.len(), 200_001 * (CONCAT_COPY_MAX_BYTES + 1));
+        // Dropping a 200,000-node chain recursively overflows a test stack.
+        drop(deep);
+
+        let mut joined = piece.clone();
+        for _ in 0..20_000 {
+            joined = joined.concat(&piece);
+        }
+        let text = joined.as_str().expect("well-formed");
+        assert_eq!(text.len(), 20_001 * (CONCAT_COPY_MAX_BYTES + 1));
+        assert!(text.bytes().all(|byte| byte == b'x'));
+    }
+
+    #[test]
+    fn joining_releases_the_parts_and_later_appends_build_on_the_joined_bytes_bd_9vouw_468() {
+        let first = JsString::from("y".repeat(2_000));
+        let second = JsString::from("z".repeat(2_000));
+        let first_count = |text: &JsString| match &text.utf8 {
+            Text::Flat(bytes) => Arc::strong_count(bytes),
+            Text::Concat(_) => 0,
+        };
+        let built = first.concat(&second);
+        assert_eq!(built.concat_parts().nodes, 1);
+        assert_eq!(first_count(&first), 2);
+        assert_eq!(built.as_str().map(str::len), Some(4_000));
+        // The node keeps only its joined bytes now.
+        assert_eq!(first_count(&first), 1);
+        assert_eq!(first_count(&second), 1);
+        assert_same_string(
+            &built,
+            &format!("{}{}", "y".repeat(2_000), "z".repeat(2_000)),
+        );
+
+        // An append after a read starts from the joined bytes: one node over
+        // two pieces, not a chain that keeps the earlier node and its copy.
+        let mut grown = built.clone();
+        for _ in 0..50 {
+            grown = grown.concat(&second);
+            assert!(grown.as_str().is_some());
+        }
+        let next = grown.concat(&second);
+        assert_eq!(
+            next.concat_parts(),
+            ConcatParts {
+                nodes: 1,
+                pieces: 2,
+                piece_bytes: grown.len() + 2_000,
+            }
+        );
+    }
+
+    /// StringIndexOf and lastIndexOf's grain, by brute force over units.
+    fn reference_index_of(
+        haystack: &[u16],
+        needle: &[u16],
+        from: usize,
+        last: bool,
+    ) -> Option<usize> {
+        let fits = |start: usize| haystack.get(start..start + needle.len()) == Some(needle);
+        if last {
+            let top = from.min(haystack.len().checked_sub(needle.len())?);
+            (0..=top).rev().find(|start| fits(*start))
+        } else {
+            let from = from.min(haystack.len());
+            (from..=haystack.len()).find(|start| fits(*start))
+        }
+    }
+
+    #[test]
+    fn ascii_index_of_searches_bytes_and_matches_units_bd_9vouw_475() {
+        let haystacks = [
+            JsString::from("abcabcabc"),
+            JsString::from(""),
+            JsString::from("a"),
+            JsString::from("x".repeat(600)).concat(&JsString::from("needle,".repeat(300))),
+        ];
+        let needles = [
+            JsString::from(""),
+            JsString::from("abc"),
+            JsString::from("c"),
+            JsString::from("bca"),
+            JsString::from("abcabcabcd"),
+            JsString::from("needle,"),
+            JsString::from("x,"),
+            JsString::from("\u{e9}"),
+            JsString::from_code_units(&[0x61, HIGH]),
+        ];
+        for haystack in &haystacks {
+            assert!(haystack.is_ascii());
+            let units: Vec<u16> = haystack.encode_utf16().collect();
+            for needle in &needles {
+                let needle_units: Vec<u16> = needle.encode_utf16().collect();
+                for from in [0, 1, 2, 3, 5, 7, 8, 9, 10, 599, 600, 601, 2700, 99_999] {
+                    assert_eq!(
+                        haystack.utf16_index_of(needle, from),
+                        reference_index_of(&units, &needle_units, from, false),
+                        "indexOf {needle:?} from {from} in {} units",
+                        units.len()
+                    );
+                    assert_eq!(
+                        haystack.utf16_last_index_of(needle, from),
+                        reference_index_of(&units, &needle_units, from, true),
+                        "lastIndexOf {needle:?} from {from} in {} units",
+                        units.len()
+                    );
+                }
+            }
+        }
+        assert!(!JsString::from("\u{e9}").is_ascii());
+        assert!(!JsString::from_code_units(&[HIGH]).is_ascii());
+    }
+
+    #[test]
+    fn concatenations_with_lone_surrogates_stay_exact_bd_9vouw_468() {
+        let long = "a".repeat(2_000);
+        let mut built = JsString::from(long.as_str());
+        built = built.concat(&JsString::from("b".repeat(2_000)));
+        assert_eq!(built.concat_parts().nodes, 1);
+        let lone = built.concat(&JsString::from_code_units(&[HIGH]));
+        assert!(!lone.is_well_formed());
+        assert_eq!(lone.utf16_len(), 4_001);
+        assert_eq!(lone.code_unit_at(4_000), Some(HIGH));
+        assert_eq!(lone.concat_parts(), ConcatParts::default());
+        // A trailing high surrogate still heals against a leading low one.
+        let healed = lone.concat(&JsString::from_code_units(&[LOW]));
+        assert_same_string(&healed, &format!("{long}{}\u{1f600}", "b".repeat(2_000)));
     }
 }

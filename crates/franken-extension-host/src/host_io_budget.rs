@@ -362,6 +362,7 @@ fn request_bytes(request: &HostIoRequest) -> Result<u64, HostIoBudgetError> {
         } => add(add(0, endpoint.len())?, payload.len()),
         HostIoRequest::NetworkRecv { endpoint, .. } => add(0, endpoint.len()),
         HostIoRequest::RandomRead { .. } => Ok(0),
+        HostIoRequest::EnvRead { name } => add(0, name.len()),
     }
 }
 

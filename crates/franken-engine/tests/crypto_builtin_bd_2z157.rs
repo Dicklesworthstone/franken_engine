@@ -1002,6 +1002,172 @@ fn aliased_console_sinks_refuse_secret_arguments_bd_9vouw_110() {
     }
 }
 
+/// Exercise the parser/lowering/orchestrator path with a granted, deterministic
+/// Secret source. The aliased console sink must refuse at runtime after entropy
+/// was read, proving the callback's return label survives the native builtin.
+#[test]
+fn array_callback_returns_cannot_launder_secrets_bd_9vouw_110() {
+    const CASES: [(&str, &str); 9] = [
+        ("[0].map(function () { return secret; })[0]", "public"),
+        (
+            "[secret].map(function (value) { return value; })[0]",
+            "public",
+        ),
+        (
+            "[0, 1].map(function (index) { return index === 0 ? secret : 'last'; }).join('|')",
+            "public|last",
+        ),
+        ("[0].flatMap(function () { return secret; })[0]", "public"),
+        ("[0].flatMap(function () { return [secret]; })[0]", "public"),
+        (
+            "['kept'].filter(function () { return secret.length > 0; }).length",
+            "1",
+        ),
+        (
+            "['kept'].filter(function () { return secret.length === 0; }).length",
+            "0",
+        ),
+        (
+            "[0, 1].some(function (index) { \
+             if (index === 0) return secret.length === 0; return false; })",
+            "false",
+        ),
+        (
+            "[0, 1].every(function (index) { \
+             if (index === 0) return secret.length > 0; return true; })",
+            "true",
+        ),
+    ];
+    for (expression, public_output) in CASES {
+        let source = format!(
+            "const crypto = require('crypto'); const secret = crypto.randomUUID(); \
+             const output = {expression}; const print = console.log; print(output);"
+        );
+        let provider = Arc::new(ScriptedRandomHostIo::bytes([vec![0x11; 16]]));
+        let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+        orchestrator.set_host_io(
+            provider.clone(),
+            Some(Arc::new(InMemoryHostIoTranscript::recording())),
+        );
+        let error = orchestrator
+            .execute(&crypto_package(&source, true))
+            .expect_err("Secret callback results must not reach an aliased sink");
+        assert!(
+            matches!(
+                error.primary_error(),
+                OrchestratorError::Interpreter(InterpreterError::CapabilityDenied { capability })
+                    if capability.ends_with(":confidentiality")
+            ),
+            "{expression}: {error:?}"
+        );
+        assert_eq!(provider.calls.load(Ordering::Acquire), 1, "{expression}");
+        assert!(
+            orchestrator.last_failed_console_output().is_empty(),
+            "{expression}: {:?}",
+            orchestrator.last_failed_console_output()
+        );
+
+        let source = format!(
+            "const secret = 'public'; const output = {expression}; \
+             const print = console.log; print(output);"
+        );
+        let result = execute_crypto(
+            &source,
+            Arc::new(ScriptedRandomHostIo::never()),
+            Arc::new(InMemoryHostIoTranscript::recording()),
+        );
+        assert_eq!(orchestrated_console(&result), public_output, "{expression}");
+    }
+}
+
+/// Native aggregate reads use the same first-owning-property provenance as
+/// indexed reads, including inherited Secret elements and Public own shadows.
+#[test]
+fn inherited_array_elements_cannot_launder_secrets_through_aggregates() {
+    const AGGREGATES: [(&str, &str); 4] = [
+        ("a.join('|')", "public"),
+        ("a.indexOf('missing')", "-1"),
+        ("a.includes('missing')", "false"),
+        ("a.lastIndexOf('missing')", "-1"),
+    ];
+    const RECEIVERS: [&str; 2] = [
+        "const a = []; a.__proto__ = p; a.length = 1;",
+        "const a = Object.create(p); a.length = 1;",
+    ];
+    for receiver in RECEIVERS {
+        for (expression, public_output) in AGGREGATES {
+            let source = format!(
+                "const crypto = require('crypto'); const p = []; {receiver} \
+                 p[0] = crypto.randomUUID(); const output = {expression}; \
+                 const print = console.log; print(output);"
+            );
+            let provider = Arc::new(ScriptedRandomHostIo::bytes([vec![0x11; 16]]));
+            let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+            orchestrator.set_host_io(
+                provider.clone(),
+                Some(Arc::new(InMemoryHostIoTranscript::recording())),
+            );
+            let error = orchestrator
+                .execute(&crypto_package(&source, true))
+                .expect_err("an inherited Secret element must taint the aggregate");
+            assert!(
+                matches!(
+                    error.primary_error(),
+                    OrchestratorError::Interpreter(InterpreterError::CapabilityDenied { capability })
+                        if capability.ends_with(":confidentiality")
+                ),
+                "{receiver} {expression}: {error:?}"
+            );
+            assert_eq!(
+                provider.calls.load(Ordering::Acquire),
+                1,
+                "{receiver} {expression}"
+            );
+            assert!(
+                orchestrator.last_failed_console_output().is_empty(),
+                "{receiver} {expression}: {:?}",
+                orchestrator.last_failed_console_output()
+            );
+
+            let source = format!(
+                "const p = []; {receiver} p[0] = 'public'; \
+                 const output = {expression}; const print = console.log; print(output);"
+            );
+            let result = execute_crypto(
+                &source,
+                Arc::new(ScriptedRandomHostIo::never()),
+                Arc::new(InMemoryHostIoTranscript::recording()),
+            );
+            assert_eq!(
+                orchestrated_console(&result),
+                public_output,
+                "{receiver} {expression}"
+            );
+
+            // Establish the prototype and own Public element before the Secret
+            // source mutates the prototype. Reading the shadow does not inspect
+            // the inherited element or depend on secret prototype selection.
+            let source = format!(
+                "const crypto = require('crypto'); const p = []; {receiver} \
+                 a[0] = 'public'; p[0] = crypto.randomUUID(); \
+                 const output = {expression}; const print = console.log; print(output);"
+            );
+            let provider = Arc::new(ScriptedRandomHostIo::bytes([vec![0x11; 16]]));
+            let result = execute_crypto(
+                &source,
+                provider.clone(),
+                Arc::new(InMemoryHostIoTranscript::recording()),
+            );
+            assert_eq!(provider.calls.load(Ordering::Acquire), 1);
+            assert_eq!(
+                orchestrated_console(&result),
+                public_output,
+                "Public shadow: {receiver} {expression}"
+            );
+        }
+    }
+}
+
 #[test]
 fn random_int_rejection_sampling_discards_biased_tail_bd_opsnv() {
     let source = "const crypto = require('crypto'); crypto.randomInt(10);";

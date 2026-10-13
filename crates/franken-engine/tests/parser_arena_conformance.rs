@@ -193,14 +193,11 @@ fn arena_conformance_cases() -> Vec<ArenaConformanceCase> {
         ),
         case(
             "es2020-script-expression-undefined-roundtrip",
-            "ECMA-262 Annex B undefined binding convention",
+            "ECMA-262 18.1 Global value properties",
             "undefined;",
             ParseGoal::Script,
-            vec![expression_statement(
-                "undefined;",
-                Expression::UndefinedLiteral,
-            )],
-            vec!["undefined".to_string()],
+            vec![expression_statement("undefined;", identifier("undefined"))],
+            vec!["identifier undefined".to_string()],
         ),
         case(
             "es2020-module-top-level-await-identifier-roundtrip",

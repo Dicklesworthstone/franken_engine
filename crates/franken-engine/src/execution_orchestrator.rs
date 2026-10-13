@@ -165,6 +165,7 @@ fn runtime_capability_for_host_io(capability: HostIoCapability) -> RuntimeCapabi
             RuntimeCapability::NetworkEgress
         }
         HostIoCapability::RandomRead => RuntimeCapability::RandomRead,
+        HostIoCapability::EnvRead => RuntimeCapability::EnvRead,
     }
 }
 
@@ -1545,6 +1546,9 @@ struct PreparedLoweringOutput {
     source_label: String,
     source_ingestion: SourceIngestionSummary,
     lowering_output: LoweringPipelineOutput,
+    /// The entry's flow label ceiling, for import edges that cycle back to
+    /// the entry (bd-j8f7q).
+    entry_flow_label_ceiling: Label,
 }
 
 #[derive(Debug)]
@@ -2573,6 +2577,7 @@ impl ExecutionOrchestrator {
             source_label,
             source_ingestion,
             lowering_output,
+            entry_flow_label_ceiling,
         } = prepared;
 
         // Step 2: Create execution cell.
@@ -2687,6 +2692,8 @@ impl ExecutionOrchestrator {
                 let result = self.phase_execute(
                     package,
                     &lowering_output.ir3,
+                    adaptive_routing_context.ir3_content_hash,
+                    &entry_flow_label_ceiling,
                     &trace_id,
                     &adaptive_routing_decision,
                     CellExecutionDispatch {
@@ -3469,10 +3476,15 @@ impl ExecutionOrchestrator {
             lowering_ctx
         };
         let lowering_output = lower_ir0_to_ir3(&ir0, &lowering_ctx)?;
+        let entry_flow_label_ceiling = crate::lowering_pipeline::lowered_unit_flow_label_ceiling(
+            &lowering_output.ir2,
+            host_io_exception_provenance,
+        );
         Ok(PreparedLoweringOutput {
             source_label,
             source_ingestion,
             lowering_output,
+            entry_flow_label_ceiling,
         })
     }
 
@@ -3708,10 +3720,15 @@ impl ExecutionOrchestrator {
         AdaptiveRoutingDecision::build(context, pre_state)
     }
 
+    /// `ir3_hash` is `ir3`'s content hash, computed once for the run's
+    /// adaptive routing context.
+    #[allow(clippy::too_many_arguments)]
     fn phase_execute(
         &self,
         package: &ExtensionPackage,
         ir3: &Ir3Module,
+        ir3_hash: ContentHash,
+        entry_flow_label_ceiling: &Label,
         trace_id: &str,
         adaptive_routing_decision: &AdaptiveRoutingDecision,
         dispatch: CellExecutionDispatch<'_>,
@@ -3756,7 +3773,8 @@ impl ExecutionOrchestrator {
         }
         lane_router.set_timer_effect_authority(timer_effect_authority);
         lane_router.set_failed_console_output_sink(Arc::clone(&self.last_failed_console_output));
-        let compact_tier1 = CompactTier1Program::compile(ir3);
+        lane_router.set_entry_flow_label_ceiling(entry_flow_label_ceiling.clone());
+        let compact_tier1 = CompactTier1Program::compile_with_source_hash(ir3, ir3_hash);
         let routed = lane_router
             .execute_with_hook_and_compact_tier1(
                 ir3,
@@ -3795,10 +3813,14 @@ impl ExecutionOrchestrator {
     ) -> Result<Ir4Module, OrchestratorError> {
         debug_assert_eq!(ir3_hash, ir3.content_hash());
         let mut witness = Ir4Module::new(ir3_hash, source_label);
-        // The interpreter returned `Ok`, so the program ran to completion;
-        // uncaught exceptions, timeouts, and cancellation all surface as
-        // `Err(InterpreterError)` and never reach this seal.
-        witness.outcome = ExecutionOutcome::Completed;
+        // Lanes also return `Ok` when an instruction hook interrupts the
+        // program, preserving its prefix and requested containment action.
+        // Bind that distinction into the witness hash; an interrupted prefix
+        // must never certify normal completion.
+        witness.outcome = match exec.requested_hook_action.as_ref() {
+            None | Some(HookAction::Allow) => ExecutionOutcome::Completed,
+            Some(_) => ExecutionOutcome::Contained,
+        };
         witness.events = exec.witness_events.clone();
         witness.hostcall_decisions = exec.hostcall_decisions.clone();
         witness.instructions_executed = exec.instructions_executed;
@@ -4653,6 +4675,13 @@ impl ExecutionOrchestrator {
             GuardplaneOperation::Import { specifier } => {
                 builder =
                     builder.meta("guardplane_import_specifier".to_string(), specifier.clone());
+            }
+            GuardplaneOperation::Hostcall {
+                capability,
+                allowed,
+            } => {
+                builder = builder.meta("guardplane_hostcall_capability", capability.clone());
+                builder = builder.meta("guardplane_hostcall_allowed", allowed.to_string());
             }
         }
 
@@ -5636,6 +5665,7 @@ fn guardplane_operation_label(operation: &GuardplaneOperation) -> &'static str {
         GuardplaneOperation::Call { .. } => "call",
         GuardplaneOperation::Allocation { .. } => "allocation",
         GuardplaneOperation::Import { .. } => "import",
+        GuardplaneOperation::Hostcall { .. } => "hostcall",
     }
 }
 
@@ -5658,6 +5688,12 @@ fn guardplane_operation_witness_value(operation: &GuardplaneOperation) -> String
             format!("allocation kind={kind:?} size_hint={size_hint}")
         }
         GuardplaneOperation::Import { specifier } => format!("import specifier={specifier}"),
+        GuardplaneOperation::Hostcall {
+            capability,
+            allowed,
+        } => {
+            format!("hostcall capability={capability} allowed={allowed}")
+        }
     }
 }
 
@@ -7317,7 +7353,7 @@ mod tests {
                 "process.platform;\nprocess['env']['PATH'];\n",
             ),
             ("destructure", "const { platform } = process;\n"),
-            ("static env", "process.env.PATH;\n"),
+            ("env possession", "process.env;\n"),
             ("computed env", "process['env']['PATH'];\n"),
             ("computed exit", "process['exit'](0);\n"),
         ] {

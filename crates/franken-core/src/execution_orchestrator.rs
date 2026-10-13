@@ -1841,10 +1841,14 @@ impl ExecutionOrchestrator {
     ) -> Result<Ir4Module, OrchestratorError> {
         let ir3_hash = ir3.content_hash();
         let mut witness = Ir4Module::new(ir3_hash, source_label);
-        // The interpreter returned `Ok`, so the program ran to completion;
-        // uncaught exceptions, timeouts, and cancellation all surface as
-        // `Err(InterpreterError)` and never reach this seal.
-        witness.outcome = ExecutionOutcome::Completed;
+        // Lanes also return `Ok` when an instruction hook interrupts the
+        // program, preserving its prefix and requested containment action.
+        // Bind that distinction into the witness hash; an interrupted prefix
+        // must never certify normal completion.
+        witness.outcome = match exec.requested_hook_action.as_ref() {
+            None | Some(HookAction::Allow) => ExecutionOutcome::Completed,
+            Some(_) => ExecutionOutcome::Contained,
+        };
         witness.events = exec.witness_events.clone();
         witness.hostcall_decisions = exec.hostcall_decisions.clone();
         witness.instructions_executed = exec.instructions_executed;
@@ -5029,6 +5033,14 @@ mod tests {
 
         assert_ne!(result.containment_action, ContainmentAction::Allow);
         assert_eq!(result.execution_value, "undefined");
+        assert_eq!(result.ir4_witness.outcome, ExecutionOutcome::Contained);
+        let mut forged_completion = result.ir4_witness.clone();
+        forged_completion.outcome = ExecutionOutcome::Completed;
+        assert_ne!(
+            forged_completion.content_hash(),
+            result.ir4_witness.content_hash(),
+            "containment must remain distinct in the signed witness"
+        );
         assert!(!result.evidence_entries.is_empty());
         assert_eq!(
             result.evidence_entries[0]

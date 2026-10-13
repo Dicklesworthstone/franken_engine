@@ -1374,7 +1374,7 @@ mod tests {
             "index.js",
             "import { cfg } from \"./config.js\";\nconst all = cfg;\n",
         );
-        pkg.write("config.js", "export const cfg = process.env.SECRET;\n");
+        pkg.write("config.js", "export const cfg = process.env;\n");
 
         let report = onboard_package(&pkg.root, "index.js", "demo-pkg", ParseGoal::Module);
 

@@ -37,6 +37,9 @@ pub struct IrSchemaVersion {
 }
 
 impl IrSchemaVersion {
+    /// `0.15.0` adds the explicit `Contained` execution outcome to serialized
+    /// IR4 witnesses. Core minor `0.14.0` is intentionally skipped because it
+    /// identifies an incompatible `franken-engine` IR wire.
     /// `0.13.0` adds explicit concise-object-method definition operations to
     /// serialized IR1, IR2, and IR3. Core minor `0.12.0` is intentionally
     /// skipped because that numeric version identifies an incompatible
@@ -62,7 +65,7 @@ impl IrSchemaVersion {
     /// lone-surrogate values use `$wtf16`.
     pub const CURRENT: Self = Self {
         major: 0,
-        minor: 13,
+        minor: 15,
         patch: 0,
     };
 
@@ -3090,6 +3093,8 @@ pub enum ExecutionOutcome {
     Timeout,
     /// Terminated by explicit halt instruction.
     Halted,
+    /// Interrupted by an in-flight security decision before normal completion.
+    Contained,
 }
 
 impl ExecutionOutcome {
@@ -3099,6 +3104,7 @@ impl ExecutionOutcome {
             Self::Exception => "exception",
             Self::Timeout => "timeout",
             Self::Halted => "halted",
+            Self::Contained => "contained",
         }
     }
 }
@@ -3374,6 +3380,18 @@ pub fn verify_ir3_specialization(module: &Ir3Module) -> Result<(), IrError> {
 /// Verify that an IR4 witness is consistent with the IR3 module it was produced from.
 pub fn verify_ir4_linkage(witness: &Ir4Module, ir3_hash: &ContentHash) -> Result<(), IrError> {
     verify_schema_version(&witness.header)?;
+    if witness.outcome == ExecutionOutcome::Contained
+        && witness.header.schema_version < CONTAINED_OUTCOME_SCHEMA_VERSION
+    {
+        return Err(IrError::new(
+            IrErrorCode::SchemaVersionMismatch,
+            format!(
+                "contained IR4 outcomes require schema {}, provided {}",
+                CONTAINED_OUTCOME_SCHEMA_VERSION, witness.header.schema_version
+            ),
+            IrLevel::Ir4,
+        ));
+    }
     if &witness.executed_ir3_hash != ir3_hash {
         return Err(IrError::new(
             IrErrorCode::WitnessIntegrityViolation,
@@ -3442,11 +3460,11 @@ pub fn verify_schema_version(header: &IrHeader) -> Result<(), IrError> {
         ));
     }
 
-    // Core 0.6.0, 0.7.0, and 0.12.0 never existed. Those numeric versions
+    // Core 0.6.0, 0.7.0, 0.12.0, and 0.14.0 never existed. Those numeric versions
     // identify incompatible franken-engine IR shapes. Accepting them as
     // historical core artifacts would make the schema gate ambiguous for the
     // overlapping enum variants.
-    if provided.major == 0 && matches!(provided.minor, 6 | 7 | 12) {
+    if provided.major == 0 && matches!(provided.minor, 6 | 7 | 12 | 14) {
         return Err(IrError::new(
             IrErrorCode::SchemaVersionMismatch,
             format!(
@@ -3470,6 +3488,12 @@ pub fn verify_schema_version(header: &IrHeader) -> Result<(), IrError> {
 
     Ok(())
 }
+
+const CONTAINED_OUTCOME_SCHEMA_VERSION: IrSchemaVersion = IrSchemaVersion {
+    major: 0,
+    minor: 15,
+    patch: 0,
+};
 
 const DERIVED_CONSTRUCTOR_SCHEMA_VERSION: IrSchemaVersion = IrSchemaVersion {
     major: 0,
@@ -4107,7 +4131,7 @@ mod tests {
 
     #[test]
     fn schema_version_display() {
-        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.13.0");
+        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.15.0");
     }
 
     #[test]
@@ -4128,7 +4152,7 @@ mod tests {
         };
 
         assert!(verify_schema_version(&header(IrSchemaVersion::CURRENT, IrLevel::Ir3)).is_ok());
-        for minor in [1, 2, 3, 4, 5, 8, 9, 10, 11] {
+        for minor in [1, 2, 3, 4, 5, 8, 9, 10, 11, 13] {
             assert!(
                 verify_schema_version(&header(
                     IrSchemaVersion {
@@ -4139,7 +4163,7 @@ mod tests {
                     IrLevel::Ir1,
                 ))
                 .is_ok(),
-                "core 0.13 readers retain compatibility with 0.{minor} artifacts"
+                "core 0.15 readers retain compatibility with 0.{minor} artifacts"
             );
         }
 
@@ -4290,7 +4314,7 @@ mod tests {
 
     #[test]
     fn schema_version_validation_rejects_skipped_engine_owned_minors_bd_t9n3s() {
-        for minor in [6, 7, 12] {
+        for minor in [6, 7, 12, 14] {
             let header = IrHeader {
                 schema_version: IrSchemaVersion {
                     major: 0,
@@ -5358,6 +5382,7 @@ mod tests {
         assert_eq!(ExecutionOutcome::Exception.as_str(), "exception");
         assert_eq!(ExecutionOutcome::Timeout.as_str(), "timeout");
         assert_eq!(ExecutionOutcome::Halted.as_str(), "halted");
+        assert_eq!(ExecutionOutcome::Contained.as_str(), "contained");
     }
 
     #[test]
@@ -5484,6 +5509,103 @@ mod tests {
             timestamp_tick: 100,
         });
         assert!(verify_ir4_linkage(&ir4, &ir3_hash).is_ok());
+    }
+
+    #[test]
+    fn contained_ir4_roundtrip_binds_outcome_and_schema_bd_9vouw_7() {
+        let ir3_hash = ContentHash::compute(b"contained-ir4-roundtrip");
+        let mut witness = Ir4Module::new(ir3_hash, "contained.js");
+        witness.outcome = ExecutionOutcome::Contained;
+
+        let json = serde_json::to_value(&witness).unwrap();
+        assert_eq!(json["outcome"], "Contained");
+        assert_eq!(
+            json["header"]["schema_version"],
+            serde_json::json!({"major": 0, "minor": 15, "patch": 0})
+        );
+        let restored: Ir4Module = serde_json::from_value(json).unwrap();
+        assert_eq!(restored, witness);
+        assert_eq!(restored.canonical_bytes(), witness.canonical_bytes());
+        assert_eq!(restored.content_hash(), witness.content_hash());
+        verify_ir4_linkage(&restored, &ir3_hash).expect("current contained witness must verify");
+
+        let mut completed = restored.clone();
+        completed.outcome = ExecutionOutcome::Completed;
+        assert_ne!(completed.content_hash(), restored.content_hash());
+    }
+
+    #[test]
+    fn contained_ir4_rejects_schema_downgrade_and_retains_legacy_outcomes_bd_9vouw_7() {
+        let ir3_hash = ContentHash::compute(b"contained-ir4-downgrade");
+        let mut witness = Ir4Module::new(ir3_hash, "contained.js");
+        witness.outcome = ExecutionOutcome::Contained;
+        let current_hash = witness.content_hash();
+
+        for minor in [1, 2, 3, 4, 5, 8, 9, 10, 11, 13] {
+            for patch in [0, u32::MAX] {
+                witness.header.schema_version = IrSchemaVersion {
+                    major: 0,
+                    minor,
+                    patch,
+                };
+                let json = serde_json::to_string(&witness).unwrap();
+                let restored: Ir4Module = serde_json::from_str(&json).unwrap();
+                verify_schema_version(&restored.header)
+                    .expect("historical owned minor must remain readable");
+                let error = verify_ir4_linkage(&restored, &ir3_hash)
+                    .expect_err("an old schema cannot advertise the new contained outcome");
+                assert_eq!(error.code, IrErrorCode::SchemaVersionMismatch);
+                assert_eq!(error.level, IrLevel::Ir4);
+                assert!(
+                    error
+                        .message
+                        .contains("contained IR4 outcomes require schema 0.15.0")
+                );
+                assert!(
+                    error
+                        .message
+                        .contains(&restored.header.schema_version.to_string())
+                );
+                assert_ne!(restored.content_hash(), current_hash);
+
+                for outcome in [
+                    ExecutionOutcome::Completed,
+                    ExecutionOutcome::Exception,
+                    ExecutionOutcome::Timeout,
+                    ExecutionOutcome::Halted,
+                ] {
+                    let mut legacy = restored.clone();
+                    legacy.outcome = outcome;
+                    verify_ir4_linkage(&legacy, &ir3_hash)
+                        .expect("existing outcomes remain valid with historical owned schemas");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn contained_ir4_rejects_peer_schema_versions_bd_9vouw_7() {
+        let ir3_hash = ContentHash::compute(b"contained-ir4-peer");
+        for (minor, reason) in [(14, "skipped core minor"), (16, "unsupported future minor")] {
+            for patch in [0, u32::MAX] {
+                let mut witness = Ir4Module::new(ir3_hash, "peer.js");
+                witness.header.schema_version = IrSchemaVersion {
+                    major: 0,
+                    minor,
+                    patch,
+                };
+                for outcome in [ExecutionOutcome::Completed, ExecutionOutcome::Contained] {
+                    witness.outcome = outcome;
+                    let json = serde_json::to_string(&witness).unwrap();
+                    let restored: Ir4Module = serde_json::from_str(&json).unwrap();
+                    let error = verify_ir4_linkage(&restored, &ir3_hash)
+                        .expect_err("overlapping IR4 shapes do not make peer wires compatible");
+                    assert_eq!(error.code, IrErrorCode::SchemaVersionMismatch);
+                    assert_eq!(error.level, IrLevel::Ir4);
+                    assert!(error.message.contains(reason));
+                }
+            }
+        }
     }
 
     #[test]
@@ -5850,6 +5972,7 @@ mod tests {
             ExecutionOutcome::Exception,
             ExecutionOutcome::Timeout,
             ExecutionOutcome::Halted,
+            ExecutionOutcome::Contained,
         ] {
             let json = serde_json::to_string(&outcome).unwrap();
             let restored: ExecutionOutcome = serde_json::from_str(&json).unwrap();
@@ -6667,6 +6790,7 @@ mod tests {
             ExecutionOutcome::Exception,
             ExecutionOutcome::Timeout,
             ExecutionOutcome::Halted,
+            ExecutionOutcome::Contained,
         ];
         let mut strs = std::collections::BTreeSet::new();
         for o in &outcomes {
@@ -6705,7 +6829,7 @@ mod tests {
     fn schema_version_current_value() {
         let v = IrSchemaVersion::CURRENT;
         assert_eq!(v.major, 0);
-        assert_eq!(v.minor, 13);
+        assert_eq!(v.minor, 15);
         assert_eq!(v.patch, 0);
     }
 

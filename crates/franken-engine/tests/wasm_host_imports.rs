@@ -165,8 +165,10 @@ fn direct_exported_and_indirect_imports_share_the_typed_host_gate() {
     assert_eq!(result.results, [I32(-6)]);
     assert_eq!(result.instructions_executed, 4);
     assert_eq!(result.max_call_depth, 1);
-    let mut fixture = Fixture::default();
-    fixture.code = vec![0x20, 0, 0x20, 1, 0x41, 0, 0x11, 0, 0, 0x0b];
+    let fixture = Fixture {
+        code: vec![0x20, 0, 0x20, 1, 0x41, 0, 0x11, 0, 0, 0x0b],
+        ..Fixture::default()
+    };
     let vm = fixture.vm();
     let mut instance = vm.instantiate_with_imports(imports(grants(), add)).unwrap();
     let result = instance.call_export("f", &[I32(20), I32(22)]).unwrap();
@@ -332,8 +334,10 @@ fn revocation_cannot_be_bypassed_by_exported_imports_or_table_dispatch() {
 
 #[test]
 fn incorrect_arguments_and_host_results_never_enter_later_guest_code() {
-    let mut fixture = Fixture::default();
-    fixture.code = vec![0x20, 0, 0x20, 1, 0x10, 0, 0x24, 0, 0x23, 0, 0x0b];
+    let fixture = Fixture {
+        code: vec![0x20, 0, 0x20, 1, 0x10, 0, 0x24, 0, 0x23, 0, 0x0b],
+        ..Fixture::default()
+    };
     let vm = fixture.vm();
     for results in [vec![], vec![I64(42)], vec![I32(42), I32(9)]] {
         let mut instance = vm
@@ -404,8 +408,10 @@ fn callbacks_preserve_exact_multivalue_bits() {
 
 #[test]
 fn host_startup_runs_once_and_shares_owned_callback_state_with_later_calls() {
-    let mut fixture = Fixture::default();
-    fixture.start = Some(vec![0x41, 20, 0x41, 22, 0x10, 0, 0x24, 0, 0x0b]);
+    let fixture = Fixture {
+        start: Some(vec![0x41, 20, 0x41, 22, 0x10, 0, 0x24, 0, 0x0b]),
+        ..Fixture::default()
+    };
     let vm = fixture.vm();
     let build = || {
         let mut count = 0;
@@ -531,8 +537,10 @@ fn registration_rejects_missing_authority_free_calls_and_duplicate_replacement()
 
 #[test]
 fn host_traps_retain_completed_guest_effects_and_do_not_publish_failed_starts() {
-    let mut fixture = Fixture::default();
-    fixture.code = vec![0x41, 7, 0x24, 0, 0x20, 0, 0x20, 1, 0x10, 0, 0x0b];
+    let mut fixture = Fixture {
+        code: vec![0x41, 7, 0x24, 0, 0x20, 0, 0x20, 1, 0x10, 0, 0x0b],
+        ..Fixture::default()
+    };
     let vm = fixture.vm();
     let mut instance = vm
         .instantiate_with_imports(imports(grants(), |_, _| {

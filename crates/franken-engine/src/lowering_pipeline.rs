@@ -44,9 +44,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::{
     ArrowBody, AssignmentOperator, AssignmentStrictness, BinaryOperator, BindingPattern,
-    BlockStatement, ExportKind, Expression, FunctionParam, ImportClause, MethodDefinition,
-    MethodKind, ObjectPatternProperty, ObjectPropertyKind, ParseGoal, SourceSpan, Statement,
-    UnaryOperator, VariableDeclarationKind, annex_b_function_var_copy,
+    BlockStatement, ExportDeclaration, ExportKind, Expression, FunctionParam, ImportClause,
+    MethodDefinition, MethodKind, ObjectPatternProperty, ObjectPropertyKind, ParseGoal, SourceSpan,
+    Statement, UnaryOperator, VariableDeclarationKind, annex_b_function_var_copy,
 };
 use crate::capability::{APPLY_HOSTCALL_TARGET_PREFIX, hostcall_result_contract};
 use crate::effect_set::{EffectKind, EffectSet};
@@ -232,6 +232,40 @@ fn runtime_scope_binding_name(
 
 fn has_source_lexical_binding(binding_lookup: &BTreeMap<String, BindingId>, name: &str) -> bool {
     binding_lookup.contains_key(&lexical_binding_sentinel(name))
+}
+
+/// A script's global declaration of an immutable value property cannot
+/// shadow that property. The origin distinguishes it from a block-local
+/// binding of the same spelling; function-local declarations clear the
+/// inherited marker because each function restarts its binding-id space.
+fn script_global_value_sentinel(name: &str) -> String {
+    format!("{LEXICAL_BINDING_SENTINEL_PREFIX}\0script-global-value\0{name}")
+}
+
+fn global_value_literal(name: &str) -> Option<Ir1Literal> {
+    match name {
+        "undefined" => Some(Ir1Literal::Undefined),
+        "NaN" => Some(Ir1Literal::Float(f64::NAN.to_bits())),
+        "Infinity" => Some(Ir1Literal::Float(f64::INFINITY.to_bits())),
+        _ => None,
+    }
+}
+
+/// Constant-fold only an immutable global reference, after name resolution.
+/// Synthetic UndefinedLiteral/FloatLiteral AST values remain literals even
+/// when source code declares a local with the corresponding global name.
+fn unshadowed_global_value(
+    binding_lookup: &BTreeMap<String, BindingId>,
+    name: &str,
+) -> Option<Ir1Literal> {
+    let value = global_value_literal(name)?;
+    let is_global = !has_source_lexical_binding(binding_lookup, name)
+        || binding_lookup
+            .get(&script_global_value_sentinel(name))
+            .is_some_and(|origin| {
+                binding_lookup.get(&capture_origin_sentinel(name)) == Some(origin)
+            });
+    is_global.then_some(value)
 }
 
 /// Materialize the body-local bridge used to address a source lexical binding
@@ -805,9 +839,12 @@ fn lower_ir0_to_ir3_unit(
         }
     };
 
-    let mut ir2_result = match lower_ir1_to_ir2_with_host_io_exception_provenance(
+    // Each pass hashed its output module; the next pass reuses that hash
+    // while the module is unchanged (bd-9vouw.382).
+    let mut ir2_result = match lower_ir1_to_ir2_with_input_hash(
         &ir1_result.module,
         context.host_io_exception_provenance,
+        content_hash_from_hash_string(&ir1_result.witness.output_hash),
     ) {
         Ok(result) => {
             events.push(success_event(context, "ir1_to_ir2_lowered"));
@@ -829,6 +866,7 @@ fn lower_ir0_to_ir3_unit(
     // ordinary per-op classifier. Declare the wrapper's module-load authority
     // explicitly so IR3 routing and E9 dispatch metadata see the same surface
     // that the interpreter can execute.
+    let mut ir2_hash = content_hash_from_hash_string(&ir2_result.witness.output_hash);
     if context.authenticated_commonjs_runtime_bindings
         && !ir2_result
             .module
@@ -844,6 +882,8 @@ fn lower_ir0_to_ir3_unit(
             .module
             .required_capabilities
             .sort_by(|left, right| left.0.cmp(&right.0));
+        // The pass's output hash no longer describes the module.
+        ir2_hash = None;
     }
 
     let ir2_flow_proof_artifact = match build_ir2_flow_proof_artifact(&ir2_result.module, context) {
@@ -861,10 +901,11 @@ fn lower_ir0_to_ir3_unit(
         }
     };
 
-    let ir3_result = match lower_ir2_to_ir3_with_host_io_exception_provenance(
+    let ir3_result = match lower_ir2_to_ir3_with_input_hash(
         &ir2_result.module,
         context.host_io_exception_provenance,
         context.authenticated_commonjs_runtime_bindings,
+        ir2_hash,
     ) {
         Ok(result) => {
             events.push(success_event(context, "ir2_to_ir3_lowered"));
@@ -893,6 +934,56 @@ fn lower_ir0_to_ir3_unit(
         ],
         events,
     })
+}
+
+/// In module code a top-level function declaration is a lexically declared
+/// name (ES2020 15.2.1.1: LexicallyDeclaredNames of a ModuleItemList), so a
+/// `var`, `let`, `const`, class, import or second function declaration of
+/// the same name is an early error (bd-9vouw.389). Lowering allocates a
+/// function as a var binding, which merges with `var` and with another
+/// function, so the module rule is checked before lowering starts.
+fn module_function_redeclaration(goal: ParseGoal, body: &[Statement]) -> Option<SemanticError> {
+    if goal != ParseGoal::Module {
+        return None;
+    }
+    let mut function_names = BTreeSet::new();
+    for statement in body {
+        if let Statement::FunctionDeclaration(function) = statement
+            && let Some(name) = function.name.as_deref()
+            && !function_names.insert(name)
+        {
+            return Some(SemanticError::new(
+                SemanticErrorCode::DuplicateLetConstDeclaration,
+                Some(name.to_string()),
+                Some(function.span),
+            ));
+        }
+    }
+    for statement in body {
+        let (names, span) = match statement {
+            Statement::VariableDeclaration(declaration) => (
+                declaration
+                    .declarations
+                    .iter()
+                    .flat_map(|declarator| declarator.pattern.binding_names())
+                    .collect::<Vec<_>>(),
+                declaration.span,
+            ),
+            Statement::ClassDeclaration(class) => {
+                (class.name.as_deref().into_iter().collect(), class.span)
+            }
+            Statement::Import(import) => (import.clause.binding_names(), import.span),
+            _ => continue,
+        };
+        if let Some(name) = names.into_iter().find(|name| function_names.contains(name)) {
+            return Some(SemanticError::new(
+                SemanticErrorCode::DuplicateLetConstDeclaration,
+                Some(name.to_string()),
+                Some(span),
+            ));
+        }
+    }
+    None
 }
 
 /// Validate static semantics of an IR0 module without performing full lowering.
@@ -977,6 +1068,26 @@ pub fn validate_ir0_static_semantics(ir0: &Ir0Module) -> SemanticValidationResul
             }
             Statement::Expression(_) => {
                 // Expression statements have no early errors at this level.
+            }
+            // A module's top-level function declarations are lexically
+            // declared names (ES2020 15.2.1.1: LexicallyDeclaredNames of a
+            // ModuleItemList includes them), so a `var`, `let`, `const`,
+            // import or other function of the same name is an early error
+            // (bd-9vouw.389). In a script they are var-scoped and merge.
+            Statement::FunctionDeclaration(function) if ir0.tree.goal == ParseGoal::Module => {
+                if let Some(name) = function.name.as_deref() {
+                    if let Some(existing_kind) = seen_bindings.get(name) {
+                        let conflict = check_binding_conflict(*existing_kind, BindingKind::Let);
+                        if let BindingConflict::Error(code) = conflict {
+                            result.add_error(SemanticError::new(
+                                code,
+                                Some(name.to_string()),
+                                Some(function.span),
+                            ));
+                        }
+                    }
+                    seen_bindings.insert(name.to_string(), BindingKind::Let);
+                }
             }
             Statement::Block(_)
             | Statement::If(_)
@@ -1076,6 +1187,9 @@ fn lower_ir0_to_ir1_on_current_stack(
 ) -> Result<LoweringPassResult<Ir1Module>, LoweringPipelineError> {
     if ir0.tree.body.is_empty() {
         return Err(LoweringPipelineError::EmptyIr0Body);
+    }
+    if let Some(error) = module_function_redeclaration(ir0.tree.goal, &ir0.tree.body) {
+        return Err(LoweringPipelineError::SemanticViolation(error));
     }
 
     let ir0_hash = ir0.content_hash();
@@ -1210,6 +1324,12 @@ fn lower_ir0_to_ir1_on_current_stack(
             .get(name)
             .expect("reserved root source binding must have an exact id");
         binding_lookup.insert(capture_origin_sentinel(name), binding_id);
+        if ir0.tree.goal == ParseGoal::Script
+            && !authenticated_commonjs_runtime_bindings
+            && global_value_literal(name).is_some()
+        {
+            binding_lookup.insert(script_global_value_sentinel(name), binding_id);
+        }
     }
     // bd-1xl17.a: record fs-module binding aliases (`const fs = require('fs')`
     // that are actually used as `fs.readFileSync/writeFileSync`) as NUL-sentinels
@@ -1509,7 +1629,7 @@ fn lower_ir0_to_ir1_on_current_stack(
     // stamp `Ir2Op::span`.
     let mut op_spans: Vec<Ir1OpSpanEntry> = Vec::new();
 
-    for statement in hoisted_statement_order(&ir0.tree.body) {
+    for statement in module_statement_order(&ir0.tree.body) {
         match statement {
             Statement::Import(import) => {
                 let specifier = import.source.clone();
@@ -1917,6 +2037,7 @@ fn lower_ir0_to_ir1_on_current_stack(
             }
             Statement::Export(export) => match &export.kind {
                 ExportKind::Default(expression) => {
+                    let start = ir1.ops.len();
                     lower_expression_to_ir1(
                         expression,
                         &mut ir1.ops,
@@ -1927,6 +2048,9 @@ fn lower_ir0_to_ir1_on_current_stack(
                         &mut label_counter,
                         &mut op_spans,
                     )?;
+                    // ES2020 15.2.3.11: an anonymous function, class or arrow
+                    // exported as default is named "default" (bd-9vouw.386).
+                    name_anonymous_function_definition(&mut ir1.ops, start, expression, "default");
                     let binding_name =
                         make_internal_binding_name("default_export", synthetic_export_index);
                     synthetic_export_index = synthetic_export_index.saturating_add(1);
@@ -1966,7 +2090,9 @@ fn lower_ir0_to_ir1_on_current_stack(
                     if clause.canonical_head().starts_with("* as ")
                         && clause.source().is_some() =>
                 {
-                    let exported_name = clause.canonical_head()["* as ".len()..].to_string();
+                    let exported_name = crate::parser::decode_module_export_name(
+                        &clause.canonical_head()["* as ".len()..],
+                    );
                     let namespace_binding_id = {
                         let temp_name = make_internal_binding_name(
                             "reexport_namespace",
@@ -2040,13 +2166,15 @@ fn lower_ir0_to_ir1_on_current_stack(
                                     synthetic_export_index,
                                 );
                                 synthetic_export_index = synthetic_export_index.saturating_add(1);
+                                // An import binding (bd-1lsy.4.10.1): it follows
+                                // the source module's export, and republishes it.
                                 let export_binding_id = alloc_binding(
                                     &mut bindings,
                                     &mut binding_lookup,
                                     &mut binding_index,
                                     root_scope_id,
                                     &export_binding_name,
-                                    BindingKind::Const,
+                                    BindingKind::Import,
                                 )
                                 .map_err(LoweringPipelineError::SemanticViolation)?;
                                 ir1.ops.push(Ir1Op::StoreBinding {
@@ -3078,6 +3206,15 @@ fn rewrite_class_expression_self_capture(
     }
 }
 
+// A function's implicit `arguments` binding is a real function-local binding,
+// even when an outer source declaration has the same name. Its exact ID is
+// routed to the entry-created runtime cell, which `var arguments` redeclares.
+const OWN_ARGUMENTS_BINDING_SENTINEL: &str = "\0own_arguments_binding";
+const REDECLARED_ARGUMENTS_BINDING_SENTINEL: &str = "\0redeclared_arguments_binding";
+// Arrows may inherit this origin, but a same-named parameter or block binding
+// must not. Captures of the implicit binding use its existing runtime cell.
+const RUNTIME_ARGUMENTS_ORIGIN_SENTINEL: &str = "\0runtime_arguments_origin";
+
 /// Prepare a fresh function-like lookup without eagerly materializing every
 /// inherited name. NUL markers carry source-lexical visibility only; an exact
 /// normal bridge binding is allocated later, and only when a descendant
@@ -3087,6 +3224,7 @@ fn rewrite_class_expression_self_capture(
 fn prepare_function_body_bindings(
     statements: Option<&[Statement]>,
     self_name: Option<&str>,
+    is_arrow: bool,
     mentioned: &MentionedNames<'_>,
     outer_lookup: &BTreeMap<String, BindingId>,
     body_lookup: &mut BTreeMap<String, BindingId>,
@@ -3097,6 +3235,9 @@ fn prepare_function_body_bindings(
         .filter(|name| !is_internal_lowering_binding(name))
         .cloned()
         .collect::<BTreeSet<_>>();
+    let parameter_binds_arguments = local_names.contains("arguments");
+    let body_shadows_arguments = statements
+        .is_some_and(|statements| direct_lexical_binding_names(statements).contains("arguments"));
     if let Some(statements) = statements {
         local_names.extend(reserve_root_scope_bindings(
             statements,
@@ -3108,6 +3249,20 @@ fn prepare_function_body_bindings(
             body_lookup,
             body_binding_index,
         ));
+    }
+    if !is_arrow
+        && !parameter_binds_arguments
+        && !body_shadows_arguments
+        && mentioned.names.contains("arguments")
+    {
+        let is_var_redeclaration = local_names.contains("arguments");
+        let binding_id = reserve_binding_id(body_lookup, body_binding_index, "arguments");
+        body_lookup.insert(OWN_ARGUMENTS_BINDING_SENTINEL.to_string(), binding_id);
+        body_lookup.insert(RUNTIME_ARGUMENTS_ORIGIN_SENTINEL.to_string(), binding_id);
+        if is_var_redeclaration {
+            body_lookup.insert(REDECLARED_ARGUMENTS_BINDING_SENTINEL.to_string(), binding_id);
+        }
+        local_names.insert("arguments".to_string());
     }
     // A stream provenance sentinel belongs to the imported binding in the
     // enclosing scope, not to a same-spelled parameter/local in this fresh
@@ -3128,7 +3283,9 @@ fn prepare_function_body_bindings(
             body_lookup.insert(capture_origin_sentinel(name), binding_id);
         }
     }
-    if let Some(name) = self_name {
+    if let Some(name) = self_name
+        && (is_arrow || name != "arguments" || parameter_binds_arguments)
+    {
         suppress_stream_module_sentinel(body_lookup, name);
         suppress_net_module_sentinel(body_lookup, name);
         suppress_zlib_module_sentinel(body_lookup, name);
@@ -3160,6 +3317,9 @@ fn prepare_function_body_bindings(
             .copied()
             .chain(AUTHENTICATED_COMMONJS_RUNTIME_BINDINGS)
         {
+            if !is_arrow && name == "arguments" {
+                continue;
+            }
             key.truncate(prefix.len());
             key.push_str(name);
             if !body_lookup.contains_key(&key)
@@ -3168,6 +3328,21 @@ fn prepare_function_body_bindings(
                 body_lookup.insert(key.clone(), binding_id);
             }
         }
+    }
+
+    if is_arrow
+        && !local_names.contains("arguments")
+        && let Some(&origin) = outer_lookup.get(RUNTIME_ARGUMENTS_ORIGIN_SENTINEL)
+        && outer_lookup.get(&capture_origin_sentinel("arguments")) == Some(&origin)
+    {
+        body_lookup.insert(RUNTIME_ARGUMENTS_ORIGIN_SENTINEL.to_string(), origin);
+    }
+
+    // A local parameter, var, lexical declaration or inner function name
+    // shadows an immutable global value even if its id happens to equal
+    // that global declaration's id in the enclosing lowering unit.
+    for name in local_names.iter().map(String::as_str).chain(self_name) {
+        body_lookup.remove(&script_global_value_sentinel(name));
     }
 
     // Buffer object provenance is intentionally not inherited from the outer
@@ -3530,7 +3705,12 @@ fn parse_named_export_clause_bindings(clause: &str) -> Vec<(String, String)> {
                     [local, "as", exported] => (*local, *exported),
                     _ => (specifier, specifier),
                 };
-                Some((local_name.to_string(), exported_name.to_string()))
+                // A string name is an encoded word of the head
+                // (`export { "a-b" as c } from`, bd-9vouw.429).
+                Some((
+                    crate::parser::decode_module_export_name(local_name),
+                    crate::parser::decode_module_export_name(exported_name),
+                ))
             })
             .collect();
     }
@@ -4928,6 +5108,8 @@ fn allocate_destructure_param_bindings(
 struct ParameterPrologueState {
     references: Vec<(String, BindingId)>,
     child_capture_entries: Vec<(String, BindingId)>,
+    arguments_binding: Option<BindingId>,
+    has_parameter_prologue: bool,
 }
 
 fn push_generator_prologue_end(body_ops: &mut Vec<Ir1Op>) {
@@ -4942,6 +5124,7 @@ fn push_generator_prologue_end(body_ops: &mut Vec<Ir1Op>) {
 fn lower_function_parameter_prologue(
     destructure_params: &[(String, &BindingPattern)],
     self_name: Option<&str>,
+    is_arrow: bool,
     outer_lookup: &BTreeMap<String, BindingId>,
     body_ops: &mut Vec<Ir1Op>,
     body_bindings: &mut Vec<ResolvedBinding>,
@@ -4958,6 +5141,7 @@ fn lower_function_parameter_prologue(
     let pre_lower_names = prepare_function_body_bindings(
         None,
         self_name,
+        is_arrow,
         &MentionedNames::of_patterns(destructure_params.iter().map(|(_, pattern)| *pattern)),
         outer_lookup,
         &mut prologue_lookup,
@@ -5010,13 +5194,32 @@ fn lower_function_parameter_prologue(
     Ok(ParameterPrologueState {
         references,
         child_capture_entries,
+        arguments_binding: prologue_lookup.get(OWN_ARGUMENTS_BINDING_SENTINEL).copied(),
+        has_parameter_prologue: true,
     })
 }
 
 fn merge_parameter_prologue_state(
     state: &ParameterPrologueState,
     body_lookup: &mut BTreeMap<String, BindingId>,
+    body_ops: &mut Vec<Ir1Op>,
 ) {
+    if state.has_parameter_prologue
+        && let Some(&binding_id) = body_lookup.get(REDECLARED_ARGUMENTS_BINDING_SENTINEL)
+    {
+        // A parameter-initializer closure retains the parameter environment.
+        // A body `var arguments` starts with that environment's current value,
+        // but later body assignments must not replace the parameter binding.
+        // Perform this copy after defaults, which may themselves assign it.
+        body_lookup.remove(OWN_ARGUMENTS_BINDING_SENTINEL);
+        body_lookup.remove(RUNTIME_ARGUMENTS_ORIGIN_SENTINEL);
+        body_ops.push(Ir1Op::LoadName {
+            name: "arguments".to_string(),
+            allow_missing: false,
+        });
+        body_ops.push(Ir1Op::StoreBinding { binding_id });
+        body_ops.push(Ir1Op::Discard);
+    }
     for (name, binding_id) in &state.references {
         body_lookup.entry(name.clone()).or_insert(*binding_id);
     }
@@ -5531,9 +5734,14 @@ fn lower_statement_to_ir1_with_flow(
                             || (is_require_url_module_initializer(init, binding_lookup)
                                 && binding_lookup.contains_key(&url_module_alias_sentinel(alias))
                                 && !require_is_commonjs_wrapper(binding_lookup))
+                            // Under the CommonJS wrapper `require('querystring')`
+                            // runs and returns the engine's querystring module
+                            // (bd-9vouw.439), so a function that reads the
+                            // alias sees it, as for os below.
                             || (is_require_querystring_module_initializer(init, binding_lookup)
                                 && binding_lookup
-                                    .contains_key(&querystring_module_alias_sentinel(alias)))
+                                    .contains_key(&querystring_module_alias_sentinel(alias))
+                                && !require_is_commonjs_wrapper(binding_lookup))
                             // Under the CommonJS wrapper `require('os')` runs:
                             // the loader returns the engine's os module
                             // (bd-9vouw.204), so `typeof os` and
@@ -5706,8 +5914,31 @@ fn lower_statement_to_ir1_with_flow(
             restore_source_lexical_markers(binding_lookup, &lexical_marker_snapshot);
         }
         Statement::If(if_stmt) => {
+            // bd-9vouw.486: `if (!x)`, `if (a === b)` and the other
+            // (in)equalities branch on the exact negation (`x`, `a !== b`)
+            // with JumpIfTruthy to the else branch: one JumpIf, where
+            // JumpIfFalsy lowers to a JumpIf over a Jump (and `!x` to a
+            // LogicalNot first). A relational test has no exact negation (NaN).
+            let negated_condition = match &if_stmt.condition {
+                Expression::Unary {
+                    operator: UnaryOperator::LogicalNot,
+                    argument,
+                } => Some(std::borrow::Cow::Borrowed(argument.as_ref())),
+                Expression::Binary {
+                    operator,
+                    left,
+                    right,
+                } => negated_equality(*operator).map(|operator| {
+                    std::borrow::Cow::Owned(Expression::Binary {
+                        operator,
+                        left: left.clone(),
+                        right: right.clone(),
+                    })
+                }),
+                _ => None,
+            };
             lower_expression_to_ir1(
-                &if_stmt.condition,
+                negated_condition.as_deref().unwrap_or(&if_stmt.condition),
                 ops,
                 bindings,
                 binding_lookup,
@@ -5718,10 +5949,16 @@ fn lower_statement_to_ir1_with_flow(
             )?;
             let else_label = alloc_label(label_counter);
             let end_label = alloc_label(label_counter);
-            ops.push(Ir1Op::JumpIfFalsy {
-                label_id: else_label,
-            });
-            ops.push(Ir1Op::Pop);
+            if negated_condition.is_some() {
+                ops.push(Ir1Op::JumpIfTruthy {
+                    label_id: else_label,
+                });
+            } else {
+                ops.push(Ir1Op::JumpIfFalsy {
+                    label_id: else_label,
+                });
+                ops.push(Ir1Op::Pop);
+            }
             lower_statement_to_ir1_with_flow(
                 &if_stmt.consequent,
                 ops,
@@ -5734,9 +5971,13 @@ fn lower_statement_to_ir1_with_flow(
                 control_flow,
                 label_ctx,
             )?;
-            ops.push(Ir1Op::Jump {
-                label_id: end_label,
-            });
+            // Without an else branch the end follows the consequent: no jump
+            // to the next instruction (bd-9vouw.328).
+            if if_stmt.alternate.is_some() {
+                ops.push(Ir1Op::Jump {
+                    label_id: end_label,
+                });
+            }
             ops.push(Ir1Op::Label { id: else_label });
             if let Some(alt) = &if_stmt.alternate {
                 lower_statement_to_ir1_with_flow(
@@ -5812,23 +6053,20 @@ fn lower_statement_to_ir1_with_flow(
             let loop_label = alloc_label(label_counter);
             let continue_label = alloc_label(label_counter);
             let end_label = alloc_label(label_counter);
-            ops.push(Ir1Op::Label { id: loop_label });
-            if let Some(test) = &for_stmt.condition {
-                lower_expression_to_ir1(
-                    test,
-                    ops,
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    scope_id,
-                    label_counter,
-                    span_table,
-                )?;
-                ops.push(Ir1Op::JumpIfFalsy {
-                    label_id: end_label,
+            // With a test, the test runs at the bottom (bd-9vouw.486): entry
+            // jumps to it and its JumpIfTruthy (one JumpIf) returns to the
+            // body, in the spec's order (test, body, per-iteration copy,
+            // update, test).
+            let test_label = for_stmt
+                .condition
+                .as_ref()
+                .map(|_| alloc_label(label_counter));
+            if let Some(test_label) = test_label {
+                ops.push(Ir1Op::Jump {
+                    label_id: test_label,
                 });
-                ops.push(Ir1Op::Pop);
             }
+            ops.push(Ir1Op::Label { id: loop_label });
             lower_statement_to_ir1_with_flow(
                 &for_stmt.body,
                 ops,
@@ -5863,11 +6101,31 @@ fn lower_statement_to_ir1_with_flow(
                     label_counter,
                     span_table,
                 )?;
-                ops.push(Ir1Op::Pop);
+                // The update's value is never the loop's completion value
+                // (ForBodyEvaluation keeps the body's): a pure discard, which
+                // also saves the top-level completion Move per iteration.
+                ops.push(Ir1Op::Discard);
             }
-            ops.push(Ir1Op::Jump {
-                label_id: loop_label,
-            });
+            if let (Some(test_label), Some(test)) = (test_label, &for_stmt.condition) {
+                ops.push(Ir1Op::Label { id: test_label });
+                lower_expression_to_ir1(
+                    test,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                    label_counter,
+                    span_table,
+                )?;
+                ops.push(Ir1Op::JumpIfTruthy {
+                    label_id: loop_label,
+                });
+            } else {
+                ops.push(Ir1Op::Jump {
+                    label_id: loop_label,
+                });
+            }
             ops.push(Ir1Op::Label { id: end_label });
             restore_binding_entries(binding_lookup, lexical_binding_snapshot);
             restore_source_lexical_markers(binding_lookup, &lexical_marker_snapshot);
@@ -6166,15 +6424,28 @@ fn lower_statement_to_ir1_with_flow(
             ops.push(Ir1Op::ForOfNext {
                 done_label: end_label,
             });
+            // Initializing a fresh let/const binding of a plain identifier
+            // cannot throw, so that head needs no region closing the iterator
+            // (bd-9vouw.486: two instructions per iteration). An assignment
+            // to an existing binding can (`const x = 0; for (x of a)` is a
+            // TypeError), as can a destructuring or an unresolved name.
+            let head_can_throw = !(matches!(for_of_stmt.binding, BindingPattern::Identifier(_))
+                && matches!(
+                    for_of_stmt.binding_kind,
+                    Some(VariableDeclarationKind::Let | VariableDeclarationKind::Const)
+                ));
             // IteratorStep/IteratorValue failures do not close the iterator.
             // Begin the head protected region only once a yielded value exists.
-            ops.push(Ir1Op::BeginTry {
-                catch_label: throw_close_label,
-                // Route directly to a finally-style handler. Unlike a catch,
-                // this preserves the pending exception for EndFinally instead
-                // of materializing it as a new user-value Throw.
-                finally_label: Some(throw_close_label),
-            });
+            if head_can_throw {
+                ops.push(Ir1Op::BeginTry {
+                    catch_label: throw_close_label,
+                    // Route directly to a finally-style handler. Unlike a
+                    // catch, this preserves the pending exception for
+                    // EndFinally instead of materializing it as a new
+                    // user-value Throw.
+                    finally_label: Some(throw_close_label),
+                });
+            }
 
             // Bind the yielded value to the loop variable.
             let bid = match for_of_stmt.binding_kind {
@@ -6303,7 +6574,9 @@ fn lower_statement_to_ir1_with_flow(
                     None,
                 )?;
             }
-            ops.push(Ir1Op::EndTry);
+            if head_can_throw {
+                ops.push(Ir1Op::EndTry);
+            }
 
             // A body throw and a function return carry different completion
             // precedence through IteratorClose. The runtime already routes a
@@ -6463,23 +6736,16 @@ fn lower_statement_to_ir1_with_flow(
             ));
         }
         Statement::While(while_stmt) => {
-            let loop_label = alloc_label(label_counter);
+            // Test at the bottom (bd-9vouw.486): entry jumps to the test,
+            // whose JumpIfTruthy (one JumpIf) returns to the body, so an
+            // iteration runs no JumpIf-over-Jump and no back Jump.
+            let body_label = alloc_label(label_counter);
+            let test_label = alloc_label(label_counter);
             let end_label = alloc_label(label_counter);
-            ops.push(Ir1Op::Label { id: loop_label });
-            lower_expression_to_ir1(
-                &while_stmt.condition,
-                ops,
-                bindings,
-                binding_lookup,
-                binding_index,
-                scope_id,
-                label_counter,
-                span_table,
-            )?;
-            ops.push(Ir1Op::JumpIfFalsy {
-                label_id: end_label,
+            ops.push(Ir1Op::Jump {
+                label_id: test_label,
             });
-            ops.push(Ir1Op::Pop);
+            ops.push(Ir1Op::Label { id: body_label });
             lower_statement_to_ir1_with_flow(
                 &while_stmt.body,
                 ops,
@@ -6491,12 +6757,23 @@ fn lower_statement_to_ir1_with_flow(
                 span_table,
                 ControlFlowTargets {
                     break_label: Some(end_label),
-                    continue_label: Some(loop_label),
+                    continue_label: Some(test_label),
                 },
-                &label_ctx.enter_loop(end_label, loop_label),
+                &label_ctx.enter_loop(end_label, test_label),
             )?;
-            ops.push(Ir1Op::Jump {
-                label_id: loop_label,
+            ops.push(Ir1Op::Label { id: test_label });
+            lower_expression_to_ir1(
+                &while_stmt.condition,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                label_counter,
+                span_table,
+            )?;
+            ops.push(Ir1Op::JumpIfTruthy {
+                label_id: body_label,
             });
             ops.push(Ir1Op::Label { id: end_label });
         }
@@ -6531,11 +6808,8 @@ fn lower_statement_to_ir1_with_flow(
                 label_counter,
                 span_table,
             )?;
-            ops.push(Ir1Op::JumpIfFalsy {
-                label_id: end_label,
-            });
-            ops.push(Ir1Op::Pop);
-            ops.push(Ir1Op::Jump {
+            // A truthy test returns to the body in one JumpIf (bd-9vouw.486).
+            ops.push(Ir1Op::JumpIfTruthy {
                 label_id: loop_label,
             });
             ops.push(Ir1Op::Label { id: end_label });
@@ -7116,6 +7390,20 @@ fn lower_statement_to_ir1_with_flow(
             ops.push(Ir1Op::Jump { label_id });
         }
         Statement::Labeled(labeled) => {
+            // ES2020 13.13.1: a label nested inside a statement with the same
+            // label is an early error (`L: { L: 0; }`); function bodies start
+            // a fresh label context (bd-9vouw.392).
+            if label_ctx.resolve(&labeled.label).is_some()
+                || label_ctx.pending.contains(&labeled.label)
+            {
+                return Err(LoweringPipelineError::SemanticViolation(
+                    SemanticError::new(
+                        SemanticErrorCode::DuplicateLabel,
+                        Some(labeled.label.clone()),
+                        Some(labeled.span),
+                    ),
+                ));
+            }
             // §14.13. A label on an iteration statement (directly or through
             // nested labels) binds to that loop's break+continue targets — so
             // accumulate it in `pending` and let the loop body lowering bind
@@ -7258,6 +7546,7 @@ fn lower_statement_to_ir1_with_flow(
             let parameter_prologue = lower_function_parameter_prologue(
                 &destructure_params,
                 None,
+                false,
                 binding_lookup,
                 &mut body_ops,
                 &mut body_bindings,
@@ -7266,18 +7555,19 @@ fn lower_statement_to_ir1_with_flow(
                 body_scope,
                 &mut body_label_counter,
             )?;
-            if func.is_generator {
-                push_generator_prologue_end(&mut body_ops);
-            }
             let pre_lower_names = prepare_function_body_bindings(
                 Some(&func.body.body),
                 None,
+                false,
                 &MentionedNames::of_function(func.name.as_deref(), &func.params, &func.body.body),
                 binding_lookup,
                 &mut body_lookup,
                 &mut body_binding_index,
             );
-            merge_parameter_prologue_state(&parameter_prologue, &mut body_lookup);
+            merge_parameter_prologue_state(&parameter_prologue, &mut body_lookup, &mut body_ops);
+            if func.is_generator {
+                push_generator_prologue_end(&mut body_ops);
+            }
             for stmt in hoisted_statement_order(&func.body.body) {
                 lower_statement_to_ir1(
                     stmt,
@@ -7435,6 +7725,7 @@ fn lower_statement_to_ir1_with_flow(
             let parameter_prologue = lower_function_parameter_prologue(
                 &destructure_params,
                 Some(&class_name),
+                false,
                 binding_lookup,
                 &mut body_ops,
                 &mut body_bindings,
@@ -7452,12 +7743,13 @@ fn lower_statement_to_ir1_with_flow(
             let ctor_pre_lower_names = prepare_function_body_bindings(
                 ctor_statements,
                 Some(&class_name),
+                false,
                 &class_mentions,
                 binding_lookup,
                 &mut body_lookup,
                 &mut body_binding_index,
             );
-            merge_parameter_prologue_state(&parameter_prologue, &mut body_lookup);
+            merge_parameter_prologue_state(&parameter_prologue, &mut body_lookup, &mut body_ops);
             if let Some(ctor) = constructor {
                 for stmt in hoisted_statement_order(&ctor.body.body) {
                     lower_statement_to_ir1(
@@ -7601,13 +7893,20 @@ fn lower_statement_to_ir1_with_flow(
                         arg_count: 0,
                     });
                 } else {
-                    // Load the parent constructor evaluated once above.
-                    ops.push(Ir1Op::LoadBinding {
-                        binding_id: super_binding.expect("user superclass binding"),
-                    });
-                    ops.push(Ir1Op::GetProperty {
-                        key: Ir1PropertyKey::Static("prototype".into()),
-                    });
+                    // The parent constructor evaluated once above.
+                    let prototype_binding = alloc_internal_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        "class_super_prototype",
+                    )?;
+                    emit_heritage_prototype(
+                        ops,
+                        super_binding.expect("user superclass binding"),
+                        prototype_binding,
+                        label_counter,
+                    );
                 }
 
                 // Child.prototype inherits from Parent.prototype. An internal
@@ -7688,6 +7987,7 @@ fn lower_statement_to_ir1_with_flow(
                 let parameter_prologue = lower_function_parameter_prologue(
                     &m_destructure_params,
                     None,
+                    false,
                     binding_lookup,
                     &mut m_body_ops,
                     &mut m_bindings,
@@ -7696,18 +7996,27 @@ fn lower_statement_to_ir1_with_flow(
                     m_scope,
                     &mut m_label_counter,
                 )?;
-                if method.is_generator {
-                    push_generator_prologue_end(&mut m_body_ops);
-                }
+                // The member's own mentions with the class-level ones: the
+                // whole class's set cost each member the size of the class,
+                // O(members^2) to lower one class.
+                let member_mentions = MentionedNames::of_class(
+                    cls.name.as_deref(),
+                    cls.super_class.as_deref(),
+                    std::slice::from_ref(method),
+                );
                 let method_pre_lower_names = prepare_function_body_bindings(
                     Some(&method.body.body),
                     None,
-                    &class_mentions,
+                    false,
+                    &member_mentions,
                     binding_lookup,
                     &mut m_lookup,
                     &mut m_binding_index,
                 );
-                merge_parameter_prologue_state(&parameter_prologue, &mut m_lookup);
+                merge_parameter_prologue_state(&parameter_prologue, &mut m_lookup, &mut m_body_ops);
+                if method.is_generator {
+                    push_generator_prologue_end(&mut m_body_ops);
+                }
                 for stmt in hoisted_statement_order(&method.body.body) {
                     lower_statement_to_ir1(
                         stmt,
@@ -8026,10 +8335,27 @@ fn lower_ir1_to_ir2_with_host_io_exception_provenance(
     ir1: &Ir1Module,
     host_io_exception_provenance: HostIoExceptionProvenance,
 ) -> Result<LoweringPassResult<Ir2Module>, LoweringPipelineError> {
+    lower_ir1_to_ir2_with_input_hash(ir1, host_io_exception_provenance, None)
+}
+
+/// [`lower_ir1_to_ir2_with_host_io_exception_provenance`] given `ir1`'s
+/// content hash when the caller already holds it: the IR0 -> IR1 pass's
+/// output hash, for the module it returned unchanged. Each canonical hash
+/// of a bundle's IR is a full encode of the module (bd-9vouw.382).
+fn lower_ir1_to_ir2_with_input_hash(
+    ir1: &Ir1Module,
+    host_io_exception_provenance: HostIoExceptionProvenance,
+    input_hash: Option<ContentHash>,
+) -> Result<LoweringPassResult<Ir2Module>, LoweringPipelineError> {
     verify_schema_version(&ir1.header).map_err(lowering_error_from_ir_error)?;
     verify_ir1_derived_constructor_schema(ir1).map_err(lowering_error_from_ir_error)?;
     verify_ir1_object_method_schema(ir1).map_err(lowering_error_from_ir_error)?;
-    let ir1_hash = ir1.content_hash();
+    let ir1_hash = input_hash.unwrap_or_else(|| ir1.content_hash());
+    debug_assert_eq!(
+        ir1_hash,
+        ir1.content_hash(),
+        "a supplied IR1 hash is the module's"
+    );
     let mut ir2 = Ir2Module::new(ir1_hash, ir1.header.source_label.clone());
     ir2.header.schema_version = ir1.header.schema_version;
     ir2.scopes = ir1.scopes.clone();
@@ -8201,6 +8527,29 @@ fn lower_unary_op_to_ir3(operator: UnaryOperator, dst: Reg, src: Reg) -> Ir3Inst
 /// compound-assignment lowering (bd-cwfiv) to build the read-modify-write
 /// `object[key] = object[key] <op> rhs`. `Assign` and the logical compound ops
 /// (`&&=`/`||=`/`??=`) are handled on dedicated paths and must not reach here.
+/// Whether evaluating `expression` runs no code that could write a binding:
+/// a literal or a read of a resolved source binding (bd-9vouw.327). Any other
+/// form can call a function, a getter or a conversion.
+fn right_side_runs_no_code(
+    expression: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    match expression {
+        Expression::NumericLiteral(_)
+        | Expression::FloatLiteral(_)
+        | Expression::StringLiteral(_)
+        | Expression::BigIntLiteral(_)
+        | Expression::BooleanLiteral(_)
+        | Expression::NullLiteral
+        | Expression::UndefinedLiteral => true,
+        Expression::Identifier(name) => {
+            has_source_lexical_binding(binding_lookup, name)
+                || unshadowed_global_value(binding_lookup, name).is_some()
+        }
+        _ => false,
+    }
+}
+
 fn compound_assignment_binary_operator(
     operator: AssignmentOperator,
 ) -> Result<BinaryOperator, LoweringPipelineError> {
@@ -8362,6 +8711,23 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
     host_io_exception_provenance: HostIoExceptionProvenance,
     authenticated_commonjs_runtime_bindings: bool,
 ) -> Result<LoweringPassResult<Ir3Module>, LoweringPipelineError> {
+    lower_ir2_to_ir3_with_input_hash(
+        ir2,
+        host_io_exception_provenance,
+        authenticated_commonjs_runtime_bindings,
+        None,
+    )
+}
+
+/// [`lower_ir2_to_ir3_with_host_io_exception_provenance`] given `ir2`'s
+/// content hash when the caller already holds it (the IR1 -> IR2 pass's
+/// output hash for an unchanged module, bd-9vouw.382).
+fn lower_ir2_to_ir3_with_input_hash(
+    ir2: &Ir2Module,
+    host_io_exception_provenance: HostIoExceptionProvenance,
+    authenticated_commonjs_runtime_bindings: bool,
+    input_hash: Option<ContentHash>,
+) -> Result<LoweringPassResult<Ir3Module>, LoweringPipelineError> {
     verify_schema_version(&ir2.header).map_err(lowering_error_from_ir_error)?;
     // Nested function bodies are re-annotated below for their runtime flow
     // guards; they share the whole lowering unit's bound (bd-9vouw.1).
@@ -8393,7 +8759,12 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
         },
     }
 
-    let ir2_hash = ir2.content_hash();
+    let ir2_hash = input_hash.unwrap_or_else(|| ir2.content_hash());
+    debug_assert_eq!(
+        ir2_hash,
+        ir2.content_hash(),
+        "a supplied IR2 hash is the module's"
+    );
     let mut ir3 = Ir3Module::new(ir2_hash, ir2.header.source_label.clone());
     ir3.header.schema_version = ir2.header.schema_version;
     let mut constant_pool = ConstantPool::new();
@@ -8434,6 +8805,9 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
     // perf: pre-size value stack based on estimated expression nesting depth
     let mut value_stack: ArenaVec<'_, Reg> = arena.alloc_vec_with_capacity::<Reg>(32);
     let mut label_targets = BTreeMap::<u32, u32>::new();
+    // bd-9vouw.494: where the last label was bound; a store copy at that
+    // position is a jump target and keeps its producer's destination.
+    let mut last_label_target: Option<u32> = None;
     let mut iterator_cleanup_labels = BTreeMap::<u32, Reg>::new();
     let mut pending_jumps = Vec::<PendingJump>::new();
     let mut catch_entry_labels = BTreeSet::<u32>::new();
@@ -8465,13 +8839,15 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
         child_captured_locals: Vec<(String, BindingId)>,
         local_lexical_bindings: Vec<ResolvedBinding>,
         is_generator: bool,
-        is_async: bool,
         is_arrow: bool,
         rest_param_index: Option<u32>,
         /// Function.prototype.toString's text (bd-9vouw.184).
         source_text: Option<crate::ast::FunctionSourceText>,
         /// Not strict mode code (bd-9vouw.272).
         sloppy: bool,
+        /// A named function expression whose own name the body mentions:
+        /// that name is the closure's immutable self binding (bd-9vouw.331).
+        self_capture: bool,
     }
     let mut deferred_functions = Vec::<DeferredFunction>::new();
 
@@ -8762,11 +9138,47 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
         })
         .copied()
         .collect::<Vec<_>>();
+    // bd-1lsy.4.10.1: a module's import bindings are live views of the
+    // exporting modules' bindings (ES2020 15.2.1.16.4 InitializeEnvironment
+    // makes them indirect bindings). Each is a runtime scope cell declared
+    // as an import (immutable) and initialized from its namespace read; the
+    // interpreter registers that cell with the exporting module, whose every
+    // later publication writes it. A register copy could not follow them.
+    let import_binding_ids = ir2
+        .scopes
+        .iter()
+        .filter(|scope| scope.parent.is_none())
+        .flat_map(|scope| scope.bindings.iter())
+        .filter(|binding| binding.kind == BindingKind::Import)
+        .map(|binding| binding.binding_id)
+        .collect::<Vec<_>>();
+    // A module binding that backs an export (`export let x`, `export { v }`,
+    // a default expression's binding) is a runtime scope cell too: the
+    // interpreter tracks the cell its ExportBinding reads, and every later
+    // write republishes the export; a register copy is invisible to it.
+    // Function declarations keep their registers (they are published before
+    // the imports run and rarely reassigned).
+    let exported_binding_ids = ir2
+        .ops
+        .iter()
+        .filter_map(|op| match &op.inner {
+            Ir1Op::ExportBinding { binding_id, .. } => Some(*binding_id),
+            _ => None,
+        })
+        .filter(|binding_id| {
+            matches!(
+                binding_kind_by_id.get(binding_id),
+                Some(BindingKind::Let | BindingKind::Const | BindingKind::Var)
+            )
+        })
+        .collect::<Vec<_>>();
     let runtime_lexical_binding_ids = tdz_binding_ids
         .union(&const_assignment_binding_ids)
         .copied()
         .chain(spilled_lexical_binding_ids)
         .chain(captured_lexical_binding_ids)
+        .chain(import_binding_ids)
+        .chain(exported_binding_ids)
         .collect::<BTreeSet<_>>();
     for id in &runtime_lexical_binding_ids {
         scoped_runtime_binding_ids.insert(*id);
@@ -8803,6 +9215,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 // A spilled `var` is hoisted: declared initialized to
                 // undefined, never in a temporal dead zone (bd-9vouw.23).
                 Some(BindingKind::Var) => 0,
+                Some(BindingKind::Import) => RUNTIME_IMPORT_BINDING_KIND,
                 _ => 1,
             };
             let name = runtime_scope_binding_name(*id, &runtime_scope_binding_names_by_id);
@@ -8821,6 +9234,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 kind: if runtime_lexical_binding_ids.contains(binding_id) {
                     match binding_kind_by_id.get(binding_id) {
                         Some(BindingKind::Const) => 2,
+                        // An exported `var` a closure captures
+                        // (`export var n = 0; export function inc() { n++; }`)
+                        // is hoisted too, never in a temporal dead zone.
+                        Some(BindingKind::Var) => 0,
+                        Some(BindingKind::Import) => RUNTIME_IMPORT_BINDING_KIND,
                         _ => 1,
                     }
                 } else {
@@ -8871,6 +9289,18 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
     let mut pinned_register_high: Reg = register_cursor;
     let mut register_high_water: Reg = register_cursor;
     let mut iterator_anchors = Vec::<IteratorAnchor>::new();
+    // Binding registers a compound assignment's operator reads in place
+    // while they sit on the value stack (compound_left_operand_reads_in_place).
+    let mut compound_reads_in_place = BTreeSet::<Reg>::new();
+    // Binding registers a straight-line consumer read in place: never a
+    // temporary to call-result or literal compaction (bd-9vouw.494).
+    let mut straight_line_reads_in_place = BTreeSet::<Reg>::new();
+    // bd-9vouw.496: loop-invariant literals and static keys, loaded once
+    // before each outermost top-level loop (plan_loop_constant_hoists).
+    let loop_hoists = plan_loop_constant_hoists(&ir2.ops);
+    let mut next_loop_hoist = 0usize;
+    let mut hoisted_constants: Vec<(Ir1Literal, Reg)> = Vec::new();
+    let mut hoisted_until = 0usize;
     for (op_index, op) in ir2.ops.iter().enumerate() {
         prune_iterator_anchors(&mut iterator_anchors, &value_stack);
         // A short-lived temporary's register is free once its last
@@ -8900,6 +9330,47 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
             if live_status_registers.is_empty() {
                 statement_register_floor = register_cursor;
             }
+        }
+        if op_index > hoisted_until {
+            hoisted_constants.clear();
+        }
+        if let Some(hoist) = loop_hoists.get(next_loop_hoist)
+            && hoist.insert_at == op_index
+        {
+            next_loop_hoist += 1;
+            if value_stack.is_empty() {
+                hoisted_constants = hoist
+                    .constants
+                    .iter()
+                    .map(|literal| {
+                        let register = alloc_pinned_register(
+                            &mut register_cursor,
+                            &mut pinned_register_high,
+                            &mut register_high_water,
+                        );
+                        lower_literal_to_ir3_optimized(
+                            literal,
+                            register,
+                            &mut ir3.instructions,
+                            &mut constant_pool,
+                        );
+                        (literal.clone(), register)
+                    })
+                    .collect();
+                hoisted_until = hoist.end;
+                if live_status_registers.is_empty() {
+                    statement_register_floor = register_cursor;
+                }
+            }
+        }
+        if let Ir1Op::LoadLiteral { value } = &op.inner
+            && let Some(&(_, register)) = hoisted_constants
+                .iter()
+                .find(|(literal, _)| literal == value)
+        {
+            // Loaded before the loop (bd-9vouw.496).
+            value_stack.push(register);
+            continue;
         }
         if matches!(op.effect, EffectBoundary::HostcallEffect) {
             let capability = op
@@ -9000,16 +9471,26 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 dst,
                 &operands,
                 copies,
-                &value_stack,
+                compaction_value_stack(&value_stack, &compound_reads_in_place),
                 reserved_below,
                 &mut register_cursor,
                 &mut register_high_water,
+                &straight_line_reads_in_place,
             );
             value_stack.push(dst);
             continue;
         }
 
         match &op.inner {
+            Ir1Op::LoadLiteral { .. }
+                if update_assignment_ignores_operand(
+                    ir2.ops.get(op_index + 1).map(|next| &next.inner),
+                ) =>
+            {
+                // The `1` of `++`/`--`: no lowering of the update reads it, so
+                // it gets a register slot and no instruction.
+                value_stack.push(alloc_register(&mut register_cursor));
+            }
             Ir1Op::LoadLiteral { value } => {
                 let dst = alloc_register(&mut register_cursor);
                 lower_literal_to_ir3_optimized(
@@ -9042,12 +9523,42 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         &mut pinned_register_high,
                         &mut register_high_water,
                     );
-                    let dst = alloc_register(&mut register_cursor);
-                    ir3.instructions.push(Ir3Instruction::Move {
-                        dst,
-                        src: source_reg,
-                    });
-                    value_stack.push(dst);
+                    // `x op= rhs`'s read of a pinned register binding: the
+                    // operator reads the register itself and writes the
+                    // result back to it (see the BinaryOp arm), one
+                    // instruction as before bd-9vouw.327's read-first order.
+                    let pinned = source_reg < pinned_register_high
+                        && !short_lived_temporaries.contains_key(binding_id);
+                    if pinned
+                        && compound_left_operand_reads_in_place(&ir2.ops, op_index, *binding_id)
+                    {
+                        compound_reads_in_place.insert(source_reg);
+                        value_stack.push(source_reg);
+                    } else if pinned
+                        // A register an in-place compound read holds is
+                        // where its operator writes the result (BinaryOp
+                        // arm), so a second read of it stays a copy.
+                        && !compound_reads_in_place.contains(&source_reg)
+                        && pinned_read_consumed_in_place(&ir2.ops, op_index)
+                    {
+                        value_stack.push(source_reg);
+                    } else if !compound_reads_in_place.contains(&source_reg)
+                        && straight_line_consumer_reads_in_place(&ir2.ops, op_index, *binding_id)
+                    {
+                        // A call's callee, a method call's receiver local or
+                        // a literal's element (bd-9vouw.494). Compaction
+                        // must not take the binding's register for a
+                        // temporary of the consuming call or literal.
+                        straight_line_reads_in_place.insert(source_reg);
+                        value_stack.push(source_reg);
+                    } else {
+                        let dst = alloc_register(&mut register_cursor);
+                        ir3.instructions.push(Ir3Instruction::Move {
+                            dst,
+                            src: source_reg,
+                        });
+                        value_stack.push(dst);
+                    }
                 }
             }
             Ir1Op::LoadName {
@@ -9106,7 +9617,26 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         &mut pinned_register_high,
                         &mut register_high_water,
                     );
-                    ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    let src_is_dead_temporary = is_dead_expression_temporary(
+                        src,
+                        &value_stack,
+                        &iterator_anchors,
+                        statement_register_floor,
+                        pinned_register_high,
+                        &live_status_registers,
+                    );
+                    let label_at_end =
+                        last_label_target == u32::try_from(ir3.instructions.len()).ok();
+                    if !retarget_store_producer(
+                        &mut ir3.instructions,
+                        0,
+                        src,
+                        dst,
+                        src_is_dead_temporary,
+                        label_at_end,
+                    ) {
+                        ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    }
                     value_stack.push(dst);
                 }
             }
@@ -9145,7 +9675,26 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         &mut register_high_water,
                     );
                     pop_lowering_value(&mut value_stack)?;
-                    ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    let src_is_dead_temporary = is_dead_expression_temporary(
+                        src,
+                        &value_stack,
+                        &iterator_anchors,
+                        statement_register_floor,
+                        pinned_register_high,
+                        &live_status_registers,
+                    );
+                    let label_at_end =
+                        last_label_target == u32::try_from(ir3.instructions.len()).ok();
+                    if !retarget_store_producer(
+                        &mut ir3.instructions,
+                        0,
+                        src,
+                        dst,
+                        src_is_dead_temporary,
+                        label_at_end,
+                    ) {
+                        ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    }
                     value_stack.push(dst);
                     // The stored value now lives in the binding's register:
                     // the temporaries that computed it are dead
@@ -9242,18 +9791,17 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 args.reverse();
                 let callee = pop_lowering_value(&mut value_stack)?;
 
-                let start_reg = register_cursor;
-                for &arg_reg in &args {
-                    let dst = alloc_register(&mut register_cursor);
-                    ir3.instructions
-                        .push(Ir3Instruction::Move { dst, src: arg_reg });
-                }
-
+                let copies = call_argument_window(
+                    &args,
+                    &[callee],
+                    &value_stack,
+                    statement_register_floor
+                        .max(pinned_register_high)
+                        .max(live_status_register_ceiling(&live_status_registers)),
+                    &mut register_cursor,
+                    &mut ir3.instructions,
+                );
                 let dst = alloc_register(&mut register_cursor);
-                let copies = RegRange {
-                    start: start_reg,
-                    count: *arg_count,
-                };
                 ir3.instructions.push(Ir3Instruction::Call {
                     callee,
                     args: copies,
@@ -9268,10 +9816,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     dst,
                     &args,
                     copies,
-                    &value_stack,
+                    compaction_value_stack(&value_stack, &compound_reads_in_place),
                     reserved_below,
                     &mut register_cursor,
                     &mut register_high_water,
+                    &straight_line_reads_in_place,
                 );
                 value_stack.push(dst);
             }
@@ -9288,18 +9837,17 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 let receiver = pop_lowering_value(&mut value_stack)?;
                 let callee = pop_lowering_value(&mut value_stack)?;
 
-                let start_reg = register_cursor;
-                for &arg_reg in &args {
-                    let dst = alloc_register(&mut register_cursor);
-                    ir3.instructions
-                        .push(Ir3Instruction::Move { dst, src: arg_reg });
-                }
-
+                let copies = call_argument_window(
+                    &args,
+                    &[receiver, callee],
+                    &value_stack,
+                    statement_register_floor
+                        .max(pinned_register_high)
+                        .max(live_status_register_ceiling(&live_status_registers)),
+                    &mut register_cursor,
+                    &mut ir3.instructions,
+                );
                 let dst = alloc_register(&mut register_cursor);
-                let copies = RegRange {
-                    start: start_reg,
-                    count: *arg_count,
-                };
                 ir3.instructions.push(Ir3Instruction::CallMethod {
                     receiver,
                     callee,
@@ -9315,10 +9863,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     dst,
                     &args,
                     copies,
-                    &value_stack,
+                    compaction_value_stack(&value_stack, &compound_reads_in_place),
                     reserved_below,
                     &mut register_cursor,
                     &mut register_high_water,
+                    &straight_line_reads_in_place,
                 );
                 value_stack.push(dst);
             }
@@ -9425,8 +9974,16 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     // Expression-statement completion: move the discarded
                     // value into register 0 so the interpreter returns it as
                     // the script completion value when execution falls off
-                    // the end of the instruction stream.
-                    if register != 0 {
+                    // the end of the instruction stream. A value JumpIfFalsy
+                    // just tested (an if or loop test, the left side of a
+                    // short-circuit) is never a completion value.
+                    let tested_value = op_index
+                        .checked_sub(1)
+                        .and_then(|previous| ir2.ops.get(previous))
+                        .is_some_and(|previous| {
+                            matches!(previous.inner, Ir1Op::JumpIfFalsy { .. })
+                        });
+                    if register != 0 && !tested_value {
                         ir3.instructions.push(Ir3Instruction::Move {
                             dst: 0,
                             src: register,
@@ -9491,15 +10048,27 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
             Ir1Op::BinaryOp { operator } => {
                 let rhs = pop_lowering_value(&mut value_stack)?;
                 let lhs = pop_lowering_value(&mut value_stack)?;
-                let dst = pure_op_result_register(
-                    &[lhs, rhs],
-                    &value_stack,
-                    statement_register_floor
-                        .max(pinned_register_high)
-                        .max(live_status_register_ceiling(&live_status_registers)),
-                    &mut register_cursor,
-                    &mut register_high_water,
-                );
+                let reserved_below = statement_register_floor
+                    .max(pinned_register_high)
+                    .max(live_status_register_ceiling(&live_status_registers));
+                let dst = if compound_reads_in_place.remove(&lhs) {
+                    // The next op assigns the result to the binding whose
+                    // register lhs is: write it there, and free rhs as
+                    // pure_op_result_register would have reused it.
+                    if rhs >= reserved_below && value_stack.iter().all(|&live| live < rhs) {
+                        register_high_water = register_high_water.max(register_cursor);
+                        register_cursor = register_cursor.min(rhs);
+                    }
+                    lhs
+                } else {
+                    pure_op_result_register(
+                        &[lhs, rhs],
+                        &value_stack,
+                        reserved_below,
+                        &mut register_cursor,
+                        &mut register_high_water,
+                    )
+                };
                 let instr = match operator {
                     BinaryOperator::Add => Ir3Instruction::Add { dst, lhs, rhs },
                     BinaryOperator::Subtract => Ir3Instruction::Sub { dst, lhs, rhs },
@@ -9647,8 +10216,30 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     continue;
                 }
                 match operator {
+                    // A compound assignment's operator already wrote the
+                    // binding's register when it read it in place.
+                    AssignmentOperator::Assign if src == dst => {}
                     AssignmentOperator::Assign => {
-                        ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                        let src_is_dead_temporary = is_dead_expression_temporary(
+                            src,
+                            &value_stack,
+                            &iterator_anchors,
+                            statement_register_floor,
+                            pinned_register_high,
+                            &live_status_registers,
+                        );
+                        let label_at_end =
+                            last_label_target == u32::try_from(ir3.instructions.len()).ok();
+                        if !retarget_store_producer(
+                            &mut ir3.instructions,
+                            0,
+                            src,
+                            dst,
+                            src_is_dead_temporary,
+                            label_at_end,
+                        ) {
+                            ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                        }
                     }
                     AssignmentOperator::AddAssign => {
                         ir3.instructions.push(Ir3Instruction::Add {
@@ -9785,6 +10376,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         detail: "IR2 contains duplicate label ids",
                     });
                 }
+                last_label_target = Some(target);
                 // If this label is a catch handler entry, emit EnterCatch
                 // so the runtime can provide the exception value.
                 if catch_entry_labels.contains(id) {
@@ -9858,12 +10450,19 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 let (obj, key_reg) = match key {
                     Ir1PropertyKey::Static(key) => {
                         let obj = pop_lowering_value(&mut value_stack)?;
-                        let key_reg = alloc_register(&mut register_cursor);
-                        let pool_index = push_constant_optimized(&mut constant_pool, key.clone());
-                        ir3.instructions.push(Ir3Instruction::LoadStr {
-                            dst: key_reg,
-                            pool_index,
-                        });
+                        let key_reg = match hoisted_string_constant(&hoisted_constants, key) {
+                            Some(register) => register,
+                            None => {
+                                let key_reg = alloc_register(&mut register_cursor);
+                                let pool_index =
+                                    push_constant_optimized(&mut constant_pool, key.clone());
+                                ir3.instructions.push(Ir3Instruction::LoadStr {
+                                    dst: key_reg,
+                                    pool_index,
+                                });
+                                key_reg
+                            }
+                        };
                         (obj, key_reg)
                     }
                     Ir1PropertyKey::Dynamic => {
@@ -9885,12 +10484,19 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 let (obj, key_reg) = match key {
                     Ir1PropertyKey::Static(key) => {
                         let obj = pop_lowering_value(&mut value_stack)?;
-                        let key_reg = alloc_register(&mut register_cursor);
-                        let pool_index = push_constant_optimized(&mut constant_pool, key.clone());
-                        ir3.instructions.push(Ir3Instruction::LoadStr {
-                            dst: key_reg,
-                            pool_index,
-                        });
+                        let key_reg = match hoisted_string_constant(&hoisted_constants, key) {
+                            Some(register) => register,
+                            None => {
+                                let key_reg = alloc_register(&mut register_cursor);
+                                let pool_index =
+                                    push_constant_optimized(&mut constant_pool, key.clone());
+                                ir3.instructions.push(Ir3Instruction::LoadStr {
+                                    dst: key_reg,
+                                    pool_index,
+                                });
+                                key_reg
+                            }
+                        };
                         (obj, key_reg)
                     }
                     Ir1PropertyKey::Dynamic => {
@@ -10046,13 +10652,20 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         val: val_reg,
                     });
                 }
-                emit_array_length_store(
-                    &mut ir3.instructions,
-                    &mut constant_pool,
-                    &mut register_cursor,
-                    dst,
-                    *count,
-                );
+                // No length store: CreateDataProperty of index count - 1
+                // already made the length `count` (ArrayDefineOwnProperty),
+                // and a hole is defined and deleted, which keeps it
+                // (bd-9vouw.491). An empty literal defines nothing, and
+                // NewArray's array has no own `length` until one is set, so
+                // `[]` keeps its store: `[].length` read undefined without it.
+                if cnt == 0 {
+                    emit_empty_array_length_store(
+                        &mut ir3.instructions,
+                        &mut constant_pool,
+                        &mut register_cursor,
+                        dst,
+                    );
+                }
                 let reserved_below = statement_register_floor
                     .max(pinned_register_high)
                     .max(live_status_register_ceiling(&live_status_registers));
@@ -10064,6 +10677,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     reserved_below,
                     &mut register_cursor,
                     &mut register_high_water,
+                    &straight_line_reads_in_place,
                 );
                 value_stack.push(dst);
             }
@@ -10108,6 +10722,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     reserved_below,
                     &mut register_cursor,
                     &mut register_high_water,
+                    &straight_line_reads_in_place,
                 );
                 value_stack.push(dst);
             }
@@ -10268,11 +10883,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         child_captured_locals: child_captured_locals.clone(),
                         local_lexical_bindings: local_lexical_bindings.clone(),
                         is_generator: *is_generator,
-                        is_async: *is_async,
                         is_arrow: false,
                         rest_param_index: *rest_param_index,
                         source_text: source_text.clone(),
                         sloppy: *sloppy,
+                        self_capture: false,
                     });
                     if *is_generator && *is_async {
                         ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {
@@ -10408,11 +11023,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     child_captured_locals: child_captured_locals.clone(),
                     local_lexical_bindings: local_lexical_bindings.clone(),
                     is_generator: *is_generator,
-                    is_async: *is_async,
                     is_arrow: *is_arrow,
                     rest_param_index: *rest_param_index,
                     source_text: source_text.clone(),
                     sloppy: *sloppy,
+                    self_capture: self_capture_name.is_some(),
                 });
                 if *is_generator && *is_async {
                     ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {
@@ -10611,10 +11226,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     dst,
                     &arg_regs,
                     args,
-                    &value_stack,
+                    compaction_value_stack(&value_stack, &compound_reads_in_place),
                     reserved_below,
                     &mut register_cursor,
                     &mut register_high_water,
+                    &straight_line_reads_in_place,
                 );
                 value_stack.push(dst);
             }
@@ -10702,10 +11318,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     dst,
                     &args,
                     copies,
-                    &value_stack,
+                    compaction_value_stack(&value_stack, &compound_reads_in_place),
                     reserved_below,
                     &mut register_cursor,
                     &mut register_high_water,
+                    &straight_line_reads_in_place,
                 );
                 value_stack.push(dst);
             }
@@ -10864,11 +11481,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
             child_captured_locals: fn_child_captured_locals,
             local_lexical_bindings: fn_local_lexical_bindings,
             is_generator: fn_is_generator,
-            is_async: fn_is_async,
             is_arrow: fn_is_arrow,
             rest_param_index: fn_rest_param_index,
             source_text: fn_source_text,
             sloppy: fn_sloppy,
+            self_capture: fn_self_capture,
         } = std::mem::take(&mut deferred_functions[deferred_idx]);
         // Taken, not cloned: a processed entry is never read again (only the
         // list's length numbers later bodies), and a body's clone copied
@@ -10886,7 +11503,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
         // end-of-pass scratch as the top-level `value_stack`, served from the
         // pass-scoped region arena.
         let mut fn_value_stack: ArenaVec<'_, Reg> = arena.alloc_vec_with_capacity::<Reg>(16);
+        let mut fn_straight_line_reads_in_place = BTreeSet::<Reg>::new();
         let mut fn_label_targets = BTreeMap::<u32, u32>::new();
+        // bd-9vouw.494: as `last_label_target`; a body's entry counts as one,
+        // so its first store never retargets the previous body's last op.
+        let mut fn_last_label_target: Option<u32> = Some(entry);
         let mut fn_pending_jumps = Vec::<PendingJump>::new();
         let mut fn_catch_entry_labels = BTreeSet::<u32>::new();
         let mut fn_iterator_cleanup_labels = BTreeMap::<u32, Reg>::new();
@@ -10946,6 +11567,18 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 dst: register,
             });
         }
+        // bd-9vouw.317: an arrow function has no new.target of its own
+        // (ES2020 12.3.8.1 GetNewTarget). A non-arrow function whose arrows
+        // read it (through arrows only) binds its own once here, declared
+        // below as `ARROW_NEW_TARGET_BINDING`, and those arrows load that
+        // name through their captured scope chain.
+        let new_target_register = (!fn_is_arrow && arrows_read_new_target(body_ops)).then(|| {
+            let register = fn_reg;
+            fn_reg = fn_reg.saturating_add(1);
+            ir3.instructions
+                .push(Ir3Instruction::LoadNewTarget { dst: register });
+            register
+        });
 
         // When this function has free variables, put parameters on the
         // scope chain so LoadScoped can find them alongside captured
@@ -10971,6 +11604,20 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 ir3.instructions.push(Ir3Instruction::PushScope);
             }
             let pool_idx = push_constant_optimized(&mut constant_pool, "arguments");
+            ir3.instructions.push(Ir3Instruction::DeclareBinding {
+                name_pool_index: pool_idx,
+                kind: 0,
+            });
+            ir3.instructions.push(Ir3Instruction::InitBinding {
+                name_pool_index: pool_idx,
+                src: register,
+            });
+        }
+        if let Some(register) = new_target_register {
+            if free_vars.is_empty() && arguments_register.is_none() {
+                ir3.instructions.push(Ir3Instruction::PushScope);
+            }
+            let pool_idx = push_constant_optimized(&mut constant_pool, ARROW_NEW_TARGET_BINDING);
             ir3.instructions.push(Ir3Instruction::DeclareBinding {
                 name_pool_index: pool_idx,
                 kind: 0,
@@ -11288,6 +11935,12 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 detail: "annotated function body does not match its IR1 ops",
             });
         }
+        // bd-9vouw.496: loop-invariant literals and static keys, loaded once
+        // before each outermost loop (plan_loop_constant_hoists).
+        let fn_loop_hoists = plan_loop_constant_hoists(&annotated_body_ops);
+        let mut fn_next_loop_hoist = 0usize;
+        let mut fn_hoisted_constants: Vec<(Ir1Literal, Reg)> = Vec::new();
+        let mut fn_hoisted_until = 0usize;
         for (op_index, ir2_op) in annotated_body_ops.iter().enumerate() {
             prune_iterator_anchors(&mut fn_iterator_anchors, &fn_value_stack);
             // A short-lived local's register is free once its last reference
@@ -11312,8 +11965,58 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     fn_statement_register_floor = fn_reg;
                 }
             }
+            if op_index > fn_hoisted_until {
+                fn_hoisted_constants.clear();
+            }
+            if let Some(hoist) = fn_loop_hoists.get(fn_next_loop_hoist)
+                && hoist.insert_at == op_index
+            {
+                fn_next_loop_hoist += 1;
+                if fn_value_stack.is_empty() {
+                    fn_hoisted_constants = hoist
+                        .constants
+                        .iter()
+                        .map(|literal| {
+                            let register = alloc_pinned_register(
+                                &mut fn_reg,
+                                &mut fn_pinned_register_high,
+                                &mut fn_register_high_water,
+                            );
+                            lower_literal_to_ir3_optimized(
+                                literal,
+                                register,
+                                &mut ir3.instructions,
+                                &mut constant_pool,
+                            );
+                            (literal.clone(), register)
+                        })
+                        .collect();
+                    fn_hoisted_until = hoist.end;
+                    if fn_live_status_registers.is_empty() {
+                        fn_statement_register_floor = fn_reg;
+                    }
+                }
+            }
+            if let Ir1Op::LoadLiteral { value } = &ir2_op.inner
+                && let Some(&(_, register)) = fn_hoisted_constants
+                    .iter()
+                    .find(|(literal, _)| literal == value)
+            {
+                // Loaded before the loop (bd-9vouw.496).
+                fn_value_stack.push(register);
+                continue;
+            }
             // We handle a core subset of ops that appear in function bodies.
             match &ir2_op.inner {
+                Ir1Op::LoadLiteral { .. }
+                    if update_assignment_ignores_operand(
+                        annotated_body_ops.get(op_index + 1).map(|next| &next.inner),
+                    ) =>
+                {
+                    // The `1` of `++`/`--`: no lowering of the update reads it,
+                    // so it gets a register slot and no instruction.
+                    fn_value_stack.push(alloc_register(&mut fn_reg));
+                }
                 Ir1Op::LoadLiteral { value } => {
                     let dst = alloc_register(&mut fn_reg);
                     match value {
@@ -11392,9 +12095,47 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                             &mut fn_pinned_register_high,
                             &mut fn_register_high_water,
                         );
-                        let dst = alloc_register(&mut fn_reg);
-                        ir3.instructions.push(Ir3Instruction::Move { dst, src });
-                        fn_value_stack.push(dst);
+                        // A `return x` reads the register itself, a pinned or
+                        // a short-lived local's alike: Return reads its value
+                        // when it runs (before any finally) and nothing runs in
+                        // between (bd-9vouw.493).
+                        // `x op= rhs`'s read-first left operand, when rhs is
+                        // straight-line code that does not write x, reads the
+                        // register in place as the top-level loop does: the
+                        // operator computes into a temporary and the AssignOp
+                        // that follows retargets it to x (bd-9vouw.494), one
+                        // instruction for `s += o.m(i)` instead of a copy of
+                        // s, the operator and a Move back.
+                        let pinned = src < fn_pinned_register_high
+                            && !fn_short_lived_locals.contains_key(binding_id);
+                        let straight_line = straight_line_consumer_reads_in_place(
+                            &annotated_body_ops,
+                            op_index,
+                            *binding_id,
+                        );
+                        if straight_line {
+                            fn_straight_line_reads_in_place.insert(src);
+                        }
+                        let read_in_place = (src < fn_pinned_register_high
+                            && pinned_read_consumed_in_place(&annotated_body_ops, op_index))
+                            || (pinned
+                                && compound_left_operand_reads_in_place(
+                                    &annotated_body_ops,
+                                    op_index,
+                                    *binding_id,
+                                ))
+                            || straight_line
+                            || matches!(
+                                annotated_body_ops.get(op_index + 1).map(|next| &next.inner),
+                                Some(Ir1Op::Return)
+                            );
+                        if read_in_place {
+                            fn_value_stack.push(src);
+                        } else {
+                            let dst = alloc_register(&mut fn_reg);
+                            ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                            fn_value_stack.push(dst);
+                        }
                     }
                 }
                 Ir1Op::LoadName {
@@ -11469,12 +12210,43 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         &mut fn_pinned_register_high,
                         &mut fn_register_high_water,
                     );
-                    ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    let src_is_dead_temporary = is_dead_expression_temporary(
+                        src,
+                        &fn_value_stack,
+                        &fn_iterator_anchors,
+                        fn_statement_register_floor,
+                        fn_pinned_register_high,
+                        &fn_live_status_registers,
+                    );
+                    let label_at_end =
+                        fn_last_label_target == u32::try_from(ir3.instructions.len()).ok();
+                    if !retarget_store_producer(
+                        &mut ir3.instructions,
+                        entry as usize,
+                        src,
+                        dst,
+                        src_is_dead_temporary,
+                        label_at_end,
+                    ) {
+                        ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    }
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::StoreBinding { binding_id } => {
                     if let Some(name) = fv_id_to_name.get(binding_id) {
                         let src = pop_lowering_value(&mut fn_value_stack)?;
+                        // A named function expression's own name is an
+                        // immutable binding made with strict = false
+                        // (ES2020 14.1.22 step 4): sloppy code's assignment
+                        // to it is ignored, keeping the assigned value as the
+                        // result; strict code's still throws at the const
+                        // binding (bd-9vouw.331). `var init = function init()
+                        // { init = null; ... }` threw.
+                        if fn_self_capture && fn_sloppy && fn_name.as_deref() == Some(name.as_str())
+                        {
+                            fn_value_stack.push(src);
+                            continue;
+                        }
                         let pool_idx = push_constant_optimized(&mut constant_pool, name);
                         ir3.instructions.push(Ir3Instruction::StoreScoped {
                             src,
@@ -11534,7 +12306,26 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         &mut fn_register_high_water,
                     );
                     let src = pop_lowering_value(&mut fn_value_stack)?;
-                    ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    let src_is_dead_temporary = is_dead_expression_temporary(
+                        src,
+                        &fn_value_stack,
+                        &fn_iterator_anchors,
+                        fn_statement_register_floor,
+                        fn_pinned_register_high,
+                        &fn_live_status_registers,
+                    );
+                    let label_at_end =
+                        fn_last_label_target == u32::try_from(ir3.instructions.len()).ok();
+                    if !retarget_store_producer(
+                        &mut ir3.instructions,
+                        entry as usize,
+                        src,
+                        dst,
+                        src_is_dead_temporary,
+                        label_at_end,
+                    ) {
+                        ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    }
                     fn_value_stack.push(dst);
                     // bd-9vouw.246: the stored value now lives in the
                     // binding's register, so the temporaries that computed it
@@ -11650,25 +12441,12 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 }
                 Ir1Op::Return => {
                     let value = pop_lowering_value(&mut fn_value_stack)?;
-                    // Async-generator ReturnStatement awaits its operand
-                    // BEFORE creating the return completion. In particular,
-                    // rejection must still enter this frame's catch/finally;
-                    // awaiting only the finished generator's result is too late.
-                    // AwaitValue overwrites its register, so never await in a
-                    // register that may still back a live local binding.
-                    let value = if fn_is_async && fn_is_generator {
-                        let awaited = alloc_register(&mut fn_reg);
-                        ir3.instructions.push(Ir3Instruction::Move {
-                            dst: awaited,
-                            src: value,
-                        });
-                        ir3.instructions.push(Ir3Instruction::AwaitValue {
-                            promise_reg: awaited,
-                        });
-                        awaited
-                    } else {
-                        value
-                    };
+                    // An async generator's `return expr` already awaits its
+                    // operand in the body: the parser writes it as
+                    // `return await expr`, so a rejection still enters this
+                    // frame's catch/finally. `return;` and the implicit
+                    // return do not await (bd-9vouw.351); they were awaited
+                    // here, with every other return.
                     ir3.instructions.push(Ir3Instruction::Return { value });
                     // A return or throw ends its statement as a Pop does: its
                     // operand and temporaries are dead.
@@ -11692,17 +12470,17 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     }
                     args.reverse();
                     let callee = pop_lowering_value(&mut fn_value_stack)?;
-                    let start_reg = fn_reg;
-                    for arg_reg in &args {
-                        let dst = alloc_register(&mut fn_reg);
-                        ir3.instructions
-                            .push(Ir3Instruction::Move { dst, src: *arg_reg });
-                    }
+                    let copies = call_argument_window(
+                        &args,
+                        &[callee],
+                        &fn_value_stack,
+                        fn_statement_register_floor
+                            .max(fn_pinned_register_high)
+                            .max(live_status_register_ceiling(&fn_live_status_registers)),
+                        &mut fn_reg,
+                        &mut ir3.instructions,
+                    );
                     let dst = alloc_register(&mut fn_reg);
-                    let copies = RegRange {
-                        start: start_reg,
-                        count: count as u32,
-                    };
                     ir3.instructions.push(Ir3Instruction::Call {
                         callee,
                         args: copies,
@@ -11721,6 +12499,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         reserved_below,
                         &mut fn_reg,
                         &mut fn_register_high_water,
+                        &fn_straight_line_reads_in_place,
                     );
                     fn_value_stack.push(dst);
                 }
@@ -11734,17 +12513,17 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     args.reverse();
                     let receiver = pop_lowering_value(&mut fn_value_stack)?;
                     let callee = pop_lowering_value(&mut fn_value_stack)?;
-                    let start_reg = fn_reg;
-                    for arg_reg in &args {
-                        let dst = alloc_register(&mut fn_reg);
-                        ir3.instructions
-                            .push(Ir3Instruction::Move { dst, src: *arg_reg });
-                    }
+                    let copies = call_argument_window(
+                        &args,
+                        &[receiver, callee],
+                        &fn_value_stack,
+                        fn_statement_register_floor
+                            .max(fn_pinned_register_high)
+                            .max(live_status_register_ceiling(&fn_live_status_registers)),
+                        &mut fn_reg,
+                        &mut ir3.instructions,
+                    );
                     let dst = alloc_register(&mut fn_reg);
-                    let copies = RegRange {
-                        start: start_reg,
-                        count: count as u32,
-                    };
                     ir3.instructions.push(Ir3Instruction::CallMethod {
                         receiver,
                         callee,
@@ -11764,12 +12543,14 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         reserved_below,
                         &mut fn_reg,
                         &mut fn_register_high_water,
+                        &fn_straight_line_reads_in_place,
                     );
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::Label { id } => {
                     let target = ir3.instructions.len() as u32;
                     fn_label_targets.insert(*id, target);
+                    fn_last_label_target = Some(target);
                     if fn_catch_entry_labels.contains(id) {
                         let dst = alloc_register(&mut fn_reg);
                         ir3.instructions.push(Ir3Instruction::EnterCatch { dst });
@@ -11860,6 +12641,23 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     operator,
                 } => {
                     let src = pop_lowering_value(&mut fn_value_stack)?;
+                    // bd-9vouw.328: a postfix update whose value is discarded
+                    // (`n++;`) is the prefix one, with no old value to keep.
+                    // A function body has no completion value to preserve.
+                    let postfix_value_used = operator.is_postfix_update()
+                        && !matches!(
+                            annotated_body_ops.get(op_index + 1).map(|next| &next.inner),
+                            Some(Ir1Op::Pop | Ir1Op::Discard)
+                        );
+                    // The function's own self-captured name in a sloppy body:
+                    // the assignment (`f = 1`, `f += 1`, `f++`) evaluates as
+                    // usual and its store is ignored, as in the StoreBinding
+                    // arm (bd-9vouw.331).
+                    let ignored_self_name_store = fn_self_capture
+                        && fn_sloppy
+                        && fv_id_to_name
+                            .get(binding_id)
+                            .is_some_and(|name| fn_name.as_deref() == Some(name.as_str()));
                     if let Some(name) = fv_id_to_name
                         .get(binding_id)
                         .or_else(|| runtime_local_id_to_name.get(binding_id))
@@ -11869,10 +12667,12 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         // `x++`/`x--` evaluate to the old value (bd-9vouw.119).
                         let mut postfix_value = None;
                         let result = if *operator == AssignmentOperator::Assign {
-                            ir3.instructions.push(Ir3Instruction::StoreScoped {
-                                src,
-                                name_pool_index: pool_idx,
-                            });
+                            if !ignored_self_name_store {
+                                ir3.instructions.push(Ir3Instruction::StoreScoped {
+                                    src,
+                                    name_pool_index: pool_idx,
+                                });
+                            }
                             src
                         } else if matches!(
                             operator,
@@ -11889,7 +12689,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                                 dst: lhs,
                                 name_pool_index: pool_idx,
                             });
-                            let (result, value) = if operator.is_postfix_update() {
+                            let (result, value) = if postfix_value_used {
                                 lower_postfix_update_to_ir3(
                                     *operator,
                                     lhs,
@@ -11902,14 +12702,17 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                                 ir3.instructions.push(instr);
                                 (result, result)
                             };
-                            ir3.instructions.push(Ir3Instruction::StoreScoped {
-                                src: result,
-                                name_pool_index: pool_idx,
-                            });
+                            if !ignored_self_name_store {
+                                ir3.instructions.push(Ir3Instruction::StoreScoped {
+                                    src: result,
+                                    name_pool_index: pool_idx,
+                                });
+                            }
                             postfix_value = Some(value);
                             result
                         };
-                        if let Some(child_name) = child_capture_id_to_name.get(binding_id)
+                        if !ignored_self_name_store
+                            && let Some(child_name) = child_capture_id_to_name.get(binding_id)
                             && child_name != name
                         {
                             let child_pool_idx =
@@ -11930,8 +12733,27 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         )
                     });
                     if *operator == AssignmentOperator::Assign {
-                        ir3.instructions.push(Ir3Instruction::Move { dst, src });
-                    } else if operator.is_postfix_update() {
+                        let src_is_dead_temporary = is_dead_expression_temporary(
+                            src,
+                            &fn_value_stack,
+                            &fn_iterator_anchors,
+                            fn_statement_register_floor,
+                            fn_pinned_register_high,
+                            &fn_live_status_registers,
+                        );
+                        let label_at_end =
+                            fn_last_label_target == u32::try_from(ir3.instructions.len()).ok();
+                        if !retarget_store_producer(
+                            &mut ir3.instructions,
+                            entry as usize,
+                            src,
+                            dst,
+                            src_is_dead_temporary,
+                            label_at_end,
+                        ) {
+                            ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                        }
+                    } else if postfix_value_used {
                         // `x++`/`x--` evaluate to the old value (bd-9vouw.119).
                         let (result, value) = lower_postfix_update_to_ir3(
                             *operator,
@@ -11944,11 +12766,12 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         fn_value_stack.push(value);
                         continue;
                     } else {
-                        let result = alloc_register(&mut fn_reg);
-                        let instr = lower_assign_op_to_ir3(*operator, result, dst, src);
-                        ir3.instructions.push(instr);
+                        // In place, as the top-level loop does (bd-9vouw.328):
+                        // one instruction reads and writes the binding's
+                        // register, which no closure or other code can write
+                        // meanwhile.
                         ir3.instructions
-                            .push(Ir3Instruction::Move { dst, src: result });
+                            .push(lower_assign_op_to_ir3(*operator, dst, dst, src));
                     }
                     fn_value_stack.push(dst);
                     // As in the top-level loop: a used assignment value is a
@@ -11971,12 +12794,19 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     let (obj, key_reg) = match key {
                         Ir1PropertyKey::Static(k) => {
                             let obj = pop_lowering_value(&mut fn_value_stack)?;
-                            let kr = alloc_register(&mut fn_reg);
-                            let pool_index = push_constant_optimized(&mut constant_pool, k.clone());
-                            ir3.instructions.push(Ir3Instruction::LoadStr {
-                                dst: kr,
-                                pool_index,
-                            });
+                            let kr = match hoisted_string_constant(&fn_hoisted_constants, k) {
+                                Some(register) => register,
+                                None => {
+                                    let kr = alloc_register(&mut fn_reg);
+                                    let pool_index =
+                                        push_constant_optimized(&mut constant_pool, k.clone());
+                                    ir3.instructions.push(Ir3Instruction::LoadStr {
+                                        dst: kr,
+                                        pool_index,
+                                    });
+                                    kr
+                                }
+                            };
                             (obj, kr)
                         }
                         Ir1PropertyKey::Dynamic => {
@@ -11998,12 +12828,19 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     let (obj, key_reg) = match key {
                         Ir1PropertyKey::Static(k) => {
                             let obj = pop_lowering_value(&mut fn_value_stack)?;
-                            let kr = alloc_register(&mut fn_reg);
-                            let pool_index = push_constant_optimized(&mut constant_pool, k.clone());
-                            ir3.instructions.push(Ir3Instruction::LoadStr {
-                                dst: kr,
-                                pool_index,
-                            });
+                            let kr = match hoisted_string_constant(&fn_hoisted_constants, k) {
+                                Some(register) => register,
+                                None => {
+                                    let kr = alloc_register(&mut fn_reg);
+                                    let pool_index =
+                                        push_constant_optimized(&mut constant_pool, k.clone());
+                                    ir3.instructions.push(Ir3Instruction::LoadStr {
+                                        dst: kr,
+                                        pool_index,
+                                    });
+                                    kr
+                                }
+                            };
                             (obj, kr)
                         }
                         Ir1PropertyKey::Dynamic => {
@@ -12107,6 +12944,19 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     ir3.instructions.push(Ir3Instruction::LoadThis { dst });
                     fn_value_stack.push(dst);
                 }
+                Ir1Op::LoadNewTarget if fn_is_arrow => {
+                    // bd-9vouw.317: the enclosing function's, bound in its
+                    // scope; an arrow outside any function reads undefined.
+                    let dst = alloc_register(&mut fn_reg);
+                    let name_pool_index =
+                        push_constant_optimized(&mut constant_pool, ARROW_NEW_TARGET_BINDING);
+                    ir3.instructions.push(Ir3Instruction::LoadName {
+                        dst,
+                        name_pool_index,
+                        allow_missing: true,
+                    });
+                    fn_value_stack.push(dst);
+                }
                 Ir1Op::LoadNewTarget => {
                     let dst = alloc_register(&mut fn_reg);
                     ir3.instructions.push(Ir3Instruction::LoadNewTarget { dst });
@@ -12144,25 +12994,40 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                             val: val_reg,
                         });
                     }
-                    emit_array_length_store(
-                        &mut ir3.instructions,
-                        &mut constant_pool,
-                        &mut fn_reg,
-                        dst,
-                        *count,
-                    );
+                    // No length store but an empty literal's (bd-9vouw.491):
+                    // see the top-level arm.
+                    if cnt == 0 {
+                        emit_empty_array_length_store(
+                            &mut ir3.instructions,
+                            &mut constant_pool,
+                            &mut fn_reg,
+                            dst,
+                        );
+                    }
                     let reserved_below = fn_statement_register_floor
                         .max(fn_pinned_register_high)
                         .max(live_status_register_ceiling(&fn_live_status_registers));
-                    let dst = compact_batch_literal(
-                        &mut ir3.instructions,
-                        dst,
-                        &operands,
-                        &fn_value_stack,
-                        reserved_below,
-                        &mut fn_reg,
-                        &mut fn_register_high_water,
+                    // A literal returned at once keeps its register: nothing
+                    // in the body runs after the Return reads it, so moving
+                    // it down only adds a Move (bd-9vouw.494).
+                    let returned = matches!(
+                        annotated_body_ops.get(op_index + 1).map(|next| &next.inner),
+                        Some(Ir1Op::Return)
                     );
+                    let dst = if returned {
+                        dst
+                    } else {
+                        compact_batch_literal(
+                            &mut ir3.instructions,
+                            dst,
+                            &operands,
+                            &fn_value_stack,
+                            reserved_below,
+                            &mut fn_reg,
+                            &mut fn_register_high_water,
+                            &fn_straight_line_reads_in_place,
+                        )
+                    };
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::NewObject { count } => {
@@ -12195,15 +13060,27 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     let reserved_below = fn_statement_register_floor
                         .max(fn_pinned_register_high)
                         .max(live_status_register_ceiling(&fn_live_status_registers));
-                    let dst = compact_batch_literal(
-                        &mut ir3.instructions,
-                        dst,
-                        &operands,
-                        &fn_value_stack,
-                        reserved_below,
-                        &mut fn_reg,
-                        &mut fn_register_high_water,
+                    // A literal returned at once keeps its register: nothing
+                    // in the body runs after the Return reads it, so moving
+                    // it down only adds a Move (bd-9vouw.494).
+                    let returned = matches!(
+                        annotated_body_ops.get(op_index + 1).map(|next| &next.inner),
+                        Some(Ir1Op::Return)
                     );
+                    let dst = if returned {
+                        dst
+                    } else {
+                        compact_batch_literal(
+                            &mut ir3.instructions,
+                            dst,
+                            &operands,
+                            &fn_value_stack,
+                            reserved_below,
+                            &mut fn_reg,
+                            &mut fn_register_high_water,
+                            &fn_straight_line_reads_in_place,
+                        )
+                    };
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::ArrayPush => {
@@ -12317,6 +13194,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     let available_capture_names: BTreeSet<&str> = fv_id_to_name
                         .values()
                         .chain(child_capture_id_to_name.values())
+                        .chain(
+                            runtime_global_id_to_name
+                                .values()
+                                .filter(|name| name.as_str() == "arguments"),
+                        )
                         .map(String::as_str)
                         .collect();
                     let temp_free_vars: Vec<&String> = inner_fv
@@ -12345,11 +13227,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         child_captured_locals: inner_child_captured_locals.clone(),
                         local_lexical_bindings: inner_local_lexical_bindings.clone(),
                         is_generator: *inner_gen,
-                        is_async: *inner_async,
                         is_arrow: false,
                         rest_param_index: *inner_rest,
                         source_text: inner_source_text.clone(),
                         sloppy: *inner_sloppy,
+                        self_capture: false,
                     });
                     if *inner_gen && *inner_async {
                         ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {
@@ -12433,6 +13315,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     let available_capture_names: BTreeSet<&str> = fv_id_to_name
                         .values()
                         .chain(child_capture_id_to_name.values())
+                        .chain(
+                            runtime_global_id_to_name
+                                .values()
+                                .filter(|name| name.as_str() == "arguments"),
+                        )
                         .map(String::as_str)
                         .collect();
                     let self_capture_name = inner_name
@@ -12468,11 +13355,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         child_captured_locals: inner_child_captured_locals.clone(),
                         local_lexical_bindings: inner_local_lexical_bindings.clone(),
                         is_generator: *inner_gen,
-                        is_async: *inner_async,
                         is_arrow: *inner_arrow,
                         rest_param_index: *inner_rest,
                         source_text: inner_source_text.clone(),
                         sloppy: *inner_sloppy,
+                        self_capture: self_capture_name.is_some(),
                     });
                     if *inner_gen && *inner_async {
                         ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {
@@ -12729,6 +13616,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         reserved_below,
                         &mut fn_reg,
                         &mut fn_register_high_water,
+                        &fn_straight_line_reads_in_place,
                     );
                     fn_value_stack.push(dst);
                 }
@@ -12904,6 +13792,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         reserved_below,
                         &mut fn_reg,
                         &mut fn_register_high_water,
+                        &fn_straight_line_reads_in_place,
                     );
                     fn_value_stack.push(dst);
                 }
@@ -13058,6 +13947,10 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
         });
     }
 
+    // Publish the optimized names before the capability scan reads them.
+    // Keeping the pool local until afterward hides every LoadName capability.
+    ir3.constant_pool = constant_pool.into_vec();
+
     // Function-body `HostCall`s (e.g. `Symbol.iterator` / `new Error()`
     // used inside a function) are emitted by the per-function lowering above and
     // are NOT recorded in `required_capabilities` by the module-level pass. Scan
@@ -13070,19 +13963,24 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
             Ir3Instruction::HostCall { capability, .. } => {
                 required_capabilities.insert(capability.0.clone());
             }
-            // A timer global read as a value (`const st = setTimeout;
-            // st(fn, 5)`) is called through its first-class builtin value,
-            // which needs the timer capability as a direct call does.
-            // Lexical bindings named like a timer load via LoadScoped.
+            // Calls through first-class timer and standard builtin values
+            // need the same authority as the corresponding direct HostCall.
+            // Inspect function bodies too; lexical shadows use LoadScoped.
             Ir3Instruction::LoadName {
                 name_pool_index, ..
-            } if ir3
-                .constant_pool
-                .get(*name_pool_index as usize)
-                .and_then(JsString::as_str)
-                .is_some_and(|name| timer_global_capability(name).is_some()) =>
-            {
-                required_capabilities.insert("timer".to_string());
+            } => {
+                if let Some(name) = ir3
+                    .constant_pool
+                    .get(*name_pool_index as usize)
+                    .and_then(JsString::as_str)
+                {
+                    if timer_global_capability(name).is_some() {
+                        required_capabilities.insert("timer".to_string());
+                    }
+                    if has_mutable_static_builtins(name) {
+                        required_capabilities.insert("builtin".to_string());
+                    }
+                }
             }
             _ => {}
         }
@@ -13092,9 +13990,6 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
         .into_iter()
         .map(CapabilityTag)
         .collect();
-
-    // Transfer optimized constant pool back to ir3 module
-    ir3.constant_pool = constant_pool.into_vec();
 
     verify_ir3_specialization(&ir3).map_err(lowering_error_from_ir_error)?;
 
@@ -13688,11 +14583,21 @@ fn append_free_var_capture(
         .get(&capture_origin_sentinel(name))
         .copied()
         .unwrap_or(outer_id);
-    let runtime_name = capture_cell_name(name, origin_id);
-    outer_lookup.insert(
-        child_capture_binding_sentinel(outer_id, &runtime_name),
-        outer_id,
-    );
+    let runtime_name = if name == "arguments"
+        && outer_lookup.get(RUNTIME_ARGUMENTS_ORIGIN_SENTINEL) == Some(&origin_id)
+    {
+        // The owning function already declares this cell on entry. Giving an
+        // arrow a copied capture alias would split subsequent assignments in
+        // the parent, the arrow, and parameter-default closures.
+        "arguments".to_string()
+    } else {
+        let runtime_name = capture_cell_name(name, origin_id);
+        outer_lookup.insert(
+            child_capture_binding_sentinel(outer_id, &runtime_name),
+            outer_id,
+        );
+        runtime_name
+    };
     names.push(runtime_name);
     ids.push(body_id);
 }
@@ -14118,6 +15023,45 @@ fn lower_super_member_assignment(
     Ok(())
 }
 
+/// Push a user superclass's prototype for `builtin:ClassPrototypeLink`
+/// (ES2020 14.6.13 step 6.e-g): null for `extends null`, whose `prototype`
+/// is not read, and otherwise the parent's `prototype`, which the link
+/// checks is an object or null (bd-9vouw.325). The parent is null or a
+/// constructor here: `RegisterDerivedConstructor` rejected anything else.
+fn emit_heritage_prototype(
+    ops: &mut Vec<Ir1Op>,
+    super_binding: BindingId,
+    result_binding: BindingId,
+    label_counter: &mut u32,
+) {
+    let link = alloc_label(label_counter);
+    ops.push(Ir1Op::LoadLiteral {
+        value: Ir1Literal::Null,
+    });
+    ops.push(Ir1Op::StoreBinding {
+        binding_id: result_binding,
+    });
+    ops.push(Ir1Op::Discard);
+    ops.push(Ir1Op::LoadBinding {
+        binding_id: super_binding,
+    });
+    ops.push(Ir1Op::JumpIfNullish { label_id: link });
+    ops.push(Ir1Op::LoadBinding {
+        binding_id: super_binding,
+    });
+    ops.push(Ir1Op::GetProperty {
+        key: Ir1PropertyKey::Static("prototype".into()),
+    });
+    ops.push(Ir1Op::StoreBinding {
+        binding_id: result_binding,
+    });
+    ops.push(Ir1Op::Discard);
+    ops.push(Ir1Op::Label { id: link });
+    ops.push(Ir1Op::LoadBinding {
+        binding_id: result_binding,
+    });
+}
+
 /// ES2020 9.2.1 [[Call]] step 2: a class constructor called without `new`
 /// (Function.prototype.call, Reflect.apply, a bound call included) throws a
 /// TypeError before its parameters or body run (bd-9vouw.292). Emitted at
@@ -14256,6 +15200,17 @@ fn rewrite_unresolved_function_body_loads(
         {
             commonjs_wrapper_loads.push((name.clone(), *binding_id));
         }
+    }
+
+    // The implicit arguments binding is source-resolvable, but uses the
+    // same exact-ID scope-load seam. Its entry marker initializes the cell
+    // before defaults and body initializers. Parameter defaults retain their
+    // own ID even when a body declaration shadows the spelling.
+    if let Some(&binding_id) = body_lookup.get(OWN_ARGUMENTS_BINDING_SENTINEL) {
+        commonjs_wrapper_loads.push(("arguments".to_string(), binding_id));
+    }
+    if let Some(binding_id) = parameter_prologue.arguments_binding {
+        commonjs_wrapper_loads.push(("arguments".to_string(), binding_id));
     }
 
     if unresolved_by_id.is_empty() {
@@ -14455,6 +15410,12 @@ fn lower_typeof_operand_suppressing_ambient(
         });
         return Ok(true);
     }
+    if let Expression::Identifier(name) = argument
+        && let Some(value) = unshadowed_global_value(binding_lookup, name)
+    {
+        ops.push(Ir1Op::LoadLiteral { value });
+        return Ok(true);
+    }
     match argument {
         Expression::Identifier(name) if !has_source_lexical_binding(binding_lookup, name) => {
             // `typeof` is the one identifier-read form that tolerates a missing
@@ -14633,6 +15594,95 @@ fn lower_spread_apply_hostcall_to_ir1(
         capability: format!("{APPLY_HOSTCALL_TARGET_PREFIX}{capability}"),
         arg_count: 2,
     });
+    Ok(())
+}
+
+/// Resolve a method reference before evaluating its arguments. Standard
+/// builtin properties are mutable, so they share this ordinary member-call
+/// path with user objects instead of selecting a native callee at compile time.
+#[allow(clippy::too_many_arguments)]
+fn lower_member_call_to_ir1(
+    object: &Expression,
+    property: &Expression,
+    computed: bool,
+    arguments: &[Expression],
+    ops: &mut Vec<Ir1Op>,
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    root_scope_id: ScopeId,
+    label_counter: &mut u32,
+    span_table: &mut Vec<Ir1OpSpanEntry>,
+) -> Result<(), LoweringPipelineError> {
+    if stages_argument_array(arguments) {
+        return lower_member_spread_call_to_reflect_apply(
+            object,
+            property,
+            computed,
+            arguments,
+            ops,
+            bindings,
+            binding_lookup,
+            binding_index,
+            root_scope_id,
+            label_counter,
+            span_table,
+        );
+    }
+    let arg_count =
+        u32::try_from(arguments.len()).map_err(|_| LoweringPipelineError::TooManyArguments {
+            count: arguments.len(),
+            max: u32::MAX as usize,
+        })?;
+    lower_expression_to_ir1(
+        object,
+        ops,
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
+        label_counter,
+        span_table,
+    )?;
+    let receiver_binding = alloc_internal_binding(
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
+        "method_receiver",
+    )?;
+    ops.push(Ir1Op::StoreBinding {
+        binding_id: receiver_binding,
+    });
+    // StoreBinding leaves the receiver on the stack for GetProperty.
+    let key = lower_member_property_key_to_ir1(
+        property,
+        computed,
+        ops,
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
+        label_counter,
+        span_table,
+    )?;
+    ops.push(Ir1Op::GetProperty { key });
+    ops.push(Ir1Op::LoadBinding {
+        binding_id: receiver_binding,
+    });
+    for argument in arguments {
+        lower_expression_to_ir1(
+            argument,
+            ops,
+            bindings,
+            binding_lookup,
+            binding_index,
+            root_scope_id,
+            label_counter,
+            span_table,
+        )?;
+    }
+    ops.push(Ir1Op::CallMethod { arg_count });
     Ok(())
 }
 
@@ -14955,11 +16005,10 @@ fn try_lower_optional_chain_to_ir1(
     }
     let chain = &links[start..];
     let prefix = chain[0].inner();
-    let keeps_existing_lowering = matches!(prefix, Expression::Super)
-        || chain.iter().any(|link| {
-            matches!(link, OptionalChainLink::Call { arguments, .. }
-                if stages_argument_array(arguments))
-        });
+    // A call link with spread (or staged) arguments is lowered here too,
+    // through ReflectApply (bd-9vouw.359): the fallback lowered each spread
+    // element as one argument and dropped a member callee's receiver.
+    let keeps_existing_lowering = matches!(prefix, Expression::Super);
     if keeps_existing_lowering {
         return Ok(false);
     }
@@ -15067,6 +16116,33 @@ fn try_lower_optional_chain_to_ir1(
                         binding_id: receiver_binding,
                     });
                 }
+                // `o.m?.(...xs)`, `f?.(a, ...xs)`: the argument array goes
+                // through ReflectApply, which reads [callee, this, argsList]
+                // like `super.m(...xs)` (bd-9vouw.359).
+                if stages_argument_array(arguments) {
+                    if method_receiver.is_none() {
+                        ops.push(Ir1Op::LoadLiteral {
+                            value: Ir1Literal::Undefined,
+                        });
+                    }
+                    let argument_list =
+                        Expression::ArrayLiteral(arguments.iter().cloned().map(Some).collect());
+                    lower_expression_to_ir1(
+                        &argument_list,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                    ops.push(Ir1Op::HostCall {
+                        capability: "builtin:ReflectApply".to_string(),
+                        arg_count: 3,
+                    });
+                    continue;
+                }
                 for argument in arguments {
                     lower_expression_to_ir1(
                         argument,
@@ -15150,51 +16226,57 @@ fn lower_expression_to_ir1(
         _ => None,
     };
     let op_start = ops.len();
-    let lowered_by_stack_bounded_helper = try_lower_net_expression_to_ir1(
-        expression,
-        ops,
-        bindings,
-        binding_lookup,
-        binding_index,
-        root_scope_id,
-        label_counter,
-        span_table,
-    )? || try_lower_arrow_expression_to_ir1(
-        expression,
-        ops,
-        bindings,
-        binding_lookup,
-        binding_index,
-        root_scope_id,
-    )? || try_lower_simple_binary_expression_to_ir1(
-        expression,
-        ops,
-        bindings,
-        binding_lookup,
-        binding_index,
-        root_scope_id,
-        label_counter,
-        span_table,
-    )? || try_lower_logical_expression_to_ir1(
-        expression,
-        ops,
-        bindings,
-        binding_lookup,
-        binding_index,
-        root_scope_id,
-        label_counter,
-        span_table,
-    )? || try_lower_optional_chain_to_ir1(
-        expression,
-        false,
-        ops,
-        bindings,
-        binding_lookup,
-        binding_index,
-        root_scope_id,
-        label_counter,
-        span_table,
-    )?;
+    let lowered_by_stack_bounded_helper =
+        try_lower_environment_read_to_ir1(expression, ops, binding_lookup)
+            || try_lower_net_expression_to_ir1(
+                expression,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                label_counter,
+                span_table,
+            )?
+            || try_lower_arrow_expression_to_ir1(
+                expression,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+            )?
+            || try_lower_simple_binary_expression_to_ir1(
+                expression,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                label_counter,
+                span_table,
+            )?
+            || try_lower_logical_expression_to_ir1(
+                expression,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                label_counter,
+                span_table,
+            )?
+            || try_lower_optional_chain_to_ir1(
+                expression,
+                false,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                label_counter,
+                span_table,
+            )?;
     if !lowered_by_stack_bounded_helper {
         lower_expression_to_ir1_inner(
             expression,
@@ -15218,6 +16300,70 @@ fn lower_expression_to_ir1(
         }
     }
     Ok(())
+}
+
+/// Admit only a named read of the unshadowed ambient environment. A read is
+/// an explicit EnvRead HostCall, not an ambient grant: it cannot authorize
+/// possession of `process`, enumeration of `process.env`, or another process
+/// member that happens to share the old EnvRead ambient classification.
+fn try_lower_environment_read_to_ir1(
+    expression: &Expression,
+    ops: &mut Vec<Ir1Op>,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    fn is_environment_object(
+        expression: &Expression,
+        binding_lookup: &BTreeMap<String, BindingId>,
+    ) -> bool {
+        let Expression::Member {
+            object,
+            property,
+            computed,
+            ..
+        } = expression
+        else {
+            return false;
+        };
+        !*computed
+            && matches!(object.as_ref(), Expression::Identifier(name)
+                if name == "process" && !has_source_lexical_binding(binding_lookup, name))
+            && well_formed_static_name(property) == Some("env")
+    }
+
+    let (name, capability) = match expression {
+        Expression::Member {
+            object,
+            property,
+            computed,
+            ..
+        } if is_environment_object(object, binding_lookup) => {
+            let name = if *computed {
+                well_formed_string_literal(property)
+            } else {
+                well_formed_static_name(property)
+            };
+            (name, "env:read")
+        }
+        Expression::Binary {
+            operator: BinaryOperator::In,
+            left,
+            right,
+        } if is_environment_object(right, binding_lookup) => {
+            (well_formed_string_literal(left), "env:has")
+        }
+        _ => return false,
+    };
+    let Some(name) = name else {
+        return false;
+    };
+    ops.push(Ir1Op::LoadLiteral {
+        value: Ir1Literal::String(name.into()),
+    });
+    ops.push(Ir1Op::HostCall {
+        capability: capability.to_string(),
+        arg_count: 1,
+    });
+    true
 }
 
 /// ES2020 IsAnonymousFunctionDefinition (14.1.12): an anonymous function,
@@ -15377,6 +16523,7 @@ fn try_lower_arrow_expression_to_ir1(
     let parameter_prologue = lower_function_parameter_prologue(
         &destructure_params,
         None,
+        true,
         binding_lookup,
         &mut body_ops,
         &mut body_bindings,
@@ -15392,12 +16539,13 @@ fn try_lower_arrow_expression_to_ir1(
     let pre_lower_names = prepare_function_body_bindings(
         body_statements,
         None,
+        true,
         &MentionedNames::of_arrow(params, body),
         binding_lookup,
         &mut body_lookup,
         &mut body_binding_index,
     );
-    merge_parameter_prologue_state(&parameter_prologue, &mut body_lookup);
+    merge_parameter_prologue_state(&parameter_prologue, &mut body_lookup, &mut body_ops);
     match body {
         ArrowBody::Expression(expr) => lower_expression_to_ir1(
             expr,
@@ -15755,6 +16903,10 @@ fn lower_expression_to_ir1_inner(
 ) -> Result<(), LoweringPipelineError> {
     match expression {
         Expression::Identifier(name) => {
+            if let Some(value) = unshadowed_global_value(binding_lookup, name) {
+                ops.push(Ir1Op::LoadLiteral { value });
+                return Ok(());
+            }
             if is_eval_value_read(expression, binding_lookup) {
                 ops.push(Ir1Op::HostCall {
                     capability: EVAL_VALUE_CAPABILITY.to_string(),
@@ -16124,10 +17276,7 @@ fn lower_expression_to_ir1_inner(
                     // and a var-created global's DeleteBinding answer
                     // false). It evaluated x and answered true. A `with`
                     // body reaches here only for names its object lacks.
-                    // `undefined` parses as a literal but names the global
-                    // object's non-configurable property (or a local
-                    // binding): `delete undefined` is false either way.
-                    Expression::Identifier(_) | Expression::UndefinedLiteral => {
+                    Expression::Identifier(_) => {
                         ops.push(Ir1Op::LoadLiteral {
                             value: Ir1Literal::Boolean(false),
                         });
@@ -16231,6 +17380,40 @@ fn lower_expression_to_ir1_inner(
                 ops.push(Ir1Op::HostCall {
                     capability: "builtin:ProcessSetExitCode".to_string(),
                     arg_count: 1,
+                });
+                return Ok(());
+            }
+            // A call as the target (Annex B web compatibility, non-strict
+            // code only; the parser admits it only there): the call runs, then
+            // a ReferenceError is thrown before the value is evaluated
+            // (bd-9vouw.408).
+            if matches!(left.as_ref(), Expression::Call { .. }) {
+                lower_expression_to_ir1(
+                    left,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                    span_table,
+                )?;
+                ops.push(Ir1Op::Pop);
+                let message = if operator.update_step().is_some() {
+                    "Invalid left-hand side expression in update operation"
+                } else {
+                    "Invalid left-hand side in assignment"
+                };
+                ops.push(Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String(message.into()),
+                });
+                ops.push(Ir1Op::HostCall {
+                    capability: "builtin:ReferenceError".to_string(),
+                    arg_count: 1,
+                });
+                ops.push(Ir1Op::Throw);
+                ops.push(Ir1Op::LoadLiteral {
+                    value: Ir1Literal::Undefined,
                 });
                 return Ok(());
             }
@@ -16341,6 +17524,17 @@ fn lower_expression_to_ir1_inner(
                 }
 
                 if let Some(binding_id) = resolved_binding_id {
+                    // ES2020 12.15.4 step 2.b: `x op= rhs` reads x before
+                    // evaluating rhs, which may write x (`x += (x = 5)`, a call
+                    // that updates a captured x). AssignOp reads its binding
+                    // when it runs, after rhs; it stays for a right side that
+                    // runs no code, so `i += 1` still steps in place
+                    // (bd-9vouw.327).
+                    let read_first = compound_assignment_binary_operator(*operator).is_ok()
+                        && !right_side_runs_no_code(right, binding_lookup);
+                    if read_first {
+                        ops.push(Ir1Op::LoadBinding { binding_id });
+                    }
                     let start = ops.len();
                     lower_expression_to_ir1(
                         right,
@@ -16355,10 +17549,20 @@ fn lower_expression_to_ir1_inner(
                     if *operator == AssignmentOperator::Assign {
                         name_anonymous_function_definition(ops, start, right, name);
                     }
-                    ops.push(Ir1Op::AssignOp {
-                        binding_id,
-                        operator: *operator,
-                    });
+                    if read_first {
+                        ops.push(Ir1Op::BinaryOp {
+                            operator: compound_assignment_binary_operator(*operator)?,
+                        });
+                        ops.push(Ir1Op::AssignOp {
+                            binding_id,
+                            operator: AssignmentOperator::Assign,
+                        });
+                    } else {
+                        ops.push(Ir1Op::AssignOp {
+                            binding_id,
+                            operator: *operator,
+                        });
+                    }
                 } else if *operator == AssignmentOperator::Assign {
                     // ResolveBinding precedes RHS evaluation even though
                     // PutValue occurs afterward. The status register prevents
@@ -17111,11 +18315,16 @@ fn lower_expression_to_ir1_inner(
                 });
             }
             // The `with` and util rewrites' intrinsics (`%WithBase(...)`,
-            // `%UtilInspect(...)`, ...): a HostCall on the evaluated arguments.
+            // `%UtilInspect(...)`, ...) and a tagged template's
+            // `%TemplateObject(...)`: a HostCall on the evaluated arguments.
             if let Expression::Identifier(name) = callee.as_ref()
                 && let Some(capability) = with_statement::intrinsic_capability(name)
                     .or_else(|| util_module::intrinsic_capability(name))
                     .or_else(|| path_module::intrinsic_capability(name))
+                    .or_else(|| {
+                        (name == crate::parser::TEMPLATE_OBJECT_INTRINSIC)
+                            .then_some(TEMPLATE_OBJECT_CAPABILITY)
+                    })
             {
                 for argument in arguments {
                     lower_expression_to_ir1(
@@ -17139,6 +18348,31 @@ fn lower_expression_to_ir1_inner(
                     })?,
                 });
                 return Ok(());
+            }
+            // bd-9vouw.366: read the live property before the argument list.
+            // A replaced method, getter, or saved native alias must retain
+            // the same behavior as an ordinary JavaScript member reference.
+            if let Expression::Member {
+                object,
+                property,
+                computed,
+                ..
+            } = callee.as_ref()
+                && is_mutable_static_builtin_receiver(object, binding_lookup)
+            {
+                return lower_member_call_to_ir1(
+                    object,
+                    property,
+                    *computed,
+                    arguments,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                    span_table,
+                );
             }
             if let Expression::Member {
                 object,
@@ -18639,84 +19873,27 @@ fn lower_expression_to_ir1_inner(
                 return Ok(());
             }
 
-            // Detect method calls: obj.method(args) → CallMethod with receiver
-            let is_method = matches!(callee.as_ref(), Expression::Member { .. });
-            if is_method {
-                if let Expression::Member {
+            // Detect method calls: obj.method(args) → CallMethod with receiver.
+            if let Expression::Member {
+                object,
+                property,
+                computed,
+                ..
+            } = callee.as_ref()
+            {
+                lower_member_call_to_ir1(
                     object,
                     property,
-                    computed,
-                    ..
-                } = callee.as_ref()
-                {
-                    // Push receiver (object) first
-                    lower_expression_to_ir1(
-                        object,
-                        ops,
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        root_scope_id,
-                        label_counter,
-                        span_table,
-                    )?;
-                    // Push the method (GetProperty on the object)
-                    // We need to duplicate the object ref for GetProperty
-                    // Store object in a temp binding
-                    let receiver_binding = alloc_internal_binding(
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        root_scope_id,
-                        "method_receiver",
-                    )?;
-                    ops.push(Ir1Op::StoreBinding {
-                        binding_id: receiver_binding,
-                    });
-                    // Object is still on stack from StoreBinding (it pushes back)
-                    // GetProperty pops object and pushes property value
-                    let key = lower_member_property_key_to_ir1(
-                        property,
-                        *computed,
-                        ops,
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        root_scope_id,
-                        label_counter,
-                        span_table,
-                    )?;
-                    ops.push(Ir1Op::GetProperty { key });
-                    // GetProperty consumed the receiver; the stack now holds
-                    // only the resolved method value for this call.
-                    // Push receiver again for CallMethod
-                    ops.push(Ir1Op::LoadBinding {
-                        binding_id: receiver_binding,
-                    });
-                    // Push args
-                    for arg in arguments {
-                        lower_expression_to_ir1(
-                            arg,
-                            ops,
-                            bindings,
-                            binding_lookup,
-                            binding_index,
-                            root_scope_id,
-                            label_counter,
-                            span_table,
-                        )?;
-                    }
-                    let arg_count = arguments.len();
-                    if arg_count > u32::MAX as usize {
-                        return Err(LoweringPipelineError::TooManyArguments {
-                            count: arg_count,
-                            max: u32::MAX as usize,
-                        });
-                    }
-                    ops.push(Ir1Op::CallMethod {
-                        arg_count: arg_count as u32,
-                    });
-                }
+                    *computed,
+                    arguments,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                    span_table,
+                )?;
             } else {
                 lower_expression_to_ir1(
                     callee,
@@ -18863,6 +20040,35 @@ fn lower_expression_to_ir1_inner(
                     capability,
                     arg_count: 0,
                 });
+                return Ok(());
+            }
+
+            // bd-9vouw.366: value reads and direct calls observe the same
+            // mutable property. Intrinsic prototype reads above retain their
+            // canonical identity; ordinary static members use runtime Get.
+            if is_mutable_static_builtin_receiver(object, binding_lookup) {
+                lower_expression_to_ir1(
+                    object,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                    span_table,
+                )?;
+                let key = lower_member_property_key_to_ir1(
+                    property,
+                    *computed,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                    span_table,
+                )?;
+                ops.push(Ir1Op::GetProperty { key });
                 return Ok(());
             }
 
@@ -19222,17 +20428,45 @@ fn lower_expression_to_ir1_inner(
             let skip_label = alloc_label(label_counter);
             let end_label = alloc_label(label_counter);
 
-            // Evaluate the callee and store into temp.
-            lower_expression_to_ir1(
-                callee,
-                ops,
-                bindings,
-                binding_lookup,
-                binding_index,
-                root_scope_id,
-                label_counter,
-                span_table,
-            )?;
+            // Evaluate the callee and store into temp. `super.m?.(...)` (the
+            // optional chain lowering leaves a `super` prefix here) looks the
+            // method up from [[HomeObject]] and calls it with this
+            // activation's `this`, as `super.m(...)` does (bd-9vouw.359).
+            let super_method = if let Expression::Member {
+                object,
+                property,
+                computed,
+                ..
+            } = callee.as_ref()
+                && matches!(object.as_ref(), Expression::Super)
+            {
+                ops.push(Ir1Op::LoadSuper);
+                let key = lower_member_property_key_to_ir1(
+                    property,
+                    *computed,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                    span_table,
+                )?;
+                ops.push(Ir1Op::GetProperty { key });
+                true
+            } else {
+                lower_expression_to_ir1(
+                    callee,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                    span_table,
+                )?;
+                false
+            };
             ops.push(Ir1Op::StoreBinding {
                 binding_id: temp_callee,
             });
@@ -19246,13 +20480,25 @@ fn lower_expression_to_ir1_inner(
                 label_id: skip_label,
             });
 
-            // Not-nullish path: perform the call.
+            // Not-nullish path: perform the call. Spread (or staged)
+            // arguments go through ReflectApply with an undefined this
+            // (bd-9vouw.359); each spread array was passed as one argument.
             ops.push(Ir1Op::LoadBinding {
                 binding_id: temp_callee,
             });
-            for arg in arguments {
+            if super_method {
+                ops.push(Ir1Op::LoadThis);
+            }
+            if stages_argument_array(arguments) {
+                if !super_method {
+                    ops.push(Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Undefined,
+                    });
+                }
+                let argument_list =
+                    Expression::ArrayLiteral(arguments.iter().cloned().map(Some).collect());
                 lower_expression_to_ir1(
-                    arg,
+                    &argument_list,
                     ops,
                     bindings,
                     binding_lookup,
@@ -19261,24 +20507,54 @@ fn lower_expression_to_ir1_inner(
                     label_counter,
                     span_table,
                 )?;
-            }
-            let arg_count = arguments.len();
-            if arg_count > u32::MAX as usize {
-                return Err(LoweringPipelineError::TooManyArguments {
-                    count: arg_count,
-                    max: u32::MAX as usize,
+                ops.push(Ir1Op::HostCall {
+                    capability: "builtin:ReflectApply".to_string(),
+                    arg_count: 3,
+                });
+                ops.push(Ir1Op::StoreBinding {
+                    binding_id: result_binding,
+                });
+                ops.push(Ir1Op::Pop);
+                ops.push(Ir1Op::Jump {
+                    label_id: end_label,
+                });
+            } else {
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                }
+                let arg_count = arguments.len();
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                ops.push(if super_method {
+                    Ir1Op::CallMethod {
+                        arg_count: arg_count as u32,
+                    }
+                } else {
+                    Ir1Op::Call {
+                        arg_count: arg_count as u32,
+                    }
+                });
+                ops.push(Ir1Op::StoreBinding {
+                    binding_id: result_binding,
+                });
+                ops.push(Ir1Op::Pop);
+                ops.push(Ir1Op::Jump {
+                    label_id: end_label,
                 });
             }
-            ops.push(Ir1Op::Call {
-                arg_count: arg_count as u32,
-            });
-            ops.push(Ir1Op::StoreBinding {
-                binding_id: result_binding,
-            });
-            ops.push(Ir1Op::Pop);
-            ops.push(Ir1Op::Jump {
-                label_id: end_label,
-            });
 
             // Nullish path: produce undefined.
             ops.push(Ir1Op::Label { id: skip_label });
@@ -19834,6 +21110,7 @@ fn lower_expression_to_ir1_inner(
             let parameter_prologue = lower_function_parameter_prologue(
                 &destructure_params,
                 name.as_deref(),
+                false,
                 binding_lookup,
                 &mut body_ops,
                 &mut body_bindings,
@@ -19842,18 +21119,19 @@ fn lower_expression_to_ir1_inner(
                 body_scope,
                 &mut body_label_counter,
             )?;
-            if *is_generator {
-                push_generator_prologue_end(&mut body_ops);
-            }
             let pre_lower_names = prepare_function_body_bindings(
                 Some(&body.body),
                 name.as_deref(),
+                false,
                 &MentionedNames::of_function(name.as_deref(), params, &body.body),
                 binding_lookup,
                 &mut body_lookup,
                 &mut body_binding_index,
             );
-            merge_parameter_prologue_state(&parameter_prologue, &mut body_lookup);
+            merge_parameter_prologue_state(&parameter_prologue, &mut body_lookup, &mut body_ops);
+            if *is_generator {
+                push_generator_prologue_end(&mut body_ops);
+            }
             for stmt in hoisted_statement_order(&body.body) {
                 lower_statement_to_ir1(
                     stmt,
@@ -20415,6 +21693,7 @@ fn lower_expression_to_ir1_inner(
             let parameter_prologue = lower_function_parameter_prologue(
                 &destructure_params,
                 name.as_deref(),
+                false,
                 binding_lookup,
                 &mut body_ops,
                 &mut body_bindings,
@@ -20429,12 +21708,13 @@ fn lower_expression_to_ir1_inner(
             let ctor_pre_lower_names = prepare_function_body_bindings(
                 ctor_statements,
                 name.as_deref(),
+                false,
                 &class_mentions,
                 binding_lookup,
                 &mut body_lookup,
                 &mut body_binding_index,
             );
-            merge_parameter_prologue_state(&parameter_prologue, &mut body_lookup);
+            merge_parameter_prologue_state(&parameter_prologue, &mut body_lookup, &mut body_ops);
             if let Some(ctor) = constructor {
                 for stmt in hoisted_statement_order(&ctor.body.body) {
                     lower_statement_to_ir1(
@@ -20589,12 +21869,19 @@ fn lower_expression_to_ir1_inner(
                         arg_count: 0,
                     });
                 } else {
-                    ops.push(Ir1Op::LoadBinding {
-                        binding_id: super_binding.expect("user superclass binding"),
-                    });
-                    ops.push(Ir1Op::GetProperty {
-                        key: Ir1PropertyKey::Static("prototype".into()),
-                    });
+                    let prototype_binding = alloc_internal_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        "class_expression_super_prototype",
+                    )?;
+                    emit_heritage_prototype(
+                        ops,
+                        super_binding.expect("user superclass binding"),
+                        prototype_binding,
+                        label_counter,
+                    );
                 }
                 ops.push(Ir1Op::HostCall {
                     capability: CLASS_PROTOTYPE_LINK_CAPABILITY.to_string(),
@@ -20673,6 +21960,7 @@ fn lower_expression_to_ir1_inner(
                 let parameter_prologue = lower_function_parameter_prologue(
                     &m_destructure_params,
                     name.as_deref(),
+                    false,
                     binding_lookup,
                     &mut m_body_ops,
                     &mut m_bindings,
@@ -20681,18 +21969,26 @@ fn lower_expression_to_ir1_inner(
                     m_scope,
                     &mut m_label_counter,
                 )?;
-                if method.is_generator {
-                    push_generator_prologue_end(&mut m_body_ops);
-                }
+                // The member's own mentions with the class-level ones (see
+                // the class declaration path).
+                let member_mentions = MentionedNames::of_class(
+                    name.as_deref(),
+                    super_class.as_deref(),
+                    std::slice::from_ref(method),
+                );
                 let method_pre_lower_names = prepare_function_body_bindings(
                     Some(&method.body.body),
                     name.as_deref(),
-                    &class_mentions,
+                    false,
+                    &member_mentions,
                     binding_lookup,
                     &mut m_lookup,
                     &mut m_binding_index,
                 );
-                merge_parameter_prologue_state(&parameter_prologue, &mut m_lookup);
+                merge_parameter_prologue_state(&parameter_prologue, &mut m_lookup, &mut m_body_ops);
+                if method.is_generator {
+                    push_generator_prologue_end(&mut m_body_ops);
+                }
                 for stmt in hoisted_statement_order(&method.body.body) {
                     lower_statement_to_ir1(
                         stmt,
@@ -20863,6 +22159,11 @@ pub(crate) const ARGUMENTS_OBJECT_CAPABILITY: &str = "builtin:ArgumentsObject";
 /// prologue that converts its frame's `this` in place.
 pub(crate) const SLOPPY_THIS_CAPABILITY: &str = "builtin:SloppyThis";
 
+/// `DeclareBinding` kind of a module's import binding (bd-1lsy.4.10.1): an
+/// immutable cell that the interpreter keeps equal to the export it was
+/// initialized from (its runtime `BindingKind::Import`).
+const RUNTIME_IMPORT_BINDING_KIND: u8 = 5;
+
 /// bd-9vouw.136: the result of a strict-mode `delete`, which is a TypeError
 /// when `false` (ES2020 12.5.3.2 step 5.d).
 pub(crate) const STRICT_DELETE_RESULT_CAPABILITY: &str = "builtin:StrictDeleteResult";
@@ -20880,6 +22181,35 @@ fn function_reads_sloppy_this(body_ops: &[Ir1Op]) -> bool {
             body_ops,
             ..
         } => function_reads_sloppy_this(body_ops),
+        _ => false,
+    })
+}
+
+/// Scope binding holding a function's new.target for the arrow functions in
+/// it (bd-9vouw.317); no identifier can spell this name.
+const ARROW_NEW_TARGET_BINDING: &str = "new.target";
+
+/// Whether an arrow function in this body (through arrows only, whose
+/// new.target is this function's) reads new.target (bd-9vouw.317).
+fn arrows_read_new_target(body_ops: &[Ir1Op]) -> bool {
+    body_ops.iter().any(|op| match op {
+        Ir1Op::CreateFunction {
+            is_arrow: true,
+            body_ops,
+            ..
+        } => arrow_reads_new_target(body_ops),
+        _ => false,
+    })
+}
+
+fn arrow_reads_new_target(body_ops: &[Ir1Op]) -> bool {
+    body_ops.iter().any(|op| match op {
+        Ir1Op::LoadNewTarget => true,
+        Ir1Op::CreateFunction {
+            is_arrow: true,
+            body_ops,
+            ..
+        } => arrow_reads_new_target(body_ops),
         _ => false,
     })
 }
@@ -22617,7 +23947,7 @@ fn is_require_querystring_module_initializer(
 /// recognizer (an alias is confirmed only by a usage the call arm will really
 /// intercept). `decode`/`encode` are Node's documented aliases of
 /// `parse`/`stringify`.
-fn querystring_method_capability(method: &str) -> Option<&'static str> {
+pub(crate) fn querystring_method_capability(method: &str) -> Option<&'static str> {
     match method {
         "parse" | "decode" => Some("builtin:QuerystringParse"),
         "stringify" | "encode" => Some("builtin:QuerystringStringify"),
@@ -22626,6 +23956,17 @@ fn querystring_method_capability(method: &str) -> Option<&'static str> {
         _ => None,
     }
 }
+
+/// Supported querystring exports, in Node's enumeration order. The aliases
+/// share their canonical native function values in the realm module (bd-305gi).
+pub(crate) const QUERYSTRING_METHOD_NAMES: [&str; 6] = [
+    "unescape",
+    "escape",
+    "stringify",
+    "encode",
+    "parse",
+    "decode",
+];
 
 /// bd-qmy52: true when `expr` IS the querystring module object at lowering
 /// time — a sentinel-recorded require-binding alias or the inline
@@ -29108,6 +30449,12 @@ fn is_process_next_tick_read(
 /// through either form.
 pub(crate) const EVAL_VALUE_CAPABILITY: &str = "builtin:static-value:builtin:Eval";
 
+/// A tagged template's `%TemplateObject(site, [cooked...], [raw...])`
+/// (crate::parser::TEMPLATE_OBJECT_INTRINSIC): the call site's one frozen
+/// template object (ES2020 12.2.9.3, bd-9vouw.343). Pure: it builds or
+/// returns an array of the literal strings.
+pub(crate) const TEMPLATE_OBJECT_CAPABILITY: &str = "builtin:TemplateObject";
+
 fn is_eval_value_read(
     expression: &Expression,
     binding_lookup: &BTreeMap<String, BindingId>,
@@ -29227,6 +30574,24 @@ fn global_function_call_capability(
 /// will exercise exactly as a direct call would; the runtime call of the value
 /// then passes the ordinary hostcall capability gate.
 pub(crate) const STATIC_VALUE_CAPABILITY_PREFIX: &str = "builtin:static-value:";
+
+/// These standard constructors and namespace objects have real runtime
+/// bindings and mutable static properties. Source member operations must
+/// resolve their live properties; internal native HostCalls stay explicit.
+fn has_mutable_static_builtins(name: &str) -> bool {
+    matches!(
+        name,
+        "Object" | "Array" | "String" | "Number" | "JSON" | "Reflect"
+    )
+}
+
+fn is_mutable_static_builtin_receiver(
+    object: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    matches!(object, Expression::Identifier(name)
+        if has_mutable_static_builtins(name) && !is_lexically_shadowed(binding_lookup, name))
+}
 
 /// Bare global functions that read as first-class values.
 pub(crate) const GLOBAL_FUNCTION_VALUE_NAMES: [&str; 13] = [
@@ -29438,12 +30803,16 @@ pub(crate) fn slot0_static_member_capability(global: &str, member: &str) -> Opti
         ("Buffer", "concat") => Some("builtin:BufferConcat"),
         ("Buffer", "compare") => Some("builtin:BufferCompare"),
         ("Buffer", "isBuffer") => Some("builtin:BufferIsBuffer"),
+        ("Buffer", "isEncoding") => Some("builtin:BufferIsEncoding"),
         // NOTE: Object.is / Object.isExtensible use the RECEIVER-PLACEHOLDER
         // calling convention (handler reads args.start+1.., guards count<N
         // counting a slot-0 receiver) — they are wired via
         // `object_receiver_static_call_capability` below, NOT here.
         ("JSON", "parse") => Some("builtin:JsonParse"),
         ("JSON", "stringify") => Some("builtin:JsonStringify"),
+        // JSON.parse source text access (Node v22, bd-9vouw.380).
+        ("JSON", "rawJSON") => Some("builtin:JsonRawJson"),
+        ("JSON", "isRawJSON") => Some("builtin:JsonIsRawJson"),
         // `Array.*` and `String.*` statics — same family, same slot-0 convention
         // (bd-tvpjk). `Array`/`String` globals have no eval-scope binding either.
         ("Array", "isArray") => Some("builtin:ArrayIsArray"),
@@ -29621,6 +30990,7 @@ fn buffer_static_builtin_call_capability(
         "concat" => Some("builtin:BufferConcat"),
         "compare" => Some("builtin:BufferCompare"),
         "isBuffer" => Some("builtin:BufferIsBuffer"),
+        "isEncoding" => Some("builtin:BufferIsEncoding"),
         _ => None,
     }
 }
@@ -31461,7 +32831,7 @@ fn hostcall_exception_is_operand_derived(
                 | FlowValueShape::FreshAggregate
                 | FlowValueShape::CallableContainer
                 | FlowValueShape::OwnKeyArray)),
-        "builtin:ArrayIsArrayFunction" => inputs.is_empty(),
+        "builtin:ArrayIsArrayFunction" | "builtin:QuerystringModule" => inputs.is_empty(),
         // bd-9vouw.17: materializes an engine-owned builtin function value.
         _ if capability.starts_with(STATIC_VALUE_CAPABILITY_PREFIX) => inputs.is_empty(),
         _ if capability.starts_with("builtin:instanceof:") => true,
@@ -33948,12 +35318,14 @@ fn extract_hostcall_capability(raw: &str) -> Option<String> {
     None
 }
 
-fn emit_array_length_store(
+/// bd-9vouw.491: `[]`'s `length` store. NewArray allocates an array with no
+/// own `length` property; an element definition (CreateDataProperty of an
+/// index) creates it, so only a literal with no element needs the store.
+fn emit_empty_array_length_store(
     instructions: &mut Vec<Ir3Instruction>,
     constant_pool: &mut ConstantPool,
     register_cursor: &mut Reg,
     array_reg: Reg,
-    length: u32,
 ) {
     let key_reg = alloc_register(register_cursor);
     let key_pool_index = push_constant_optimized(constant_pool, "length");
@@ -33964,13 +35336,156 @@ fn emit_array_length_store(
     let length_reg = alloc_register(register_cursor);
     instructions.push(Ir3Instruction::LoadInt {
         dst: length_reg,
-        value: i64::from(length),
+        value: 0,
     });
     instructions.push(Ir3Instruction::SetProperty {
         obj: array_reg,
         key: key_reg,
         val: length_reg,
     });
+}
+
+/// bd-9vouw.496: the most constants one loop hoists, each into a register
+/// pinned for the rest of the body.
+const MAX_HOISTED_LOOP_CONSTANTS: usize = 16;
+
+/// bd-9vouw.496: the literals and static property keys an outermost loop
+/// reads, loaded once into pinned registers at `insert_at` (before the
+/// loop's entry `Jump` to its bottom test, or before the body label of a
+/// loop entered by falling into it) instead of on every iteration.
+struct LoopConstantHoist {
+    insert_at: usize,
+    end: usize,
+    constants: Vec<Ir1Literal>,
+}
+
+/// bd-9vouw.496: plan the loop-invariant constant loads of a body. A loop is
+/// a back edge, a `JumpIfTruthy` to an earlier label (while, do-while and
+/// for loops test at the bottom, bd-9vouw.486); only outermost loops are
+/// planned, so a constant of an inner loop is loaded before the outer one.
+/// A loop is skipped when anything outside it, other than its own entry
+/// jump, targets a label inside it (the loads could be bypassed). The loop's
+/// `++`/`--` operand literal is not hoisted: no instruction loads it
+/// (update_assignment_ignores_operand). BigInt literals are not hoisted.
+/// The emitter applies a plan only when the value stack is empty at
+/// `insert_at` (a statement boundary).
+fn plan_loop_constant_hoists(ops: &[Ir2Op]) -> Vec<LoopConstantHoist> {
+    let mut label_at = BTreeMap::<u32, usize>::new();
+    for (index, op) in ops.iter().enumerate() {
+        if let Ir1Op::Label { id } = &op.inner {
+            label_at.insert(*id, index);
+        }
+    }
+    let targets = |op: &Ir1Op| -> Vec<u32> {
+        match op {
+            Ir1Op::Jump { label_id }
+            | Ir1Op::JumpIfFalsy { label_id }
+            | Ir1Op::JumpIfFalsyConsume { label_id }
+            | Ir1Op::JumpIfTruthy { label_id }
+            | Ir1Op::JumpIfNullish { label_id } => vec![*label_id],
+            Ir1Op::BeginTry {
+                catch_label,
+                finally_label,
+            } => std::iter::once(*catch_label)
+                .chain(finally_label.iter().copied())
+                .collect(),
+            Ir1Op::ForInNext { done_label } | Ir1Op::ForOfNext { done_label } => {
+                vec![*done_label]
+            }
+            _ => Vec::new(),
+        }
+    };
+    let mut loops = ops
+        .iter()
+        .enumerate()
+        .filter_map(|(index, op)| match &op.inner {
+            Ir1Op::JumpIfTruthy { label_id } => label_at
+                .get(label_id)
+                .filter(|&&body| body < index)
+                .map(|&body| (body, index)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    loops.sort_unstable();
+    let mut outermost: Vec<(usize, usize)> = Vec::new();
+    for (body, end) in loops {
+        if outermost
+            .last()
+            .is_some_and(|&(outer_body, outer_end)| body >= outer_body && end <= outer_end)
+        {
+            continue;
+        }
+        outermost.push((body, end));
+    }
+    outermost
+        .into_iter()
+        .filter_map(|(body, end)| {
+            let insert_at = match body.checked_sub(1).map(|index| &ops[index].inner) {
+                Some(Ir1Op::Jump { label_id })
+                    if label_at
+                        .get(label_id)
+                        .is_some_and(|&test| test > body && test <= end) =>
+                {
+                    body - 1
+                }
+                _ => body,
+            };
+            let entered_only_at_its_head = ops.iter().enumerate().all(|(index, op)| {
+                (index >= insert_at && index <= end)
+                    || targets(&op.inner).iter().all(|label| {
+                        label_at
+                            .get(label)
+                            .is_none_or(|&target| target <= insert_at || target > end)
+                    })
+            });
+            if !entered_only_at_its_head {
+                return None;
+            }
+            let mut constants: Vec<Ir1Literal> = Vec::new();
+            for index in body..=end {
+                let literal = match &ops[index].inner {
+                    Ir1Op::LoadLiteral { value }
+                        if !update_assignment_ignores_operand(
+                            ops.get(index + 1).map(|next| &next.inner),
+                        ) =>
+                    {
+                        Some(value.clone())
+                    }
+                    Ir1Op::GetProperty {
+                        key: Ir1PropertyKey::Static(key),
+                    }
+                    | Ir1Op::SetProperty {
+                        key: Ir1PropertyKey::Static(key),
+                        ..
+                    } => Some(Ir1Literal::String(key.clone())),
+                    _ => None,
+                };
+                if let Some(literal) = literal
+                    && !matches!(literal, Ir1Literal::BigInt(_))
+                    && !constants.contains(&literal)
+                    && constants.len() < MAX_HOISTED_LOOP_CONSTANTS
+                {
+                    constants.push(literal);
+                }
+            }
+            (!constants.is_empty()).then_some(LoopConstantHoist {
+                insert_at,
+                end,
+                constants,
+            })
+        })
+        .collect()
+}
+
+/// bd-9vouw.496: the pinned register a hoisted string constant was loaded
+/// into, for a static property key inside its loop.
+fn hoisted_string_constant(hoisted: &[(Ir1Literal, Reg)], key: &JsString) -> Option<Reg> {
+    hoisted
+        .iter()
+        .find_map(|(literal, register)| match literal {
+            Ir1Literal::String(text) if text == key => Some(*register),
+            _ => None,
+        })
 }
 
 fn lower_literal_to_ir3_optimized(
@@ -34017,6 +35532,83 @@ fn hoisted_statement_order(body: &[Statement]) -> impl Iterator<Item = &Statemen
         body.iter()
             .filter(move |statement| !is_function_declaration(statement)),
     )
+}
+
+/// A module's top-level statements in evaluation order: function
+/// declarations first (hoisted), then the exports of those functions and
+/// every module request (`import`, `export ... from`), then the rest in
+/// source order. ES2020 15.2.1.16.4 InitializeEnvironment creates a module's
+/// function declarations and its exports of them before any module code
+/// runs, and InnerModuleEvaluation evaluates every requested module before
+/// the body (bd-9vouw.388): a dependency in a cycle can call an exported
+/// function of the module that imported it, and a binding imported by a
+/// statement at the end of the module is usable from its first line.
+fn module_statement_order(body: &[Statement]) -> std::vec::IntoIter<&Statement> {
+    let function_names: BTreeSet<&str> = body
+        .iter()
+        .filter_map(|statement| match statement {
+            Statement::FunctionDeclaration(function) => function.name.as_deref(),
+            _ => None,
+        })
+        .collect();
+    // A top-level `var` is initialized (undefined) when the module is
+    // instantiated, before any import runs, as a function is: its export is
+    // published there too, so a module in a cycle reads undefined, not a
+    // binding in its temporal dead zone (bd-1lsy.4.10.1).
+    let var_names: BTreeSet<&str> = body
+        .iter()
+        .filter_map(|statement| match statement {
+            Statement::VariableDeclaration(declaration)
+                if declaration.kind == VariableDeclarationKind::Var =>
+            {
+                Some(declaration.declarations.iter())
+            }
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|declarator| match &declarator.pattern {
+            BindingPattern::Identifier(name) => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    let rank = |statement: &Statement| match statement {
+        Statement::FunctionDeclaration(_) => 0u8,
+        // `export default function () {}` (also a generator or async
+        // function) is a hoistable declaration whose binding is *default*
+        // (ES2020 15.2.3): it exists before any module request runs, so a
+        // module in a cycle can call it (bd-9vouw.412). Its evaluation has
+        // no side effect. A parenthesized `export default (function () {})`
+        // has the same tree and is moved too, where the specification would
+        // leave *default* uninitialized until the statement runs.
+        Statement::Export(ExportDeclaration {
+            kind: ExportKind::Default(Expression::Function { .. }),
+            ..
+        }) => 1,
+        Statement::Export(ExportDeclaration {
+            kind: ExportKind::NamedClause(clause),
+            ..
+        }) if clause.source().is_none() => {
+            let locals = parse_named_export_clause_bindings(clause.canonical_head());
+            if !locals.is_empty()
+                && locals.iter().all(|(local, _)| {
+                    function_names.contains(local.as_str()) || var_names.contains(local.as_str())
+                })
+            {
+                1
+            } else {
+                3
+            }
+        }
+        Statement::Import(_) => 2,
+        Statement::Export(ExportDeclaration {
+            kind: ExportKind::NamedClause(clause),
+            ..
+        }) if clause.source().is_some() => 2,
+        _ => 3,
+    };
+    let mut ordered: Vec<&Statement> = body.iter().collect();
+    ordered.sort_by_key(|statement| rank(statement));
+    ordered.into_iter()
 }
 
 fn alloc_register(cursor: &mut Reg) -> Reg {
@@ -34389,6 +35981,104 @@ fn function_local_register(
     })
 }
 
+/// bd-9vouw.494: `x = <expr>` and `let x = <expr>` for a register-resident
+/// binding computed the value into a temporary and copied it, `Add t, a, b;
+/// Move x, t`. When the instruction just emitted wrote that temporary, it
+/// writes the binding's register instead and the copy is not emitted.
+///
+/// Sound only when nothing else can observe the temporary or the order of the
+/// two writes, which the caller establishes:
+/// - `src` is a dead temporary: above the statement floor and the pinned
+///   bindings, not a live slot or an iterator anchor, and not on the value
+///   stack once the stored value is popped;
+/// - no label is bound at the end of the stream (`label_at_end`), so no jump
+///   lands between the producer and the copy (a conditional expression's
+///   arms each write the temporary and join there);
+/// - the producer sits in the current function (`first_index`).
+///
+/// The producer kinds read every operand before they write their destination
+/// (a call writes it when it returns, a throwing producer never), and each
+/// writes a label computed from its operands with `write_reg_with_label`,
+/// which the copy reproduced exactly (`Move` writes the source's label the
+/// same way). Kinds whose destination label depends on the destination's
+/// previous label are excluded: literal loads (`write_reg` keeps the previous
+/// label unless the context label dominates it) and `GetProperty` (joins the
+/// prior destination label). One call path writes that way too: a call that
+/// creates a generator or async-generator object (`write_reg`), so for
+/// `g = gen()` the binding keeps its own previous label where the copy gave
+/// it the temporary's; both are at least the context label.
+fn retarget_store_producer(
+    instructions: &mut [Ir3Instruction],
+    first_index: usize,
+    src: Reg,
+    dst: Reg,
+    src_is_dead_temporary: bool,
+    label_at_end: bool,
+) -> bool {
+    if !src_is_dead_temporary || label_at_end || src == dst || instructions.len() <= first_index {
+        return false;
+    }
+    let Some(last) = instructions.last_mut() else {
+        return false;
+    };
+    // A producer that can run guest code (a callee, a builtin's callbacks, a
+    // part's toString) does not get the binding's register when it also
+    // reads that register as an operand: `a = a.concat(b)` keeps its copy.
+    let in_range = |range: &RegRange| dst >= range.start && dst - range.start < range.count;
+    let reads_dst = match &*last {
+        Ir3Instruction::Call { callee, args, .. } => *callee == dst || in_range(args),
+        Ir3Instruction::CallMethod {
+            receiver,
+            callee,
+            args,
+            ..
+        } => *receiver == dst || *callee == dst || in_range(args),
+        Ir3Instruction::TemplateLiteral { parts, .. } => in_range(parts),
+        _ => false,
+    };
+    if reads_dst {
+        return false;
+    }
+    let written = match last {
+        Ir3Instruction::Add { dst, .. }
+        | Ir3Instruction::Sub { dst, .. }
+        | Ir3Instruction::Mul { dst, .. }
+        | Ir3Instruction::Div { dst, .. }
+        | Ir3Instruction::Mod { dst, .. }
+        | Ir3Instruction::Exp { dst, .. }
+        | Ir3Instruction::UnaryNeg { dst, .. }
+        | Ir3Instruction::UnaryPlus { dst, .. }
+        | Ir3Instruction::LogicalNot { dst, .. }
+        | Ir3Instruction::BitNot { dst, .. }
+        | Ir3Instruction::TypeOf { dst, .. }
+        | Ir3Instruction::Lt { dst, .. }
+        | Ir3Instruction::Lte { dst, .. }
+        | Ir3Instruction::Gt { dst, .. }
+        | Ir3Instruction::Gte { dst, .. }
+        | Ir3Instruction::Eq { dst, .. }
+        | Ir3Instruction::StrictEq { dst, .. }
+        | Ir3Instruction::NotEq { dst, .. }
+        | Ir3Instruction::StrictNotEq { dst, .. }
+        | Ir3Instruction::BitAnd { dst, .. }
+        | Ir3Instruction::BitOr { dst, .. }
+        | Ir3Instruction::BitXor { dst, .. }
+        | Ir3Instruction::Shl { dst, .. }
+        | Ir3Instruction::Shr { dst, .. }
+        | Ir3Instruction::Ushr { dst, .. }
+        | Ir3Instruction::Move { dst, .. }
+        | Ir3Instruction::Call { dst, .. }
+        | Ir3Instruction::CallMethod { dst, .. }
+        | Ir3Instruction::LoadScoped { dst, .. }
+        | Ir3Instruction::TemplateLiteral { dst, .. } => dst,
+        _ => return false,
+    };
+    if *written != src {
+        return false;
+    }
+    *written = dst;
+    true
+}
+
 /// bd-9vouw.23: once a batch array or object literal is built, its element
 /// and key registers are dead. When nothing live sits at or above the lowest
 /// of them (no value-stack entry, and it is above the statement floor, pinned
@@ -34397,6 +36087,15 @@ fn function_local_register(
 /// Without this, nested literals in one statement used
 /// every register until the statement ended (Test262's
 /// harness/byteConversionValues.js needed a 1295-register frame).
+/// bd-9vouw.494: operands below the floor are binding registers a value read
+/// in place (straight_line_consumer_reads_in_place), not temporaries; they
+/// are left alone, and the temporaries among the rest are still reclaimed.
+/// So are the registers of bindings a straight-line consumer read in place
+/// above the floor (`bindings_read_in_place`): a short-lived local read in
+/// place is not a temporary of the call or literal that consumes it, and
+/// counting it made compaction give up below earlier results (the n68 gate:
+/// top-level `[o.m(1), ...]` kept four registers per call).
+#[allow(clippy::too_many_arguments)]
 fn compact_batch_literal(
     instructions: &mut Vec<Ir3Instruction>,
     literal: Reg,
@@ -34405,12 +36104,16 @@ fn compact_batch_literal(
     reserved_below: Reg,
     cursor: &mut Reg,
     high_water: &mut Reg,
+    bindings_read_in_place: &BTreeSet<Reg>,
 ) -> Reg {
-    let Some(&lowest_operand) = operands.iter().min() else {
+    let Some(&lowest_operand) = operands
+        .iter()
+        .filter(|&&operand| operand >= reserved_below && !bindings_read_in_place.contains(&operand))
+        .min()
+    else {
         return literal;
     };
     if lowest_operand >= literal
-        || lowest_operand < reserved_below
         || value_stack
             .iter()
             .any(|register| *register >= lowest_operand)
@@ -34437,6 +36140,22 @@ fn compact_batch_literal(
     base
 }
 
+/// The value stack as call-result compaction sees it at the top level. The
+/// binding registers a compound assignment reads in place
+/// (compound_left_operand_reads_in_place) are pinned bindings, not
+/// temporaries, so a stack holding only them compacts as an empty one does:
+/// the result stays in its register.
+fn compaction_value_stack<'a>(value_stack: &'a [Reg], in_place: &BTreeSet<Reg>) -> &'a [Reg] {
+    if value_stack
+        .iter()
+        .all(|register| in_place.contains(register))
+    {
+        &[]
+    } else {
+        value_stack
+    }
+}
+
 /// bd-9vouw.23: once a call (Call, CallMethod, Construct, HostCall) has
 /// produced `result`, its callee, receiver and argument registers and the
 /// contiguous argument copies are dead. Reclaim the temporaries among them
@@ -34448,6 +36167,49 @@ fn compact_batch_literal(
 /// overflowed the 256-register frame. A call that leaves the value stack
 /// empty is left as it is: nothing accumulates above it, and the statement
 /// boundary rewind reclaims its registers without an extra Move.
+/// bd-9vouw.375: the argument window of a Call or CallMethod. When the
+/// arguments already sit in contiguous temporaries that end at the register
+/// cursor (each argument expression's own result, in order), at or above
+/// `reserved_below`, and none of them is still on the value stack or another
+/// operand of the call, the call reads them in place; otherwise each is
+/// copied into a fresh contiguous window above the cursor, as before. A call
+/// reads its arguments' values and labels from the window when it runs and
+/// writes only its result, which is allocated above the window, so reading
+/// in place observes the same values: `arg_count` fewer Moves per call.
+fn call_argument_window(
+    args: &[Reg],
+    other_operands: &[Reg],
+    value_stack: &[Reg],
+    reserved_below: Reg,
+    cursor: &mut Reg,
+    instructions: &mut Vec<Ir3Instruction>,
+) -> RegRange {
+    let count = u32::try_from(args.len()).unwrap_or(u32::MAX);
+    if let (Some(&first), Some(&last)) = (args.first(), args.last())
+        && first >= reserved_below
+        && last.checked_add(1) == Some(*cursor)
+        && args
+            .iter()
+            .zip(first..)
+            .all(|(&arg, expected)| arg == expected)
+        && !value_stack
+            .iter()
+            .chain(other_operands)
+            .any(|register| (first..=last).contains(register))
+    {
+        return RegRange {
+            start: first,
+            count,
+        };
+    }
+    let start = *cursor;
+    for &arg in args {
+        let dst = alloc_register(cursor);
+        instructions.push(Ir3Instruction::Move { dst, src: arg });
+    }
+    RegRange { start, count }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn compact_call_result(
     instructions: &mut Vec<Ir3Instruction>,
@@ -34458,6 +36220,7 @@ fn compact_call_result(
     reserved_below: Reg,
     cursor: &mut Reg,
     high_water: &mut Reg,
+    bindings_read_in_place: &BTreeSet<Reg>,
 ) -> Reg {
     if value_stack.is_empty() {
         return result;
@@ -34476,6 +36239,7 @@ fn compact_call_result(
         reserved_below,
         cursor,
         high_water,
+        bindings_read_in_place,
     )
 }
 
@@ -34486,6 +36250,27 @@ fn compact_call_result(
 /// per expression temporary, for the rest of the body.
 fn live_status_register_ceiling(live: &BTreeSet<Reg>) -> Reg {
     live.last().map_or(0, |register| register.saturating_add(1))
+}
+
+/// bd-9vouw.494: whether `register` is an expression temporary that nothing
+/// names once it has left the value stack: at or above the statement floor,
+/// the pinned bindings and the innermost loop iterator's body floor, not a
+/// live slot (a name status or a short-lived local, which may sit above it:
+/// a method call's receiver local takes the register after its object's
+/// copy), and not on the stack.
+fn is_dead_expression_temporary(
+    register: Reg,
+    value_stack: &[Reg],
+    anchors: &[IteratorAnchor],
+    floor: Reg,
+    pinned_high: Reg,
+    live: &BTreeSet<Reg>,
+) -> bool {
+    let reserved = floor.max(pinned_high);
+    let reserved = anchors
+        .last()
+        .map_or(reserved, |anchor| reserved.max(anchor.body_floor));
+    register >= reserved && !live.contains(&register) && !value_stack.contains(&register)
 }
 
 /// bd-9vouw.23: a for-in/for-of iterator that stays on the lowering value
@@ -34578,6 +36363,12 @@ fn store_result_needs_copy(
     stored: Reg,
     iterator_cleanup_labels: &BTreeMap<u32, Reg>,
 ) -> bool {
+    // bd-9vouw.494: an op that pops the value at once (an operator, a
+    // property read, a return) reads the binding's register before anything
+    // can write the binding again, so it needs no copy either: a method
+    // call's receiver store feeds its method lookup directly. Operator and
+    // property-read results never reuse a binding's register, which sits
+    // below every reusable temporary (pure_op_result_register).
     !matches!(
         next,
         None | Some(
@@ -34591,10 +36382,244 @@ fn store_result_needs_copy(
                 | Ir1Op::JumpIfFalsyConsume { .. }
                 | Ir1Op::JumpIfTruthy { .. }
                 | Ir1Op::JumpIfNullish { .. }
+                | Ir1Op::BinaryOp { .. }
+                | Ir1Op::GetProperty { .. }
+                | Ir1Op::Return
         )
     ) && !iterator_cleanup_labels
         .values()
         .any(|register| *register == stored)
+}
+
+/// Whether the read of a pinned register binding at `ops[index]` may push the
+/// binding's register itself instead of a copy: the op that consumes it comes
+/// next, or after one more literal or binding load, so nothing in between can
+/// write the binding (a register binding is written only by its own ops; a
+/// closure's binding is scoped instead), and that op reads it before it
+/// writes anything:
+/// - an operator or a static property read (bd-9vouw.330), whose result
+///   register is never a pinned one (pure_op_result_register's floor, or a
+///   fresh register);
+/// - the right operand of an arithmetic or bitwise compound assignment
+///   (`s += i`), which pushes the target's value or a fresh register, never
+///   its operand (bd-9vouw.486).
+///
+/// Any other read is a copy, as an assignment may follow it (`x + (x = 5)`).
+fn pinned_read_consumed_in_place(ops: &[Ir2Op], index: usize) -> bool {
+    let op_at = |offset: usize| ops.get(index + offset).map(|op| &op.inner);
+    let operator = |op: Option<&Ir1Op>| matches!(op, Some(Ir1Op::BinaryOp { .. }));
+    operator(op_at(1))
+        || matches!(
+            op_at(1),
+            Some(Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Static(_)
+            })
+        )
+        || compound_assignment_consumes_operand(op_at(1))
+        || (matches!(
+            op_at(1),
+            Some(Ir1Op::LoadLiteral { .. } | Ir1Op::LoadBinding { .. })
+        ) && operator(op_at(2)))
+}
+
+/// The operator whose result is exactly the negation of `operator`'s, with
+/// the same evaluation (`a != b` is `!(a == b)`, ES2020 13.11.1), for an
+/// (in)equality; `None` for every other operator (a relational one is false
+/// both ways on NaN).
+fn negated_equality(operator: BinaryOperator) -> Option<BinaryOperator> {
+    match operator {
+        BinaryOperator::Equal => Some(BinaryOperator::NotEqual),
+        BinaryOperator::NotEqual => Some(BinaryOperator::Equal),
+        BinaryOperator::StrictEqual => Some(BinaryOperator::StrictNotEqual),
+        BinaryOperator::StrictNotEqual => Some(BinaryOperator::StrictEqual),
+        _ => None,
+    }
+}
+
+/// Whether `next` is an arithmetic or bitwise compound assignment to a
+/// binding, which takes the IR1 stack top as its right operand.
+fn compound_assignment_consumes_operand(next: Option<&Ir1Op>) -> bool {
+    matches!(
+        next,
+        Some(Ir1Op::AssignOp { operator, .. }) if matches!(
+            operator,
+            AssignmentOperator::AddAssign
+                | AssignmentOperator::SubtractAssign
+                | AssignmentOperator::MultiplyAssign
+                | AssignmentOperator::DivideAssign
+                | AssignmentOperator::RemainderAssign
+                | AssignmentOperator::ExponentiateAssign
+                | AssignmentOperator::LeftShiftAssign
+                | AssignmentOperator::RightShiftAssign
+                | AssignmentOperator::UnsignedRightShiftAssign
+                | AssignmentOperator::BitwiseAndAssign
+                | AssignmentOperator::BitwiseOrAssign
+                | AssignmentOperator::BitwiseXorAssign
+        )
+    )
+}
+
+/// Whether `next` is a `++`/`--` of a binding, whose IR1 right operand (the
+/// literal 1) no lowering reads: each steps the target's own value
+/// (lower_assign_op_to_ir3, lower_postfix_update_to_ir3, the register arms'
+/// `Inc`/`Dec`), so the literal needs a stack slot but no instruction
+/// (bd-9vouw.486).
+fn update_assignment_ignores_operand(next: Option<&Ir1Op>) -> bool {
+    matches!(
+        next,
+        Some(Ir1Op::AssignOp { operator, .. }) if matches!(
+            operator,
+            AssignmentOperator::IncrementAssign
+                | AssignmentOperator::DecrementAssign
+                | AssignmentOperator::PostIncrementAssign
+                | AssignmentOperator::PostDecrementAssign
+        )
+    )
+}
+
+/// How far the in-place scans below look ahead: every read scans, so an
+/// unbounded scan of nested right sides or argument lists was quadratic.
+const STRAIGHT_LINE_SCAN_LIMIT: usize = 64;
+
+/// The (pops, pushes) of an op that runs no branch and does not write
+/// `binding_id`, for the in-place scans below; `None` for every other op
+/// (a jump, a label, a write of the binding, an op whose effect is not
+/// listed), which ends a scan with a copy.
+fn straight_line_stack_effect(op: &Ir1Op, binding_id: BindingId) -> Option<(usize, usize)> {
+    Some(match op {
+        Ir1Op::LoadLiteral { .. } | Ir1Op::LoadName { .. } | Ir1Op::LoadBinding { .. } => (0, 1),
+        Ir1Op::StoreBinding { binding_id: other }
+        | Ir1Op::AssignOp {
+            binding_id: other, ..
+        } if *other != binding_id => (1, 1),
+        Ir1Op::GetProperty {
+            key: Ir1PropertyKey::Static(_),
+        }
+        | Ir1Op::UnaryOp { .. } => (1, 1),
+        Ir1Op::GetProperty {
+            key: Ir1PropertyKey::Dynamic,
+        }
+        | Ir1Op::BinaryOp { .. } => (2, 1),
+        Ir1Op::Call { arg_count } => ((*arg_count as usize).saturating_add(1), 1),
+        Ir1Op::CallMethod { arg_count } => ((*arg_count as usize).saturating_add(2), 1),
+        Ir1Op::NewArray { count } => (*count as usize, 1),
+        Ir1Op::NewObject { count } => ((*count as usize).saturating_mul(2), 1),
+        Ir1Op::SetProperty {
+            key: Ir1PropertyKey::Static(_),
+            ..
+        } => (2, 1),
+        Ir1Op::SetProperty {
+            key: Ir1PropertyKey::Dynamic,
+            ..
+        } => (3, 1),
+        _ => return None,
+    })
+}
+
+/// bd-9vouw.494: whether the read of register binding `binding_id` at
+/// `ops[index]` reaches the op that consumes it across straight-line code
+/// only, and that op reads it in place when it runs: scanning forward over
+/// ops whose stack effect is known, with no op in between writing the
+/// binding or branching, the consumer is
+/// - a Call taking it as its callee, or a CallMethod taking it as its
+///   receiver (the method value sits below it): a call reads both when it
+///   runs;
+/// - a batch array or object literal taking it as an element, key or value:
+///   the literal's CreateDataProperty instructions read their registers when
+///   they run, after every operand is evaluated, and write only the fresh
+///   object;
+/// - an operator or a property read taking it as an operand (bd-9vouw.330's
+///   rule when the consumer comes next, now across straight-line code too:
+///   `arr[i]`, `i < arr.length`), whose result register is never a
+///   binding's (pure_op_result_register's floor, or a fresh register);
+/// - a property write taking it as its object or key (`o.n = o.n + 1`).
+///
+/// A register binding is written only by its own ops (a closure's is
+/// scoped), so the register still holds the value read: a method call's
+/// receiver local (stored once, before the method lookup), `f(x)` of a local
+/// `f` and `{ x: x, y: y }` need no copies. `f(f = g)` and
+/// `[x, x = 5]` still read copies.
+fn straight_line_consumer_reads_in_place(
+    ops: &[Ir2Op],
+    index: usize,
+    binding_id: BindingId,
+) -> bool {
+    let mut above = 0usize;
+    for op in ops
+        .iter()
+        .skip(index.saturating_add(1))
+        .take(STRAIGHT_LINE_SCAN_LIMIT)
+    {
+        let Some((pops, pushes)) = straight_line_stack_effect(&op.inner, binding_id) else {
+            return false;
+        };
+        if pops > above {
+            return match op.inner {
+                Ir1Op::Call { arg_count } => {
+                    arg_count as usize == above && pops == above.saturating_add(1)
+                }
+                Ir1Op::CallMethod { arg_count } => {
+                    arg_count as usize == above && pops == above.saturating_add(2)
+                }
+                Ir1Op::NewArray { .. }
+                | Ir1Op::NewObject { .. }
+                | Ir1Op::BinaryOp { .. }
+                | Ir1Op::UnaryOp { .. }
+                | Ir1Op::GetProperty { .. } => true,
+                // Its object or key, not its value: the property write
+                // leaves the value's register on the stack as the
+                // assignment's result, which a later op may read after the
+                // binding changed (`f(o.p = x, x = 5)`).
+                Ir1Op::SetProperty { .. } => above >= 1,
+                _ => false,
+            };
+        }
+        above = above - pops + pushes;
+    }
+    false
+}
+
+/// Whether the read of register binding `binding_id` at `ops[index]` is the
+/// left operand of a compound assignment that straight-line code alone
+/// separates from its operator: scanning forward over ops whose stack effect
+/// is known, the op that consumes the read is a BinaryOp taking it as its
+/// left operand, the next op assigns the result to the same binding, and no
+/// op in between writes the binding or branches. `x op= rhs` reads x before
+/// rhs (bd-9vouw.327), but a register binding is written only by its own
+/// ops (a closure's binding is scoped instead), so after such an rhs the
+/// register still holds the value read and the operator can read it in
+/// place. Any other op, or a right side longer than
+/// [`STRAIGHT_LINE_SCAN_LIMIT`] ops, ends the scan with a copy.
+fn compound_left_operand_reads_in_place(
+    ops: &[Ir2Op],
+    index: usize,
+    binding_id: BindingId,
+) -> bool {
+    // Values pushed above the read and not yet consumed.
+    let mut above = 0usize;
+    for (offset, op) in ops
+        .iter()
+        .enumerate()
+        .skip(index.saturating_add(1))
+        .take(STRAIGHT_LINE_SCAN_LIMIT)
+    {
+        let Some((pops, pushes)) = straight_line_stack_effect(&op.inner, binding_id) else {
+            return false;
+        };
+        if pops > above {
+            return above == 1
+                && matches!(op.inner, Ir1Op::BinaryOp { .. })
+                && matches!(
+                    ops.get(offset + 1).map(|next| &next.inner),
+                    Some(Ir1Op::AssignOp {
+                        binding_id: assigned,
+                        operator: AssignmentOperator::Assign,
+                    }) if *assigned == binding_id
+                );
+        }
+        above = above - pops + pushes;
+    }
+    false
 }
 
 fn prune_iterator_anchors(anchors: &mut Vec<IteratorAnchor>, value_stack: &[Reg]) {
@@ -34690,6 +36715,14 @@ fn scope_binding_ids_are_unique(scopes: &[ScopeNode]) -> bool {
 
 fn hash_string(hash: &ContentHash) -> String {
     format!("sha256:{}", hex::encode(hash.as_bytes()))
+}
+
+/// The hash a [`hash_string`] spells, or `None` for any other text.
+fn content_hash_from_hash_string(text: &str) -> Option<ContentHash> {
+    let digits = text.strip_prefix("sha256:")?;
+    let mut bytes = [0_u8; 32];
+    hex::decode_to_slice(digits, &mut bytes).ok()?;
+    Some(ContentHash::from_bytes(bytes))
 }
 
 fn lowering_error_from_ir_error(error: IrError) -> LoweringPipelineError {
@@ -39991,68 +42024,72 @@ mod tests {
 
     #[test]
     fn object_keys_join_keeps_finite_own_key_provenance_bd_n8eta() {
-        for (
-            name,
-            source,
-            expected_querystring_parse,
-            expected_querystring_stringify,
-            expected_console_count,
-        ) in [
+        let literal = |value: &str| Ir1Op::LoadLiteral {
+            value: Ir1Literal::String(value.into()),
+        };
+        // Authenticate the pure native operation in IR itself. The first-class
+        // querystring module is mutable across files, so reading a method from
+        // its factory result cannot vouch for this native-call contract.
+        for (name, object_ops) in [
             (
-                "querystring_0010",
-                "const qs = require('querystring'); const value = { foo: 'bar', baz: 'qux' }; console.log(Object.keys(value).join(',')); console.log(qs.stringify(value));",
-                false,
-                true,
-                2,
+                "literal",
+                vec![
+                    literal("foo"),
+                    literal("bar"),
+                    literal("baz"),
+                    literal("qux"),
+                    Ir1Op::NewObject { count: 2 },
+                ],
             ),
             (
-                "querystring_0013",
-                "const qs = require('querystring'); const o = qs.parse('foo=bar&abc=xyz'); console.log(Object.keys(o).join(','), o.foo, o.abc);",
-                true,
-                false,
-                1,
+                "querystring_parse",
+                vec![
+                    literal("foo=bar&baz=qux"),
+                    Ir1Op::HostCall {
+                        capability: "builtin:QuerystringParse".to_string(),
+                        arg_count: 1,
+                    },
+                ],
             ),
         ] {
-            let tree = crate::parser_api_stability::parse_script(source)
-                .unwrap_or_else(|error| panic!("parse {name}: {error}"));
-            let ir0 = Ir0Module::from_syntax_tree(tree, format!("{name}_bd_n8eta.js"));
-            let ir1 = lower_ir0_to_ir1(&ir0)
-                .unwrap_or_else(|error| panic!("lower {name} to IR1: {error}"))
-                .module;
-
-            assert!(
-                ir1.ops.iter().any(|op| matches!(op,
-                    Ir1Op::HostCall { capability, arg_count: 1 }
-                        if capability == "builtin:ObjectKeys"
-                )),
-                "{name} must retain the Object.keys operation"
+            let mut native = Ir1Module::new(
+                ContentHash::compute(name.as_bytes()),
+                format!("native_own_keys_{name}_bd_n8eta.js"),
             );
-            assert_eq!(
-                ir1.ops.iter().any(|op| matches!(op,
-                    Ir1Op::HostCall { capability, .. }
-                        if capability == "builtin:QuerystringParse"
-                )),
-                expected_querystring_parse,
-                "{name} querystring parse lowering"
-            );
-            assert_eq!(
-                ir1.ops.iter().any(|op| matches!(op,
-                    Ir1Op::HostCall { capability, .. }
-                        if capability == "builtin:QuerystringStringify"
-                )),
-                expected_querystring_stringify,
-                "{name} querystring stringify lowering"
-            );
-            assert!(
-                ir1.ops.iter().any(|op| matches!(op,
-                    Ir1Op::GetProperty { key: Ir1PropertyKey::Static(key) }
-                        if key.as_str() == Some("join")
-                )),
-                "{name} must retain the Array.prototype.join observation"
-            );
-
-            let ir2 = lower_ir1_to_ir2(&ir1)
-                .unwrap_or_else(|error| panic!("lower {name} to IR2: {error}"))
+            native.ops = object_ops;
+            native.ops.extend([
+                Ir1Op::StoreBinding { binding_id: 0 },
+                Ir1Op::Pop,
+                Ir1Op::LoadBinding { binding_id: 0 },
+                Ir1Op::HostCall {
+                    capability: "builtin:ObjectKeys".to_string(),
+                    arg_count: 1,
+                },
+                Ir1Op::StoreBinding { binding_id: 1 },
+                Ir1Op::GetProperty {
+                    key: Ir1PropertyKey::Static("join".into()),
+                },
+                Ir1Op::LoadBinding { binding_id: 1 },
+                literal(","),
+                Ir1Op::CallMethod { arg_count: 1 },
+                Ir1Op::HostCall {
+                    capability: "console:log".to_string(),
+                    arg_count: 1,
+                },
+                Ir1Op::Pop,
+                Ir1Op::LoadBinding { binding_id: 0 },
+                Ir1Op::HostCall {
+                    capability: "builtin:QuerystringStringify".to_string(),
+                    arg_count: 1,
+                },
+                Ir1Op::HostCall {
+                    capability: "console:log".to_string(),
+                    arg_count: 1,
+                },
+                Ir1Op::Return,
+            ]);
+            let ir2 = lower_ir1_to_ir2(&native)
+                .unwrap_or_else(|error| panic!("native {name} flow: {error}"))
                 .module;
             let console_flows = ir2
                 .ops
@@ -40064,33 +42101,15 @@ mod tests {
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            assert_eq!(
-                console_flows.len(),
-                expected_console_count,
-                "{name} console flow count"
-            );
+            assert_eq!(console_flows.len(), 2, "native {name}");
             for console_flow in console_flows {
-                assert_eq!(console_flow.data_label, Label::Public, "{name}");
-                assert!(
-                    !console_flow.declassification_required,
-                    "{name} must not require a TopSecret-to-Internal declassification"
-                );
+                assert_eq!(console_flow.data_label, Label::Public, "native {name}");
+                assert!(!console_flow.declassification_required, "native {name}");
             }
-
-            // HybridRouter.eval denies at build_ir2_flow_proof_artifact, not
-            // at IR2 annotation. Pin the live 0010/0013 sources through that
-            // same lattice check under the trusted-eval grant.
-            let eval_context = LoweringContext::new(
-                format!("eval-hybrid-{name}"),
-                format!("eval-decision-{name}"),
-                "eval-policy-hybrid",
-            )
-            .with_ambient_authority_grant(AmbientAuthorityGrant::TrustedProcessShape);
-            if let Err(error) = build_ir2_flow_proof_artifact(&ir2, &eval_context) {
-                panic!("{name} must lower without UnauthorizedFlow: {error}");
-            }
-            lower_ir0_to_ir3(&ir0, &eval_context).unwrap_or_else(|error| {
-                panic!("{name} eval-equivalent IR0→IR3 must succeed: {error}")
+            let context =
+                LoweringContext::new("native-keys", "native-keys-decision", "native-keys-policy");
+            build_ir2_flow_proof_artifact(&ir2, &context).unwrap_or_else(|error| {
+                panic!("native {name} requires no declassification: {error}")
             });
         }
 
@@ -40154,11 +42173,123 @@ mod tests {
     }
 
     #[test]
-    fn object_keys_join_stays_finite_over_callable_aggregates_bd_lmchj() {
-        // A literal aggregate holding summarized callables keeps structural
-        // key-name finiteness: keys() never reads property values, so the
-        // callable contents cannot disclose labels through the produced key
-        // array or its immediate authenticated `.join`.
+    fn querystring_first_class_source_keeps_mutable_method_provenance_bd_305gi() {
+        for (name, source, expected_querystring_method, expected_console_labels) in [
+            (
+                "querystring_0010",
+                "const qs = require('querystring'); const value = { foo: 'bar', baz: 'qux' }; console.log(Object.keys(value).join(',')); console.log(qs.stringify(value));",
+                "stringify",
+                vec![Label::Internal, Label::Internal],
+            ),
+            (
+                "querystring_0013",
+                "const qs = require('querystring'); const o = qs.parse('foo=bar&abc=xyz'); console.log(Object.keys(o).join(','), o.foo, o.abc);",
+                "parse",
+                vec![Label::Internal],
+            ),
+        ] {
+            let tree = crate::parser_api_stability::parse_script(source)
+                .unwrap_or_else(|error| panic!("parse {name}: {error}"));
+            let ir0 = Ir0Module::from_syntax_tree(tree, format!("{name}_bd_n8eta.js"));
+            let ir1 = lower_ir0_to_ir1(&ir0)
+                .unwrap_or_else(|error| panic!("lower {name} to IR1: {error}"))
+                .module;
+
+            assert!(
+                ir1.ops.iter().any(|op| matches!(op,
+                    Ir1Op::GetProperty { key: Ir1PropertyKey::Static(key) }
+                        if key.as_str() == Some("keys")
+                )),
+                "{name} must resolve the mutable Object.keys property"
+            );
+            assert!(
+                !ir1.ops.iter().any(|op| matches!(op,
+                    Ir1Op::HostCall { capability, .. }
+                        if capability == "builtin:ObjectKeys"
+                )),
+                "{name} must not authenticate a replaceable method as an intrinsic"
+            );
+            // bd-305gi: querystring's first-class object replaces the direct
+            // call recognizer. Read the actual, potentially replaced method.
+            // A sibling module may have installed a closure or getter; the
+            // factory cannot authenticate immutable native members.
+            assert!(
+                ir1.ops.iter().any(|op| matches!(op,
+                    Ir1Op::HostCall { capability, arg_count: 0 }
+                        if capability == "builtin:QuerystringModule"
+                )),
+                "{name} must materialize the querystring module"
+            );
+            assert!(
+                ir1.ops.iter().any(|op| matches!(op,
+                    Ir1Op::GetProperty { key: Ir1PropertyKey::Static(key) }
+                        if key.as_str() == Some(expected_querystring_method)
+                )),
+                "{name} must observe the querystring method property"
+            );
+            assert!(
+                ir1.ops.iter().any(|op| matches!(op,
+                    Ir1Op::GetProperty { key: Ir1PropertyKey::Static(key) }
+                        if key.as_str() == Some("join")
+                )),
+                "{name} must retain the Array.prototype.join observation"
+            );
+
+            let ir2 = lower_ir1_to_ir2(&ir1)
+                .unwrap_or_else(|error| panic!("lower {name} to IR2: {error}"))
+                .module;
+            let console_flows = ir2
+                .ops
+                .iter()
+                .filter_map(|op| match &op.inner {
+                    Ir1Op::HostCall { capability, .. } if capability == "console:log" => {
+                        op.flow.as_ref()
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                console_flows.len(),
+                expected_console_labels.len(),
+                "{name} console flow count"
+            );
+            for (console_flow, expected_label) in
+                console_flows.into_iter().zip(expected_console_labels)
+            {
+                assert_eq!(console_flow.data_label, expected_label, "{name}");
+                assert!(
+                    !console_flow.declassification_required,
+                    "{name} must not require a TopSecret-to-Internal declassification"
+                );
+            }
+
+            // These source programs introduce no confidential source. Their
+            // dynamic method results remain conservatively Internal; the
+            // native-call Public contract is tested separately above.
+            // HybridRouter.eval denies at build_ir2_flow_proof_artifact, not
+            // at IR2 annotation. Pin the live 0010/0013 sources through that
+            // same lattice check under the trusted-eval grant.
+            let eval_context = LoweringContext::new(
+                format!("eval-hybrid-{name}"),
+                format!("eval-decision-{name}"),
+                "eval-policy-hybrid",
+            )
+            .with_ambient_authority_grant(AmbientAuthorityGrant::TrustedProcessShape);
+            if let Err(error) = build_ir2_flow_proof_artifact(&ir2, &eval_context) {
+                panic!("{name} must lower without UnauthorizedFlow: {error}");
+            }
+            lower_ir0_to_ir3(&ir0, &eval_context).unwrap_or_else(|error| {
+                panic!("{name} eval-equivalent IR0→IR3 must succeed: {error}")
+            });
+        }
+    }
+
+    #[test]
+    fn object_keys_join_keeps_mutable_provenance_over_callable_aggregates_bd_lmchj() {
+        // Source Object.keys resolves a mutable method even for a literal
+        // aggregate. Its call can execute guest code, so retain the program's
+        // Internal bound. The authenticated native Public contract is covered
+        // by object_keys_join_keeps_finite_own_key_provenance_bd_n8eta.
         let callable_source = "function f() { return 5; } const o = { a: 1, g: f }; console.log(Object.keys(o).join('|'));";
         let tree = crate::parser_api_stability::parse_script(callable_source)
             .expect("callable aggregate source parses");
@@ -40179,7 +42310,7 @@ mod tests {
             })
             .and_then(|op| op.flow.as_ref())
             .expect("callable aggregate console flow");
-        assert_eq!(console_flow.data_label, Label::Public);
+        assert_eq!(console_flow.data_label, Label::Internal);
         assert!(
             !console_flow.declassification_required,
             "callable aggregate keys().join must not require declassification"
@@ -40426,10 +42557,12 @@ mod tests {
 
         for (name, source, expected_console_count, expected_label) in [
             (
-                "callable_only_catch",
+                // The source property can be replaced with a guest constructor;
+                // only the explicit native factory proves callable-only shape.
+                "mutable_callable_catch",
                 "const probe=(Array.isArray); let outcome='unset'; try { new probe([]); outcome='constructed'; } catch (error) { outcome='caught'; } console.log(outcome); console.log('alive:' + probe([]));",
                 2,
-                Label::Public,
+                Label::Internal,
             ),
             (
                 "function_constructor",
@@ -42186,23 +44319,41 @@ mod tests {
         );
     }
 
+    /// bd-305gi.1: a stream form the facade does not claim is never elided to
+    /// a stream kernel HostCall; it lowers with the engine-owned stream module
+    /// (whose process.nextTick HostCall marks it) instead of the ambient
+    /// `require` refusal it met before that module existed.
+    fn assert_served_by_stream_module(source: &str, label: &str) {
+        let ops = lower_script_source_ops(source, label);
+        for kernel in [
+            "builtin:StreamReadable",
+            "builtin:StreamReadableFrom",
+            "builtin:StreamWritable",
+            "builtin:StreamPassThrough",
+            "builtin:StreamTransform",
+            "builtin:StreamPipeline",
+            "builtin:StreamPromisesPipeline",
+        ] {
+            assert_eq!(
+                count_hostcall_deep(&ops, kernel),
+                0,
+                "{label}: {kernel} for {source}"
+            );
+        }
+        assert!(
+            count_hostcall_deep(&ops, "builtin:ProcessNextTick") > 0,
+            "{label}: the stream module was not materialized for {source}"
+        );
+    }
+
     #[test]
-    fn stream_transform_pipeline_escapes_remain_fail_closed_bd_fw7zd_12() {
+    fn stream_transform_pipeline_escapes_get_the_module_not_the_kernel_bd_fw7zd_12() {
         for source in [
             "const { Transform } = require('stream'); console.log(Transform);",
             "const { pipeline } = require('stream'); const escaped = pipeline;",
             "const { promises } = require('stream'); console.log(promises['pipeline']);",
         ] {
-            let tree = crate::parser_api_stability::parse_script(source)
-                .expect("parse rejected stream use");
-            let ir0 = Ir0Module::from_syntax_tree(tree, "stream_rejected_bd_fw7zd_12.js");
-            let error = lower_ir0_to_ir1(&ir0).expect_err("stream escape must not be elided");
-            assert!(
-                error.to_string().contains("ambient")
-                    || error.to_string().contains("require")
-                    || error.to_string().contains("unsupported"),
-                "unexpected fail-closed error: {error}"
-            );
+            assert_served_by_stream_module(source, "stream_escape_bd_fw7zd_12.js");
         }
     }
 
@@ -42241,17 +44392,7 @@ mod tests {
                  const { PassThrough: Through } = require('stream');\n",
             ),
         ] {
-            let tree = crate::parser_api_stability::parse_script(source).expect("parse script");
-            let ir0 = Ir0Module::from_syntax_tree(tree, format!("stream_{label}_bd_fw7zd.js"));
-            let error = lower_ir0_to_ir1(&ir0)
-                .expect_err("rejected PassThrough use must preserve ambient require denial");
-            assert!(
-                matches!(
-                    error,
-                    LoweringPipelineError::AmbientAuthorityViolation { .. }
-                ),
-                "{label} should preserve ambient denial, got {error:?}"
-            );
+            assert_served_by_stream_module(source, &format!("stream_{label}_bd_fw7zd.js"));
         }
 
         for (label, source) in [
@@ -42318,14 +44459,7 @@ mod tests {
             "const { Duplex } = require('stream'); new Duplex();",
             "const stream = require('stream'); new stream.Readable();",
         ] {
-            let tree = crate::parser_api_stability::parse_script(source).expect("parse script");
-            let ir0 = Ir0Module::from_syntax_tree(tree, "unsupported_stream_constructor.js");
-            let error = lower_ir0_to_ir1(&ir0)
-                .expect_err("unsupported stream possession must preserve ambient denial");
-            assert!(matches!(
-                error,
-                LoweringPipelineError::AmbientAuthorityViolation { .. }
-            ));
+            assert_served_by_stream_module(source, "unsupported_stream_constructor.js");
         }
     }
 
@@ -44981,6 +47115,27 @@ mod tests {
         assert_eq!(s.len(), 7 + 64); // "sha256:" + 64 hex chars
     }
 
+    /// bd-9vouw.382: a pass's output hash string reads back as the hash, and
+    /// nothing else does.
+    #[test]
+    fn hash_string_reads_back_as_its_hash_bd_9vouw_382() {
+        let hash = ContentHash::compute(b"module");
+        assert_eq!(
+            content_hash_from_hash_string(&hash_string(&hash)),
+            Some(hash)
+        );
+        let hex = hex::encode(hash.as_bytes());
+        for text in [
+            hex.clone(),
+            format!("sha1:{hex}"),
+            format!("sha256:{}", &hex[..62]),
+            format!("sha256:{hex}00"),
+            format!("sha256:{}zz", &hex[..62]),
+        ] {
+            assert_eq!(content_hash_from_hash_string(&text), None, "{text}");
+        }
+    }
+
     // -- ensure_checks_pass --
 
     #[test]
@@ -46678,95 +48833,106 @@ mod tests {
 
     #[test]
     fn lower_for_of_body_preserves_throw_and_return_close_kinds_bd_g73mg() {
-        let ir0 = stmt_ir0(vec![Statement::ForOf(ForOfStatement {
-            binding: BindingPattern::Identifier("value".into()),
-            binding_kind: Some(VariableDeclarationKind::Const),
-            assignment_strictness: AssignmentStrictness::Sloppy,
-            iterable: Expression::Identifier("values".into()),
-            body: Box::new(Statement::Return(ReturnStatement {
-                argument: Some(Expression::Identifier("value".into())),
+        // A fresh `const value` head cannot throw, so only the body runs in a
+        // close region (bd-9vouw.486); an assignment head (`value` undeclared,
+        // a PutName) keeps the head region the body's throw target shares.
+        for (binding_kind, guards) in [(Some(VariableDeclarationKind::Const), 1), (None, 2)] {
+            let ir0 = stmt_ir0(vec![Statement::ForOf(ForOfStatement {
+                binding: BindingPattern::Identifier("value".into()),
+                binding_kind,
+                assignment_strictness: AssignmentStrictness::Sloppy,
+                iterable: Expression::Identifier("values".into()),
+                body: Box::new(Statement::Return(ReturnStatement {
+                    argument: Some(Expression::Identifier("value".into())),
+                    span: span(),
+                })),
                 span: span(),
-            })),
-            span: span(),
-        })]);
-        let ir1 = lower_ir0_to_ir1(&ir0)
-            .expect("for-of return lowering")
-            .module;
-        let begin_tries: Vec<_> = ir1
-            .ops
-            .iter()
-            .filter_map(|op| match op {
-                Ir1Op::BeginTry {
-                    catch_label,
-                    finally_label,
-                } => Some((*catch_label, *finally_label)),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(begin_tries.len(), 2, "head and body guards");
-        assert_eq!(begin_tries[0].1, Some(begin_tries[0].0));
-        let (throw_close_label, return_close_label) = begin_tries[1];
-        let return_close_label = return_close_label.expect("body return target");
-        assert_eq!(throw_close_label, begin_tries[0].0);
-        assert_ne!(throw_close_label, return_close_label);
-
-        let return_handler = ir1
-            .ops
-            .iter()
-            .position(|op| matches!(op, Ir1Op::Label { id } if *id == return_close_label))
-            .expect("return close handler");
-        // EnterFinally must sit exactly at the return-close target: the
-        // pending-completion ownership check compares the unwind target to the
-        // EnterFinally ip, so a close emitted before EnterFinally silently
-        // drops the suspended return value (bd-s94p8).
-        assert!(matches!(
-            ir1.ops.get(return_handler + 1),
-            Some(Ir1Op::EnterFinally)
-        ));
-        assert!(matches!(
-            ir1.ops.get(return_handler + 3),
-            Some(Ir1Op::IteratorClose {
-                reason: IteratorCloseReason::Return
-            })
-        ));
-        assert!(matches!(
-            ir1.ops.get(return_handler + 4),
-            Some(Ir1Op::EndFinally)
-        ));
-
-        let throw_handler = ir1
-            .ops
-            .iter()
-            .position(|op| matches!(op, Ir1Op::Label { id } if *id == throw_close_label))
-            .expect("throw close handler");
-        assert!(matches!(
-            ir1.ops.get(throw_handler + 1),
-            Some(Ir1Op::EnterFinally)
-        ));
-        assert!(matches!(
-            ir1.ops.get(throw_handler + 3),
-            Some(Ir1Op::IteratorClose {
-                reason: IteratorCloseReason::Throw
-            })
-        ));
-
-        let ir2 = lower_ir1_to_ir2(&ir1).expect("IR1->IR2").module;
-        let ir3 = lower_ir2_to_ir3(&ir2).expect("IR2->IR3").module;
-        assert_eq!(
-            ir3.instructions
+            })]);
+            let ir1 = lower_ir0_to_ir1(&ir0)
+                .expect("for-of return lowering")
+                .module;
+            let begin_tries: Vec<_> = ir1
+                .ops
                 .iter()
-                .filter(|instruction| matches!(instruction, Ir3Instruction::EnterCatch { .. }))
-                .count(),
-            0,
-            "the distinct body Throw target is finally-style and must retain its exception"
-        );
-        assert!(ir3.instructions.iter().any(|instruction| matches!(
-            instruction,
-            Ir3Instruction::IteratorClose {
-                reason: IteratorCloseReason::Return,
-                ..
+                .filter_map(|op| match op {
+                    Ir1Op::BeginTry {
+                        catch_label,
+                        finally_label,
+                    } => Some((*catch_label, *finally_label)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                begin_tries.len(),
+                guards,
+                "head and body guards ({binding_kind:?})"
+            );
+            let (throw_close_label, return_close_label) = begin_tries[guards - 1];
+            let return_close_label = return_close_label.expect("body return target");
+            if guards == 2 {
+                assert_eq!(begin_tries[0].1, Some(begin_tries[0].0));
+                assert_eq!(throw_close_label, begin_tries[0].0);
             }
-        )));
+            assert_ne!(throw_close_label, return_close_label);
+
+            let return_handler = ir1
+                .ops
+                .iter()
+                .position(|op| matches!(op, Ir1Op::Label { id } if *id == return_close_label))
+                .expect("return close handler");
+            // EnterFinally must sit exactly at the return-close target: the
+            // pending-completion ownership check compares the unwind target to
+            // the EnterFinally ip, so a close emitted before EnterFinally
+            // silently drops the suspended return value (bd-s94p8).
+            assert!(matches!(
+                ir1.ops.get(return_handler + 1),
+                Some(Ir1Op::EnterFinally)
+            ));
+            assert!(matches!(
+                ir1.ops.get(return_handler + 3),
+                Some(Ir1Op::IteratorClose {
+                    reason: IteratorCloseReason::Return
+                })
+            ));
+            assert!(matches!(
+                ir1.ops.get(return_handler + 4),
+                Some(Ir1Op::EndFinally)
+            ));
+
+            let throw_handler = ir1
+                .ops
+                .iter()
+                .position(|op| matches!(op, Ir1Op::Label { id } if *id == throw_close_label))
+                .expect("throw close handler");
+            assert!(matches!(
+                ir1.ops.get(throw_handler + 1),
+                Some(Ir1Op::EnterFinally)
+            ));
+            assert!(matches!(
+                ir1.ops.get(throw_handler + 3),
+                Some(Ir1Op::IteratorClose {
+                    reason: IteratorCloseReason::Throw
+                })
+            ));
+
+            let ir2 = lower_ir1_to_ir2(&ir1).expect("IR1->IR2").module;
+            let ir3 = lower_ir2_to_ir3(&ir2).expect("IR2->IR3").module;
+            assert_eq!(
+                ir3.instructions
+                    .iter()
+                    .filter(|instruction| matches!(instruction, Ir3Instruction::EnterCatch { .. }))
+                    .count(),
+                0,
+                "the distinct body Throw target is finally-style and must retain its exception"
+            );
+            assert!(ir3.instructions.iter().any(|instruction| matches!(
+                instruction,
+                Ir3Instruction::IteratorClose {
+                    reason: IteratorCloseReason::Return,
+                    ..
+                }
+            )));
+        }
     }
 
     #[test]
@@ -46834,13 +49000,26 @@ mod tests {
             span: span(),
         })]);
         let result = lower_ir0_to_ir1(&ir0).expect("while should lower");
-        let labels = result
+        let labels: Vec<u32> = result
             .module
             .ops
             .iter()
-            .filter(|op| matches!(op, Ir1Op::Label { .. }))
-            .count();
-        assert_eq!(labels, 2); // loop + end
+            .filter_map(|op| match op {
+                Ir1Op::Label { id } => Some(*id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(labels.len(), 3); // body + test + end
+        // The test runs at the bottom (bd-9vouw.486): entry jumps to it, and
+        // a truthy test is the back edge to the body.
+        assert!(result.module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::Jump { label_id } if *label_id == labels[1]
+        )));
+        assert!(result.module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::JumpIfTruthy { label_id } if *label_id == labels[0]
+        )));
     }
 
     #[test]
@@ -46878,14 +49057,15 @@ mod tests {
             jumps.contains(&labels[1]),
             "continue in do-while must jump to the condition-check label"
         );
+        // A truthy test is the back edge to the loop label, in one
+        // conditional jump (bd-9vouw.486).
         assert!(
-            jumps.contains(&labels[0]),
-            "do-while must retain a back-edge jump to the loop label"
+            result.module.ops.iter().any(|op| matches!(
+                op,
+                Ir1Op::JumpIfTruthy { label_id } if *label_id == labels[0]
+            )),
+            "do-while must retain a back edge to the loop label"
         );
-        assert!(result.module.ops.iter().any(|op| matches!(
-            op,
-            Ir1Op::JumpIfFalsy { label_id } if *label_id == labels[2]
-        )));
     }
 
     #[test]
@@ -47735,6 +49915,53 @@ mod tests {
                 value: Ir1Literal::Null
             }
         )));
+    }
+
+    #[test]
+    fn immutable_global_references_keep_the_literal_fast_path() {
+        let ops = lower_script_source_ops("undefined; NaN; Infinity;", "global-values.js");
+        let literals = ops
+            .iter()
+            .filter_map(|op| match op {
+                Ir1Op::LoadLiteral { value } => Some(value.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            literals,
+            vec![
+                Ir1Literal::Undefined,
+                Ir1Literal::Float(f64::NAN.to_bits()),
+                Ir1Literal::Float(f64::INFINITY.to_bits()),
+            ]
+        );
+        assert!(!ops.iter().any(|op| matches!(op, Ir1Op::LoadName { .. })));
+    }
+
+    #[test]
+    fn module_and_commonjs_bindings_shadow_immutable_global_names() {
+        for name in ["undefined", "NaN", "Infinity"] {
+            let source = format!("const {name} = 7; {name};");
+            let ops = lower_esm_source_ops(&source, "global-shadow.mjs");
+            assert!(ops.iter().any(|op| matches!(op, Ir1Op::LoadBinding { .. })));
+
+            let tree = crate::parser_api_stability::parse_script(&source).expect("parse CommonJS");
+            let ir0 = Ir0Module::from_syntax_tree(tree, "global-shadow.cjs");
+            let result = lower_ir0_to_ir1_with_authenticated_runtime_bindings(
+                &ir0,
+                AmbientAuthorityGrant::DenyAll,
+                true,
+                false,
+            )
+            .expect("lower authenticated CommonJS");
+            assert!(
+                result
+                    .module
+                    .ops
+                    .iter()
+                    .any(|op| matches!(op, Ir1Op::LoadBinding { .. }))
+            );
+        }
     }
 
     #[test]
@@ -50356,14 +52583,14 @@ mod tests {
     }
 
     #[test]
-    fn bd_xewby_trusted_eval_still_denies_process_env_value_read() {
-        // Defense in depth: even a trusted eval may not read env VALUES; the
-        // `process.env` member carries `EnvRead`, which the shape grant excludes.
+    fn bd_xewby_trusted_eval_still_denies_process_env_possession() {
+        // Named reads lower to a runtime EnvRead capability gate (bd-omckp),
+        // but the trusted shape grant still cannot expose the env object.
         let error = lower_script_with_grant_bd_xewby(
-            "process.env.PATH;\n",
+            "process.env;\n",
             AmbientAuthorityGrant::TrustedProcessShape,
         )
-        .expect_err("trusted eval must still reject an env value read");
+        .expect_err("trusted eval must still reject possession of the env object");
         assert!(
             matches!(
                 error,
@@ -50498,6 +52725,7 @@ mod tests {
         prepare_function_body_bindings(
             Some(&body),
             None,
+            false,
             &mentioned,
             &outer,
             &mut body_lookup,

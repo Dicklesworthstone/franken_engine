@@ -50,6 +50,52 @@ impl Eraser<'_> {
         }
     }
 
+    /// `<T>value` where an operand starts (no operand before the `<`): a
+    /// type assertion, whose `<T>` is erased (bd-9vouw.426). A `<` after an
+    /// operand is a comparison or type arguments, and `<T>(params) =>` (or
+    /// `): R =>`) is a generic arrow function, which `erase` handles.
+    pub(super) fn erase_prefix_assertions(&mut self) {
+        let mut previous: Option<usize> = None;
+        let mut cursor = 0;
+        while cursor < self.tokens.len() {
+            if self.text(cursor) == "<"
+                && !previous.is_some_and(|index| self.suffix_operand(index))
+                && let Some(end) = self.angle_end(cursor)
+                && end > cursor + 1
+                && self.assertion_operand_at(end)
+                && !self.generic_arrow_parameters_at(end)
+            {
+                self.mark(cursor, end);
+                cursor = end;
+                continue;
+            }
+            previous = Some(cursor);
+            cursor += 1;
+        }
+    }
+
+    fn assertion_operand_at(&self, index: usize) -> bool {
+        self.tokens
+            .get(index)
+            .is_some_and(|token| match token.kind {
+                Kind::Word | Kind::Literal => true,
+                Kind::Punctuation => matches!(
+                    token.text,
+                    "(" | "[" | "{" | "<" | "!" | "-" | "+" | "~" | "++" | "--"
+                ),
+            })
+    }
+
+    fn generic_arrow_parameters_at(&self, open: usize) -> bool {
+        self.text(open) == "("
+            && self
+                .pairs
+                .get(open)
+                .copied()
+                .flatten()
+                .is_some_and(|close| matches!(self.text(close + 1), "=>" | ":"))
+    }
+
     pub(super) fn erase_expression_types(&mut self, module_scope: bool) {
         self.erase_type_only_declarations(module_scope);
         let mut cursor = 0;
@@ -265,6 +311,34 @@ impl Eraser<'_> {
         if !self.type_declaration_site(start) {
             return None;
         }
+        // `declare global { ... }`, `declare module "m" { ... }`, `declare
+        // namespace N.M { ... }`: ambient blocks declare types only
+        // (bd-9vouw.435).
+        if matches!(self.text(declare + 1), "global" | "module" | "namespace") {
+            let mut body = declare + 2;
+            if self.text(declare + 1) != "global" {
+                if !self
+                    .tokens
+                    .get(body)
+                    .is_some_and(|token| matches!(token.kind, Kind::Word | Kind::Literal))
+                {
+                    return None;
+                }
+                body += 1;
+                while self.text(body) == "."
+                    && self
+                        .tokens
+                        .get(body + 1)
+                        .is_some_and(|token| token.kind == Kind::Word)
+                {
+                    body += 2;
+                }
+            }
+            if self.text(body) != "{" {
+                return None;
+            }
+            return Some((start, self.pairs[body]? + 1));
+        }
         let constant = self.text(declare + 1) == "const";
         if !matches!(self.text(declare + 1), "var" | "let" | "const") {
             return None;
@@ -367,7 +441,7 @@ impl Eraser<'_> {
     /// between two angle brackets. In particular `a < b + c > (d)` is runtime
     /// arithmetic, whereas `a < B<C>, D > (d)` is a generic call. Nested type
     /// groups and the recursion limit belong to the existing type parser.
-    fn expression_type_arguments_end(&self, open: usize) -> Option<usize> {
+    pub(super) fn expression_type_arguments_end(&self, open: usize) -> Option<usize> {
         let mut cursor = open + 1;
         loop {
             let end = self.type_end(cursor, 0)?;
@@ -605,6 +679,15 @@ mod tests {
         check("⟦declare var legacy;⟧ use(legacy);");
         check("⟦declare const code = -42, label = 'ready', active = true;⟧ use(code);");
         check("⟦declare var 名称:\n {名: 'é'}⟧\nuse(名称);");
+    }
+
+    /// bd-9vouw.435: ambient blocks declare types only.
+    #[test]
+    fn ambient_global_module_and_namespace_blocks_are_erased() {
+        check("⟦declare global { interface P { x(): void; } }⟧ const a = 1;");
+        check("⟦declare module \"pkg\" { export const v: number; }⟧ run();");
+        check("⟦declare namespace NS.Inner { const v: number; }⟧ run();");
+        check("const declare = { global: 1 }; use(declare.global);");
     }
 
     #[test]

@@ -344,7 +344,8 @@ fn extract_export_specifier_names(clause: &str) -> Vec<String> {
             [_local, "as", alias] => *alias,
             _ => specifier,
         };
-        names.push(exported_name.to_string());
+        // A string name is an encoded word of the head (bd-9vouw.429).
+        names.push(crate::parser::decode_module_export_name(exported_name));
     }
     names
 }
@@ -587,7 +588,10 @@ fn analyze_statement(
                         // Nothing to check before linking.
                     } else if specifier_names.is_empty() {
                         // Entire clause as single name (legacy or single-specifier).
-                        if !state.export_names.insert(canonical_head.to_string()) {
+                        if !state
+                            .export_names
+                            .insert(crate::parser::decode_module_export_name(canonical_head))
+                        {
                             state.push_error(
                                 StaticErrorKind::DuplicateExport,
                                 format!("duplicate export name '{canonical_head}'"),

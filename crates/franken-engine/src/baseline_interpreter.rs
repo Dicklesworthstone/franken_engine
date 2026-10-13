@@ -126,6 +126,7 @@ use frankenengine_extension_host::host_effect_journal::InMemoryHostEffectJournal
 use frankenengine_extension_host::host_io::{
     FsDirEntry, FsMetaResult, FsMetadata, FsOperation, HostIoError, HostIoExceptionProvenance,
     HostIoOutcome, HostIoProvider, HostIoRecorder, SANDBOXED_HOST_IO_MAX_RANDOM_BYTES_PER_REQUEST,
+    validate_environment_name,
 };
 use frankenengine_extension_host::process_spawn::{
     ProcessExit, ProcessLaunch, ProcessSignal, ProcessSpawnError, ProcessSpawnProvider,
@@ -147,8 +148,8 @@ use crate::engine_object_id::{EngineObjectId, ObjectDomain, SchemaId, derive_id}
 use crate::hash_tiers::ContentHash;
 use crate::hostcall_effects_migration::{
     InterpreterTimerOutcome, InterpreterTimerRequest, PROCESS_SPAWN_EXECUTABLE_NOT_FOUND_CODE,
-    TimerEffectAuthority, TimerEffectPermit, TimerOperation, create_fs_effect,
-    create_handler_stack_from_profile_with_effect_providers,
+    TimerEffectAuthority, TimerEffectPermit, TimerOperation, create_env_read_effect,
+    create_fs_effect, create_handler_stack_from_profile_with_effect_providers,
     create_handler_stack_from_profile_with_host_io, create_interpreter_timer_effect,
     create_interpreter_timer_handler_stack, create_network_effect, create_network_host_io_request,
     create_process_spawn_effect, create_random_read_effect,
@@ -172,7 +173,9 @@ use crate::iterator_protocol::{
 use crate::js_string::JsString;
 use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use crate::object_model::{SymbolId, WellKnownSymbol};
-use crate::parser::{CanonicalEs2020Parser, ParseErrorCode, ParserOptions, ParserSource};
+use crate::parser::{
+    CanonicalEs2020Parser, ParseError, ParseErrorCode, ParserOptions, ParserSource,
+};
 use crate::runtime_config::ExecutionConfig;
 use crate::runtime_observability::{
     CapabilityDenialReason, RuntimeSecurityMetrics, RuntimeSecurityObservability,
@@ -303,6 +306,13 @@ const DEFAULT_QUICKJS_MAX_REGISTERS: u32 = 256;
 
 /// Default register file size for the throughput profile.
 const DEFAULT_V8_MAX_REGISTERS: u32 = 4096;
+/// Longest file, in `max_registers` windows, the core keeps as a spare
+/// register file (`spare_register_files`); a longer one is freed.
+const SPARE_REGISTER_FILE_WINDOWS: usize = 4;
+/// Spare register files the core keeps. A generator stepped from inside a
+/// function alternates between the caller's file and the activation's,
+/// which differ in length: with one spare every install cut or regrew it.
+const SPARE_REGISTER_FILES: usize = 2;
 /// Default heap object budget for the deterministic profile.
 const DEFAULT_QUICKJS_MAX_HEAP_OBJECTS: u32 = 100_000;
 /// Default heap object budget for the throughput profile.
@@ -395,6 +405,11 @@ const MAX_PROTOTYPE_CHAIN_DEPTH: u32 = 64;
 const PROXY_TYPE_TAG: &str = "Proxy";
 /// The brand of a `stream.Readable` (bd-9vouw.150).
 const READABLE_BRAND: &str = "Readable";
+/// The brand of a JSON.rawJSON result, its [[IsRawJSON]] slot (bd-9vouw.380).
+const RAW_JSON_BRAND: &str = "RawJSON";
+/// The failure reason a module record keeps for invalid source, so a later
+/// import throws the same SyntaxError (bd-9vouw.389).
+const MODULE_SYNTAX_ERROR_REASON_PREFIX: &str = "SyntaxError: ";
 const PROXY_TARGET_SLOT: &str = "__proxy_target";
 const PROXY_HANDLER_SLOT: &str = "__proxy_handler";
 const PROXY_REVOKED_SLOT: &str = "__proxy_revoked";
@@ -465,11 +480,47 @@ const MAX_ITERATION_TRACES: usize = 1024;
 const MAX_ITERATION_TRACE_EVENTS: usize = 4096;
 /// Trace index of an untraced iteration.
 const UNTRACED_ITERATION: usize = usize::MAX;
-/// Maximum nesting depth for recursive Array join/toString stringification.
-/// Runtime-constructed arrays can nest unboundedly, so recursion is bounded
-/// fail-closed: deeper sub-arrays render as `""` rather than risking stack
-/// exhaustion (bd-sxh8o.3).
-const ARRAY_JOIN_MAX_DEPTH: usize = 128;
+/// Most arrays one Array.prototype.join / toString may hold on its join
+/// stack (nesting depth). The join keeps its nested arrays on an explicit
+/// stack, so this bounds memory, not native stack: past it the join throws
+/// RangeError ("Maximum call stack size exceeded"), as Node does somewhere
+/// between 1,000 and 10,000 levels (bd-sxh8o.3, bd-9vouw.481).
+const ARRAY_JOIN_MAX_DEPTH: usize = 10_000;
+/// Nesting depth of the non-observable string fallback
+/// ([`InterpreterCore::array_join_string`]), which recurses natively: deeper
+/// sub-arrays render as `""` rather than risk stack exhaustion (bd-sxh8o.3).
+const ARRAY_STRING_FALLBACK_MAX_DEPTH: usize = 128;
+
+/// One array of an Array.prototype.join in progress: its length, the next
+/// element to render, and the elements rendered so far.
+struct ArrayJoinFrame {
+    array_id: ObjectId,
+    len: usize,
+    index: usize,
+    parts: Vec<String>,
+}
+
+impl ArrayJoinFrame {
+    fn new(array_id: ObjectId, len: usize) -> Self {
+        Self {
+            array_id,
+            len,
+            index: 0,
+            parts: Vec::with_capacity(len.min(4096)),
+        }
+    }
+}
+
+/// The register file of the synchronous reducer lane
+/// ([`InterpreterCore::invoke_simple_reduce_callback_inner`]) and the bytes its
+/// values own, kept up to date by each write: the lane used to re-sum every
+/// register at every instruction. `high_water` is one past the highest
+/// register written, the prefix to reset when the file goes back to the pool.
+struct SimpleCallbackRegisters {
+    values: Vec<Value>,
+    value_bytes: u64,
+    high_water: usize,
+}
 
 /// One queued `process.nextTick(callback, ...args)` job (bd-8nrud). The
 /// callback runs with the forwarded arguments before any Promise microtask at
@@ -1019,11 +1070,15 @@ fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
         iterator_helpers::WRAP_FOR_VALID_ITERATOR_PROTOTYPE => {
             Some(iterator_helpers::WRAP_FOR_VALID_ITERATOR_PROTOTYPE)
         }
+        iterator_helpers::REGEXP_STRING_ITERATOR_PROTOTYPE => {
+            Some(iterator_helpers::REGEXP_STRING_ITERATOR_PROTOTYPE)
+        }
         ARRAY_ITERATOR_PROTOTYPE => Some(ARRAY_ITERATOR_PROTOTYPE),
         MAP_ITERATOR_PROTOTYPE => Some(MAP_ITERATOR_PROTOTYPE),
         SET_ITERATOR_PROTOTYPE => Some(SET_ITERATOR_PROTOTYPE),
         GENERATOR_PROTOTYPE => Some(GENERATOR_PROTOTYPE),
         ASYNC_GENERATOR_PROTOTYPE => Some(ASYNC_GENERATOR_PROTOTYPE),
+        ASYNC_ITERATOR_PROTOTYPE => Some(ASYNC_ITERATOR_PROTOTYPE),
         _ => None,
     }
 }
@@ -1090,6 +1145,24 @@ pub(crate) fn regexp_literal_early_error(pattern: &str, flags: &str) -> Option<S
             "Invalid regular expression: /{pattern}/{flags}: {message}"
         ));
     }
+    // `regex` takes a `v` class's syntax characters, and a `u` or `v`
+    // pattern's lone braces and class-escape range ends, as literals.
+    let unicode_sets = flags.contains('v');
+    let unicode_mode_error = (unicode_sets || flags.contains('u'))
+        .then(|| regexp_syntax::unicode_mode_syntax_error(pattern, unicode_sets))
+        .flatten();
+    if let Some(message) = unicode_mode_error
+        .or_else(|| {
+            unicode_sets
+                .then(|| regexp_syntax::unicode_sets_class_error(pattern))
+                .flatten()
+        })
+        .or_else(|| regexp_syntax::group_modifier_error(pattern, unicode_sets))
+    {
+        return Some(format!(
+            "Invalid regular expression: /{pattern}/{flags}: {message}"
+        ));
+    }
     let message = BacktrackRegExp::syntax_error(pattern, flags)?;
     let automaton_accepts = InterpreterCore::regexp_builder(pattern, flags)
         .is_ok_and(|builder| builder.build().is_ok());
@@ -1112,6 +1185,7 @@ pub(crate) fn capability_gate_key(tag: &str) -> &str {
         | "builtin:CryptoRandomUUID"
         | "builtin:CryptoRandomInt"
         | "builtin:CryptoRandomFillSync" => "random_read",
+        "env:read" | "env:has" => "env_read",
         _ => tag,
     }
 }
@@ -1940,7 +2014,11 @@ fn check_hostcall_capability_gate(
     capability_tag: &str,
     instruction_index: u32,
 ) -> Result<bool, InterpreterError> {
-    let capability_tag = capability_gate_key(capability_tag);
+    // Keep the operation spelling for the live hook: an exact witness denial
+    // of env:read must still match even though its authority/evidence key is
+    // env_read. Canonical authority decisions remain independent of that tag.
+    let operation_tag = capability_tag;
+    let capability_tag = capability_gate_key(operation_tag);
     // bd-9vouw.76: a language operation encoded as a HostCall needs no
     // authority. Recording its constant `allowed` decision per call grew the
     // witness and decision log by one entry per destructuring step.
@@ -1965,6 +2043,27 @@ fn check_hostcall_capability_gate(
     // who controls the `HostCall` capability string cannot inflate the
     // witness or decision log with a multi-megabyte payload per call.
     let recordable_tag = recordable_capability_tag(capability_tag);
+
+    // Observe the actual authority decision before dispatch, including calls
+    // through builtin values and ApplyHostCall. Property/call hooks alone do
+    // not cover these paths. A capability denial remains the primary error;
+    // the hook cannot grant authority or suppress its denial evidence.
+    let hook_action = interpreter.hook.as_ref().map(|hook| {
+        let recordable_operation = recordable_capability_tag(operation_tag);
+        hook.pre_hostcall(
+            &HookContext {
+                extension_id: interpreter
+                    .config
+                    .extension_id
+                    .clone()
+                    .unwrap_or_else(|| "extension:current".to_string()),
+                instruction_count: interpreter.instructions_executed,
+                current_ip: instruction_index as usize,
+            },
+            recordable_operation.as_ref(),
+            !capability_denied,
+        )
+    });
 
     if capability_denied {
         interpreter
@@ -1994,6 +2093,10 @@ fn check_hostcall_capability_gate(
         return Err(InterpreterError::CapabilityDenied {
             capability: recordable_tag.into_owned(),
         });
+    }
+
+    if let Some(action) = hook_action {
+        interpreter.enforce_hook_action(action)?;
     }
 
     // bd-9vouw.83: an effect-free hostcall in a loop (`JSON.stringify`,
@@ -2629,31 +2732,10 @@ impl RuntimeSymbolState {
         (1..FIRST_DYNAMIC_SYMBOL_ID).contains(&id.0) || self.symbols.contains_key(&id)
     }
 
-    fn allocate_private(
-        &mut self,
-        description: Option<JsString>,
-    ) -> Result<SymbolId, InterpreterError> {
-        self.allocate(RuntimeSymbolKind::Private, description, None)
-    }
-
-    fn allocate_class_private_name(
-        &mut self,
-        description: JsString,
-    ) -> Result<SymbolId, InterpreterError> {
-        self.allocate(RuntimeSymbolKind::ClassPrivateName, Some(description), None)
-    }
-
     fn is_class_private_name(&self, id: SymbolId) -> bool {
         self.symbols
             .get(&id)
             .is_some_and(|record| matches!(record.kind, RuntimeSymbolKind::ClassPrivateName))
-    }
-
-    fn intern_global(&mut self, key: JsString) -> Result<SymbolId, InterpreterError> {
-        if let Some(symbol) = self.global_symbol(&key) {
-            return Ok(symbol);
-        }
-        self.allocate(RuntimeSymbolKind::Global, Some(key.clone()), Some(key))
     }
 
     fn global_symbol(&self, key: &JsString) -> Option<SymbolId> {
@@ -3211,6 +3293,10 @@ pub enum BuiltinFunctionKind {
     BufferSwap16,
     BufferSwap32,
     BufferSwap64,
+    /// Node's other `Buffer.prototype` numeric accessors and `write`
+    /// ([`BUFFER_NUMERIC_METHODS`], by method name in `module_specifier`;
+    /// bd-9vouw.437).
+    BufferNumericMethod,
     /// Receiver-independent `Array.isArray`, materialized by a dedicated pure
     /// factory hostcall for unshadowed static member reads (bd-cue2u).
     ArrayIsArray,
@@ -3684,6 +3770,14 @@ pub enum BuiltinFunctionKind {
     /// `set` of every arguments object's `callee` but a sloppy function
     /// with a simple parameter list's (bd-9vouw.272). Append only.
     ThrowTypeError,
+    /// `set Object.prototype.__proto__` (Annex B.2.2.1.2), the setter of the
+    /// accessor whose getter is the `"Object.__proto__"` PrototypeGetter
+    /// (bd-9vouw.284). Append only.
+    ObjectProtoSetter,
+    /// %Function.prototype% (ES2020 19.2.3): a callable, non-constructible
+    /// function that returns undefined. Its bound object is the realm's
+    /// canonical Function prototype property storage (bd-9vouw.346).
+    FunctionPrototype,
 }
 
 /// Annex B B.2.2.2-14: each String HTML method's tag and attribute name.
@@ -4063,6 +4157,18 @@ impl BuiltinFunction {
         Self {
             kind: BuiltinFunctionKind::StringToLowerCase,
             module_specifier: BuiltinModuleSpecifier::default(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    /// `String.prototype.toLocaleUpperCase` / `toLocaleLowerCase`: the case
+    /// mappings under the root locale, but their own function objects named
+    /// for themselves (bd-9vouw.383); the specifier names the member.
+    fn string_to_locale_case(kind: BuiltinFunctionKind, name: &str) -> Self {
+        Self {
+            kind,
+            module_specifier: BuiltinModuleSpecifier::from_nonempty(name),
             iterator_handle: None,
             bound_object: None,
         }
@@ -5046,6 +5152,10 @@ impl BuiltinFunction {
         }
     }
 
+    fn object_proto_setter() -> Self {
+        Self::new_kind(BuiltinFunctionKind::ObjectProtoSetter)
+    }
+
     fn proxy_revoke(proxy_id: ObjectId) -> Self {
         Self {
             kind: BuiltinFunctionKind::ProxyRevoke,
@@ -5105,6 +5215,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::Require => "require",
             BuiltinFunctionKind::RequireResolve => "resolve",
             BuiltinFunctionKind::FunctionConstructor => "Function",
+            BuiltinFunctionKind::FunctionPrototype => "",
             BuiltinFunctionKind::GeneratedFunction => "anonymous",
             BuiltinFunctionKind::IteratorNext
             | BuiltinFunctionKind::GeneratorNext
@@ -5134,6 +5245,16 @@ impl BuiltinFunction {
             BuiltinFunctionKind::StringCharAt => "charAt",
             BuiltinFunctionKind::StringCharCodeAt => "charCodeAt",
             BuiltinFunctionKind::StringAt => "at",
+            BuiltinFunctionKind::StringToUpperCase
+                if self.module_specifier.0.as_deref() == Some("toLocaleUpperCase") =>
+            {
+                "toLocaleUpperCase"
+            }
+            BuiltinFunctionKind::StringToLowerCase
+                if self.module_specifier.0.as_deref() == Some("toLocaleLowerCase") =>
+            {
+                "toLocaleLowerCase"
+            }
             BuiltinFunctionKind::StringToUpperCase => "toUpperCase",
             BuiltinFunctionKind::StringToLowerCase => "toLowerCase",
             BuiltinFunctionKind::StringTrim => "trim",
@@ -5195,6 +5316,7 @@ impl BuiltinFunction {
                 "@@iterator"
             }
             BuiltinFunctionKind::ProxyRevoke => "revoke",
+            BuiltinFunctionKind::ObjectProtoSetter => "set __proto__",
             BuiltinFunctionKind::CallableProxy => "",
             BuiltinFunctionKind::UrlMethod => {
                 if self.module_specifier.0.as_deref() == Some("toJSON") {
@@ -5576,6 +5698,11 @@ impl BuiltinFunction {
                 .copied()
                 .find(|name| self.module_specifier.0.as_deref() == Some(*name))
                 .unwrap_or("dataViewMethod"),
+            BuiltinFunctionKind::BufferNumericMethod => BUFFER_NUMERIC_METHODS
+                .iter()
+                .copied()
+                .find(|name| self.module_specifier.0.as_deref() == Some(*name))
+                .unwrap_or("bufferNumericMethod"),
             BuiltinFunctionKind::DatePrototypeMethod => DATE_PROTOTYPE_METHODS
                 .iter()
                 .copied()
@@ -5905,7 +6032,8 @@ impl BuiltinFunction {
             | K::PromiseAllResolveElement
             | K::PromiseAllSettledResolveElement
             | K::PromiseAllSettledRejectElement
-            | K::PromiseAnyRejectElement => Some(1),
+            | K::PromiseAnyRejectElement
+            | K::ObjectProtoSetter => Some(1),
             K::PromiseCapabilityExecutor => Some(2),
             K::IteratorNext
             | K::IteratorSelf
@@ -5916,6 +6044,7 @@ impl BuiltinFunction {
             | K::PromiseFinallyThrower
             | K::ProxyRevoke
             | K::PrototypeGetter
+            | K::FunctionPrototype
             | K::ThrowTypeError => Some(0),
             _ => None,
         };
@@ -5974,6 +6103,9 @@ const MAP_ITERATOR_PROTOTYPE: &str = "%MapIteratorPrototype%";
 const SET_ITERATOR_PROTOTYPE: &str = "%SetIteratorPrototype%";
 const GENERATOR_PROTOTYPE: &str = "%GeneratorPrototype%";
 const ASYNC_GENERATOR_PROTOTYPE: &str = "%AsyncGeneratorPrototype%";
+/// %AsyncIteratorPrototype% (ES2018 25.1.3): %AsyncGeneratorPrototype%'s
+/// [[Prototype]], whose @@asyncIterator returns its receiver.
+const ASYNC_ITERATOR_PROTOTYPE: &str = "%AsyncIteratorPrototype%";
 /// %GeneratorFunction%, %AsyncFunction% and %AsyncGeneratorFunction% (ES2020
 /// 25.2, 25.7; ES2018 25.3): standard constructors that are not global
 /// bindings, reached as the `constructor` of their prototypes, which are the
@@ -5983,6 +6115,135 @@ const FUNCTION_KIND_INTRINSICS: [&str; 3] = [
     "AsyncFunction",
     "AsyncGeneratorFunction",
 ];
+
+/// The name of the wrapper a generator or async dynamic function is
+/// compiled inside; NUL-free but not a name source text can collide with in
+/// the one-statement wrapper it heads.
+const DYNAMIC_FUNCTION_WRAPPER: &str = "__franken_dynamic_function";
+
+/// The kind of function CreateDynamicFunction builds (ES2020 19.2.1.1.1):
+/// the Function constructor's, or %GeneratorFunction%'s, %AsyncFunction%'s
+/// or %AsyncGeneratorFunction%'s (bd-9vouw.321).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DynamicFunctionKind {
+    Normal,
+    Generator,
+    Async,
+    AsyncGenerator,
+}
+
+impl DynamicFunctionKind {
+    fn for_constructor(name: &str) -> Option<Self> {
+        match name {
+            "GeneratorFunction" => Some(Self::Generator),
+            "AsyncFunction" => Some(Self::Async),
+            "AsyncGeneratorFunction" => Some(Self::AsyncGenerator),
+            _ => None,
+        }
+    }
+
+    fn constructor_name(self) -> &'static str {
+        match self {
+            Self::Normal => "Function",
+            Self::Generator => "GeneratorFunction",
+            Self::Async => "AsyncFunction",
+            Self::AsyncGenerator => "AsyncGeneratorFunction",
+        }
+    }
+
+    fn is_async(self) -> bool {
+        matches!(self, Self::Async | Self::AsyncGenerator)
+    }
+
+    fn is_generator(self) -> bool {
+        matches!(self, Self::Generator | Self::AsyncGenerator)
+    }
+
+    fn function_keyword(self) -> &'static str {
+        match self {
+            Self::Normal => "function",
+            Self::Generator => "function*",
+            Self::Async => "async function",
+            Self::AsyncGenerator => "async function*",
+        }
+    }
+
+    /// The source of the wrapper whose one statement returns the function.
+    fn wrapper_source(self, parameters: &str, body: &str) -> String {
+        let prefix = self.function_keyword();
+        format!(
+            "function {DYNAMIC_FUNCTION_WRAPPER}() {{\nreturn {prefix} anonymous({parameters}\n) {{\n{body}\n}};\n}}"
+        )
+    }
+
+    /// The parameters alone, as a declaration with an empty body: they
+    /// must parse as that one declaration, as CreateDynamicFunction parses
+    /// them as FormalParameters before forming the full source text (ES2020
+    /// 19.2.1.1.1 step 10). Parameter text that opens a comment or closes
+    /// the list early is a SyntaxError even when the body would complete it.
+    fn parameters_source(self, parameters: &str) -> String {
+        format!("{} anonymous({parameters}\n) {{}}", self.function_keyword())
+    }
+
+    /// Whether `tree` is exactly one declaration of `anonymous` of this
+    /// kind.
+    fn is_single_declaration(self, tree: &crate::ast::SyntaxTree) -> bool {
+        use crate::ast::Statement;
+        matches!(
+            tree.body.as_slice(),
+            [Statement::FunctionDeclaration(function)]
+                if function.name.as_deref() == Some("anonymous")
+                    && function.is_async == self.is_async()
+                    && function.is_generator == self.is_generator()
+        )
+    }
+
+    /// Bytes the wrapper adds to the generated source, for the scratch
+    /// charge taken before any source is built.
+    fn wrapper_overhead_bytes(self) -> u64 {
+        match self {
+            Self::Normal => 0,
+            _ => self.wrapper_source("", "").len() as u64,
+        }
+    }
+
+    /// Whether `tree` is exactly the wrapper: one declaration of
+    /// [`DYNAMIC_FUNCTION_WRAPPER`] whose body is one `return` of a function
+    /// named `anonymous` of this kind. Anything else means the parameters
+    /// or body closed the inner function early, which CreateDynamicFunction
+    /// parses as separate productions and rejects as a SyntaxError.
+    fn is_exact_wrapper(self, tree: &crate::ast::SyntaxTree) -> bool {
+        use crate::ast::{Expression, ReturnStatement, Statement};
+        let [Statement::FunctionDeclaration(wrapper)] = tree.body.as_slice() else {
+            return false;
+        };
+        if wrapper.name.as_deref() != Some(DYNAMIC_FUNCTION_WRAPPER)
+            || !wrapper.params.is_empty()
+            || wrapper.is_async
+            || wrapper.is_generator
+        {
+            return false;
+        }
+        let [
+            Statement::Return(ReturnStatement {
+                argument:
+                    Some(Expression::Function {
+                        name,
+                        is_async,
+                        is_generator,
+                        ..
+                    }),
+                ..
+            }),
+        ] = wrapper.body.body.as_slice()
+        else {
+            return false;
+        };
+        name.as_deref() == Some("anonymous")
+            && *is_async == self.is_async()
+            && *is_generator == self.is_generator()
+    }
+}
 
 /// bd-9vouw.17: standard constructors bound as first-class global values.
 /// Every name has a canonical builtin prototype (`ensure_builtin_prototype`),
@@ -6110,19 +6371,16 @@ const GENERATED_REALM_OBJECT_GLOBALS: [&str; 8] = [
     "global",
 ];
 
-/// Name of a first-class static builtin, or `None` if `tag` is not one the
-/// shared lowering tables can produce. `None` is also the dispatch guard: a
-/// `StaticHostcall` value whose tag does not resolve here is never executed.
-/// Seed-tracked slot (in `builtin_prototypes`) of the top-level `this` object
-/// (bd-9vouw.47). Not a builtin name, so no prototype lookup ever matches it.
-const TOP_LEVEL_THIS_KEY: &str = "<top-level this>";
-
 /// Seed-tracked slot (in `builtin_prototypes`) of the `require('buffer')`
 /// module object (bd-9vouw.193), so every require returns the same object.
 const BUFFER_MODULE_KEY: &str = "<module buffer>";
 
 /// Seed-tracked slot of the `require('os')` module object (bd-9vouw.204).
 const OS_MODULE_KEY: &str = "<module os>";
+
+/// Seed-tracked slot of the realm's querystring module (bd-305gi), shared by
+/// the lowering factory and runtime CommonJS requests.
+const QUERYSTRING_MODULE_KEY: &str = "<module querystring>";
 
 /// Seed-tracked slot of the `require('url')` module object (bd-9vouw.224).
 const URL_MODULE_KEY: &str = "<module url>";
@@ -6583,6 +6841,24 @@ fn static_hostcall_owner_and_name(tag: &str) -> Option<(&'static str, &'static s
         .or_else(|| (tag == "builtin:Eval").then_some(("globalThis", "eval")))
         // `require('events').once` (bd-9vouw.210).
         .or_else(|| (tag == "builtin:EventsOnce").then_some(("events", "once")))
+        // querystring's native methods, including the parse/decode and
+        // stringify/encode identity aliases (bd-305gi).
+        .or_else(|| {
+            crate::lowering_pipeline::QUERYSTRING_METHOD_NAMES
+                .iter()
+                .copied()
+                .find(|name| {
+                    crate::lowering_pipeline::querystring_method_capability(name) == Some(tag)
+                })
+                .map(|name| {
+                    let name = match name {
+                        "escape" => "qsEscape",
+                        "unescape" => "qsUnescape",
+                        name => name,
+                    };
+                    ("querystring", name)
+                })
+        })
         // The legacy members of `require('url')` (bd-9vouw.224).
         .or(match tag {
             "builtin:UrlFileUrlToPath" => Some(("url", "fileURLToPath")),
@@ -6597,6 +6873,17 @@ fn static_hostcall_owner_and_name(tag: &str) -> Option<(&'static str, &'static s
                 .copied()
                 .find(|name| crate::lowering_pipeline::os_method_capability(name) == Some(tag))
                 .map(|name| ("os", name))
+        })
+        // The members of `require('querystring')` (bd-9vouw.439): `parse`
+        // and `stringify` before their `decode`/`encode` aliases.
+        .or_else(|| {
+            crate::lowering_pipeline::QUERYSTRING_METHOD_NAMES
+                .iter()
+                .copied()
+                .find(|name| {
+                    crate::lowering_pipeline::querystring_method_capability(name) == Some(tag)
+                })
+                .map(|name| ("querystring", name))
         })
 }
 
@@ -6690,7 +6977,7 @@ const SLOT0_STATIC_GLOBALS: [&str; 10] = [
     "Number",
     "Buffer",
 ];
-const SLOT0_STATIC_MEMBERS: [&str; 43] = [
+const SLOT0_STATIC_MEMBERS: [&str; 46] = [
     "keys",
     "hasOwn",
     "values",
@@ -6712,6 +6999,8 @@ const SLOT0_STATIC_MEMBERS: [&str; 43] = [
     "isView",
     "parse",
     "stringify",
+    "rawJSON",
+    "isRawJSON",
     "isArray",
     "from",
     "fromAsync",
@@ -6734,6 +7023,7 @@ const SLOT0_STATIC_MEMBERS: [&str; 43] = [
     "concat",
     "compare",
     "isBuffer",
+    "isEncoding",
 ];
 
 /// Owner global and member name for a slot-0 static hostcall tag, for
@@ -7203,6 +7493,195 @@ const DATA_VIEW_METHODS: [&str; 14] = [
     "setBigUint64",
 ];
 
+/// `Buffer.prototype` methods served by
+/// [`BuiltinFunctionKind::BufferNumericMethod`] (bd-9vouw.437): `write`,
+/// and the numeric accessors the dedicated kinds do not serve: 8- and 16-bit
+/// signed, variable width (`readIntLE(offset, byteLength)`), float, double
+/// and 64-bit BigInt, and the lowercase `Uint` aliases Node also defines.
+const BUFFER_NUMERIC_METHODS: &[&str] = &[
+    "write",
+    "readInt8",
+    "writeInt8",
+    "readUint8",
+    "writeUint8",
+    "readInt16LE",
+    "readInt16BE",
+    "writeInt16LE",
+    "writeInt16BE",
+    "readUint16LE",
+    "readUint16BE",
+    "writeUint16LE",
+    "writeUint16BE",
+    "readUint32LE",
+    "readUint32BE",
+    "writeUint32LE",
+    "writeUint32BE",
+    "readIntLE",
+    "readIntBE",
+    "writeIntLE",
+    "writeIntBE",
+    "readUIntLE",
+    "readUIntBE",
+    "writeUIntLE",
+    "writeUIntBE",
+    "readUintLE",
+    "readUintBE",
+    "writeUintLE",
+    "writeUintBE",
+    "readFloatLE",
+    "readFloatBE",
+    "writeFloatLE",
+    "writeFloatBE",
+    "readDoubleLE",
+    "readDoubleBE",
+    "writeDoubleLE",
+    "writeDoubleBE",
+    "readBigInt64LE",
+    "readBigInt64BE",
+    "writeBigInt64LE",
+    "writeBigInt64BE",
+    "readBigUInt64LE",
+    "readBigUInt64BE",
+    "writeBigUInt64LE",
+    "writeBigUInt64BE",
+    "readBigUint64LE",
+    "readBigUint64BE",
+    "writeBigUint64LE",
+    "writeBigUint64BE",
+];
+
+/// The number format of a [`BUFFER_NUMERIC_METHODS`] accessor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BufferNumberFormat {
+    Int {
+        width: usize,
+        signed: bool,
+    },
+    /// `readIntLE(offset, byteLength)`: 1 to 6 bytes.
+    Variable {
+        signed: bool,
+    },
+    Float32,
+    Float64,
+    BigInt64 {
+        signed: bool,
+    },
+}
+
+impl BufferNumberFormat {
+    /// `(write, format, little_endian)` of an accessor name: the 8-bit
+    /// names have no byte-order suffix, every other one has `LE` or `BE`.
+    fn parse(name: &str) -> Option<(bool, Self, bool)> {
+        let (write, rest) = match name.strip_prefix("read") {
+            Some(rest) => (false, rest),
+            None => (true, name.strip_prefix("write")?),
+        };
+        let (body, little_endian, suffixed) = if let Some(body) = rest.strip_suffix("LE") {
+            (body, true, true)
+        } else if let Some(body) = rest.strip_suffix("BE") {
+            (body, false, true)
+        } else {
+            (rest, false, false)
+        };
+        let format = match body {
+            "Int8" => Self::Int {
+                width: 1,
+                signed: true,
+            },
+            "UInt8" | "Uint8" => Self::Int {
+                width: 1,
+                signed: false,
+            },
+            "Int16" => Self::Int {
+                width: 2,
+                signed: true,
+            },
+            "UInt16" | "Uint16" => Self::Int {
+                width: 2,
+                signed: false,
+            },
+            "Int32" => Self::Int {
+                width: 4,
+                signed: true,
+            },
+            "UInt32" | "Uint32" => Self::Int {
+                width: 4,
+                signed: false,
+            },
+            "Int" => Self::Variable { signed: true },
+            "UInt" | "Uint" => Self::Variable { signed: false },
+            "Float" => Self::Float32,
+            "Double" => Self::Float64,
+            "BigInt64" => Self::BigInt64 { signed: true },
+            "BigUInt64" | "BigUint64" => Self::BigInt64 { signed: false },
+            _ => return None,
+        };
+        let one_byte = matches!(format, Self::Int { width: 1, .. });
+        (one_byte != suffixed).then_some((write, format, little_endian))
+    }
+
+    /// The value of `width` little-endian bytes (`bytes` beyond `width`
+    /// are zero).
+    fn decode(self, bytes: [u8; 8], width: usize) -> Value {
+        match self {
+            Self::Int { signed, .. } | Self::Variable { signed } => {
+                let unsigned = u64::from_le_bytes(bytes);
+                let bits = width * 8;
+                let negative = signed && unsigned & (1u64 << (bits - 1)) != 0;
+                let value = unsigned as i64;
+                Value::Int(if negative {
+                    value - (1i64 << bits)
+                } else {
+                    value
+                })
+            }
+            Self::Float32 => js_number_to_value(f64::from(f32::from_le_bytes([
+                bytes[0], bytes[1], bytes[2], bytes[3],
+            ]))),
+            Self::Float64 => js_number_to_value(f64::from_le_bytes(bytes)),
+            Self::BigInt64 { signed: true } => {
+                Value::BigInt(Arc::from(i64::from_le_bytes(bytes).to_string().as_str()))
+            }
+            Self::BigInt64 { signed: false } => {
+                Value::BigInt(Arc::from(u64::from_le_bytes(bytes).to_string().as_str()))
+            }
+        }
+    }
+}
+
+/// A number as Node's ERR_OUT_OF_RANGE messages print it: an integer beyond
+/// 2 ** 32 with `_` between digit groups (`4_294_967_296`).
+fn node_out_of_range_received(number: f64) -> String {
+    if number.is_infinite() {
+        return if number > 0.0 {
+            "Infinity"
+        } else {
+            "-Infinity"
+        }
+        .to_string();
+    }
+    if number.is_nan() || number.fract() != 0.0 || number.abs() <= 4_294_967_296.0 {
+        return format!("{number}");
+    }
+    group_decimal_digits(&format!("{number}"))
+}
+
+/// `digits` (an optional `-` and decimal digits) with `_` between groups of
+/// three, as Node prints a large number or BigInt in a range error.
+fn group_decimal_digits(digits: &str) -> String {
+    let (sign, digits) = digits
+        .strip_prefix('-')
+        .map_or(("", digits), |rest| ("-", rest));
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3 + 1);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index) % 3 == 0 {
+            grouped.push('_');
+        }
+        grouped.push(digit);
+    }
+    format!("{sign}{grouped}")
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BufferIntegerKind {
     UInt8,
@@ -7320,6 +7799,11 @@ fn engine_symbol_id(symbol: CoreSymbolId) -> SymbolId {
 
 const UPPER_HEX: &[u8; 16] = b"0123456789ABCDEF";
 
+/// A physical register `InterpreterCore::compact_public_int_operands` found
+/// eligible for a static write; only that check makes one (bd-9vouw.504).
+#[derive(Debug, Clone, Copy)]
+struct StaticWriteSlot(usize);
+
 fn decimal_u32_len(value: u32) -> usize {
     if value == 0 {
         1
@@ -7431,12 +7915,62 @@ impl RuntimePropertyKey {
     }
 }
 
+#[cfg(test)]
 fn property_resolution_found_payload(
     key: &RuntimePropertyKey,
     object_id: ObjectId,
     depth: u32,
 ) -> Vec<u8> {
-    let mut payload = Vec::with_capacity(
+    let mut payload = Vec::new();
+    write_property_resolution_found_payload(&mut payload, key, object_id, depth);
+    payload
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Sends every own-property read through the generic [[Get]], so a test
+    /// can compare it with the fast path on the same object.
+    static FORCE_GENERIC_OWN_PROPERTY_READS: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+/// How many small array indices keep a shared decimal key.
+const SMALL_INDEX_KEYS: usize = 1024;
+
+/// The decimal property key of a small non-negative integer, shared per
+/// thread (bd-9vouw.504): `a[i]` formatted a String and then made a shared
+/// copy of it on every access. Key identity is never observable; the keys
+/// are filled on first use, at most SMALL_INDEX_KEYS of them.
+fn small_index_key(number: i64) -> Option<JsString> {
+    thread_local! {
+        static KEYS: std::cell::RefCell<Vec<Option<JsString>>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let index = usize::try_from(number)
+        .ok()
+        .filter(|index| *index < SMALL_INDEX_KEYS)?;
+    KEYS.with(|keys| {
+        let mut keys = keys.borrow_mut();
+        if keys.len() <= index {
+            keys.resize(index + 1, None);
+        }
+        Some(
+            keys[index]
+                .get_or_insert_with(|| JsString::from(index.to_string()))
+                .clone(),
+        )
+    })
+}
+
+/// Replace `payload`'s contents with the found-property witness event's bytes.
+fn write_property_resolution_found_payload(
+    payload: &mut Vec<u8>,
+    key: &RuntimePropertyKey,
+    object_id: ObjectId,
+    depth: u32,
+) {
+    payload.clear();
+    payload.reserve(
         b"property_found:key=".len()
             + key.diagnostic_byte_len()
             + b",object_id=".len()
@@ -7445,13 +7979,20 @@ fn property_resolution_found_payload(
             + decimal_u32_len(depth),
     );
     payload.extend_from_slice(b"property_found:key=");
-    key.append_diagnostic_bytes(&mut payload);
+    key.append_diagnostic_bytes(payload);
     payload.extend_from_slice(b",object_id=");
-    append_decimal_u32(&mut payload, object_id.0);
+    append_decimal_u32(payload, object_id.0);
     payload.extend_from_slice(b",depth=");
-    append_decimal_u32(&mut payload, depth);
-    payload
+    append_decimal_u32(payload, depth);
 }
+
+/// The most property-witness scratch capacity an interpreter keeps between
+/// reads; a longer key's buffer is dropped after its event.
+const PROPERTY_WITNESS_SCRATCH_MAX_CAPACITY: usize = 256;
+
+/// The most argument slots each call-argument scratch vector keeps between
+/// calls; a call with more arguments drops its vectors after the call.
+const CALL_ARGUMENT_SCRATCH_MAX_CAPACITY: usize = 64;
 
 /// Slots per heap chunk. A full chunk whose objects were all reclaimed is
 /// released as a whole (bd-9vouw.57 phase B), so memory follows the live set
@@ -8057,6 +8598,11 @@ impl<T> std::ops::IndexMut<usize> for ReclaimableTable<T> {
 }
 
 /// A heap-allocated object with string-keyed properties.
+///
+/// The internal slots only some objects have (an ArrayBuffer's bytes, a
+/// view, a Blob, a RegExp's source, a wrapper's primitive, class metadata, a
+/// brand) are boxed: inline, their `None`s made every `{}` about 900 bytes,
+/// against Node's ~130 (bd-9vouw.464).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HeapObject {
     /// Data properties in ECMAScript own-key order with deterministic lookup.
@@ -8077,9 +8623,9 @@ pub struct HeapObject {
     /// Constructor function index that allocated this object via `Construct`.
     pub constructor_function: Option<u32>,
     /// Engine-private parent constructor slot, inaccessible to guest code.
-    derived_constructor_parent: Option<Value>,
+    derived_constructor_parent: Option<Box<Value>>,
     /// IFC provenance paired with the private parent constructor slot.
-    derived_constructor_parent_label: Option<Label>,
+    derived_constructor_parent_label: Option<Box<Label>>,
     /// Whether the owning function is a derived class constructor.
     is_derived_constructor: bool,
     /// Whether the owning function uses the implicit forwarding constructor.
@@ -8089,30 +8635,30 @@ pub struct HeapObject {
     /// static fields (consumed once they run). An internal array
     /// `[key0, initializer0, key1, initializer1, ...]` in declaration order,
     /// reachable only through this slot.
-    class_fields: Option<Value>,
+    class_fields: Option<Box<Value>>,
     /// The [[BooleanData]], [[NumberData]], [[StringData]], [[BigIntData]] or
     /// [[SymbolData]] of a primitive wrapper object (`Object(1)`,
     /// `new String('a')`; ES2020 19.3.4, 20.1.4, 21.1.4, 20.2.4, 19.4.4).
     /// Engine-private: guest code reaches it only through the prototype
     /// methods' thisXValue and the conversions.
-    primitive_value: Option<Value>,
+    primitive_value: Option<Box<Value>>,
     /// The engine-assigned brand of a built-in or host object (`"Map"`,
     /// `"Date"`, `"ClientRequest"`, `"Intl.NumberFormat"`, ...): what its
     /// methods' receiver checks, member dispatch, Object.prototype.toString
     /// and inspect consult (bd-9vouw.150). Engine-private: it is not a
     /// property, so guest code can neither see nor forge it, and a guest
     /// `__type` property is ordinary data.
-    brand: Option<JsString>,
+    brand: Option<Box<JsString>>,
     /// Whether this object was created as a true Array instance.
     pub is_array: bool,
     /// Cached dense length for arrays (None = sparse, compute from properties).
     pub cached_dense_length: Option<u32>,
     /// Optional ArrayBuffer backing-store bytes for JS-visible binary memory.
-    pub array_buffer: Option<ArrayBufferBacking>,
+    pub array_buffer: Option<Box<ArrayBufferBacking>>,
     /// Optional fixed-length typed-array view over an ArrayBuffer backing store.
-    pub typed_array: Option<TypedArrayView>,
+    pub typed_array: Option<Box<TypedArrayView>>,
     /// Optional fixed-length DataView over an ArrayBuffer backing store.
-    pub data_view: Option<DataViewView>,
+    pub data_view: Option<Box<DataViewView>>,
     /// Whether this object has been frozen via Object.freeze().
     pub is_frozen: bool,
     /// Private [[Extensible]] state; guest property names cannot forge it.
@@ -8138,12 +8684,12 @@ pub struct HeapObject {
     deleted_virtual_keys: BTreeSet<RuntimePropertyKey>,
     /// The bytes and type of a WHATWG Blob (bd-9vouw.226); `None` on every
     /// other object.
-    blob: Option<blob::BlobData>,
+    blob: Option<Box<blob::BlobData>>,
     /// A RegExp's [[OriginalSource]] and [[OriginalFlags]] (bd-9vouw.150
     /// phase 2): engine-private, so guest properties named `source` or
     /// `flags` neither change nor reveal them, and reflection lists only
     /// `lastIndex`.
-    regexp: Option<RegExpSlots>,
+    regexp: Option<Box<RegExpSlots>>,
 }
 
 /// A RegExp's pattern, escaped as `source` reads it back (bd-9vouw.243),
@@ -8530,9 +9076,9 @@ impl<'de> Deserialize<'de> for HeapObject {
             constructor_function: Option<u32>,
             is_array: bool,
             cached_dense_length: Option<u32>,
-            array_buffer: Option<ArrayBufferBacking>,
-            typed_array: Option<TypedArrayView>,
-            data_view: Option<DataViewView>,
+            array_buffer: Option<Box<ArrayBufferBacking>>,
+            typed_array: Option<Box<TypedArrayView>>,
+            data_view: Option<Box<DataViewView>>,
             is_frozen: bool,
             #[serde(default)]
             is_non_extensible: bool,
@@ -8541,19 +9087,19 @@ impl<'de> Deserialize<'de> for HeapObject {
             #[serde(default)]
             is_import_meta: bool,
             #[serde(default)]
-            derived_constructor_parent: Option<Value>,
+            derived_constructor_parent: Option<Box<Value>>,
             #[serde(default)]
-            derived_constructor_parent_label: Option<Label>,
+            derived_constructor_parent_label: Option<Box<Label>>,
             #[serde(default)]
             is_derived_constructor: bool,
             #[serde(default)]
             is_default_derived_constructor: bool,
             #[serde(default)]
-            class_fields: Option<Value>,
+            class_fields: Option<Box<Value>>,
             #[serde(default)]
-            primitive_value: Option<Value>,
+            primitive_value: Option<Box<Value>>,
             #[serde(default)]
-            brand: Option<JsString>,
+            brand: Option<Box<JsString>>,
             #[serde(default)]
             private_elements: Vec<PrivateElementWire>,
             #[serde(default)]
@@ -8565,9 +9111,9 @@ impl<'de> Deserialize<'de> for HeapObject {
             #[serde(default)]
             deleted_virtual_keys: Vec<PropertyKeyWire>,
             #[serde(default)]
-            blob: Option<blob::BlobData>,
+            blob: Option<Box<blob::BlobData>>,
             #[serde(default)]
-            regexp: Option<RegExpSlots>,
+            regexp: Option<Box<RegExpSlots>>,
         }
 
         #[derive(Deserialize)]
@@ -8763,15 +9309,15 @@ pub(crate) fn heap_object_contains_symbols(object: &HeapObject) -> bool {
             .any(|key| matches!(key, RuntimePropertyKey::Symbol(_)))
         || object
             .derived_constructor_parent
-            .as_ref()
+            .as_deref()
             .is_some_and(value_contains_symbol)
         || object
             .class_fields
-            .as_ref()
+            .as_deref()
             .is_some_and(value_contains_symbol)
         || object
             .primitive_value
-            .as_ref()
+            .as_deref()
             .is_some_and(value_contains_symbol)
         || object
             .properties
@@ -8893,7 +9439,7 @@ impl HeapObject {
     /// The engine-assigned brand (bd-9vouw.150): `Some("Map")` for a Map,
     /// `None` for an ordinary object whatever its properties say.
     fn brand(&self) -> Option<&str> {
-        self.brand.as_deref()
+        self.brand.as_deref().map(|brand| &**brand)
     }
 
     /// Effective attributes of the own property `key` (assumed present). A
@@ -9217,7 +9763,14 @@ struct ModuleRuntimeRecord {
     /// The module's static flow label ceiling once it is lowered: every value
     /// it can produce is at most this label (bd-j8f7q import contracts).
     flow_label_ceiling: Option<Label>,
-    pending_import_bindings: BTreeMap<JsString, Vec<Weak<RefCell<ScopeBindingState>>>>,
+    /// Importers' binding cells for each export name (bd-1lsy.4.10.1). Every
+    /// publication of the export writes them, so an import is a live view of
+    /// the exporting module's binding; a cell whose importer is gone drops
+    /// out at the next publication.
+    import_bindings: BTreeMap<JsString, Vec<Weak<RefCell<ScopeBindingState>>>>,
+    /// Modules that `export * from` this one (bd-1lsy.4.10.1): a publication
+    /// of a name they still re-export publishes it from them too.
+    star_reexporters: BTreeSet<String>,
     cjs_module_object: Option<ObjectId>,
     /// The executable program that owns every closure created while this
     /// module is evaluated. Imported closures carry only an index into this
@@ -9229,14 +9782,6 @@ struct ModuleRuntimeRecord {
     /// Owned activation parked while an imported module is asynchronously
     /// evaluating. Entry-module execution remains installed in the core.
     async_execution: Option<ModuleExecutionSnapshot>,
-}
-
-#[derive(Debug, Clone)]
-struct PendingCyclicImportBinding {
-    module_specifier: String,
-    export_name: JsString,
-    source_register: u32,
-    expected_init_ip: usize,
 }
 
 /// Realm-persistent dynamic-code artifacts owned by one immutable module
@@ -9269,6 +9814,9 @@ struct ModuleState {
     generated_function_stores: BTreeMap<ContentHash, GeneratedFunctionStore>,
     /// Cached logical charge for `generated_function_stores`.
     retained_generated_function_bytes: u64,
+    /// Module bindings that back exports (bd-1lsy.4.10.1), indexed by their
+    /// cells' `live_export`: a write to one republishes its exports.
+    live_exports: Vec<LiveExport>,
 }
 
 impl ModuleState {
@@ -9278,8 +9826,30 @@ impl ModuleState {
             retained_program_bytes: 0,
             generated_function_stores: BTreeMap::new(),
             retained_generated_function_bytes: 0,
+            live_exports: Vec::new(),
         }
     }
+}
+
+/// A module's scope binding and the exports it is the local binding of:
+/// `(module specifier, export name)` pairs (bd-1lsy.4.10.1).
+#[derive(Debug, Clone)]
+struct LiveExport {
+    cell: Weak<RefCell<ScopeBindingState>>,
+    exports: Vec<(String, JsString)>,
+}
+
+/// How many re-export hops one write republishes through (an exported
+/// import binding republishes when its export is published).
+const LIVE_EXPORT_CASCADE_LIMIT: u32 = 64;
+
+/// Whose publication of an export it is (bd-1lsy.4.10.1): the module's own
+/// export (which wins over a star re-export of the name), or a source
+/// module's value reaching a module that `export * from` it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExportPublication {
+    Own,
+    Star,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -9482,6 +10052,19 @@ struct GeneratorExecutionSnapshot {
     /// The label file's length then; the two files need not be equally long
     /// (an isolated wrapper replaces the value file and keeps the labels).
     register_label_len: usize,
+    /// [`InterpreterCore::register_dirty_end`] of these files, which
+    /// `install_generator_execution` restores: the whole file's length would
+    /// make the next call after every generator step clear to its end
+    /// (bd-9vouw.499).
+    register_dirty_end: usize,
+    /// [`InterpreterCore::registers_memory_bytes`] of the files when they
+    /// were parked, if the core had it cached, which
+    /// `install_generator_execution` restores: the trimmed tail and the
+    /// padding that replaces it are cleared slots, which own no bytes
+    /// (bd-9vouw.500). `None` makes the next read sum the file.
+    registers_value_bytes: Option<u64>,
+    /// The same for [`InterpreterCore::register_labels_memory_bytes`].
+    register_labels_bytes: Option<u64>,
     delegation: Option<GeneratorDelegation>,
     active_inline_callback_context_label: Option<Label>,
     call_stack: Vec<CallFrame>,
@@ -9513,14 +10096,7 @@ impl GeneratorExecutionSnapshot {
     /// deterministic lane, 8,192 on the throughput lane) that were almost all
     /// cleared (bd-9vouw.167). `register_len` keeps the length to restore.
     fn trim_cleared_register_tail(&mut self) {
-        let len = self.registers.len().max(self.register_labels.len());
-        let live = (0..len)
-            .rev()
-            .find(|&index| {
-                !matches!(self.registers.get(index), Some(Value::Undefined) | None)
-                    || !matches!(self.register_labels.get(index), Some(Label::Public) | None)
-            })
-            .map_or(0, |index| index + 1);
+        let live = live_register_prefix_len(&self.registers, &self.register_labels);
         if live < self.registers.len() {
             self.registers.truncate(live);
             self.registers.shrink_to_fit();
@@ -9529,6 +10105,30 @@ impl GeneratorExecutionSnapshot {
             self.register_labels.truncate(live);
             self.register_labels.shrink_to_fit();
         }
+    }
+}
+
+/// Length of the files' live prefix: every register past it is undefined
+/// with a Public label, as are the slots one file has past the other's end
+/// (bd-9vouw.167).
+fn live_register_prefix_len(registers: &[Value], register_labels: &[Label]) -> usize {
+    let values_end = registers
+        .iter()
+        .rposition(|value| !matches!(value, Value::Undefined))
+        .map_or(0, |index| index + 1);
+    let labels_end = register_labels
+        .iter()
+        .rposition(|label| !matches!(label, Label::Public))
+        .map_or(0, |index| index + 1);
+    values_end.max(labels_end)
+}
+
+/// Make a file whose every slot is `cleared` hold `prefix` followed by
+/// cleared slots, `len` in all (at least the prefix).
+fn refill_cleared_file<T: Clone>(file: &mut Vec<T>, prefix: Vec<T>, len: usize, cleared: T) {
+    file.resize(len.max(prefix.len()), cleared);
+    for (slot, value) in file.iter_mut().zip(prefix) {
+        *slot = value;
     }
 }
 
@@ -9738,6 +10338,9 @@ enum BindingKind {
     Const = 2,
     Param = 3,
     Function = 4,
+    /// A module's import binding (bd-1lsy.4.10.1): immutable, initialized
+    /// when its import runs and then kept equal to the exported binding.
+    Import = 5,
 }
 
 impl BindingKind {
@@ -9748,8 +10351,9 @@ impl BindingKind {
             2 => Ok(Self::Const),
             3 => Ok(Self::Param),
             4 => Ok(Self::Function),
+            5 => Ok(Self::Import),
             _ => Err(InterpreterError::TypeError {
-                expected: "binding kind 0..=4".to_string(),
+                expected: "binding kind 0..=5".to_string(),
                 got: format!("kind {val}"),
             }),
         }
@@ -9757,6 +10361,12 @@ impl BindingKind {
 
     fn is_hoisted(self) -> bool {
         matches!(self, Self::Var | Self::Param | Self::Function)
+    }
+
+    /// Assigning it is a TypeError: a `const`, or an import (ES2020
+    /// 15.2.1.16.4: an import binding is immutable).
+    fn is_immutable(self) -> bool {
+        matches!(self, Self::Const | Self::Import)
     }
 }
 
@@ -9773,6 +10383,9 @@ struct ScopeBindingState {
     label: Label,
     /// `true` once initialized (let/const start uninitialized in TDZ).
     initialized: bool,
+    /// 1 + the index in `ModuleState::live_exports` of the exports this
+    /// module binding backs (bd-1lsy.4.10.1); a write republishes them.
+    live_export: Option<std::num::NonZeroU32>,
 }
 
 /// A single binding in a scope environment.
@@ -9833,6 +10446,7 @@ impl ScopeBinding {
                 value,
                 label,
                 initialized,
+                live_export: None,
             })),
         }
     }
@@ -10158,14 +10772,16 @@ struct ColdBindingCell {
 struct ColdBindingCells {
     cells: BTreeMap<usize, ColdBindingCell>,
     payload_bytes: u64,
-    /// Registered bindings maps, by address: how many registrations hold
-    /// each, the map itself, and the key bytes charged for it. A map's cells
-    /// are registered by its first registration and released by its last,
-    /// so re-registering a scope that is already held (the global scope, at
-    /// every call) costs O(1), not O(bindings). Holding the `Rc` makes every
-    /// structural write elsewhere copy the map first (`Rc::make_mut`), so a
-    /// registered map's bindings cannot change while it is held.
-    maps: BTreeMap<usize, (usize, Rc<FrameBindings>, u64)>,
+    /// Registered bindings maps, by address: the map itself and the key
+    /// bytes charged for it. How many registrations hold a map is its
+    /// `ledger_holds`. A map's cells are registered by its first
+    /// registration and released by its last, so re-registering a scope that
+    /// is already held (the global scope, at every call) costs O(1), not
+    /// O(bindings), and does not search this map. Holding the `Rc` makes
+    /// every structural write elsewhere copy the map first
+    /// (`Rc::make_mut`), so a registered map's bindings cannot change while
+    /// it is held.
+    maps: BTreeMap<usize, (Rc<FrameBindings>, u64)>,
     /// Key bytes of the registered maps, each map once.
     map_key_bytes: u64,
 }
@@ -10230,39 +10846,48 @@ impl ColdBindingCells {
     fn register_frames(&mut self, frames: &[ScopeFrame]) {
         for frame in frames {
             let holds = &frame.bindings.ledger_holds;
-            holds.set(holds.get() + 1);
-            match self.maps.entry(Self::map_key(frame)) {
-                std::collections::btree_map::Entry::Occupied(mut entry) => {
-                    entry.get_mut().0 += 1;
-                }
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert((1, Rc::clone(&frame.bindings), frame.key_bytes));
-                    self.map_key_bytes = self.map_key_bytes.saturating_add(frame.key_bytes);
-                    for binding in frame.bindings.values() {
-                        self.register_cell(&binding.state);
-                    }
-                }
+            let previous = holds.get();
+            holds.set(previous + 1);
+            if previous > 0 {
+                continue;
+            }
+            let replaced = self.maps.insert(
+                Self::map_key(frame),
+                (Rc::clone(&frame.bindings), frame.key_bytes),
+            );
+            debug_assert!(
+                replaced.is_none(),
+                "an unheld scope map was in the ledger (bd-9vouw.154)"
+            );
+            self.map_key_bytes = self.map_key_bytes.saturating_add(frame.key_bytes);
+            for binding in frame.bindings.values() {
+                self.register_cell(&binding.state);
             }
         }
     }
 
     fn release_frames(&mut self, frames: &[ScopeFrame]) {
         for frame in frames {
-            let std::collections::btree_map::Entry::Occupied(mut entry) =
-                self.maps.entry(Self::map_key(frame))
-            else {
+            let holds = &frame.bindings.ledger_holds;
+            let previous = holds.get();
+            if previous == 0 {
                 debug_assert!(false, "released a scope map the ledger does not hold");
                 continue;
+            }
+            holds.set(previous - 1);
+            if previous > 1 {
+                continue;
+            }
+            let Some((bindings, key_bytes)) = self.maps.remove(&Self::map_key(frame)) else {
+                debug_assert!(
+                    false,
+                    "a held scope map was not in the ledger (bd-9vouw.154)"
+                );
+                continue;
             };
-            let holds = &frame.bindings.ledger_holds;
-            holds.set(holds.get().saturating_sub(1));
-            entry.get_mut().0 -= 1;
-            if entry.get().0 == 0 {
-                let (_, bindings, key_bytes) = entry.remove();
-                self.map_key_bytes = self.map_key_bytes.saturating_sub(key_bytes);
-                for binding in bindings.values() {
-                    self.release_cell(&binding.state);
-                }
+            self.map_key_bytes = self.map_key_bytes.saturating_sub(key_bytes);
+            for binding in bindings.values() {
+                self.release_cell(&binding.state);
             }
         }
     }
@@ -10696,14 +11321,24 @@ struct CallFrame {
 /// cannot change while a frame above it is live, so the frames below the top
 /// are a running total here and their saved caller chains are registered in
 /// the cold binding-cell ledger, as a parked activation's are. Only the top
-/// frame, which `last_mut` may change, is measured on demand. Reads deref to a
-/// slice; every other mutation goes through these methods.
+/// frame, which `last_mut` may change, is measured on demand, at most once
+/// between changes. Reads deref to a slice; every other mutation goes through
+/// these methods.
 #[derive(Debug, Default)]
 struct CallStack {
     frames: Vec<CallFrame>,
     /// [`InterpreterCore::estimate_live_call_frame_bytes`] summed over every
     /// frame but the top one.
     below_top_bytes: u64,
+    /// For each frame below the top, its estimate when a frame was pushed
+    /// over it, which `pop` restores as the top's without measuring it again.
+    below_top_frame_bytes: Vec<u64>,
+    /// The top frame's estimate since it was last measured. A frame's
+    /// estimate depends only on its own fields (a string's retained bytes
+    /// are fixed when it is built, a saved chain is charged per frame), so
+    /// only `push`, `pop`, `take` and `last_mut` clear it. Every call and
+    /// return measured the top frame about six times (bd-9vouw.497).
+    top_bytes: Cell<Option<u64>>,
     /// For each frame below the top, the index of the first frame at or
     /// below it with the strictly greatest `super_label` among the frames
     /// that carry a HomeObject (`active_execution_context_label`).
@@ -10721,11 +11356,20 @@ impl std::ops::Deref for CallStack {
 impl CallStack {
     /// Estimated bytes of all frames.
     fn frame_bytes(&self) -> u64 {
-        self.below_top_bytes.saturating_add(
-            self.frames
-                .last()
-                .map_or(0, InterpreterCore::estimate_live_call_frame_bytes),
-        )
+        self.below_top_bytes.saturating_add(self.top_frame_bytes())
+    }
+
+    /// [`InterpreterCore::estimate_live_call_frame_bytes`] of the top frame.
+    fn top_frame_bytes(&self) -> u64 {
+        if let Some(bytes) = self.top_bytes.get() {
+            return bytes;
+        }
+        let bytes = self
+            .frames
+            .last()
+            .map_or(0, InterpreterCore::estimate_live_call_frame_bytes);
+        self.top_bytes.set(Some(bytes));
+        bytes
     }
 
     /// The top frame's saved caller chain, the only saved chain the live-only
@@ -10737,10 +11381,10 @@ impl CallStack {
     }
 
     fn push(&mut self, frame: CallFrame, cold: &mut ColdBindingCells) {
+        let covered_bytes = self.top_frame_bytes();
         if let Some(top) = self.frames.last() {
-            self.below_top_bytes = self
-                .below_top_bytes
-                .saturating_add(InterpreterCore::estimate_live_call_frame_bytes(top));
+            self.below_top_bytes = self.below_top_bytes.saturating_add(covered_bytes);
+            self.below_top_frame_bytes.push(covered_bytes);
             if let Some(saved) = &top.saved_scope_chain {
                 cold.register_frames(saved);
             }
@@ -10756,10 +11400,12 @@ impl CallStack {
             self.below_top_super_winner.push(winner);
         }
         self.frames.push(frame);
+        self.top_bytes.set(None);
     }
 
     /// The `super_label` of the first frame with the strictly greatest one
     /// among the frames that carry a HomeObject, bottom-up.
+    #[inline]
     fn super_label_winner(&self) -> Option<&Label> {
         let below = self
             .below_top_super_winner
@@ -10780,14 +11426,24 @@ impl CallStack {
 
     fn pop(&mut self, cold: &mut ColdBindingCells) -> Option<CallFrame> {
         let frame = self.frames.pop()?;
+        self.top_bytes.set(None);
         if let Some(top) = self.frames.last() {
             self.below_top_super_winner.pop();
-            let bytes = InterpreterCore::estimate_live_call_frame_bytes(top);
+            let bytes = self
+                .below_top_frame_bytes
+                .pop()
+                .unwrap_or_else(|| InterpreterCore::estimate_live_call_frame_bytes(top));
+            debug_assert_eq!(
+                bytes,
+                InterpreterCore::estimate_live_call_frame_bytes(top),
+                "a covered frame's estimate changed under the frame above it (bd-9vouw.497)"
+            );
             debug_assert!(
                 self.below_top_bytes >= bytes,
                 "call-stack running total lost a frame (bd-9vouw.72)"
             );
             self.below_top_bytes = self.below_top_bytes.saturating_sub(bytes);
+            self.top_bytes.set(Some(bytes));
             if let Some(saved) = &top.saved_scope_chain {
                 cold.release_frames(saved);
             }
@@ -10805,6 +11461,8 @@ impl CallStack {
             }
         }
         self.below_top_bytes = 0;
+        self.below_top_frame_bytes.clear();
+        self.top_bytes.set(None);
         self.below_top_super_winner.clear();
         std::mem::take(&mut self.frames)
     }
@@ -10822,6 +11480,7 @@ impl CallStack {
 
     /// The top frame is measured on demand, so it may change in place.
     fn last_mut(&mut self) -> Option<&mut CallFrame> {
+        self.top_bytes.set(None);
         self.frames.last_mut()
     }
 }
@@ -11549,6 +12208,13 @@ pub trait InterpreterHook: Send + Sync {
     fn pre_allocation(&self, ctx: &HookContext, kind: AllocKind, size_hint: usize) -> HookAction;
 
     fn pre_import(&self, ctx: &HookContext, specifier: &str) -> HookAction;
+
+    /// Observe the live capability decision before any hostcall effect.
+    /// `allowed` reports the existing capability membrane; returning Allow
+    /// never overrides a denial. Non-Allow stops an authorized dispatch.
+    fn pre_hostcall(&self, _ctx: &HookContext, _capability: &str, _allowed: bool) -> HookAction {
+        HookAction::Allow
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -12366,6 +13032,24 @@ impl CompactTier1Program {
     /// remain explicit baseline cells; compilation itself never changes module
     /// admission or execution semantics.
     pub(crate) fn compile(module: &Ir3Module) -> Option<Self> {
+        Self::compile_with_known_hash(module, None)
+    }
+
+    /// [`Self::compile`] given `module`'s content hash when the caller already
+    /// computed it for the same module (the orchestrator's routing context),
+    /// instead of a further full canonical encoding (bd-9vouw.382).
+    /// [`Self::validate_module`] still rehashes the module it is given.
+    pub(crate) fn compile_with_source_hash(
+        module: &Ir3Module,
+        source_hash: ContentHash,
+    ) -> Option<Self> {
+        Self::compile_with_known_hash(module, Some(source_hash))
+    }
+
+    fn compile_with_known_hash(
+        module: &Ir3Module,
+        source_hash: Option<ContentHash>,
+    ) -> Option<Self> {
         let verified_function_frame_clear_width = Self::verified_function_frame_clear_width(module);
         let verified_function_frame_clear_widths = if verified_function_frame_clear_width.is_some()
         {
@@ -12402,8 +13086,13 @@ impl CompactTier1Program {
                 compact
             })
             .collect::<Arc<[_]>>();
-        (compact_work_instruction_count > 0).then_some(Self {
-            source_module_hash: module.content_hash(),
+        if compact_work_instruction_count == 0 {
+            return None;
+        }
+        let source_module_hash = source_hash.unwrap_or_else(|| module.content_hash());
+        debug_assert_eq!(source_module_hash, module.content_hash());
+        Some(Self {
+            source_module_hash,
             source_rest_param_indices: module
                 .function_table
                 .iter()
@@ -12966,11 +13655,22 @@ enum TraceHandoff {
 struct ModuleExecutionSnapshot {
     accounted_bytes: u64,
     registers: Vec<Value>,
+    /// [`InterpreterCore::registers_memory_bytes`] of `registers`, which no
+    /// one writes while they are parked here.
+    register_bytes: u64,
     generator_delegation: Option<GeneratorDelegation>,
     /// IFC labels parallel the logical register file. Inline callback
     /// execution replaces the register values, so its snapshot must preserve
     /// labels as well or a stream/event callback can corrupt caller taint.
     register_labels: Vec<Label>,
+    /// [`InterpreterCore::register_labels_memory_bytes`] of
+    /// `register_labels`, which no one writes while they are parked here.
+    register_label_bytes: u64,
+    /// [`InterpreterCore::register_dirty_end`] of these files, which
+    /// `restore_module_execution` restores: the whole file's length would make
+    /// the next call after every isolated call clear to its end
+    /// (bd-9vouw.499).
+    register_dirty_end: usize,
     /// PC-style provenance for an isolated stream/event callback. Keeping one
     /// snapshotted label avoids cloning a Custom label into every register.
     active_inline_callback_context_label: Option<Label>,
@@ -14532,8 +15232,30 @@ pub struct InterpreterCore {
     /// timer registry and event loop remain owned by this interpreter; the
     /// authority gates and records the crossing before mutation.
     timer_effect_authority: Option<Arc<dyn TimerEffectAuthority>>,
+    /// The flow label ceiling of the entry module's lowering, when the
+    /// embedder lowered it (bd-j8f7q): an import edge back to the entry
+    /// (a cycle through it) is checked against it like any other module's.
+    entry_flow_label_ceiling: Option<Label>,
     /// Register file (flat, indexed by register number). SEED-SURFACE.
     registers: SeedTrackedField<Vec<Value>>,
+    /// [`Self::registers_memory_bytes`] of the register file as it stands, or
+    /// `None` once a write may have changed it. An isolated callback reads
+    /// the sum for its preflight, its snapshot, its setup and its restore;
+    /// each read walked the whole file (grown with the call depth), about a
+    /// tenth of babel-standalone's run time. Every register write clears it
+    /// in [`Self::mutate_registers`]; installing a whole file sets it.
+    registers_value_bytes: std::cell::Cell<Option<u64>>,
+    /// Cached [`Self::register_labels_memory_bytes`], `None` when stale
+    /// (bd-9vouw.376). Every isolated callback's snapshot and restore read it,
+    /// and each read summed the whole label file (`max_registers` slots):
+    /// 8% of a forEach loop. A label write whose bytes the writer knows moves
+    /// it by that delta ([`Self::adjust_register_labels_bytes`]); a write of
+    /// two byte-free labels leaves it; any other change of the file clears it.
+    register_labels_bytes: std::cell::Cell<Option<u64>>,
+    /// Each tagged-template call site's frozen template object, keyed by its
+    /// module's content hash (else label) and parse ordinal (ES2020
+    /// 12.2.9.3 [[TemplateMap]], bd-9vouw.343). Collector roots.
+    template_objects: BTreeMap<(String, String), ObjectId>,
     /// Call stack.
     call_stack: CallStack,
     /// Object heap. SEED-SURFACE.
@@ -14547,6 +15269,32 @@ pub struct InterpreterCore {
     /// makes every nested allocation gate see the temporary owner while still
     /// allowing exact release on every callback exit (bd-aw8td).
     simple_callback_temporary_bytes: u64,
+    /// The reducer lane's register file between callbacks, every slot
+    /// `Undefined`, so a callback neither allocates nor drops `max_registers`
+    /// slots. Engine capacity of at most `max_registers` slots, not charged.
+    simple_callback_register_pool: Vec<Value>,
+    /// The register and label files `take_generator_execution` emptied, every
+    /// slot undefined with a Public label, which the next
+    /// `install_generator_execution` or `isolate_module_execution` refills
+    /// instead of allocating and clearing whole windows: an `await` or a
+    /// generator step moved four windows through the allocator
+    /// (bd-9vouw.500). Engine capacity of at most `SPARE_REGISTER_FILES`
+    /// pairs of at most `SPARE_REGISTER_FILE_WINDOWS` windows a file, not
+    /// charged.
+    spare_register_files: Vec<(Vec<Value>, Vec<Label>)>,
+    /// The bytes of the last found-property witness event, kept so a
+    /// property read folds its event without allocating a buffer. Engine
+    /// capacity (at most PROPERTY_WITNESS_SCRATCH_MAX_CAPACITY bytes kept),
+    /// not charged.
+    property_witness_scratch: Vec<u8>,
+    /// The argument values and labels of the call being set up, kept so a
+    /// call does not allocate and free two vectors (bd-9vouw.497). Empty
+    /// between calls: a call takes them, drains them into the callee's
+    /// registers and puts them back (`restore_call_argument_scratch`); a call
+    /// that fails in between drops them. Engine capacity (at most
+    /// CALL_ARGUMENT_SCRATCH_MAX_CAPACITY slots each kept), not charged.
+    call_argument_value_scratch: Vec<Value>,
+    call_argument_label_scratch: Vec<Label>,
     /// JSON parser/reviver scratch retained on the Rust stack across guest
     /// callbacks. A nested accounting resync must not erase this ownership.
     json_parse_temporary_bytes: u64,
@@ -14696,11 +15444,16 @@ pub struct InterpreterCore {
     register_width: usize,
     /// Run loops currently active on the native stack (bd-9vouw.72).
     native_run_loop_depth: usize,
-    /// Largest stacked-frame prefix ever occupied by this core. This monotonic
-    /// high-water mark keeps reduced clears safe when a reusable core later
-    /// executes a narrower module: stale values and labels from the older,
-    /// wider module are still cleared before the new callee starts.
-    stacked_register_frame_clear_width_high_water: usize,
+    /// Every register at or past this physical index holds `Undefined` with
+    /// a Public label (bd-9vouw.499). A frame entry clears its window and
+    /// every register up to here, then sets it to its window's end; every
+    /// write past it (a register write, a label write, a restored or widened
+    /// window, an installed file) raises it. It replaced a monotonic
+    /// high-water mark of the widest frame ever entered, which every later
+    /// entry cleared: after one call of a function with 200 registers, each
+    /// call of a 3-register function cleared 200 values and labels (1,000,000
+    /// calls took 4.60 s instead of 1.61 s).
+    register_dirty_end: usize,
     /// The top-level run's compact Tier-I plan and the address of the module
     /// it was compiled for. Nested builtin callbacks in that same module
     /// dispatch through it too (verified frame widths, scope-inert leaves,
@@ -15058,6 +15811,18 @@ pub struct InterpreterCore {
     /// Watchers keyed by promise handle for combinator updates.
     promise_combinator_watchers:
         BTreeMap<crate::promise_model::PromiseHandle, Vec<PromiseCombinatorWatcher>>,
+    /// Running totals of the two maps' memory estimates
+    /// (`promise_combinators_memory_bytes_by_walk` and
+    /// `promise_combinator_watchers_memory_bytes_by_walk`), kept up to date at
+    /// every mutation. Every Promise operation measures them, and re-summing
+    /// made a pending Promise.all over n inputs cost O(n) per settlement and
+    /// per registered input (bd-9vouw.479).
+    promise_combinators_bytes: u64,
+    promise_combinator_watchers_bytes: u64,
+    /// Arrays an Array.prototype.join / toString is joining right now,
+    /// across guest re-entry (bd-9vouw.481): one of them met again renders
+    /// "". Empty between instructions.
+    array_join_stack: BTreeSet<u32>,
     /// Monotonic combinator id generator.
     next_promise_combinator_id: u64,
     /// Module registry/cache for ImportModule execution.
@@ -15067,8 +15832,6 @@ pub struct InterpreterCore {
     /// available but the importer must park behind this dependency's module
     /// evaluation Promise before executing its next instruction (bd-yn3lv).
     pending_async_module_import: Option<(String, crate::promise_model::PromiseHandle)>,
-    /// One-instruction handoff from a cyclic namespace read to InitBinding.
-    pending_cyclic_import_binding: Option<PendingCyclicImportBinding>,
     /// Active CommonJS module context, if currently evaluating a CJS module.
     active_cjs_context: Option<CjsModuleContext>,
     /// Current module specifier (used to resolve relative imports).
@@ -15302,6 +16065,18 @@ impl InterpreterCore {
         name: &str,
         allow_missing: bool,
     ) -> Result<Value, InterpreterError> {
+        self.load_runtime_name_labeled(name, allow_missing)
+            .map(|(value, _label)| value)
+    }
+
+    /// [`Self::load_runtime_name`] with the label the binding's cell holds
+    /// alongside its value (the label LoadScoped reads); the CommonJS path
+    /// names and an allowed missing name are Public (bd-9vouw.487).
+    fn load_runtime_name_labeled(
+        &self,
+        name: &str,
+        allow_missing: bool,
+    ) -> Result<(Value, Label), InterpreterError> {
         if let Some(binding) = self.resolve_runtime_name_binding(name) {
             let state = binding.state()?;
             if !state.initialized {
@@ -15309,7 +16084,13 @@ impl InterpreterCore {
                     name: name.to_string(),
                 });
             }
-            return Ok(state.value.clone());
+            return Ok((state.value.clone(), state.label.clone()));
+        }
+
+        // These are immutable global-object value properties, not mutable
+        // scope cells. A real local binding (including its TDZ) wins above.
+        if let Some(value) = Self::read_only_global_value(name) {
+            return Ok((value, Label::Public));
         }
 
         if self.active_generated_function_artifact.is_none()
@@ -15317,14 +16098,14 @@ impl InterpreterCore {
         {
             let (filename, dirname) = self.cjs_filename_dirname(Some(&context.module_specifier));
             match name {
-                "__filename" => return Ok(filename),
-                "__dirname" => return Ok(dirname),
+                "__filename" => return Ok((filename, Label::Public)),
+                "__dirname" => return Ok((dirname, Label::Public)),
                 _ => {}
             }
         }
 
         if allow_missing {
-            Ok(Value::Undefined)
+            Ok((Value::Undefined, Label::Public))
         } else {
             Err(InterpreterError::UndefinedBinding {
                 name: name.to_string(),
@@ -15403,6 +16184,10 @@ impl InterpreterCore {
     /// SetMutableBinding of a global-object binding, and the property a
     /// sloppy write to an unresolvable name creates: an ordinary [[Set]] that
     /// stores the written value's label on the property, as SetProperty does.
+    /// In strict code a binding the right-hand side deleted is a
+    /// ReferenceError and a [[Set]] that fails (a non-writable property, a
+    /// getter without a setter) a TypeError (ES2020 8.1.1.2.5 steps 1-5,
+    /// bd-9vouw.466).
     fn put_global_object_name(
         &mut self,
         module: Option<&Ir3Module>,
@@ -15410,8 +16195,14 @@ impl InterpreterCore {
         name: &str,
         value: Value,
         label: &Label,
+        strict: bool,
     ) -> Result<(), InterpreterError> {
         let key = RuntimePropertyKey::String(JsString::from(name));
+        if strict && !self.proxy_aware_has_runtime_property(module, global, &key, 0)? {
+            return Err(InterpreterError::UndefinedBinding {
+                name: name.to_string(),
+            });
+        }
         if let Some(module) = module {
             self.run_pre_runtime_property_access_hook(module, global, &key)?;
         }
@@ -15440,6 +16231,12 @@ impl InterpreterCore {
             // A non-writable property or an inherited setter keeps no own value.
             self.set_own_runtime_property_label(global, &key, &previous_label)?;
         }
+        if strict && !committed {
+            return Err(InterpreterError::TypeError {
+                expected: "writable global property".to_string(),
+                got: format!("the global object's read-only `{name}`"),
+            });
+        }
         Ok(())
     }
 
@@ -15461,7 +16258,7 @@ impl InterpreterCore {
                 name: name.to_string(),
             });
         }
-        if binding.kind == BindingKind::Const {
+        if binding.kind.is_immutable() {
             return Err(InterpreterError::ConstAssignment {
                 name: name.to_string(),
             });
@@ -15593,7 +16390,8 @@ impl InterpreterCore {
             return Ok(());
         }
 
-        self.put_realm_runtime_name_labeled(module, name, value, label)
+        // Sloppy code: the write creates the global property.
+        self.put_realm_runtime_name_labeled(module, name, value, label, false)
     }
 
     /// Execute `delete name` for an identifier without a source lexical
@@ -15664,7 +16462,7 @@ impl InterpreterCore {
     }
 
     fn put_realm_runtime_name(&mut self, name: &str, value: Value) -> Result<(), InterpreterError> {
-        self.put_realm_runtime_name_labeled(None, name, value, &Label::Public)
+        self.put_realm_runtime_name_labeled(None, name, value, &Label::Public, false)
     }
 
     fn put_realm_runtime_name_labeled(
@@ -15673,6 +16471,7 @@ impl InterpreterCore {
         name: &str,
         value: Value,
         label: &Label,
+        strict: bool,
     ) -> Result<(), InterpreterError> {
         // Write the realm global object directly. If RHS code created or
         // replaced this property after the Reference was captured, it is still
@@ -15685,7 +16484,7 @@ impl InterpreterCore {
         // of it (`x = 1; globalThis.x`), readable through the fallback in
         // LoadName.
         if let Some(global) = self.name_resolving_global_object() {
-            return self.put_global_object_name(module, global, name, value, label);
+            return self.put_global_object_name(module, global, name, value, label, strict);
         }
 
         let previous_scope_bytes = self.scope_chain_memory_bytes();
@@ -15735,12 +16534,14 @@ impl InterpreterCore {
     ) -> Result<(), InterpreterError> {
         if let Some(binding) = self.resolve_runtime_name_binding(name) {
             self.put_resolved_runtime_name_binding(name, binding, value)
+        } else if let Some(outcome) = Self::put_read_only_global_value(name, strict) {
+            outcome
         } else if self.active_generated_function_artifact.is_none()
             && self.global_object_binding(module, name)?.is_some()
         {
             // A property of the global object is a binding, in strict code
             // too (`globalThis.x = 1; x = 2`).
-            self.put_realm_runtime_name_labeled(module, name, value, label)
+            self.put_realm_runtime_name_labeled(module, name, value, label, strict)
         } else {
             self.put_unresolvable_runtime_name(module, name, value, label, strict)
         }
@@ -15766,6 +16567,52 @@ impl InterpreterCore {
         )
     }
 
+    fn read_only_global_value(name: &str) -> Option<Value> {
+        match name {
+            "undefined" => Some(Value::Undefined),
+            "NaN" => Some(Value::Float(Float64::new(f64::NAN))),
+            "Infinity" => Some(Value::Float(Float64::new(f64::INFINITY))),
+            _ => None,
+        }
+    }
+
+    /// Install the immutable global value properties without creating Var
+    /// cells, which would let name assignments bypass their descriptors.
+    fn seed_read_only_global_values(&mut self, global: ObjectId) -> Result<(), InterpreterError> {
+        for name in ["undefined", "NaN", "Infinity"] {
+            let value = Self::read_only_global_value(name)
+                .expect("the immutable global value names are exhaustive");
+            self.set_object_property(global, name.to_string(), value)?;
+            self.set_own_property_attributes(
+                global,
+                &RuntimePropertyKey::String(JsString::from(name)),
+                READ_ONLY_VALUE_ATTRIBUTES,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// The global object's NaN, Infinity and undefined are non-writable data
+    /// properties (ES2020 18.1): assigning one through an identifier that no
+    /// binding shadows changes nothing, and in strict code is a TypeError
+    /// (PutValue step 6's [[Set]] returns false). `None` for any other name.
+    fn put_read_only_global_value(
+        name: &str,
+        strict: bool,
+    ) -> Option<Result<(), InterpreterError>> {
+        if !matches!(name, "NaN" | "Infinity" | "undefined") {
+            return None;
+        }
+        Some(if strict {
+            Err(InterpreterError::TypeError {
+                expected: "writable global property".to_string(),
+                got: format!("the global object's read-only `{name}`"),
+            })
+        } else {
+            Ok(())
+        })
+    }
+
     fn put_runtime_name_with_status_labeled(
         &mut self,
         module: Option<&Ir3Module>,
@@ -15782,6 +16629,11 @@ impl InterpreterCore {
             .ok_or_else(|| InterpreterError::InternalError {
                 details: format!("unknown runtime name reference token {reference_token}"),
             })?;
+        if !matches!(reference, RuntimeNameReference::Resolved(_))
+            && let Some(outcome) = Self::put_read_only_global_value(name, strict)
+        {
+            return outcome;
+        }
         match reference {
             RuntimeNameReference::Resolved(binding) => {
                 self.put_resolved_runtime_name_binding(name, binding, value)
@@ -15794,7 +16646,7 @@ impl InterpreterCore {
                                 .to_string(),
                     });
                 }
-                self.put_realm_runtime_name_labeled(module, name, value, label)
+                self.put_realm_runtime_name_labeled(module, name, value, label, strict)
             }
             RuntimeNameReference::Unresolvable => {
                 self.put_unresolvable_runtime_name(module, name, value, label, strict)
@@ -15829,11 +16681,20 @@ impl InterpreterCore {
             process_spawn: None,
             host_effect_journal: None,
             timer_effect_authority: None,
+            entry_flow_label_ceiling: None,
             registers: SeedTrackedField::new(vec![Value::Undefined; max_regs]),
+            registers_value_bytes: std::cell::Cell::new(None),
+            register_labels_bytes: std::cell::Cell::new(None),
+            template_objects: BTreeMap::new(),
             call_stack: CallStack::default(),
             heap: SeedTrackedField::new(Heap::new()),
             estimated_memory_bytes,
             simple_callback_temporary_bytes: 0,
+            simple_callback_register_pool: Vec::new(),
+            spare_register_files: Vec::new(),
+            property_witness_scratch: Vec::new(),
+            call_argument_value_scratch: Vec::new(),
+            call_argument_label_scratch: Vec::new(),
             json_parse_temporary_bytes: 0,
             module_snapshot_in_flight_bytes: 0,
             temporarily_suspended_execution_bytes: 0,
@@ -15878,7 +16739,7 @@ impl InterpreterCore {
             register_base: 0,
             register_width: max_regs,
             native_run_loop_depth: 0,
-            stacked_register_frame_clear_width_high_water: 0,
+            register_dirty_end: 0,
             top_level_compact_tier1: None,
             entry_frame_widths: None,
             catch_frames: Vec::new(),
@@ -15997,10 +16858,12 @@ impl InterpreterCore {
             next_writable_completion_token: 0,
             promise_combinators: BTreeMap::new(),
             promise_combinator_watchers: BTreeMap::new(),
+            promise_combinators_bytes: 0,
+            promise_combinator_watchers_bytes: 0,
+            array_join_stack: BTreeSet::new(),
             next_promise_combinator_id: 0,
             module_state: ModuleState::new(),
             pending_async_module_import: None,
-            pending_cyclic_import_binding: None,
             active_cjs_context: None,
             current_module_specifier: None,
             active_generated_function_artifact: None,
@@ -16098,15 +16961,30 @@ impl InterpreterCore {
         self.timer_effect_authority = Some(authority);
     }
 
+    /// Record the entry module's flow label ceiling (bd-j8f7q), computed by
+    /// the embedder from the entry's lowering.
+    pub fn set_entry_flow_label_ceiling(&mut self, ceiling: Label) {
+        self.entry_flow_label_ceiling = Some(ceiling);
+    }
+
     fn join_object_mutation_label(
         &mut self,
         object_id: ObjectId,
         label: &Label,
     ) -> Result<(), InterpreterError> {
         let mut current = Some(object_id);
-        let mut visited = BTreeSet::new();
+        // The cycle guard of a Proxy chain; a store into an ordinary object
+        // ends after one step, so the set (one node allocation per store)
+        // starts only when the chain goes on (bd-9vouw.504).
+        let mut visited: Option<BTreeSet<ObjectId>> = None;
+        let mut first = true;
         while let Some(target) = current {
-            if !visited.insert(target) {
+            if first {
+                first = false;
+            } else if !visited
+                .get_or_insert_with(|| BTreeSet::from([object_id]))
+                .insert(target)
+            {
                 break;
             }
             self.join_direct_object_mutation_label(target, label)?;
@@ -16172,7 +17050,9 @@ impl InterpreterCore {
             .unwrap_or(Label::Public)
             .join(&self.binary_storage_label(*object_id));
         if let Some(object) = self.heap.get(object_id.0 as usize) {
-            for property in object.properties.values() {
+            // A join is order-insensitive: no per-key lookup for creation
+            // order (bd-9vouw.333).
+            for property in object.properties.values_unordered() {
                 label = label.join(&self.process_dynamic_value_label(property, visited));
             }
         }
@@ -17781,6 +18661,9 @@ impl InterpreterCore {
         capability: &str,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
+        if matches!(capability, "env:read" | "env:has") {
+            return self.dispatch_environment_hostcall(capability, args);
+        }
         // bd-3894s slice (2b): the `net:request` egress is handled by a single
         // shared seam — [`Self::perform_net_request_effect`] — used by BOTH the
         // immediate `http.get`/`fetch` forms (which reach here as a `net:request`
@@ -18322,9 +19205,9 @@ impl InterpreterCore {
     /// resolves `.write`/`.end` to their receiver-aware builtins
     /// ([`Self::collection_prototype_method`]); `.end()` performs the deferred
     /// egress via [`Self::perform_net_request_effect`]. The hostcall capability gate
-    /// already authorized `NetworkEgress` for the `net:client_request` tag at this
-    /// call site, so the later `.end()` egress is pre-authorized at the engine
-    /// capability layer.
+    /// authorizes construction through `net:client_request`. The later `.end()`
+    /// checks `net:request` again before changing request state or dispatching,
+    /// so a live containment decision can stop the deferred effect.
     fn dispatch_client_request_create(
         &mut self,
         args: RegRange,
@@ -19200,7 +20083,7 @@ impl InterpreterCore {
                 .get(key)
                 .map_or(0, |value| Self::estimate_property_entry_bytes(key, value))
         }))
-        .saturating_add(Self::estimate_brand_bytes(object.brand.as_ref()));
+        .saturating_add(Self::estimate_brand_bytes(object.brand.as_deref()));
         let scalar_property_bytes = |key: &str| {
             MEMORY_ESTIMATE_MAP_ENTRY_BYTES
                 .saturating_add(Self::estimate_string_bytes(key).saturating_mul(2))
@@ -19273,7 +20156,7 @@ impl InterpreterCore {
             for (key, value) in property_updates {
                 object.properties.insert(key.to_string(), value);
             }
-            object.brand = Some(tls_brand);
+            object.brand = Some(Box::new(tls_brand));
         });
         self.gc_write_barrier(socket);
         Ok(())
@@ -25273,7 +26156,7 @@ impl InterpreterCore {
                 .properties
                 .insert((*key).to_string(), value.clone());
         }
-        projected_object.brand = Some(JsString::from("Writable"));
+        projected_object.brand = Some(Box::new(JsString::from("Writable")));
         let object_bytes = Self::estimate_heap_object_bytes(&projected_object);
         let state_bytes = Self::estimate_writable_state_bytes(&state);
         let requested_bytes = self
@@ -25398,7 +26281,7 @@ impl InterpreterCore {
                 .properties
                 .insert((*key).to_string(), value.clone());
         }
-        projected_object.brand = Some(JsString::from(brand));
+        projected_object.brand = Some(Box::new(JsString::from(brand)));
         let readable_bytes = Self::estimate_readable_from_state_bytes(&readable_state);
         let writable_bytes = Self::estimate_writable_state_bytes(&writable_state);
         let object_bytes = Self::estimate_heap_object_bytes(&projected_object);
@@ -25567,7 +26450,7 @@ impl InterpreterCore {
                 .properties
                 .insert((*key).to_string(), value.clone());
         }
-        projected_object.brand = Some(JsString::from(brand));
+        projected_object.brand = Some(Box::new(JsString::from(brand)));
         let readable_bytes = Self::estimate_readable_from_state_bytes(&readable_state);
         let writable_bytes = Self::estimate_writable_state_bytes(&writable_state);
         let object_bytes = Self::estimate_heap_object_bytes(&projected_object);
@@ -25677,18 +26560,31 @@ impl InterpreterCore {
         let writable_view = (self.writable_streams.contains_key(&object_id)
             || self.writable_terminal_states.contains_key(&object_id))
             && Self::is_writable_state_view_key(key);
-        let binary_slot = self.heap.get(object_id.0 as usize).is_some_and(|object| {
-            if object.typed_array.is_some() {
-                TYPED_ARRAY_SLOT_KEYS.contains(&key)
-            } else if object.data_view.is_some() {
-                DATA_VIEW_SLOT_KEYS.contains(&key)
-            } else {
-                object.array_buffer.is_some() && ARRAY_BUFFER_SLOT_KEYS.contains(&key)
-            }
-        });
+        let binary_slot = self
+            .heap
+            .get(object_id.0 as usize)
+            .is_some_and(|object| Self::binary_slot_key(object, key));
         // The internal slots of events, targets and signals (bd-9vouw.170).
         let event_slot = event_target::EVENT_FAMILY_SLOT_KEYS.contains(&key);
-        !(writable_view || binary_slot || event_slot)
+        // Iterator helpers' and matchAll iterators' slots: Reflect.ownKeys of
+        // `[].values().map(f)` listed ten of them (bd-9vouw.476).
+        let iterator_slot = iterator_helpers::ITERATOR_HELPER_SLOT_KEYS.contains(&key)
+            || iterator_helpers::REGEXP_STRING_ITERATOR_SLOT_KEYS.contains(&key);
+        !(writable_view || binary_slot || event_slot || iterator_slot)
+    }
+
+    /// Whether `key` is one of the heap entries through which `object`, a
+    /// typed array, DataView or ArrayBuffer, keeps an internal slot or the
+    /// value of a prototype accessor (`length`, `byteLength`, ...) rather
+    /// than an own property.
+    fn binary_slot_key(object: &HeapObject, key: &str) -> bool {
+        if object.typed_array.is_some() {
+            TYPED_ARRAY_SLOT_KEYS.contains(&key)
+        } else if object.data_view.is_some() {
+            DATA_VIEW_SLOT_KEYS.contains(&key)
+        } else {
+            object.array_buffer.is_some() && ARRAY_BUFFER_SLOT_KEYS.contains(&key)
+        }
     }
 
     fn own_runtime_property_visible(&self, object_id: ObjectId, key: &JsString) -> bool {
@@ -25739,7 +26635,7 @@ impl InterpreterCore {
         if let Some(view) = self
             .heap
             .get(object_id.0 as usize)
-            .and_then(|object| object.typed_array.as_ref())
+            .and_then(|object| object.typed_array.as_deref())
             && key
                 .as_str()
                 .and_then(Self::typed_array_integer_index_key)
@@ -29164,7 +30060,7 @@ impl InterpreterCore {
                 .properties
                 .insert((*key).to_string(), value.clone());
         }
-        projected_object.brand = Some(JsString::from(READABLE_BRAND));
+        projected_object.brand = Some(Box::new(JsString::from(READABLE_BRAND)));
         let object_bytes = Self::estimate_heap_object_bytes(&projected_object);
         let requested_bytes = self
             .estimated_memory_bytes
@@ -31135,7 +32031,7 @@ impl InterpreterCore {
             )?;
             return Ok(decoded.map(|decoded| {
                 let units = match &decoded {
-                    Value::Str(text) => text.encode_utf16().count(),
+                    Value::Str(text) => text.utf16_len(),
                     _ => 0,
                 };
                 (decoded, units)
@@ -33724,6 +34620,7 @@ impl InterpreterCore {
         )
     }
 
+    #[inline]
     fn live_execution_seed_reserved_bytes(&self) -> u64 {
         if self
             .execution_seed_reservation_ledger
@@ -33738,6 +34635,7 @@ impl InterpreterCore {
         }
     }
 
+    #[inline]
     fn total_memory_bytes_from_base(&self, base_bytes: u64) -> u64 {
         base_bytes
             .saturating_add(self.live_execution_seed_reserved_bytes())
@@ -33845,7 +34743,50 @@ impl InterpreterCore {
     // ---- THE ONLY WAY to mutate a seed-surface field ----
     pub(crate) fn mutate_registers<R>(&mut self, f: impl FnOnce(&mut Vec<Value>) -> R) -> R {
         self.before_seed_surface_write();
+        self.registers_value_bytes.set(None);
         f(&mut self.registers.value)
+    }
+
+    /// [`Self::mutate_registers`] for a write whose effect on
+    /// [`Self::registers_memory_bytes`] the caller has computed: values of
+    /// `released` bytes leave the file and values of `added` bytes enter it
+    /// (growing it with `Undefined` adds none). A cached sum moves by that
+    /// delta instead of being dropped, so the next isolated-callback or
+    /// inline-call preflight does not walk the whole file.
+    fn mutate_registers_by_bytes<R>(
+        &mut self,
+        released: u64,
+        added: u64,
+        f: impl FnOnce(&mut Vec<Value>) -> R,
+    ) -> R {
+        let cached = self.registers_value_bytes.get();
+        let result = self.mutate_registers(f);
+        self.registers_value_bytes
+            .set(cached.map(|bytes| bytes.saturating_sub(released).saturating_add(added)));
+        result
+    }
+
+    /// Install a whole register file whose [`Self::registers_memory_bytes`]
+    /// is `value_bytes` when the caller knows it (a fresh file of
+    /// `Undefined` is 0; a restored snapshot carries its own), else `None`.
+    fn install_register_file(&mut self, registers: Vec<Value>, value_bytes: Option<u64>) {
+        self.note_registers_written_to(registers.len());
+        self.registers = SeedTrackedField::new(registers);
+        self.registers_value_bytes.set(value_bytes);
+    }
+
+    /// A write to physical register `actual_reg` (bd-9vouw.499).
+    #[inline]
+    fn note_register_written(&mut self, actual_reg: usize) {
+        if actual_reg >= self.register_dirty_end {
+            self.register_dirty_end = actual_reg + 1;
+        }
+    }
+
+    /// Writes to physical registers below `end` (bd-9vouw.499).
+    #[inline]
+    fn note_registers_written_to(&mut self, end: usize) {
+        self.register_dirty_end = self.register_dirty_end.max(end);
     }
 
     pub(crate) fn mutate_heap<R>(&mut self, f: impl FnOnce(&mut Heap) -> R) -> R {
@@ -34075,7 +35016,9 @@ impl InterpreterCore {
             restore
         {
             self.before_seed_surface_write();
+            self.note_registers_written_to(registers.len());
             self.registers.value = registers;
+            self.registers_value_bytes.set(None);
             self.heap.value = heap;
             self.function_prototypes.value = function_prototypes;
             // A restored map may hold built-in backing objects, and a
@@ -34124,6 +35067,7 @@ impl InterpreterCore {
             });
         }
         let actual_reg = self.register_base + reg as usize;
+        self.note_register_written(actual_reg);
         let Some(previous_label) = self.register_labels.get(actual_reg) else {
             return Err(InterpreterError::RegisterOutOfBounds {
                 register: reg,
@@ -34164,6 +35108,7 @@ impl InterpreterCore {
             label
         };
         self.register_labels[actual_reg] = next_label;
+        self.adjust_register_labels_bytes(previous_label_bytes, next_label_bytes);
         self.estimated_memory_bytes = requested_bytes;
         Ok(())
     }
@@ -34182,7 +35127,7 @@ impl InterpreterCore {
     fn binary_storage_label_ref(&self, object_id: ObjectId) -> Option<&Label> {
         self.array_buffer_id_for_object(object_id)
             .and_then(|buffer_id| self.heap.get(buffer_id.0 as usize))
-            .and_then(|object| object.array_buffer.as_ref())
+            .and_then(|object| object.array_buffer.as_deref())
             .map(|backing| &backing.label)
     }
 
@@ -34336,7 +35281,7 @@ impl InterpreterCore {
         let Some(previous_label) = self
             .heap
             .get(buffer_id.0 as usize)
-            .and_then(|object| object.array_buffer.as_ref())
+            .and_then(|object| object.array_buffer.as_deref())
             .map(|backing| backing.label.clone())
         else {
             return Ok(());
@@ -34349,7 +35294,7 @@ impl InterpreterCore {
         self.mutate_heap(|heap| {
             if let Some(backing) = heap
                 .get_mut(buffer_id.0 as usize)
-                .and_then(|object| object.array_buffer.as_mut())
+                .and_then(|object| object.array_buffer.as_deref_mut())
             {
                 backing.label = next_label;
             }
@@ -34390,6 +35335,12 @@ impl InterpreterCore {
                 .0
                 .as_deref()
                 .is_some_and(|name| name.starts_with("set")))
+            || (builtin.kind == Kind::BufferNumericMethod
+                && builtin
+                    .module_specifier
+                    .0
+                    .as_deref()
+                    .is_some_and(|name| name.starts_with("write")))
             || (builtin.kind == Kind::TypedArrayMethod
                 && matches!(
                     builtin.module_specifier.0.as_deref(),
@@ -34748,6 +35699,7 @@ impl InterpreterCore {
         }
 
         if let Some(final_label) = final_label {
+            self.note_register_written(actual_array_register);
             let Some(target_label) = self.register_labels.get_mut(actual_array_register) else {
                 self.mutate_heap(|heap| {
                     if let Some(target) = heap.get_mut(heap_index) {
@@ -34766,6 +35718,7 @@ impl InterpreterCore {
             let previous_label = std::mem::replace(target_label, Label::Public);
             drop(previous_label);
             *target_label = final_label;
+            self.adjust_register_labels_bytes(previous_label_bytes, final_label_bytes);
         }
         self.estimated_memory_bytes = requested_bytes;
         Ok(())
@@ -34818,6 +35771,7 @@ impl InterpreterCore {
     /// HomeObject-bound closure. A method selected through a secret definition
     /// key/prototype must taint literals, throws, and zero-argument effects in
     /// its body, not only the explicit argument registers it happens to read.
+    #[inline]
     fn active_execution_context_label(&self) -> Option<&Label> {
         let mut winner = self.active_inline_callback_context_label.as_ref();
         // bd-9vouw.72: the frames' first strict maximum, kept by the call
@@ -34890,12 +35844,17 @@ impl InterpreterCore {
         Ok(joined.clone())
     }
 
+    #[inline]
     fn join_owned_label_with_temporary_budget(
         &self,
         owned: Label,
         other: &Label,
     ) -> Result<Label, InterpreterError> {
-        if &owned >= other {
+        // Public is the bottom of Label's order (level 0, before any
+        // same-level Custom): `owned >= Public` always holds, so the usual
+        // join with a Public operand skips the out-of-line comparison
+        // (bd-9vouw.504).
+        if matches!(other, Label::Public) || &owned >= other {
             return Ok(owned);
         }
         drop(owned);
@@ -35094,6 +36053,7 @@ impl InterpreterCore {
         self.apply_memory_component_delta(previous_bytes, Self::estimate_value_bytes(&value))?;
         self.last_pre_run_seed = None;
         self.last_post_run_epoch = None;
+        self.note_register_written(reg as usize);
         self.mutate_registers(|r| r[reg as usize] = value);
         Ok(())
     }
@@ -35729,11 +36689,19 @@ impl InterpreterCore {
     }
 
     /// Instruction-boundary check for an armed state capture. O(1) when
-    /// disarmed or already captured.
+    /// disarmed or already captured: the dispatch loop runs it before every
+    /// instruction, so the disarmed check is inlined there and the rest is
+    /// out of line (bd-9vouw.329).
+    #[inline]
     fn check_state_capture_boundary(&mut self) {
-        let Some(requested) = self.state_capture_tick else {
-            return;
-        };
+        if let Some(requested) = self.state_capture_tick {
+            self.capture_state_at_armed_boundary(requested);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn capture_state_at_armed_boundary(&mut self, requested: u64) {
         let seen = self.nondeterminism_event_count();
         if seen < requested {
             return;
@@ -36007,6 +36975,11 @@ impl InterpreterCore {
         // perf: hot path - avoid double clone of source_label
         let entry_specifier = module.header.source_label.clone();
         self.ensure_module_record(module, &entry_specifier)?;
+        if let Some(ceiling) = self.entry_flow_label_ceiling.clone()
+            && let Some(record) = self.module_state.modules.get_mut(&entry_specifier)
+        {
+            record.flow_label_ceiling = Some(ceiling);
+        }
         self.entry_module_specifier = Some(entry_specifier.clone());
         self.current_module_specifier = Some(entry_specifier);
         self.active_generated_function_artifact = None;
@@ -36097,6 +37070,9 @@ impl InterpreterCore {
         self.event_loop = crate::promise_model::EventLoop::new();
         self.promise_combinators.clear();
         self.promise_combinator_watchers.clear();
+        self.promise_combinators_bytes = 0;
+        self.promise_combinator_watchers_bytes = 0;
+        self.array_join_stack.clear();
         self.promise_in_flight_task_bytes = 0;
         self.promise_reaction_callables.clear();
         self.next_promise_reaction_callable_id = PROMISE_REACTION_CALLABLE_BASE;
@@ -36114,8 +37090,8 @@ impl InterpreterCore {
         self.gc_remembered_set.clear();
         self.module_state.modules.clear();
         self.module_state.retained_program_bytes = 0;
+        self.module_state.live_exports.clear();
         self.pending_async_module_import = None;
-        self.pending_cyclic_import_binding = None;
         self.active_cjs_context = None;
 
         // The clears above released many independently-charged memory
@@ -36305,7 +37281,12 @@ impl InterpreterCore {
     }
 
     fn module_execution_snapshot_memory_bytes(&self) -> u64 {
-        Self::estimate_value_vec_bytes(&self.registers)
+        // `estimate_value_vec_bytes(&self.registers)`, with the values' share
+        // from the cached sum.
+        u64::try_from(self.registers.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(std::mem::size_of::<Value>() as u64)
+            .saturating_add(self.registers_memory_bytes())
             .saturating_add(self.generator_delegation_memory_bytes())
             .saturating_add(
                 u64::try_from(self.register_labels.len())
@@ -36548,16 +37529,83 @@ impl InterpreterCore {
     }
 
     fn snapshot_module_execution(&mut self) -> Result<ModuleExecutionSnapshot, InterpreterError> {
+        let accounted_bytes = self.charge_module_execution_snapshot()?;
+        let registers = self.registers.to_vec();
+        let register_bytes = self.registers_memory_bytes();
+        let register_labels = self.register_labels.clone();
+        let register_label_bytes = self.register_labels_memory_bytes();
+        Ok(self.module_execution_snapshot(
+            accounted_bytes,
+            registers,
+            register_bytes,
+            register_labels,
+            register_label_bytes,
+        ))
+    }
+
+    /// [`Self::snapshot_module_execution`] for an isolated callback, which
+    /// starts on a fresh register file with every label Public. The caller's
+    /// registers and labels move into the snapshot rather than being cloned
+    /// there and then overwritten in place. What is left is an `Undefined`
+    /// file of `max_registers` slots and a Public label file of the same length
+    /// as before, as the overwrite left them.
+    fn isolate_module_execution(&mut self) -> Result<ModuleExecutionSnapshot, InterpreterError> {
+        let accounted_bytes = self.charge_module_execution_snapshot()?;
+        // The spare files are cleared throughout (bd-9vouw.500).
+        let (mut fresh_registers, mut fresh_labels) =
+            self.take_spare_register_files(self.config.max_registers as usize);
+        fresh_registers.resize(self.config.max_registers as usize, Value::Undefined);
+        fresh_labels.resize(self.register_labels.len(), Label::Public);
+        let register_bytes = self.registers_memory_bytes();
+        let registers = std::mem::replace(&mut self.registers.value, fresh_registers);
+        // `Undefined` carries no bytes beyond its slot.
+        self.registers_value_bytes.set(Some(0));
+        let register_label_bytes = self.register_labels_memory_bytes();
+        let register_labels = std::mem::replace(&mut self.register_labels, fresh_labels);
+        // A Public label owns no bytes beyond its slot.
+        self.register_labels_bytes.set(Some(0));
+        let snapshot = self.module_execution_snapshot(
+            accounted_bytes,
+            registers,
+            register_bytes,
+            register_labels,
+            register_label_bytes,
+        );
+        // The fresh files are clear throughout (bd-9vouw.499).
+        self.register_dirty_end = 0;
+        Ok(snapshot)
+    }
+
+    /// Charge a module-execution snapshot of the current state to the budget
+    /// and return its accounted bytes.
+    fn charge_module_execution_snapshot(&mut self) -> Result<u64, InterpreterError> {
         let accounted_bytes = self.module_execution_snapshot_memory_bytes();
         self.apply_memory_component_delta(0, accounted_bytes)?;
         self.module_snapshot_in_flight_bytes = self
             .module_snapshot_in_flight_bytes
             .saturating_add(accounted_bytes);
-        Ok(ModuleExecutionSnapshot {
+        Ok(accounted_bytes)
+    }
+
+    /// The snapshot of the current state with `registers` (whose
+    /// [`Self::registers_memory_bytes`] is `register_bytes`) and
+    /// `register_labels` as its register and label files.
+    fn module_execution_snapshot(
+        &self,
+        accounted_bytes: u64,
+        registers: Vec<Value>,
+        register_bytes: u64,
+        register_labels: Vec<Label>,
+        register_label_bytes: u64,
+    ) -> ModuleExecutionSnapshot {
+        ModuleExecutionSnapshot {
             accounted_bytes,
-            registers: self.registers.clone(),
+            registers,
+            register_bytes,
             generator_delegation: self.generator_delegation.clone(),
-            register_labels: self.register_labels.clone(),
+            register_labels,
+            register_label_bytes,
+            register_dirty_end: self.register_dirty_end,
             active_inline_callback_context_label: self.active_inline_callback_context_label.clone(),
             call_stack: self.call_stack.to_vec(),
             ip: self.ip,
@@ -36575,7 +37623,7 @@ impl InterpreterCore {
             pending_captures: self.pending_captures.clone(),
             current_module_specifier: self.current_module_specifier.clone(),
             active_generated_function_artifact: self.active_generated_function_artifact,
-        })
+        }
     }
 
     fn restore_module_execution(
@@ -36589,9 +37637,14 @@ impl InterpreterCore {
         } else {
             0
         };
-        self.registers = SeedTrackedField::new(snapshot.registers);
+        self.install_register_file(snapshot.registers, Some(snapshot.register_bytes));
         self.generator_delegation = snapshot.generator_delegation;
-        self.register_labels = snapshot.register_labels;
+        self.install_register_labels(
+            snapshot.register_labels,
+            Some(snapshot.register_label_bytes),
+        );
+        // No one writes the files while they are parked (bd-9vouw.499).
+        self.register_dirty_end = snapshot.register_dirty_end;
         self.active_inline_callback_context_label = snapshot.active_inline_callback_context_label;
         self.call_stack
             .replace(snapshot.call_stack, &mut self.closures.cold_cells);
@@ -36647,8 +37700,7 @@ impl InterpreterCore {
             r.clear();
             r.resize(max_regs, Value::Undefined);
         });
-        self.register_labels.clear();
-        self.register_labels.resize(max_regs, Label::Public);
+        self.install_register_labels(vec![Label::Public; max_regs], Some(0));
         self.call_stack.clear(&mut self.closures.cold_cells);
         self.ip = 0;
         self.register_base = 0;
@@ -37127,6 +38179,7 @@ impl InterpreterCore {
                     NON_ENUMERABLE_DATA_ATTRIBUTES,
                 )?;
             }
+            self.seed_read_only_global_values(global)?;
             entries.push(("globalThis", Value::Object(global)));
             entries.push(("global", Value::Object(global)));
             let registry_bytes = Self::projected_generated_function_realm_registry_bytes();
@@ -37437,6 +38490,14 @@ impl InterpreterCore {
                 "stringify",
                 Value::BuiltinFunction(BuiltinFunction::static_hostcall("builtin:JsonStringify")),
             ),
+            (
+                "rawJSON",
+                Value::BuiltinFunction(BuiltinFunction::static_hostcall("builtin:JsonRawJson")),
+            ),
+            (
+                "isRawJSON",
+                Value::BuiltinFunction(BuiltinFunction::static_hostcall("builtin:JsonIsRawJson")),
+            ),
         ])?;
         self.mark_builtin_members_non_enumerable(json)?;
         self.set_object_runtime_property(
@@ -37578,6 +38639,7 @@ impl InterpreterCore {
             // the way theirs do (PREDECLARED_RUNTIME_GLOBALS in lowering).
             self.inject_runtime_global_binding(name, Value::Object(global))?;
         }
+        self.seed_read_only_global_values(global)?;
         self.realm_global_object = Some(global);
         Ok(())
     }
@@ -37985,7 +39047,7 @@ impl InterpreterCore {
         if Self::is_bare_module_specifier(specifier) {
             let candidate = self.resolve_bare_import_specifier(specifier)?;
             let canonical = self.canonicalize_module_candidate(specifier, &candidate)?;
-            return Ok(canonical.display().to_string());
+            return Ok(self.module_key_for_canonical_path(&canonical));
         }
         let resolved = self.resolve_specifier_base(specifier)?;
         let candidate = self.resolve_module_candidate(&resolved).ok_or_else(|| {
@@ -37995,7 +39057,26 @@ impl InterpreterCore {
             }
         })?;
         let canonical = self.canonicalize_module_candidate(specifier, &candidate)?;
-        Ok(canonical.display().to_string())
+        Ok(self.module_key_for_canonical_path(&canonical))
+    }
+
+    /// The module-map key of a resolved module file: the entry module's own
+    /// specifier when the file is the entry's (bd-9vouw.411). The entry is
+    /// recorded under its source label, the path as the caller gave it
+    /// (`app.mjs`, `./app.mjs`, `/dir/./app.mjs`), while imports and
+    /// `require` calls resolve to canonical paths, so a cycle back to the
+    /// entry missed its record and loaded and evaluated the entry a second
+    /// time (its top-level code ran twice, and the first run saw the cycle's
+    /// exports missing).
+    fn module_key_for_canonical_path(&self, canonical: &Path) -> String {
+        if let Some(entry) = self.entry_module_specifier.as_deref()
+            && Path::new(entry)
+                .canonicalize()
+                .is_ok_and(|entry_path| entry_path == canonical)
+        {
+            return entry.to_string();
+        }
+        canonical.display().to_string()
     }
 
     /// Not a relative (`./`, `../`) or absolute path: a package name, a
@@ -38032,7 +39113,7 @@ impl InterpreterCore {
             self.resolve_bare_require_specifier(specifier)?
         };
         let canonical = self.canonicalize_module_candidate(specifier, &candidate)?;
-        Ok(canonical.display().to_string())
+        Ok(self.module_key_for_canonical_path(&canonical))
     }
 
     fn resolve_module_candidate(&self, candidate: &Path) -> Option<PathBuf> {
@@ -38068,6 +39149,37 @@ impl InterpreterCore {
             if index_js.is_file() {
                 return Some(index_js);
             }
+        }
+        // TypeScript sources (bd-9vouw.431): a project names a module
+        // without its extension (`./lib`, `./app.config`, `./dir` for
+        // `dir/index.ts`) or by the JavaScript file it compiles to
+        // (`./lib.js` for `lib.ts`, `./m.mjs` for `m.mts`: TypeScript's
+        // NodeNext spelling), as Bun resolves. Only a specifier no
+        // JavaScript file answers reaches these probes.
+        let typescript_files = match candidate
+            .extension()
+            .and_then(|extension| extension.to_str())
+        {
+            Some("js") => vec![
+                candidate.with_extension("ts"),
+                candidate.with_extension("tsx"),
+            ],
+            Some("jsx") => vec![candidate.with_extension("tsx")],
+            Some("mjs") => vec![candidate.with_extension("mts")],
+            Some("cjs") => vec![candidate.with_extension("cts")],
+            _ => ["ts", "tsx", "mts", "cts"]
+                .into_iter()
+                .map(|extension| package_resolution::with_appended_extension(candidate, extension))
+                .collect(),
+        };
+        if let Some(path) = typescript_files.into_iter().find(|path| path.is_file()) {
+            return Some(path);
+        }
+        if candidate.is_dir() {
+            return ["index.ts", "index.tsx"]
+                .into_iter()
+                .map(|index| candidate.join(index))
+                .find(|path| path.is_file());
         }
         None
     }
@@ -38145,7 +39257,8 @@ impl InterpreterCore {
                 exports: BTreeMap::new(),
                 star_exports: BTreeMap::new(),
                 flow_label_ceiling: None,
-                pending_import_bindings: BTreeMap::new(),
+                import_bindings: BTreeMap::new(),
+                star_reexporters: BTreeSet::new(),
                 cjs_module_object: None,
                 compiled_module,
                 evaluation_promise: None,
@@ -38156,6 +39269,19 @@ impl InterpreterCore {
             .module_state
             .retained_program_bytes
             .saturating_add(retained_program_bytes);
+        // ES2020 26.3.1: a namespace's @@toStringTag is "Module", neither
+        // writable, enumerable nor configurable (bd-9vouw.399).
+        let tag = RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id());
+        self.set_object_runtime_property(namespace_object, tag.clone(), Value::str("Module"))?;
+        self.set_own_property_attributes(
+            namespace_object,
+            &tag,
+            PropertyAttributes {
+                writable: false,
+                enumerable: false,
+                configurable: false,
+            },
+        )?;
         Ok(namespace_object)
     }
 
@@ -38367,8 +39493,12 @@ impl InterpreterCore {
             match &record.flow_label_ceiling {
                 Some(ceiling) => Self::check_import_flow_bound(resolved, ceiling, import_bound)?,
                 // Still being lowered (a cycle reached it first): its bound is
-                // unknown, so a bounded importer cannot rely on it.
-                None if import_bound.is_some() => {
+                // unknown, so a bounded importer cannot rely on it. A module
+                // that failed to load runs no code, and its error is thrown
+                // again below as on the first import (bd-9vouw.389).
+                None if import_bound.is_some()
+                    && !matches!(record.status, ModuleRuntimeStatus::Failed(_)) =>
+                {
                     return Err(InterpreterError::ModuleLoweringFailed {
                         specifier: resolved.to_string(),
                         error: "module flow label ceiling is not known yet (bd-j8f7q)".to_string(),
@@ -38388,9 +39518,18 @@ impl InterpreterCore {
                 }
                 ModuleRuntimeStatus::Evaluating | ModuleRuntimeStatus::Evaluated => None,
                 ModuleRuntimeStatus::Failed(reason) => {
-                    return Err(InterpreterError::ModuleEvaluationFailed {
-                        specifier: resolved.to_string(),
-                        reason: reason.clone(),
+                    // A module whose source was invalid fails every import
+                    // with its SyntaxError again (bd-9vouw.389).
+                    let reason = reason.clone();
+                    let syntax_message = reason
+                        .strip_prefix(MODULE_SYNTAX_ERROR_REASON_PREFIX)
+                        .map(str::to_string);
+                    return Err(match syntax_message {
+                        Some(message) => self.throw_js_error("SyntaxError", message),
+                        None => InterpreterError::ModuleEvaluationFailed {
+                            specifier: resolved.to_string(),
+                            reason,
+                        },
                     });
                 }
             };
@@ -38407,12 +39546,42 @@ impl InterpreterCore {
                 specifier: resolved.to_string(),
                 error: error.to_string(),
             })?;
-        let source = if is_cjs
-            && Path::new(resolved)
-                .extension()
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+        let is_json = Path::new(resolved)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("json"));
+        let source = match (is_json, is_cjs) {
+            (true, true) => Self::json_module_source(&source)?,
+            // An ES module import of a `.json` file (`with { type: 'json' }`,
+            // bd-9vouw.387) is a JSON module: its only export is `default`.
+            (true, false) => Self::json_es_module_source(&source)?,
+            (false, _) => source,
+        };
+        // An imported TypeScript file (`.ts`, `.tsx`, `.mts`, `.cts`) is
+        // normalized as an entry file is: the parser reads JavaScript, so a
+        // type annotation or `export interface` failed the import as
+        // unsupported syntax (bd-9vouw.430). A file of declarations only
+        // is empty once its types are erased: a module with no code and no
+        // exports.
+        let source = if !is_json
+            && crate::ts_normalization::source_label_has_typescript_extension(resolved)
         {
-            Self::json_module_source(&source)?
+            match crate::ts_normalization::prepare_source_entry_for_public_entrypoints(
+                &source,
+                resolved,
+                &self.trace_id,
+                "module-import",
+                "baseline_interpreter",
+            ) {
+                Ok(prepared) => prepared.prepared_source,
+                Err(crate::ts_normalization::TsNormalizationError::EmptySource) => String::new(),
+                Err(error) => {
+                    self.fail_module_record(resolved, &error.to_string());
+                    return Err(InterpreterError::ModuleParseFailed {
+                        specifier: resolved.to_string(),
+                        error: error.to_string(),
+                    });
+                }
+            }
         } else {
             source
         };
@@ -38425,16 +39594,49 @@ impl InterpreterCore {
         } else {
             ParseGoal::Module
         };
-        let syntax_tree = CanonicalEs2020Parser
-            .parse_with_options(
-                parser_source,
-                parse_goal,
-                &self.config.module_parser_options,
-            )
-            .map_err(|error| InterpreterError::ModuleParseFailed {
-                specifier: resolved.to_string(),
-                error: error.to_string(),
-            })?;
+        // A module whose source is not valid (a parse error or an early
+        // error) is a SyntaxError the importer can catch, as Node's loader
+        // throws for `require` and rejects `import()` with (bd-9vouw.389);
+        // its record fails, so importing it again fails again. Unsupported
+        // syntax and every policy refusal stay uncatchable.
+        let syntax_tree = match CanonicalEs2020Parser.parse_with_options(
+            parser_source,
+            parse_goal,
+            &self.config.module_parser_options,
+        ) {
+            Ok(syntax_tree) => syntax_tree,
+            // An empty file, or one holding only comments, white space or
+            // TypeScript declarations, is a module with no code and no
+            // exports, which Node and Bun load (bd-9vouw.430); the parser
+            // reports it as an empty source.
+            Err(error) if error.code == ParseErrorCode::EmptySource => crate::ast::SyntaxTree {
+                goal: parse_goal,
+                body: Vec::new(),
+                span: crate::ast::SourceSpan::new(0, 0, 1, 1, 1, 1),
+            },
+            Err(error) => {
+                return Err(
+                    // InvalidGoal: an import or export declaration in a
+                    // CommonJS (script) module, a SyntaxError in Node too.
+                    if matches!(
+                        error.code,
+                        ParseErrorCode::StrictModeWithStatement
+                            | ParseErrorCode::AwaitOutsideAsync
+                            | ParseErrorCode::InvalidClassElementName
+                            | ParseErrorCode::InvalidSyntax
+                            | ParseErrorCode::InvalidGoal
+                    ) {
+                        self.fail_module_with_syntax_error(resolved, error.message.clone())
+                    } else {
+                        self.fail_module_record(resolved, &error.to_string());
+                        InterpreterError::ModuleParseFailed {
+                            specifier: resolved.to_string(),
+                            error: error.to_string(),
+                        }
+                    },
+                );
+            }
+        };
         // An empty file (or one holding only comments) is a module with no
         // code and no exports, which Node loads; lowering refuses an empty
         // body, so it lowers as one empty block.
@@ -38462,10 +39664,23 @@ impl InterpreterCore {
         } else {
             lower_ir0_to_ir3(&ir0, &lowering_ctx)
         };
-        let lowering_output = lowered.map_err(|error| InterpreterError::ModuleLoweringFailed {
-            specifier: resolved.to_string(),
-            error: error.to_string(),
-        })?;
+        let lowering_output = match lowered {
+            Ok(lowering_output) => lowering_output,
+            Err(error) => {
+                return Err(match error {
+                    crate::lowering_pipeline::LoweringPipelineError::SemanticViolation(
+                        violation,
+                    ) => self.fail_module_with_syntax_error(resolved, violation.to_string()),
+                    error => {
+                        self.fail_module_record(resolved, &error.to_string());
+                        InterpreterError::ModuleLoweringFailed {
+                            specifier: resolved.to_string(),
+                            error: error.to_string(),
+                        }
+                    }
+                });
+            }
+        };
         let ceiling = crate::lowering_pipeline::lowered_unit_flow_label_ceiling(
             &lowering_output.ir2,
             lowering_ctx.host_io_exception_provenance,
@@ -38496,7 +39711,7 @@ impl InterpreterCore {
                     };
                 }
                 if !async_evaluating {
-                    self.sort_module_namespace_keys(resolved);
+                    self.sort_module_namespace_keys(resolved)?;
                 }
                 if async_evaluating {
                     let promise = self
@@ -38549,6 +39764,29 @@ impl InterpreterCore {
             && Self::unit_declares_bounded_imports(module))
         .then_some(crate::lowering_pipeline::IFC_BOUNDED_IMPORT_LABEL);
         self.load_module_resolved(module, &resolved, is_cjs, import_bound.as_ref())
+    }
+
+    /// Mark a module whose load failed before evaluation, so a later import
+    /// of it fails with the same reason instead of seeing an empty record.
+    fn fail_module_record(&mut self, resolved: &str, reason: &str) {
+        if let Some(record) = self.module_state.modules.get_mut(resolved) {
+            record.status = ModuleRuntimeStatus::Failed(reason.to_string());
+        }
+    }
+
+    /// Fail a module whose source is invalid: its record remembers the
+    /// SyntaxError, which this import and every later one throws
+    /// (bd-9vouw.389).
+    fn fail_module_with_syntax_error(
+        &mut self,
+        resolved: &str,
+        message: String,
+    ) -> InterpreterError {
+        self.fail_module_record(
+            resolved,
+            &format!("{MODULE_SYNTAX_ERROR_REASON_PREFIX}{message}"),
+        );
+        self.throw_js_error("SyntaxError", message)
     }
 
     /// Whether `module` was lowered under the bounded-imports contract
@@ -38743,6 +39981,33 @@ impl InterpreterCore {
         Ok(Value::Object(object))
     }
 
+    /// querystring's supported native methods as ordinary mutable properties.
+    /// Caching in the realm's traced prototype roots keeps module and function
+    /// identity stable across literal, dynamic and cross-file require calls.
+    /// Calling an extracted method still enters `call_static_hostcall`, which
+    /// checks the caller's Builtin capability and joins its operand labels.
+    fn querystring_core_module(&mut self) -> Result<Value, InterpreterError> {
+        if let Some(object) = self.builtin_prototypes.get(QUERYSTRING_MODULE_KEY) {
+            return Ok(Value::Object(*object));
+        }
+        let members: Vec<(&str, Value)> = crate::lowering_pipeline::QUERYSTRING_METHOD_NAMES
+            .iter()
+            .map(|&name| {
+                let tag = crate::lowering_pipeline::querystring_method_capability(name)
+                    .expect("querystring module exports have native capability tags");
+                (
+                    name,
+                    Value::BuiltinFunction(BuiltinFunction::static_hostcall(tag)),
+                )
+            })
+            .collect();
+        let object = self.alloc_object_with_properties(&members)?;
+        self.mutate_builtin_prototypes(|prototypes| {
+            prototypes.insert(QUERYSTRING_MODULE_KEY.to_string(), object);
+        });
+        Ok(Value::Object(object))
+    }
+
     /// `require('events')` (bd-9vouw.210): as in Node, the EventEmitter
     /// constructor itself, whose own properties hold `EventEmitter` (itself),
     /// `once`, `defaultMaxListeners` and `errorMonitor`. The events facade
@@ -38814,6 +40079,9 @@ impl InterpreterCore {
         }
         if matches!(specifier, "os" | "node:os") {
             return self.os_core_module();
+        }
+        if matches!(specifier, "querystring" | "node:querystring") {
+            return self.querystring_core_module();
         }
         if matches!(specifier, "events" | "node:events") {
             return self.events_core_module(module);
@@ -39267,7 +40535,7 @@ impl InterpreterCore {
         }
         Ok(rendered_argument_bytes
             .saturating_add(u64::from(args.count))
-            .saturating_add("function anonymous() {\n\n}".len() as u64))
+            .saturating_add("function anonymous(\n) {\n\n}".len() as u64))
     }
 
     fn generated_function_compilation_scratch_bytes(
@@ -39343,6 +40611,26 @@ impl InterpreterCore {
         module: &Ir3Module,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
+        self.construct_dynamic_function(module, args, DynamicFunctionKind::Normal)
+    }
+
+    /// CreateDynamicFunction (ES2020 19.2.1.1.1) for the Function
+    /// constructor and, through a generated wrapper, for %GeneratorFunction%,
+    /// %AsyncFunction% and %AsyncGeneratorFunction% (bd-9vouw.321). A
+    /// generated function runs its body as a plain call, so a generator or
+    /// async kind is compiled as `function WRAPPER() { return <kind>
+    /// anonymous(params) { body }; }`. The wrapper runs once, in the same
+    /// contained-codegen envelope, and its result is a real function of that
+    /// kind whose closure carries the generated artifact's provenance, as a
+    /// function returned from `new Function(...)` code does. The wrapper
+    /// must parse to exactly that return, so text in the parameters or body
+    /// cannot close the inner function and run in the wrapper.
+    fn construct_dynamic_function(
+        &mut self,
+        module: &Ir3Module,
+        args: RegRange,
+        kind: DynamicFunctionKind,
+    ) -> Result<Value, InterpreterError> {
         // bd-9vouw.60: code generation is the call the behavior firewall
         // exists to see, but a builtin callee never reaches the per-call hook
         // (only IR3 functions and closures do). Every Function-constructor
@@ -39382,10 +40670,13 @@ impl InterpreterCore {
                         total.saturating_add(u64::try_from(text.len()).unwrap_or(u64::MAX))
                     })
                     .saturating_add(u64::from(args.count))
-                    .saturating_add("function anonymous() {\n\n}".len() as u64),
+                    .saturating_add("function anonymous(\n) {\n\n}".len() as u64)
+                    .saturating_add(kind.wrapper_overhead_bytes()),
                 args.count,
             ),
-            None => self.generated_function_compilation_scratch_bytes(args)?,
+            None => self
+                .generated_function_compilation_scratch_bytes(args)?
+                .saturating_add(kind.wrapper_overhead_bytes()),
         };
         let record_construction_audit =
             self.generated_code_audit.len() < MAX_GENERATED_CODE_AUDIT_ENTRIES;
@@ -39423,14 +40714,14 @@ impl InterpreterCore {
                 granted_capabilities: Vec::new(),
                 outcome: "constructed".to_string(),
             });
-            let generated_source =
-                Self::function_constructor_source(&parameter_source, &body_source);
+            let generated_source = match kind {
+                DynamicFunctionKind::Normal => {
+                    Self::function_constructor_source(&parameter_source, &body_source)
+                }
+                kind => kind.wrapper_source(&parameter_source, &body_source),
+            };
             self.run_pre_allocation_hook(module, AllocKind::Function, generated_source.len())?;
 
-            let parser_source = ParserSource {
-                label: "<function-constructor>".to_string(),
-                text: generated_source,
-            };
             // ES2020 19.2.1.1.1 CreateDynamicFunction steps 18-20: a body or
             // parameter list that is not valid source is a SyntaxError the
             // caller can catch, as is an early error in it (`break` outside a
@@ -39438,30 +40729,68 @@ impl InterpreterCore {
             // a class). They aborted the whole program. Syntax the parser or
             // lowering does not support (`UnsupportedSyntax`) stays a refusal:
             // it says nothing about the source being invalid.
-            let syntax_tree = match CanonicalEs2020Parser.parse_with_options(
-                parser_source,
-                ParseGoal::Script,
-                &ParserOptions::default(),
-            ) {
-                Ok(syntax_tree) => syntax_tree,
+            let parse = |text: String| {
+                CanonicalEs2020Parser.parse_with_options(
+                    ParserSource {
+                        label: "<function-constructor>".to_string(),
+                        text,
+                    },
+                    ParseGoal::Script,
+                    &ParserOptions::default(),
+                )
+            };
+            // An import or export declaration in the function body
+            // (InvalidGoal: script code) is a SyntaxError too (bd-9vouw.396).
+            let parse_failure = |this: &mut Self, error: ParseError| {
+                if matches!(
+                    error.code,
+                    ParseErrorCode::StrictModeWithStatement
+                        | ParseErrorCode::AwaitOutsideAsync
+                        | ParseErrorCode::InvalidClassElementName
+                        | ParseErrorCode::InvalidSyntax
+                        | ParseErrorCode::InvalidGoal
+                ) {
+                    this.throw_js_error("SyntaxError", error.message.clone())
+                } else {
+                    InterpreterError::ModuleParseFailed {
+                        specifier: "<function-constructor>".to_string(),
+                        error: error.to_string(),
+                    }
+                }
+            };
+            // The parameters first, on their own; their tree is dropped
+            // before the full source is parsed.
+            let parameters_valid = match parse(kind.parameters_source(&parameter_source)) {
+                Ok(tree) => kind.is_single_declaration(&tree),
+                // The wrapper around the parameters is balanced, so a
+                // structural failure (an unbalanced list or a missing body
+                // brace) comes from the parameter text itself: `a){ /*`
+                // opens a comment that swallows the `) {}`.
                 Err(error)
-                    if matches!(
-                        error.code,
-                        ParseErrorCode::StrictModeWithStatement
-                            | ParseErrorCode::AwaitOutsideAsync
-                            | ParseErrorCode::InvalidClassElementName
-                            | ParseErrorCode::InvalidSyntax
-                    ) =>
+                    if error.code == ParseErrorCode::UnsupportedSyntax
+                        && (error.message.contains("unbalanced parentheses")
+                            || error.message.contains("requires a braced body")) =>
                 {
                     return Err(self.throw_js_error("SyntaxError", error.message.clone()));
                 }
-                Err(error) => {
-                    return Err(InterpreterError::ModuleParseFailed {
-                        specifier: "<function-constructor>".to_string(),
-                        error: error.to_string(),
-                    });
-                }
+                Err(error) => return Err(parse_failure(self, error)),
             };
+            let syntax_tree = match parse(generated_source) {
+                Ok(syntax_tree) => syntax_tree,
+                Err(error) => return Err(parse_failure(self, error)),
+            };
+            let exact = match kind {
+                // A body that closes the function early (`}; x(); function
+                // y() {`) leaves more statements after it (bd-9vouw.322).
+                DynamicFunctionKind::Normal => kind.is_single_declaration(&syntax_tree),
+                kind => kind.is_exact_wrapper(&syntax_tree),
+            };
+            if !exact || !parameters_valid {
+                return Err(self.throw_js_error(
+                    "SyntaxError",
+                    format!("invalid parameters or body for {}", kind.constructor_name()),
+                ));
+            }
             let ir0 = Ir0Module::from_syntax_tree(syntax_tree, "<function-constructor>");
             let lowering_ctx = LoweringContext::new(
                 &self.trace_id,
@@ -39480,11 +40809,15 @@ impl InterpreterCore {
                     });
                 }
             };
+            let entry_name = match kind {
+                DynamicFunctionKind::Normal => "anonymous",
+                _ => DYNAMIC_FUNCTION_WRAPPER,
+            };
             let function_index = lowering_output
                 .ir3
                 .function_table
                 .iter()
-                .position(|desc| desc.name.as_deref() == Some("anonymous"))
+                .position(|desc| desc.name.as_deref() == Some(entry_name))
                 .ok_or_else(|| InterpreterError::ModuleLoweringFailed {
                     specifier: "<function-constructor>".to_string(),
                     error: "generated function descriptor missing".to_string(),
@@ -39515,19 +40848,32 @@ impl InterpreterCore {
             compilation_scratch_bytes,
             audit_entry,
         );
-        match retained {
-            Ok(builtin) => Ok(Value::BuiltinFunction(builtin)),
+        let wrapper = match retained {
+            Ok(builtin) => builtin,
             Err(error) => {
                 self.estimated_memory_bytes = self
                     .estimated_memory_bytes
                     .saturating_sub(compilation_scratch_bytes);
-                Err(error)
+                return Err(error);
             }
+        };
+        if kind == DynamicFunctionKind::Normal {
+            return Ok(Value::BuiltinFunction(wrapper));
         }
+        // The wrapper returns the generator, async or async generator
+        // function its body defines.
+        let (function, label) = self.call_generated_function_artifact(
+            &wrapper,
+            RegRange { start: 0, count: 0 },
+            None,
+            None,
+        )?;
+        self.replace_pending_hostcall_result_label(Some(label))?;
+        Ok(function)
     }
 
     fn function_constructor_source(parameter_source: &str, body_source: &str) -> String {
-        format!("function anonymous({parameter_source}) {{\n{body_source}\n}}")
+        format!("function anonymous({parameter_source}\n) {{\n{body_source}\n}}")
     }
 
     /// Derive deterministic, content-addressed provenance for a generated
@@ -40313,7 +41659,12 @@ impl InterpreterCore {
         // generated function. The instruction counter is deliberately NOT part
         // of `snapshot_module_execution`, so the post-call delta reflects the
         // generated body's real spend against the one shared budget.
-        let snapshot = match self.snapshot_module_execution() {
+        let setup_previous_register_bytes = self.registers_memory_bytes();
+        let setup_previous_register_context_label_bytes =
+            self.register_context_labels_memory_bytes();
+        // The snapshot takes the caller's registers and labels, leaving the
+        // fresh files the generated body starts on.
+        let snapshot = match self.isolate_module_execution() {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 self.estimated_memory_bytes = self
@@ -40333,18 +41684,12 @@ impl InterpreterCore {
         // out and restore ownership after the isolated call instead of cloning
         // its attacker-sized module specifier as an uncharged temporary.
         let saved_active_cjs_context = self.active_cjs_context.take();
-        let setup_previous_register_bytes = self.registers_memory_bytes();
-        let setup_previous_register_context_label_bytes =
-            self.register_context_labels_memory_bytes();
         let setup_previous_scope_bytes = self.scope_chain_memory_bytes();
         let setup_previous_call_stack_bytes = self.call_stack_memory_bytes();
         let mut wrapper_memory_committed = false;
         let previous_granted_capabilities =
             self.replace_with_contained_codegen_grant(Some(effective_generated_grant));
         let result = (|| -> Result<Value, InterpreterError> {
-            self.registers =
-                SeedTrackedField::new(vec![Value::Undefined; self.config.max_registers as usize]);
-            self.register_labels.fill(Label::Public);
             self.call_stack.clear(&mut self.closures.cold_cells);
             self.ip = wrapper_start;
             self.register_base = 0;
@@ -40685,7 +42030,7 @@ impl InterpreterCore {
             && let Some(view) = self
                 .heap
                 .get(object_id.0 as usize)
-                .and_then(|object| object.typed_array.as_ref())
+                .and_then(|object| object.typed_array.as_deref())
         {
             Self::reject_out_of_bounds_typed_array(view, builtin.spec_name())?;
         }
@@ -40760,6 +42105,7 @@ impl InterpreterCore {
             }
         }
         match builtin.kind {
+            BuiltinFunctionKind::FunctionPrototype => Ok(Value::Undefined),
             BuiltinFunctionKind::AsyncGeneratorNext
             | BuiltinFunctionKind::AsyncGeneratorReturn
             | BuiltinFunctionKind::AsyncGeneratorThrow => self.dispatch_async_generator_resume(
@@ -40845,10 +42191,14 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::DateUtc => {
                 // Date.UTC(year[, month[, date[, hours[, minutes[, seconds[, ms]]]]]])
-                // (ES2020 20.4.3.4); a two-digit year maps to 19xx.
+                // (ES2020 20.4.3.4); a two-digit year maps to 19xx. Each
+                // argument is ToNumber'd in order, an object's valueOf
+                // included; an object counted as NaN (bd-9vouw.368).
                 let mut parts = Vec::with_capacity(7);
                 for index in 0..args.count.min(7) {
-                    let value = self.builtin_arg(args, index)?.unwrap_or(Value::Undefined);
+                    let value = self
+                        .builtin_number_arg(module, args, index)?
+                        .unwrap_or(Value::Undefined);
                     parts.push(Self::coerce_to_float(&value).unwrap_or(f64::NAN));
                 }
                 let part = |index: usize, fallback: f64| parts.get(index).copied().unwrap_or(fallback);
@@ -40872,8 +42222,11 @@ impl InterpreterCore {
                 // runs an object argument's @@toPrimitive, toString or valueOf
                 // (bd-9vouw.213: is-regex tells a RegExp by an exec that must
                 // throw from its argument's toString).
+                // ToString keeping the string itself (shared, lone surrogates
+                // included): the UTF-8 text copied the whole subject on every
+                // exec of a loop (bd-9vouw.475).
                 let input = if self.regexp_source_flags_from_value(&receiver).is_some() {
-                    Value::str(self.builtin_arg_text(Some(module), args, 0)?)
+                    Value::Str(self.builtin_arg_js_text(Some(module), args, 0)?)
                 } else {
                     Value::Undefined
                 };
@@ -41101,8 +42454,11 @@ impl InterpreterCore {
                 // method's kind. A bound `it.next` used its own iterator
                 // whatever the receiver, so `next.call({})` and a Map
                 // iterator's next on a Set iterator advanced it; now they are
-                // TypeErrors and an iterator receiver is the one advanced. A
-                // bound next called with no receiver still steps its own.
+                // TypeErrors and an iterator receiver is the one advanced.
+                // So is a detached `next()` (no receiver) and
+                // `next.call(undefined)`, which stepped the iterator the
+                // method was read from (bd-9vouw.310); the iteration
+                // statements advance iterators directly, not through here.
                 let incompatible = |name: &str| {
                     let tag = match name {
                         MAP_ITERATOR_PROTOTYPE => "Map Iterator",
@@ -41120,8 +42476,7 @@ impl InterpreterCore {
                         *handle
                     }
                     (Some(Value::Iterator(handle)), None) => *handle,
-                    (None | Some(Value::Undefined), Some(bound)) => bound,
-                    (Some(_), Some(bound)) => {
+                    (_, Some(bound)) => {
                         let method_kind = self.iterator_intrinsic_prototype_name(bound);
                         return Err(self.throw_js_error("TypeError", incompatible(method_kind)));
                     }
@@ -41380,8 +42735,21 @@ impl InterpreterCore {
                     return Ok(result);
                 }
                 let value = self.string_pattern_this(module, &receiver)?;
-                let pattern = self.string_pattern_arg(module, args)?;
-                self.string_match_all_value(&value, &pattern)
+                let label = self.join_arg_range_label(args)?;
+                let pattern = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                // A pristine RegExp whose @@matchAll is the intrinsic one
+                // (the protocol call above left it to us) runs on the
+                // matcher; any other pattern supplied no @@matchAll, so
+                // steps 4-5 create a RegExp and Invoke its @@matchAll
+                // (bd-9vouw.498).
+                let key = RuntimePropertyKey::Symbol(WellKnownSymbol::MatchAll.id());
+                if let Value::Object(pattern_id) = pattern
+                    && self.regexp_is_pristine(&pattern)
+                    && self.regexp_uses_builtin_symbol_method(pattern_id, &key)
+                {
+                    return self.string_match_all_value(&value, &pattern, &label);
+                }
+                self.string_match_all_created_regexp(module, value, pattern, &label)
             }
             BuiltinFunctionKind::StringSearch => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
@@ -41786,21 +43154,23 @@ impl InterpreterCore {
                 if len == 0 {
                     return Ok(Value::Undefined);
                 }
+                if let Some(first) = self.shift_dense_array_in_place(arr_id, len)? {
+                    return Ok(first);
+                }
                 let was_dense = self.array_cache_is_dense(arr_id);
                 let first = self
                     .array_index_get(Some(module), arr_id, 0)?
                     .unwrap_or(Value::Undefined);
+                // A hole moves as a hole: its target is deleted (step 6.d.iv).
+                let mut moved_hole = false;
                 for i in 1..len {
-                    let moved = self
-                        .array_index_get(Some(module), arr_id, i)?
-                        .unwrap_or(Value::Undefined);
-                    self.set_object_property(arr_id, (i - 1).to_string(), moved)?;
+                    self.array_move_element(module, arr_id, i, i - 1, &mut moved_hole)?;
                 }
                 let last = len - 1;
                 self.array_delete_or_throw(arr_id, &last.to_string())?;
                 let new_len = i64::try_from(last).unwrap_or(i64::MAX);
                 self.set_object_property(arr_id, "length".to_string(), Value::Int(new_len))?;
-                self.refresh_dense_length_cache(arr_id, last, was_dense);
+                self.refresh_dense_length_cache(arr_id, last, was_dense && !moved_hole);
                 Ok(first)
             }
             BuiltinFunctionKind::ArrayUnshift => {
@@ -41827,15 +43197,22 @@ impl InterpreterCore {
                 }
                 let arg_count = items.len();
                 let new_len = len.saturating_add(arg_count);
+                let items = if arg_count > 0 {
+                    match self.unshift_dense_array_in_place(arr_id, len, items)? {
+                        Ok(new_len) => return Ok(Value::Int(i64::try_from(new_len).unwrap_or(i64::MAX))),
+                        Err(items) => items,
+                    }
+                } else {
+                    items
+                };
                 if arg_count > 0 {
                     let was_dense = self.array_cache_is_dense(arr_id);
                     // Move existing elements up, top-down, so a source index is
-                    // read before its destination overwrites a later source.
+                    // read before its destination overwrites a later source. A
+                    // hole moves as a hole (step 4.b.v: delete the target).
+                    let mut moved_hole = false;
                     for i in (0..len).rev() {
-                        let moved = self
-                            .array_index_get(Some(module), arr_id, i)?
-                            .unwrap_or(Value::Undefined);
-                        self.set_object_property(arr_id, (i + arg_count).to_string(), moved)?;
+                        self.array_move_element(module, arr_id, i, i + arg_count, &mut moved_hole)?;
                     }
                     for (offset, item) in items.into_iter().enumerate() {
                         self.set_object_property(arr_id, offset.to_string(), item)?;
@@ -41846,7 +43223,7 @@ impl InterpreterCore {
                         "length".to_string(),
                         Value::Int(new_len_int),
                     )?;
-                    self.refresh_dense_length_cache(arr_id, new_len, was_dense);
+                    self.refresh_dense_length_cache(arr_id, new_len, was_dense && !moved_hole);
                 }
                 Ok(Value::Int(i64::try_from(new_len).unwrap_or(i64::MAX)))
             }
@@ -41943,18 +43320,18 @@ impl InterpreterCore {
                 let len = self.array_like_length(arr_id)?;
                 if len > 1 {
                     let was_dense = self.array_cache_is_dense(arr_id);
+                    let mut moved_hole = false;
                     for i in 0..(len / 2) {
                         let j = len - 1 - i;
-                        let lo = self
-                            .array_index_get(Some(module), arr_id, i)?
-                            .unwrap_or(Value::Undefined);
-                        let hi = self
-                            .array_index_get(Some(module), arr_id, j)?
-                            .unwrap_or(Value::Undefined);
-                        self.set_object_property(arr_id, i.to_string(), hi)?;
-                        self.set_object_property(arr_id, j.to_string(), lo)?;
+                        let lo = self.array_index_get(Some(module), arr_id, i)?;
+                        let hi = self.array_index_get(Some(module), arr_id, j)?;
+                        // Step 7.h-k: a present element moves to the other
+                        // index and a hole deletes it, so holes swap too.
+                        moved_hole |= lo.is_none() || hi.is_none();
+                        self.array_store_or_delete(arr_id, i, hi)?;
+                        self.array_store_or_delete(arr_id, j, lo)?;
                     }
-                    self.refresh_dense_length_cache(arr_id, len, was_dense);
+                    self.refresh_dense_length_cache(arr_id, len, was_dense && !moved_hole);
                 }
                 Ok(Value::Object(arr_id))
             }
@@ -42034,7 +43411,18 @@ impl InterpreterCore {
                 };
                 let result = self.array_species_result(module, arr_id, 0)?;
                 let mut out = 0usize;
-                self.array_flatten_into(arr_id, depth, result, &mut out)?;
+                let source_label = match receiver_register {
+                    Some(register) => self.clone_register_label_with_temporary_budget(register)?,
+                    None => self.clone_active_execution_context_label()?,
+                };
+                self.array_flatten_into(
+                    module,
+                    arr_id,
+                    depth,
+                    result,
+                    &mut out,
+                    &source_label,
+                )?;
                 // An array result keeps its length in step; another
                 // species object gets only the data properties.
                 if self.generic_is_array(result)? {
@@ -42071,12 +43459,10 @@ impl InterpreterCore {
                     None | Some(Value::Undefined) => ",".to_string(),
                     Some(value) => self.value_to_string(&value),
                 };
-                let mut active = BTreeSet::new();
                 Ok(Value::str(self.array_join_observable(
                     module,
                     arr_id,
                     &separator,
-                    &mut active,
                 )?))
             }
             BuiltinFunctionKind::ArrayToString => {
@@ -42112,13 +43498,7 @@ impl InterpreterCore {
                                     .brand()
                                     .is_some_and(|tag| TypedArrayKind::from_type_name(tag).is_some())
                         }) {
-                            let mut active = BTreeSet::new();
-                            Ok(Value::str(self.array_join_observable(
-                                module,
-                                arr_id,
-                                ",",
-                                &mut active,
-                            )?))
+                            Ok(Value::str(self.array_join_observable(module, arr_id, ",")?))
                         } else {
                             Ok(self.object_prototype_to_string_value(&Value::Object(arr_id)))
                         }
@@ -42182,9 +43562,9 @@ impl InterpreterCore {
                     let Some(element) = self.array_index_get(Some(module), arr_id, index)? else {
                         continue;
                     };
-                    let mapped =
+                    let (mapped, mapped_label) =
                         self.with_gc_nested_request(vec![Value::Object(result)], |core| {
-                            core.invoke_array_callback(
+                            core.invoke_labeled_array_callback(
                                 Some(module),
                                 &callback,
                                 this_arg.clone(),
@@ -42193,7 +43573,12 @@ impl InterpreterCore {
                                 arr_id,
                             )
                         })?;
-                    self.create_data_property_or_throw(result, index.to_string(), mapped)?;
+                    self.create_labeled_data_property_or_throw(
+                        result,
+                        index.to_string(),
+                        mapped,
+                        &mapped_label,
+                    )?;
                 }
                 // An array result keeps its length in step; another
                 // species object gets only the data properties.
@@ -42217,23 +43602,47 @@ impl InterpreterCore {
                         "Array.prototype.filter",
                     )?;
                 let result = self.array_species_result(module, arr_id, 0)?;
+                let mut prefix_label = {
+                    let mut source_label = self.join_arg_range_label(args)?;
+                    if let Some(register) = receiver_register {
+                        source_label = self.join_owned_label_with_temporary_budget(
+                            source_label,
+                            self.get_register_label(register)?,
+                        )?;
+                    }
+                    self.array_result_prefix_label(arr_id, result, &source_label)?
+                };
+                self.record_array_result_prefix_label(result, &prefix_label)?;
                 let mut out = 0usize;
                 for index in 0..len {
                     let Some(element) = self.array_index_get(Some(module), arr_id, index)? else {
                         continue;
                     };
-                    let keep = self.with_gc_nested_request(vec![Value::Object(result)], |core| {
-                        core.invoke_array_callback(
-                            Some(module),
-                            &callback,
-                            this_arg.clone(),
-                            element.clone(),
-                            index,
-                            arr_id,
-                        )
-                    })?;
+                    let (keep, predicate_label) =
+                        self.with_gc_nested_request(vec![Value::Object(result)], |core| {
+                            core.invoke_labeled_array_callback(
+                                Some(module),
+                                &callback,
+                                this_arg.clone(),
+                                element.clone(),
+                                index,
+                                arr_id,
+                            )
+                        })?;
+                    // Every earlier selection controls this output position.
+                    // Label length even when the predicate rejects the element,
+                    // so an existing species alias observes that dependency.
+                    prefix_label = std::cmp::max(prefix_label, predicate_label);
+                    prefix_label =
+                        self.array_result_prefix_label(arr_id, result, &prefix_label)?;
+                    self.record_array_result_prefix_label(result, &prefix_label)?;
                     if keep.is_truthy() {
-                        self.create_data_property_or_throw(result, out.to_string(), element)?;
+                        self.create_labeled_data_property_or_throw(
+                            result,
+                            out.to_string(),
+                            element,
+                            &prefix_label,
+                        )?;
                         out += 1;
                     }
                 }
@@ -42372,14 +43781,25 @@ impl InterpreterCore {
                         "Array.prototype.flatMap",
                     )?;
                 let result = self.array_species_result(module, arr_id, 0)?;
+                let mut prefix_label = {
+                    let mut source_label = self.join_arg_range_label(args)?;
+                    if let Some(register) = receiver_register {
+                        source_label = self.join_owned_label_with_temporary_budget(
+                            source_label,
+                            self.get_register_label(register)?,
+                        )?;
+                    }
+                    self.array_result_prefix_label(arr_id, result, &source_label)?
+                };
+                self.record_array_result_prefix_label(result, &prefix_label)?;
                 let mut out = 0usize;
                 for index in 0..len {
                     let Some(element) = self.array_index_get(Some(module), arr_id, index)? else {
                         continue;
                     };
-                    let mapped =
+                    let (mapped, mapped_label) =
                         self.with_gc_nested_request(vec![Value::Object(result)], |core| {
-                            core.invoke_array_callback(
+                            core.invoke_labeled_array_callback(
                                 Some(module),
                                 &callback,
                                 this_arg.clone(),
@@ -42388,6 +43808,12 @@ impl InterpreterCore {
                                 arr_id,
                             )
                         })?;
+                    // A previous callback or empty nested array can still
+                    // determine where this value is written and the final length.
+                    prefix_label = std::cmp::max(prefix_label, mapped_label);
+                    prefix_label =
+                        self.array_result_prefix_label(arr_id, result, &prefix_label)?;
+                    self.record_array_result_prefix_label(result, &prefix_label)?;
                     let nested = if let Value::Object(eid) = &mapped {
                         self.heap
                             .get(eid.0 as usize)
@@ -42400,10 +43826,22 @@ impl InterpreterCore {
                         if let Value::Object(eid) = mapped {
                             // depth 0 => copy the mapped array's elements one
                             // level without recursing further.
-                            self.array_flatten_into(eid, 0, result, &mut out)?;
+                            self.array_flatten_into(
+                                module,
+                                eid,
+                                0,
+                                result,
+                                &mut out,
+                                &prefix_label,
+                            )?;
                         }
                     } else {
-                        self.create_data_property_or_throw(result, out.to_string(), mapped)?;
+                        self.create_labeled_data_property_or_throw(
+                            result,
+                            out.to_string(),
+                            mapped,
+                            &prefix_label,
+                        )?;
                         out += 1;
                     }
                 }
@@ -42607,11 +44045,13 @@ impl InterpreterCore {
                 let result = self.array_species_result(module, arr_id, 0)?;
                 let mut out = 0usize;
                 let len = self.array_like_length(arr_id)?;
+                // A hole in a spread array stays a hole in the result (step
+                // 5.c.iv: only a present element is created); `length`
+                // counts it.
                 for i in 0..len {
-                    let element = self
-                        .array_index_get(Some(module), arr_id, i)?
-                        .unwrap_or(Value::Undefined);
-                    self.create_data_property_or_throw(result, out.to_string(), element)?;
+                    if let Some(element) = self.array_index_get(Some(module), arr_id, i)? {
+                        self.create_data_property_or_throw(result, out.to_string(), element)?;
+                    }
                     out += 1;
                 }
                 for k in 0..args.count {
@@ -42626,10 +44066,13 @@ impl InterpreterCore {
                         let arg_id = *arg_id;
                         let arg_len = self.array_like_length(arg_id)?;
                         for i in 0..arg_len {
-                            let element = self
-                                .array_index_get(Some(module), arg_id, i)?
-                                .unwrap_or(Value::Undefined);
-                            self.create_data_property_or_throw(result, out.to_string(), element)?;
+                            if let Some(element) = self.array_index_get(Some(module), arg_id, i)? {
+                                self.create_data_property_or_throw(
+                                    result,
+                                    out.to_string(),
+                                    element,
+                                )?;
+                            }
                             out += 1;
                         }
                     } else {
@@ -42668,10 +44111,11 @@ impl InterpreterCore {
                 let mut out = 0usize;
                 let mut index = start;
                 while index < end {
-                    let element = self
-                        .array_index_get(Some(module), arr_id, index)?
-                        .unwrap_or(Value::Undefined);
-                    self.create_data_property_or_throw(result, out.to_string(), element)?;
+                    // A hole stays a hole in the result (step 10.c: only a
+                    // present element is created); `length` counts it.
+                    if let Some(element) = self.array_index_get(Some(module), arr_id, index)? {
+                        self.create_data_property_or_throw(result, out.to_string(), element)?;
+                    }
                     out += 1;
                     index += 1;
                 }
@@ -42754,6 +44198,9 @@ impl InterpreterCore {
                     None => 0,
                 };
                 let delete_count = match self.builtin_number_arg(module, args, 1)? {
+                    // Step 8: with no start at all, nothing is deleted;
+                    // `[1, 2].splice()` emptied the array.
+                    None if args.count == 0 => 0,
                     None => len - start,
                     Some(value) => {
                         let raw = Self::value_as_integer(&value);
@@ -42771,55 +44218,83 @@ impl InterpreterCore {
                     items.push(self.builtin_arg(args, k)?.unwrap_or(Value::Undefined));
                     k += 1;
                 }
-                let mut elements: Vec<Value> = self.element_buffer(len)?;
-                for i in 0..len {
-                    elements.push(
-                        self.array_index_get(Some(module), arr_id, i)?
-                            .unwrap_or(Value::Undefined),
-                    );
+                let items =
+                    match self.splice_dense_array_in_place(arr_id, len, start, delete_count, items)? {
+                        Ok(removed) => {
+                            let removed_len = removed.len();
+                            for (i, element) in removed.into_iter().enumerate() {
+                                self.create_data_property_or_throw(
+                                    removed_arr,
+                                    i.to_string(),
+                                    element,
+                                )?;
+                            }
+                            self.set_object_property(
+                                removed_arr,
+                                "length".to_string(),
+                                Value::Int(i64::try_from(removed_len).unwrap_or(i64::MAX)),
+                            )?;
+                            return Ok(Value::Object(removed_arr));
+                        }
+                        Err(items) => items,
+                    };
+                // ES2020 23.1.3.28 steps 11-18 in their order, so a Set or
+                // DeletePropertyOrThrow that throws (a sealed, frozen or
+                // non-extensible array) leaves exactly the writes before it
+                // (bd-9vouw.477). A hole stays a hole in the removed array
+                // and moves as a hole (its target is deleted).
+                for k in 0..delete_count {
+                    if let Some(element) = self.array_index_get(Some(module), arr_id, start + k)? {
+                        self.create_data_property_or_throw(removed_arr, k.to_string(), element)?;
+                    }
                 }
-                let removed: Vec<Value> = elements
-                    .splice(start..start + delete_count, items)
-                    .collect();
-                let new_len = elements.len();
-                // ES2020 23.1.3.28 step 16: growing the array first writes
-                // the new top index, so a non-extensible (sealed or
-                // prevented) array refuses before any element moves
-                // (bd-9vouw.250).
-                if new_len > len
-                    && self
-                        .heap
-                        .get(arr_id.0 as usize)
-                        .is_some_and(|object| !object.extensible())
-                {
-                    return Err(InterpreterError::TypeError {
-                        expected: "an extensible array for Array.prototype.splice".to_string(),
-                        got: format!("Cannot add property {len}, object is not extensible"),
-                    });
-                }
+                self.set_object_property(
+                    removed_arr,
+                    "length".to_string(),
+                    Value::Int(i64::try_from(delete_count).unwrap_or(i64::MAX)),
+                )?;
+                let item_count = items.len();
+                let new_len = len - delete_count + item_count;
                 let was_dense = self.array_cache_is_dense(arr_id);
-                for (i, element) in elements.into_iter().enumerate() {
-                    self.set_object_property(arr_id, i.to_string(), element)?;
+                let mut moved_hole = false;
+                if item_count < delete_count {
+                    // Step 15: move the tail down, then delete the top.
+                    for k in start..len - delete_count {
+                        self.array_move_element(
+                            module,
+                            arr_id,
+                            k + delete_count,
+                            k + item_count,
+                            &mut moved_hole,
+                        )?;
+                    }
+                    for k in (new_len..len).rev() {
+                        self.array_delete_or_throw(arr_id, &k.to_string())?;
+                    }
+                } else if item_count > delete_count {
+                    // Step 16: move the tail up, from the top. Its first
+                    // write is a new top index, which a non-extensible
+                    // array refuses before anything else changes.
+                    for k in (start + 1..=len - delete_count).rev() {
+                        self.array_move_element(
+                            module,
+                            arr_id,
+                            k + delete_count - 1,
+                            k + item_count - 1,
+                            &mut moved_hole,
+                        )?;
+                    }
                 }
-                // Step 18: from the top index down.
-                for i in (new_len..len).rev() {
-                    self.array_delete_or_throw(arr_id, &i.to_string())?;
+                // Step 17: the items.
+                for (offset, item) in items.into_iter().enumerate() {
+                    self.set_object_property(arr_id, (start + offset).to_string(), item)?;
                 }
                 self.set_object_property(
                     arr_id,
                     "length".to_string(),
                     Value::Int(i64::try_from(new_len).unwrap_or(i64::MAX)),
                 )?;
-                self.refresh_dense_length_cache(arr_id, new_len, was_dense);
-                let removed_len = removed.len();
-                for (i, element) in removed.into_iter().enumerate() {
-                    self.create_data_property_or_throw(removed_arr, i.to_string(), element)?;
-                }
-                self.set_object_property(
-                    removed_arr,
-                    "length".to_string(),
-                    Value::Int(i64::try_from(removed_len).unwrap_or(i64::MAX)),
-                )?;
+                self.refresh_dense_length_cache(arr_id, new_len, was_dense && !moved_hole);
                 Ok(Value::Object(removed_arr))
             }
             BuiltinFunctionKind::ArrayToReversed => {
@@ -42850,6 +44325,21 @@ impl InterpreterCore {
             BuiltinFunctionKind::ArrayToSorted => {
                 // ES2023 23.1.3.34: return a sorted COPY using the same ordering
                 // as `sort` (optional comparator); receiver unchanged (bd-ib0ue).
+                // Step 1: a comparator that is neither undefined nor callable
+                // is a TypeError before the receiver's length is read; an
+                // empty or one-element array never called it, so
+                // `[].toSorted(null)` returned [] (bd-9vouw.456).
+                let comparator = match self.builtin_arg(args, 0)? {
+                    Some(Value::Undefined) | None => None,
+                    Some(callback) if callback.is_callable() => Some(callback),
+                    Some(other) => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "a function or undefined comparator for Array.prototype.toSorted"
+                                .to_string(),
+                            got: format!("{} is not a function", other.type_name()),
+                        });
+                    }
+                };
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let Value::Object(arr_id) = receiver else {
                     return Err(InterpreterError::TypeError {
@@ -42858,10 +44348,6 @@ impl InterpreterCore {
                     });
                 };
                 let len = self.array_like_length(arr_id)?;
-                let comparator = match self.builtin_arg(args, 0)? {
-                    Some(Value::Undefined) | None => None,
-                    Some(callback) => Some(callback),
-                };
                 let mut elements = self.element_buffer(len)?;
                 for index in 0..len {
                     elements.push(
@@ -43116,29 +44602,42 @@ impl InterpreterCore {
                 self.call_standard_constructor(module, builtin, args)
             }
             BuiltinFunctionKind::StaticHostcall => {
-                let result = self.call_static_hostcall(module, builtin, args)?;
-                match receiver {
-                    // bd-9vouw.94: `C.from(...)` / `C.of(...)` with a
-                    // constructor `C` (a subclass of Array inherits them)
-                    // construct a C (ES2020 22.1.2.1 step 5.a, 22.1.2.3
-                    // step 4); they returned a plain Array.
-                    Some(ref constructor @ (Value::Closure(_) | Value::Function(_)))
-                        if matches!(
-                            &*builtin.module_specifier,
-                            "builtin:ArrayFrom" | "builtin:ArrayOf"
-                        ) && self.is_constructible_value(constructor) =>
-                    {
-                        self.array_static_result_for_constructor(
-                            module,
-                            constructor.clone(),
-                            result,
-                        )
+                // bd-9vouw.94: `C.from(...)` / `C.of(...)` with a constructor
+                // `C` other than %Array% (a subclass of Array inherits them;
+                // `Array.from.call(Object, ...)`) construct a C (ES2020
+                // 22.1.2.1 steps 5.a and 12.a, 22.1.2.3 step 4), in the
+                // specification's order (bd-9vouw.361).
+                let array_static = matches!(
+                    &*builtin.module_specifier,
+                    "builtin:ArrayFrom" | "builtin:ArrayOf"
+                );
+                if array_static
+                    && let Some(constructor) = receiver.clone()
+                    && !Self::is_intrinsic_array_constructor(&constructor)
+                    && self.is_constructible_value(&constructor)
+                {
+                    let tag = builtin.module_specifier.to_string();
+                    let instruction_index = u32::try_from(self.ip).unwrap_or(u32::MAX);
+                    check_hostcall_capability_gate(self, &tag, instruction_index)?;
+                    if tag == "builtin:ArrayFrom" {
+                        self.array_from_with_constructor(module, args, constructor)
+                    } else {
+                        self.array_of_with_constructor(module, args, constructor)
                     }
-                    _ => Ok(result),
+                } else {
+                    self.call_static_hostcall(module, builtin, args)
                 }
             }
             BuiltinFunctionKind::PrototypeGetter => {
                 self.call_prototype_getter(module, builtin, receiver.unwrap_or(Value::Undefined))
+            }
+            BuiltinFunctionKind::ObjectProtoSetter => {
+                let proto = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                self.object_proto_setter_call(
+                    Some(module),
+                    receiver.unwrap_or(Value::Undefined),
+                    proto,
+                )
             }
             BuiltinFunctionKind::ErrorPrototypeToString => {
                 self.error_prototype_to_string(module, receiver.unwrap_or(Value::Undefined))
@@ -43589,6 +45088,16 @@ impl InterpreterCore {
                         got: receiver.type_name().to_string(),
                     });
                 };
+                if self.heap.get(req_id.0 as usize).is_none_or(|request| {
+                    matches!(request.properties.get("__ended"), Some(Value::Bool(true)))
+                }) {
+                    return Ok(Value::Undefined);
+                }
+                // Construction authorized a request object, not a future
+                // effect. Recheck the live membrane before appending the final
+                // chunk or consuming the request so containment preserves a
+                // retryable prefix and cannot publish to the host provider.
+                check_hostcall_capability_gate(self, "net:request", self.ip as u32)?;
                 let end_label =
                     self.writable_invocation_label_with_receiver(args, receiver_register)?;
                 // bd-3894s slice (2d): `req.end([data][, cb])` — a trailing closure is
@@ -44503,6 +46012,15 @@ impl InterpreterCore {
             BuiltinFunctionKind::BufferSwap64 => {
                 self.buffer_swap(receiver.unwrap_or(Value::Undefined), 8)
             }
+            BuiltinFunctionKind::BufferNumericMethod => {
+                let name = builtin
+                    .module_specifier
+                    .0
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_string();
+                self.buffer_numeric_method(receiver.unwrap_or(Value::Undefined), args, &name)
+            }
             BuiltinFunctionKind::PromiseResolve => {
                 if let Some(handle_id) = builtin.bound_object {
                     // A bound handle marks a resolve capability (from
@@ -44630,7 +46148,9 @@ impl InterpreterCore {
                         got: receiver.type_name().to_string(),
                     });
                 }
-                let input = Value::str(self.builtin_arg_text(Some(module), args, 0)?);
+                // ToString keeping the string itself, as exec takes it
+                // (bd-9vouw.475).
+                let input = Value::Str(self.builtin_arg_js_text(Some(module), args, 0)?);
                 if let Some(exec) = self.regexp_user_exec(module, &receiver)? {
                     let label = self.join_arg_range_label(args)?;
                     let result =
@@ -44798,9 +46318,21 @@ impl InterpreterCore {
                         return Ok(Value::Bool(fields.enumerable == Some(true)));
                     }
                 }
+                // A function's own `prototype` is never enumerable (ES2020
+                // 9.2.10 MakeConstructor, and the built-in constructors'
+                // non-configurable `prototype`); getOwnPropertyDescriptor
+                // answers it on its own path, which this now agrees with
+                // (`String.propertyIsEnumerable('prototype')` was true).
+                if !matches!(receiver, Value::Object(_))
+                    && receiver.is_callable()
+                    && matches!(&property, Value::Str(name) if name.as_str() == Some("prototype"))
+                    && self.function_has_intrinsic_prototype(&receiver)
+                {
+                    return Ok(Value::Bool(false));
+                }
                 let enumerable = self.object_own_property_is_enumerable(&receiver, &property)
                     || self
-                        .function_own_property_object(module, &receiver)?
+                        .own_property_holder(Some(module), &receiver, false)?
                         .is_some_and(|backing| {
                             self.object_own_property_is_enumerable(
                                 &Value::Object(backing),
@@ -44851,7 +46383,7 @@ impl InterpreterCore {
             // non-callable `this` instead of throwing as `instanceof` does.
             BuiltinFunctionKind::FunctionPrototypeHasInstance => {
                 let constructor = receiver.unwrap_or(Value::Undefined);
-                if !self.is_callable_for_has_instance(&constructor) {
+                if !constructor.is_callable() {
                     return Ok(Value::Bool(false));
                 }
                 let candidate = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
@@ -45212,34 +46744,44 @@ impl InterpreterCore {
     /// A module namespace lists its exports in code-unit order of their names
     /// (ES2020 9.4.6.11 [[OwnPropertyKeys]]); they register while the module
     /// evaluates, so the namespace is put in that order once it has finished.
-    fn sort_module_namespace_keys(&mut self, specifier: &str) {
+    /// The Symbol-keyed properties (its @@toStringTag) are carried over: the
+    /// reorder cleared the whole map, so a namespace whose exports arrived
+    /// out of order (a hoisted function before an earlier-sorting `let`)
+    /// lost "Module" while its bytes stayed charged (bd-9vouw.471).
+    fn sort_module_namespace_keys(&mut self, specifier: &str) -> Result<(), InterpreterError> {
         let Some(namespace) = self
             .module_state
             .modules
             .get(specifier)
             .map(|record| record.namespace_object)
         else {
-            return;
+            return Ok(());
         };
-        self.mutate_heap(|heap| {
-            let Some(object) = heap.get_mut(namespace.0 as usize) else {
-                return;
-            };
-            let mut entries: Vec<(Vec<u16>, JsString, Value)> = object
-                .properties
-                .exact_entries()
-                .into_iter()
-                .map(|(key, value)| (key.code_units_vec(), key, value.clone()))
-                .collect();
-            if entries.is_sorted_by(|a, b| a.0 <= b.0) {
-                return;
-            }
-            entries.sort_by(|a, b| a.0.cmp(&b.0));
-            object.properties.clear();
-            for (_, key, value) in entries {
-                object.properties.insert_exact(key, value);
-            }
-        });
+        let Some(object) = self.heap.get(namespace.0 as usize) else {
+            return Ok(());
+        };
+        let mut entries: Vec<(Vec<u16>, JsString, Value)> = object
+            .properties
+            .exact_entries()
+            .into_iter()
+            .map(|(key, value)| (key.code_units_vec(), key, value.clone()))
+            .collect();
+        if entries.is_sorted_by(|a, b| a.0 <= b.0) {
+            return Ok(());
+        }
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        let previous_bytes = Self::estimate_ordered_property_map_bytes(&object.properties);
+        let mut sorted = OrderedStringMap::new();
+        for (_, key, value) in entries {
+            sorted.insert_exact(key, value);
+        }
+        for (symbol, property) in object.properties.baseline_symbol_properties() {
+            sorted.insert_baseline_symbol_property(symbol, property.clone());
+        }
+        let next_bytes = Self::estimate_ordered_property_map_bytes(&sorted);
+        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        self.mutate_heap(|heap| heap[namespace.0 as usize].properties = sorted);
+        Ok(())
     }
 
     /// The value a nested module evaluation threw, taken from its pending-
@@ -45297,48 +46839,68 @@ impl InterpreterCore {
         value: Value,
         label: Label,
     ) -> Result<(), InterpreterError> {
-        let diagnostic_name = name.to_string();
         let Some(specifier) = self.current_module_specifier.clone() else {
             return Err(InterpreterError::ExportOutsideModule {
-                name: diagnostic_name,
+                name: name.to_string(),
             });
         };
-        let record = self.module_state.modules.get(&specifier).ok_or_else(|| {
-            InterpreterError::ExportOutsideModule {
-                name: diagnostic_name.clone(),
-            }
-        })?;
-        let namespace_object = record.namespace_object;
-        let previous_export_bytes = record
-            .exports
-            .get(&name)
-            .map(|previous| Self::estimate_js_string_map_entry_bytes(&name, previous))
-            .unwrap_or(0);
-        let next_export_bytes = Self::estimate_js_string_map_entry_bytes(&name, &value);
-        let pending_cells = record
-            .pending_import_bindings
-            .get(&name)
-            .into_iter()
-            .flatten()
-            .filter_map(Weak::upgrade)
-            .fold(Vec::new(), |mut cells, cell| {
-                if !cells.iter().any(|seen| Rc::ptr_eq(seen, &cell)) {
-                    cells.push(cell);
+        self.publish_module_export(&specifier, name, value, label, ExportPublication::Own, 0)
+    }
+
+    /// Publish `value` as export `name` of module `specifier`: its export
+    /// record, its namespace object's property and every importer's binding
+    /// cell of that name (bd-1lsy.4.10.1). The cells stay registered, so each
+    /// later publication writes them too: imports are live. A cell keeps the
+    /// join of every label published to it. A cell that itself backs an
+    /// export (a re-exported import) republishes that export in turn.
+    fn publish_module_export(
+        &mut self,
+        specifier: &str,
+        name: JsString,
+        value: Value,
+        label: Label,
+        publication: ExportPublication,
+        depth: u32,
+    ) -> Result<(), InterpreterError> {
+        let diagnostic_name = name.to_string();
+        let (namespace_object, previous_export_bytes, pending_cells) = {
+            let record = self
+                .module_state
+                .modules
+                .get_mut(specifier)
+                .ok_or_else(|| InterpreterError::ExportOutsideModule {
+                    name: diagnostic_name.clone(),
+                })?;
+            let previous_export_bytes = record
+                .exports
+                .get(&name)
+                .map(|previous| Self::estimate_js_string_map_entry_bytes(&name, previous))
+                .unwrap_or(0);
+            // An importer whose scope and closures are gone drops out.
+            let mut cells: Vec<Rc<RefCell<ScopeBindingState>>> = Vec::new();
+            if let Some(watchers) = record.import_bindings.get_mut(&name) {
+                watchers.retain(|watcher| watcher.strong_count() > 0);
+                for cell in watchers.iter().filter_map(Weak::upgrade) {
+                    if !cells.iter().any(|seen| Rc::ptr_eq(seen, &cell)) {
+                        cells.push(cell);
+                    }
                 }
-                cells
-            });
-        let previous_scope_bytes = self.scope_chain_memory_bytes();
-        let previous_closure_bytes = self.closures_memory_bytes();
-        let previous_call_stack_bytes = self.call_stack_memory_bytes();
+            }
+            (record.namespace_object, previous_export_bytes, cells)
+        };
+        let next_export_bytes = Self::estimate_js_string_map_entry_bytes(&name, &value);
         let mut previous_cell_states = Vec::with_capacity(pending_cells.len());
         let mut next_cell_labels = Vec::with_capacity(pending_cells.len());
+        let mut previous_cell_payload_bytes = 0u64;
         for cell in &pending_cells {
             let old_state = cell
                 .try_borrow()
                 .map_err(|_| InterpreterError::InternalError {
-                    details: "cyclic module import binding is already mutably borrowed".to_string(),
+                    details: "module import binding is already mutably borrowed".to_string(),
                 })?
                 .clone();
+            previous_cell_payload_bytes = previous_cell_payload_bytes
+                .saturating_add(Self::estimate_binding_cell_payload_bytes(cell));
             next_cell_labels.push(
                 self.join_owned_label_with_temporary_budget(old_state.label.clone(), &label)?,
             );
@@ -45351,7 +46913,7 @@ impl InterpreterCore {
             .map(|cell| {
                 cell.try_borrow_mut()
                     .map_err(|_| InterpreterError::InternalError {
-                        details: "cyclic module import binding is already borrowed".to_string(),
+                        details: "module import binding is already borrowed".to_string(),
                     })
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -45364,11 +46926,16 @@ impl InterpreterCore {
         for cell in &pending_cells {
             self.closures.refresh_cell(cell);
         }
-        if let Err(error) = self.apply_scope_closure_call_stack_memory_delta(
-            previous_scope_bytes,
-            previous_closure_bytes,
-            previous_call_stack_bytes,
-        ) {
+        // Each cell is charged once wherever it is reachable (an importer's
+        // scope frame, a closure's cold ledger), so its payload change is the
+        // whole delta, as for a scoped store (bd-9vouw.31): publishing does
+        // not walk every live cell.
+        let next_cell_payload_bytes = pending_cells.iter().fold(0u64, |total, cell| {
+            total.saturating_add(Self::estimate_binding_cell_payload_bytes(cell))
+        });
+        if let Err(error) =
+            self.apply_memory_component_delta(previous_cell_payload_bytes, next_cell_payload_bytes)
+        {
             for (cell, previous) in &previous_cell_states {
                 *cell.borrow_mut() = previous.clone();
                 self.closures.refresh_cell(cell);
@@ -45389,32 +46956,71 @@ impl InterpreterCore {
             let record = self
                 .module_state
                 .modules
-                .get_mut(&specifier)
+                .get_mut(specifier)
                 .expect("module record was validated before export preflight");
             record.exports.insert(name.clone(), value.clone())
         };
+        // A star re-exporter republishes the value below.
         match self.set_object_runtime_property(
             namespace_object,
             RuntimePropertyKey::String(name.clone()),
-            value,
+            value.clone(),
         ) {
             Ok(()) => {
                 let record = self
                     .module_state
                     .modules
-                    .get_mut(&specifier)
+                    .get_mut(specifier)
                     .expect("module export record existed after namespace update");
-                record.pending_import_bindings.remove(&name);
                 // The module's own export of this name wins over any star
                 // re-export (module_export_star re-marks its own names).
-                record.star_exports.remove(&name);
+                if publication == ExportPublication::Own {
+                    record.star_exports.remove(&name);
+                }
+                let star_reexporters = record.star_reexporters.clone();
+                if depth < LIVE_EXPORT_CASCADE_LIMIT {
+                    for cell in &pending_cells {
+                        let live_export = cell
+                            .try_borrow()
+                            .map_err(|_| InterpreterError::InternalError {
+                                details: "module import binding is already mutably borrowed"
+                                    .to_string(),
+                            })?
+                            .live_export;
+                        if let Some(live_export) = live_export {
+                            self.publish_live_export(cell, live_export, depth + 1)?;
+                        }
+                    }
+                    // A module that still provides this name through
+                    // `export * from` this one republishes it.
+                    for reexporter in star_reexporters {
+                        let provided =
+                            self.module_state
+                                .modules
+                                .get(&reexporter)
+                                .is_some_and(|record| {
+                                    record.star_exports.get(&name)
+                                        == Some(&StarExportOrigin::Provided)
+                                });
+                        if provided {
+                            self.publish_module_export(
+                                &reexporter,
+                                name.clone(),
+                                value.clone(),
+                                label.clone(),
+                                ExportPublication::Star,
+                                depth + 1,
+                            )?;
+                        }
+                    }
+                }
                 Ok(())
             }
             Err(error) => {
                 let record = self
                     .module_state
                     .modules
-                    .get_mut(&specifier)
+                    .get_mut(specifier)
                     .expect("module export record existed before namespace update");
                 match previous_export {
                     Some(previous) => {
@@ -45436,6 +47042,132 @@ impl InterpreterCore {
                 Err(error)
             }
         }
+    }
+
+    /// Record `cell`, a scope binding of module `specifier` that an
+    /// `ExportBinding` just published as `name`, as that export's local
+    /// binding (bd-1lsy.4.10.1): its later writes republish the export.
+    fn track_live_export(
+        &mut self,
+        cell: &Rc<RefCell<ScopeBindingState>>,
+        specifier: String,
+        name: JsString,
+    ) -> Result<(), InterpreterError> {
+        let borrow_error = || InterpreterError::InternalError {
+            details: "exported module binding is already borrowed".to_string(),
+        };
+        let existing = cell.try_borrow().map_err(|_| borrow_error())?.live_export;
+        let target = (specifier, name);
+        if let Some(existing) = existing
+            && let Some(entry) = self
+                .module_state
+                .live_exports
+                .get_mut(existing.get() as usize - 1)
+            && entry.cell.as_ptr() == Rc::as_ptr(cell)
+        {
+            if !entry.exports.contains(&target) {
+                entry.exports.push(target);
+            }
+            return Ok(());
+        }
+        let slot = u32::try_from(self.module_state.live_exports.len() + 1)
+            .ok()
+            .and_then(std::num::NonZeroU32::new)
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "too many exported module bindings".to_string(),
+            })?;
+        self.module_state.live_exports.push(LiveExport {
+            cell: Rc::downgrade(cell),
+            exports: vec![target],
+        });
+        cell.try_borrow_mut()
+            .map_err(|_| borrow_error())?
+            .live_export = Some(slot);
+        Ok(())
+    }
+
+    /// Register an importer's binding `cell`, initialized from export
+    /// `export_name` of the module whose namespace object is
+    /// `namespace_object`, with that module's record (bd-1lsy.4.10.1).
+    /// In a cycle the module may not have published the export yet: its
+    /// function and var exports are published before its imports run, so
+    /// the export is a lexical binding (`let`, `const`, `class`, a default
+    /// expression) still in its temporal dead zone, and the import is too
+    /// until the publication initializes it.
+    fn watch_module_export(
+        &mut self,
+        namespace_object: ObjectId,
+        export_name: JsString,
+        cell: &Rc<RefCell<ScopeBindingState>>,
+    ) -> Result<(), InterpreterError> {
+        let Some(record) = self
+            .module_state
+            .modules
+            .values_mut()
+            .find(|record| record.namespace_object == namespace_object)
+        else {
+            return Ok(());
+        };
+        if matches!(record.status, ModuleRuntimeStatus::Evaluating)
+            && !record.exports.contains_key(&export_name)
+        {
+            cell.try_borrow_mut()
+                .map_err(|_| InterpreterError::InternalError {
+                    details: "module import binding is already borrowed".to_string(),
+                })?
+                .initialized = false;
+        }
+        let watchers = record.import_bindings.entry(export_name).or_default();
+        watchers.retain(|watcher| watcher.strong_count() > 0);
+        if !watchers
+            .iter()
+            .any(|watcher| watcher.as_ptr() == Rc::as_ptr(cell))
+        {
+            watchers.push(Rc::downgrade(cell));
+        }
+        Ok(())
+    }
+
+    /// `cell`, a module binding that backs exports (`live_export` names its
+    /// entry), was written: publish its value as each of those exports
+    /// (bd-1lsy.4.10.1). A stale index (a cell of an earlier execution)
+    /// publishes nothing.
+    fn publish_live_export(
+        &mut self,
+        cell: &Rc<RefCell<ScopeBindingState>>,
+        live_export: std::num::NonZeroU32,
+        depth: u32,
+    ) -> Result<(), InterpreterError> {
+        let Some(entry) = self
+            .module_state
+            .live_exports
+            .get(live_export.get() as usize - 1)
+        else {
+            return Ok(());
+        };
+        if entry.cell.as_ptr() != Rc::as_ptr(cell) {
+            return Ok(());
+        }
+        let exports = entry.exports.clone();
+        let (value, label) = {
+            let state = cell
+                .try_borrow()
+                .map_err(|_| InterpreterError::InternalError {
+                    details: "exported module binding is already mutably borrowed".to_string(),
+                })?;
+            (state.value.clone(), state.label.clone())
+        };
+        for (specifier, name) in exports {
+            self.publish_module_export(
+                &specifier,
+                name,
+                value.clone(),
+                label.clone(),
+                ExportPublication::Own,
+                depth,
+            )?;
+        }
+        Ok(())
     }
 
     /// `export * from m` (bd-332pq): every export of `m` except `default`
@@ -45465,15 +47197,18 @@ impl InterpreterCore {
                 name: "*".to_string(),
             });
         };
-        let source_exports: Vec<(JsString, Value)> = self
+        let source = self
             .module_state
             .modules
-            .values()
+            .values_mut()
             .find(|record| record.namespace_object == namespace_object)
             .ok_or_else(|| InterpreterError::TypeError {
                 expected: "export * source with a module record".to_string(),
                 got: "a namespace without module exports".to_string(),
-            })?
+            })?;
+        // bd-1lsy.4.10.1: the source's later publications reach this module.
+        source.star_reexporters.insert(specifier.clone());
+        let source_exports: Vec<(JsString, Value)> = source
             .exports
             .iter()
             .filter(|(name, _)| name.as_str() != Some("default"))
@@ -45539,29 +47274,6 @@ impl InterpreterCore {
             .map(|_| ())
     }
 
-    fn cyclic_module_import_target(
-        &self,
-        namespace_object: ObjectId,
-        property_key: &RuntimePropertyKey,
-        value: &Value,
-    ) -> Option<(String, JsString)> {
-        if !matches!(value, Value::Undefined) {
-            return None;
-        }
-        let RuntimePropertyKey::String(export_name) = property_key else {
-            return None;
-        };
-        self.module_state
-            .modules
-            .iter()
-            .find(|(_, record)| {
-                record.namespace_object == namespace_object
-                    && matches!(record.status, ModuleRuntimeStatus::Evaluating)
-                    && !record.exports.contains_key(export_name)
-            })
-            .map(|(specifier, _)| (specifier.clone(), export_name.clone()))
-    }
-
     fn complete_return(
         &mut self,
         module: Option<&Ir3Module>,
@@ -45592,7 +47304,6 @@ impl InterpreterCore {
         // pushed change, so neither side is re-walked.
         let previous_scope_bytes =
             (!scope_inert_activation).then(|| self.scope_chain_structural_bytes());
-        let callee_frames = (!scope_inert_activation).then(|| self.scope_chain.frames.clone());
         #[cfg(debug_assertions)]
         let walked_scope_before =
             (!scope_inert_activation).then(|| self.scope_chain_memory_bytes());
@@ -45632,13 +47343,18 @@ impl InterpreterCore {
                 Self::terminal_async_failure_label(label)
             });
             let return_ip = frame.return_ip;
-            self.restore_call_frame_state(&mut frame);
+            let callee_frames = if scope_inert_activation {
+                self.restore_call_frame_state(&mut frame);
+                Vec::new()
+            } else {
+                self.restore_call_frame_control_state(&mut frame);
+                self.swap_back_returning_scope_chain(&mut frame)
+            };
             self.ip = return_ip;
             let frame_memory_result = match (previous_scope_bytes, previous_closure_bytes) {
                 (Some(previous_scope_bytes), Some(previous_closure_bytes)) => {
-                    let released_cell_bytes = self.released_frame_cell_payload_bytes(
-                        callee_frames.as_deref().unwrap_or_default(),
-                    );
+                    let released_cell_bytes =
+                        self.released_frame_cell_payload_bytes(&callee_frames);
                     #[cfg(debug_assertions)]
                     self.debug_assert_scope_swap_delta(
                         walked_scope_before.expect("ordinary scope accounting"),
@@ -45710,16 +47426,55 @@ impl InterpreterCore {
     }
 
     fn restore_call_frame_state(&mut self, frame: &mut CallFrame) {
+        self.restore_call_frame_control_state(frame);
+        self.restore_scope_chain_for_frame(frame);
+    }
+
+    /// Everything [`Self::restore_call_frame_state`] restores but the scope
+    /// chain.
+    fn restore_call_frame_control_state(&mut self, frame: &mut CallFrame) {
         self.register_base = frame.register_base;
         self.register_width = frame.register_width;
         self.suspended_abrupt_completions
             .truncate(frame.saved_suspended_abrupt_depth);
         self.finally_frames.truncate(frame.saved_finally_mode_depth);
-        self.restore_scope_chain_for_frame(frame);
         self.pending_exception = frame.saved_pending_exception.take();
         self.pending_exception_label =
             std::mem::replace(&mut frame.saved_pending_exception_label, Label::Public);
         self.pending_return = frame.saved_pending_return.take();
+    }
+
+    /// The scope half of [`Self::restore_call_frame_state`] for the frame
+    /// `complete_return` pops from an activation that replaced the chain,
+    /// giving back the callee frames that leave the chain for
+    /// `released_frame_cell_payload_bytes`. They were cloned before the swap:
+    /// a Vec and a reference count per frame on every return (bd-9vouw.504).
+    /// A plain return also moves the saved chain back instead of cloning it.
+    /// An async settle or a derived constructor's field initializers run code
+    /// before the frame drops, so those keep the frame's copy, and with it
+    /// every map's sharing count, until then, as before.
+    fn swap_back_returning_scope_chain(&mut self, frame: &mut CallFrame) -> Vec<ScopeFrame> {
+        debug_assert_eq!(frame.scope_inert_virtual_scope_bytes, 0);
+        let runs_code_before_drop =
+            frame.async_function_id.is_some() || frame.initialize_derived_this_on_return;
+        let saved = if runs_code_before_drop {
+            frame.saved_scope_chain.clone()
+        } else {
+            frame.saved_scope_chain.take()
+        };
+        match saved {
+            Some(saved) => std::mem::replace(&mut self.scope_chain.frames, saved),
+            None => {
+                let mut left = Vec::new();
+                while self.scope_chain.depth() > frame.saved_scope_depth {
+                    let Some(popped) = self.scope_chain.pop() else {
+                        break;
+                    };
+                    left.push(popped);
+                }
+                left
+            }
+        }
     }
 
     fn settle_async_function(
@@ -46104,11 +47859,6 @@ impl InterpreterCore {
                 ),
             });
         }
-        // Only the restored range of the register file changes, so its bytes
-        // are the register component delta. Measuring the whole file walked
-        // every live frame twice per await.
-        let previous_register_bytes =
-            self.register_range_memory_bytes(saved_register_base..window_end);
         let (saved_registers, saved_register_labels) = {
             let async_function = self
                 .async_functions
@@ -46129,20 +47879,45 @@ impl InterpreterCore {
         // Restore register file
         let reg_start = self.register_base;
 
-        // perf: hot path - use into_iter to avoid cloning each register value
+        // Only the restored window changes, so the bytes leaving and entering
+        // it are the register component delta, and they move the cached file
+        // sums. One pass writes the saved prefix and clears the rest of the
+        // window: summing the window before and after and dropping the caches
+        // walked it twice and the whole file at the next read (bd-9vouw.500).
+        let mut previous_value_bytes = 0u64;
+        let mut next_value_bytes = 0u64;
+        self.note_registers_written_to(reg_end);
+        let cached_value_bytes = self.registers_value_bytes.get();
         self.mutate_registers(|r| {
-            for (i, value) in saved_registers.into_iter().enumerate() {
-                r[reg_start + i] = value;
+            let mut saved = saved_registers.into_iter();
+            for slot in &mut r[reg_start..window_end] {
+                let value = saved.next().unwrap_or(Value::Undefined);
+                previous_value_bytes =
+                    previous_value_bytes.saturating_add(Self::estimate_value_bytes(slot));
+                next_value_bytes =
+                    next_value_bytes.saturating_add(Self::estimate_value_bytes(&value));
+                *slot = value;
             }
-            r[reg_end..window_end].fill(Value::Undefined);
         });
-        for (slot, label) in self.register_labels[reg_start..reg_end]
-            .iter_mut()
-            .zip(saved_register_labels)
-        {
+        self.registers_value_bytes
+            .set(cached_value_bytes.map(|bytes| {
+                bytes
+                    .saturating_sub(previous_value_bytes)
+                    .saturating_add(next_value_bytes)
+            }));
+        let mut previous_label_bytes = 0u64;
+        let mut next_label_bytes = 0u64;
+        let mut saved_labels = saved_register_labels.into_iter();
+        for slot in &mut self.register_labels[reg_start..window_end] {
+            let label = saved_labels.next().unwrap_or(Label::Public);
+            previous_label_bytes =
+                previous_label_bytes.saturating_add(Self::estimate_label_bytes(slot));
+            next_label_bytes = next_label_bytes.saturating_add(Self::estimate_label_bytes(&label));
             *slot = label;
         }
-        self.register_labels[reg_end..window_end].fill(Label::Public);
+        self.adjust_register_labels_bytes(previous_label_bytes, next_label_bytes);
+        let previous_register_bytes = previous_value_bytes.saturating_add(previous_label_bytes);
+        let next_register_bytes = next_value_bytes.saturating_add(next_label_bytes);
 
         // Resume execution - now we can safely get the mutable reference
         let async_function = self
@@ -46154,7 +47929,6 @@ impl InterpreterCore {
             })?;
         async_function.phase = AsyncFunctionPhase::Executing;
         let next_async_bytes = Self::estimate_async_function_bytes(async_function);
-        let next_register_bytes = self.register_range_memory_bytes(reg_start..window_end);
         self.estimated_memory_bytes = self
             .estimated_memory_bytes
             .saturating_sub(previous_register_bytes)
@@ -46666,7 +48440,7 @@ impl InterpreterCore {
             Ok(_) => {
                 // Static importers ignore the fulfillment value; an `import()`
                 // of the module follows this promise to its namespace.
-                self.sort_module_namespace_keys(specifier);
+                self.sort_module_namespace_keys(specifier)?;
                 let mut namespace = crate::object_model::JsValue::Undefined;
                 if let Some(record) = self.module_state.modules.get_mut(specifier) {
                     record.status = ModuleRuntimeStatus::Evaluated;
@@ -48176,20 +49950,26 @@ impl InterpreterCore {
         self.apply_rest_param_labels(&mut argument_labels, function.rest_param_index, args)?;
         self.stage_arguments_object(module, function, function_index, &active_callee, args)?;
         self.run_pre_call_hook(module, &active_callee, function_index, &argument_values)?;
+        let super_home_object =
+            self.constructor_super_home_object(module, &active_callee, function_index)?;
 
         let scope_depth = self.scope_chain.depth();
         let captured_env_bytes = captured_env
             .as_ref()
             .map(|environment| Self::estimate_scope_chain_bytes(environment))
             .unwrap_or(0);
-        let saved_scope_chain = if captured_env.is_some() {
-            Some(self.snapshot_scope_chain_with_temporary_budget(captured_env_bytes)?)
-        } else {
-            None
-        };
+        if captured_env.is_some() {
+            self.preflight_scope_chain_snapshot_with_temporary_budget(captured_env_bytes)?;
+        }
         let previous_scope_bytes = self.scope_chain_memory_bytes();
         let previous_closure_bytes = self.closures_memory_bytes();
         let previous_call_stack_bytes = self.call_stack_memory_bytes();
+        // The callee's environment replaces the caller's chain below, so the
+        // frame takes the chain itself rather than a copy (bd-9vouw.504);
+        // nothing reads the chain until the environment is in place.
+        let saved_scope_chain = captured_env
+            .is_some()
+            .then(|| std::mem::take(&mut self.scope_chain.frames));
         let pushed_frame = CallFrame {
             return_ip,
             return_reg,
@@ -48202,7 +49982,7 @@ impl InterpreterCore {
             new_target_label,
             super_value,
             super_label,
-            super_home_object: None,
+            super_home_object,
             construct_this,
             derived_constructor,
             this_initialized,
@@ -48487,6 +50267,9 @@ impl InterpreterCore {
             register_labels,
             register_len: max_registers,
             register_label_len: max_registers,
+            register_dirty_end: max_registers,
+            registers_value_bytes: None,
+            register_labels_bytes: None,
             delegation: None,
             active_inline_callback_context_label: invocation.inline_context_label,
             call_stack: vec![CallFrame {
@@ -48545,11 +50328,34 @@ impl InterpreterCore {
 
     fn take_generator_execution(&mut self) -> GeneratorExecutionSnapshot {
         self.before_seed_surface_write();
-        let registers = std::mem::take(&mut self.registers.value);
-        let register_labels = std::mem::take(&mut self.register_labels);
-        let mut execution = GeneratorExecutionSnapshot {
-            register_len: registers.len(),
-            register_label_len: register_labels.len(),
+        let register_len = self.registers.len();
+        let register_label_len = self.register_labels.len();
+        // The snapshot takes the files' live prefix (the trim of
+        // bd-9vouw.167) by moving each value out, which leaves the core's
+        // files cleared throughout: they become the spare the next install
+        // refills, instead of being truncated, reallocated and padded back
+        // to full windows on every step (bd-9vouw.500).
+        let live = live_register_prefix_len(&self.registers, &self.register_labels);
+        let registers: Vec<Value> = self.registers.value[..live.min(register_len)]
+            .iter_mut()
+            .map(|value| std::mem::replace(value, Value::Undefined))
+            .collect();
+        let register_labels: Vec<Label> = self.register_labels[..live.min(register_label_len)]
+            .iter_mut()
+            .map(|label| std::mem::replace(label, Label::Public))
+            .collect();
+        let registers_value_bytes = self.registers_value_bytes.replace(Some(0));
+        let register_labels_bytes = self.register_labels_bytes.replace(Some(0));
+        let cleared_registers = std::mem::take(&mut self.registers.value);
+        let cleared_labels = std::mem::take(&mut self.register_labels);
+        self.keep_spare_register_files(cleared_registers, cleared_labels);
+        GeneratorExecutionSnapshot {
+            register_len,
+            register_label_len,
+            // The core's files are empty now, so nothing past 0 is dirty.
+            register_dirty_end: std::mem::take(&mut self.register_dirty_end),
+            registers_value_bytes,
+            register_labels_bytes,
             registers,
             register_labels,
             delegation: self.generator_delegation.take(),
@@ -48577,9 +50383,39 @@ impl InterpreterCore {
             current_module_specifier: self.current_module_specifier.take(),
             active_generated_function_artifact: self.active_generated_function_artifact.take(),
             contained_codegen_grant: None,
-        };
-        execution.trim_cleared_register_tail();
-        execution
+        }
+    }
+
+    /// Keep `registers` and `labels`, every slot cleared, as spare files
+    /// (`spare_register_files`) unless they are longer than the cap; the
+    /// oldest spare goes once there are more than SPARE_REGISTER_FILES.
+    fn keep_spare_register_files(&mut self, registers: Vec<Value>, labels: Vec<Label>) {
+        let cap = SPARE_REGISTER_FILE_WINDOWS.saturating_mul(self.config.max_registers as usize);
+        if registers.len() <= cap && labels.len() <= cap {
+            debug_assert_eq!(
+                live_register_prefix_len(&registers, &labels),
+                0,
+                "a spare register file holds a value or a label (bd-9vouw.500)"
+            );
+            self.spare_register_files.push((registers, labels));
+            if self.spare_register_files.len() > SPARE_REGISTER_FILES {
+                self.spare_register_files.remove(0);
+            }
+        }
+    }
+
+    /// The spare files to refill into a file of `len` values: those of that
+    /// length if any, else new empty ones. A spare of another length stays:
+    /// a step takes one file and installs one, so a spare handed out for
+    /// the wrong length was cut or regrown on every install, and the pool
+    /// never held one of each length (bd-9vouw.500).
+    fn take_spare_register_files(&mut self, len: usize) -> (Vec<Value>, Vec<Label>) {
+        self.spare_register_files
+            .iter()
+            .position(|(registers, _)| registers.len() == len)
+            .map_or_else(Default::default, |index| {
+                self.spare_register_files.remove(index)
+            })
     }
 
     fn async_function_ids_in_call_stack(
@@ -48790,6 +50626,8 @@ impl InterpreterCore {
                 break;
             }
         }
+        // Bulk removals above: recount the running totals once.
+        self.resync_promise_combinator_bytes();
     }
 
     /// Fail closed when an isolated owner-module activation cannot continue.
@@ -48910,6 +50748,10 @@ impl InterpreterCore {
             .first_mut()
             .map(|label| std::mem::replace(label, Label::Public))
             .unwrap_or(Label::Public);
+        let moved_label_bytes = Self::estimate_label_bytes(&result_label);
+        execution.register_labels_bytes = execution
+            .register_labels_bytes
+            .map(|bytes| bytes.saturating_sub(moved_label_bytes));
         self.closures.replace_activation(
             &mut self.async_functions[suspended_async_id as usize].isolated_execution,
             Some(execution),
@@ -48974,16 +50816,27 @@ impl InterpreterCore {
 
     fn install_generator_execution(&mut self, execution: GeneratorExecutionSnapshot) {
         self.before_seed_surface_write();
-        let mut registers = execution.registers;
-        let mut register_labels = execution.register_labels;
-        if registers.len() < execution.register_len {
-            registers.resize(execution.register_len, Value::Undefined);
-        }
-        if register_labels.len() < execution.register_label_len {
-            register_labels.resize(execution.register_label_len, Label::Public);
-        }
+        // The spare files are cleared throughout, so only the parked prefix
+        // and any difference in length are written (bd-9vouw.500).
+        let (mut registers, mut register_labels) =
+            self.take_spare_register_files(execution.register_len);
+        refill_cleared_file(
+            &mut registers,
+            execution.registers,
+            execution.register_len,
+            Value::Undefined,
+        );
+        refill_cleared_file(
+            &mut register_labels,
+            execution.register_labels,
+            execution.register_label_len,
+            Label::Public,
+        );
         self.registers.value = registers;
-        self.register_labels = register_labels;
+        self.registers_value_bytes
+            .set(execution.registers_value_bytes);
+        self.install_register_labels(register_labels, execution.register_labels_bytes);
+        self.register_dirty_end = execution.register_dirty_end;
         self.generator_delegation = execution.delegation;
         self.active_inline_callback_context_label = execution.active_inline_callback_context_label;
         self.call_stack
@@ -50419,11 +52272,10 @@ impl InterpreterCore {
                         // writable `ClientRequest` object here WITHOUT egressing —
                         // the body is accumulated via `req.write`/`req.end` and the
                         // deferred egress fires from `.end()`. The capability gate
-                        // above already authorized NetworkEgress at creation time
-                        // (`net:client_request` maps to NetworkEgress), so the
-                        // deferred `.end()` egress is pre-authorized at the engine
-                        // capability layer; the per-endpoint SSRF policy still
-                        // applies at `.end()` via the sandboxed provider.
+                        // above authorizes construction through NetworkEgress.
+                        // The deferred `.end()` checks the live `net:request`
+                        // gate again before mutation or egress, followed by the
+                        // provider's endpoint policy at dispatch.
                         self.dispatch_client_request_create(args)?
                     }
                     HostcallDispatchBinding::HostIo => {
@@ -50546,6 +52398,24 @@ impl InterpreterCore {
                     Ok(value) => value,
                     Err(error) => return self.route_reentrant_guest_error(module, error),
                 };
+                // ES2020 12.15.3 ApplyStringOrNumericBinaryOperator: ToNumeric
+                // of the left operand completes, throwing for a Symbol, before
+                // the right one converts. A relational comparison converts both
+                // operands to primitives first (7.2.13).
+                let relational = matches!(
+                    numeric,
+                    Ir3Instruction::Lt { .. }
+                        | Ir3Instruction::Lte { .. }
+                        | Ir3Instruction::Gt { .. }
+                        | Ir3Instruction::Gte { .. }
+                );
+                if rhs.is_some() && !relational && matches!(left, Value::Symbol(_)) {
+                    self.clear_pending_hostcall_result_label();
+                    return Err(InterpreterError::TypeError {
+                        expected: "value convertible to a number".to_string(),
+                        got: "Symbol (Cannot convert a Symbol value to a number)".to_string(),
+                    });
+                }
                 let right = match rhs {
                     Some(rhs) => match self.observable_to_numeric_primitive_operand(module, rhs) {
                         Ok(value) => Some(value),
@@ -50803,9 +52673,6 @@ impl InterpreterCore {
             if self.gc_safe_point_due() {
                 self.gc_safe_point();
             }
-            // Retire the handoff even on EOF, implicit return, or budget refusal.
-            // Only this iteration's adjacent InitBinding may consume it.
-            let pending_cyclic_import_binding = self.pending_cyclic_import_binding.take();
             // Time-travel debugger state capture at the instruction boundary
             // (bd-fqlfw.3.5.5). O(1) branch when disarmed.
             self.check_state_capture_boundary();
@@ -50853,7 +52720,14 @@ impl InterpreterCore {
             {
                 self.preflight_bigint_literal_write(*dst, value)?;
             }
-            let instr = compact_instruction.is_none().then(|| instr_ref.clone());
+            // An instruction Tier-R always hands to the reentrant path is not
+            // cloned: that path reads it in place, and the clone of a HostCall
+            // allocated its capability tag only to drop it (bd-9vouw.348).
+            let reentrant_only =
+                compact_instruction.is_none() && self.tier_r_always_reentrant(instr_ref);
+            let mut instr =
+                (compact_instruction.is_none() && !reentrant_only).then(|| instr_ref.clone());
+            let mut spread_apply_arguments = None;
             self.instructions_executed += 1;
 
             // Checkpoint guard integration: tick on each instruction
@@ -50893,6 +52767,26 @@ impl InterpreterCore {
                     self.tier_i_instructions_executed.saturating_add(1);
                 self.execute_compact_tier1_instruction(module, compact_instruction)?;
                 continue;
+            }
+            if reentrant_only {
+                // bd-9vouw.501: a spread call `f(...list)` is the Reflect.apply
+                // hostcall over a fresh array; when building the argument list
+                // is unobservable it runs as the method call `undefined.f(...)`,
+                // the list handed to the CallMethod handler as
+                // `apply_arguments`. Only the reentrant instructions reach this
+                // check: made before the dispatch, it cost every instruction.
+                match self.spread_call_as_method_call(module, instr_ref)? {
+                    Some((call, values)) => {
+                        instr = Some(call);
+                        spread_apply_arguments = Some(values);
+                    }
+                    None => {
+                        return Ok(DispatchOutcome::ReentrantInstruction {
+                            instruction_ip: self.ip,
+                            profile_start,
+                        });
+                    }
+                }
             }
 
             // bd-9vouw.37: a numeric operator with an object operand runs its
@@ -50991,9 +52885,11 @@ impl InterpreterCore {
                     });
                 }
                 Ir3Instruction::Move { dst, src } => {
-                    let result_label = self.unary_operation_label(src)?;
-                    let val = self.read_reg(src)?;
-                    self.write_reg_with_label(dst, val, result_label)?;
+                    if !self.static_move(dst, src) {
+                        let result_label = self.unary_operation_label(src)?;
+                        let val = self.read_reg(src)?;
+                        self.write_reg_with_label(dst, val, result_label)?;
+                    }
                     self.ip += 1;
                 }
                 Ir3Instruction::Jump { target } => {
@@ -51488,8 +53384,7 @@ impl InterpreterCore {
                                 });
                             }
 
-                            let mut arg_vals = Vec::new();
-                            let mut arg_labels = Vec::new();
+                            let (mut arg_vals, mut arg_labels) = self.take_call_argument_scratch();
                             for i in 0..args.count.min(func.arity) {
                                 let reg = args.start.checked_add(i).ok_or(
                                     InterpreterError::RegisterOutOfBounds {
@@ -51668,13 +53563,14 @@ impl InterpreterCore {
 
                             // Copy arguments into registers for the callee.
                             for (i, (val, label)) in
-                                arg_vals.into_iter().zip(arg_labels).enumerate()
+                                arg_vals.drain(..).zip(arg_labels.drain(..)).enumerate()
                             {
                                 let reg = i as u32;
                                 if reg < self.config.max_registers {
                                     self.write_reg_with_label(reg, val, label)?;
                                 }
                             }
+                            self.restore_call_argument_scratch(arg_vals, arg_labels);
 
                             self.ip = func.entry as usize;
                         }
@@ -51719,6 +53615,52 @@ impl InterpreterCore {
                             start: args.start + 1,
                             count: args.count - 1,
                         };
+                    }
+
+                    // bd-9vouw.501: `f.apply(t, list)` and `Reflect.apply(f,
+                    // t, list)` likewise, when building the list is
+                    // unobservable (`unobservable_apply_arguments`): the list
+                    // reaches the frame as overflow registers instead of an
+                    // isolated activation running `f` in a nested run loop,
+                    // which also capped a recursion through apply at the
+                    // reentrant depth. A spread call arrives here rewritten
+                    // from its Reflect.apply hostcall, its list taken.
+                    let mut apply_arguments = spread_apply_arguments.take();
+                    if apply_arguments.is_none()
+                        && let Value::BuiltinFunction(builtin) = &callee_val
+                        && builtin.bound_object.is_none()
+                    {
+                        let operands = match builtin.kind {
+                            BuiltinFunctionKind::FunctionPrototypeApply if args.count >= 2 => {
+                                Some((receiver, args.start, args.start + 1))
+                            }
+                            BuiltinFunctionKind::StaticHostcall
+                                if args.count >= 3
+                                    && &*builtin.module_specifier == "builtin:ReflectApply" =>
+                            {
+                                Some((args.start, args.start + 1, args.start + 2))
+                            }
+                            _ => None,
+                        };
+                        if let Some((function, this, list)) = operands
+                            && let Some(values) = self.unobservable_apply_arguments(
+                                module,
+                                &[receiver, callee],
+                                function,
+                                this,
+                                list,
+                            )?
+                        {
+                            callee = function;
+                            callee_val = self.read_reg(callee)?;
+                            receiver = this;
+                            receiver_val = self.read_reg(receiver)?;
+                            args = RegRange {
+                                start: self.config.max_registers,
+                                count: values.len() as u32,
+                            };
+                            apply_arguments = Some(values);
+                        }
                     }
 
                     if let Value::BuiltinFunction(builtin) = callee_val {
@@ -52091,22 +54033,35 @@ impl InterpreterCore {
                         });
                     }
 
-                    let mut arg_vals = Vec::new();
-                    let mut arg_labels = Vec::new();
-                    for i in 0..args.count.min(func.arity) {
-                        let reg = args.start.checked_add(i).ok_or(
-                            InterpreterError::RegisterOutOfBounds {
-                                register: args.start,
-                                max: self.config.max_registers,
-                            },
-                        )?;
-                        arg_vals.push(self.read_reg(reg)?);
-                        arg_labels.push(self.get_register_label(reg)?.clone());
+                    let (mut arg_vals, mut arg_labels) = self.take_call_argument_scratch();
+                    // An apply list (bd-9vouw.501) is registers
+                    // max_registers.. of this frame while the parameters,
+                    // the rest parameter and `arguments` take it, and only
+                    // then, whatever their outcome.
+                    let overflow_depth = match apply_arguments.take() {
+                        Some(values) => Some(self.install_apply_argument_overflow(values)?),
+                        None => None,
+                    };
+                    let bound = (|| -> Result<(), InterpreterError> {
+                        for i in 0..args.count.min(func.arity) {
+                            let reg = args.start.checked_add(i).ok_or(
+                                InterpreterError::RegisterOutOfBounds {
+                                    register: args.start,
+                                    max: self.config.max_registers,
+                                },
+                            )?;
+                            arg_vals.push(self.read_reg(reg)?);
+                            arg_labels.push(self.get_register_label(reg)?.clone());
+                        }
+                        self.mark_inline_callback_started();
+                        self.apply_rest_param(&mut arg_vals, func.rest_param_index, args)?;
+                        self.apply_rest_param_labels(&mut arg_labels, func.rest_param_index, args)?;
+                        self.stage_arguments_object(module, func, func_idx, &callee_val, args)
+                    })();
+                    if let Some(depth) = overflow_depth {
+                        self.restore_argument_overflow(depth);
                     }
-                    self.mark_inline_callback_started();
-                    self.apply_rest_param(&mut arg_vals, func.rest_param_index, args)?;
-                    self.apply_rest_param_labels(&mut arg_labels, func.rest_param_index, args)?;
-                    self.stage_arguments_object(module, func, func_idx, &callee_val, args)?;
+                    bound?;
 
                     self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
@@ -52199,12 +54154,15 @@ impl InterpreterCore {
                         func_idx,
                     )?;
 
-                    for (i, (val, label)) in arg_vals.into_iter().zip(arg_labels).enumerate() {
+                    for (i, (val, label)) in
+                        arg_vals.drain(..).zip(arg_labels.drain(..)).enumerate()
+                    {
                         let reg = i as u32;
                         if reg < self.config.max_registers {
                             self.write_reg_with_label(reg, val, label)?;
                         }
                     }
+                    self.restore_call_argument_scratch(arg_vals, arg_labels);
 
                     self.ip = func.entry as usize;
                 }
@@ -52321,7 +54279,38 @@ impl InterpreterCore {
                         .unwrap_or_else(|| format!("__export_{name_pool_index}"));
                     let value = self.read_reg(src)?;
                     let label = self.get_register_label(src)?.clone();
-                    self.register_module_export_exact_labeled(JsString::from(name), value, label)?;
+                    let export_name = JsString::from(name);
+                    self.register_module_export_exact_labeled(export_name.clone(), value, label)?;
+                    // bd-1lsy.4.10.1: the export of a scope-resident module
+                    // binding (read, or initialized, just before) stays live:
+                    // later writes to that binding republish it.
+                    let local = match self
+                        .ip
+                        .checked_sub(1)
+                        .and_then(|read| module.instructions.get(read))
+                    {
+                        Some(Ir3Instruction::LoadScoped {
+                            dst,
+                            name_pool_index,
+                        }) if *dst == src => Some(*name_pool_index),
+                        Some(Ir3Instruction::InitBinding {
+                            name_pool_index,
+                            src: initialized,
+                        }) if *initialized == src => Some(*name_pool_index),
+                        _ => None,
+                    };
+                    if let Some(local) = local
+                        && let Some(specifier) = self.current_module_specifier.clone()
+                    {
+                        let local = Self::scoped_constant_name(module, local);
+                        let cell = self
+                            .scope_chain
+                            .resolve(local.as_ref())
+                            .map(|(_, binding)| Rc::clone(&binding.state));
+                        if let Some(cell) = cell {
+                            self.track_live_export(&cell, specifier, export_name)?;
+                        }
+                    }
                     self.ip += 1;
                 }
                 Ir3Instruction::GetProperty { obj, key, dst } => {
@@ -52355,9 +54344,13 @@ impl InterpreterCore {
                         Value::Object(object_id) => Some(*object_id),
                         _ => None,
                     };
-                    let ordinary_own_property_fast_path = object_id.is_some_and(|object_id| {
-                        self.ordinary_own_property_read_fast_path_eligible(object_id, &property_key)
+                    let mut ordinary_own_property_read = object_id.and_then(|object_id| {
+                        self.ordinary_own_property_fast_read(object_id, &property_key)
                     });
+                    let ordinary_own_property_fast_path = ordinary_own_property_read.is_some();
+                    // A data property's stored label from the fast read, for
+                    // the owner-label join below (bd-9vouw.504).
+                    let mut ordinary_own_property_label = None;
                     let has_hook_target = object_id.is_some()
                         || matches!(
                             &obj_val,
@@ -52432,8 +54425,17 @@ impl InterpreterCore {
                     // another function's (an arrow's, a bound function's) is
                     // an ordinary own property, as in function_own_get
                     // (bd-9vouw.277).
+                    let authoritative_standard_backing = self
+                        .authoritative_standard_constructor_backing(
+                            module,
+                            &obj_val,
+                            &property_key,
+                        )?;
                     let mut inherited_function_standard = None;
                     let function_backing = match &obj_val {
+                        _ if authoritative_standard_backing.is_some() => {
+                            authoritative_standard_backing
+                        }
                         Value::Function(_)
                         | Value::Closure(_)
                         | Value::GeneratorFunction(_)
@@ -52485,16 +54487,20 @@ impl InterpreterCore {
                     // intrinsic prototype (after the match).
                     // A callable proxy's [[Get]] is its trap's (or its
                     // target's) answer, never continued here.
-                    let inherited_base =
-                        if function_backing.is_none() && !Self::is_callable_proxy(&obj_val) {
-                            Self::function_intrinsic_prototype_name(&obj_val)
-                                .or(self
-                                    .exotic_intrinsic_prototype_name(&obj_val)
-                                    .filter(|name| *name != "Promise"))
-                                .map(|prototype| (prototype, obj_val.clone()))
-                        } else {
-                            None
-                        };
+                    let inherited_base = if function_backing.is_none()
+                        && !matches!(&obj_val, Value::BuiltinFunction(builtin)
+                                if matches!(builtin.kind,
+                                    BuiltinFunctionKind::CallableProxy
+                                    | BuiltinFunctionKind::FunctionPrototype))
+                    {
+                        Self::function_intrinsic_prototype_name(&obj_val)
+                            .or(self
+                                .exotic_intrinsic_prototype_name(&obj_val)
+                                .filter(|name| *name != "Promise"))
+                            .map(|prototype| (prototype, obj_val.clone()))
+                    } else {
+                        None
+                    };
 
                     // The prototype object a primitive base's property came
                     // from, for the stored-label join below.
@@ -52503,13 +54509,17 @@ impl InterpreterCore {
                         value
                     } else if let Some(backing) = function_backing {
                         self.run_pre_runtime_property_access_hook(module, backing, &property_key)?;
-                        self.proxy_aware_get_runtime_property(
-                            Some(module),
-                            backing,
-                            &property_key,
-                            obj_val.clone(),
-                            0,
-                        )?
+                        if authoritative_standard_backing.is_some() {
+                            self.get_v(module, &obj_val, &property_key)?
+                        } else {
+                            self.proxy_aware_get_runtime_property(
+                                Some(module),
+                                backing,
+                                &property_key,
+                                obj_val.clone(),
+                                0,
+                            )?
+                        }
                     } else {
                         match obj_val {
                             Value::Object(oid) => {
@@ -52519,26 +54529,21 @@ impl InterpreterCore {
                                     &property_key,
                                 )?;
                                 if property_key.as_str() == Some("__proto__")
-                                    && !self.heap[oid.0 as usize]
-                                        .contains_own_runtime_property(&property_key)
+                                    && self.proto_key_reaches_accessor(oid)
                                 {
                                     // `__proto__` reads the internal prototype link
                                     // (set by class `extends` and `o.__proto__ = p`),
                                     // not a data property (bd-ppfds). A function's
                                     // backing object reports as the function
-                                    // (bd-9vouw.98).
+                                    // (bd-9vouw.98). An own `__proto__` data
+                                    // property or a null-prototype chain reads
+                                    // as an ordinary property (bd-9vouw.318).
                                     let link = self.ordinary_get_prototype_of(oid)?;
                                     self.prototype_value_for_link(Some(module), link)
-                                } else if ordinary_own_property_fast_path {
-                                    let value = self
-                                    .heap
-                                    .get(oid.0 as usize)
-                                    .and_then(|object| {
-                                        object.own_runtime_property_value(&property_key)
-                                    })
-                                    .expect(
-                                        "ordinary own-property fast-path eligibility was checked",
-                                    );
+                                } else if let Some((value, stored_label)) =
+                                    ordinary_own_property_read.take()
+                                {
+                                    ordinary_own_property_label = stored_label;
                                     self.capture_property_resolution_found(&property_key, oid, 0);
                                     self.resolve_accessor_get(
                                         Some(module),
@@ -52671,7 +54676,7 @@ impl InterpreterCore {
                                     // bd-9vouw.34: `Date.prototype` and
                                     // `Promise.prototype` are the realm's
                                     // intrinsics (non-writable in ES2020).
-                                    Value::Object(self.ensure_builtin_prototype(name)?)
+                                    self.builtin_prototype_value(name)?
                                 } else if builtin.kind == BuiltinFunctionKind::Require
                                     && property_key.as_str() == Some("main")
                                 {
@@ -53006,14 +55011,24 @@ impl InterpreterCore {
                     // string and Symbol keys while respecting shadowing.
                     // bd-9vouw.17: a function's backing object is the owner of
                     // its own properties, so their stored labels join too.
-                    if let Some(owner) = object_id.or(function_backing).or(primitive_owner) {
-                        let stored_label = self.runtime_property_label(owner, &property_key);
+                    // The authoritative constructor path records the actual
+                    // resolved owner's label during [[Get]]. Its storage's
+                    // implicit Object.prototype chain is not the function's
+                    // chain and must not override a Public shadow.
+                    if let Some(owner) = object_id
+                        .or(function_backing.filter(|_| authoritative_standard_backing.is_none()))
+                        .or(primitive_owner)
+                    {
+                        // The fast read's owner is `object_id` itself, and a
+                        // plain object never continues to an intrinsic
+                        // prototype above (`inherited_base`).
+                        let stored_label = match ordinary_own_property_label.take() {
+                            Some(label) => label,
+                            None => self.runtime_property_label(owner, &property_key),
+                        };
                         result_label = self
                             .join_owned_label_with_temporary_budget(result_label, &stored_label)?;
                     }
-                    let pending_cyclic_import = object_id.and_then(|namespace_object| {
-                        self.cyclic_module_import_target(namespace_object, &property_key, &prop)
-                    });
                     // bd-9vouw.113: a legacy RegExp static carries its match's label.
                     if let Some(legacy_label) = self.legacy_regexp_read_label.take() {
                         result_label = self
@@ -53029,15 +55044,6 @@ impl InterpreterCore {
                         )?;
                     }
                     self.write_reg_with_label(dst, prop, result_label)?;
-                    self.pending_cyclic_import_binding =
-                        pending_cyclic_import.map(|(module_specifier, export_name)| {
-                            PendingCyclicImportBinding {
-                                source_register: dst,
-                                expected_init_ip: self.ip.saturating_add(1),
-                                module_specifier,
-                                export_name,
-                            }
-                        });
                     self.ip += 1;
                 }
                 Ir3Instruction::CreateDataProperty { obj, key, val } => {
@@ -53154,6 +55160,26 @@ impl InterpreterCore {
                             _ => None,
                         };
                         let set_val = self.read_reg(val)?;
+                        // An Array's writable `length` set to an object runs
+                        // ArraySetLength's ToUint32 / ToNumber (its valueOf
+                        // twice) before the write (bd-9vouw.338); a read-only
+                        // `length` rejects the write without converting.
+                        let set_val = match &obj_val {
+                            Value::Object(oid)
+                                if set_val.is_object_like()
+                                    && property_key.as_str() == Some("length")
+                                    && self.heap.get(oid.0 as usize).is_some_and(|object| {
+                                        object.is_array
+                                            && !object.is_frozen
+                                            && object
+                                                .own_property_attributes(&property_key)
+                                                .writable
+                                    }) =>
+                            {
+                                self.array_length_definition_value(Some(module), set_val)?
+                            }
+                            _ => set_val,
+                        };
 
                         match obj_val {
                             Value::Object(oid) => {
@@ -53181,20 +55207,37 @@ impl InterpreterCore {
                                     // authenticated side table; no guest-writable
                                     // mirror property is created.
                                 } else if property_key.as_str() == Some("__proto__")
-                                    && !self.heap[oid.0 as usize]
-                                        .contains_own_runtime_property(&property_key)
+                                    && self.proto_key_reaches_accessor(oid)
                                 {
+                                    // Otherwise (an own `__proto__`, a null-prototype
+                                    // chain) it is an ordinary data write below
+                                    // (bd-9vouw.318).
                                     // `__proto__` sets the internal prototype link so
                                     // prototype-chain lookups (incl. class `extends`,
                                     // which lowers to `Child.prototype.__proto__ =
                                     // Parent.prototype`) traverse it — not a data
                                     // property (bd-ppfds). A non-object, non-null value
                                     // is a no-op per spec; a function links to its
-                                    // own-property backing (bd-9vouw.98).
+                                    // own-property backing (bd-9vouw.98). The link
+                                    // changes through [[SetPrototypeOf]] (Annex B
+                                    // 2.2.1.2 steps 4-5), so a cycle, a
+                                    // non-extensible object, Object.prototype and a
+                                    // refusing proxy trap throw a TypeError; the
+                                    // link was stored unconditionally (bd-9vouw.311).
                                     let proto_update =
                                         self.prototype_link_for_value(Some(module), &set_val)?;
-                                    if let Some(new_proto) = proto_update {
-                                        self.store_prototype_link(oid, new_proto);
+                                    if let Some(new_proto) = proto_update
+                                        && !self.object_set_prototype(
+                                            Some(module),
+                                            oid,
+                                            new_proto,
+                                            0,
+                                        )?
+                                    {
+                                        return Err(InterpreterError::TypeError {
+                                            expected: "a permitted __proto__ change".to_string(),
+                                            got: "a cyclic or refused prototype".to_string(),
+                                        });
                                     }
                                 } else {
                                     // Precharge and stage the label before the value
@@ -54584,6 +56627,8 @@ impl InterpreterCore {
                             self.stage_arguments_object(module, func, func_idx, &callee_val, args)?;
 
                             self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
+                            let super_home_object =
+                                self.constructor_super_home_object(module, &callee_val, func_idx)?;
 
                             // Push constructor frame with `construct_this`.
                             let scope_depth = self.scope_chain.depth();
@@ -54613,7 +56658,7 @@ impl InterpreterCore {
                                 new_target_label: callee_label,
                                 super_value: Value::Undefined,
                                 super_label: Label::Public,
-                                super_home_object: None,
+                                super_home_object,
                                 construct_this: Some(this_val.clone()),
                                 derived_constructor: false,
                                 this_initialized: true,
@@ -54800,7 +56845,7 @@ impl InterpreterCore {
                                     .function_value_for_backing(module, home_object)
                                     .is_some() =>
                             {
-                                Value::Object(self.ensure_builtin_prototype("Function")?)
+                                self.builtin_prototype_value("Function")?
                             }
                             (None, false) => self
                                 .ordinary_get_prototype_of(home_object)?
@@ -55345,11 +57390,37 @@ impl InterpreterCore {
                     }
 
                     let awaited_value = self.read_reg(promise_reg)?;
-                    let awaited_label = self.get_register_label(promise_reg)?.clone();
+                    let mut awaited_label = self.get_register_label(promise_reg)?.clone();
 
                     // Convert the awaited value to a Promise if it's not already one
                     let promise_handle = match awaited_value {
-                        Value::Promise(h) => crate::promise_model::PromiseHandle(h),
+                        Value::Promise(h) => {
+                            // PromiseResolve reads its `constructor`
+                            // (bd-9vouw.352); what the read observes labels
+                            // the await, and a pending HostCall result label
+                            // is set aside.
+                            let saved_result_label = self.take_pending_hostcall_result_label();
+                            let keeps = self.await_keeps_promise(module, h);
+                            let observed = self.take_pending_hostcall_result_label();
+                            if let Some(saved) = saved_result_label {
+                                self.replace_pending_hostcall_result_label(Some(saved))?;
+                            }
+                            if let Some(observed) = observed {
+                                awaited_label = awaited_label.join(&observed);
+                            }
+                            if keeps? {
+                                crate::promise_model::PromiseHandle(h)
+                            } else {
+                                let handle = self.create_promise()?;
+                                self.resolve_promise_with_value(
+                                    Some(module),
+                                    handle,
+                                    Value::Promise(h),
+                                    awaited_label.clone(),
+                                )?;
+                                handle
+                            }
+                        }
                         // await an object: PromiseResolve adopts a thenable
                         // through a PromiseResolveThenableJob (bd-9vouw.174).
                         Value::Object(_) => {
@@ -55583,7 +57654,7 @@ impl InterpreterCore {
                     allow_missing,
                 } => {
                     let name = Self::scoped_constant_name(module, name_pool_index);
-                    match self.load_runtime_name(name.as_ref(), false) {
+                    match self.load_runtime_name_labeled(name.as_ref(), false) {
                         Err(InterpreterError::UndefinedBinding { .. }) => {
                             match self.load_global_object_name(Some(module), name.as_ref())? {
                                 Some((val, label)) => {
@@ -55604,7 +57675,18 @@ impl InterpreterCore {
                                 }
                             }
                         }
-                        loaded => self.write_reg(dst, loaded?)?,
+                        loaded => {
+                            // A scope cell keeps its value's label (LoadScoped
+                            // writes it); the read carries it, joined with
+                            // dst's like the global-object read above
+                            // (bd-9vouw.487: the value used to keep dst's
+                            // label only).
+                            let (val, label) = loaded?;
+                            let prior_dst_label = self.get_register_label(dst)?;
+                            let label = self
+                                .join_owned_label_with_temporary_budget(label, prior_dst_label)?;
+                            self.write_reg_with_label(dst, val, label)?;
+                        }
                     }
                     self.ip += 1;
                 }
@@ -55643,7 +57725,7 @@ impl InterpreterCore {
                                 name: name.into_owned(),
                             });
                         }
-                        if binding.kind == BindingKind::Const {
+                        if binding.kind.is_immutable() {
                             return Err(InterpreterError::ConstAssignment {
                                 name: name.into_owned(),
                             });
@@ -55673,6 +57755,12 @@ impl InterpreterCore {
                             binding.restore_state(old_state)?;
                             self.closures.refresh_cell(&binding.state);
                             return Err(err);
+                        }
+                        // bd-1lsy.4.10.1: a module binding that backs exports
+                        // republishes them (namespace object and importers).
+                        let live_export = binding.state()?.live_export;
+                        if let Some(live_export) = live_export {
+                            self.publish_live_export(&binding.state, live_export, 0)?;
                         }
                     }
                     self.ip += 1;
@@ -55753,23 +57841,34 @@ impl InterpreterCore {
                             return Err(err);
                         }
                     }
-                    if let Some(pending) = pending_cyclic_import_binding
-                        && pending.source_register == src
-                        && pending.expected_init_ip == self.ip
-                        && let Some((binding, _, _)) = previous.as_ref()
-                        && let Some(record) =
-                            self.module_state.modules.get_mut(&pending.module_specifier)
-                    {
-                        let watchers = record
-                            .pending_import_bindings
-                            .entry(pending.export_name)
-                            .or_default();
-                        if !watchers
-                            .iter()
-                            .any(|watcher| watcher.as_ptr() == Rc::as_ptr(&binding.state))
-                        {
-                            watchers.push(Rc::downgrade(&binding.state));
+                    // bd-1lsy.4.10.1: a module binding that backs exports is
+                    // initialized by its declaration (`export var v = 2` after
+                    // the export was published undefined): republish it.
+                    if let Some((binding, _, _)) = previous.as_ref() {
+                        let live_export = binding.state()?.live_export;
+                        if let Some(live_export) = live_export {
+                            let cell = Rc::clone(&binding.state);
+                            self.publish_live_export(&cell, live_export, 0)?;
                         }
+                    }
+                    // bd-1lsy.4.10.1: an import binding initialized from its
+                    // namespace read (the instruction just before) watches that
+                    // export, so every later publication writes it: the import
+                    // is a live view of the exporting module's binding. In a
+                    // cycle the export may not be published yet; its
+                    // publication initializes the binding then.
+                    if let Some((binding, _, _)) = previous.as_ref()
+                        && binding.kind == BindingKind::Import
+                        && let Some(Ir3Instruction::GetProperty { obj, key, dst }) = self
+                            .ip
+                            .checked_sub(1)
+                            .and_then(|read| module.instructions.get(read))
+                        && *dst == src
+                        && let Value::Object(namespace_object) = self.read_reg(*obj)?
+                        && let Value::Str(export_name) = self.read_reg(*key)?
+                    {
+                        let cell = Rc::clone(&binding.state);
+                        self.watch_module_export(namespace_object, export_name, &cell)?;
                     }
                     self.ip += 1;
                 }
@@ -55865,17 +57964,19 @@ impl InterpreterCore {
                 self.ip += 1;
             }
             Op::Move => {
-                let result_label = self.unary_operation_label(lhs)?;
-                let value = self.read_reg(lhs)?;
-                self.write_reg_with_label(dst, value, result_label)?;
+                if !self.static_move(dst, lhs) {
+                    let result_label = self.unary_operation_label(lhs)?;
+                    let value = self.read_reg(lhs)?;
+                    self.write_reg_with_label(dst, value, result_label)?;
+                }
                 self.ip += 1;
             }
             Op::Add => {
                 let mut compact_handled = false;
-                if let Some((left, right)) = self.compact_public_int_operands(dst, lhs, rhs) {
+                if let Some((left, right, slot)) = self.compact_public_int_operands(dst, lhs, rhs) {
                     if let Some(sum) = left.checked_add(right) {
                         if sum >= MIN_SAFE_INTEGER && sum <= MAX_SAFE_INTEGER {
-                            self.write_reg_with_label(dst, Value::Int(sum), Label::Public)?;
+                            self.write_static_slot(slot, Value::Int(sum));
                             self.record_tier_i_specialization();
                             compact_handled = true;
                         }
@@ -55891,10 +57992,10 @@ impl InterpreterCore {
             }
             Op::Sub => {
                 let mut compact_handled = false;
-                if let Some((left, right)) = self.compact_public_int_operands(dst, lhs, rhs) {
+                if let Some((left, right, slot)) = self.compact_public_int_operands(dst, lhs, rhs) {
                     if let Some(diff) = left.checked_sub(right) {
                         if diff >= MIN_SAFE_INTEGER && diff <= MAX_SAFE_INTEGER {
-                            self.write_reg_with_label(dst, Value::Int(diff), Label::Public)?;
+                            self.write_static_slot(slot, Value::Int(diff));
                             self.record_tier_i_specialization();
                             compact_handled = true;
                         }
@@ -55909,11 +58010,11 @@ impl InterpreterCore {
             }
             Op::Mul => {
                 let mut compact_handled = false;
-                if let Some((left, right)) = self.compact_public_int_operands(dst, lhs, rhs) {
+                if let Some((left, right, slot)) = self.compact_public_int_operands(dst, lhs, rhs) {
                     if !((left == 0 && right < 0) || (right == 0 && left < 0)) {
                         if let Some(prod) = left.checked_mul(right) {
                             if prod >= MIN_SAFE_INTEGER && prod <= MAX_SAFE_INTEGER {
-                                self.write_reg_with_label(dst, Value::Int(prod), Label::Public)?;
+                                self.write_static_slot(slot, Value::Int(prod));
                                 self.record_tier_i_specialization();
                                 compact_handled = true;
                             }
@@ -55958,10 +58059,10 @@ impl InterpreterCore {
                 let delta: i64 = if instruction.opcode == Op::Inc { 1 } else { -1 };
                 let stepped = self
                     .compact_public_int_operands(dst, lhs, lhs)
-                    .and_then(|(value, _)| value.checked_add(delta))
-                    .filter(|value| (MIN_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(value));
-                if let Some(stepped) = stepped {
-                    self.write_reg_with_label(dst, Value::Int(stepped), Label::Public)?;
+                    .and_then(|(value, _, slot)| Some((value.checked_add(delta)?, slot)))
+                    .filter(|(value, _)| (MIN_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(value));
+                if let Some((stepped, slot)) = stepped {
+                    self.write_static_slot(slot, Value::Int(stepped));
                     self.record_tier_i_specialization();
                 } else {
                     let result_label = self.unary_operation_label(lhs)?;
@@ -56088,7 +58189,12 @@ impl InterpreterCore {
     /// destination growth, dynamic destination ownership, or over-budget base
     /// state falls back before mutation to the canonical helpers.
     #[inline(always)]
-    fn compact_public_int_operands(&self, dst: u32, lhs: u32, rhs: u32) -> Option<(i64, i64)> {
+    fn compact_public_int_operands(
+        &self,
+        dst: u32,
+        lhs: u32,
+        rhs: u32,
+    ) -> Option<(i64, i64, StaticWriteSlot)> {
         if dst >= self.config.max_registers
             || lhs >= self.config.max_registers
             || rhs >= self.config.max_registers
@@ -56104,13 +58210,59 @@ impl InterpreterCore {
         ) else {
             return None;
         };
-        if self.register_labels.get(actual_lhs) != Some(&Label::Public)
-            || self.register_labels.get(actual_rhs) != Some(&Label::Public)
+        if !matches!(self.register_labels.get(actual_lhs), Some(Label::Public))
+            || !matches!(self.register_labels.get(actual_rhs), Some(Label::Public))
             || !self.static_register_write_eligible(actual_dst, &Value::Undefined, &Label::Public)
         {
             return None;
         }
-        Some((*left, *right))
+        Some((*left, *right, StaticWriteSlot(actual_dst)))
+    }
+
+    /// `Move dst, src` when the source value and label own no dynamic bytes
+    /// and the destination is eligible for a static write: the write
+    /// `write_reg_with_label` makes on its static path, without cloning the
+    /// label through a budget check (a static label is zero bytes; the
+    /// eligibility check refuses an over-budget state, which the generic
+    /// path reports) (bd-9vouw.504). False leaves every register untouched.
+    #[inline(always)]
+    fn static_move(&mut self, dst: u32, src: u32) -> bool {
+        if dst >= self.config.max_registers || src >= self.config.max_registers {
+            return false;
+        }
+        let actual_src = self.register_base + src as usize;
+        let actual_dst = self.register_base + dst as usize;
+        let (Some(value), Some(label)) = (
+            self.registers.get(actual_src),
+            self.register_labels.get(actual_src),
+        ) else {
+            return false;
+        };
+        if !Self::static_register_value(value) || !Self::static_register_label(label) {
+            return false;
+        }
+        let (value, label) = (value.clone(), label.clone());
+        if !self.static_register_write_eligible(actual_dst, &value, &label) {
+            return false;
+        }
+        self.note_register_written(actual_dst);
+        self.mutate_registers_by_bytes(0, 0, |registers| registers[actual_dst] = value);
+        self.register_labels[actual_dst] = label;
+        true
+    }
+
+    /// Store a compact operator's Public primitive result in the slot
+    /// `compact_public_int_operands` found eligible: the write
+    /// `write_reg_with_label` makes on its static path, without checking
+    /// eligibility a second time (bd-9vouw.504). Nothing runs between the
+    /// check and this write but the operator's integer arithmetic.
+    #[inline(always)]
+    fn write_static_slot(&mut self, slot: StaticWriteSlot, value: Value) {
+        debug_assert!(Self::static_register_value(&value));
+        let StaticWriteSlot(actual_reg) = slot;
+        self.note_register_written(actual_reg);
+        self.mutate_registers_by_bytes(0, 0, |registers| registers[actual_reg] = value);
+        self.register_labels[actual_reg] = Label::Public;
     }
 
     #[inline]
@@ -56121,7 +58273,7 @@ impl InterpreterCore {
         rhs: u32,
         operator: &str,
     ) -> Result<(), InterpreterError> {
-        if let Some((left, right)) = self.compact_public_int_operands(dst, lhs, rhs) {
+        if let Some((left, right, slot)) = self.compact_public_int_operands(dst, lhs, rhs) {
             // Preserve the canonical interpreter's current numeric comparison
             // projection through f64, including its behavior above 2^53.
             let left = left as f64;
@@ -56133,7 +58285,7 @@ impl InterpreterCore {
                 ">=" => left >= right,
                 _ => unreachable!("compact relational opcode is statically validated"),
             };
-            self.write_reg_with_label(dst, Value::Bool(result), Label::Public)?;
+            self.write_static_slot(slot, Value::Bool(result));
             self.record_tier_i_specialization();
         } else {
             let result_label = self.binary_operation_label(lhs, rhs)?;
@@ -56153,13 +58305,9 @@ impl InterpreterCore {
         strict: bool,
         negate: bool,
     ) -> Result<(), InterpreterError> {
-        if let Some((left, right)) = self.compact_public_int_operands(dst, lhs, rhs) {
+        if let Some((left, right, slot)) = self.compact_public_int_operands(dst, lhs, rhs) {
             let matches = left == right;
-            self.write_reg_with_label(
-                dst,
-                Value::Bool(if negate { !matches } else { matches }),
-                Label::Public,
-            )?;
+            self.write_static_slot(slot, Value::Bool(if negate { !matches } else { matches }));
             self.record_tier_i_specialization();
         } else {
             let result_label = self.binary_operation_label(lhs, rhs)?;
@@ -56178,7 +58326,7 @@ impl InterpreterCore {
         rhs: u32,
         operator: &str,
     ) -> Result<(), InterpreterError> {
-        if let Some((left, right)) = self.compact_public_int_operands(dst, lhs, rhs) {
+        if let Some((left, right, slot)) = self.compact_public_int_operands(dst, lhs, rhs) {
             let left = left as i32;
             let right = right as i32;
             let shift = (right as u32) & 31;
@@ -56191,7 +58339,7 @@ impl InterpreterCore {
                 ">>>" => (left as u32).wrapping_shr(shift) as i64,
                 _ => unreachable!("compact bitwise opcode is statically validated"),
             };
-            self.write_reg_with_label(dst, Value::Int(result), Label::Public)?;
+            self.write_static_slot(slot, Value::Int(result));
             self.record_tier_i_specialization();
         } else {
             let result_label = self.binary_operation_label(lhs, rhs)?;
@@ -56752,7 +58900,7 @@ impl InterpreterCore {
             if matches!(&handler, Value::BuiltinFunction(builtin)
                 if builtin.kind == BuiltinFunctionKind::FunctionPrototypeHasInstance)
             {
-                if !self.is_callable_for_has_instance(&constructor) {
+                if !constructor.is_callable() {
                     return Ok((Value::Bool(false), None));
                 }
                 return Ok((
@@ -56781,16 +58929,6 @@ impl InterpreterCore {
             self.ordinary_instanceof(module, candidate, constructor)?,
             None,
         ))
-    }
-
-    /// IsCallable(C) for OrdinaryHasInstance: a callable value, or
-    /// %Function.prototype%, which is a function in the spec but an ordinary
-    /// object here. `[] instanceof Function.prototype` therefore reads its
-    /// `prototype`, a TypeError when that is not an object (bd-9vouw.268).
-    fn is_callable_for_has_instance(&self, value: &Value) -> bool {
-        value.is_callable()
-            || matches!(value, Value::Object(id)
-                if self.builtin_prototypes.get("Function") == Some(id))
     }
 
     /// A callable `Symbol.hasInstance` on an object target, or among a user
@@ -56834,7 +58972,7 @@ impl InterpreterCore {
         // ES2020 12.10.4 InstanceofOperator step 4: the target must be
         // callable, not constructible; a generator function has an object
         // `prototype` its generators inherit from (bd-9vouw.120).
-        if !self.is_callable_for_has_instance(&constructor) {
+        if !constructor.is_callable() {
             return Err(InterpreterError::TypeError {
                 expected: "callable instanceof target".to_string(),
                 got: constructor.type_name().to_string(),
@@ -56853,6 +58991,15 @@ impl InterpreterCore {
             let key = RuntimePropertyKey::String(JsString::from("prototype"));
             match self.get_v(module, &constructor, &key)? {
                 Value::Object(prototype) => prototype,
+                // A function is an object: `F.prototype = fn` (Test262
+                // S13.2.2_A1) is searched for as that function.
+                function if function.is_callable() => {
+                    return Ok(Value::Bool(self.value_prototype_chain_contains(
+                        Some(module),
+                        &candidate,
+                        &function,
+                    )?));
+                }
                 other => {
                     return Err(InterpreterError::TypeError {
                         expected: "object-valued constructor prototype".into(),
@@ -56865,6 +59012,13 @@ impl InterpreterCore {
         {
             match value {
                 Value::Object(prototype) => prototype,
+                function if function.is_callable() => {
+                    return Ok(Value::Bool(self.value_prototype_chain_contains(
+                        Some(module),
+                        &candidate,
+                        &function,
+                    )?));
+                }
                 _ => {
                     return Err(InterpreterError::TypeError {
                         expected: "object-valued constructor prototype".into(),
@@ -57084,6 +59238,15 @@ impl InterpreterCore {
         if !found {
             return Ok(false);
         }
+        // An array inherits Array.prototype[@@unscopables] once
+        // Array.prototype exists; make sure it does.
+        if self
+            .heap
+            .get(object_id.0 as usize)
+            .is_some_and(|object| object.is_array)
+        {
+            self.ensure_builtin_prototype("Array")?;
+        }
         let unscopables_key = RuntimePropertyKey::Symbol(WellKnownSymbol::Unscopables.id());
         let unscopables = self.proxy_aware_get_runtime_property(
             module,
@@ -57092,22 +59255,10 @@ impl InterpreterCore {
             object.clone(),
             0,
         )?;
+        // ES2020 8.1.1.2.1 step 5: only an object @@unscopables blocks (a
+        // deleted or replaced Array.prototype[@@unscopables] blocks nothing).
         let Value::Object(unscopables_id) = unscopables else {
-            // Array.prototype[@@unscopables] (ES2020 22.1.3.32) has no heap
-            // object here; its names are applied to arrays directly, so
-            // `with (array) { keys }` finds the enclosing `keys`.
-            let is_array =
-                self.heap
-                    .get(object_id.0 as usize)
-                    .is_some_and(|object| object.is_array)
-                    || self.builtin_prototypes.get("Array").copied().is_some_and(
-                        |array_prototype| self.chain_contains_object(*object_id, array_prototype),
-                    );
-            let blocked = is_array
-                && key
-                    .as_str()
-                    .is_some_and(|name| ARRAY_UNSCOPABLE_NAMES.contains(&name));
-            return Ok(!blocked);
+            return Ok(true);
         };
         let blocked =
             self.proxy_aware_get_runtime_property(module, unscopables_id, &key, unscopables, 0)?;
@@ -57126,12 +59277,36 @@ impl InterpreterCore {
         function: &Value,
         key: &RuntimePropertyKey,
     ) -> Result<bool, InterpreterError> {
-        // A callable proxy answers through its `has` trap (bd-9vouw.132).
-        if let Value::BuiltinFunction(builtin) = function
-            && builtin.kind == BuiltinFunctionKind::CallableProxy
+        if let Some(backing) =
+            self.authoritative_standard_constructor_backing(module, function, key)?
         {
-            let proxy = Self::callable_proxy_record_id(builtin)?;
-            return self.proxy_aware_has_runtime_property(Some(module), proxy, key, 0);
+            if self
+                .heap
+                .get(backing.0 as usize)
+                .is_some_and(|object| object.contains_own_runtime_property(key))
+            {
+                return Ok(true);
+            }
+            return match self.function_value_prototype(Some(module), function)? {
+                Value::Object(prototype) => {
+                    self.proxy_aware_has_runtime_property(Some(module), prototype, key, 0)
+                }
+                prototype if prototype.is_callable() => {
+                    self.function_has_property(module, &prototype, key)
+                }
+                _ => Ok(false),
+            };
+        }
+        // A callable proxy and %Function.prototype% have complete property
+        // chains on their backing objects (bd-9vouw.132, bd-9vouw.346).
+        if let Value::BuiltinFunction(builtin) = function
+            && matches!(
+                builtin.kind,
+                BuiltinFunctionKind::CallableProxy | BuiltinFunctionKind::FunctionPrototype
+            )
+            && let Some(backing) = Self::builtin_function_property_object(builtin)
+        {
+            return self.proxy_aware_has_runtime_property(Some(module), backing, key, 0);
         }
         let own = match self.function_own_property_exists(module, function, key)? {
             Some(own) => own,
@@ -57352,6 +59527,7 @@ impl InterpreterCore {
         // ES2020 13.7.5.12 ForIn/OfHeadEvaluation: ToObject(exprValue), so a
         // primitive enumerates its wrapper (a string its indices).
         let mut continue_at = None;
+        let callable = value.is_callable().then(|| value.clone());
         let object_id = match value {
             Value::Object(object_id) => object_id,
             // Step 7.a: an undefined or null object enumerates nothing (the
@@ -57423,7 +59599,32 @@ impl InterpreterCore {
             }
         };
 
-        let keys = self.collect_for_in_keys_continuing(module, object_id, continue_at)?;
+        // A function's inherited keys come from its value-level [[Prototype]]
+        // (%Function.prototype%, a parent class, a function-kind intrinsic),
+        // not from its backing object's link, which defaults to
+        // Object.prototype (bd-9vouw.488): enumerate the backing objects of
+        // the callable ancestors, then continue at the first ordinary object.
+        let mut leading = Vec::new();
+        if let (Some(function), Some(module)) = (callable.as_ref(), module) {
+            let mut prototype = self.function_value_prototype(Some(module), function)?;
+            for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
+                if !prototype.is_callable() {
+                    break;
+                }
+                let backing = match &prototype {
+                    Value::BuiltinFunction(builtin) => {
+                        Self::builtin_function_property_object(builtin)
+                    }
+                    other => self.function_own_property_object(module, other)?,
+                };
+                leading.extend(backing);
+                prototype = self.function_value_prototype(Some(module), &prototype)?;
+            }
+            if let Value::Object(prototype) = prototype {
+                continue_at = Some(prototype);
+            }
+        }
+        let keys = self.collect_for_in_keys_continuing(module, object_id, &leading, continue_at)?;
         let trace_index =
             self.start_iteration_trace(IterationKind::ForIn, || format!("object:{}", object_id.0));
         if self.iteration_traced(trace_index) {
@@ -57973,7 +60174,7 @@ impl InterpreterCore {
                 .typed_array
                 .as_ref()
                 .and_then(|iterator| self.heap.get(iterator.object.0 as usize))
-                .and_then(|object| object.typed_array.clone()),
+                .and_then(|object| object.typed_array.as_deref().cloned()),
             _ => None,
         };
         if let Some(view) = &fresh_typed_view {
@@ -58063,23 +60264,37 @@ impl InterpreterCore {
             }
             ForOfStep::Array { iterator, index } => {
                 let receiver = Value::Object(iterator.object_id);
-                let length = self.iterator_protocol_property(
-                    module,
-                    iterator.object_id,
-                    &RuntimePropertyKey::String(JsString::from("length")),
-                    receiver.clone(),
-                )?;
-                if matches!(length, Value::BigInt(_) | Value::Symbol(_)) {
-                    return Err(InterpreterError::TypeError {
-                        expected: "number-compatible array-like length".to_string(),
-                        got: length.type_name().to_string(),
-                    });
-                }
-                let length = Self::coerce_to_float(&length).unwrap_or(f64::NAN);
-                let length = if length.is_nan() || length <= 0.0 {
-                    0
+                // A typed array iterated by Array.prototype.values / keys /
+                // entries reads its view's length each step, and a view out
+                // of bounds is a TypeError (ES2024 23.1.5.1 step 2.b.ii), as
+                // `ta.values()` does above; it iterated as empty
+                // (bd-9vouw.360).
+                let typed_view = self
+                    .heap
+                    .get(iterator.object_id.0 as usize)
+                    .and_then(|object| object.typed_array.as_deref().cloned());
+                let length = if let Some(view) = typed_view {
+                    Self::reject_out_of_bounds_typed_array(&view, "next")?;
+                    view.length
                 } else {
-                    length.floor().min(9_007_199_254_740_991.0) as usize
+                    let length = self.iterator_protocol_property(
+                        module,
+                        iterator.object_id,
+                        &RuntimePropertyKey::String(JsString::from("length")),
+                        receiver.clone(),
+                    )?;
+                    if matches!(length, Value::BigInt(_) | Value::Symbol(_)) {
+                        return Err(InterpreterError::TypeError {
+                            expected: "number-compatible array-like length".to_string(),
+                            got: length.type_name().to_string(),
+                        });
+                    }
+                    let length = Self::coerce_to_float(&length).unwrap_or(f64::NAN);
+                    if length.is_nan() || length <= 0.0 {
+                        0
+                    } else {
+                        length.floor().min(9_007_199_254_740_991.0) as usize
+                    }
                 };
                 if index >= length {
                     if let RuntimeIteratorState::ForOf(state) = self.iterator_state_mut(handle)? {
@@ -58336,6 +60551,15 @@ impl InterpreterCore {
                     "read"
                 };
                 format!("Cannot {action} properties of {got}")
+            }
+            // JSON.stringify of a cycle: Node's first line, which code
+            // matching on "circular structure" reads. Node goes on to name
+            // the property path that closes the circle; that path can carry
+            // labeled keys, so it stays out of the message.
+            InterpreterError::TypeError { expected, got }
+                if expected == "acyclic JSON value" && got == "circular structure" =>
+            {
+                "Converting circular structure to JSON".to_string()
             }
             _ => err.to_string(),
         };
@@ -59095,8 +61319,14 @@ impl InterpreterCore {
         }
         let mut last = 0usize;
         let mut budget = self.regexp_retention_budget();
-        let matches =
-            self.regexp_all_captures(&regex, input, CaptureRetention::AllGroups, &mut budget)?;
+        // @@split runs its own sticky splitter: the caller's flag is moot.
+        let matches = self.regexp_all_captures(
+            &regex,
+            input,
+            CaptureRetention::AllGroups,
+            &mut budget,
+            false,
+        )?;
         if let Some(spans) = matches.last() {
             self.record_legacy_regexp_match(input, spans);
         }
@@ -59239,15 +61469,19 @@ impl InterpreterCore {
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         // ES2020 21.1.3.20: prefix test at an optional position, over exact
-        // UTF-16 code units (bd-9a8cz.1, bd-rdnhc).
+        // UTF-16 code units (bd-9a8cz.1, bd-rdnhc). Only the needle-long
+        // slice at `from` is built, not the receiver's units (bd-9vouw.467);
+        // canonical JsStrings are equal exactly when their units are.
         let search = self.builtin_search_js_string(module, args, 0)?;
-        let units = this_str.code_units_vec();
-        let needle = search.code_units_vec();
+        let len = this_str.utf16_len();
         let from = match self.builtin_number_arg(module, args, 1)? {
-            Some(arg) => Self::value_as_integer(&arg).clamp(0, units.len() as i64) as usize,
+            Some(arg) => Self::value_as_integer(&arg).clamp(0, len as i64) as usize,
             None => 0,
         };
-        Ok(Value::Bool(units[from..].starts_with(&needle)))
+        let end = from + search.utf16_len();
+        Ok(Value::Bool(
+            end <= len && this_str.utf16_slice(from, end) == search,
+        ))
     }
 
     fn string_ends_with_impl(
@@ -59258,15 +61492,18 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         // ES2020 21.1.3.6: suffix test against the prefix of code-unit
         // length `endPosition` (default = full length) (bd-9a8cz.1,
-        // bd-rdnhc).
+        // bd-rdnhc). Only the needle-long slice before `end` is built
+        // (bd-9vouw.467).
         let search = self.builtin_search_js_string(module, args, 0)?;
-        let units = this_str.code_units_vec();
-        let needle = search.code_units_vec();
+        let len = this_str.utf16_len();
         let end = match self.builtin_number_arg(module, args, 1)? {
-            Some(Value::Undefined) | None => units.len(),
-            Some(arg) => Self::value_as_integer(&arg).clamp(0, units.len() as i64) as usize,
+            Some(Value::Undefined) | None => len,
+            Some(arg) => Self::value_as_integer(&arg).clamp(0, len as i64) as usize,
         };
-        Ok(Value::Bool(units[..end].ends_with(&needle)))
+        Ok(Value::Bool(
+            end.checked_sub(search.utf16_len())
+                .is_some_and(|start| this_str.utf16_slice(start, end) == search),
+        ))
     }
 
     fn string_index_of_impl(
@@ -59327,8 +61564,7 @@ impl InterpreterCore {
         // offsets over exact units, composing with the unit-indexed search
         // family; a boundary inside a surrogate pair yields the lone half
         // losslessly (bd-9a8cz.1, bd-3kvat; previously scalar-indexed).
-        let units = this_str.code_units_vec();
-        let len = units.len() as i64;
+        let len = this_str.utf16_len() as i64;
         let normalize = |n: i64| -> i64 {
             if n < 0 {
                 len.saturating_add(n).max(0)
@@ -59347,9 +61583,9 @@ impl InterpreterCore {
         if start >= end {
             return Ok(Value::str(String::new()));
         }
-        Ok(Value::Str(JsString::from_code_units(
-            &units[start as usize..end as usize],
-        )))
+        Ok(Value::Str(
+            this_str.utf16_slice(start as usize, end as usize),
+        ))
     }
 
     fn string_substring_impl(
@@ -59362,8 +61598,7 @@ impl InterpreterCore {
         // start <= end. Indices are UTF-16 code-unit offsets over exact
         // units; split-pair boundaries are lossless (bd-9a8cz.1, bd-3kvat;
         // previously scalar-indexed).
-        let units = this_str.code_units_vec();
-        let len = units.len() as i64;
+        let len = this_str.utf16_len() as i64;
         let clamp_idx = |n: i64| -> i64 { n.clamp(0, len) };
         let start = match self.builtin_number_arg(module, args, 0)? {
             Some(Value::Undefined) | None => 0,
@@ -59378,9 +61613,7 @@ impl InterpreterCore {
         } else {
             (end, start)
         };
-        Ok(Value::Str(JsString::from_code_units(
-            &units[lo as usize..hi as usize],
-        )))
+        Ok(Value::Str(this_str.utf16_slice(lo as usize, hi as usize)))
     }
 
     fn string_substr_impl(
@@ -59397,8 +61630,7 @@ impl InterpreterCore {
         // This is deliberately NOT `substring`, which clamps both args to [0, len]
         // and swaps them. `size` and both offsets are UTF-16 code-unit counts
         // over exact units (bd-fqlfw.2.11.2, bd-3kvat; previously scalar).
-        let units = this_str.code_units_vec();
-        let size = units.len() as i64;
+        let size = this_str.utf16_len() as i64;
         let int_start = match self.builtin_number_arg(module, args, 0)? {
             Some(Value::Undefined) | None => 0,
             Some(arg) => Self::value_as_integer(&arg),
@@ -59417,9 +61649,9 @@ impl InterpreterCore {
             return Ok(Value::str(String::new()));
         }
         let end = start + result_length;
-        Ok(Value::Str(JsString::from_code_units(
-            &units[start as usize..end as usize],
-        )))
+        Ok(Value::Str(
+            this_str.utf16_slice(start as usize, end as usize),
+        ))
     }
 
     /// Intrinsic-table binding (fixed signature, no module): a callable
@@ -59608,10 +61840,10 @@ impl InterpreterCore {
         // properties, while supplementary characters still occupy two
         // independently observable indices and lone surrogates survive
         // without being projected through U+FFFD.
+        // code_unit_at reads ASCII text directly (bd-9vouw.467).
         if let Some(index) = Self::canonical_array_index_property(key, receiver.utf16_len()) {
             return receiver
-                .encode_utf16()
-                .nth(index)
+                .code_unit_at(index)
                 .map_or(Value::Undefined, |unit| {
                     Value::Str(JsString::from_code_units(&[unit]))
                 });
@@ -59631,11 +61863,15 @@ impl InterpreterCore {
             "at" => Value::BuiltinFunction(BuiltinFunction::string_at()),
             // Locale-sensitive case mapping uses the root locale, as Node's
             // default `en-US` does for everything but a few special casings.
-            "toUpperCase" | "toLocaleUpperCase" => {
-                Value::BuiltinFunction(BuiltinFunction::string_to_upper_case())
-            }
-            "toLowerCase" | "toLocaleLowerCase" => {
-                Value::BuiltinFunction(BuiltinFunction::string_to_lower_case())
+            "toUpperCase" => Value::BuiltinFunction(BuiltinFunction::string_to_upper_case()),
+            "toLowerCase" => Value::BuiltinFunction(BuiltinFunction::string_to_lower_case()),
+            "toLocaleUpperCase" | "toLocaleLowerCase" => {
+                let kind = if key == "toLocaleUpperCase" {
+                    BuiltinFunctionKind::StringToUpperCase
+                } else {
+                    BuiltinFunctionKind::StringToLowerCase
+                };
+                Value::BuiltinFunction(BuiltinFunction::string_to_locale_case(kind, key))
             }
             "concat" => Value::BuiltinFunction(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StringPrototypeConcat,
@@ -59901,12 +62137,21 @@ impl InterpreterCore {
             return Ok(regex);
         }
         let mut builder = Self::regexp_builder(pattern, flags)?;
-        let regex = match builder
-            .size_limit(REGEXP_CACHE_MAX_PROGRAM_BYTES)
-            .dfa_size_limit(REGEXP_CACHE_MAX_DFA_BYTES)
-            .build()
-        {
-            Ok(regex) => CompiledRegExp::Automaton(regex),
+        let built = match Self::es_repetition_matcher(pattern, flags) {
+            Some(regexp) => Ok(regexp),
+            None => builder
+                .size_limit(REGEXP_CACHE_MAX_PROGRAM_BYTES)
+                .dfa_size_limit(REGEXP_CACHE_MAX_DFA_BYTES)
+                .build()
+                .map(CompiledRegExp::Automaton),
+        };
+        let regex = match built {
+            Ok(CompiledRegExp::Backtracking(regexp))
+                if regexp.program_len() > REGEXP_CACHE_MAX_BACKTRACK_INSTRUCTIONS =>
+            {
+                return Ok(CompiledRegExp::Backtracking(regexp));
+            }
+            Ok(regex) => regex,
             // Too large for the cache limits, or not expressible by `regex`:
             // the default limits or the backtracking matcher decide. Only a
             // small backtracking program is kept.
@@ -59945,6 +62190,14 @@ impl InterpreterCore {
                 ),
             });
         }
+        // The backtracking parser refuses these; the `regex` crate would
+        // compile them as nested repetitions.
+        if regexp_syntax::has_nested_quantifier(pattern, flags) {
+            return Err(InterpreterError::TypeError {
+                expected: "valid RegExp pattern".to_string(),
+                got: "Nothing to repeat".to_string(),
+            });
+        }
         let mut case_insensitive = false;
         let mut multi_line = false;
         let mut dot_matches_new_line = false;
@@ -59973,11 +62226,29 @@ impl InterpreterCore {
         Ok(builder)
     }
 
+    /// The backtracking matcher for a pattern whose repetitions the `regex`
+    /// crate would answer differently from ES2020 (captures nested in a
+    /// repeated atom, or a repeated atom that can match empty), when this
+    /// module's parser accepts it (bd-9vouw.367).
+    fn es_repetition_matcher(pattern: &str, flags: &str) -> Option<CompiledRegExp> {
+        if !BacktrackRegExp::needs_es_repetition_semantics(pattern, flags) {
+            return None;
+        }
+        BacktrackRegExp::new(pattern, flags)
+            .ok()
+            .map(|regexp| CompiledRegExp::Backtracking(Rc::new(regexp)))
+    }
+
     /// Compile under the default limits: the `regex` crate for the patterns
     /// it can express, the backtracking matcher for look-around,
-    /// backreferences and the rest. A pattern neither accepts is invalid.
+    /// backreferences, repetitions with ES2020-only results and the rest. A
+    /// pattern neither accepts is invalid.
     fn build_regexp(pattern: &str, flags: &str) -> Result<CompiledRegExp, InterpreterError> {
-        if let Ok(regex) = Self::regexp_builder(pattern, flags)?.build() {
+        let builder = Self::regexp_builder(pattern, flags)?;
+        if let Some(regexp) = Self::es_repetition_matcher(pattern, flags) {
+            return Ok(regexp);
+        }
+        if let Ok(regex) = builder.build() {
             return Ok(CompiledRegExp::Automaton(regex));
         }
         BacktrackRegExp::new(pattern, flags)
@@ -60009,16 +62280,43 @@ impl InterpreterCore {
     }
 
     /// [`CompiledRegExp::all_captures`] charged to `budget`.
+    /// Every match of a global exec loop from position 0. A sticky pattern's
+    /// loop stops at its first failure: each match must start where the
+    /// previous one left lastIndex (bd-9vouw.315). The leftmost match from a
+    /// position starts there whenever one can, so the sticky matches are
+    /// the leading run of the leftmost ones that start where expected.
     fn regexp_all_captures(
         &self,
         regex: &CompiledRegExp,
         input: &str,
         retention: CaptureRetention,
         budget: &mut RetentionBudget,
+        sticky: bool,
     ) -> Result<Vec<Captures>, InterpreterError> {
-        regex
+        let mut all = regex
             .all_captures(input, retention, budget)
-            .map_err(|error| self.regexp_global_match_error(error))
+            .map_err(|error| self.regexp_global_match_error(error))?;
+        if sticky {
+            let mut expected = 0usize;
+            let contiguous = all
+                .iter()
+                .take_while(|spans| match spans[0] {
+                    Some((from, to)) if from == expected => {
+                        // The exec loop's AdvanceStringIndex past an empty
+                        // match, as all_captures steps.
+                        expected = if from == to {
+                            to + input[to..].chars().next().map_or(1, char::len_utf8)
+                        } else {
+                            to
+                        };
+                        true
+                    }
+                    _ => false,
+                })
+                .count();
+            all.truncate(contiguous);
+        }
+        Ok(all)
     }
 
     /// Charge `bytes` of native result text to `budget`.
@@ -60090,11 +62388,19 @@ impl InterpreterCore {
             let result_id = self.alloc_array_with_prototype(None)?;
             let mut count = 0usize;
             let mut budget = self.regexp_retention_budget();
+            // A sticky loop may stop early, so its last kept match needs
+            // its groups for the legacy RegExp statics.
+            let sticky = flags.contains('y');
             let matches = self.regexp_all_captures(
                 &regex,
                 input,
-                CaptureRetention::WholeMatchExceptLast,
+                if sticky {
+                    CaptureRetention::AllGroups
+                } else {
+                    CaptureRetention::WholeMatchExceptLast
+                },
                 &mut budget,
+                sticky,
             )?;
             if let Some(spans) = matches.last() {
                 self.record_legacy_regexp_match(input, spans);
@@ -60124,7 +62430,7 @@ impl InterpreterCore {
         // ES2020 21.1.3.11 step 3: any other value is `new RegExp(value)`.
         let regex = self.compile_regexp_pattern(&self.regexp_create_source(pattern), "")?;
         Ok(self
-            .regexp_exec_at(&regex, input, 0, false, false)?
+            .regexp_exec_at(&regex, &JsString::from(input), 0, false, false)?
             .map_or(Value::Null, |(result, _)| result))
     }
 
@@ -60191,10 +62497,10 @@ impl InterpreterCore {
             .ok_or(InterpreterError::ObjectNotFound { id: regexp_id.0 })?;
         let previous_bytes = Self::estimate_heap_object_bytes(previous);
         let mut projected = previous.clone();
-        projected.regexp = Some(RegExpSlots {
+        projected.regexp = Some(Box::new(RegExpSlots {
             source,
             flags: canonical,
-        });
+        }));
         let projected_bytes = Self::estimate_heap_object_bytes(&projected);
         self.apply_memory_component_delta(previous_bytes, projected_bytes)?;
         self.mutate_heap(|heap| heap[index] = projected);
@@ -60264,16 +62570,17 @@ impl InterpreterCore {
     /// ES2020 21.1.3.12 String.prototype.matchAll: an iterator over every
     /// match of a global RegExp (a RegExp without `g` is a TypeError; any
     /// other pattern becomes `new RegExp(pattern, "g")`), each result shaped
-    /// like RegExp.prototype.exec's (index, input, groups). It ran on a
-    /// private clone, so the argument's own `lastIndex` is untouched; an empty
-    /// match advances the clone by one. It was missing ("expected function,
-    /// got undefined"). No-claim: the matches are collected when matchAll is
-    /// called (the spec's %RegExpStringIteratorPrototype% is lazy), and the
-    /// iterator is an array iterator.
+    /// like RegExp.prototype.exec's (index, input, groups). It runs on a
+    /// private clone, so the argument's own `lastIndex` is untouched, and
+    /// lazily: the %RegExpStringIteratorPrototype% iterator runs one exec per
+    /// `next` (they were all collected up front, so 5,000 matches of a 34 KB
+    /// string were all alive at once and exceeded the memory budget,
+    /// bd-9vouw.476). An empty match advances the clone by AdvanceStringIndex.
     fn string_match_all_value(
         &mut self,
         input: &JsString,
         pattern: &Value,
+        label: &Label,
     ) -> Result<Value, InterpreterError> {
         let (source, flags, last_index) = match self.regexp_source_flags_from_value(pattern) {
             Some((source, flags)) => {
@@ -60301,43 +62608,16 @@ impl InterpreterCore {
                 (source, "g".to_string(), Value::Int(0))
             }
         };
+        let full_unicode = flags.contains('u') || flags.contains('v');
         let clone = self.alloc_regexp_object(source, flags)?;
         self.set_object_property(clone, "lastIndex".to_string(), last_index)?;
-        let subject = Value::Str(input.clone());
-        let mut results = Vec::new();
-        // Each iteration either ends or moves lastIndex forward, so the loop
-        // is bounded by the input length; the bound is a backstop.
-        for _ in 0..=input.len().saturating_add(1) {
-            // Every native exec here costs what the equivalent guest
-            // `while (re.exec(s))` iteration would: one instruction of the
-            // run's budget, so the eager loop cannot outlast it
-            // (franken_engine#2 follow-up).
-            self.charge_property_copy_work()?;
-            let result = self.regexp_prototype_exec(Value::Object(clone), &subject)?;
-            let Value::Object(result_id) = result else {
-                break;
-            };
-            let empty_match = matches!(
-                self.heap
-                    .get(result_id.0 as usize)
-                    .and_then(|object| object.properties.get("0")),
-                Some(Value::Str(matched)) if matched.is_empty()
-            );
-            if empty_match {
-                let next = match self
-                    .heap
-                    .get(clone.0 as usize)
-                    .and_then(|object| object.properties.get("lastIndex"))
-                {
-                    Some(Value::Int(index)) => index.saturating_add(1),
-                    _ => 1,
-                };
-                self.set_object_property(clone, "lastIndex".to_string(), Value::Int(next))?;
-            }
-            results.push(result);
-        }
-        let array = self.alloc_array_from_values(&results)?;
-        self.array_prototype_iterator_for_receiver(Value::Object(array), "values")
+        self.create_regexp_string_iterator(
+            Value::Object(clone),
+            input.clone(),
+            true,
+            full_unicode,
+            label,
+        )
     }
 
     /// ES2020 21.1.3.18 String.prototype.search: the index of the first
@@ -60352,7 +62632,9 @@ impl InterpreterCore {
             .regexp_source_flags_from_value(pattern)
             .unwrap_or_else(|| (self.regexp_create_source(pattern), String::new()));
         let regex = self.compile_regexp_pattern(&source, &flags)?;
-        let found = regex.captures_at(input, 0, false)?;
+        // ES2020 21.2.5.9 @@search: RegExpExec with lastIndex 0, so a sticky
+        // pattern matches only at the start (bd-9vouw.315).
+        let found = regex.captures_at(input, 0, flags.contains('y'))?;
         if let Some(spans) = &found {
             self.record_legacy_regexp_match(input, spans);
         }
@@ -60367,6 +62649,23 @@ impl InterpreterCore {
     /// or RegExp search value. A callable replacer receives (match, ...groups,
     /// offset, string) with the UTF-16 offset; otherwise the replacement is a
     /// GetSubstitution template.
+    /// ToString of a replace value or a replacer's result: observable for an
+    /// object (its toString or valueOf runs) and a TypeError for a Symbol;
+    /// any other primitive converts without guest code (bd-9vouw.358).
+    fn replacement_to_string(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: &Value,
+    ) -> Result<String, InterpreterError> {
+        if value.is_object_like() || matches!(value, Value::Symbol(_)) {
+            let value = value.clone();
+            return Ok(self
+                .scoped_conversion(|this| this.conversion_to_string(module, value))?
+                .to_string());
+        }
+        Ok(self.value_to_string(value))
+    }
+
     fn string_replace_js(
         &mut self,
         module: Option<&Ir3Module>,
@@ -60381,6 +62680,17 @@ impl InterpreterCore {
         // Every match is held natively until the output is built, so the
         // match list is charged to the guest's memory headroom
         // (franken_engine#2).
+        // A replaceValue that is not callable is ToString'd before anything
+        // is matched (ES2020 21.2.5.8 step 6, 21.1.3.17 step 5): an object's
+        // own toString or valueOf runs, and its throw is the call's; a direct
+        // `re[Symbol.replace](s, obj)` read it as "[object Object]"
+        // (bd-9vouw.358).
+        let callable = replace.is_callable();
+        let template = if callable {
+            String::new()
+        } else {
+            self.replacement_to_string(module, replace)?
+        };
         let mut budget = self.regexp_retention_budget();
         let match_entry_bytes = std::mem::size_of::<(usize, usize, Vec<Option<String>>)>();
         if let Some((source, flags)) = self.regexp_source_flags_from_value(search) {
@@ -60399,7 +62709,13 @@ impl InterpreterCore {
                 {
                     self.set_regexp_last_index(regexp_id, 0)?;
                 }
-                self.regexp_all_captures(&regex, input, CaptureRetention::AllGroups, &mut budget)?
+                self.regexp_all_captures(
+                    &regex,
+                    input,
+                    CaptureRetention::AllGroups,
+                    &mut budget,
+                    flags.contains('y'),
+                )?
             } else if flags.contains('y')
                 && let Some(regexp_id) = regexp_id
             {
@@ -60457,18 +62773,18 @@ impl InterpreterCore {
                 }
             }
         }
-        let callable = replace.is_callable();
-        let template = if callable {
-            String::new()
-        } else {
-            self.value_to_string(replace)
-        };
         let mut output = String::with_capacity(input.len());
         let mut last = 0usize;
+        // The replacer's position (UTF-16) is counted on from the previous
+        // match (matches come in order) and its string argument is made
+        // once: decoding the prefix and copying the subject per call made a
+        // callback replace over a long string quadratic (bd-9vouw.480).
+        let mut position_cursor = (0usize, 0usize);
+        let subject_value = callable.then(|| Value::str(input));
         for (start, end, groups) in matches {
             output.push_str(&input[last..start]);
             let matched = &input[start..end];
-            let replacement = if callable {
+            let replacement = if let Some(subject_value) = &subject_value {
                 let mut arguments = Vec::with_capacity(groups.len() + 3);
                 arguments.push(Value::str(matched));
                 arguments.extend(
@@ -60476,13 +62792,18 @@ impl InterpreterCore {
                         .iter()
                         .map(|group| group.clone().map_or(Value::Undefined, Value::str)),
                 );
-                let offset = input[..start].encode_utf16().count();
+                let (cursor_byte, cursor_units) = position_cursor;
+                let offset = cursor_units + input[cursor_byte..start].encode_utf16().count();
+                position_cursor = (start, offset);
                 arguments.push(Value::Int(i64::try_from(offset).unwrap_or(i64::MAX)));
-                arguments.push(Value::str(input));
+                arguments.push(subject_value.clone());
                 // ES2020 21.2.5.8 step 14.l: with named groups the replacer
                 // also receives the groups object, as its last argument.
                 if group_names.iter().any(Option::is_some) {
+                    // OrdinaryObjectCreate(null), as a match's `groups` is
+                    // (bd-9vouw.365): `None` alone links Object.prototype.
                     let named = self.alloc_object_with_prototype(None)?;
+                    self.store_prototype_link(named, None);
                     for (name, group) in group_names.iter().zip(&groups) {
                         if let Some(name) = name {
                             let value = group.clone().map_or(Value::Undefined, Value::str);
@@ -60504,7 +62825,10 @@ impl InterpreterCore {
                     arguments,
                     Some(label.clone()),
                 )?;
-                self.value_to_string(&result)
+                // ToString of the replacer's result (ES2020 21.1.3.17 step
+                // 6.e, 21.2.5.8 step 14.l.iii): an object's own toString
+                // runs, and a Symbol is a TypeError (bd-9vouw.358).
+                self.replacement_to_string(module, &result)?
             } else {
                 // A template can expand far beyond its own length (`$'`
                 // repeated), so the expansion is bounded while it is built.
@@ -61008,6 +63332,47 @@ impl InterpreterCore {
             .and_then(|object| self.observable_prototype_link(object, id))
     }
 
+    /// Whether `object.__proto__` reaches %Object.prototype%'s `__proto__`
+    /// accessor (Annex B.2.2.1): neither the receiver nor any object before
+    /// %Object.prototype% on its chain has an own `__proto__`, and the chain
+    /// does reach %Object.prototype%. Otherwise `__proto__` is an ordinary
+    /// property name: an own data property (JSON.parse, defineProperty,
+    /// spread) is read and written as data, and a null-prototype object has
+    /// no such accessor, so a read is undefined and a write defines it
+    /// (bd-9vouw.318). A Proxy receiver keeps the accessor path, whose
+    /// setter runs its setPrototypeOf trap (bd-9vouw.311).
+    fn proto_key_reaches_accessor(&self, id: ObjectId) -> bool {
+        let key = RuntimePropertyKey::String(JsString::from("__proto__"));
+        let object_prototype = self.builtin_prototypes.get("Object").copied();
+        let mut current = id;
+        for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
+            let Some(object) = self.heap.get(current.0 as usize) else {
+                return false;
+            };
+            if object.brand() == Some(PROXY_TYPE_TAG) {
+                return current == id;
+            }
+            if object.contains_own_runtime_property(&key) {
+                return false;
+            }
+            // Unless `delete Object.prototype.__proto__` removed it
+            // (bd-9vouw.284).
+            if Some(current) == object_prototype {
+                return !self.virtual_own_property_deleted(current, &key);
+            }
+            // An implicit link is followed (%Array.prototype% for an array,
+            // then %Object.prototype%), so a redefined or deleted
+            // Object.prototype.__proto__ is seen (bd-9vouw.284); an
+            // unallocated %Object.prototype% is pristine, an explicit null
+            // ends the chain without the accessor.
+            match self.observable_prototype_link(object, current) {
+                Some(next) => current = next,
+                None => return !object.is_null_prototype,
+            }
+        }
+        false
+    }
+
     /// Whether `id`'s chain ends at %Object.prototype%, allocated or not; an
     /// explicit null link ends it before.
     fn chain_reaches_object_prototype(&self, id: ObjectId) -> bool {
@@ -61075,6 +63440,11 @@ impl InterpreterCore {
         value: &Value,
         needle: &Value,
     ) -> Result<bool, InterpreterError> {
+        // A function needle is linked into chains as its own-property
+        // backing object (prototype_link_for_value: `Object.create(fn)`,
+        // `F.prototype = fn; new F()`), so a link to that object is the
+        // function. Without a backing no object links to it.
+        let needle_backing = self.own_property_holder(module, needle, false)?;
         let mut current = value.clone();
         for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
             let next = match &current {
@@ -61110,7 +63480,10 @@ impl InterpreterCore {
                 },
                 _ => return Ok(false),
             };
-            if next == *needle {
+            if next == *needle
+                || (needle_backing.is_some()
+                    && self.own_property_holder(module, &next, false)? == needle_backing)
+            {
                 return Ok(true);
             }
             if matches!(next, Value::Null) {
@@ -61293,6 +63666,20 @@ impl InterpreterCore {
             if let Some(val) = property_value {
                 // Capture property resolution success for deterministic replay
                 self.capture_property_resolution_found(key, id, depth);
+                // A materialized constructor walks its actual function
+                // prototype, while its own storage has an ordinary object's
+                // implicit chain. Preserve the label of this resolved owner
+                // before a getter runs or throws (bd-9vouw.366).
+                if let Some(module) = module
+                    && self
+                        .authoritative_standard_constructor_backing(module, &receiver, key)?
+                        .is_some()
+                {
+                    let label = self.runtime_property_label(id, key);
+                    if label != Label::Public {
+                        self.join_into_pending_hostcall_result_label(Some(label))?;
+                    }
+                }
                 return self.resolve_accessor_get(module, val, receiver);
             }
             // RegExp.prototype.global, Map.prototype.size, ...: accessors the
@@ -61399,7 +63786,18 @@ impl InterpreterCore {
         };
         // Consult virtual function prototypes only after real own/inherited
         // properties, including an explicitly stored undefined, have won.
+        // Materialized constructors already walk their actual prototype;
+        // a custom parent must not acquire Function.prototype's members.
+        let authoritative_standard_backing = match module {
+            Some(module) => {
+                self.authoritative_standard_constructor_backing(module, &receiver, key)?
+            }
+            None => None,
+        };
         if receiver.is_callable()
+            && authoritative_standard_backing.is_none()
+            && !matches!(&receiver, Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::FunctionPrototype)
             && let Some(value) = Self::function_prototype_property(key_text)
             && !self.canonical_virtual_property_deleted("Function", key)
         {
@@ -61546,41 +63944,91 @@ impl InterpreterCore {
     /// hit remains on the generic path. The caller still runs the typed
     /// property hook, resolves accessors, joins stored-property and destination
     /// labels, and emits the same deterministic property-resolution event.
+    #[cfg(test)]
     fn ordinary_own_property_read_fast_path_eligible(
         &self,
         object_id: ObjectId,
         key: &RuntimePropertyKey,
     ) -> bool {
+        self.ordinary_own_property_read_object(object_id, key)
+            .is_some_and(|object| object.contains_own_runtime_property(key))
+    }
+
+    /// The object of an own-property read the fast path may serve, by the
+    /// exclusions above, whether or not it has the key.
+    fn ordinary_own_property_read_object(
+        &self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> Option<&HeapObject> {
         if key.as_str() == Some("__proto__") {
-            return false;
+            return None;
         }
-        let Some(object) = self.heap.get(object_id.0 as usize) else {
-            return false;
-        };
+        // In a callback scope [[Get]] observes the owner's shape label and
+        // the property's stored label into the context
+        // (reflect_observe_selected_property); only the generic path does
+        // (bd-9vouw.505).
+        if self.active_inline_callback_context_label.is_some() {
+            return None;
+        }
+        #[cfg(test)]
+        if FORCE_GENERIC_OWN_PROPERTY_READS.with(std::cell::Cell::get) {
+            return None;
+        }
+        let object = self.heap.get(object_id.0 as usize)?;
+        // An own data property answers before the prototype is consulted, so
+        // a prototype does not matter here (bd-9vouw.504: instances of
+        // classes and constructors now take this path). Of the generic walk's
+        // depth-0 special cases, a String wrapper's index/length properties
+        // are the one the exclusions below do not already cover.
         if object.is_import_meta
-            || object.prototype.is_some()
+            || object.primitive_value.is_some()
             || object.array_buffer.is_some()
             || object.typed_array.is_some()
             || object.data_view.is_some()
             || object.brand() == Some(PROXY_TYPE_TAG)
-            || !object.contains_own_runtime_property(key)
         {
-            return false;
+            return None;
         }
 
-        !self.url_objects.contains_key(&object_id)
-            && !self.url_search_params.contains_key(&object_id)
-            && !self.cluster_facades.contains_key(&object_id)
+        // These host-object tables are empty in almost every program: the
+        // emptiness test spares a lookup per table on every read.
+        fn absent<V>(table: &BTreeMap<ObjectId, V>, object_id: &ObjectId) -> bool {
+            table.is_empty() || !table.contains_key(object_id)
+        }
+        (absent(&self.url_objects, &object_id)
+            && absent(&self.url_search_params, &object_id)
+            && absent(&self.cluster_facades, &object_id)
             && !self
                 .cluster_facades
                 .values()
                 .any(|state| state.settings == object_id)
-            && !self.readable_from_streams.contains_key(&object_id)
-            && !self.readable_terminal_states.contains_key(&object_id)
-            && !self.writable_streams.contains_key(&object_id)
-            && !self.writable_terminal_states.contains_key(&object_id)
-            && !self.loopback_servers.contains_key(&object_id)
-            && !self.loopback_sockets.contains_key(&object_id)
+            && absent(&self.readable_from_streams, &object_id)
+            && absent(&self.readable_terminal_states, &object_id)
+            && absent(&self.writable_streams, &object_id)
+            && absent(&self.writable_terminal_states, &object_id)
+            && absent(&self.loopback_servers, &object_id)
+            && absent(&self.loopback_sockets, &object_id))
+        .then_some(object)
+    }
+
+    /// The fast path's read (bd-9vouw.504): the own property's value, and
+    /// for a data property its stored label, one lookup each. A data
+    /// property's label is final: no code runs between this read and the
+    /// label join. An accessor's getter may delete or relabel the property
+    /// first, so its label is read after the getter, as before.
+    fn ordinary_own_property_fast_read(
+        &self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> Option<(Value, Option<Label>)> {
+        let object = self.ordinary_own_property_read_object(object_id, key)?;
+        let value = object.own_runtime_property_value(key)?;
+        if matches!(value, Value::Accessor { .. }) {
+            return Some((value, None));
+        }
+        let label = self.own_stored_runtime_property_label(object_id, key);
+        Some((value, Some(label)))
     }
 
     fn capture_property_resolution_found(
@@ -61589,11 +64037,39 @@ impl InterpreterCore {
         object_id: ObjectId,
         depth: u32,
     ) {
-        // Deterministic decision: fold, don't record (bd-9vouw.18).
-        self.nondeterminism_trace.witness_deterministic(
-            NondeterminismSource::PropertyResolution,
-            &property_resolution_found_payload(key, object_id, depth),
-        );
+        // Deterministic decision: fold, don't record (bd-9vouw.18). The bytes
+        // go through a reused buffer: a Vec per property read was malloc and
+        // free on every found [[Get]].
+        let mut payload = std::mem::take(&mut self.property_witness_scratch);
+        write_property_resolution_found_payload(&mut payload, key, object_id, depth);
+        self.nondeterminism_trace
+            .witness_deterministic(NondeterminismSource::PropertyResolution, &payload);
+        if payload.capacity() <= PROPERTY_WITNESS_SCRATCH_MAX_CAPACITY {
+            self.property_witness_scratch = payload;
+        }
+    }
+
+    /// The call-argument scratch vectors, empty, for a call to fill
+    /// (bd-9vouw.497).
+    fn take_call_argument_scratch(&mut self) -> (Vec<Value>, Vec<Label>) {
+        let mut values = std::mem::take(&mut self.call_argument_value_scratch);
+        let mut labels = std::mem::take(&mut self.call_argument_label_scratch);
+        values.clear();
+        labels.clear();
+        (values, labels)
+    }
+
+    /// Keep a call's drained argument vectors for the next call, unless they
+    /// grew past CALL_ARGUMENT_SCRATCH_MAX_CAPACITY.
+    fn restore_call_argument_scratch(&mut self, mut values: Vec<Value>, mut labels: Vec<Label>) {
+        values.clear();
+        labels.clear();
+        if values.capacity() <= CALL_ARGUMENT_SCRATCH_MAX_CAPACITY {
+            self.call_argument_value_scratch = values;
+        }
+        if labels.capacity() <= CALL_ARGUMENT_SCRATCH_MAX_CAPACITY {
+            self.call_argument_label_scratch = labels;
+        }
     }
 
     /// Resolve an `Array.prototype` method name to its receiver-aware builtin
@@ -62232,6 +64708,14 @@ impl InterpreterCore {
             "swap16" => BuiltinFunctionKind::BufferSwap16,
             "swap32" => BuiltinFunctionKind::BufferSwap32,
             "swap64" => BuiltinFunctionKind::BufferSwap64,
+            name if BUFFER_NUMERIC_METHODS.contains(&name) => {
+                return Some(BuiltinFunction {
+                    kind: BuiltinFunctionKind::BufferNumericMethod,
+                    module_specifier: BuiltinModuleSpecifier::from_nonempty(name),
+                    iterator_handle: None,
+                    bound_object: None,
+                });
+            }
             _ => return None,
         };
         Some(BuiltinFunction::new_kind(kind))
@@ -62523,7 +65007,7 @@ impl InterpreterCore {
                 tag
             }
         };
-        match &object.primitive_value {
+        match object.primitive_value.as_deref() {
             Some(Value::Bool(_)) => return "Boolean",
             Some(Value::Int(_) | Value::Float(_)) => return "Number",
             Some(Value::Str(_)) => return "String",
@@ -62964,10 +65448,16 @@ impl InterpreterCore {
             return Ok(false);
         };
         let repr = Self::collection_key_repr(key);
-        // Live iterators past the removed entry move back (bd-9vouw.131).
-        let position = self
-            .collection_iterators
-            .contains_key(&storage_id)
+        // Live iterators and forEach walks past the removed entry move back
+        // (bd-9vouw.131). A forEach walk has no iterator: counting only
+        // iterators skipped the entry after one its callback deleted
+        // (bd-9vouw.314).
+        let tracked = self.collection_iterators.contains_key(&storage_id)
+            || self
+                .collection_for_each_cursors
+                .iter()
+                .any(|(cursor_storage, _)| *cursor_storage == storage_id);
+        let position = tracked
             .then(|| {
                 self.heap
                     .get(storage_id.0 as usize)
@@ -63187,8 +65677,19 @@ impl InterpreterCore {
             let descriptor = self.read_property_descriptor(module, &descriptor_val)?;
             definitions.push((key, descriptor));
         }
-        for (key, descriptor) in definitions {
+        for (key, mut descriptor) in definitions {
             let prop_name = self.executable_property_key_from_value(&Value::Str(key));
+            // ArraySetLength converts a `length` value as defineProperty
+            // does (bd-9vouw.338).
+            if prop_name.as_str() == Some("length")
+                && self
+                    .heap
+                    .get(target_id.0 as usize)
+                    .is_some_and(|object| object.is_array)
+                && let Some(value) = descriptor.value.take()
+            {
+                descriptor.value = Some(self.array_length_definition_value(module, value)?);
+            }
             if !self.define_own_property_from_descriptor(target_id, prop_name, descriptor)? {
                 return Err(InterpreterError::TypeError {
                     expected: format!("definable property for {caller}"),
@@ -63813,6 +66314,25 @@ impl InterpreterCore {
                     self.reflect_admit_mutation_label(*receiver)?;
                 }
             }
+            // [[Set]] of `__proto__` that reaches %Object.prototype%'s
+            // accessor runs its setter (Annex B.2.2.1.2), as SetProperty
+            // does: Object.assign and Reflect.set of a `__proto__` key set
+            // the prototype, and a refused change is a TypeError
+            // (bd-9vouw.318). They defined an own `__proto__` data property.
+            if key.as_str() == Some("__proto__")
+                && receiver == Value::Object(object_id)
+                && self.proto_key_reaches_accessor(object_id)
+            {
+                if let Some(new_proto) = self.prototype_link_for_value(module, &value)?
+                    && !self.object_set_prototype(module, object_id, new_proto, 0)?
+                {
+                    return Err(InterpreterError::TypeError {
+                        expected: "a permitted __proto__ change".to_string(),
+                        got: "a cyclic or refused prototype".to_string(),
+                    });
+                }
+                return Ok(true);
+            }
             let mut define_on_receiver = false;
             if let Some(key) = key.as_str() {
                 match self
@@ -63866,7 +66386,17 @@ impl InterpreterCore {
                     let Some(object) = self.heap.get(owner.0 as usize) else {
                         return Err(InterpreterError::ObjectNotFound { id: owner.0 });
                     };
-                    if let Some(property) = object.own_runtime_property_value(key) {
+                    // A typed array's, DataView's or ArrayBuffer's `length`,
+                    // `byteLength`, ... entries keep internal slots, not own
+                    // properties: the write goes on to the prototype's
+                    // getter-only accessor and fails. It replaced the slot, so
+                    // `ta.length = 0` made `ta.length` read 0 and
+                    // Array.prototype.push on a typed array changed nothing
+                    // instead of throwing.
+                    let slot = key
+                        .as_str()
+                        .is_some_and(|name| Self::binary_slot_key(object, name));
+                    if !slot && let Some(property) = object.own_runtime_property_value(key) {
                         if matches!(&property, Value::Accessor { .. }) {
                             return self.resolve_accessor_set(module, property, receiver, value);
                         }
@@ -63897,6 +66427,12 @@ impl InterpreterCore {
                             Some("Event.returnValue" | "Event.cancelBubble")
                         )
                     {
+                        // Object.prototype.__proto__ has a setter, called on
+                        // the receiver (bd-9vouw.284).
+                        if getter.module_specifier.0.as_deref() == Some("Object.__proto__") {
+                            self.object_proto_setter_call(module, receiver, value)?;
+                            return Ok(true);
+                        }
                         return Ok(false);
                     }
                     // OrdinarySet follows the same observable prototype chain
@@ -63927,6 +66463,9 @@ impl InterpreterCore {
             if self.active_inline_callback_context_label.is_some() {
                 self.reflect_admit_mutation_label(receiver_id)?;
             }
+            // A write over a canonical prototype's virtual property keeps its
+            // attributes (bd-9vouw.379).
+            self.materialize_virtual_own_property(receiver_id, key)?;
             let Some(receiver_object) = self.heap.get(receiver_id.0 as usize) else {
                 return Err(InterpreterError::ObjectNotFound { id: receiver_id.0 });
             };
@@ -64222,6 +66761,12 @@ impl InterpreterCore {
             .into_iter()
             .map(|(key, _)| Value::Str(key))
             .collect();
+        // A String wrapper's `length` follows its indices (ES2020 9.4.3.3);
+        // Reflect.ownKeys(new String('ab')) left it out (bd-9vouw.356).
+        let string_wrapper = matches!(self.primitive_wrapper_value(object_id), Some(Value::Str(_)));
+        if string_wrapper {
+            keys.push(Value::Str(JsString::from("length")));
+        }
         let virtual_keys = self.canonical_prototype_virtual_own_keys(object_id);
         keys.extend(virtual_keys.iter().cloned());
         let object = self
@@ -64234,7 +66779,8 @@ impl InterpreterCore {
                 .into_iter()
                 .filter_map(|key| match key {
                     RuntimePropertyKey::String(key)
-                        if self.own_runtime_property_visible(object_id, &key) =>
+                        if self.own_runtime_property_visible(object_id, &key)
+                            && !(string_wrapper && key.as_str() == Some("length")) =>
                     {
                         Some(Value::Str(key))
                     }
@@ -64252,8 +66798,8 @@ impl InterpreterCore {
     /// Node's order: `length`, `constructor`, the methods this engine serves,
     /// and @@iterator. Empty for any other object. Without them
     /// `Object.getOwnPropertyNames(Array.prototype)` was empty (Node: 40
-    /// names). No-claim: @@unscopables is not listed, as Array.prototype has
-    /// no @@unscopables object here.
+    /// names). @@unscopables is an ordinary own property
+    /// (install_array_unscopables), listed after these.
     ///
     /// bd-9vouw.249: every other prototype that serves its methods
     /// virtually (VIRTUAL_METHOD_PROTOTYPES) lists `constructor`, the methods
@@ -64286,7 +66832,12 @@ impl InterpreterCore {
                 .filter(|(entry_owner, key, _)| *entry_owner == owner && !key.starts_with('['))
                 .map(|(_, key, _)| *key);
             let mut names: Vec<&str> = Vec::new();
-            for key in std::iter::once("constructor").chain(methods) {
+            let leading: &[&str] = if name == "Function" {
+                &["length", "name", "constructor"]
+            } else {
+                &["constructor"]
+            };
+            for key in leading.iter().copied().chain(methods) {
                 if !names.contains(&key)
                     && self
                         .canonical_prototype_own_virtual_value(object_id, key)
@@ -64430,6 +66981,38 @@ impl InterpreterCore {
     /// Own enumerable String keys of `object_id` in ES order, honoring the
     /// Proxy `ownKeys` + `getOwnPropertyDescriptor` traps (bd-9trje). Used by
     /// the Object.keys/values/entries proxy branch.
+    /// ES2020 7.3.22 EnumerableOwnPropertyNames(O, key+value) for a Proxy:
+    /// [[OwnPropertyKeys]], then for each string key its [[GetOwnProperty]]
+    /// and, when enumerable, its [[Get]] before the next key's descriptor
+    /// (Object.entries / Object.values, bd-9vouw.347). Reading every
+    /// descriptor first, then every value, ran the traps out of order.
+    fn proxy_enumerable_own_entries(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object_id: ObjectId,
+    ) -> Result<Vec<(JsString, Value)>, InterpreterError> {
+        // Guest traps run while native locals hold their results: no
+        // collection until this returns.
+        self.gc_nested_request = None;
+        let keys = self.proxy_aware_own_property_keys(module, object_id, 0)?;
+        let mut entries = Vec::new();
+        for key_value in keys {
+            if let Value::Str(key) = key_value
+                && self.own_string_key_is_enumerable(module, object_id, &key, 0)?
+            {
+                let value = self.proxy_aware_get_runtime_property(
+                    module,
+                    object_id,
+                    &RuntimePropertyKey::String(key.clone()),
+                    Value::Object(object_id),
+                    0,
+                )?;
+                entries.push((key, value));
+            }
+        }
+        Ok(entries)
+    }
+
     fn proxy_own_enumerable_string_keys(
         &mut self,
         module: Option<&Ir3Module>,
@@ -64656,6 +67239,15 @@ impl InterpreterCore {
         {
             return Ok(true);
         }
+        // So are a String wrapper's code-unit indices, which are not heap
+        // entries either; its `length` is not enumerable (ES2020 9.4.3.1).
+        // Object.assign({}, new String('ab')) copied nothing (bd-9vouw.356).
+        if let RuntimePropertyKey::String(name) = key
+            && let Some(name) = name.as_str()
+            && self.string_wrapper_own_property(object_id, name).is_some()
+        {
+            return Ok(name != "length");
+        }
         // Recheck existence per key: an earlier getter may delete a later
         // property, even though that key remains in the ownKeys snapshot.
         // CopyDataProperties and Object.assign copy only [[Enumerable]] keys.
@@ -64797,6 +67389,27 @@ impl InterpreterCore {
     /// Whether a numeric operator has an object operand, or a loose equality
     /// compares an object with a primitive; only the reentrant Tier-R path can
     /// run that conversion (bd-9vouw.37).
+    /// The instructions run_loop_dispatch's Tier-R arms always return to the
+    /// reentrant path for: a HostCall (but the generator prologue's, which
+    /// suspends there), the for-in / for-of iterator steps, IteratorClose,
+    /// ArraySlice and SpreadIntoArray.
+    fn tier_r_always_reentrant(&self, instruction: &Ir3Instruction) -> bool {
+        match instruction {
+            Ir3Instruction::HostCall { capability, .. } => {
+                !(self.suspend_at_generator_prologue
+                    && capability.0 == crate::capability::GENERATOR_PROLOGUE_CAPABILITY)
+            }
+            Ir3Instruction::ForInInit { .. }
+            | Ir3Instruction::ForInNext { .. }
+            | Ir3Instruction::ForOfInit { .. }
+            | Ir3Instruction::ForOfNext { .. }
+            | Ir3Instruction::IteratorClose { .. }
+            | Ir3Instruction::ArraySlice { .. }
+            | Ir3Instruction::SpreadIntoArray { .. } => true,
+            _ => false,
+        }
+    }
+
     fn numeric_operator_needs_to_primitive(&self, instruction: &Ir3Instruction) -> bool {
         if let Ir3Instruction::Eq { lhs, rhs, .. } | Ir3Instruction::NotEq { lhs, rhs, .. } =
             instruction
@@ -64948,8 +67561,7 @@ impl InterpreterCore {
             .get(object_id.0 as usize)
             .is_some_and(|object| object.is_array)
         {
-            let mut active = BTreeSet::new();
-            let joined = self.array_join_observable(module, object_id, ",", &mut active)?;
+            let joined = self.array_join_observable(module, object_id, ",")?;
             return Ok(Value::Str(JsString::from(joined)));
         }
         Ok(Value::Str(JsString::from(
@@ -64970,6 +67582,8 @@ impl InterpreterCore {
             .heap
             .get(object_id.0 as usize)
             .is_some_and(|object| object.brand() == Some("Date"));
+        let object_prototype = self.builtin_prototypes.get("Object").copied();
+        let mut reaches_object_prototype = false;
         let mut to_primitive_seen = false;
         let mut current = Some(object_id);
         // Bounded like the other prototype walks; a longer chain keeps the
@@ -64981,19 +67595,16 @@ impl InterpreterCore {
             let Some(object) = self.heap.get(id.0 as usize) else {
                 break;
             };
-            let guest_method = |name: &str| {
-                matches!(
-                    object.properties.get(name),
-                    Some(
-                        Value::Closure(_)
-                            | Value::Function(_)
-                            | Value::AsyncFunction(_)
-                            | Value::GeneratorFunction(_)
-                            | Value::AsyncGeneratorFunction(_)
-                    )
-                )
-            };
-            if guest_method("toString") || guest_method("valueOf") {
+            reaches_object_prototype |= Some(id) == object_prototype;
+            // The intrinsic prototypes supply their conversion methods
+            // virtually, so a stored `toString` or `valueOf` is the program's:
+            // a function, or a value OrdinaryToPrimitive skips (`null`, a
+            // number) and an accessor, which only the generic path reads.
+            // `{ valueOf: null, toString: null } + ''` is a TypeError; the
+            // engine's string form answered "[object Object]".
+            if object.properties.contains_key("toString")
+                || object.properties.contains_key("valueOf")
+            {
                 return true;
             }
             // The first @@toPrimitive on the chain is the one ToPrimitive
@@ -65011,6 +67622,22 @@ impl InterpreterCore {
                 to_primitive_seen = true;
             }
             current = self.observable_prototype_link(object, id);
+            // %Object.prototype% is materialized on first use; until then an
+            // ordinary object's default link resolves to nothing here, yet
+            // its chain does reach the intrinsic's virtual conversion
+            // methods. Only an explicit null prototype ends a chain without
+            // them. Reading the unmaterialized link as null sent every nested
+            // array through a guest toString call (a call frame per level,
+            // and a fresh cycle guard), and made the result depend on whether
+            // earlier code had touched Object.prototype (bd-9vouw.481).
+            if current.is_none() && object_prototype.is_none() && !object.is_null_prototype {
+                reaches_object_prototype = true;
+            }
+        }
+        // A chain that ends without %Object.prototype% (`Object.create(null)`)
+        // has no conversion methods at all: OrdinaryToPrimitive throws.
+        if current.is_none() && !reaches_object_prototype {
+            return true;
         }
         is_date && !to_primitive_seen
     }
@@ -65403,12 +68030,20 @@ impl InterpreterCore {
                 );
             }
             Value::BuiltinFunction(builtin)
-                if builtin.kind == BuiltinFunctionKind::CallableProxy =>
+                if matches!(
+                    builtin.kind,
+                    BuiltinFunctionKind::CallableProxy | BuiltinFunctionKind::FunctionPrototype
+                ) =>
             {
-                let proxy = Self::callable_proxy_record_id(builtin)?;
+                let backing = Self::builtin_function_property_object(builtin).ok_or_else(|| {
+                    InterpreterError::TypeError {
+                        expected: "built-in function with property storage".to_string(),
+                        got: builtin.display_name().to_string(),
+                    }
+                })?;
                 return self.proxy_aware_get_runtime_property(
                     Some(module),
-                    proxy,
+                    backing,
                     key,
                     receiver,
                     depth,
@@ -65472,6 +68107,32 @@ impl InterpreterCore {
         receiver: Value,
         depth: u32,
     ) -> Result<Option<Value>, InterpreterError> {
+        if let Some(backing) =
+            self.authoritative_standard_constructor_backing(module, function, key)?
+        {
+            if self
+                .heap
+                .get(backing.0 as usize)
+                .is_some_and(|object| object.contains_own_runtime_property(key))
+            {
+                return self
+                    .proxy_aware_get_runtime_property(Some(module), backing, key, receiver, depth)
+                    .map(Some);
+            }
+            let prototype = self.function_value_prototype(Some(module), function)?;
+            return if matches!(prototype, Value::Null) {
+                Ok(Some(Value::Undefined))
+            } else {
+                self.get_v_with_receiver(
+                    module,
+                    &prototype,
+                    key,
+                    receiver,
+                    depth.saturating_add(1),
+                )
+                .map(Some)
+            };
+        }
         let name_or_length = matches!(key.as_str(), Some("name" | "length"));
         // `prototype` has dedicated storage only on a function that has an
         // intrinsic one; another function's is an ordinary own property
@@ -65519,7 +68180,7 @@ impl InterpreterCore {
             {
                 let prototype = Self::materialized_global_prototype_name(builtin)
                     .expect("checked by the guard");
-                Value::Object(self.ensure_builtin_prototype(prototype)?)
+                self.builtin_prototype_value(prototype)?
             }
             Value::BuiltinFunction(builtin)
                 if builtin.kind == BuiltinFunctionKind::Require && name == "main" =>
@@ -65990,9 +68651,13 @@ impl InterpreterCore {
                 details: "Promise combinator id space exhausted".to_string(),
             })?;
         let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        let entry_bytes = Self::promise_combinator_entry_bytes(&state);
         self.promise_combinators.insert(id, state);
+        self.promise_combinators_bytes = self.promise_combinators_bytes.saturating_add(entry_bytes);
         if let Err(error) = self.apply_promise_runtime_memory_delta(previous_promise_bytes) {
             self.promise_combinators.remove(&id);
+            self.promise_combinators_bytes =
+                self.promise_combinators_bytes.saturating_sub(entry_bytes);
             return Err(error);
         }
         self.next_promise_combinator_id = next_id;
@@ -66005,10 +68670,19 @@ impl InterpreterCore {
         watcher: PromiseCombinatorWatcher,
     ) -> Result<(), InterpreterError> {
         let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        // One more watcher, and a new map entry when the promise had none.
+        let added_bytes = if self.promise_combinator_watchers.contains_key(&handle) {
+            Self::promise_combinator_watchers_bytes_for(1)
+        } else {
+            Self::promise_combinator_watcher_entry_bytes(1)
+        };
         self.promise_combinator_watchers
             .entry(handle)
             .or_default()
             .push(watcher);
+        self.promise_combinator_watchers_bytes = self
+            .promise_combinator_watchers_bytes
+            .saturating_add(added_bytes);
         if let Err(error) = self.apply_promise_runtime_memory_delta(previous_promise_bytes) {
             let remove_entry =
                 if let Some(watchers) = self.promise_combinator_watchers.get_mut(&handle) {
@@ -66020,6 +68694,9 @@ impl InterpreterCore {
             if remove_entry {
                 self.promise_combinator_watchers.remove(&handle);
             }
+            self.promise_combinator_watchers_bytes = self
+                .promise_combinator_watchers_bytes
+                .saturating_sub(added_bytes);
             return Err(error);
         }
         Ok(())
@@ -66117,12 +68794,12 @@ impl InterpreterCore {
         kind: crate::promise_model::ReactionKind,
         value: &crate::object_model::JsValue,
         label: &Label,
-    ) -> Result<bool, InterpreterError> {
+    ) -> Result<Option<u64>, InterpreterError> {
         let Some(state) = self.promise_combinators.get(&combinator_id) else {
-            return Ok(false);
+            return Ok(None);
         };
         let Some(entry_bytes) = state.observation_memory_growth(index, kind, value) else {
-            return Ok(false);
+            return Ok(None);
         };
         let result_promise = state.result_promise();
         let previous_store_bytes = self.promise_store.estimated_memory_bytes();
@@ -66139,7 +68816,7 @@ impl InterpreterCore {
         self.promise_store
             .join_label(result_promise, label)
             .expect("preflighted combinator result remains valid");
-        Ok(true)
+        Ok(Some(entry_bytes))
     }
 
     /// A refused native job must not strand an aggregate or leave a partially
@@ -66176,10 +68853,26 @@ impl InterpreterCore {
     ) -> Result<(), InterpreterError> {
         let previous_promise_bytes = self.promise_runtime_memory_bytes();
         let removed_state = self.promise_combinators.remove(&combinator_id);
+        if let Some(state) = &removed_state {
+            self.promise_combinators_bytes = self
+                .promise_combinators_bytes
+                .saturating_sub(Self::promise_combinator_entry_bytes(state));
+        }
+        let mut removed_watcher_bytes = 0u64;
         self.promise_combinator_watchers.retain(|_, watchers| {
+            let before = watchers.len();
             watchers.retain(|watcher| watcher.combinator_id != combinator_id);
-            !watchers.is_empty()
+            let kept = !watchers.is_empty();
+            removed_watcher_bytes = removed_watcher_bytes.saturating_add(if kept {
+                Self::promise_combinator_watchers_bytes_for(before - watchers.len())
+            } else {
+                Self::promise_combinator_watcher_entry_bytes(before)
+            });
+            kept
         });
+        self.promise_combinator_watchers_bytes = self
+            .promise_combinator_watchers_bytes
+            .saturating_sub(removed_watcher_bytes);
         drop(removed_state);
         self.apply_promise_runtime_memory_delta(previous_promise_bytes)?;
         Ok(())
@@ -66455,10 +69148,9 @@ impl InterpreterCore {
     /// the aggregate, allocating result objects, or taking a cascade snapshot.
     fn release_settled_combinator_watchers(&mut self, handle: crate::promise_model::PromiseHandle) {
         if let Some(watchers) = self.promise_combinator_watchers.remove(&handle) {
-            let bytes = MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(
-                (watchers.len() as u64)
-                    .saturating_mul(std::mem::size_of::<PromiseCombinatorWatcher>() as u64),
-            );
+            let bytes = Self::promise_combinator_watcher_entry_bytes(watchers.len());
+            self.promise_combinator_watchers_bytes =
+                self.promise_combinator_watchers_bytes.saturating_sub(bytes);
             self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(bytes);
         }
     }
@@ -66470,19 +69162,22 @@ impl InterpreterCore {
         value: &crate::object_model::JsValue,
         label: &crate::ifc_artifacts::Label,
     ) -> Result<(), InterpreterError> {
-        if !self.prepare_combinator_observation(
+        let Some(growth) = self.prepare_combinator_observation(
             combinator_id,
             index,
             crate::promise_model::ReactionKind::Fulfill,
             value,
             label,
-        )? {
+        )?
+        else {
             return Ok(());
-        }
+        };
         // Record only an admitted retained payload. Terminal materialization
-        // borrows this tracker instead of cloning the whole aggregate.
+        // borrows this tracker instead of cloning the whole aggregate. The
+        // record grows the tracker by exactly the admitted `growth`.
         let mut resolution = None;
         if let Some(state) = self.promise_combinators.get_mut(&combinator_id) {
+            self.promise_combinators_bytes = self.promise_combinators_bytes.saturating_add(growth);
             match state {
                 PromiseCombinatorState::All(tracker) => {
                     if tracker.record_fulfillment(index, value.clone()) {
@@ -66548,17 +69243,20 @@ impl InterpreterCore {
         reason: &crate::object_model::JsValue,
         label: &crate::ifc_artifacts::Label,
     ) -> Result<(), InterpreterError> {
-        if !self.prepare_combinator_observation(
+        let Some(growth) = self.prepare_combinator_observation(
             combinator_id,
             index,
             crate::promise_model::ReactionKind::Reject,
             reason,
             label,
-        )? {
+        )?
+        else {
             return Ok(());
-        }
+        };
         let mut resolution = None;
         if let Some(state) = self.promise_combinators.get_mut(&combinator_id) {
+            // The record grows the tracker by exactly the admitted `growth`.
+            self.promise_combinators_bytes = self.promise_combinators_bytes.saturating_add(growth);
             match state {
                 PromiseCombinatorState::All(tracker) => {
                     tracker.mark_settled();
@@ -66668,6 +69366,10 @@ impl InterpreterCore {
         let previous_event_loop = self.event_loop.clone();
         let previous_combinators = self.promise_combinators.clone();
         let previous_watchers = self.promise_combinator_watchers.clone();
+        let previous_combinator_bytes = (
+            self.promise_combinators_bytes,
+            self.promise_combinator_watchers_bytes,
+        );
         let previous_combinator_id = self.next_promise_combinator_id;
         let previous_heap_len = self.heap.len();
 
@@ -66677,6 +69379,10 @@ impl InterpreterCore {
             self.event_loop = previous_event_loop;
             self.promise_combinators = previous_combinators;
             self.promise_combinator_watchers = previous_watchers;
+            (
+                self.promise_combinators_bytes,
+                self.promise_combinator_watchers_bytes,
+            ) = previous_combinator_bytes;
             self.next_promise_combinator_id = previous_combinator_id;
             self.rollback_heap_to_len(previous_heap_len);
             self.estimated_memory_bytes = previous_estimated_bytes;
@@ -66918,6 +69624,7 @@ impl InterpreterCore {
     fn promise_finally_handlers(
         &mut self,
         on_finally: Option<Value>,
+        constructor: Value,
     ) -> Result<
         (
             Option<crate::closure_model::ClosureHandle>,
@@ -66928,7 +69635,10 @@ impl InterpreterCore {
         let Some(on_finally) = on_finally.filter(Value::is_callable) else {
             return Ok((None, None));
         };
-        let holder = self.alloc_object_with_properties(&[("__onFinally", on_finally)])?;
+        let holder = self.alloc_object_with_properties(&[
+            ("__onFinally", on_finally),
+            ("__constructor", constructor),
+        ])?;
         let then_finally = self.promise_reaction_handler_from_value(
             Value::BuiltinFunction(BuiltinFunction::bound_to(
                 BuiltinFunctionKind::PromiseThenFinally,
@@ -66944,6 +69654,44 @@ impl InterpreterCore {
             "onFinally",
         )?;
         Ok((then_finally, catch_finally))
+    }
+
+    /// ES2020 25.6.5.3 step 3: SpeciesConstructor(promise, %Promise%), which
+    /// Then Finally and Catch Finally resolve onFinally's result with
+    /// (bd-9vouw.349). %Promise% for an undefined `constructor` or an
+    /// undefined or null @@species; a TypeError for a non-object
+    /// `constructor` or a species that is not a constructor.
+    fn promise_finally_species_constructor(
+        &mut self,
+        module: &Ir3Module,
+        promise: &Value,
+    ) -> Result<Value, InterpreterError> {
+        let intrinsic = Value::BuiltinFunction(BuiltinFunction::standard_constructor("Promise"));
+        let constructor = self.get_v(
+            module,
+            promise,
+            &RuntimePropertyKey::String(JsString::from("constructor")),
+        )?;
+        if matches!(constructor, Value::Undefined) {
+            return Ok(intrinsic);
+        }
+        if !constructor.is_object_like() {
+            return Err(InterpreterError::TypeError {
+                expected: "object or undefined promise constructor".to_string(),
+                got: constructor.type_name().to_string(),
+            });
+        }
+        let species = self.species_of_constructor(module, &constructor)?;
+        if matches!(species, Value::Undefined | Value::Null) {
+            return Ok(intrinsic);
+        }
+        if !self.is_constructible_value(&species) {
+            return Err(InterpreterError::TypeError {
+                expected: "constructor @@species for a promise".to_string(),
+                got: species.type_name().to_string(),
+            });
+        }
+        Ok(species)
     }
 
     /// A property of the engine-owned holder a Promise.prototype.finally step
@@ -66963,47 +69711,55 @@ impl InterpreterCore {
     }
 
     /// ES2020 25.6.5.3.1 Then Finally / 25.6.5.3.2 Catch Finally: call
-    /// onFinally() with no arguments. A throw from it propagates (rejecting the
-    /// chain with that error). If it returns a Promise, continue with that
-    /// Promise's settlement and then pass the original value or rethrow the
-    /// original reason; otherwise pass/rethrow immediately.
+    /// onFinally() with no arguments (a throw from it rejects the chain),
+    /// resolve its result with PromiseResolve(C, result) for the
+    /// SpeciesConstructor C taken when finally was called, and return
+    /// Invoke(that promise, "then", «thunk»), where the thunk returns the
+    /// original value or throws the original reason. The `then` call, the
+    /// C construction and their jobs are observable (bd-9vouw.349): a
+    /// promise result was chained internally, past its own `then`, and any
+    /// other result passed the settlement through at once.
     fn promise_finally_step(
         &mut self,
         module: &Ir3Module,
         builtin: &BuiltinFunction,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
+        // Guest code runs while native locals hold values: no collection
+        // until this returns.
+        self.gc_nested_request = None;
         let settlement = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         let on_finally = self.promise_finally_bound_property(builtin, "__onFinally")?;
+        let constructor = self.promise_finally_bound_property(builtin, "__constructor")?;
         let fulfilled = builtin.kind == BuiltinFunctionKind::PromiseThenFinally;
         let result =
             self.invoke_inline_method_call(Some(module), on_finally, Value::Undefined, Vec::new())?;
-        if let Value::Promise(awaited) = result {
-            let carrier = self.alloc_object_with_properties(&[("__value", settlement)])?;
-            let continuation = self.promise_reaction_handler_from_value(
-                Value::BuiltinFunction(BuiltinFunction::bound_to(
-                    if fulfilled {
-                        BuiltinFunctionKind::PromiseFinallyValueThunk
-                    } else {
-                        BuiltinFunctionKind::PromiseFinallyThrower
-                    },
-                    carrier,
-                )),
-                "onFinally",
-            )?;
-            let derived = self.register_promise_then(
-                crate::promise_model::PromiseHandle(awaited),
-                continuation,
-                None,
-                Label::Public,
-            )?;
-            return Ok(Value::Promise(derived.0));
+        let label = self
+            .pending_hostcall_result_label
+            .clone()
+            .unwrap_or(Label::Public);
+        let promise = self.promise_resolve_with_constructor(module, constructor, result, label)?;
+        let carrier = self.alloc_object_with_properties(&[("__value", settlement)])?;
+        let thunk = Value::BuiltinFunction(BuiltinFunction::bound_to(
+            if fulfilled {
+                BuiltinFunctionKind::PromiseFinallyValueThunk
+            } else {
+                BuiltinFunctionKind::PromiseFinallyThrower
+            },
+            carrier,
+        ));
+        let then = self.get_v(
+            module,
+            &promise,
+            &RuntimePropertyKey::String(JsString::from("then")),
+        )?;
+        if !then.is_callable() {
+            return Err(InterpreterError::TypeError {
+                expected: "callable then of the promise onFinally's result resolves to".to_string(),
+                got: then.type_name().to_string(),
+            });
         }
-        if fulfilled {
-            Ok(settlement)
-        } else {
-            Err(self.throw_guest_value(settlement, Label::Public)?)
-        }
+        self.invoke_inline_method_call(Some(module), then, promise, vec![thunk])
     }
 
     fn dispatch_promise_reaction_builtin(
@@ -67014,6 +69770,9 @@ impl InterpreterCore {
         kind: PromiseReactionKind,
     ) -> Result<Value, InterpreterError> {
         let receiver = receiver.unwrap_or(Value::Undefined);
+        // ES2020 25.6.5.3 step 3: finally takes SpeciesConstructor(this,
+        // %Promise%) before it reads `then` (bd-9vouw.349).
+        let mut finally_constructor = None;
         // ES2020 25.6.5.1 / 25.6.5.3: catch and finally are
         // Invoke(this, "then", ...), so a thenable `this`, or a promise
         // whose `then` was replaced, runs that `then`; only a promise with
@@ -67032,6 +69791,10 @@ impl InterpreterCore {
             // Guest code (a `then` getter, a user `then`) runs while native
             // locals hold values: no collection until this returns.
             self.gc_nested_request = None;
+            if matches!(kind, PromiseReactionKind::Finally) {
+                finally_constructor =
+                    Some(self.promise_finally_species_constructor(module, &receiver)?);
+            }
             let then = self.get_v(
                 module,
                 &receiver,
@@ -67052,8 +69815,11 @@ impl InterpreterCore {
                 let arguments = match kind {
                     PromiseReactionKind::Catch => vec![Value::Undefined, handler],
                     _ if handler.is_callable() => {
-                        let holder =
-                            self.alloc_object_with_properties(&[("__onFinally", handler)])?;
+                        let constructor = finally_constructor.clone().unwrap_or(Value::Undefined);
+                        let holder = self.alloc_object_with_properties(&[
+                            ("__onFinally", handler),
+                            ("__constructor", constructor),
+                        ])?;
                         vec![
                             Value::BuiltinFunction(BuiltinFunction::bound_to(
                                 BuiltinFunctionKind::PromiseThenFinally,
@@ -67124,7 +69890,10 @@ impl InterpreterCore {
             // swallowed rejections).
             PromiseReactionKind::Finally => {
                 let on_finally = self.builtin_arg(args, 0)?;
-                self.promise_finally_handlers(on_finally)?
+                let constructor = finally_constructor.clone().unwrap_or_else(|| {
+                    Value::BuiltinFunction(BuiltinFunction::standard_constructor("Promise"))
+                });
+                self.promise_finally_handlers(on_finally, constructor)?
             }
         };
         Ok(match species_result {
@@ -67666,7 +70435,11 @@ impl InterpreterCore {
                     }
                 };
                 let on_finally = self.promise_reaction_arg(args, 1)?;
-                let (then_finally, catch_finally) = self.promise_finally_handlers(on_finally)?;
+                // The internal hostcall has no observable species: %Promise%.
+                let (then_finally, catch_finally) = self.promise_finally_handlers(
+                    on_finally,
+                    Value::BuiltinFunction(BuiltinFunction::standard_constructor("Promise")),
+                )?;
                 let result =
                     self.register_promise_then(handle, then_finally, catch_finally, label)?;
                 Ok(Value::Promise(result.0))
@@ -67935,14 +70708,13 @@ impl InterpreterCore {
         &mut self,
         module: Option<&Ir3Module>,
         handler: crate::closure_model::ClosureHandle,
-        argument: crate::object_model::JsValue,
+        arguments: Vec<Value>,
         task_label: Label,
     ) -> Result<Value, InterpreterError> {
         let module = module.ok_or_else(|| InterpreterError::TypeError {
             expected: "module-backed Promise reaction handler dispatch".to_string(),
             got: "missing module context".to_string(),
         })?;
-        let argument = self.js_value_to_value(&argument);
         let callee = self.promise_reaction_callee(handler)?;
         // Promise reactions are control-dependent on settlement as well as
         // value-dependent on the delivered argument. Run the whole isolated
@@ -67952,7 +70724,7 @@ impl InterpreterCore {
             Some(module),
             callee,
             Value::Undefined,
-            vec![argument],
+            arguments,
             Some(task_label),
         );
         match &result {
@@ -68085,13 +70857,7 @@ impl InterpreterCore {
         label: crate::ifc_artifacts::Label,
     ) -> Result<(), InterpreterError> {
         if let Value::Promise(source_handle) = value {
-            // Resolving with a native promise adopts its state (ES2020
-            // 25.6.3.2); it must never be flattened into a fulfillment value.
-            return self.resolve_promise_to_native(
-                promise,
-                crate::promise_model::PromiseHandle(source_handle),
-                label,
-            );
+            return self.resolve_promise_with_native(module, promise, source_handle, label);
         }
         if !matches!(value, Value::Object(_)) {
             let value = self.promise_value(&value)?;
@@ -68152,6 +70918,117 @@ impl InterpreterCore {
                 let value = self.promise_value(&value)?;
                 self.fulfill_promise(promise, value, label)
             }
+        }
+    }
+
+    /// The Promise Resolve Function with a native promise (ES2020 25.6.1.3.2
+    /// steps 6-12). Resolving with itself is a TypeError at once. Otherwise
+    /// `then` is read now: the intrinsic %Promise.prototype.then% makes the
+    /// PromiseResolveThenableJob an adoption of the native promise, which
+    /// settles `promise` two jobs later, as in Node; adopting at once settled
+    /// it two ticks early (an async function returning a promise, `resolve(p)`
+    /// in an executor, a `then` callback returning a promise). An own or
+    /// patched `then` runs as any thenable's, and a non-callable one
+    /// fulfills `promise` with the source itself (bd-9vouw.323).
+    fn resolve_promise_with_native(
+        &mut self,
+        module: Option<&Ir3Module>,
+        promise: crate::promise_model::PromiseHandle,
+        source_handle: u32,
+        label: crate::ifc_artifacts::Label,
+    ) -> Result<(), InterpreterError> {
+        let source = crate::promise_model::PromiseHandle(source_handle);
+        let Some(module) = module.filter(|_| source != promise) else {
+            return self.resolve_promise_to_native(promise, source, label);
+        };
+        // As for any thenable, what the Get reads labels the resolution, and
+        // the enclosing HostCall's pending result label is set aside.
+        let saved_result_label = self.take_pending_hostcall_result_label();
+        let then = self.get_v(
+            module,
+            &Value::Promise(source_handle),
+            &RuntimePropertyKey::String(JsString::from("then")),
+        );
+        let observed = self.take_pending_hostcall_result_label();
+        if let Some(saved) = saved_result_label {
+            self.replace_pending_hostcall_result_label(Some(saved))?;
+        }
+        let label = match observed {
+            Some(observed) => label.join(&observed),
+            None => label,
+        };
+        let then = match then {
+            Ok(then) => then,
+            Err(error) => {
+                let (reason, reason_label) = self.thrown_completion_value(error, &label)?;
+                let reason = self.promise_value(&reason)?;
+                return self.reject_promise(promise, reason, reason_label);
+            }
+        };
+        // The adoption stands in for the job's `then` call only when that
+        // call is unobservable: a subclass instance's `then` constructs the
+        // subclass, so it runs as any thenable's (bd-9vouw.349).
+        if matches!(&then, Value::BuiltinFunction(builtin)
+            if builtin.kind == BuiltinFunctionKind::PromiseThen && builtin.bound_object.is_none())
+            && self.native_then_is_inert(module, &Value::Promise(source_handle))?
+        {
+            return self.enqueue_adopt_native(promise, source, false, label);
+        }
+        match self.promise_reaction_handler_from_value(then, "thenable then")? {
+            Some(handler) => self.enqueue_resolve_thenable(
+                promise,
+                handler,
+                Value::Promise(source_handle),
+                label,
+            ),
+            None => {
+                let value = self.promise_value(&Value::Promise(source_handle))?;
+                self.fulfill_promise(promise, value, label)
+            }
+        }
+    }
+
+    /// Enqueue an [`crate::promise_model::Microtask::AdoptNative`] job
+    /// (memory-preflighted, as [`Self::enqueue_resolve_thenable`]). The
+    /// first (`settle` false) is the resolving functions' resolution: they
+    /// are already resolved from here on.
+    fn enqueue_adopt_native(
+        &mut self,
+        promise: crate::promise_model::PromiseHandle,
+        source: crate::promise_model::PromiseHandle,
+        settle: bool,
+        label: crate::ifc_artifacts::Label,
+    ) -> Result<(), InterpreterError> {
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        let task = crate::promise_model::Microtask::AdoptNative {
+            promise,
+            source,
+            settle,
+            label,
+        };
+        let next_queue_bytes = self
+            .event_loop
+            .microtasks
+            .projected_enqueue_memory_bytes(&task);
+        let next_promise_bytes = self
+            .promise_store
+            .estimated_memory_bytes()
+            .saturating_add(
+                self.event_loop
+                    .estimated_memory_bytes()
+                    .saturating_sub(self.event_loop.microtasks.estimated_memory_bytes())
+                    .saturating_add(next_queue_bytes),
+            )
+            .saturating_add(self.promise_combinators_memory_bytes())
+            .saturating_add(self.promise_combinator_watchers_memory_bytes())
+            .saturating_add(self.promise_in_flight_task_bytes);
+        self.apply_memory_component_delta(previous_promise_bytes, next_promise_bytes)?;
+        self.event_loop.microtasks.enqueue(task);
+        self.settle_projected_promise_bytes(next_promise_bytes)?;
+        if settle {
+            Ok(())
+        } else {
+            self.retire_promise_resolvers(promise)
         }
     }
 
@@ -68357,17 +71234,15 @@ impl InterpreterCore {
     ///
     /// Node semantics: the tick queue runs to exhaustion — including ticks
     /// enqueued by tick callbacks — before any Promise microtask. Each
-    /// executed tick counts against the caller's shared drain bound so a
-    /// mutually-feeding tick/microtask pair cannot starve the checkpoint. An
-    /// uncaught exception in a tick callback aborts the drain fail-closed
-    /// (Node's equivalent crashes the process).
+    /// executed tick counts in the caller's `drained`. An uncaught exception
+    /// in a tick callback aborts the drain fail-closed (Node's equivalent
+    /// crashes the process).
     fn drain_next_tick_queue(
         &mut self,
         module: Option<&Ir3Module>,
-        drained: &mut u32,
-        max_drain: u32,
+        drained: &mut u64,
     ) -> Result<(), InterpreterError> {
-        while *drained < max_drain {
+        loop {
             // Collector safe point between nextTick callbacks (bd-9vouw.57).
             self.gc_event_loop_safe_point();
             let previous_bytes = self.next_tick_queue_memory_bytes();
@@ -68392,13 +71267,26 @@ impl InterpreterCore {
     }
 
     fn drain_microtasks(&mut self, module: Option<&Ir3Module>) -> Result<(), InterpreterError> {
-        let max_drain = 10_000u32;
-        let mut drained = 0u32;
+        // The checkpoint runs until both queues are empty, as Node's does: it
+        // used to stop after 10,000 jobs and let a timer run ahead of the
+        // jobs still queued (bd-9vouw.478: 20,000 reactions on one promise
+        // printed "many 10000" from a setTimeout). It ends: a job that queues
+        // another runs guest code, which the instruction budget bounds, and a
+        // native job (a resolve function, a combinator element) only settles
+        // promises that guest code created and registered reactions on.
+        let mut drained = 0u64;
         #[cfg(test)]
         let entry_drift = self.memory_walk_drift();
         let mut dequeued_since_compaction = 0u32;
+        // Node's processTicksAndRejections: drain the whole next-tick queue,
+        // then let the microtask checkpoint run every queued job (jobs those
+        // jobs queue included), and only then the ticks queued meanwhile;
+        // repeat until both are empty. Draining the ticks before every job
+        // ran a tick that a job queued ahead of the jobs already waiting
+        // (bd-9vouw.319).
+        let mut tick_round = true;
 
-        while drained < max_drain {
+        loop {
             // Collector safe point between microtasks (bd-9vouw.57).
             self.gc_event_loop_safe_point();
             // bd-9vouw.71: a consumed queue slot stays charged until the
@@ -68411,13 +71299,20 @@ impl InterpreterCore {
                 self.event_loop.microtasks.compact();
                 self.apply_promise_runtime_memory_delta(previous_promise_bytes)?;
             }
-            // bd-8nrud: Node ordering — the next-tick queue drains completely
-            // before every Promise microtask, including ticks enqueued by the
-            // microtask executed on the previous iteration.
-            self.drain_next_tick_queue(module, &mut drained, max_drain)?;
+            // bd-8nrud: the next-tick queue drains completely before the
+            // round's Promise microtasks.
+            if tick_round {
+                self.drain_next_tick_queue(module, &mut drained)?;
+                tick_round = false;
+            }
             let previous_promise_bytes = self.promise_runtime_memory_bytes();
             let Some(task) = self.event_loop.microtasks.dequeue() else {
-                break;
+                if self.next_tick_queue.is_empty() {
+                    break;
+                }
+                // Ticks the round's jobs queued run now, then their jobs.
+                tick_round = true;
+                continue;
             };
             let transferred_bytes = self.begin_promise_task_transfer(previous_promise_bytes);
             drained += 1;
@@ -68530,10 +71425,11 @@ impl InterpreterCore {
                             // with the handler's result (bd-9vouw.77).
                             let held = vec![Value::Promise(result_promise.0)];
                             match self.with_event_job_gc_request(held, |this| {
+                                let argument = this.js_value_to_value(argument);
                                 this.execute_promise_reaction_handler(
                                     module,
                                     handler,
-                                    argument.clone(),
+                                    vec![argument],
                                     task_label.clone(),
                                 )
                             }) {
@@ -68578,6 +71474,25 @@ impl InterpreterCore {
                                 }
                             }
                         }
+                    }
+                    // queueMicrotask(callback) (bd-9vouw.478): the callback
+                    // gets no arguments, its value is dropped, and a throw is
+                    // an uncaught exception that ends the run here, as in
+                    // Node. It used to reject a promise nobody held, and the
+                    // jobs after it still ran before that was reported.
+                    crate::promise_model::Microtask::QueuedCallback {
+                        handler,
+                        label: task_label,
+                    } => {
+                        let held = vec![self.promise_reaction_callee(*handler)?];
+                        self.with_event_job_gc_request(held, |this| {
+                            this.execute_promise_reaction_handler(
+                                module,
+                                *handler,
+                                Vec::new(),
+                                task_label.clone(),
+                            )
+                        })?;
                     }
                     crate::promise_model::Microtask::PromiseRejection {
                         reason,
@@ -68639,6 +71554,27 @@ impl InterpreterCore {
                                 reason.clone(),
                                 task_label.clone(),
                             )?;
+                        }
+                    }
+                    crate::promise_model::Microtask::AdoptNative {
+                        promise,
+                        source,
+                        settle,
+                        label: task_label,
+                    } => {
+                        // The PromiseResolveThenableJob's `then(resolve,
+                        // reject)` on a native promise (bd-9vouw.323): a
+                        // pending source gets the forwarding reaction, which
+                        // settles `promise` when it settles; a settled one
+                        // queues the reaction job, which settles it next.
+                        let pending = matches!(
+                            self.promise_store.get(*source).map(|record| &record.state),
+                            Ok(crate::promise_model::PromiseState::Pending)
+                        );
+                        if *settle || pending {
+                            self.resolve_promise_to_native(*promise, *source, task_label.clone())?;
+                        } else {
+                            self.enqueue_adopt_native(*promise, *source, true, task_label.clone())?;
                         }
                     }
                     crate::promise_model::Microtask::ResolveThenable {
@@ -69230,7 +72166,7 @@ impl InterpreterCore {
                 })?,
             );
         let mut object = HeapObject::new();
-        object.brand = Some(JsString::from(marker));
+        object.brand = Some(Box::new(JsString::from(marker)));
         object
             .properties
             .insert("__timerId".to_string(), Value::Int(timer_id as i64));
@@ -69464,18 +72400,24 @@ impl InterpreterCore {
     /// Implemented as a `PromiseReaction` against a fresh (unobservable)
     /// promise so it reuses the audited reaction-drain path.
     fn queue_microtask_from_value(&mut self, callback: &Value) -> Result<Value, InterpreterError> {
-        let Value::Closure(closure_id) = callback else {
+        // Any callable, as Promise reactions take: a builtin (a promise's
+        // resolve function, `console.log`, a bound function) or an async or
+        // generator function object, not only a closure. Those were refused
+        // with "expected function, got function" (bd-9vouw.478).
+        let handler = if callback.is_callable() {
+            self.promise_reaction_handler_from_value(callback.clone(), "queueMicrotask callback")?
+        } else {
+            None
+        };
+        let Some(handler) = handler else {
             return Err(InterpreterError::TypeError {
                 expected: "function".to_string(),
                 got: callback.type_name().to_string(),
             });
         };
-        let result_promise = self.create_promise()?;
         let previous_promise_bytes = self.promise_runtime_memory_bytes();
-        let task = crate::promise_model::Microtask::PromiseReaction {
-            handler: Some(crate::closure_model::ClosureHandle(*closure_id)),
-            argument: crate::object_model::JsValue::Undefined,
-            result_promise,
+        let task = crate::promise_model::Microtask::QueuedCallback {
+            handler,
             label: crate::ifc_artifacts::Label::Public,
         };
         let next_queue_bytes = self
@@ -69494,12 +72436,7 @@ impl InterpreterCore {
             .saturating_add(self.promise_combinators_memory_bytes())
             .saturating_add(self.promise_combinator_watchers_memory_bytes())
             .saturating_add(self.promise_in_flight_task_bytes);
-        if let Err(error) =
-            self.apply_memory_component_delta(previous_promise_bytes, next_promise_bytes)
-        {
-            self.rollback_fresh_promise(result_promise);
-            return Err(error);
-        }
+        self.apply_memory_component_delta(previous_promise_bytes, next_promise_bytes)?;
         self.event_loop.microtasks.enqueue(task);
         self.settle_projected_promise_bytes(next_promise_bytes)?;
         Ok(Value::Undefined)
@@ -69682,7 +72619,7 @@ impl InterpreterCore {
         &mut self,
         description: Option<JsString>,
     ) -> Result<SymbolId, InterpreterError> {
-        self.allocate_charged_symbol(|state| state.allocate_private(description))
+        self.allocate_charged_symbol(RuntimeSymbolKind::Private, description, None)
     }
 
     /// A class evaluation's Private Name `#x`, charged like any symbol.
@@ -69690,59 +72627,39 @@ impl InterpreterCore {
         &mut self,
         description: JsString,
     ) -> Result<SymbolId, InterpreterError> {
-        self.allocate_charged_symbol(|state| state.allocate_class_private_name(description))
+        self.allocate_charged_symbol(RuntimeSymbolKind::ClassPrivateName, Some(description), None)
     }
 
-    /// Runs `allocate` on a copy of the symbol state, within the memory
-    /// budget, and charges the state's growth.
+    /// Adds one symbol record within the memory budget and charges it. The
+    /// record's bytes are known before it exists, so the budget is checked
+    /// and charged first and the state changes only on success. This used to
+    /// copy the whole symbol state and estimate it twice per allocation:
+    /// O(symbols) for every Symbol(), Symbol.for and class private name, so
+    /// a class with N private fields took O(N^2) to define (bd-9vouw.332).
     fn allocate_charged_symbol(
         &mut self,
-        allocate: impl FnOnce(&mut RuntimeSymbolState) -> Result<SymbolId, InterpreterError>,
+        kind: RuntimeSymbolKind,
+        description: Option<JsString>,
+        registry_key: Option<JsString>,
     ) -> Result<SymbolId, InterpreterError> {
-        let previous_symbol_bytes = Self::estimate_symbol_state_bytes(&self.symbol_state);
-        let temporary_bytes = self
-            .estimated_memory_bytes
-            .saturating_add(previous_symbol_bytes);
-        if self.memory_request_exceeds_budget(temporary_bytes, self.config.max_total_memory_bytes) {
-            return Err(self.memory_budget_error(temporary_bytes, self.heap_object_count_u32()));
+        let record_bytes =
+            Self::estimate_symbol_record_bytes(description.as_ref(), registry_key.as_ref());
+        self.apply_memory_component_delta(0, record_bytes)?;
+        match self.mutate_symbol_state(|state| state.allocate(kind, description, registry_key)) {
+            Ok(symbol) => Ok(symbol),
+            Err(error) => {
+                self.estimated_memory_bytes =
+                    self.estimated_memory_bytes.saturating_sub(record_bytes);
+                Err(error)
+            }
         }
-        let mut projected = self.symbol_state.value.clone();
-        let symbol = allocate(&mut projected)?;
-        let next_symbol_bytes = Self::estimate_symbol_state_bytes(&projected);
-        let peak_bytes = self
-            .estimated_memory_bytes
-            .saturating_add(next_symbol_bytes);
-        if self.memory_request_exceeds_budget(peak_bytes, self.config.max_total_memory_bytes) {
-            return Err(self.memory_budget_error(peak_bytes, self.heap_object_count_u32()));
-        }
-        self.apply_memory_component_delta(previous_symbol_bytes, next_symbol_bytes)?;
-        self.mutate_symbol_state(|state| *state = projected);
-        Ok(symbol)
     }
 
     fn intern_global_symbol(&mut self, key: JsString) -> Result<SymbolId, InterpreterError> {
         if let Some(symbol) = self.symbol_state.global_symbol(&key) {
             return Ok(symbol);
         }
-        let previous_symbol_bytes = Self::estimate_symbol_state_bytes(&self.symbol_state);
-        let temporary_bytes = self
-            .estimated_memory_bytes
-            .saturating_add(previous_symbol_bytes);
-        if self.memory_request_exceeds_budget(temporary_bytes, self.config.max_total_memory_bytes) {
-            return Err(self.memory_budget_error(temporary_bytes, self.heap_object_count_u32()));
-        }
-        let mut projected = self.symbol_state.value.clone();
-        let symbol = projected.intern_global(key)?;
-        let next_symbol_bytes = Self::estimate_symbol_state_bytes(&projected);
-        let peak_bytes = self
-            .estimated_memory_bytes
-            .saturating_add(next_symbol_bytes);
-        if self.memory_request_exceeds_budget(peak_bytes, self.config.max_total_memory_bytes) {
-            return Err(self.memory_budget_error(peak_bytes, self.heap_object_count_u32()));
-        }
-        self.apply_memory_component_delta(previous_symbol_bytes, next_symbol_bytes)?;
-        self.mutate_symbol_state(|state| *state = projected);
-        Ok(symbol)
+        self.allocate_charged_symbol(RuntimeSymbolKind::Global, Some(key.clone()), Some(key))
     }
 
     fn symbol_description(&self, id: SymbolId) -> Option<JsString> {
@@ -69833,7 +72750,9 @@ impl InterpreterCore {
 
         let key = match value {
             Value::Str(key) => key.clone(),
-            Value::Int(number) => JsString::from(number.to_string()),
+            Value::Int(number) => {
+                small_index_key(*number).unwrap_or_else(|| JsString::from(number.to_string()))
+            }
             _ => JsString::from(Self::property_key(value)),
         };
         RuntimePropertyKey::String(key)
@@ -70422,7 +73341,7 @@ impl InterpreterCore {
         let source_kind = self
             .heap
             .get(source_id.0 as usize)
-            .and_then(|object| object.typed_array.as_ref())
+            .and_then(|object| object.typed_array.as_deref())
             .map(|view| view.kind);
         match source_kind {
             Some(kind) if kind.is_bigint() != target.is_bigint() => {
@@ -70465,7 +73384,7 @@ impl InterpreterCore {
                 None => Ok(None),
             };
         };
-        let Some(view) = object.typed_array.clone() else {
+        let Some(view) = object.typed_array.as_deref().cloned() else {
             return Ok(None);
         };
         let Some(index) = Self::typed_array_integer_index_key(key) else {
@@ -70501,7 +73420,8 @@ impl InterpreterCore {
             .get(object_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
             .typed_array
-            .clone()
+            .as_deref()
+            .cloned()
         else {
             return Ok(None);
         };
@@ -70738,7 +73658,7 @@ impl InterpreterCore {
             .heap
             .get(object_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
-        Ok(object.typed_array.clone())
+        Ok(object.typed_array.as_deref().cloned())
     }
 
     fn typed_array_receiver_view(
@@ -70756,7 +73676,7 @@ impl InterpreterCore {
             .heap
             .get(object_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
-        let view = object.typed_array.clone().ok_or_else(|| {
+        let view = object.typed_array.as_deref().cloned().ok_or_else(|| {
             let got = object.brand().unwrap_or("object").to_string();
             InterpreterError::TypeError {
                 expected: format!("TypedArray receiver for TypedArray.prototype.{method_name}"),
@@ -71195,7 +74115,7 @@ impl InterpreterCore {
             Value::Object(object_id) => self
                 .heap
                 .get(object_id.0 as usize)
-                .and_then(|object| object.typed_array.clone()),
+                .and_then(|object| object.typed_array.as_deref().cloned()),
             _ => None,
         };
         let (Value::Object(created), Some(created_view)) = (result.clone(), created_view) else {
@@ -71238,10 +74158,20 @@ impl InterpreterCore {
         for (index, value) in values.iter().enumerate() {
             self.typed_array_indexed_set_property(target, &index.to_string(), value)?;
         }
+        self.join_typed_array_source_label(target, source)
+    }
+
+    /// `target`'s storage joins the label of `source`'s backing buffer, whose
+    /// elements were written to it.
+    fn join_typed_array_source_label(
+        &mut self,
+        target: ObjectId,
+        source: ObjectId,
+    ) -> Result<(), InterpreterError> {
         let label = self
             .array_buffer_id_for_object(source)
             .and_then(|buffer| self.heap.get(buffer.0 as usize))
-            .and_then(|object| object.array_buffer.as_ref())
+            .and_then(|object| object.array_buffer.as_deref())
             .map(|backing| backing.label.clone())
             .unwrap_or(Label::Public);
         self.join_binary_storage_label(target, &label)
@@ -71414,7 +74344,7 @@ impl InterpreterCore {
             let label = self
                 .heap
                 .get(source.0 as usize)
-                .and_then(|object| object.array_buffer.as_ref())
+                .and_then(|object| object.array_buffer.as_deref())
                 .map(|backing| backing.label.clone())
                 .unwrap_or(Label::Public);
             self.join_binary_storage_label(created, &label)?;
@@ -71423,7 +74353,7 @@ impl InterpreterCore {
         let label = self
             .heap
             .get(source.0 as usize)
-            .and_then(|object| object.array_buffer.as_ref())
+            .and_then(|object| object.array_buffer.as_deref())
             .map(|backing| backing.label.clone())
             .unwrap_or(Label::Public);
         let created = self.alloc_buffer_object(last.saturating_sub(first), shared)?;
@@ -71542,17 +74472,69 @@ impl InterpreterCore {
                     });
                 }
                 let this_arg = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
-                // ES2020 22.2.3.19 step 5: map creates its result before the
-                // callbacks run; filter (22.2.3.9 step 10) after them.
-                let mapped_species = if method == "map" {
-                    let length = Value::Int(i64::try_from(view.length).unwrap_or(i64::MAX));
-                    self.typed_array_species_result(module, target_id, view.kind, vec![length])?
-                } else {
-                    None
-                };
-                let mut results = Vec::with_capacity(values.len());
-                for (index, element) in values.into_iter().enumerate() {
-                    let result = self.invoke_array_callback(
+                let len = view.length;
+                if method == "map" {
+                    // ES2024 23.2.3.22: the result exists before the
+                    // callbacks run (step 4). Each step reads O[k] when it
+                    // runs (undefined once a resize left k out of bounds)
+                    // and Sets the result's element, converting the mapped
+                    // value then (steps 6.b-6.d).
+                    let length = Value::Int(i64::try_from(len).unwrap_or(i64::MAX));
+                    let species = self.typed_array_species_result(
+                        module,
+                        target_id,
+                        view.kind,
+                        vec![length],
+                    )?;
+                    let created = match species {
+                        Some(created) => created,
+                        None => self.alloc_typed_array_with_fresh_buffer(view.kind, len)?,
+                    };
+                    // A species constructor may return another element type.
+                    let created_kind = self
+                        .typed_array_view_for_object(created)?
+                        .map_or(view.kind, |created_view| created_view.kind);
+                    for index in 0..len {
+                        let element = self
+                            .array_loop_element(Some(module), target_id, index, true)?
+                            .unwrap_or(Value::Undefined);
+                        // Set converts the mapped value (its valueOf runs)
+                        // before the next callback.
+                        let converted =
+                            self.with_gc_nested_request(vec![Value::Object(created)], |core| {
+                                let mapped = core.invoke_array_callback(
+                                    Some(module),
+                                    &callback,
+                                    this_arg.clone(),
+                                    element,
+                                    index,
+                                    target_id,
+                                )?;
+                                core.typed_array_element_value(Some(module), created_kind, mapped)
+                            })?;
+                        self.typed_array_indexed_set_property(
+                            created,
+                            &index.to_string(),
+                            &converted,
+                        )?;
+                    }
+                    // As before: a species result joins the receiver's
+                    // storage label (typed_array_write_values); the
+                    // default result is a fresh array of the mapped values.
+                    if species.is_some() {
+                        self.join_typed_array_source_label(created, target_id)?;
+                    }
+                    return Ok(Value::Object(created));
+                }
+                // ES2024 23.2.3.10: each step reads O[k] when it runs; the
+                // kept values go to a result created after the callbacks
+                // (step 9).
+                let mut kept = Vec::new();
+                for index in 0..len {
+                    let element = self
+                        .array_loop_element(Some(module), target_id, index, true)?
+                        .unwrap_or(Value::Undefined);
+                    let selected = self.invoke_array_callback(
                         Some(module),
                         &callback,
                         this_arg.clone(),
@@ -71560,26 +74542,22 @@ impl InterpreterCore {
                         index,
                         target_id,
                     )?;
-                    if method == "map" {
-                        results.push(result);
-                    } else if result.is_truthy() {
-                        results.push(element);
+                    if selected.is_truthy() {
+                        kept.push(element);
                     }
                 }
-                let species = match mapped_species {
-                    Some(created) => Some(created),
-                    None if method == "filter" => {
-                        let length = Value::Int(i64::try_from(results.len()).unwrap_or(i64::MAX));
-                        self.typed_array_species_result(module, target_id, view.kind, vec![length])?
-                    }
-                    None => None,
-                };
-                let created = match species {
+                let length = Value::Int(i64::try_from(kept.len()).unwrap_or(i64::MAX));
+                let created = match self.typed_array_species_result(
+                    module,
+                    target_id,
+                    view.kind,
+                    vec![length],
+                )? {
                     Some(created) => {
-                        self.typed_array_write_values(created, target_id, &results)?;
+                        self.typed_array_write_values(created, target_id, &kept)?;
                         created
                     }
-                    None => self.alloc_typed_array_from_values(view.kind, &results)?,
+                    None => self.alloc_typed_array_from_values(view.kind, &kept)?,
                 };
                 return Ok(Value::Object(created));
             }
@@ -72869,6 +75847,34 @@ impl InterpreterCore {
         ))
     }
 
+    /// Node's `Buffer.isEncoding(encoding)` (bd-9vouw.308): whether
+    /// `encoding` is a string naming one of Buffer's encodings, ignoring case.
+    fn buffer_is_encoding_builtin(&self, args: RegRange) -> Result<Value, InterpreterError> {
+        let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let Value::Str(name) = value else {
+            return Ok(Value::Bool(false));
+        };
+        let known = name.as_str().is_some_and(|name| {
+            [
+                "utf8",
+                "utf-8",
+                "ucs2",
+                "ucs-2",
+                "utf16le",
+                "utf-16le",
+                "latin1",
+                "binary",
+                "base64",
+                "base64url",
+                "hex",
+                "ascii",
+            ]
+            .iter()
+            .any(|encoding| encoding.eq_ignore_ascii_case(name))
+        });
+        Ok(Value::Bool(known))
+    }
+
     fn buffer_to_string(
         &mut self,
         receiver: Value,
@@ -73114,7 +76120,19 @@ impl InterpreterCore {
         view: &TypedArrayView,
         width: usize,
     ) -> Result<usize, InterpreterError> {
-        let value = match self.builtin_arg(args, 0)? {
+        self.buffer_offset_arg(args, 0, view, width)
+    }
+
+    /// Node's `offset` argument at `index` of a `width`-byte access: an
+    /// integer from 0 to the view's length minus `width` (undefined is 0).
+    fn buffer_offset_arg(
+        &mut self,
+        args: RegRange,
+        index: u32,
+        view: &TypedArrayView,
+        width: usize,
+    ) -> Result<usize, InterpreterError> {
+        let value = match self.builtin_arg(args, index)? {
             None | Some(Value::Undefined) => Value::Int(0),
             Some(value) => value,
         };
@@ -73323,6 +76341,290 @@ impl InterpreterCore {
         })??;
         let next_offset = offset.saturating_add(width);
         Ok(Value::Int(i64::try_from(next_offset).unwrap_or(i64::MAX)))
+    }
+
+    /// Node's `Buffer.prototype` numeric accessors that the dedicated kinds
+    /// do not serve, and `write(string)` (bd-9vouw.437). A read takes
+    /// `(offset)` (`(offset, byteLength)` for the variable-width family) and
+    /// returns the value; a write takes `(value, offset)` (`(value, offset,
+    /// byteLength)`) and returns the offset after the bytes it wrote.
+    fn buffer_numeric_method(
+        &mut self,
+        receiver: Value,
+        args: RegRange,
+        name: &str,
+    ) -> Result<Value, InterpreterError> {
+        if name == "write" {
+            return self.buffer_write_string(receiver, args);
+        }
+        let Some((write, format, little_endian)) = BufferNumberFormat::parse(name) else {
+            return Err(InterpreterError::TypeError {
+                expected: "Buffer numeric accessor".to_string(),
+                got: name.to_string(),
+            });
+        };
+        let (_, view) = self.buffer_receiver_view(receiver, name)?;
+        let width = match format {
+            BufferNumberFormat::Int { width, .. } => width,
+            BufferNumberFormat::Variable { .. } => {
+                self.buffer_byte_length_arg(args, if write { 2 } else { 1 })?
+            }
+            BufferNumberFormat::Float32 => 4,
+            BufferNumberFormat::Float64 | BufferNumberFormat::BigInt64 { .. } => 8,
+        };
+        if write {
+            let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+            let mut bytes = self.buffer_numeric_bytes(format, width, value)?;
+            if !little_endian {
+                bytes[..width].reverse();
+            }
+            let offset = self.buffer_offset_arg(args, 1, &view, width)?;
+            let range = self.buffer_integer_range(&view, offset, width)?;
+            self.with_array_buffer_bytes_mut(view.buffer, |storage| {
+                let slot = storage
+                    .get_mut(range)
+                    .ok_or_else(|| InterpreterError::RangeError {
+                        message: "Buffer write exceeds backing storage".to_string(),
+                    })?;
+                slot.copy_from_slice(&bytes[..width]);
+                Ok(())
+            })??;
+            return Ok(Value::Int(
+                i64::try_from(offset.saturating_add(width)).unwrap_or(i64::MAX),
+            ));
+        }
+        let offset = self.buffer_offset_arg(args, 0, &view, width)?;
+        let range = self.buffer_integer_range(&view, offset, width)?;
+        let mut bytes = self.with_array_buffer_bytes(view.buffer, |storage| {
+            let slot = storage
+                .get(range)
+                .ok_or_else(|| InterpreterError::RangeError {
+                    message: "Buffer read exceeds backing storage".to_string(),
+                })?;
+            let mut bytes = [0u8; 8];
+            bytes[..width].copy_from_slice(slot);
+            Ok::<[u8; 8], InterpreterError>(bytes)
+        })??;
+        if !little_endian {
+            bytes[..width].reverse();
+        }
+        Ok(format.decode(bytes, width))
+    }
+
+    /// The `byteLength` argument of the variable-width accessors: an integer
+    /// from 1 to 6.
+    fn buffer_byte_length_arg(
+        &mut self,
+        args: RegRange,
+        index: u32,
+    ) -> Result<usize, InterpreterError> {
+        let value = self.builtin_arg(args, index)?.unwrap_or(Value::Undefined);
+        let number = match &value {
+            Value::Int(value) => *value as f64,
+            Value::Float(value) => value.inner(),
+            other => {
+                return Err(self.throw_buffer_node_error(
+                    "TypeError",
+                    "ERR_INVALID_ARG_TYPE",
+                    format!(
+                        "The \"byteLength\" argument must be of type number. Received {}",
+                        if matches!(other, Value::Undefined) {
+                            "undefined".to_string()
+                        } else {
+                            format!("type {}", other.type_name())
+                        }
+                    ),
+                ));
+            }
+        };
+        if number.fract() != 0.0 || !(1.0..=6.0).contains(&number) {
+            return Err(self.throw_buffer_node_error(
+                "RangeError",
+                "ERR_OUT_OF_RANGE",
+                format!(
+                    "The value of \"byteLength\" is out of range. It must be >= 1 and <= 6. Received {}",
+                    node_out_of_range_received(number)
+                ),
+            ));
+        }
+        Ok(number as usize)
+    }
+
+    /// The `width` little-endian bytes a numeric write stores for `value`,
+    /// after Node's range check (an integer format takes a Number, a
+    /// BigInt64 format a BigInt).
+    fn buffer_numeric_bytes(
+        &mut self,
+        format: BufferNumberFormat,
+        width: usize,
+        value: Value,
+    ) -> Result<[u8; 8], InterpreterError> {
+        match format {
+            BufferNumberFormat::Int { signed, .. } | BufferNumberFormat::Variable { signed } => {
+                if matches!(value, Value::BigInt(_)) {
+                    return Err(self.throw_js_error(
+                        "TypeError",
+                        "Cannot mix BigInt and other types, use explicit conversions".to_string(),
+                    ));
+                }
+                let number = Self::coerce_to_float(&value).unwrap_or(f64::NAN);
+                let bits = (width * 8) as i32;
+                let (minimum, maximum) = if signed {
+                    (-(2f64.powi(bits - 1)), 2f64.powi(bits - 1) - 1.0)
+                } else {
+                    (0.0, 2f64.powi(bits) - 1.0)
+                };
+                if number < minimum || number > maximum {
+                    let bounds = if width > 4 {
+                        if signed {
+                            format!(">= -(2 ** {}) and < 2 ** {}", bits - 1, bits - 1)
+                        } else {
+                            format!(">= 0 and < 2 ** {bits}")
+                        }
+                    } else {
+                        format!(">= {minimum} and <= {maximum}")
+                    };
+                    return Err(self.throw_buffer_node_error(
+                        "RangeError",
+                        "ERR_OUT_OF_RANGE",
+                        format!(
+                            "The value of \"value\" is out of range. It must be {bounds}. Received {}",
+                            node_out_of_range_received(number)
+                        ),
+                    ));
+                }
+                let integer = if number.is_nan() {
+                    0
+                } else {
+                    number.trunc() as i64
+                };
+                Ok((integer as u64).to_le_bytes())
+            }
+            BufferNumberFormat::Float32 => {
+                Ok(u64::from((Self::typed_array_number(&value) as f32).to_bits()).to_le_bytes())
+            }
+            BufferNumberFormat::Float64 => {
+                Ok(Self::typed_array_number(&value).to_bits().to_le_bytes())
+            }
+            BufferNumberFormat::BigInt64 { signed } => {
+                // Node mixes the value into BigInt arithmetic.
+                let Value::BigInt(digits) = &value else {
+                    return Err(self.throw_js_error(
+                        "TypeError",
+                        "Cannot mix BigInt and other types, use explicit conversions".to_string(),
+                    ));
+                };
+                let parsed = digits.parse::<i128>().ok();
+                let in_range = parsed.is_some_and(|parsed| {
+                    if signed {
+                        i64::try_from(parsed).is_ok()
+                    } else {
+                        u64::try_from(parsed).is_ok()
+                    }
+                });
+                let Some(parsed) = parsed.filter(|_| in_range) else {
+                    let bounds = if signed {
+                        ">= -(2n ** 63n) and < 2n ** 63n"
+                    } else {
+                        ">= 0n and < 2n ** 64n"
+                    };
+                    let large = parsed.is_none_or(|parsed| parsed.unsigned_abs() > 1u128 << 32);
+                    let received = if large {
+                        group_decimal_digits(digits)
+                    } else {
+                        digits.to_string()
+                    };
+                    return Err(self.throw_buffer_node_error(
+                        "RangeError",
+                        "ERR_OUT_OF_RANGE",
+                        format!(
+                            "The value of \"value\" is out of range. It must be {bounds}. Received {received}n"
+                        ),
+                    ));
+                };
+                Ok((parsed as u64).to_le_bytes())
+            }
+        }
+    }
+
+    /// `buf.write(string[, offset[, length]][, encoding])`: the string's
+    /// bytes in `encoding` (utf8 by default) copied in at `offset`, at most
+    /// `length` of them and never a partial character; returns the count.
+    fn buffer_write_string(
+        &mut self,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let (_, view) = self.buffer_receiver_view(receiver, "write")?;
+        let Some(Value::Str(text)) = self.builtin_arg(args, 0)? else {
+            return Err(self.throw_buffer_node_error(
+                "TypeError",
+                "ERR_INVALID_ARG_TYPE",
+                "The \"string\" argument must be of type string".to_string(),
+            ));
+        };
+        let length = view.byte_length;
+        let mut encoding = "utf8".to_string();
+        let mut offset = 0usize;
+        let mut count = length;
+        match self.builtin_arg(args, 1)? {
+            None | Some(Value::Undefined) => {}
+            Some(Value::Str(name)) => encoding = name.to_string(),
+            Some(_) => {
+                offset = self.buffer_integer_offset(args, 1)?;
+                if offset > length {
+                    return Err(self.throw_buffer_node_error(
+                        "RangeError",
+                        "ERR_OUT_OF_RANGE",
+                        format!(
+                            "The value of \"offset\" is out of range. It must be >= 0 && <= {length}. Received {offset}"
+                        ),
+                    ));
+                }
+                count = length - offset;
+                match self.builtin_arg(args, 2)? {
+                    None | Some(Value::Undefined) => {}
+                    Some(Value::Str(name)) => encoding = name.to_string(),
+                    Some(_) => {
+                        count = count.min(self.buffer_integer_offset(args, 2)?);
+                        if let Some(Value::Str(name)) = self.builtin_arg(args, 3)? {
+                            encoding = name.to_string();
+                        }
+                    }
+                }
+            }
+        }
+        let encoding = encoding.to_ascii_lowercase();
+        let bytes = self.decode_buffer_string(&text, &encoding)?;
+        let mut written = bytes.len().min(count);
+        // Node writes whole characters only.
+        if written < bytes.len() {
+            match encoding.as_str() {
+                "utf8" | "utf-8" => {
+                    while written > 0 && bytes[written] & 0xc0 == 0x80 {
+                        written -= 1;
+                    }
+                }
+                "ucs2" | "ucs-2" | "utf16le" | "utf-16le" => written -= written % 2,
+                _ => {}
+            }
+        }
+        let start =
+            view.byte_offset
+                .checked_add(offset)
+                .ok_or_else(|| InterpreterError::RangeError {
+                    message: "Buffer write offset overflows host address space".to_string(),
+                })?;
+        self.with_array_buffer_bytes_mut(view.buffer, |storage| {
+            let slot = storage.get_mut(start..start + written).ok_or_else(|| {
+                InterpreterError::RangeError {
+                    message: "Buffer write exceeds backing storage".to_string(),
+                }
+            })?;
+            slot.copy_from_slice(&bytes[..written]);
+            Ok(())
+        })??;
+        Ok(Value::Int(i64::try_from(written).unwrap_or(i64::MAX)))
     }
 
     fn buffer_copy(&mut self, receiver: Value, args: RegRange) -> Result<Value, InterpreterError> {
@@ -73643,7 +76945,7 @@ impl InterpreterCore {
             .heap
             .get(object_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
-        object.data_view.clone().ok_or_else(|| {
+        object.data_view.as_deref().cloned().ok_or_else(|| {
             let got = object.brand().unwrap_or("object").to_string();
             InterpreterError::TypeError {
                 expected: format!("DataView receiver for DataView.prototype.{method_name}"),
@@ -74145,7 +77447,7 @@ impl InterpreterCore {
             return Ok(Value::str(""));
         }
 
-        let Some(unit) = string_val.encode_utf16().nth(index as usize) else {
+        let Some(unit) = string_val.code_unit_at(index as usize) else {
             return Ok(Value::str(""));
         };
         // A surrogate half stays a real lone-surrogate string value
@@ -74163,7 +77465,7 @@ impl InterpreterCore {
             return Ok(Value::Float(Float64::new(f64::NAN)));
         }
 
-        match string_val.encode_utf16().nth(index as usize) {
+        match string_val.code_unit_at(index as usize) {
             Some(unit) => Ok(Value::Int(i64::from(unit))),
             None => Ok(Value::Float(Float64::new(f64::NAN))),
         }
@@ -74174,16 +77476,17 @@ impl InterpreterCore {
         index: Option<Value>,
     ) -> Result<Value, InterpreterError> {
         let string_val = Self::require_object_coercible_to_js_string(&receiver)?;
-        let units: Vec<u16> = string_val.code_units_vec();
-        let len = units.len() as i64;
+        let len = string_val.utf16_len() as i64;
         let raw = index.as_ref().map(Self::value_as_integer).unwrap_or(0);
         let idx = if raw < 0 { raw + len } else { raw };
         if idx < 0 || idx >= len {
             return Ok(Value::Undefined);
         }
-        Ok(Value::Str(JsString::from_code_units(
-            &[units[idx as usize]],
-        )))
+        Ok(string_val
+            .code_unit_at(idx as usize)
+            .map_or(Value::Undefined, |unit| {
+                Value::Str(JsString::from_code_units(&[unit]))
+            }))
     }
 
     /// Validates Array method callback arguments for fail-closed implementations.
@@ -74285,15 +77588,35 @@ impl InterpreterCore {
         element_index: usize,
         array_id: ObjectId,
     ) -> Result<Value, InterpreterError> {
+        self.invoke_labeled_array_callback(
+            module,
+            callback,
+            this_arg,
+            element,
+            element_index,
+            array_id,
+        )
+        .map(|(value, _label)| value)
+    }
+
+    /// Preserve callback return provenance both for the enclosing builtin's
+    /// result and for callers that copy the value into a new array. Predicates
+    /// also contribute: their result decides which value/index/length escapes.
+    fn invoke_labeled_array_callback(
+        &mut self,
+        module: Option<&Ir3Module>,
+        callback: &Value,
+        this_arg: Value,
+        element: Value,
+        element_index: usize,
+        array_id: ObjectId,
+    ) -> Result<(Value, Label), InterpreterError> {
         let index = i64::try_from(element_index).map_err(|_| InterpreterError::TypeError {
             expected: "array callback index within i64".to_string(),
             got: element_index.to_string(),
         })?;
-        // bd-9vouw.110: the element's stored label (and the array's own) is
-        // the callback's context label, so a sink inside the callback sees it.
-        // Passed bare, `[secret].forEach(s => { const w = console.warn; w(s) })`
-        // printed the secret: the aliased sink escapes the static check, and
-        // the argument register arrived Public.
+        // The element's stored label (and the array's own) is the callback's
+        // context label, so an aliased sink inside the callback sees it.
         let element_key = RuntimePropertyKey::String(JsString::from(element_index.to_string()));
         let element_label = self.runtime_property_label(array_id, &element_key).join(
             self.object_mutation_labels
@@ -74302,7 +77625,7 @@ impl InterpreterCore {
         );
         let argument_label = (element_label != Label::Public).then_some(element_label);
         let held = self.gc_nested_request.take().unwrap_or_default();
-        self.with_gc_nested_request(held, |core| {
+        let result = self.with_gc_nested_request(held, |core| {
             core.invoke_inline_method_call_with_argument_label(
                 module,
                 callback.clone(),
@@ -74310,8 +77633,26 @@ impl InterpreterCore {
                 vec![element, Value::Int(index), Value::Object(array_id)],
                 argument_label,
             )
-            .map(|(value, _label)| value)
-        })
+        })?;
+        // The inline-call boundary preserves a nonempty pending label in its
+        // caller snapshot. Join instead of replacing it so a later Public
+        // callback cannot erase an earlier Secret return.
+        self.join_pending_array_result_label(&result.1)?;
+        Ok(result)
+    }
+
+    fn join_pending_array_result_label(&mut self, label: &Label) -> Result<(), InterpreterError> {
+        if label == &Label::Public {
+            return Ok(());
+        }
+        let joined = self.clone_dominant_label_with_temporary_budget(
+            self.pending_hostcall_result_label
+                .as_ref()
+                .unwrap_or(&Label::Public),
+            label,
+            Self::estimate_label_bytes(label),
+        )?;
+        self.replace_pending_hostcall_result_label(Some(joined))
     }
 
     fn array_prototype_reduce(
@@ -74432,9 +77773,9 @@ impl InterpreterCore {
     /// temporary budget first: the length is guest-chosen (up to 2^53 - 1,
     /// `{ length: 2 ** 53 - 1 }`), and an unchecked `with_capacity` of it
     /// aborted the process ("memory allocation of ... bytes failed").
-    fn element_buffer(&self, len: usize) -> Result<Vec<Value>, InterpreterError> {
+    fn element_buffer<T>(&self, len: usize) -> Result<Vec<T>, InterpreterError> {
         self.check_temporary_memory_budget(
-            (len as u64).saturating_mul(std::mem::size_of::<Value>() as u64),
+            (len as u64).saturating_mul(std::mem::size_of::<T>() as u64),
         )?;
         Ok(Vec::with_capacity(len))
     }
@@ -74454,7 +77795,7 @@ impl InterpreterCore {
             && let Some(view) = self
                 .heap
                 .get(array_id.0 as usize)
-                .and_then(|object| object.typed_array.as_ref())
+                .and_then(|object| object.typed_array.as_deref())
         {
             return Ok(view.length);
         }
@@ -74526,6 +77867,39 @@ impl InterpreterCore {
                 .map(Some),
             element => Ok(element),
         }
+    }
+
+    /// Write `element` at `index` of an in-place Array method's receiver, or
+    /// delete that index when `element` is `None` (a hole moved there): the
+    /// Set / DeletePropertyOrThrow pair the in-place methods' moves make.
+    fn array_store_or_delete(
+        &mut self,
+        array_id: ObjectId,
+        index: usize,
+        element: Option<Value>,
+    ) -> Result<(), InterpreterError> {
+        match element {
+            Some(element) => self.set_object_property(array_id, index.to_string(), element),
+            None => self
+                .array_delete_or_throw(array_id, &index.to_string())
+                .map(|_| ()),
+        }
+    }
+
+    /// Move the element at `from` to `to` as shift and unshift do: a present
+    /// element is read with [[Get]] and written; a hole deletes `to` and sets
+    /// `moved_hole`.
+    fn array_move_element(
+        &mut self,
+        module: &Ir3Module,
+        array_id: ObjectId,
+        from: usize,
+        to: usize,
+        moved_hole: &mut bool,
+    ) -> Result<(), InterpreterError> {
+        let element = self.array_index_get(Some(module), array_id, from)?;
+        *moved_hole |= element.is_none();
+        self.array_store_or_delete(array_id, to, element)
     }
 
     /// The element a native callback loop visits at `index`, or `None` to
@@ -74705,18 +78079,180 @@ impl InterpreterCore {
         )
     }
 
+    /// Prepare and reserve the label map before writing an indexed array
+    /// result. The value writer invokes no guest code and its trailing
+    /// descriptor reset only releases memory, so success can publish the
+    /// preallocated labels without another fallible operation. On refusal the
+    /// original labels remain intact; rollback never allocates.
+    fn create_labeled_data_property_or_throw(
+        &mut self,
+        object_id: ObjectId,
+        key: String,
+        value: Value,
+        label: &Label,
+    ) -> Result<(), InterpreterError> {
+        let heap_index = object_id.0 as usize;
+        let object = self
+            .heap
+            .get(heap_index)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        if label == &Label::Public && object.property_labels.is_empty() {
+            return self.create_data_property_or_throw(object_id, key, value);
+        }
+        let previous_label_bytes =
+            Self::estimate_execution_seed_ordered_label_map_bytes(&object.property_labels);
+        self.check_temporary_memory_budget(previous_label_bytes)?;
+        let mut projected_labels = object.property_labels.clone();
+        let property_key = JsString::from(key.as_str());
+        if label == &Label::Public {
+            projected_labels.remove_exact(&property_key);
+        } else {
+            projected_labels.insert_exact(property_key, label.clone());
+        }
+        let projected_label_bytes =
+            Self::estimate_execution_seed_ordered_label_map_bytes(&projected_labels);
+        // Both maps stay live until the value write either commits or refuses.
+        // Include the staged map in every budget check made by that writer.
+        self.apply_memory_component_delta(0, projected_label_bytes)?;
+        match self.create_data_property_or_throw(object_id, key, value) {
+            Ok(()) => {
+                self.mutate_heap(|heap| heap[heap_index].property_labels = projected_labels);
+                self.estimated_memory_bytes = self
+                    .estimated_memory_bytes
+                    .saturating_sub(previous_label_bytes);
+                Ok(())
+            }
+            Err(error) => {
+                drop(projected_labels);
+                self.estimated_memory_bytes = self
+                    .estimated_memory_bytes
+                    .saturating_sub(projected_label_bytes);
+                Err(error)
+            }
+        }
+    }
+
+    /// Borrow the first owning string property's label with the same shadowing
+    /// and traversal bounds as runtime_property_label, without cloning its name.
+    fn array_string_property_label_ref(
+        &self,
+        object_id: ObjectId,
+        key: &JsString,
+    ) -> Option<&Label> {
+        let runtime_key = RuntimePropertyKey::String(key.clone());
+        let mut current = Some(object_id);
+        let mut depth = 0u32;
+        let mut visited = ChainGuard::default();
+        while let Some(id) = current {
+            if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
+                break;
+            }
+            let object = self.heap.get(id.0 as usize)?;
+            if object.contains_own_runtime_property(&runtime_key) {
+                return object.property_labels.get_exact(key);
+            }
+            current = self.observable_prototype_link(object, id);
+            depth += 1;
+        }
+        None
+    }
+
+    /// Join provenance already observed while compacting an array result.
+    /// The source length and mutation state matter even when it has no elements.
+    fn array_result_prefix_label(
+        &self,
+        source: ObjectId,
+        result: ObjectId,
+        input_label: &Label,
+    ) -> Result<Label, InterpreterError> {
+        let length_key = JsString::from("length");
+        let mut winner = input_label;
+        for candidate in [
+            self.array_string_property_label_ref(source, &length_key),
+            self.object_mutation_labels.get(&source),
+            self.object_mutation_labels.get(&result),
+            self.pending_hostcall_result_label.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if candidate > winner {
+                winner = candidate;
+            }
+        }
+        // A Custom name can be large. Scan borrowed labels, then preflight
+        // both the caller's input temporary and the single winning clone.
+        self.clone_dominant_label_with_temporary_budget(
+            winner,
+            &Label::Public,
+            Self::estimate_label_bytes(input_label),
+        )
+    }
+
+    /// Preserve length provenance on an ordinary Array species result before
+    /// writing an element. Its reference may already be held by a Public alias.
+    /// Missing-index and HasProperty observations need separate shape tracking.
+    fn record_array_result_prefix_label(
+        &mut self,
+        result: ObjectId,
+        label: &Label,
+    ) -> Result<(), InterpreterError> {
+        if label == &Label::Public {
+            return Ok(());
+        }
+        self.join_pending_array_result_label(label)?;
+        self.join_object_mutation_label(result, label)?;
+        if let Some(object) = self.heap.get(result.0 as usize)
+            && object.is_array
+        {
+            let length_key = JsString::from("length");
+            let previous_label = object
+                .property_labels
+                .get_exact(&length_key)
+                .unwrap_or(&Label::Public);
+            // The labels form a total order. Keep an already dominant stored
+            // label without cloning its name; otherwise the input is the join.
+            if previous_label < label {
+                self.set_own_runtime_property_label(
+                    result,
+                    &RuntimePropertyKey::String(length_key),
+                    label,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     fn array_flatten_into(
         &mut self,
+        module: &Ir3Module,
         src_id: ObjectId,
         depth: i64,
         result: ObjectId,
         out: &mut usize,
+        source_label: &Label,
     ) -> Result<(), InterpreterError> {
+        let mut prefix_label = self.array_result_prefix_label(src_id, result, source_label)?;
+        self.record_array_result_prefix_label(result, &prefix_label)?;
         let len = self.array_like_length(src_id)?;
         for i in 0..len {
-            let element = self
-                .array_index_value(src_id, i)?
-                .unwrap_or(Value::Undefined);
+            // FlattenIntoArray (ES2020 23.1.3.10.1): a hole is skipped and
+            // takes no target index, and an element is read with [[Get]], so
+            // an accessor element's getter runs (its accessor leaked before).
+            let Some(element) = self.array_index_get(Some(module), src_id, i)? else {
+                continue;
+            };
+            let element_key = JsString::from(i.to_string());
+            if let Some(element_label) =
+                self.array_string_property_label_ref(src_id, &element_key)
+            {
+                prefix_label =
+                    self.join_owned_label_with_temporary_budget(prefix_label, element_label)?;
+            }
+            // A recursive empty array may have contributed a length label.
+            // Getter returns and earlier callback results also join this prefix.
+            prefix_label = self.array_result_prefix_label(src_id, result, &prefix_label)?;
+            self.record_array_result_prefix_label(result, &prefix_label)?;
             let nested = if let Value::Object(eid) = &element {
                 self.heap
                     .get(eid.0 as usize)
@@ -74727,10 +78263,15 @@ impl InterpreterCore {
             };
             if depth > 0 && nested {
                 if let Value::Object(eid) = element {
-                    self.array_flatten_into(eid, depth - 1, result, out)?;
+                    self.array_flatten_into(module, eid, depth - 1, result, out, &prefix_label)?;
                 }
             } else {
-                self.create_data_property_or_throw(result, out.to_string(), element)?;
+                self.create_labeled_data_property_or_throw(
+                    result,
+                    out.to_string(),
+                    element,
+                    &prefix_label,
+                )?;
                 *out += 1;
             }
         }
@@ -74831,6 +78372,250 @@ impl InterpreterCore {
         });
         self.gc_write_barrier(array_id);
         Ok(true)
+    }
+
+    /// Whether shift and unshift may move this array's elements inside its
+    /// property carrier: the generic algorithm's per-element steps observe
+    /// nothing. No hole (the dense cache matches the visible length, so no
+    /// lookup reaches the prototype chain), no accessor element, no attribute
+    /// on an index or on `length`, no IFC label on an index, not frozen, not
+    /// a typed array, no exact-only key. Then each [[Get]] is a plain own
+    /// data read and each [[Set]] replaces a data value whose label and
+    /// attributes stay with the position (bd-9vouw.472).
+    fn dense_array_moves_are_plain(
+        &self,
+        array_id: ObjectId,
+        len: usize,
+    ) -> Result<bool, InterpreterError> {
+        if !self.array_cache_matches_visible_length(array_id, len) {
+            return Ok(false);
+        }
+        let Some(object) = self.heap.get(array_id.0 as usize) else {
+            return Err(InterpreterError::ObjectNotFound { id: array_id.0 });
+        };
+        let attributed = object.property_attributes.keys().any(|key| match key {
+            RuntimePropertyKey::String(name) => name.as_str().is_some_and(|name| {
+                name == "length" || Self::canonical_array_index_key(name).is_some()
+            }),
+            RuntimePropertyKey::Symbol(_) => false,
+        });
+        Ok(!(attributed
+            || object.is_frozen
+            || object.typed_array.is_some()
+            || object.properties.exact_len() != object.properties.len()
+            || object.property_labels.has_index_keys()
+            || object
+                .properties
+                .index_values()
+                .any(|value| matches!(value, Value::Accessor { .. }))))
+    }
+
+    /// `Array.prototype.shift` on an array `dense_array_moves_are_plain`
+    /// admits: the values move down one index inside the property carrier,
+    /// the last index entry goes with its exact estimate and `length` is
+    /// written without the shrink scan. Returns the shifted value, or `None`
+    /// with nothing changed when the array does not qualify (bd-9vouw.472).
+    fn shift_dense_array_in_place(
+        &mut self,
+        array_id: ObjectId,
+        len: usize,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let (Ok(len_u32), Some(last)) = (u32::try_from(len), len.checked_sub(1)) else {
+            return Ok(None);
+        };
+        if !self.dense_array_moves_are_plain(array_id, len)? {
+            return Ok(None);
+        }
+        let heap_index = array_id.0 as usize;
+        let Some(first) = self.heap[heap_index].properties.get_index(0) else {
+            return Ok(None);
+        };
+        let last_key = last.to_string();
+        // Moved, the carrier has lost exactly the entry `last_key` holding
+        // the first value: the estimate is a sum over entries.
+        let removed_bytes = Self::estimate_property_entry_bytes(&last_key, first);
+        let mut shifted = None;
+        self.mutate_heap(|heap| {
+            shifted = heap[heap_index]
+                .properties
+                .shift_dense_index_values(len_u32);
+        });
+        let Some(shifted) = shifted else {
+            return Ok(None);
+        };
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(removed_bytes);
+        if !self.set_array_length_after_dense_tail_removal(array_id, len, last, &last_key)? {
+            let new_len = i64::try_from(last).unwrap_or(i64::MAX);
+            self.set_object_property(array_id, "length".to_string(), Value::Int(new_len))?;
+            self.refresh_dense_length_cache(array_id, last, true);
+        }
+        Ok(Some(shifted))
+    }
+
+    /// `Array.prototype.unshift` of `items` onto an extensible array that
+    /// `dense_array_moves_are_plain` admits: the items take the first indices
+    /// and the existing values move up inside the property carrier, so only
+    /// the new top entries are added. Their estimate is checked against the
+    /// memory budget before anything changes. Returns the new length, or the
+    /// items back with nothing changed when the array does not qualify
+    /// (bd-9vouw.472).
+    fn unshift_dense_array_in_place(
+        &mut self,
+        array_id: ObjectId,
+        len: usize,
+        items: Vec<Value>,
+    ) -> Result<Result<usize, Vec<Value>>, InterpreterError> {
+        let fits = |length: usize| u32::try_from(length).is_ok();
+        let Some(new_len) = len
+            .checked_add(items.len())
+            .filter(|new_len| fits(*new_len))
+        else {
+            return Ok(Err(items));
+        };
+        let Ok(len_u32) = u32::try_from(len) else {
+            return Ok(Err(items));
+        };
+        if !self.dense_array_moves_are_plain(array_id, len)?
+            || !self.heap[array_id.0 as usize].extensible()
+        {
+            return Ok(Err(items));
+        }
+        for item in &items {
+            validate_symbol_value(&self.symbol_state, item).map_err(|got| {
+                InterpreterError::TypeError {
+                    expected: "resolved Symbol value".to_string(),
+                    got,
+                }
+            })?;
+        }
+        // The carrier gains exactly the entries `len..new_len`; the estimate
+        // is a sum over entries, and the values only move, so the gain is
+        // those keys' entries holding the items.
+        let added_bytes =
+            Self::saturating_sum((len..new_len).zip(&items).map(|(index, item)| {
+                Self::estimate_property_entry_bytes(&index.to_string(), item)
+            }));
+        let requested_bytes = self.estimated_memory_bytes.saturating_add(added_bytes);
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
+            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
+        }
+        let heap_index = array_id.0 as usize;
+        let refused = self.mutate_heap(|heap| {
+            heap[heap_index]
+                .properties
+                .unshift_dense_index_values(len_u32, items)
+                .err()
+        });
+        if let Some(items) = refused {
+            return Ok(Err(items));
+        }
+        self.estimated_memory_bytes = requested_bytes;
+        let new_len_int = i64::try_from(new_len).unwrap_or(i64::MAX);
+        self.set_object_property(array_id, "length".to_string(), Value::Int(new_len_int))?;
+        self.refresh_dense_length_cache(array_id, new_len, true);
+        self.gc_write_barrier(array_id);
+        Ok(Ok(new_len))
+    }
+
+    /// `Array.prototype.splice` on an array `dense_array_moves_are_plain`
+    /// admits (and that is extensible when it grows): the deleted values
+    /// leave, the items take their place and the values after them move
+    /// inside the property carrier, entries changing only at the top. The
+    /// estimate changes by exactly the top keys added or removed and the
+    /// values exchanged, checked against the memory budget before anything
+    /// changes. Returns the deleted values in order, or the items back with
+    /// nothing changed when the array does not qualify (bd-9vouw.472).
+    fn splice_dense_array_in_place(
+        &mut self,
+        array_id: ObjectId,
+        len: usize,
+        start: usize,
+        delete_count: usize,
+        items: Vec<Value>,
+    ) -> Result<Result<Vec<Value>, Vec<Value>>, InterpreterError> {
+        let as_u32 = |count: usize| u32::try_from(count).ok();
+        let (Some(len_u32), Some(start_u32), Some(delete_u32)) =
+            (as_u32(len), as_u32(start), as_u32(delete_count))
+        else {
+            return Ok(Err(items));
+        };
+        let Some(new_len) = len
+            .checked_sub(delete_count)
+            .and_then(|kept| kept.checked_add(items.len()))
+            .filter(|new_len| as_u32(*new_len).is_some())
+        else {
+            return Ok(Err(items));
+        };
+        if start.checked_add(delete_count).is_none_or(|end| end > len)
+            || !self.dense_array_moves_are_plain(array_id, len)?
+            || (new_len > len && !self.heap[array_id.0 as usize].extensible())
+        {
+            return Ok(Err(items));
+        }
+        for item in &items {
+            validate_symbol_value(&self.symbol_state, item).map_err(|got| {
+                InterpreterError::TypeError {
+                    expected: "resolved Symbol value".to_string(),
+                    got,
+                }
+            })?;
+        }
+        // The estimate is a sum over entries: an entry is its key's part
+        // (the entry with an undefined value, which costs nothing) plus its
+        // value's bytes. Keys change only at the top; values are exchanged.
+        let heap_index = array_id.0 as usize;
+        let key_bytes = |index: usize| {
+            Self::estimate_property_entry_bytes(&index.to_string(), &Value::Undefined)
+        };
+        let properties = &self.heap[heap_index].properties;
+        let deleted_value_bytes =
+            Self::saturating_sum((start..start + delete_count).map(|index| {
+                u32::try_from(index)
+                    .ok()
+                    .and_then(|index| properties.get_index(index))
+                    .map_or(0, Self::estimate_value_bytes)
+            }));
+        let added_bytes = Self::saturating_sum((len..new_len).map(key_bytes)).saturating_add(
+            Self::saturating_sum(items.iter().map(Self::estimate_value_bytes)),
+        );
+        let removed_bytes =
+            Self::saturating_sum((new_len..len).map(key_bytes)).saturating_add(deleted_value_bytes);
+        let requested_bytes = self
+            .estimated_memory_bytes
+            .saturating_add(added_bytes)
+            .saturating_sub(removed_bytes);
+        if added_bytes > removed_bytes
+            && self
+                .memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
+        {
+            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
+        }
+        let outcome = self.mutate_heap(|heap| {
+            heap[heap_index]
+                .properties
+                .splice_dense_index_values(len_u32, start_u32, delete_u32, items)
+        });
+        let removed = match outcome {
+            Ok(removed) => removed,
+            Err(items) => return Ok(Err(items)),
+        };
+        self.estimated_memory_bytes = requested_bytes;
+        if new_len != len {
+            let shrunk_by_one = new_len + 1 == len
+                && self.set_array_length_after_dense_tail_removal(
+                    array_id,
+                    len,
+                    new_len,
+                    &new_len.to_string(),
+                )?;
+            if !shrunk_by_one {
+                let new_len_int = i64::try_from(new_len).unwrap_or(i64::MAX);
+                self.set_object_property(array_id, "length".to_string(), Value::Int(new_len_int))?;
+                self.refresh_dense_length_cache(array_id, new_len, true);
+            }
+        }
+        self.gc_write_barrier(array_id);
+        Ok(Ok(removed))
     }
 
     /// Re-establish the dense-length cache after a contiguous in-place array
@@ -76316,13 +80101,25 @@ impl InterpreterCore {
         )))
     }
 
-    /// Date.parse (ES2020 20.4.3.2) for the date-time string format
-    /// (20.4.1.15): `YYYY[-MM[-DD]][THH:mm[:ss[.sss]]][Z|±HH:mm]` with
-    /// extended `±YYYYYY` years, plus the `toUTCString` form
+    /// Date.parse (ES2020 20.4.3.2): the date-time string format and the
+    /// toUTCString form, then V8's legacy formats (bd-9vouw.443), as Node
+    /// parses them.
+    fn parse_date_string(text: &str) -> f64 {
+        let iso = Self::parse_iso_date_string(text);
+        if iso.is_nan() {
+            Self::parse_legacy_date_string(text)
+        } else {
+            iso
+        }
+    }
+
+    /// The date-time string format (ES2020 20.4.1.15):
+    /// `YYYY[-MM[-DD]][THH:mm[:ss[.sss]]][Z|±HH:mm]` with extended
+    /// `±YYYYYY` years, plus the `toUTCString` form
     /// `Www, DD Mmm YYYY HH:mm:ss GMT`. Date-only forms are UTC; date-time
     /// forms without an offset are local time, which is UTC here. Anything
     /// else is NaN.
-    fn parse_date_string(text: &str) -> f64 {
+    fn parse_iso_date_string(text: &str) -> f64 {
         use date_math::{make_date, make_day, make_time, time_clip};
         let text = text.trim();
         let digits = |slice: &str, count: usize| -> Option<f64> {
@@ -76449,6 +80246,330 @@ impl InterpreterCore {
         )
     }
 
+    /// V8's legacy Date.parse fallback (dateparser-inl.h), for a string that
+    /// is neither the ES date-time format nor the toUTCString form
+    /// (bd-9vouw.443): month names (`Feb 29, 2024`, `29 February 2024`),
+    /// `M/D/Y` and `Y/M/D` numbers, `h:m[:s[.ms]]` times with AM/PM, the
+    /// toString form (`Thu Feb 29 2024 13:05:09 GMT+0000 (...)`), and the
+    /// zones UT/UTC/GMT/Z, the US abbreviations and a `±hh[mm]` / `±hh:mm`
+    /// offset after a zone or a time. Parenthesized text is skipped. A
+    /// string without a zone is local time, which is UTC here. V8's rules
+    /// are kept, quirks included: a missing year is 2001 and a two-digit
+    /// year is 19xx/20xx. Anything else is NaN.
+    fn parse_legacy_date_string(text: &str) -> f64 {
+        use date_math::{make_date, make_day, make_time, time_clip};
+
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum Token<'a> {
+            Number { value: i64, length: usize },
+            Word(&'a str),
+            Symbol(char),
+            Space,
+        }
+        enum Keyword {
+            Month(i64),
+            AmPm(i64),
+            Zone(i64),
+        }
+        static KEYWORDS: [(&str, Keyword); 27] = [
+            ("jan", Keyword::Month(1)),
+            ("feb", Keyword::Month(2)),
+            ("mar", Keyword::Month(3)),
+            ("apr", Keyword::Month(4)),
+            ("may", Keyword::Month(5)),
+            ("jun", Keyword::Month(6)),
+            ("jul", Keyword::Month(7)),
+            ("aug", Keyword::Month(8)),
+            ("sep", Keyword::Month(9)),
+            ("oct", Keyword::Month(10)),
+            ("nov", Keyword::Month(11)),
+            ("dec", Keyword::Month(12)),
+            ("am", Keyword::AmPm(0)),
+            ("pm", Keyword::AmPm(12)),
+            ("ut", Keyword::Zone(0)),
+            ("utc", Keyword::Zone(0)),
+            ("z", Keyword::Zone(0)),
+            ("gmt", Keyword::Zone(0)),
+            ("cdt", Keyword::Zone(-5)),
+            ("cst", Keyword::Zone(-6)),
+            ("edt", Keyword::Zone(-4)),
+            ("est", Keyword::Zone(-5)),
+            ("mdt", Keyword::Zone(-6)),
+            ("mst", Keyword::Zone(-7)),
+            ("pdt", Keyword::Zone(-7)),
+            ("pst", Keyword::Zone(-8)),
+            // V8's time separator keyword: a garbage word in this parser.
+            ("t", Keyword::AmPm(-1)),
+        ];
+        // V8 compares a word's first three letters with each keyword; only a
+        // month name may be longer than its keyword.
+        fn keyword(word: &str) -> Option<&'static Keyword> {
+            let lower = word.to_lowercase();
+            let prefix: String = lower.chars().take(3).collect();
+            KEYWORDS
+                .iter()
+                .find(|(name, kind)| {
+                    *name == prefix
+                        && (lower.chars().count() <= 3 || matches!(kind, Keyword::Month(_)))
+                })
+                .map(|(_, kind)| kind)
+                .filter(|kind| !matches!(kind, Keyword::AmPm(-1)))
+        }
+
+        let mut tokens = Vec::new();
+        let mut chars = text.char_indices().peekable();
+        while let Some((start, ch)) = chars.next() {
+            if ch.is_ascii_digit() {
+                let mut value: i64 = i64::from(ch as u8 - b'0');
+                let mut length = 1;
+                while let Some(&(_, next)) = chars.peek() {
+                    if !next.is_ascii_digit() {
+                        break;
+                    }
+                    chars.next();
+                    length += 1;
+                    if value < i64::from(i32::MAX) / 10 - 10 {
+                        value = value * 10 + i64::from(next as u8 - b'0');
+                    }
+                }
+                tokens.push(Token::Number { value, length });
+            } else if ch.is_alphabetic() || !ch.is_ascii() {
+                let mut end = start + ch.len_utf8();
+                while let Some(&(index, next)) = chars.peek() {
+                    if !(next.is_alphabetic() || (!next.is_ascii() && !next.is_whitespace())) {
+                        break;
+                    }
+                    chars.next();
+                    end = index + next.len_utf8();
+                }
+                tokens.push(Token::Word(&text[start..end]));
+            } else if ch.is_whitespace() {
+                while chars.peek().is_some_and(|&(_, next)| next.is_whitespace()) {
+                    chars.next();
+                }
+                tokens.push(Token::Space);
+            } else if ch == '(' {
+                let mut depth = 1;
+                for (_, next) in chars.by_ref() {
+                    match next {
+                        '(' => depth += 1,
+                        ')' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            } else {
+                tokens.push(Token::Symbol(ch));
+            }
+        }
+
+        let is_day = |n: i64| (1..=31).contains(&n);
+        let is_minute = |n: i64| (0..=59).contains(&n);
+        let is_millisecond = |n: i64| (0..=999).contains(&n);
+        let mut day = ([0i64; 3], 0usize);
+        let mut named_month: Option<i64> = None;
+        let mut time = ([0i64; 4], 0usize);
+        let mut hour_offset: Option<i64> = None;
+        let (mut tz_sign, mut tz_hour, mut tz_minute): (Option<i64>, Option<i64>, Option<i64>) =
+            (None, None, None);
+        let time_expecting = |time: &([i64; 4], usize), n: i64| {
+            (time.1 == 1 && is_minute(n))
+                || (time.1 == 2 && is_minute(n))
+                || (time.1 == 3 && is_millisecond(n))
+        };
+        let mut has_read_number = false;
+        let mut index = 0;
+        while index < tokens.len() {
+            let token = tokens[index];
+            index += 1;
+            let peek = tokens.get(index).copied();
+            match token {
+                Token::Number { value: n, .. } => {
+                    has_read_number = true;
+                    // V8 skips a dot after a number before asking whether a
+                    // time component is expected.
+                    let dot = peek == Some(Token::Symbol('.'));
+                    if dot {
+                        index += 1;
+                    }
+                    if peek == Some(Token::Symbol(':')) {
+                        index += 1;
+                        if tokens.get(index) == Some(&Token::Symbol(':')) {
+                            index += 1;
+                            if time.1 != 0 {
+                                return f64::NAN;
+                            }
+                            time.0[0] = n;
+                            time.0[1] = 0;
+                            time.1 = 2;
+                        } else {
+                            if time.1 >= 4 {
+                                return f64::NAN;
+                            }
+                            time.0[time.1] = n;
+                            time.1 += 1;
+                            if tokens.get(index) == Some(&Token::Symbol('.')) {
+                                index += 1;
+                            }
+                        }
+                    } else if dot && time_expecting(&time, n) {
+                        time.0[time.1] = n;
+                        time.1 += 1;
+                        let Some(Token::Number { value, length }) = tokens.get(index).copied()
+                        else {
+                            return f64::NAN;
+                        };
+                        index += 1;
+                        // The first three significant digits (ReadMilliseconds).
+                        let millis = match length {
+                            1 => value * 100,
+                            2 => value * 10,
+                            3 => value,
+                            _ => value / 10i64.pow((length.min(9) - 3) as u32),
+                        };
+                        if time.1 >= 4 {
+                            return f64::NAN;
+                        }
+                        time.0[time.1] = millis;
+                        time.1 = 4;
+                    } else if tz_hour.is_some() && tz_minute.is_none() && is_minute(n) {
+                        tz_minute = Some(n);
+                    } else if time_expecting(&time, n) {
+                        time.0[time.1] = n;
+                        time.1 = 4;
+                        let peek = tokens.get(index).copied();
+                        if !matches!(
+                            peek,
+                            None | Some(Token::Space) | Some(Token::Symbol('+' | '-'))
+                        ) && !matches!(peek, Some(Token::Word(word)) if word.eq_ignore_ascii_case("z"))
+                        {
+                            return f64::NAN;
+                        }
+                    } else {
+                        if day.1 >= 3 {
+                            return f64::NAN;
+                        }
+                        day.0[day.1] = n;
+                        day.1 += 1;
+                        if tokens.get(index) == Some(&Token::Symbol('-')) {
+                            index += 1;
+                        }
+                    }
+                }
+                Token::Word(word) => match keyword(word) {
+                    Some(Keyword::AmPm(offset)) if time.1 != 0 => hour_offset = Some(*offset),
+                    Some(Keyword::Month(month)) => {
+                        named_month = Some(*month);
+                        if peek == Some(Token::Symbol('-')) {
+                            index += 1;
+                        }
+                    }
+                    Some(Keyword::Zone(hours)) if has_read_number => {
+                        tz_sign = Some(if *hours < 0 { -1 } else { 1 });
+                        tz_hour = Some(hours.abs());
+                        tz_minute = Some(0);
+                    }
+                    _ => {
+                        // A word that is not a keyword (a weekday name) may
+                        // only come before the first number, apart from it.
+                        if has_read_number || matches!(peek, Some(Token::Number { .. })) {
+                            return f64::NAN;
+                        }
+                    }
+                },
+                Token::Symbol(sign @ ('+' | '-'))
+                    if (tz_hour == Some(0) && tz_minute == Some(0)) || time.1 != 0 =>
+                {
+                    tz_sign = Some(if sign == '-' { -1 } else { 1 });
+                    let (mut n, mut length) = (0, 0);
+                    if let Some(Token::Number {
+                        value,
+                        length: digits,
+                    }) = tokens.get(index).copied()
+                    {
+                        index += 1;
+                        (n, length) = (value, digits);
+                    }
+                    has_read_number = true;
+                    if tokens.get(index) == Some(&Token::Symbol(':')) {
+                        tz_hour = Some(n);
+                        tz_minute = None;
+                    } else if length == 1 || length == 2 {
+                        tz_hour = Some(n);
+                        tz_minute = Some(0);
+                    } else if length == 3 || length == 4 {
+                        tz_hour = Some(n / 100);
+                        tz_minute = Some(n % 100);
+                    } else {
+                        return f64::NAN;
+                    }
+                }
+                Token::Symbol('+' | '-' | ')') if has_read_number => return f64::NAN,
+                _ => {}
+            }
+        }
+
+        // DayComposer::Write: empty slots are 1 (so a missing year is 2001).
+        if day.1 == 0 {
+            return f64::NAN;
+        }
+        let comps = [
+            day.0[0],
+            if day.1 > 1 { day.0[1] } else { 1 },
+            if day.1 > 2 { day.0[2] } else { 1 },
+        ];
+        let (mut year, month, date) = match named_month {
+            None if !is_day(comps[0]) => (comps[0], comps[1], comps[2]),
+            None => (comps[2], comps[0], comps[1]),
+            Some(month) if !is_day(comps[0]) => (comps[0], month, comps[1]),
+            Some(month) => (comps[1], month, comps[0]),
+        };
+        if (0..=49).contains(&year) {
+            year += 2000;
+        } else if (50..=99).contains(&year) {
+            year += 1900;
+        }
+        if !(1..=12).contains(&month) || !is_day(date) {
+            return f64::NAN;
+        }
+        // TimeComposer::Write.
+        // Unfilled time slots are 0.
+        let [mut hour, minute, second, millisecond] = time.0;
+        if let Some(offset) = hour_offset {
+            if !(0..=12).contains(&hour) {
+                return f64::NAN;
+            }
+            hour = hour % 12 + offset;
+        }
+        if !((0..=23).contains(&hour)
+            && is_minute(minute)
+            && is_minute(second)
+            && is_millisecond(millisecond))
+            && !(hour == 24 && minute == 0 && second == 0 && millisecond == 0)
+        {
+            return f64::NAN;
+        }
+        // TimeZoneComposer::Write: no zone is local time (UTC here).
+        let offset_ms = tz_sign.map_or(0, |sign| {
+            sign * (tz_hour.unwrap_or(0) * 3600 + tz_minute.unwrap_or(0) * 60) * 1000
+        });
+        time_clip(
+            make_date(
+                make_day(year as f64, (month - 1) as f64, date as f64),
+                make_time(
+                    hour as f64,
+                    minute as f64,
+                    second as f64,
+                    millisecond as f64,
+                ),
+            ) - offset_ms as f64,
+        )
+    }
+
     /// The UTF-8 byte offset of UTF-16 index `index` in `text`; an index
     /// inside a surrogate pair rounds up to the next character.
     fn utf16_index_to_byte_offset(text: &str, index: usize) -> usize {
@@ -76468,43 +80589,64 @@ impl InterpreterCore {
     /// `groups`, and with the `d` flag `indices` (ES2022 MakeIndicesArray:
     /// each capture's UTF-16 `[start, end]` or undefined, and `groups`),
     /// plus the match's end byte offset.
+    /// RegExpBuiltinExec's match and result object for `subject` from byte
+    /// offset `start` of its UTF-8 projection. An ASCII subject's byte
+    /// offsets are its UTF-16 offsets, and the subject is the result's
+    /// `input` and the legacy statics' input as it is, shared, not copied:
+    /// an exec loop over a long string decoded and copied the whole string
+    /// per match (bd-9vouw.475).
     fn regexp_exec_at(
         &mut self,
         regex: &CompiledRegExp,
-        input: &str,
+        subject: &JsString,
         start: usize,
         sticky: bool,
         has_indices: bool,
     ) -> Result<Option<(Value, usize)>, InterpreterError> {
+        let input = subject.as_utf8_projection();
+        let ascii = subject.is_ascii();
         let Some(spans) = regex.captures_at(input, start, sticky)? else {
             return Ok(None);
         };
         let Some((whole_start, whole_end)) = spans[0] else {
             return Ok(None);
         };
-        self.record_legacy_regexp_match(input, &spans);
+        self.record_legacy_regexp_match_shared(subject, &spans);
         let group_value = |span: Option<(usize, usize)>| {
             span.map_or(Value::Undefined, |(from, to)| Value::str(&input[from..to]))
         };
         let values: Vec<Value> = spans.iter().map(|span| group_value(*span)).collect();
         let result = self.alloc_array_from_values(&values)?;
-        let index = input[..whole_start].encode_utf16().count();
+        let utf16_offset = |offset: usize| {
+            if ascii {
+                offset
+            } else {
+                input[..offset].encode_utf16().count()
+            }
+        };
+        let index = utf16_offset(whole_start);
         self.set_object_property(
             result,
             "index".to_string(),
             Value::Int(i64::try_from(index).unwrap_or(i64::MAX)),
         )?;
-        self.set_object_property(result, "input".to_string(), Value::str(input))?;
+        // `input` is the subject itself (ES2020 21.2.5.2.2 step 22), lone
+        // surrogates included; it was the U+FFFD projection.
+        self.set_object_property(result, "input".to_string(), Value::Str(subject.clone()))?;
         let named: Vec<(String, Value)> = regex
             .group_names()
             .into_iter()
             .enumerate()
             .filter_map(|(slot, name)| name.map(|name| (name, group_value(spans[slot]))))
             .collect();
+        // A match's `groups` is OrdinaryObjectCreate(null) (ES2020 21.2.5.2.2
+        // step 25): no inherited members, and a group named `__proto__` is
+        // an ordinary own property (bd-9vouw.365).
         let groups = if named.is_empty() {
             Value::Undefined
         } else {
             let groups = self.alloc_object_with_prototype(None)?;
+            self.store_prototype_link(groups, None);
             for (name, value) in named {
                 self.set_object_property(groups, name, value)?;
             }
@@ -76512,11 +80654,8 @@ impl InterpreterCore {
         };
         self.set_object_property(result, "groups".to_string(), groups)?;
         if has_indices {
-            let utf16 = |offset: usize| {
-                Value::Int(
-                    i64::try_from(input[..offset].encode_utf16().count()).unwrap_or(i64::MAX),
-                )
-            };
+            let utf16 =
+                |offset: usize| Value::Int(i64::try_from(utf16_offset(offset)).unwrap_or(i64::MAX));
             let mut pairs = Vec::with_capacity(spans.len());
             for span in &spans {
                 pairs.push(match span {
@@ -76537,6 +80676,7 @@ impl InterpreterCore {
                 Value::Undefined
             } else {
                 let groups = self.alloc_object_with_prototype(None)?;
+                self.store_prototype_link(groups, None);
                 for (name, value) in named {
                     self.set_object_property(groups, name, value)?;
                 }
@@ -76611,7 +80751,10 @@ impl InterpreterCore {
         let input = self.value_to_string(&input);
         match method {
             "@@match" => self.string_match_value(&input, &receiver),
-            "@@matchAll" => self.string_match_all_value(&JsString::from(input), &receiver),
+            "@@matchAll" => {
+                let label = self.join_arg_range_label(args)?;
+                self.string_match_all_value(&JsString::from(input), &receiver, &label)
+            }
             "@@search" => self.string_search_value(&input, &receiver),
             "@@split" => {
                 let limit =
@@ -76637,12 +80780,16 @@ impl InterpreterCore {
     }
 
     /// `%TypedArray%.from(source[, mapFn[, thisArg]])` and
-    /// `%TypedArray%.of(...items)` (ES2020 22.2.2.1-2). The element type is
-    /// the `this` constructor's (`Uint8Array.from`), so an unbound call is a
-    /// TypeError, as in Node. `from` collects its source exactly as
-    /// `Array.from` does (iterables, array-likes, the mapper and its
-    /// `thisArg`), then converts every value to the element type, in order
-    /// and observably.
+    /// `%TypedArray%.of(...items)` (ES2020 22.2.2.1-2). `this` is the
+    /// constructor: an intrinsic typed array constructor (`Uint8Array.from`)
+    /// allocates directly; any other constructor (a subclass, or a function
+    /// returning a typed array) goes through TypedArrayCreate (bd-9vouw.344).
+    /// A non-constructor `this`, an unbound call included, is a TypeError.
+    /// `from` collects its source as `Array.from` does (iterables,
+    /// array-likes), then maps and converts each value in order, so a
+    /// throwing conversion stops the mapper there. No-claim: an array-like
+    /// source's elements are all read before the first mapper call (the
+    /// specification interleaves each read with its mapping).
     fn typed_array_static_call(
         &mut self,
         module: &Ir3Module,
@@ -76650,7 +80797,7 @@ impl InterpreterCore {
         receiver: Value,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        let kind = match &receiver {
+        let intrinsic_kind = match &receiver {
             Value::BuiltinFunction(constructor)
                 if constructor.kind == BuiltinFunctionKind::StandardConstructor =>
             {
@@ -76660,7 +80807,7 @@ impl InterpreterCore {
             }
             _ => None,
         };
-        let Some(kind) = kind else {
+        if intrinsic_kind.is_none() && !self.is_constructible_value(&receiver) {
             return Err(InterpreterError::TypeError {
                 expected: format!(
                     "typed array constructor as this of %TypedArray%.{}",
@@ -76668,37 +80815,145 @@ impl InterpreterCore {
                 ),
                 got: receiver.type_name().to_string(),
             });
-        };
-        let values = if builtin.display_name() == "of" {
+        }
+        let (values, mapper, this_arg) = if builtin.display_name() == "of" {
             let mut items = Vec::with_capacity(args.count as usize);
             for index in 0..args.count {
                 items.push(self.builtin_arg(args, index)?.unwrap_or(Value::Undefined));
             }
-            items
+            (items, Value::Undefined, Value::Undefined)
         } else {
-            if let Some(mapper) = self.builtin_arg(args, 1)?
-                && !matches!(mapper, Value::Undefined)
-                && !mapper.is_callable()
-            {
+            let mapper = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+            if !matches!(mapper, Value::Undefined) && !mapper.is_callable() {
                 return Err(InterpreterError::TypeError {
                     expected: "callable %TypedArray%.from mapper".to_string(),
                     got: mapper.type_name().to_string(),
                 });
             }
-            let Value::Object(list) = self.array_from_builtin(Some(module), args)? else {
+            let this_arg = self.builtin_arg(args, 2)?.unwrap_or(Value::Undefined);
+            let source_only = RegRange {
+                start: args.start,
+                count: args.count.min(1),
+            };
+            let Value::Object(list) = self.array_from_builtin(Some(module), source_only)? else {
                 return Err(InterpreterError::TypeError {
                     expected: "array from %TypedArray%.from source".to_string(),
                     got: "non-array".to_string(),
                 });
             };
-            self.array_like_values(list)?
+            (self.array_like_values(list)?, mapper, this_arg)
         };
-        // Each value converts with ToNumber/ToBigInt, running its valueOf
-        // (bd-9vouw.273); objects became NaN without it.
-        let values = self.typed_array_element_values(Some(module), kind, values)?;
-        Ok(Value::Object(
-            self.alloc_typed_array_from_values(kind, &values)?,
-        ))
+        // Guest code (the constructor, the mapper, valueOf) runs while
+        // native locals hold values: no collection until this returns.
+        self.gc_nested_request = None;
+        let target = match intrinsic_kind {
+            Some(_) => None,
+            None => Some(self.typed_array_create(module, receiver, values.len())?),
+        };
+        let kind = match (intrinsic_kind, target) {
+            (Some(kind), _) => kind,
+            (None, Some(target)) => self
+                .typed_array_view_for_object(target)?
+                .map(|view| view.kind)
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "typed array from the %TypedArray%.from constructor".to_string(),
+                    got: "object".to_string(),
+                })?,
+            (None, None) => unreachable!("a non-intrinsic constructor creates its target"),
+        };
+        let argument_label = self.join_arg_range_label(args)?;
+        let mut converted = Vec::with_capacity(values.len());
+        for (index, value) in values.into_iter().enumerate() {
+            let mapped = if matches!(mapper, Value::Undefined) {
+                value
+            } else {
+                let (mapped, label) = self.invoke_inline_method_call_with_argument_label(
+                    Some(module),
+                    mapper.clone(),
+                    this_arg.clone(),
+                    vec![value, Value::Int(index as i64)],
+                    Some(argument_label.clone()),
+                )?;
+                let joined = self
+                    .pending_hostcall_result_label
+                    .as_ref()
+                    .unwrap_or(&Label::Public)
+                    .join(&label);
+                self.replace_pending_hostcall_result_label(Some(joined))?;
+                mapped
+            };
+            // ToNumber/ToBigInt runs the value's valueOf (bd-9vouw.273).
+            let element = self
+                .typed_array_element_values(Some(module), kind, vec![mapped])?
+                .pop()
+                .unwrap_or(Value::Undefined);
+            match target {
+                Some(target) => {
+                    self.typed_array_indexed_set_property(target, &index.to_string(), &element)?;
+                }
+                None => converted.push(element),
+            }
+        }
+        match target {
+            Some(target) => {
+                // The constructed target's bytes take what was written into
+                // them: the source's and the mapper's labels.
+                let label = self
+                    .pending_hostcall_result_label
+                    .clone()
+                    .unwrap_or(Label::Public);
+                self.join_binary_storage_label(target, &label)?;
+                Ok(Value::Object(target))
+            }
+            None => Ok(Value::Object(
+                self.alloc_typed_array_from_values(kind, &converted)?,
+            )),
+        }
+    }
+
+    /// ES2020 22.2.4.6 TypedArrayCreate(constructor, «length»): construct
+    /// it with the length and require a typed array of at least that length
+    /// (22.2.3.5.1 ValidateTypedArray), whatever its element type.
+    fn typed_array_create(
+        &mut self,
+        module: &Ir3Module,
+        constructor: Value,
+        length: usize,
+    ) -> Result<ObjectId, InterpreterError> {
+        let (result, label) = self.invoke_inline_construct_with_labels(
+            Some(module),
+            constructor,
+            vec![Value::Int(i64::try_from(length).unwrap_or(i64::MAX))],
+            None,
+            None,
+        )?;
+        let label = self
+            .pending_hostcall_result_label
+            .as_ref()
+            .unwrap_or(&Label::Public)
+            .join(&label);
+        self.replace_pending_hostcall_result_label(Some(label))?;
+        let created_length = match &result {
+            Value::Object(object_id) => self
+                .heap
+                .get(object_id.0 as usize)
+                .and_then(|object| object.typed_array.as_deref())
+                .map(|view| view.length),
+            _ => None,
+        };
+        let (Value::Object(created), Some(created_length)) = (&result, created_length) else {
+            return Err(InterpreterError::TypeError {
+                expected: "typed array from the %TypedArray% constructor".to_string(),
+                got: result.type_name().to_string(),
+            });
+        };
+        if created_length < length {
+            return Err(InterpreterError::TypeError {
+                expected: format!("typed array of length {length} or more from the constructor"),
+                got: format!("length {created_length}"),
+            });
+        }
+        Ok(*created)
     }
 
     /// ToString(this) for a String.prototype method that takes a pattern
@@ -76817,8 +81072,9 @@ impl InterpreterCore {
 
     /// Whether `object_id` is a RegExp whose `key` method is certainly the
     /// builtin: no own property shadows it, its prototype is
-    /// %RegExp.prototype% (or none), and %RegExp.prototype% has no own `key`
-    /// property. The common `s.split(/,/)` then skips the property walk.
+    /// %RegExp.prototype% (or none), and %RegExp.prototype% neither stores
+    /// its own `key` property nor had the intrinsic one deleted. The common
+    /// `s.split(/,/)` then skips the property walk.
     fn regexp_uses_builtin_symbol_method(
         &self,
         object_id: ObjectId,
@@ -76836,10 +81092,14 @@ impl InterpreterCore {
         let regexp_prototype = self.builtin_prototypes.get("RegExp").copied();
         match object.prototype {
             None => true,
+            // A deleted intrinsic method is absent too (bd-9vouw.498).
             Some(prototype) if Some(prototype) == regexp_prototype => self
                 .heap
                 .get(prototype.0 as usize)
-                .is_some_and(|prototype| prototype.own_runtime_property_value(key).is_none()),
+                .is_some_and(|prototype| {
+                    prototype.own_runtime_property_value(key).is_none()
+                        && !prototype.deleted_virtual_keys.contains(key)
+                }),
             Some(_) => false,
         }
     }
@@ -76875,7 +81135,15 @@ impl InterpreterCore {
                 got: receiver.type_name().to_string(),
             });
         };
-        let text = self.value_to_string(input);
+        // A string subject is used as it is (shared); copying it, counting
+        // its units and mapping lastIndex from its start made each exec of
+        // a loop over a long string cost the whole string (bd-9vouw.475).
+        let subject = match input {
+            Value::Str(text) => text.clone(),
+            other => JsString::from(self.value_to_string(other)),
+        };
+        let text = subject.as_utf8_projection();
+        let ascii = subject.is_ascii();
         let regex = self.compile_regexp_pattern(&source, &flags)?;
         let sticky = flags.contains('y');
         let tracks_last_index = sticky || flags.contains('g');
@@ -76884,12 +81152,15 @@ impl InterpreterCore {
             (true, Some(number)) => Self::to_length_index(number),
             (true, None) => self.regexp_last_index_start(regexp_id),
         };
-        let length = text.encode_utf16().count();
-        let found = if last_index > length {
+        let found = if last_index > subject.utf16_len() {
             None
         } else {
-            let start = Self::utf16_index_to_byte_offset(&text, last_index);
-            self.regexp_exec_at(&regex, &text, start, sticky, flags.contains('d'))?
+            let start = if ascii {
+                last_index
+            } else {
+                Self::utf16_index_to_byte_offset(text, last_index)
+            };
+            self.regexp_exec_at(&regex, &subject, start, sticky, flags.contains('d'))?
         };
         match found {
             None => {
@@ -76900,7 +81171,12 @@ impl InterpreterCore {
             }
             Some((result, end)) => {
                 if tracks_last_index {
-                    self.set_regexp_last_index(regexp_id, text[..end].encode_utf16().count())?;
+                    let end_units = if ascii {
+                        end
+                    } else {
+                        text[..end].encode_utf16().count()
+                    };
+                    self.set_regexp_last_index(regexp_id, end_units)?;
                 }
                 Ok(result)
             }
@@ -77805,6 +82081,22 @@ impl InterpreterCore {
         Ok(result)
     }
 
+    /// ES2020 25.6.3.1 step 1: Promise's [[Call]] (NewTarget undefined)
+    /// throws. The Call instruction refused it (bd-auy04), but
+    /// `Promise.call(...)`, `Promise.apply(...)` and `Reflect.apply(Promise,
+    /// ...)` reach the builtin dispatcher, which constructs (bd-9vouw.377).
+    fn reject_promise_constructor_call(function: &Value) -> Result<(), InterpreterError> {
+        if matches!(function, Value::BuiltinFunction(builtin)
+            if builtin.kind == BuiltinFunctionKind::PromiseConstructor)
+        {
+            return Err(InterpreterError::TypeError {
+                expected: "new Promise(executor)".to_string(),
+                got: "Promise constructor called without new".to_string(),
+            });
+        }
+        Ok(())
+    }
+
     fn forward_function_invocation(
         &mut self,
         module: Option<&Ir3Module>,
@@ -77882,6 +82174,8 @@ impl InterpreterCore {
                 }
                 values
             };
+            // Call(F, thisArgument, argList) after the list is built.
+            Self::reject_promise_constructor_call(&function)?;
             // bd-9vouw.50: a list that does not fit a register frame goes to
             // the builtin as a vector.
             let vector_tag = Self::vector_variadic_builtin_tag(&function)
@@ -77915,6 +82209,146 @@ impl InterpreterCore {
             .simple_callback_temporary_bytes
             .saturating_sub(reserved);
         result
+    }
+
+    /// bd-9vouw.501: the argument list of `f.apply(t, list)`,
+    /// `Reflect.apply(f, t, list)` or a spread call `f(...list)` (the
+    /// Reflect.apply hostcall over a fresh array) when `f` can run as an
+    /// ordinary frame of this run loop, with the list as its arguments,
+    /// exactly as the isolated activation of `forward_function_invocation`
+    /// would run it: `f` (in `function_register`) is a same-module closure
+    /// or function; no embedder hook and no execution context label is
+    /// active; `labelled_registers` (the call's own operands) and the
+    /// function, receiver and list registers are Public, as are the list's
+    /// mutation label and property labels, so the isolated call's context
+    /// label would be Public; and the list is an ordinary Array whose
+    /// `length` is an Int within MAX_CALL_ARGUMENTS and whose elements
+    /// 0..length are own data properties, so CreateListFromArrayLike's
+    /// [[Get]]s run no getter. Charges the instruction budget as
+    /// `observable_apply_arguments` does: one unit, then one per element.
+    fn unobservable_apply_arguments(
+        &mut self,
+        module: &Ir3Module,
+        labelled_registers: &[u32],
+        function_register: u32,
+        receiver_register: u32,
+        list_register: u32,
+    ) -> Result<Option<Vec<Value>>, InterpreterError> {
+        if self.hook.is_some()
+            || self
+                .active_execution_context_label()
+                .is_some_and(|label| *label != Label::Public)
+        {
+            return Ok(None);
+        }
+        let operands = [function_register, receiver_register, list_register];
+        for &register in labelled_registers.iter().chain(&operands) {
+            if *self.get_register_label(register)? != Label::Public {
+                return Ok(None);
+            }
+        }
+        let function = self.read_reg(function_register)?;
+        if !matches!(function, Value::Closure(_) | Value::Function(_))
+            || self.foreign_closure_module(&function, module)?.is_some()
+        {
+            return Ok(None);
+        }
+        let Value::Object(list) = self.read_reg(list_register)? else {
+            return Ok(None);
+        };
+        if self
+            .object_mutation_labels
+            .get(&list)
+            .is_some_and(|label| *label != Label::Public)
+            || self.active_proxy_record(list)?.is_some()
+        {
+            return Ok(None);
+        }
+        let Some(object) = self.heap.get(list.0 as usize) else {
+            return Ok(None);
+        };
+        if !object.is_array || object.typed_array.is_some() || !object.property_labels.is_empty() {
+            return Ok(None);
+        }
+        let length = match object.properties.get("length") {
+            Some(Value::Int(length)) if (0..=i64::from(MAX_CALL_ARGUMENTS)).contains(length) => {
+                *length as u32
+            }
+            _ => return Ok(None),
+        };
+        let mut values = Vec::with_capacity(length as usize);
+        for index in 0..length {
+            match object.properties.get_index(index) {
+                None | Some(Value::Accessor { .. }) => return Ok(None),
+                Some(value) => values.push(value.clone()),
+            }
+        }
+        for _ in 0..=length {
+            self.json_charge_work()?;
+        }
+        Ok(Some(values))
+    }
+
+    /// The CallMethod a spread call's Reflect.apply hostcall runs as, with
+    /// its argument list, when `unobservable_apply_arguments` allows it
+    /// (bd-9vouw.501); `None` for any other instruction, and while the
+    /// profiler observes instructions.
+    fn spread_call_as_method_call(
+        &mut self,
+        module: &Ir3Module,
+        instruction: &Ir3Instruction,
+    ) -> Result<Option<(Ir3Instruction, Vec<Value>)>, InterpreterError> {
+        let Ir3Instruction::HostCall {
+            capability,
+            args,
+            dst,
+        } = instruction
+        else {
+            return Ok(None);
+        };
+        if self.profiling_data.is_some()
+            || args.count != 3
+            || capability.0 != "builtin:ReflectApply"
+        {
+            return Ok(None);
+        }
+        let Some(values) = self.unobservable_apply_arguments(
+            module,
+            &[],
+            args.start,
+            args.start + 1,
+            args.start + 2,
+        )?
+        else {
+            return Ok(None);
+        };
+        let call = Ir3Instruction::CallMethod {
+            receiver: args.start + 1,
+            callee: args.start,
+            args: RegRange {
+                start: self.config.max_registers,
+                count: values.len() as u32,
+            },
+            dst: *dst,
+        };
+        Ok(Some((call, values)))
+    }
+
+    /// Make `values` (Public) registers `max_registers..` of the active frame
+    /// for the call that binds them, as `stage_argument_overflow` does for a
+    /// synthetic call site (bd-9vouw.501).
+    fn install_apply_argument_overflow(
+        &mut self,
+        values: Vec<Value>,
+    ) -> Result<usize, InterpreterError> {
+        let labels = vec![Label::Public; values.len()];
+        let bytes = Self::estimate_value_vec_bytes(&values).saturating_add(
+            u64::try_from(labels.len())
+                .unwrap_or(u64::MAX)
+                .saturating_mul(std::mem::size_of::<Label>() as u64),
+        );
+        self.check_temporary_memory_budget(bytes)?;
+        Ok(self.install_argument_overflow(values, labels, bytes))
     }
 
     /// CreateListFromArrayLike for apply, not iterable spread. Read length
@@ -78230,7 +82664,8 @@ impl InterpreterCore {
             winner = Some(candidate);
         }
         if let Some(object) = self.heap.get(object_id.0 as usize) {
-            for property in object.properties.values() {
+            // The largest label wins whatever the order (bd-9vouw.333).
+            for property in object.properties.values_unordered() {
                 if let Some(candidate) = self.process_dynamic_value_label_ref(property, visited)
                     && winner.is_none_or(|current| candidate > current)
                 {
@@ -78533,9 +82968,7 @@ impl InterpreterCore {
         self.preflight_legacy_property_key_for_hook(&key)?;
         match object_value {
             Value::Object(object_id) => {
-                if key.as_str() == Some("__proto__")
-                    && !self.heap[object_id.0 as usize].contains_own_runtime_property(&key)
-                {
+                if key.as_str() == Some("__proto__") && self.proto_key_reaches_accessor(object_id) {
                     let link = self.ordinary_get_prototype_of(object_id)?;
                     return Ok(self.prototype_value_for_link(module, link));
                 }
@@ -78561,11 +82994,12 @@ impl InterpreterCore {
                 let Some(property_object) = Self::builtin_function_property_object(&builtin) else {
                     return Ok(Value::Undefined);
                 };
-                Ok(self
-                    .heap
-                    .get(property_object.0 as usize)
-                    .and_then(|object| object.own_runtime_property_value(&key))
-                    .unwrap_or(Value::Undefined))
+                self.iterator_protocol_property(
+                    module,
+                    property_object,
+                    &key,
+                    Value::BuiltinFunction(builtin),
+                )
             }
             other => Err(InterpreterError::TypeError {
                 expected: "object".to_string(),
@@ -78732,249 +83166,281 @@ impl InterpreterCore {
         self.simple_callback_temporary_bytes = self
             .simple_callback_temporary_bytes
             .saturating_add(register_carrier_bytes);
-        let mut local_registers = vec![Value::Undefined; register_count];
-        Self::write_local_register(&mut local_registers, 0, accumulator)?;
-        Self::write_local_register(&mut local_registers, 1, current_value)?;
-        Self::write_local_register(&mut local_registers, 2, Value::Int(element_index))?;
-        Self::write_local_register(&mut local_registers, 3, Value::Object(array_id))?;
+        let mut local_registers = self.take_simple_callback_registers(register_count);
+        let outcome = (|| -> Result<Value, InterpreterError> {
+            Self::write_local_register(&mut local_registers, 0, accumulator)?;
+            Self::write_local_register(&mut local_registers, 1, current_value)?;
+            Self::write_local_register(&mut local_registers, 2, Value::Int(element_index))?;
+            Self::write_local_register(&mut local_registers, 3, Value::Object(array_id))?;
 
-        let mut instruction_pointer = function.entry as usize;
-        for _step in 0..self.config.instruction_budget {
-            self.simple_callback_temporary_bytes = previous_callback_temporary_bytes
-                .saturating_add(Self::simple_callback_register_bytes(&local_registers));
-            let instruction_ref = module.instructions.get(instruction_pointer).ok_or(
-                InterpreterError::InstructionOutOfBounds {
-                    ip: instruction_pointer,
-                    count: module.instructions.len(),
-                },
-            )?;
-            if let Ir3Instruction::LoadBigInt { value, .. } = instruction_ref {
-                self.check_temporary_memory_budget(Self::bigint_literal_construction_peak_bytes(
-                    value,
-                ))?;
-            }
-            let instruction = instruction_ref.clone();
-            match instruction {
-                Ir3Instruction::LoadInt { dst, value } => {
-                    Self::write_local_register(&mut local_registers, dst, Value::Int(value))?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::LoadBigInt { dst, value } => {
-                    Self::write_local_register(
-                        &mut local_registers,
-                        dst,
-                        Value::BigInt(Arc::from(value)),
+            let mut instruction_pointer = function.entry as usize;
+            for _step in 0..self.config.instruction_budget {
+                self.simple_callback_temporary_bytes = previous_callback_temporary_bytes
+                    .saturating_add(Self::simple_callback_register_bytes(&local_registers));
+                let instruction_ref = module.instructions.get(instruction_pointer).ok_or(
+                    InterpreterError::InstructionOutOfBounds {
+                        ip: instruction_pointer,
+                        count: module.instructions.len(),
+                    },
+                )?;
+                if let Ir3Instruction::LoadBigInt { value, .. } = instruction_ref {
+                    self.check_temporary_memory_budget(
+                        Self::bigint_literal_construction_peak_bytes(value),
                     )?;
-                    instruction_pointer += 1;
                 }
-                Ir3Instruction::LoadFloat { dst, bits } => {
-                    Self::write_local_register(
-                        &mut local_registers,
-                        dst,
-                        Value::Float(Float64::new(f64::from_bits(bits))),
-                    )?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::LoadStr { dst, pool_index } => {
-                    let value = module
-                        .constant_pool
-                        .get(pool_index as usize)
-                        .cloned()
-                        .ok_or(InterpreterError::StringPoolOutOfBounds {
-                            index: pool_index,
-                            pool_size: module.constant_pool.len() as u32,
-                        })?;
-                    Self::write_local_register(&mut local_registers, dst, Value::str(value))?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::LoadBool { dst, value } => {
-                    Self::write_local_register(&mut local_registers, dst, Value::Bool(value))?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::LoadNull { dst } => {
-                    Self::write_local_register(&mut local_registers, dst, Value::Null)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::LoadUndefined { dst } => {
-                    Self::write_local_register(&mut local_registers, dst, Value::Undefined)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::LoadName {
-                    dst,
-                    name_pool_index,
-                    allow_missing,
-                } => {
-                    let name = Self::scoped_constant_name(module, name_pool_index);
-                    let value = match self.load_runtime_name(name.as_ref(), false) {
-                        // This lane runs no guest code: a data property of the
-                        // global object only, as its GetProperty reads.
-                        Err(InterpreterError::UndefinedBinding { .. }) => {
-                            match self.global_object_data_property(name.as_ref()) {
-                                Some(value) => value,
-                                None if allow_missing => Value::Undefined,
-                                None => {
-                                    return Err(InterpreterError::UndefinedBinding {
-                                        name: name.into_owned(),
-                                    });
-                                }
-                            }
-                        }
-                        loaded => loaded?,
-                    };
-                    Self::write_local_register(&mut local_registers, dst, value)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::ResolveNameStatus {
-                    dst,
-                    name_pool_index,
-                } => {
-                    let name = Self::scoped_constant_name(module, name_pool_index);
-                    let reference_token = self.capture_runtime_name_reference(name.as_ref())?;
-                    Self::write_local_register(
-                        &mut local_registers,
-                        dst,
-                        Value::Int(i64::from(reference_token)),
-                    )?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::PutName {
-                    src,
-                    name_pool_index,
-                    strict,
-                } => {
-                    let name = Self::scoped_constant_name(module, name_pool_index);
-                    let value = Self::read_local_register(&local_registers, src)?;
-                    self.put_runtime_name(name.as_ref(), value, strict)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::PutNameWithStatus {
-                    src,
-                    status,
-                    name_pool_index,
-                    strict,
-                } => {
-                    let name = Self::scoped_constant_name(module, name_pool_index);
-                    let value = Self::read_local_register(&local_registers, src)?;
-                    let reference_token = Self::runtime_name_reference_token(
-                        Self::read_local_register(&local_registers, status)?,
-                    )?;
-                    self.put_runtime_name_with_status(
-                        name.as_ref(),
-                        value,
-                        strict,
-                        reference_token,
-                    )?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::LoadNewTarget { dst } => {
-                    Self::write_local_register(&mut local_registers, dst, Value::Undefined)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::Move { dst, src } => {
-                    let value = Self::read_local_register(&local_registers, src)?;
-                    Self::write_local_register(&mut local_registers, dst, value)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::Add { dst, lhs, rhs } => {
-                    let left = Self::read_local_register(&local_registers, lhs)?;
-                    let right = Self::read_local_register(&local_registers, rhs)?;
-                    let value = self.eval_add_values(Some(module), &left, &right)?;
-                    Self::write_local_register(&mut local_registers, dst, value)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::Sub { dst, lhs, rhs } => {
-                    let left = Self::read_local_register(&local_registers, lhs)?;
-                    let right = Self::read_local_register(&local_registers, rhs)?;
-                    let value = Self::eval_arith_values(&left, &right, "sub")?;
-                    Self::write_local_register(&mut local_registers, dst, value)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::Inc { dst, src } | Ir3Instruction::Dec { dst, src } => {
-                    let delta = if matches!(instruction_ref, Ir3Instruction::Inc { .. }) {
-                        1
-                    } else {
-                        -1
-                    };
-                    let value = Self::read_local_register(&local_registers, src)?;
-                    let value = Self::step_numeric(&value, delta)?;
-                    Self::write_local_register(&mut local_registers, dst, value)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::Mul { dst, lhs, rhs } => {
-                    let left = Self::read_local_register(&local_registers, lhs)?;
-                    let right = Self::read_local_register(&local_registers, rhs)?;
-                    let value = Self::eval_arith_values(&left, &right, "mul")?;
-                    Self::write_local_register(&mut local_registers, dst, value)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::Div { dst, lhs, rhs } => {
-                    let left = Self::read_local_register(&local_registers, lhs)?;
-                    let right = Self::read_local_register(&local_registers, rhs)?;
-                    let value = Self::eval_div_values(&left, &right)?;
-                    Self::write_local_register(&mut local_registers, dst, value)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::GetProperty { obj, key, dst } => {
-                    let object_value = Self::read_local_register(&local_registers, obj)?;
-                    let key_value = Self::read_local_register(&local_registers, key)?;
-                    let value =
-                        self.simple_callback_get_property(Some(module), object_value, &key_value)?;
-                    Self::write_local_register(&mut local_registers, dst, value)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::Jump { target } => {
-                    instruction_pointer = target as usize;
-                }
-                Ir3Instruction::JumpIf { cond, target } => {
-                    let value = Self::read_local_register(&local_registers, cond)?;
-                    if value.is_truthy() {
-                        instruction_pointer = target as usize;
-                    } else {
+                let instruction = instruction_ref.clone();
+                match instruction {
+                    Ir3Instruction::LoadInt { dst, value } => {
+                        Self::write_local_register(&mut local_registers, dst, Value::Int(value))?;
                         instruction_pointer += 1;
                     }
-                }
-                Ir3Instruction::Return { value } => {
-                    return Self::read_local_register(&local_registers, value);
-                }
-                Ir3Instruction::Halt => {
-                    return Ok(Value::Undefined);
-                }
-                Ir3Instruction::Throw { value } => {
-                    // bd-8enww.4.8: preserve the callback's explicitly-thrown
-                    // value so an enclosing `try`/`catch` binds the ORIGINAL
-                    // value verbatim, instead of the wrapped "unsupported
-                    // instruction" TypeError this `match` used to surface via its
-                    // `other` arm (which the caller then re-boxed into a generic
-                    // Error object — the `[object …]` symptom of this bug).
-                    //
-                    // Mirror the modern `Throw` arm: arm `pending_exception` with
-                    // the value and surface an `UncaughtException`. The `Call` /
-                    // `CallMethod` builtin dispatch that ran this reducer then
-                    // routes it through `route_isolated_explicit_throw` into the
-                    // caller's catch frames, re-raising the preserved value. This
-                    // legacy mini-lane tracks no per-register labels, so the
-                    // escaping value's confidentiality is re-established (as a
-                    // sound upper bound) by the receiver+args label join on the
-                    // dispatch site's throw path.
-                    let thrown = Self::read_local_register(&local_registers, value)?;
-                    self.replace_pending_abrupt_slots(Some((thrown.clone(), Label::Public)), None)?;
-                    return Err(InterpreterError::UncaughtException {
-                        value: self.uncaught_exception_description(&thrown),
-                    });
-                }
-                other => {
-                    return Err(InterpreterError::TypeError {
-                        expected: "simple synchronous reducer callback".to_string(),
-                        got: format!("unsupported reducer instruction {other:?}"),
-                    });
+                    Ir3Instruction::LoadBigInt { dst, value } => {
+                        Self::write_local_register(
+                            &mut local_registers,
+                            dst,
+                            Value::BigInt(Arc::from(value)),
+                        )?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::LoadFloat { dst, bits } => {
+                        Self::write_local_register(
+                            &mut local_registers,
+                            dst,
+                            Value::Float(Float64::new(f64::from_bits(bits))),
+                        )?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::LoadStr { dst, pool_index } => {
+                        let value = module
+                            .constant_pool
+                            .get(pool_index as usize)
+                            .cloned()
+                            .ok_or(InterpreterError::StringPoolOutOfBounds {
+                                index: pool_index,
+                                pool_size: module.constant_pool.len() as u32,
+                            })?;
+                        Self::write_local_register(&mut local_registers, dst, Value::str(value))?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::LoadBool { dst, value } => {
+                        Self::write_local_register(&mut local_registers, dst, Value::Bool(value))?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::LoadNull { dst } => {
+                        Self::write_local_register(&mut local_registers, dst, Value::Null)?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::LoadUndefined { dst } => {
+                        Self::write_local_register(&mut local_registers, dst, Value::Undefined)?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::LoadName {
+                        dst,
+                        name_pool_index,
+                        allow_missing,
+                    } => {
+                        let name = Self::scoped_constant_name(module, name_pool_index);
+                        let value = match self.load_runtime_name(name.as_ref(), false) {
+                            // This lane runs no guest code: a data property of the
+                            // global object only, as its GetProperty reads.
+                            Err(InterpreterError::UndefinedBinding { .. }) => {
+                                match self.global_object_data_property(name.as_ref()) {
+                                    Some(value) => value,
+                                    None if allow_missing => Value::Undefined,
+                                    None => {
+                                        return Err(InterpreterError::UndefinedBinding {
+                                            name: name.into_owned(),
+                                        });
+                                    }
+                                }
+                            }
+                            loaded => loaded?,
+                        };
+                        Self::write_local_register(&mut local_registers, dst, value)?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::ResolveNameStatus {
+                        dst,
+                        name_pool_index,
+                    } => {
+                        let name = Self::scoped_constant_name(module, name_pool_index);
+                        let reference_token = self.capture_runtime_name_reference(name.as_ref())?;
+                        Self::write_local_register(
+                            &mut local_registers,
+                            dst,
+                            Value::Int(i64::from(reference_token)),
+                        )?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::PutName {
+                        src,
+                        name_pool_index,
+                        strict,
+                    } => {
+                        let name = Self::scoped_constant_name(module, name_pool_index);
+                        let value = Self::read_local_register(&local_registers, src)?;
+                        self.put_runtime_name(name.as_ref(), value, strict)?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::PutNameWithStatus {
+                        src,
+                        status,
+                        name_pool_index,
+                        strict,
+                    } => {
+                        let name = Self::scoped_constant_name(module, name_pool_index);
+                        let value = Self::read_local_register(&local_registers, src)?;
+                        let reference_token = Self::runtime_name_reference_token(
+                            Self::read_local_register(&local_registers, status)?,
+                        )?;
+                        self.put_runtime_name_with_status(
+                            name.as_ref(),
+                            value,
+                            strict,
+                            reference_token,
+                        )?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::LoadNewTarget { dst } => {
+                        Self::write_local_register(&mut local_registers, dst, Value::Undefined)?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::Move { dst, src } => {
+                        let value = Self::read_local_register(&local_registers, src)?;
+                        Self::write_local_register(&mut local_registers, dst, value)?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::Add { dst, lhs, rhs } => {
+                        let left = Self::read_local_register(&local_registers, lhs)?;
+                        let right = Self::read_local_register(&local_registers, rhs)?;
+                        let value = self.eval_add_values(Some(module), &left, &right)?;
+                        Self::write_local_register(&mut local_registers, dst, value)?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::Sub { dst, lhs, rhs } => {
+                        let left = Self::read_local_register(&local_registers, lhs)?;
+                        let right = Self::read_local_register(&local_registers, rhs)?;
+                        let value = Self::eval_arith_values(&left, &right, "sub")?;
+                        Self::write_local_register(&mut local_registers, dst, value)?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::Inc { dst, src } | Ir3Instruction::Dec { dst, src } => {
+                        let delta = if matches!(instruction_ref, Ir3Instruction::Inc { .. }) {
+                            1
+                        } else {
+                            -1
+                        };
+                        let value = Self::read_local_register(&local_registers, src)?;
+                        let value = Self::step_numeric(&value, delta)?;
+                        Self::write_local_register(&mut local_registers, dst, value)?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::Mul { dst, lhs, rhs } => {
+                        let left = Self::read_local_register(&local_registers, lhs)?;
+                        let right = Self::read_local_register(&local_registers, rhs)?;
+                        let value = Self::eval_arith_values(&left, &right, "mul")?;
+                        Self::write_local_register(&mut local_registers, dst, value)?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::Div { dst, lhs, rhs } => {
+                        let left = Self::read_local_register(&local_registers, lhs)?;
+                        let right = Self::read_local_register(&local_registers, rhs)?;
+                        let value = Self::eval_div_values(&left, &right)?;
+                        Self::write_local_register(&mut local_registers, dst, value)?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::GetProperty { obj, key, dst } => {
+                        let object_value = Self::read_local_register(&local_registers, obj)?;
+                        let key_value = Self::read_local_register(&local_registers, key)?;
+                        let value = self.simple_callback_get_property(
+                            Some(module),
+                            object_value,
+                            &key_value,
+                        )?;
+                        Self::write_local_register(&mut local_registers, dst, value)?;
+                        instruction_pointer += 1;
+                    }
+                    Ir3Instruction::Jump { target } => {
+                        instruction_pointer = target as usize;
+                    }
+                    Ir3Instruction::JumpIf { cond, target } => {
+                        let value = Self::read_local_register(&local_registers, cond)?;
+                        if value.is_truthy() {
+                            instruction_pointer = target as usize;
+                        } else {
+                            instruction_pointer += 1;
+                        }
+                    }
+                    Ir3Instruction::Return { value } => {
+                        return Self::read_local_register(&local_registers, value);
+                    }
+                    Ir3Instruction::Halt => {
+                        return Ok(Value::Undefined);
+                    }
+                    Ir3Instruction::Throw { value } => {
+                        // bd-8enww.4.8: preserve the callback's explicitly-thrown
+                        // value so an enclosing `try`/`catch` binds the ORIGINAL
+                        // value verbatim, instead of the wrapped "unsupported
+                        // instruction" TypeError this `match` used to surface via its
+                        // `other` arm (which the caller then re-boxed into a generic
+                        // Error object — the `[object …]` symptom of this bug).
+                        //
+                        // Mirror the modern `Throw` arm: arm `pending_exception` with
+                        // the value and surface an `UncaughtException`. The `Call` /
+                        // `CallMethod` builtin dispatch that ran this reducer then
+                        // routes it through `route_isolated_explicit_throw` into the
+                        // caller's catch frames, re-raising the preserved value. This
+                        // legacy mini-lane tracks no per-register labels, so the
+                        // escaping value's confidentiality is re-established (as a
+                        // sound upper bound) by the receiver+args label join on the
+                        // dispatch site's throw path.
+                        let thrown = Self::read_local_register(&local_registers, value)?;
+                        self.replace_pending_abrupt_slots(
+                            Some((thrown.clone(), Label::Public)),
+                            None,
+                        )?;
+                        return Err(InterpreterError::UncaughtException {
+                            value: self.uncaught_exception_description(&thrown),
+                        });
+                    }
+                    other => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "simple synchronous reducer callback".to_string(),
+                            got: format!("unsupported reducer instruction {other:?}"),
+                        });
+                    }
                 }
             }
-        }
 
-        Err(InterpreterError::BudgetExhausted {
-            executed: self.config.instruction_budget,
-            budget: self.config.instruction_budget,
-        })
+            Err(InterpreterError::BudgetExhausted {
+                executed: self.config.instruction_budget,
+                budget: self.config.instruction_budget,
+            })
+        })();
+        self.return_simple_callback_registers(local_registers);
+        outcome
+    }
+
+    /// The reducer lane's register file: the pooled one when it has
+    /// `register_count` slots (all `Undefined`), else a new one.
+    fn take_simple_callback_registers(&mut self, register_count: usize) -> SimpleCallbackRegisters {
+        let mut values = std::mem::take(&mut self.simple_callback_register_pool);
+        if values.len() != register_count {
+            values = vec![Value::Undefined; register_count];
+        }
+        SimpleCallbackRegisters {
+            values,
+            value_bytes: 0,
+            high_water: 0,
+        }
+    }
+
+    /// Reset the written prefix and keep the file for the next callback.
+    fn return_simple_callback_registers(&mut self, mut registers: SimpleCallbackRegisters) {
+        for value in &mut registers.values[..registers.high_water] {
+            *value = Value::Undefined;
+        }
+        self.simple_callback_register_pool = registers.values;
     }
 
     fn invoke_inline_method_call(
@@ -79298,7 +83764,7 @@ impl InterpreterCore {
             0,
             transient_execution_bytes.saturating_add(remaining_label_transport_bytes),
         )?;
-        if matches!(callee, Value::Closure(_) | Value::Function(_))
+        if Self::callee_runs_nested(&callee)
             && !is_foreign_call
             && contained_codegen_grant.is_none()
             && callee_generated_artifact.is_none()
@@ -79364,7 +83830,12 @@ impl InterpreterCore {
         });
         let wrapper_start = module.instructions.len();
 
-        let snapshot = match self.snapshot_module_execution() {
+        let setup_previous_register_bytes = self.registers_memory_bytes();
+        let setup_previous_register_context_label_bytes =
+            self.register_context_labels_memory_bytes();
+        // The snapshot takes the caller's registers and labels, leaving the
+        // fresh files the callback starts on.
+        let snapshot = match self.isolate_module_execution() {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 drop(wrapper);
@@ -79379,9 +83850,6 @@ impl InterpreterCore {
             None => (None, IsolatedArgumentLabels::Public),
         };
         let saved_active_cjs_context = self.active_cjs_context.clone();
-        let setup_previous_register_bytes = self.registers_memory_bytes();
-        let setup_previous_register_context_label_bytes =
-            self.register_context_labels_memory_bytes();
         let setup_previous_scope_bytes = self.scope_chain_memory_bytes();
         let setup_previous_call_stack_bytes = self.call_stack_memory_bytes();
         let mut wrapper_memory_committed = false;
@@ -79406,9 +83874,6 @@ impl InterpreterCore {
             // In particular, a foreign async callback must not retain its
             // caller's yield* record in the callback's own activation.
             self.take_generator_delegation();
-            self.registers =
-                SeedTrackedField::new(vec![Value::Undefined; self.config.max_registers as usize]);
-            self.register_labels.fill(Label::Public);
             self.active_inline_callback_context_label = callback_context_label;
             self.call_stack.clear(&mut self.closures.cold_cells);
             self.ip = wrapper_start;
@@ -79645,6 +84110,25 @@ impl InterpreterCore {
             .as_ref()
             .filter(|(address, _)| *address == Self::module_address(module))
             .map(|(_, program)| program.clone())
+    }
+
+    /// Callees an inline method call runs on the live stack through
+    /// [`Self::invoke_nested_callback`] (when nothing else needs isolation):
+    /// same-module closures, and builtins other than a Function-constructor
+    /// generated function, whose contained codegen grant needs the isolated
+    /// run. The nested trampoline runs the same CallMethod as the isolated
+    /// wrapper. A builtin reached by `fn.call(...)`, `fn.apply(...)` or
+    /// through a bound function used to snapshot and restore the whole
+    /// module execution around one builtin dispatch: 7-9x a closure call
+    /// (bd-9vouw.312).
+    fn callee_runs_nested(callee: &Value) -> bool {
+        match callee {
+            Value::Closure(_) | Value::Function(_) => true,
+            Value::BuiltinFunction(builtin) => {
+                builtin.kind != BuiltinFunctionKind::GeneratedFunction
+            }
+            _ => false,
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -79929,7 +84413,12 @@ impl InterpreterCore {
         ];
         let wrapper_start = module.instructions.len();
 
-        let snapshot = match self.snapshot_module_execution() {
+        let setup_previous_register_bytes = self.registers_memory_bytes();
+        let setup_previous_register_context_label_bytes =
+            self.register_context_labels_memory_bytes();
+        // The snapshot takes the caller's registers and labels, leaving the
+        // fresh files the constructor starts on.
+        let snapshot = match self.isolate_module_execution() {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(
@@ -79943,9 +84432,6 @@ impl InterpreterCore {
             None => (None, IsolatedArgumentLabels::Public),
         };
         let saved_active_cjs_context = self.active_cjs_context.clone();
-        let setup_previous_register_bytes = self.registers_memory_bytes();
-        let setup_previous_register_context_label_bytes =
-            self.register_context_labels_memory_bytes();
         let setup_previous_scope_bytes = self.scope_chain_memory_bytes();
         let setup_previous_call_stack_bytes = self.call_stack_memory_bytes();
         let mut wrapper_memory_committed = false;
@@ -79953,9 +84439,6 @@ impl InterpreterCore {
             self.replace_with_contained_codegen_grant(contained_codegen_grant);
         let mut overflow_depth = None;
         let result = (|| -> Result<Value, InterpreterError> {
-            self.registers =
-                SeedTrackedField::new(vec![Value::Undefined; self.config.max_registers as usize]);
-            self.register_labels.fill(Label::Public);
             self.call_stack.clear(&mut self.closures.cold_cells);
             self.ip = wrapper_start;
             self.register_base = 0;
@@ -80056,42 +84539,47 @@ impl InterpreterCore {
         result.map(|value| (value, result_label))
     }
 
-    fn read_local_register(registers: &[Value], register: u32) -> Result<Value, InterpreterError> {
-        registers
-            .get(register as usize)
-            .cloned()
-            .ok_or(InterpreterError::RegisterOutOfBounds {
+    fn read_local_register(
+        registers: &SimpleCallbackRegisters,
+        register: u32,
+    ) -> Result<Value, InterpreterError> {
+        registers.values.get(register as usize).cloned().ok_or(
+            InterpreterError::RegisterOutOfBounds {
                 register,
-                max: registers.len() as u32,
-            })
+                max: registers.values.len() as u32,
+            },
+        )
     }
 
     fn write_local_register(
-        registers: &mut [Value],
+        registers: &mut SimpleCallbackRegisters,
         register: u32,
         value: Value,
     ) -> Result<(), InterpreterError> {
-        let max_registers = registers.len() as u32;
+        let max_registers = registers.values.len() as u32;
         let register_index = register as usize;
-        if register_index >= registers.len() {
+        let Some(slot) = registers.values.get_mut(register_index) else {
             return Err(InterpreterError::RegisterOutOfBounds {
                 register,
                 max: max_registers,
             });
-        }
-        registers[register_index] = value;
+        };
+        let released = Self::estimate_execution_seed_value_bytes(slot);
+        let added = Self::estimate_execution_seed_value_bytes(&value);
+        *slot = value;
+        registers.value_bytes = registers
+            .value_bytes
+            .saturating_sub(released)
+            .saturating_add(added);
+        registers.high_water = registers.high_water.max(register_index + 1);
         Ok(())
     }
 
-    fn simple_callback_register_bytes(registers: &[Value]) -> u64 {
-        u64::try_from(registers.len())
+    fn simple_callback_register_bytes(registers: &SimpleCallbackRegisters) -> u64 {
+        u64::try_from(registers.values.len())
             .unwrap_or(u64::MAX)
             .saturating_mul(u64::try_from(std::mem::size_of::<Value>()).unwrap_or(u64::MAX))
-            .saturating_add(Self::saturating_sum(
-                registers
-                    .iter()
-                    .map(Self::estimate_execution_seed_value_bytes),
-            ))
+            .saturating_add(registers.value_bytes)
     }
 
     fn eval_add_values(
@@ -80821,25 +85309,63 @@ impl InterpreterCore {
         let prospective_accessor_bytes = new_edge_bytes.saturating_add(preserved_edge_bytes);
         let has_exact_only_properties = object.properties.exact_len() != object.properties.len();
         let ordinary_key = key.as_str().filter(|_| !has_exact_only_properties);
-        let previous_property_bytes =
-            Self::estimate_ordered_property_map_bytes_nonalloc(&object.properties);
-        let next_property_bytes = Self::estimate_projected_string_accessor_map_bytes(
-            &object.properties,
-            &key,
-            prospective_accessor_bytes,
-        );
-        let requested_bytes = self
-            .estimated_memory_bytes
-            .saturating_sub(previous_property_bytes)
-            .saturating_add(next_property_bytes);
-        let construction_peak = ordinary_key.map_or_else(
-            || {
-                new_edge_bytes
-                    .saturating_add(previous_property_bytes)
-                    .max(next_property_bytes)
-            },
-            |key| new_edge_bytes.saturating_add(Self::estimate_string_bytes(key)),
-        );
+        let (requested_bytes, construction_peak) = match ordinary_key {
+            // An ordinary key leaves every other entry's estimate as it was
+            // (no exact key order before or after), so the request moves by
+            // this entry's own change. Estimating the whole map before and
+            // after made defining N accessors on one object O(N^2): a class
+            // with many getters, a bundle's export getters (bd-9vouw.335).
+            Some(ordinary) => {
+                let entry_base = MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                    .saturating_add(Self::estimate_string_bytes(ordinary).saturating_mul(2));
+                let previous_entry = object.properties.get(ordinary).map_or(0, |value| {
+                    entry_base.saturating_add(Self::estimate_execution_seed_value_bytes(value))
+                });
+                let next_entry = entry_base.saturating_add(prospective_accessor_bytes);
+                let requested_bytes = self
+                    .estimated_memory_bytes
+                    .saturating_sub(previous_entry)
+                    .saturating_add(next_entry);
+                #[cfg(debug_assertions)]
+                {
+                    let previous_property_bytes =
+                        Self::estimate_ordered_property_map_bytes_nonalloc(&object.properties);
+                    let next_property_bytes = Self::estimate_projected_string_accessor_map_bytes(
+                        &object.properties,
+                        &key,
+                        prospective_accessor_bytes,
+                    );
+                    debug_assert_eq!(
+                        requested_bytes,
+                        self.estimated_memory_bytes
+                            .saturating_sub(previous_property_bytes)
+                            .saturating_add(next_property_bytes),
+                        "an accessor entry's own delta is the whole map's (bd-9vouw.335)"
+                    );
+                }
+                (
+                    requested_bytes,
+                    new_edge_bytes.saturating_add(Self::estimate_string_bytes(ordinary)),
+                )
+            }
+            None => {
+                let previous_property_bytes =
+                    Self::estimate_ordered_property_map_bytes_nonalloc(&object.properties);
+                let next_property_bytes = Self::estimate_projected_string_accessor_map_bytes(
+                    &object.properties,
+                    &key,
+                    prospective_accessor_bytes,
+                );
+                (
+                    self.estimated_memory_bytes
+                        .saturating_sub(previous_property_bytes)
+                        .saturating_add(next_property_bytes),
+                    new_edge_bytes
+                        .saturating_add(previous_property_bytes)
+                        .max(next_property_bytes),
+                )
+            }
+        };
         self.check_temporary_memory_budget(construction_peak)?;
         if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
@@ -81062,6 +85588,8 @@ impl InterpreterCore {
         key: RuntimePropertyKey,
         descriptor: PropertyDescriptorFields,
     ) -> Result<bool, InterpreterError> {
+        // A canonical prototype's virtual property is the current one.
+        self.materialize_virtual_own_property(obj_id, &key)?;
         let object = self
             .heap
             .get(obj_id.0 as usize)
@@ -81201,6 +85729,28 @@ impl InterpreterCore {
         !object.own_property_attributes(&length_key).writable
             && matches!(object.own_runtime_property_value(&length_key),
                 Some(Value::Int(length)) if i64::from(index) >= length)
+    }
+
+    /// ES2020 9.4.2.4 ArraySetLength steps 3-5 for the value an array's
+    /// `length` is set or defined to: ToUint32(value), then ToNumber(value),
+    /// each observable (an object's valueOf runs twice); a RangeError when
+    /// they differ (bd-9vouw.279). A Number passes through unconverted.
+    fn array_length_definition_value(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: Value,
+    ) -> Result<Value, InterpreterError> {
+        if matches!(value, Value::Int(_) | Value::Float(_)) {
+            return Ok(value);
+        }
+        let as_uint32 = Self::js_to_uint32(self.array_length_number(module, value.clone())?);
+        let as_number = self.array_length_number(module, value)?;
+        if f64::from(as_uint32) != as_number {
+            return Err(InterpreterError::RangeError {
+                message: format!("invalid array length {as_number}"),
+            });
+        }
+        Ok(Value::Int(i64::from(as_uint32)))
     }
 
     /// ToNumber(value) for ArraySetLength steps 3-4 (bd-9vouw.279): an
@@ -81374,19 +85924,7 @@ impl InterpreterCore {
             .flatten()
             .or_else(|| {
                 let virtual_value = self.canonical_prototype_virtual_property(object_id, key)?;
-                let attributes = if matches!(key.as_str(), Some("length" | "name"))
-                    && self.builtin_prototypes.get("Function") == Some(&object_id)
-                {
-                    FUNCTION_NAME_LENGTH_ATTRIBUTES
-                } else if self.virtual_property_is_configurable(object_id, key) {
-                    NON_ENUMERABLE_DATA_ATTRIBUTES
-                } else {
-                    PropertyAttributes {
-                        writable: true,
-                        enumerable: false,
-                        configurable: false,
-                    }
-                };
+                let attributes = self.virtual_property_attributes(object_id, key);
                 Some((BaselineSymbolProperty::Data(virtual_value), attributes))
             });
         let (property, attributes) = source?;
@@ -85040,6 +89578,63 @@ impl InterpreterCore {
             .ok_or(())
     }
 
+    /// Read a bounded, explicit snapshot value through the same provider and
+    /// effect journal as every other host read. Missing provider authority is
+    /// an error, never a fabricated absent variable.
+    fn dispatch_environment_hostcall(
+        &mut self,
+        capability: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let denied = || InterpreterError::CapabilityDenied {
+            capability: RuntimeCapability::EnvRead.to_string(),
+        };
+        if !self
+            .config
+            .granted_capabilities
+            .contains(&RuntimeCapability::EnvRead)
+        {
+            return Err(denied());
+        }
+        if args.count != 1 {
+            return Err(InterpreterError::TypeError {
+                expected: "one environment variable name".to_string(),
+                got: format!("{} argument(s)", args.count),
+            });
+        }
+        let Value::Str(name) = self.read_reg(args.start)? else {
+            return Err(InterpreterError::TypeError {
+                expected: "an environment variable name string".to_string(),
+                got: "non-string environment variable name".to_string(),
+            });
+        };
+        let name = name.as_str().ok_or_else(denied)?;
+        validate_environment_name(name).map_err(|_| denied())?;
+        let provider = self.host_io.clone().ok_or_else(denied)?;
+        let effect = create_env_read_effect(name.to_string());
+        let mut stack = create_handler_stack_from_profile_with_effect_providers(
+            &CapabilityProfile::full(),
+            Some(provider),
+            self.host_io_recorder.clone(),
+            self.process_spawn.clone(),
+            None,
+            self.host_effect_journal.clone(),
+        );
+        let result = stack.handle_effect(effect.as_ref()).map_err(|_| denied())?;
+        let value = result.downcast::<Option<String>>().map_err(|_| denied())?;
+        if capability == "env:has" {
+            Ok(Value::Bool(value.is_some()))
+        } else {
+            match value {
+                Some(value) => {
+                    self.check_string_limit(value.len())?;
+                    Ok(Value::str(value))
+                }
+                None => Ok(Value::Undefined),
+            }
+        }
+    }
+
     fn require_random_read_capability(&self) -> Result<(), InterpreterError> {
         if self
             .config
@@ -87028,9 +91623,12 @@ impl InterpreterCore {
         self.clear_pending_hostcall_result_label();
         self.builtin_dispatch_hit_unknown_member = false;
         // bd-9vouw.76: a language operation is not a host call, so it leaves
-        // no telemetry record either.
-        let args_hash =
-            (!is_language_operation_tag(cap)).then(|| self.hostcall_arguments_hash(args));
+        // no telemetry record either. The telemetry channel only grows: once
+        // it is full, a record is refused (and counted) without its input, so
+        // its arguments are not serialized and hashed (bd-9vouw.348).
+        let telemetry = !is_language_operation_tag(cap);
+        let args_hash = (telemetry && self.telemetry_recorder.remaining_capacity() > 0)
+            .then(|| self.hostcall_arguments_hash(args));
         if cap.starts_with("builtin:Math") {
             for offset in 0..args.count {
                 if let Value::BigInt(_) = self.read_reg(args.start + offset)? {
@@ -87056,9 +91654,17 @@ impl InterpreterCore {
         // hostcalls. Record the outer builtin in completion order so its
         // deterministic timestamp cannot precede an already-retained inner
         // record and trigger a false monotonicity drop (bd-juz83).
-        if let Some(args_hash) = args_hash {
+        if telemetry {
             let timestamp_ns = self.instructions_executed;
-            self.record_hostcall_telemetry(cap, args, timestamp_ns, args_hash, &outcome);
+            match args_hash {
+                Some(args_hash) => {
+                    self.record_hostcall_telemetry(cap, args, timestamp_ns, args_hash, &outcome);
+                }
+                None => {
+                    // Full before the dispatch, so still full.
+                    self.telemetry_recorder.refuse_while_full(timestamp_ns);
+                }
+            }
         }
         outcome
     }
@@ -87402,6 +92008,7 @@ impl InterpreterCore {
         }
 
         let mut saved_values = Vec::with_capacity(value_count);
+        self.note_registers_written_to(required_len);
         self.mutate_registers(|registers| {
             if registers.len() < required_len {
                 registers.resize(required_len, Value::Undefined);
@@ -87417,12 +92024,17 @@ impl InterpreterCore {
             self.register_labels.resize(required_len, Label::Public);
         }
         let mut saved_labels = Vec::with_capacity(value_count);
+        let (mut released_label_bytes, mut added_label_bytes) = (0u64, 0u64);
         for (offset, label) in labels.into_iter().enumerate() {
-            saved_labels.push(std::mem::replace(
-                &mut self.register_labels[register_base + offset],
-                label,
-            ));
+            added_label_bytes =
+                added_label_bytes.saturating_add(Self::estimate_label_bytes(&label));
+            let previous =
+                std::mem::replace(&mut self.register_labels[register_base + offset], label);
+            released_label_bytes =
+                released_label_bytes.saturating_add(Self::estimate_label_bytes(&previous));
+            saved_labels.push(previous);
         }
+        self.adjust_register_labels_bytes(released_label_bytes, added_label_bytes);
 
         // A pending publication surviving from BEFORE this delegation is
         // stale provenance: were it left in place, an inner dispatch that
@@ -87491,6 +92103,7 @@ impl InterpreterCore {
             .saturating_sub(current_register_bytes)
             .saturating_sub(saved_carrier_bytes)
             .saturating_add(previous_register_bytes);
+        self.note_registers_written_to(required_len);
         self.mutate_registers(|registers| {
             if registers.len() < required_len {
                 registers.resize(required_len, Value::Undefined);
@@ -87505,11 +92118,23 @@ impl InterpreterCore {
         if self.register_labels.len() < required_len {
             self.register_labels.resize(required_len, Label::Public);
         }
+        let (mut released_label_bytes, mut added_label_bytes) = (0u64, 0u64);
         for (offset, label) in saved_labels.into_iter().enumerate() {
-            self.register_labels[register_base + offset] = label;
+            added_label_bytes =
+                added_label_bytes.saturating_add(Self::estimate_label_bytes(&label));
+            let previous =
+                std::mem::replace(&mut self.register_labels[register_base + offset], label);
+            released_label_bytes =
+                released_label_bytes.saturating_add(Self::estimate_label_bytes(&previous));
+        }
+        if let Some(truncated) = self.register_labels.get(original_label_len..) {
+            released_label_bytes = released_label_bytes.saturating_add(Self::saturating_sum(
+                truncated.iter().map(Self::estimate_label_bytes),
+            ));
         }
         self.register_labels
             .resize(original_label_len, Label::Public);
+        self.adjust_register_labels_bytes(released_label_bytes, added_label_bytes);
         drop(stale_entry_publication);
     }
 
@@ -88429,7 +93054,7 @@ impl InterpreterCore {
                     got: format!("{} argument(s)", args.count),
                 });
             }
-            return Ok(Value::Object(self.ensure_builtin_prototype(name)?));
+            return self.builtin_prototype_value(name);
         }
 
         // bd-9vouw.17: declared factory for a static builtin read as a value.
@@ -88671,7 +93296,7 @@ impl InterpreterCore {
                 } else if let Some(fields) = self
                     .heap
                     .get(target_id.0 as usize)
-                    .and_then(|object| object.class_fields.clone())
+                    .and_then(|object| object.class_fields.as_deref().cloned())
                 {
                     // The list stays reachable from its slot while the
                     // initializers run, then is released.
@@ -89696,18 +94321,13 @@ impl InterpreterCore {
                     }),
                     Value::Object(obj_id) if self.active_proxy_record(obj_id)?.is_some() => {
                         // bd-9trje: read each enumerable Proxy key's value through
-                        // the get trap, in ownKeys-trap order.
-                        let keys = self.proxy_own_enumerable_string_keys(module, obj_id)?;
-                        let mut values = Vec::with_capacity(keys.len());
-                        for key in keys {
-                            values.push(self.proxy_aware_get_runtime_property(
-                                module,
-                                obj_id,
-                                &RuntimePropertyKey::String(key),
-                                Value::Object(obj_id),
-                                0,
-                            )?);
-                        }
+                        // the get trap, in ownKeys-trap order, right after its
+                        // descriptor (bd-9vouw.347).
+                        let values = self
+                            .proxy_enumerable_own_entries(module, obj_id)?
+                            .into_iter()
+                            .map(|(_, value)| value)
+                            .collect::<Vec<_>>();
                         let array_id = self.alloc_array_from_values(&values)?;
                         Ok(Value::Object(array_id))
                     }
@@ -89764,17 +94384,11 @@ impl InterpreterCore {
                     }),
                     Value::Object(obj_id) if self.active_proxy_record(obj_id)?.is_some() => {
                         // bd-9trje: [key, value] pairs for each enumerable Proxy key,
-                        // key order from the ownKeys trap, values from the get trap.
-                        let keys = self.proxy_own_enumerable_string_keys(module, obj_id)?;
-                        let mut entry_values = Vec::with_capacity(keys.len());
-                        for key in keys {
-                            let value = self.proxy_aware_get_runtime_property(
-                                module,
-                                obj_id,
-                                &RuntimePropertyKey::String(key.clone()),
-                                Value::Object(obj_id),
-                                0,
-                            )?;
+                        // key order from the ownKeys trap, each value from the get
+                        // trap right after its descriptor (bd-9vouw.347).
+                        let entries = self.proxy_enumerable_own_entries(module, obj_id)?;
+                        let mut entry_values = Vec::with_capacity(entries.len());
+                        for (key, value) in entries {
                             let entry_array_id =
                                 self.alloc_array_from_values(&[Value::Str(key), value])?;
                             entry_values.push(Value::Object(entry_array_id));
@@ -89988,6 +94602,72 @@ impl InterpreterCore {
                 // Return the target (the function itself for a function).
                 Ok(target_val)
             }
+            "builtin:TemplateObject" => {
+                // ES2020 12.2.9.3 GetTemplateObject (bd-9vouw.343): a tagged
+                // template's `%TemplateObject(site, [cooked...], [raw...])`.
+                // The first evaluation of a call site freezes the raw array,
+                // makes it the cooked array's non-writable, non-enumerable,
+                // non-configurable `raw`, freezes the cooked array and keeps
+                // it; every later evaluation of the site answers that object.
+                // A site is keyed by its module's content hash (else its label)
+                // and its parse ordinal.
+                let site = match self.builtin_arg(args, 0)? {
+                    Some(Value::Str(site)) => site.to_string(),
+                    other => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "template call-site key".to_string(),
+                            got: other
+                                .map_or("undefined", |value| value.type_name())
+                                .to_string(),
+                        });
+                    }
+                };
+                // A dispatch without a module (host-driven, never a lowered
+                // tagged template) has no site to key, so it is not cached.
+                let key = module.map(|module| {
+                    let module_key = module
+                        .header
+                        .source_hash
+                        .as_ref()
+                        .map_or_else(|| module.header.source_label.clone(), |hash| hash.to_hex());
+                    (module_key, site)
+                });
+                if let Some(cached) = key.as_ref().and_then(|key| self.template_objects.get(key)) {
+                    return Ok(Value::Object(*cached));
+                }
+                let (Some(Value::Object(cooked)), Some(Value::Object(raw))) =
+                    (self.builtin_arg(args, 1)?, self.builtin_arg(args, 2)?)
+                else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "template strings arrays".to_string(),
+                        got: "non-array arguments".to_string(),
+                    });
+                };
+                self.mutate_heap(|heap| {
+                    if let Some(object) = heap.get_mut(raw.0 as usize) {
+                        object.is_frozen = true;
+                    }
+                });
+                self.set_object_property(cooked, "raw".to_string(), Value::Object(raw))?;
+                self.set_own_property_attributes(
+                    cooked,
+                    &RuntimePropertyKey::String(JsString::from("raw")),
+                    PropertyAttributes {
+                        writable: false,
+                        enumerable: false,
+                        configurable: false,
+                    },
+                )?;
+                self.mutate_heap(|heap| {
+                    if let Some(object) = heap.get_mut(cooked.0 as usize) {
+                        object.is_frozen = true;
+                    }
+                });
+                if let Some(key) = key {
+                    self.template_objects.insert(key, cooked);
+                }
+                Ok(Value::Object(cooked))
+            }
             "builtin:ObjectFreeze" => {
                 // Object.freeze implementation - makes an object immutable
                 if args.count == 0 {
@@ -90015,7 +94695,7 @@ impl InterpreterCore {
                         if self
                             .heap
                             .get(obj_id.0 as usize)
-                            .and_then(|object| object.typed_array.as_ref())
+                            .and_then(|object| object.typed_array.as_deref())
                             .is_some_and(|view| view.length > 0)
                         {
                             return Err(InterpreterError::TypeError {
@@ -90384,9 +95064,18 @@ impl InterpreterCore {
             }
 
             // Node `querystring` builtins (bd-qmy52): pure-compute parse/
-            // stringify/escape/unescape, dispatched from the lowering's
-            // querystring-module member-call interception. No host effect;
+            // stringify/escape/unescape, shared by first-class querystring
+            // module methods and direct hostcalls. No host effect;
             // semantics pinned against bun 1.3.14.
+            "builtin:QuerystringModule" => {
+                if args.count != 0 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "zero querystring module factory arguments".to_string(),
+                        got: format!("{} argument(s)", args.count),
+                    });
+                }
+                self.querystring_core_module()
+            }
             "builtin:QuerystringParse" => {
                 let input = self
                     .builtin_optional_arg(args, 0)?
@@ -90675,6 +95364,8 @@ impl InterpreterCore {
             // JSON methods
             "builtin:JsonStringify" => self.json_stringify_builtin(module, args),
             "builtin:JsonParse" => self.json_parse_builtin(module, args),
+            "builtin:JsonRawJson" => self.json_raw_json_builtin(module, args),
+            "builtin:JsonIsRawJson" => self.json_is_raw_json_builtin(args),
             "builtin:isNaN" => {
                 self.primitive_conversion_builtin(module, args, PrimitiveConversion::IsNaN)
             }
@@ -90790,6 +95481,7 @@ impl InterpreterCore {
             "builtin:BufferConcat" => self.buffer_concat(args),
             "builtin:BufferCompare" => self.buffer_static_compare(args),
             "builtin:BufferIsBuffer" => self.buffer_is_buffer_builtin(args),
+            "builtin:BufferIsEncoding" => self.buffer_is_encoding_builtin(args),
             "builtin:BufferObjectToString" | "builtin:BufferObjectReadUInt32LE" => {
                 self.buffer_object_hostcall(cap, args)
             }
@@ -92038,18 +96730,9 @@ impl InterpreterCore {
                         .heap
                         .get(obj_id.0 as usize)
                         .is_some_and(|object| object.is_array)
-                    && let Some(value) = descriptor.value.clone()
-                    && !matches!(value, Value::Int(_) | Value::Float(_))
+                    && let Some(value) = descriptor.value.take()
                 {
-                    let as_uint32 =
-                        Self::js_to_uint32(self.array_length_number(module, value.clone())?);
-                    let as_number = self.array_length_number(module, value)?;
-                    if f64::from(as_uint32) != as_number {
-                        return Err(InterpreterError::RangeError {
-                            message: format!("invalid array length {as_number}"),
-                        });
-                    }
-                    descriptor.value = Some(Value::Int(i64::from(as_uint32)));
+                    descriptor.value = Some(self.array_length_definition_value(module, value)?);
                 }
                 // A Proxy defines through its defineProperty trap or its
                 // target (bd-9vouw.147).
@@ -92765,6 +97448,13 @@ impl InterpreterCore {
                             .into_iter()
                             .map(|(key, _)| Value::Str(key))
                             .collect::<Vec<_>>();
+                        // A String wrapper's `length` follows its indices, as
+                        // for a string primitive above (bd-9vouw.356).
+                        let string_wrapper =
+                            matches!(self.primitive_wrapper_value(obj_id), Some(Value::Str(_)));
+                        if string_wrapper {
+                            property_name_values.push(Value::str("length"));
+                        }
                         // bd-9vouw.122: %Array.prototype%'s virtual names first.
                         let virtual_names = self
                             .canonical_prototype_virtual_own_keys(obj_id)
@@ -92779,7 +97469,10 @@ impl InterpreterCore {
                                 .properties
                                 .exact_keys()
                                 .into_iter()
-                                .filter(|key| self.own_runtime_property_visible(obj_id, key))
+                                .filter(|key| {
+                                    self.own_runtime_property_visible(obj_id, key)
+                                        && !(string_wrapper && key.as_str() == Some("length"))
+                                })
                                 .map(Value::Str)
                                 .filter(|key| !virtual_names.contains(key)),
                         );
@@ -93417,6 +98110,15 @@ impl InterpreterCore {
                 {
                     return self.function_prototype_descriptor(module, &obj_val);
                 }
+                // ToObject of a string is a String exotic object, whose
+                // indices and `length` are its own (bd-9vouw.356); no other
+                // primitive's wrapper has own properties.
+                if let Value::Str(text) = &obj_val {
+                    let text = text.clone();
+                    return Ok(self
+                        .string_own_property_descriptor(&text, &prop_name)?
+                        .unwrap_or(Value::Undefined));
+                }
                 let Some(obj_id) = self.own_property_holder(module, &obj_val, true)? else {
                     return Ok(Value::Undefined); // Primitives have no own property descriptors here
                 };
@@ -93475,8 +98177,28 @@ impl InterpreterCore {
             }
 
             "builtin:ObjectGetOwnPropertyDescriptors" => {
-                // Object.getOwnPropertyDescriptors(O), ES2020 19.1.2.9.
-                let obj_val = self.arg_or_undefined(args, 0)?;
+                // Object.getOwnPropertyDescriptors(O), ES2020 19.1.2.9:
+                // ToObject(O) (a primitive's wrapper; undefined and null are
+                // TypeErrors), then each key of [[OwnPropertyKeys]] through
+                // [[GetOwnProperty]], so a Proxy's ownKeys and
+                // getOwnPropertyDescriptor traps run, in key order
+                // (bd-9vouw.347). Only the ordinary heap path ran: a Proxy
+                // gave {} and a primitive was a TypeError.
+                let obj_val = match self.arg_or_undefined(args, 0)? {
+                    nullish @ (Value::Undefined | Value::Null) => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "object for Object.getOwnPropertyDescriptors".to_string(),
+                            got: nullish.type_name().to_string(),
+                        });
+                    }
+                    primitive @ (Value::Bool(_)
+                    | Value::Int(_)
+                    | Value::Float(_)
+                    | Value::Str(_)
+                    | Value::BigInt(_)
+                    | Value::Symbol(_)) => Value::Object(self.alloc_primitive_wrapper(primitive)?),
+                    other => other,
+                };
                 let Some(obj_id) = self.own_property_holder(module, &obj_val, true)? else {
                     return Err(InterpreterError::TypeError {
                         expected: "object for Object.getOwnPropertyDescriptors".to_string(),
@@ -93484,14 +98206,15 @@ impl InterpreterCore {
                     });
                 };
                 self.join_pending_hostcall_stream_label(obj_id)?;
-                let keys = self
-                    .heap
-                    .get(obj_id.0 as usize)
-                    .ok_or(InterpreterError::ObjectNotFound { id: obj_id.0 })?
-                    .own_runtime_property_keys();
+                // Guest traps run while native locals hold the result: no
+                // collection until this returns.
+                self.gc_nested_request = None;
+                let keys = self.proxy_aware_own_property_keys(module, obj_id, 0)?;
                 let result_id = self.alloc_object_with_prototype(None)?;
                 for key in keys {
-                    let descriptor = self.own_property_descriptor_value(obj_id, &key)?;
+                    let key = self.executable_property_key_from_value(&key);
+                    let descriptor =
+                        self.proxy_aware_own_property_descriptor(module, obj_id, &key, 0)?;
                     if !matches!(descriptor, Value::Undefined) {
                         self.set_object_runtime_property(result_id, key, descriptor)?;
                     }
@@ -95440,10 +100163,10 @@ impl InterpreterCore {
                         continue;
                     };
 
-                    let mapped_result = self.with_gc_nested_request(
+                    let (mapped_result, mapped_label) = self.with_gc_nested_request(
                         vec![Value::Object(result_array_id)],
                         |core| {
-                            core.invoke_array_callback(
+                            core.invoke_labeled_array_callback(
                                 module,
                                 &callback,
                                 this_arg.clone(),
@@ -95454,8 +100177,12 @@ impl InterpreterCore {
                         },
                     )?;
 
-                    // Set result in new array
-                    self.set_object_property(result_array_id, index.to_string(), mapped_result)?;
+                    self.create_labeled_data_property_or_throw(
+                        result_array_id,
+                        index.to_string(),
+                        mapped_result,
+                        &mapped_label,
+                    )?;
                 }
 
                 // Set result array length
@@ -95576,40 +100303,47 @@ impl InterpreterCore {
             // builtin:ArrayPrototypeFindIndex - Duplicate removed, consolidated to line 10807
             "builtin:EncodeURIComponent" => {
                 // encodeURIComponent(value): slot-0 convention, shared by direct
-                // calls and the first-class value.
-                let input_str = self.builtin_arg_text(module, args, 0)?;
-                let encoded = percent_encode_utf8(&input_str, should_encode_uri_component);
-
-                Ok(Value::str(encoded))
+                // calls and the first-class value. A lone surrogate is a
+                // URIError (ES2020 18.2.6.1.1 step 3.e).
+                let input = self.builtin_arg_js_text(module, args, 0)?;
+                match input.as_str() {
+                    Some(text) => Ok(Value::str(percent_encode_utf8(
+                        text,
+                        should_encode_uri_component,
+                    ))),
+                    None => Err(self.throw_uri_malformed(None)),
+                }
             }
 
             "builtin:DecodeURIComponent" => {
                 // decodeURIComponent(value): slot-0 convention, shared by direct
                 // calls and the first-class value. A malformed escape is a
                 // URIError (ES2020 18.2.6.1.2), which callers catch.
-                let encoded_str = self.builtin_arg_text(module, args, 0)?;
-                match percent_decode_utf8(&encoded_str, "") {
-                    Some(decoded) => Ok(Value::str(decoded)),
+                let encoded = self.builtin_arg_js_text(module, args, 0)?;
+                match percent_decode_js_string(&encoded, "") {
+                    Some(decoded) => Ok(Value::Str(decoded)),
                     None => Err(self.throw_uri_malformed(None)),
                 }
             }
 
             "builtin:EncodeURI" => {
                 // encodeURI(value): slot-0 convention, shared by direct
-                // calls and the first-class value.
-                let input_str = self.builtin_arg_text(module, args, 0)?;
-                let encoded = percent_encode_utf8(&input_str, should_encode_uri);
-
-                Ok(Value::str(encoded))
+                // calls and the first-class value. A lone surrogate is a
+                // URIError (ES2020 18.2.6.1.1 step 3.e).
+                let input = self.builtin_arg_js_text(module, args, 0)?;
+                match input.as_str() {
+                    Some(text) => Ok(Value::str(percent_encode_utf8(text, should_encode_uri))),
+                    None => Err(self.throw_uri_malformed(None)),
+                }
             }
 
             "builtin:DecodeURI" => {
                 // decodeURI(value): slot-0 convention, shared by direct
                 // calls and the first-class value. A malformed escape is a
                 // URIError (ES2020 18.2.6.1.2), which callers catch.
-                let encoded_str = self.builtin_arg_text(module, args, 0)?;
-                match percent_decode_utf8(&encoded_str, ";/?:@&=+$,#") {
-                    Some(decoded) => Ok(Value::str(decoded)),
+                let encoded = self.builtin_arg_js_text(module, args, 0)?;
+                match percent_decode_js_string(&encoded, ";/?:@&=+$,#") {
+                    Some(decoded) => Ok(Value::Str(decoded)),
                     None => Err(self.throw_uri_malformed(None)),
                 }
             }
@@ -96906,6 +101640,7 @@ impl InterpreterCore {
     /// file if the index is past the current length.
     #[cfg(test)]
     fn set_reg(&mut self, idx: usize, value: Value) {
+        self.note_register_written(idx);
         self.mutate_registers(|r| {
             if idx >= r.len() {
                 r.resize(idx + 1, Value::Undefined);
@@ -96949,6 +101684,7 @@ impl InterpreterCore {
     #[cfg(test)]
     fn set_register(&mut self, reg: u32, value: Value) -> Result<(), InterpreterError> {
         let idx = reg as usize;
+        self.note_register_written(idx);
         self.mutate_registers(|r| {
             if idx >= r.len() {
                 r.resize(idx + 1, Value::Undefined);
@@ -97173,7 +101909,7 @@ impl InterpreterCore {
         if let Some(view) = self
             .heap
             .get(id.0 as usize)
-            .and_then(|object| object.typed_array.as_ref())
+            .and_then(|object| object.typed_array.as_deref())
             .filter(|view| view.is_buffer)
             && let Ok(bytes) = self.typed_array_view_bytes(view)
         {
@@ -97198,7 +101934,7 @@ impl InterpreterCore {
         if let Some(view) = self
             .heap
             .get(id.0 as usize)
-            .and_then(|object| object.typed_array.as_ref())
+            .and_then(|object| object.typed_array.as_deref())
             && let Ok(values) = self.typed_array_values_in_range(view, 0, view.length)
         {
             return values
@@ -97236,39 +101972,72 @@ impl InterpreterCore {
     /// ES2020 23.1.3.13 (join) / 23.1.3.30 (toString) element stringification:
     /// concatenate the elements with `separator`; `undefined`/`null` render as
     /// `""`; nested arrays recurse through their own default (`","`) join.
-    /// `active` carries the ancestor chain of arrays currently being joined so
-    /// a cyclic array renders `""` instead of recursing forever, and depth is
-    /// bounded fail-closed at [`ARRAY_JOIN_MAX_DEPTH`] (bd-sxh8o.3).
+    /// The interpreter's join stack carries the arrays currently being joined
+    /// so a cyclic array renders `""` instead of recursing forever, and depth
+    /// is bounded fail-closed at [`ARRAY_JOIN_MAX_DEPTH`] (bd-sxh8o.3,
+    /// bd-9vouw.481).
     /// Array.prototype.join with observable element conversion (bd-9vouw.37):
     /// an element object that defines a guest toString / valueOf /
     /// @@toPrimitive converts through ToPrimitive(hint "string") (ES2020
-    /// 23.1.3.13 step 7.c ToString). Nested arrays join recursively under the
-    /// same cycle guard and depth cap as [`Self::array_join_string`]; every
-    /// other element keeps its non-observable rendering.
+    /// 23.1.3.13 step 7.c ToString). Nested arrays join recursively on the
+    /// same join stack, under the depth cap [`Self::array_join_string`] also
+    /// applies; every other element keeps its non-observable rendering.
     fn array_join_observable(
         &mut self,
         module: &Ir3Module,
         array_id: ObjectId,
         separator: &str,
-        active: &mut BTreeSet<u32>,
     ) -> Result<String, InterpreterError> {
-        if !active.insert(array_id.0) {
+        // The ancestor chain is the interpreter's join stack, not a set owned
+        // by one call: an element's guest toString may re-enter here, and a
+        // fresh set per entry never saw a cycle (`a.push(a); a.join()`
+        // overflowed the call stack; V8 keeps one join stack per isolate,
+        // bd-9vouw.481). Every array this join puts on the stack comes off
+        // again, however it ends.
+        if !self.array_join_stack.insert(array_id.0) {
             return Ok(String::new());
         }
-        if active.len() > ARRAY_JOIN_MAX_DEPTH {
-            active.remove(&array_id.0);
-            return Ok(String::new());
+        let mut nested = Vec::new();
+        let joined = self.array_join_observable_frames(module, array_id, separator, &mut nested);
+        self.array_join_stack.remove(&array_id.0);
+        for frame in &nested {
+            self.array_join_stack.remove(&frame.array_id.0);
         }
+        joined
+    }
+
+    /// The join of [`Self::array_join_observable`] over an explicit stack of
+    /// nested arrays, so nesting costs no native stack: `nested` holds the
+    /// arrays being joined below `array_id`, each on the join stack.
+    fn array_join_observable_frames(
+        &mut self,
+        module: &Ir3Module,
+        array_id: ObjectId,
+        separator: &str,
+        nested: &mut Vec<ArrayJoinFrame>,
+    ) -> Result<String, InterpreterError> {
         let len = self.array_like_length(array_id)?;
-        let mut parts = Vec::with_capacity(len.min(4096));
-        for index in 0..len {
-            let element = self
-                .array_index_get(Some(module), array_id, index)?
-                .unwrap_or(Value::Undefined);
-            if let Err(error) = self.join_element_stored_label(array_id, index as u64) {
-                active.remove(&array_id.0);
-                return Err(error);
+        let mut root = ArrayJoinFrame::new(array_id, len);
+        loop {
+            let frame = nested.last_mut().unwrap_or(&mut root);
+            if frame.index == frame.len {
+                let Some(done) = nested.pop() else {
+                    return Ok(root.parts.join(separator));
+                };
+                self.array_join_stack.remove(&done.array_id.0);
+                nested
+                    .last_mut()
+                    .unwrap_or(&mut root)
+                    .parts
+                    .push(done.parts.join(","));
+                continue;
             }
+            let (current, index) = (frame.array_id, frame.index);
+            frame.index += 1;
+            let element = self
+                .array_index_get(Some(module), current, index)?
+                .unwrap_or(Value::Undefined);
+            self.join_element_stored_label(current, index as u64)?;
             let rendered = match element {
                 Value::Undefined | Value::Null => String::new(),
                 Value::Object(nested_id)
@@ -97278,12 +102047,28 @@ impl InterpreterCore {
                         .is_some_and(|object| object.is_array)
                         && !self.object_has_user_conversion_hook(nested_id) =>
                 {
-                    let joined = self.array_join_observable(module, nested_id, ",", active);
-                    match joined {
-                        Ok(joined) => joined,
-                        Err(error) => {
-                            active.remove(&array_id.0);
-                            return Err(error);
+                    // An array already being joined renders "" (the cycle
+                    // guard); a nested one is joined as its own frame.
+                    if !self.array_join_stack.insert(nested_id.0) {
+                        String::new()
+                    } else if self.array_join_stack.len() > ARRAY_JOIN_MAX_DEPTH {
+                        self.array_join_stack.remove(&nested_id.0);
+                        // Deeper nesting fails loudly, as Node does once its
+                        // native stack runs out, instead of rendering "".
+                        return Err(InterpreterError::StackOverflow {
+                            depth: self.array_join_stack.len() + 1,
+                            max: ARRAY_JOIN_MAX_DEPTH,
+                        });
+                    } else {
+                        match self.array_like_length(nested_id) {
+                            Ok(nested_len) => {
+                                nested.push(ArrayJoinFrame::new(nested_id, nested_len));
+                                continue;
+                            }
+                            Err(error) => {
+                                self.array_join_stack.remove(&nested_id.0);
+                                return Err(error);
+                            }
                         }
                     }
                 }
@@ -97292,30 +102077,20 @@ impl InterpreterCore {
                         Some(module),
                         Value::Object(object_id),
                         "string",
-                    ) {
+                    )? {
                         // ToString of a Symbol (a Symbol wrapper converts to
                         // its symbol, bd-9vouw.239) is a TypeError.
-                        Ok(Value::Symbol(_)) => {
-                            active.remove(&array_id.0);
-                            return Err(Self::symbol_to_string_error());
-                        }
-                        Ok(primitive) => self.value_to_string(&primitive),
-                        Err(error) => {
-                            active.remove(&array_id.0);
-                            return Err(error);
-                        }
+                        Value::Symbol(_) => return Err(Self::symbol_to_string_error()),
+                        primitive => self.value_to_string(&primitive),
                     }
                 }
                 Value::Symbol(_) => {
-                    active.remove(&array_id.0);
                     return Err(Self::symbol_to_string_error());
                 }
                 other => self.value_to_string(&other),
             };
-            parts.push(rendered);
+            nested.last_mut().unwrap_or(&mut root).parts.push(rendered);
         }
-        active.remove(&array_id.0);
-        Ok(parts.join(separator))
     }
 
     fn array_join_string(
@@ -97327,7 +102102,7 @@ impl InterpreterCore {
         if !active.insert(array_id.0) {
             return Ok(String::new());
         }
-        if active.len() > ARRAY_JOIN_MAX_DEPTH {
+        if active.len() > ARRAY_STRING_FALLBACK_MAX_DEPTH {
             active.remove(&array_id.0);
             return Ok(String::new());
         }
@@ -97609,7 +102384,8 @@ impl InterpreterCore {
             // Preserve the sole execution-seed mutation chokepoint before the
             // direct replacement. Eligibility proves the value/label logical
             // byte total is unchanged and no context label can dominate.
-            self.mutate_registers(|registers| registers[actual_reg] = value);
+            self.note_register_written(actual_reg);
+            self.mutate_registers_by_bytes(0, 0, |registers| registers[actual_reg] = value);
             return Ok(());
         }
         self.write_reg_accounted(actual_reg, value)
@@ -97621,6 +102397,7 @@ impl InterpreterCore {
         actual_reg: usize,
         value: Value,
     ) -> Result<(), InterpreterError> {
+        self.note_register_written(actual_reg);
         // bd-31ijt: the previous implementation called sync_estimated_memory_bytes()
         // after every register write, walking the full heap, registers, scope chain,
         // closures, call stack, iterators, and generators each time — turning every
@@ -97659,7 +102436,7 @@ impl InterpreterCore {
 
         // Refusal above leaves both parallel files and their lengths intact.
         // Resize only after the combined value+effective-label projection fits.
-        self.mutate_registers(|registers| {
+        self.mutate_registers_by_bytes(previous_value_bytes, new_value_bytes, |registers| {
             if actual_reg >= registers.len() {
                 let new_len = actual_reg + 1;
                 let growth_capacity = new_len + (new_len >> 2);
@@ -97681,6 +102458,7 @@ impl InterpreterCore {
                 .clone();
             self.register_labels[actual_reg] = next_label;
         }
+        self.adjust_register_labels_bytes(previous_label_bytes, next_label_bytes);
         self.estimated_memory_bytes = projected;
         Ok(())
     }
@@ -97702,7 +102480,8 @@ impl InterpreterCore {
             // The existing and replacement value/label pairs own zero dynamic
             // bytes. Keep seed materialization and epoch advancement exact,
             // then replace both parallel register files as one logical write.
-            self.mutate_registers(|registers| registers[actual_reg] = value);
+            self.note_register_written(actual_reg);
+            self.mutate_registers_by_bytes(0, 0, |registers| registers[actual_reg] = value);
             self.register_labels[actual_reg] = label;
             return Ok(());
         }
@@ -97716,6 +102495,7 @@ impl InterpreterCore {
         value: Value,
         label: Label,
     ) -> Result<(), InterpreterError> {
+        self.note_register_written(actual_reg);
         let previous_value_bytes = self
             .registers
             .get(actual_reg)
@@ -97736,17 +102516,18 @@ impl InterpreterCore {
         } else {
             Self::estimate_label_bytes(&label)
         };
+        let new_value_bytes = Self::estimate_value_bytes(&value);
         let requested_bytes = self
             .estimated_memory_bytes
             .saturating_sub(previous_value_bytes)
             .saturating_sub(previous_label_bytes)
-            .saturating_add(Self::estimate_value_bytes(&value))
+            .saturating_add(new_value_bytes)
             .saturating_add(next_label_bytes);
         if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
         }
 
-        self.mutate_registers(|registers| {
+        self.mutate_registers_by_bytes(previous_value_bytes, new_value_bytes, |registers| {
             if actual_reg >= registers.len() {
                 registers.resize(actual_reg + 1, Value::Undefined);
             }
@@ -97767,6 +102548,7 @@ impl InterpreterCore {
             label
         };
         self.register_labels[actual_reg] = next_label;
+        self.adjust_register_labels_bytes(previous_label_bytes, next_label_bytes);
         self.estimated_memory_bytes = requested_bytes;
         Ok(())
     }
@@ -97837,11 +102619,33 @@ impl InterpreterCore {
         }
         self.register_base = base;
         self.register_width = width.min(max_registers);
-        self.stacked_register_frame_clear_width_high_water = self
-            .stacked_register_frame_clear_width_high_water
-            .max(width);
-        let clear_width = self.stacked_register_frame_clear_width_high_water;
-        self.clear_current_register_frame_width(clear_width);
+        // The callee's window and whatever an earlier frame or write left
+        // past it (bd-9vouw.499); every register past `register_dirty_end`
+        // is already clear.
+        let window_end = base.saturating_add(self.register_width);
+        let clear_end = window_end.max(self.register_dirty_end);
+        // The test build checks the invariant a window past the clear: a
+        // write that skipped `note_register_written` would show up here.
+        #[cfg(test)]
+        {
+            let check_end = clear_end.saturating_add(max_registers);
+            debug_assert!(
+                self.registers
+                    .get(clear_end..check_end.min(self.registers.len()))
+                    .unwrap_or(&[])
+                    .iter()
+                    .all(|value| matches!(value, Value::Undefined))
+                    && self
+                        .register_labels
+                        .get(clear_end..check_end.min(self.register_labels.len()))
+                        .unwrap_or(&[])
+                        .iter()
+                        .all(|label| matches!(label, Label::Public)),
+                "a register past register_dirty_end holds a value (bd-9vouw.499)"
+            );
+        }
+        self.clear_current_register_frame_width(clear_end - base);
+        self.register_dirty_end = window_end;
         Ok(())
     }
 
@@ -97886,11 +102690,21 @@ impl InterpreterCore {
             .fold(0u64, |total, value| {
                 total.saturating_add(Self::estimate_value_bytes(value))
             });
-        self.mutate_registers(|registers| {
+        self.mutate_registers_by_bytes(released_value_bytes, 0, |registers| {
             if physical_frame_end > registers.len() {
                 registers.resize(physical_frame_end, Value::Undefined);
             }
-            registers[frame_start..frame_end].fill(Value::Undefined);
+            // A clear past one window (registers an earlier, deeper frame
+            // left, bd-9vouw.499) stops at the file's end. Only a register
+            // that holds something is written: `fill` cloned `Undefined` into
+            // and dropped every slot of the window on every call
+            // (bd-9vouw.504).
+            let end = frame_end.min(registers.len());
+            for register in &mut registers[frame_start..end] {
+                if !matches!(register, Value::Undefined) {
+                    *register = Value::Undefined;
+                }
+            }
         });
         let released_label_bytes = Self::saturating_sum(
             self.register_labels
@@ -97903,7 +102717,13 @@ impl InterpreterCore {
             self.register_labels
                 .resize(physical_frame_end, Label::Public);
         }
-        self.register_labels[frame_start..frame_end].fill(Label::Public);
+        let label_end = frame_end.min(self.register_labels.len());
+        for label in &mut self.register_labels[frame_start..label_end] {
+            if !matches!(label, Label::Public) {
+                *label = Label::Public;
+            }
+        }
+        self.adjust_register_labels_bytes(released_label_bytes, 0);
         self.estimated_memory_bytes = self
             .estimated_memory_bytes
             .saturating_sub(released_value_bytes)
@@ -97961,24 +102781,34 @@ impl InterpreterCore {
                     .saturating_mul(2),
             )
         };
-        Self::estimate_string_bytes(text).saturating_add(malformed_utf16_bytes)
+        // retained_bytes does not join a concatenation; estimating
+        // through &str would (bd-9vouw.468).
+        text.retained_bytes(MEMORY_ESTIMATE_STRING_BASE_BYTES)
+            .saturating_add(malformed_utf16_bytes)
     }
 
+    #[inline]
     fn estimate_value_bytes(value: &Value) -> u64 {
         // Keep the overwhelmingly common non-accessor path allocation-free.
         // Only accessor graphs need the iterative worklist/memo machinery
-        // below; constructing it for every integer/object/function property
-        // made exact-carrier preflight allocate before its own peak gate.
+        // (estimate_accessor_value_bytes); constructing it for every
+        // integer/object/function property made exact-carrier preflight
+        // allocate before its own peak gate. The match is inlined into every
+        // register write and frame estimate, which call this several times
+        // per instruction (bd-9vouw.497).
         match value {
-            Value::BigInt(digits) => return Self::estimate_string_bytes(digits),
-            Value::Str(text) => return Self::estimate_js_string_bytes(text),
+            Value::BigInt(digits) => Self::estimate_string_bytes(digits),
+            Value::Str(text) => Self::estimate_js_string_bytes(text),
             Value::BuiltinFunction(builtin) => {
-                return Self::estimate_string_bytes(&builtin.module_specifier);
+                Self::estimate_string_bytes(&builtin.module_specifier)
             }
-            Value::Accessor { .. } => {}
-            _ => return 0,
+            Value::Accessor { .. } => Self::estimate_accessor_value_bytes(value),
+            _ => 0,
         }
+    }
 
+    #[inline(never)]
+    fn estimate_accessor_value_bytes(value: &Value) -> u64 {
         // Accessors form an immutable `Arc<Value>` graph. Walk that graph
         // iteratively so an embedder-supplied chain cannot exhaust the host
         // stack, and memoize each shared node so a compact diamond/DAG cannot
@@ -98339,21 +103169,21 @@ impl InterpreterCore {
             .saturating_add(
                 object
                     .derived_constructor_parent
-                    .as_ref()
+                    .as_deref()
                     .map(Self::estimate_execution_seed_value_bytes)
                     .unwrap_or(0),
             )
             .saturating_add(
                 object
                     .class_fields
-                    .as_ref()
+                    .as_deref()
                     .map(Self::estimate_execution_seed_value_bytes)
                     .unwrap_or(0),
             )
             .saturating_add(
                 object
                     .primitive_value
-                    .as_ref()
+                    .as_deref()
                     .map(Self::estimate_execution_seed_value_bytes)
                     .unwrap_or(0),
             )
@@ -98369,7 +103199,7 @@ impl InterpreterCore {
             .saturating_add(
                 object
                     .derived_constructor_parent_label
-                    .as_ref()
+                    .as_deref()
                     .map(Self::estimate_label_bytes)
                     .unwrap_or(0),
             )
@@ -98490,22 +103320,25 @@ impl InterpreterCore {
 
     fn estimate_symbol_state_bytes(state: &RuntimeSymbolState) -> u64 {
         Self::saturating_sum(state.symbols.values().map(|record| {
-            MEMORY_ESTIMATE_MAP_ENTRY_BYTES
-                .saturating_add(
-                    record
-                        .description
-                        .as_ref()
-                        .map(Self::estimate_js_string_bytes)
-                        .unwrap_or(0),
-                )
-                .saturating_add(
-                    record
-                        .registry_key
-                        .as_ref()
-                        .map(Self::estimate_js_string_bytes)
-                        .unwrap_or(0),
-                )
+            Self::estimate_symbol_record_bytes(
+                record.description.as_ref(),
+                record.registry_key.as_ref(),
+            )
         }))
+    }
+
+    /// One dynamic symbol record's term of [`Self::estimate_symbol_state_bytes`].
+    fn estimate_symbol_record_bytes(
+        description: Option<&JsString>,
+        registry_key: Option<&JsString>,
+    ) -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(description.map(Self::estimate_js_string_bytes).unwrap_or(0))
+            .saturating_add(
+                registry_key
+                    .map(Self::estimate_js_string_bytes)
+                    .unwrap_or(0),
+            )
     }
 
     fn symbol_state_memory_bytes(&self) -> u64 {
@@ -99052,21 +103885,69 @@ impl InterpreterCore {
         }
     }
 
+    /// The combinator map's memory estimate: its running total
+    /// (bd-9vouw.479). Unit tests check it against the full walk.
     fn promise_combinators_memory_bytes(&self) -> u64 {
-        Self::saturating_sum(self.promise_combinators.values().map(|state| {
-            MEMORY_ESTIMATE_MAP_ENTRY_BYTES
-                .saturating_add(Self::estimate_promise_combinator_bytes(state))
-        }))
+        #[cfg(test)]
+        assert_eq!(
+            self.promise_combinators_bytes,
+            self.promise_combinators_memory_bytes_by_walk(),
+            "promise combinator running total drifted from the walk"
+        );
+        self.promise_combinators_bytes
     }
 
+    /// The watcher map's memory estimate: its running total (bd-9vouw.479).
     fn promise_combinator_watchers_memory_bytes(&self) -> u64 {
-        Self::saturating_sum(self.promise_combinator_watchers.values().map(|watchers| {
-            MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(
-                u64::try_from(watchers.len())
-                    .unwrap_or(u64::MAX)
-                    .saturating_mul(std::mem::size_of::<PromiseCombinatorWatcher>() as u64),
-            )
-        }))
+        #[cfg(test)]
+        assert_eq!(
+            self.promise_combinator_watchers_bytes,
+            self.promise_combinator_watchers_memory_bytes_by_walk(),
+            "promise combinator watcher running total drifted from the walk"
+        );
+        self.promise_combinator_watchers_bytes
+    }
+
+    /// One combinator map entry's estimate.
+    fn promise_combinator_entry_bytes(state: &PromiseCombinatorState) -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(Self::estimate_promise_combinator_bytes(state))
+    }
+
+    /// One watcher map entry's estimate, for `count` watchers.
+    fn promise_combinator_watcher_entry_bytes(count: usize) -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(Self::promise_combinator_watchers_bytes_for(count))
+    }
+
+    /// The bytes `count` watchers take inside one watcher map entry.
+    fn promise_combinator_watchers_bytes_for(count: usize) -> u64 {
+        u64::try_from(count)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(std::mem::size_of::<PromiseCombinatorWatcher>() as u64)
+    }
+
+    fn promise_combinators_memory_bytes_by_walk(&self) -> u64 {
+        Self::saturating_sum(
+            self.promise_combinators
+                .values()
+                .map(Self::promise_combinator_entry_bytes),
+        )
+    }
+
+    fn promise_combinator_watchers_memory_bytes_by_walk(&self) -> u64 {
+        Self::saturating_sum(
+            self.promise_combinator_watchers
+                .values()
+                .map(|watchers| Self::promise_combinator_watcher_entry_bytes(watchers.len())),
+        )
+    }
+
+    /// Recount both running totals from the maps, after a bulk change.
+    fn resync_promise_combinator_bytes(&mut self) {
+        self.promise_combinators_bytes = self.promise_combinators_memory_bytes_by_walk();
+        self.promise_combinator_watchers_bytes =
+            self.promise_combinator_watchers_memory_bytes_by_walk();
     }
 
     /// Owned footprint of the `process.nextTick` job queue (bd-8nrud).
@@ -99107,8 +103988,8 @@ impl InterpreterCore {
         self.promise_store
             .estimated_memory_bytes_by_walk()
             .saturating_add(self.event_loop.estimated_memory_bytes_by_walk())
-            .saturating_add(self.promise_combinators_memory_bytes())
-            .saturating_add(self.promise_combinator_watchers_memory_bytes())
+            .saturating_add(self.promise_combinators_memory_bytes_by_walk())
+            .saturating_add(self.promise_combinator_watchers_memory_bytes_by_walk())
             .saturating_add(self.promise_in_flight_task_bytes)
     }
 
@@ -99718,25 +104599,25 @@ impl InterpreterCore {
             .saturating_add(
                 object
                     .derived_constructor_parent
-                    .as_ref()
+                    .as_deref()
                     .map(Self::estimate_value_bytes)
                     .unwrap_or(0),
             )
             .saturating_add(
                 object
                     .class_fields
-                    .as_ref()
+                    .as_deref()
                     .map(Self::estimate_value_bytes)
                     .unwrap_or(0),
             )
             .saturating_add(
                 object
                     .primitive_value
-                    .as_ref()
+                    .as_deref()
                     .map(Self::estimate_value_bytes)
                     .unwrap_or(0),
             )
-            .saturating_add(Self::estimate_brand_bytes(object.brand.as_ref()))
+            .saturating_add(Self::estimate_brand_bytes(object.brand.as_deref()))
             .saturating_add(Self::saturating_sum(
                 object
                     .private_elements
@@ -99746,7 +104627,7 @@ impl InterpreterCore {
             .saturating_add(
                 object
                     .derived_constructor_parent_label
-                    .as_ref()
+                    .as_deref()
                     .map(Self::estimate_label_bytes)
                     .unwrap_or(0),
             )
@@ -99855,6 +104736,42 @@ impl InterpreterCore {
             .unwrap_or(0)
     }
 
+    /// `estimate_value_vec_bytes` of a snapshot's register file plus
+    /// `estimate_label_vec_bytes` of its label file, from the byte totals
+    /// the snapshot carries when it has them (bd-9vouw.500): the transfer
+    /// accounting of every generator step and await summed both files of
+    /// the parked activation and of the caller.
+    fn snapshot_register_files_bytes(execution: &GeneratorExecutionSnapshot) -> u64 {
+        let slots = |len: usize, slot: usize| {
+            u64::try_from(len)
+                .unwrap_or(u64::MAX)
+                .saturating_mul(slot as u64)
+        };
+        let values = match execution.registers_value_bytes {
+            Some(bytes) => {
+                slots(execution.registers.len(), std::mem::size_of::<Value>()).saturating_add(bytes)
+            }
+            None => Self::estimate_value_vec_bytes(&execution.registers),
+        };
+        let labels = match execution.register_labels_bytes {
+            Some(bytes) => slots(
+                execution.register_labels.len(),
+                std::mem::size_of::<Label>(),
+            )
+            .saturating_add(bytes),
+            None => Self::estimate_label_vec_bytes(&execution.register_labels),
+        };
+        debug_assert_eq!(
+            (values, labels),
+            (
+                Self::estimate_value_vec_bytes(&execution.registers),
+                Self::estimate_label_vec_bytes(&execution.register_labels)
+            ),
+            "a parked snapshot's byte totals went stale (bd-9vouw.500)"
+        );
+        values.saturating_add(labels)
+    }
+
     fn estimate_generator_execution_bytes(execution: &GeneratorExecutionSnapshot) -> u64 {
         let pending_abrupt = execution
             .pending_exception
@@ -99887,8 +104804,7 @@ impl InterpreterCore {
                 .map(Self::finally_frame_memory_bytes),
         );
 
-        Self::estimate_value_vec_bytes(&execution.registers)
-            .saturating_add(Self::estimate_label_vec_bytes(&execution.register_labels))
+        Self::snapshot_register_files_bytes(execution)
             .saturating_add(
                 execution
                     .delegation
@@ -100035,27 +104951,52 @@ impl InterpreterCore {
     }
 
     fn registers_memory_bytes(&self) -> u64 {
-        Self::saturating_sum(self.registers.iter().map(Self::estimate_value_bytes))
+        if let Some(bytes) = self.registers_value_bytes.get() {
+            debug_assert_eq!(
+                bytes,
+                Self::saturating_sum(self.registers.iter().map(Self::estimate_value_bytes)),
+                "cached register-file bytes went stale: a register write bypassed mutate_registers"
+            );
+            return bytes;
+        }
+        let bytes = Self::saturating_sum(self.registers.iter().map(Self::estimate_value_bytes));
+        self.registers_value_bytes.set(Some(bytes));
+        bytes
     }
 
     fn register_labels_memory_bytes(&self) -> u64 {
-        Self::saturating_sum(self.register_labels.iter().map(Self::estimate_label_bytes))
+        if let Some(bytes) = self.register_labels_bytes.get() {
+            debug_assert_eq!(
+                bytes,
+                Self::saturating_sum(self.register_labels.iter().map(Self::estimate_label_bytes)),
+                "cached register-label bytes went stale: a label write bypassed the cache"
+            );
+            return bytes;
+        }
+        let bytes =
+            Self::saturating_sum(self.register_labels.iter().map(Self::estimate_label_bytes));
+        self.register_labels_bytes.set(Some(bytes));
+        bytes
     }
 
-    /// The share of [`Self::registers_memory_bytes`] plus
-    /// [`Self::register_labels_memory_bytes`] owned by `range`, which must lie
-    /// within both files.
-    fn register_range_memory_bytes(&self, range: std::ops::Range<usize>) -> u64 {
-        Self::saturating_sum(
-            self.registers[range.clone()]
-                .iter()
-                .map(Self::estimate_value_bytes),
-        )
-        .saturating_add(Self::saturating_sum(
-            self.register_labels[range]
-                .iter()
-                .map(Self::estimate_label_bytes),
-        ))
+    /// Move the cached register-label bytes by a write the caller measured:
+    /// labels of `released` bytes left the file and labels of `added` bytes
+    /// entered it (the label file's [`Self::mutate_registers_by_bytes`]).
+    fn adjust_register_labels_bytes(&self, released: u64, added: u64) {
+        self.register_labels_bytes.set(
+            self.register_labels_bytes
+                .get()
+                .map(|bytes| bytes.saturating_sub(released).saturating_add(added)),
+        );
+    }
+
+    /// Install a whole label file whose [`Self::register_labels_memory_bytes`]
+    /// is `bytes` when the caller knows it (a Public file is 0, a restored
+    /// snapshot carries its own), else `None`.
+    fn install_register_labels(&mut self, labels: Vec<Label>, bytes: Option<u64>) {
+        self.note_registers_written_to(labels.len());
+        self.register_labels = labels;
+        self.register_labels_bytes.set(bytes);
     }
 
     fn active_inline_callback_context_memory_bytes(&self) -> u64 {
@@ -100628,6 +105569,7 @@ impl InterpreterCore {
         u32::try_from(self.heap.live_len()).unwrap_or(u32::MAX)
     }
 
+    #[inline]
     fn memory_request_exceeds_budget(&self, requested_base_bytes: u64, max_bytes: u64) -> bool {
         let requested_bytes = self.total_memory_bytes_from_base(requested_base_bytes);
         // `u64::MAX` is the saturating overflow sentinel for logical memory
@@ -101207,7 +106149,7 @@ impl InterpreterCore {
 
         let mut object = HeapObject::new();
         object.prototype = Some(prototype);
-        object.brand = Some(JsString::from(constructor));
+        object.brand = Some(Box::new(JsString::from(constructor)));
         object
             .properties
             .insert("byteLength".to_string(), Value::Int(byte_length_i64));
@@ -101219,7 +106161,7 @@ impl InterpreterCore {
             return Err(self.memory_budget_error(requested_bytes, requested_heap_objects));
         }
 
-        object.array_buffer = Some(ArrayBufferBacking::new_zeroed(byte_length));
+        object.array_buffer = Some(Box::new(ArrayBufferBacking::new_zeroed(byte_length)));
         self.mutate_heap(|h| h.push(object));
         self.estimated_memory_bytes = requested_bytes;
 
@@ -101359,7 +106301,7 @@ impl InterpreterCore {
 
         let mut object = HeapObject::new();
         object.prototype = prototype;
-        object.brand = Some(JsString::from(kind.type_name()));
+        object.brand = Some(Box::new(JsString::from(kind.type_name())));
         object
             .properties
             .insert("__typedArrayKind".to_string(), Value::str(kind.type_name()));
@@ -101379,7 +106321,7 @@ impl InterpreterCore {
             "BYTES_PER_ELEMENT".to_string(),
             Value::Int(element_size_i64),
         );
-        object.typed_array = Some(TypedArrayView {
+        object.typed_array = Some(Box::new(TypedArrayView {
             kind,
             buffer,
             byte_offset,
@@ -101387,7 +106329,7 @@ impl InterpreterCore {
             length,
             is_buffer,
             bounds: None,
-        });
+        }));
 
         let object_size = Self::estimate_heap_object_bytes(&object);
         let requested_bytes = self.estimated_memory_bytes.saturating_add(object_size);
@@ -101496,14 +106438,14 @@ impl InterpreterCore {
         // caller-declared live temporary. Only after it succeeds are either
         // heap object and the backing Vec published.
         let mut buffer_object = HeapObject::new();
-        buffer_object.brand = Some(JsString::from("ArrayBuffer"));
+        buffer_object.brand = Some(Box::new(JsString::from("ArrayBuffer")));
         buffer_object.prototype = Some(buffer_prototype);
         buffer_object
             .properties
             .insert("byteLength".to_string(), Value::Int(byte_length_i64));
 
         let mut view_object = HeapObject::new();
-        view_object.brand = Some(JsString::from("Uint8Array"));
+        view_object.brand = Some(Box::new(JsString::from("Uint8Array")));
         view_object.prototype = Some(view_prototype);
         view_object
             .properties
@@ -101523,7 +106465,7 @@ impl InterpreterCore {
         view_object
             .properties
             .insert("BYTES_PER_ELEMENT".to_string(), Value::Int(1));
-        view_object.typed_array = Some(TypedArrayView {
+        view_object.typed_array = Some(Box::new(TypedArrayView {
             kind: TypedArrayKind::Uint8,
             buffer: buffer_id,
             byte_offset: 0,
@@ -101531,7 +106473,7 @@ impl InterpreterCore {
             length: byte_length,
             is_buffer: true,
             bounds: None,
-        });
+        }));
 
         let backing_bytes =
             u64::try_from(byte_length).map_err(|_| InterpreterError::RangeError {
@@ -101555,10 +106497,10 @@ impl InterpreterCore {
             return Err(error);
         }
 
-        buffer_object.array_buffer = Some(match contents {
+        buffer_object.array_buffer = Some(Box::new(match contents {
             Some(bytes) => ArrayBufferBacking::with_bytes(bytes.to_vec()),
             None => ArrayBufferBacking::new_zeroed(byte_length),
-        });
+        }));
         self.mutate_heap(|heap| {
             heap.push(buffer_object);
             heap.push(view_object);
@@ -101609,7 +106551,7 @@ impl InterpreterCore {
         let buffer = self
             .heap
             .get(view.0 as usize)
-            .and_then(|object| object.typed_array.as_ref())
+            .and_then(|object| object.typed_array.as_deref())
             .map(|typed_array| typed_array.buffer)
             .ok_or_else(|| InterpreterError::TypeError {
                 expected: "typed-array view".to_string(),
@@ -101631,6 +106573,32 @@ impl InterpreterCore {
     /// the same values as their indexed read, and an array-like has no
     /// iterator, so those return `None` for the indexed path. (A Set gave an
     /// empty typed array and a generator was taken for a length.)
+    /// Whether the first `@@iterator` on `object`'s chain is a data property
+    /// holding undefined or null, which GetMethod (ES2020 7.3.10) answers as
+    /// no method: TypedArray(object) then reads it as an array-like
+    /// (`new Uint8Array({ [Symbol.iterator]: null, length: 2 })`,
+    /// bd-9vouw.378). An accessor or a proxy is not decided here.
+    fn iterator_method_is_nullish_data(&self, object: ObjectId) -> bool {
+        let key = RuntimePropertyKey::Symbol(WellKnownSymbol::Iterator.id());
+        let mut current = Some(object);
+        for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
+            let Some(id) = current else {
+                return false;
+            };
+            let Some(object) = self.heap.get(id.0 as usize) else {
+                return false;
+            };
+            if object.contains_own_runtime_property(&key) {
+                return matches!(
+                    object.own_runtime_property_value(&key),
+                    Some(Value::Undefined | Value::Null)
+                );
+            }
+            current = object.prototype;
+        }
+        false
+    }
+
     fn typed_array_iterable_source(
         &mut self,
         module: Option<&Ir3Module>,
@@ -101652,7 +106620,10 @@ impl InterpreterCore {
                 } else {
                     let map = self.collection_storage_id(*id, "Map", "__entries");
                     let set = self.collection_storage_id(*id, "Set", "__values");
-                    map.is_some() || set.is_some() || self.array_from_has_explicit_iterator(*id)?
+                    map.is_some()
+                        || set.is_some()
+                        || (self.array_from_has_explicit_iterator(*id)?
+                            && !self.iterator_method_is_nullish_data(*id))
                 }
             }
             _ => false,
@@ -101800,7 +106771,7 @@ impl InterpreterCore {
 
         let mut object = HeapObject::new();
         object.prototype = Some(prototype);
-        object.brand = Some(JsString::from("DataView"));
+        object.brand = Some(Box::new(JsString::from("DataView")));
         object
             .properties
             .insert("buffer".to_string(), Value::Object(buffer));
@@ -101810,12 +106781,12 @@ impl InterpreterCore {
         object
             .properties
             .insert("byteOffset".to_string(), Value::Int(byte_offset_i64));
-        object.data_view = Some(DataViewView {
+        object.data_view = Some(Box::new(DataViewView {
             buffer,
             byte_offset,
             byte_length,
             bounds: None,
-        });
+        }));
 
         let object_size = Self::estimate_heap_object_bytes(&object);
         let requested_bytes = self.estimated_memory_bytes.saturating_add(object_size);
@@ -102015,17 +106986,20 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
         object_id: ObjectId,
     ) -> Result<Vec<JsString>, InterpreterError> {
-        self.collect_for_in_keys_continuing(module, object_id, None)
+        self.collect_for_in_keys_continuing(module, object_id, &[], None)
     }
 
-    /// The for-in keys of `object_id` and its prototype chain; when the
-    /// object itself has no prototype link the walk continues at
-    /// `continue_at` (a promise's, generator's or iterator's backing object
-    /// inherits from its intrinsic prototype, bd-9vouw.149).
+    /// The for-in keys of `object_id` and its prototype chain. After
+    /// `object_id` the walk visits `leading` in order (the backing objects
+    /// of a function's parent constructors, bd-9vouw.488), then `continue_at`
+    /// when given (a promise's, generator's or iterator's backing object
+    /// inherits from its intrinsic prototype, bd-9vouw.149; a function from
+    /// its value-level [[Prototype]]), then ordinary prototype links.
     fn collect_for_in_keys_continuing(
         &mut self,
         module: Option<&Ir3Module>,
         object_id: ObjectId,
+        leading: &[ObjectId],
         continue_at: Option<ObjectId>,
     ) -> Result<Vec<JsString>, InterpreterError> {
         let mut keys = Vec::new();
@@ -102033,6 +107007,8 @@ impl InterpreterCore {
         let mut visited = BTreeSet::new();
         let mut current = Some(object_id);
         let mut depth = 0u32;
+        let mut leading_levels = leading.iter().copied();
+        let mut continue_at = continue_at;
 
         while let Some(id) = current {
             if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
@@ -102074,9 +107050,12 @@ impl InterpreterCore {
             // [[Prototype]] (a generator's recorded `prototype`, a Promise
             // subclass's, or the intrinsic), not at the backing object's link
             // (bd-9vouw.120).
-            current = match continue_at {
-                Some(prototype) if id == object_id => Some(prototype),
-                _ => self.proxy_aware_prototype_link(module, id)?,
+            current = match leading_levels.next() {
+                Some(level) => Some(level),
+                None => match continue_at.take() {
+                    Some(prototype) => Some(prototype),
+                    None => self.proxy_aware_prototype_link(module, id)?,
+                },
             };
             depth += 1;
         }
@@ -102187,6 +107166,21 @@ impl InterpreterCore {
         let Some(current) = self.heap.get(heap_index) else {
             return Err(InterpreterError::ObjectNotFound { id: object_id.0 });
         };
+        // A Public label is stored as no entry: with none for the key, there
+        // is nothing to remove and the estimate stays (bd-9vouw.504). Every
+        // store into a Public-labelled property came through the removal
+        // below: two walks of the label map and a heap write of nothing.
+        if matches!(label, Label::Public)
+            && match key {
+                RuntimePropertyKey::String(key) => current.property_labels.get_exact(key).is_none(),
+                RuntimePropertyKey::Symbol(symbol) => current
+                    .property_labels
+                    .baseline_symbol_property(core_symbol_id(*symbol))
+                    .is_none(),
+            }
+        {
+            return Ok(());
+        }
         let previous_bytes =
             Self::estimate_execution_seed_ordered_label_map_bytes(&current.property_labels);
         if matches!(label, Label::Public) {
@@ -102231,26 +107225,18 @@ impl InterpreterCore {
         Ok(())
     }
 
-    /// IFC: join the stored label of element `index` of `object_id` into the
-    /// pending hostcall result label. bd-ojvo1 stores a label per element and
-    /// an index read (GetProperty) joins it, but join, indexOf, includes and
-    /// lastIndexOf read elements natively, so `[secret].join()` and
-    /// `[secret].includes(x)` came out Public. Objects with no stored labels
-    /// pay one emptiness check.
+    /// Join the stored label of an element read by a native array aggregate
+    /// into its pending result label. Resolve the same first owning object
+    /// as the value lookup: a hole may inherit a labeled prototype element,
+    /// while a Public own element must shadow a Secret inherited element.
     fn join_element_stored_label(
         &mut self,
         object_id: ObjectId,
         index: u64,
     ) -> Result<(), InterpreterError> {
-        let label = match self.heap.get(object_id.0 as usize) {
-            Some(object) if !object.property_labels.is_empty() => object
-                .property_labels
-                .get_exact(&JsString::from(index.to_string()))
-                .filter(|label| **label != Label::Public)
-                .cloned(),
-            _ => None,
-        };
-        if let Some(label) = label {
+        let key = RuntimePropertyKey::String(JsString::from(index.to_string()));
+        let label = self.runtime_property_label(object_id, &key);
+        if label != Label::Public {
             let joined = self
                 .pending_hostcall_result_label
                 .as_ref()
@@ -103089,9 +108075,12 @@ impl InterpreterCore {
             // Constructed rather than called (call_standard_constructor
             // throws for them): Reflect.construct(Map, ...), a value
             // `new M()` with M = Map, a derived class's super().
-            Some(name @ ("Map" | "Set" | "WeakMap" | "WeakSet")) => {
-                self.dispatch_builtin_hostcall(&format!("builtin:{name}"), args, Some(module))?
-            }
+            // WeakRef and FinalizationRegistry too (ES2021 26.1.1.1,
+            // 26.2.1.1): a subclass's super() threw "requires 'new'"
+            // (bd-9vouw.357).
+            Some(
+                name @ ("Map" | "Set" | "WeakMap" | "WeakSet" | "WeakRef" | "FinalizationRegistry"),
+            ) => self.dispatch_builtin_hostcall(&format!("builtin:{name}"), args, Some(module))?,
             _ => self.dispatch_builtin_function(module, builtin, args, None, None)?,
         };
         if matches!(standard_name, Some("Number" | "String" | "Boolean"))
@@ -103109,6 +108098,28 @@ impl InterpreterCore {
                     .ok_or_else(|| InterpreterError::TypeError {
                         expected: "promise with property storage".to_string(),
                         got: "promise without property storage".to_string(),
+                    })?;
+                self.mutate_heap(|heap| {
+                    if let Some(object) = heap.get_mut(backing.0 as usize) {
+                        object.prototype = Some(prototype);
+                    }
+                });
+            }
+            return Ok(result);
+        }
+        // bd-9vouw.326: a Function, GeneratorFunction, AsyncFunction or
+        // AsyncGeneratorFunction subclass's instance is the function built
+        // from source text, whose [[Prototype]] is the subclass prototype:
+        // kept on its backing object, as a derived class constructor's parent
+        // is (`function_value_prototype` reads it there).
+        if result.is_callable() {
+            let intrinsic = self.function_value_prototype(Some(module), &result)?;
+            if intrinsic != Value::Object(prototype) {
+                let backing = self
+                    .ensure_function_own_property_object(module, &result)?
+                    .ok_or_else(|| InterpreterError::TypeError {
+                        expected: "function with property storage".to_string(),
+                        got: "function without property storage".to_string(),
                     })?;
                 self.mutate_heap(|heap| {
                     if let Some(object) = heap.get_mut(backing.0 as usize) {
@@ -103449,14 +108460,11 @@ impl InterpreterCore {
         if let Some(context) = &self.active_cjs_context {
             return Ok((Value::Object(context.exports_object), Label::Public));
         }
-        if let Some(object) = self.builtin_prototypes.get(TOP_LEVEL_THIS_KEY) {
-            return Ok((Value::Object(*object), Label::Public));
-        }
-        let object = self.alloc_object_with_prototype(None)?;
-        self.mutate_builtin_prototypes(|prototypes| {
-            prototypes.insert(TOP_LEVEL_THIS_KEY.to_string(), object);
-        });
-        Ok((Value::Object(object), Label::Public))
+        // Top-level code (bd-9vouw.417): a module's `this` is undefined
+        // (ES2020 15.2.1.17.4 GetThisBinding). A script's is the global
+        // object, which the parser's SloppyThis conversion makes of this
+        // undefined for every top-level script read, its arrows' included.
+        Ok((Value::Undefined, Label::Public))
     }
 
     fn clone_closure_lexical_this_binding(
@@ -103558,22 +108566,40 @@ impl InterpreterCore {
         value: &Value,
     ) -> Result<ObjectId, InterpreterError> {
         if let Some((value, _)) = self.constructor_prototype_override(module, value)? {
-            return match value {
-                Value::Object(prototype) => Ok(prototype),
-                _ => self.ensure_builtin_prototype("Object"),
-            };
+            return self.constructed_prototype_link(module, value);
         }
         // A callable proxy newTarget (bd-9vouw.132): GetPrototypeFromConstructor
         // reads its `prototype` through [[Get]], so its get trap or its target
         // answers. `new P(...)` of a trapless proxy over a proxy passes P on.
         if Self::is_callable_proxy(value) {
             let key = RuntimePropertyKey::String(JsString::from("prototype"));
-            return match self.get_v(module, value, &key)? {
-                Value::Object(prototype) => Ok(prototype),
-                _ => self.ensure_builtin_prototype("Object"),
-            };
+            let prototype = self.get_v(module, value, &key)?;
+            return self.constructed_prototype_link(module, prototype);
         }
         self.default_constructor_prototype_for_value(module, value)
+    }
+
+    /// GetPrototypeFromConstructor step 3-4 (ES2020 9.1.14) for a
+    /// `prototype` value read from the constructor: an object is the link,
+    /// and so is a function, through its own-property backing object
+    /// (prototype_link_for_value; `F.prototype = fn; new F()` inherits fn's
+    /// properties and `fn.isPrototypeOf` holds, Test262 S13.2.2_A1);
+    /// anything else falls back to %Object.prototype%.
+    fn constructed_prototype_link(
+        &mut self,
+        module: &Ir3Module,
+        prototype: Value,
+    ) -> Result<ObjectId, InterpreterError> {
+        match prototype {
+            Value::Object(prototype) => Ok(prototype),
+            function if function.is_callable() => {
+                match self.prototype_link_for_value(Some(module), &function)? {
+                    Some(Some(link)) => Ok(link),
+                    _ => self.ensure_builtin_prototype("Object"),
+                }
+            }
+            _ => self.ensure_builtin_prototype("Object"),
+        }
     }
 
     fn default_constructor_prototype_for_value(
@@ -103602,6 +108628,28 @@ impl InterpreterCore {
         }
     }
 
+    /// The [[HomeObject]] of a class constructor whose body reads `super`
+    /// (ES2020 14.6.13 step 12: the constructor's HomeObject is its
+    /// prototype object), so `super.x`, `super.m()` and an arrow's `super`
+    /// look up from that prototype's [[Prototype]], as a method's do.
+    /// Constructor frames had none, so LoadSuper read the frame's
+    /// `super_value`, the parent constructor: `super.m()` called the
+    /// parent's static `m`, and a base class's `super.x` threw
+    /// (bd-9vouw.363). `super(...)` still takes the parent constructor from
+    /// `super_value`.
+    fn constructor_super_home_object(
+        &mut self,
+        module: &Ir3Module,
+        constructor: &Value,
+        function_index: u32,
+    ) -> Result<Option<ObjectId>, InterpreterError> {
+        if !self.function_uses_lexical_super(module, function_index)? {
+            return Ok(None);
+        }
+        let prototype = self.default_constructor_prototype_for_value(module, constructor)?;
+        Ok(Some(prototype))
+    }
+
     fn derived_constructor_metadata(
         &mut self,
         module: &Ir3Module,
@@ -103617,11 +108665,13 @@ impl InterpreterCore {
             object.is_default_derived_constructor,
             object
                 .derived_constructor_parent
-                .clone()
+                .as_deref()
+                .cloned()
                 .unwrap_or(Value::Undefined),
             object
                 .derived_constructor_parent_label
-                .clone()
+                .as_deref()
+                .cloned()
                 .unwrap_or(Label::Public),
         ))
     }
@@ -103640,7 +108690,7 @@ impl InterpreterCore {
         Ok(self
             .heap
             .get(prototype.0 as usize)
-            .and_then(|object| object.class_fields.clone()))
+            .and_then(|object| object.class_fields.as_deref().cloned()))
     }
 
     /// Replace an object's engine-private class field list, charging the
@@ -103658,14 +108708,9 @@ impl InterpreterCore {
         let mut names = match self.own_property_holder(module, function, true)? {
             Some(backing) => {
                 self.join_pending_hostcall_stream_label(backing)?;
-                self.heap
-                    .get(backing.0 as usize)
-                    .ok_or(InterpreterError::ObjectNotFound { id: backing.0 })?
-                    .properties
-                    .exact_keys()
+                self.proxy_aware_own_property_keys(module, backing, 0)?
                     .into_iter()
-                    .filter(|key| self.own_runtime_property_visible(backing, key))
-                    .map(Value::Str)
+                    .filter(|key| matches!(key, Value::Str(_)))
                     .collect::<Vec<_>>()
             }
             None => Vec::new(),
@@ -103722,7 +108767,7 @@ impl InterpreterCore {
             // writable (ES2020 19.1.2.19, 20.1.2.15, ...).
             Value::BuiltinFunction(builtin) => {
                 let value = match Self::materialized_global_prototype_name(builtin) {
-                    Some(name) => Value::Object(self.ensure_builtin_prototype(name)?),
+                    Some(name) => self.builtin_prototype_value(name)?,
                     None if builtin.kind == BuiltinFunctionKind::StandardConstructor => {
                         self.standard_constructor_property(builtin, "prototype")?
                     }
@@ -103761,7 +108806,7 @@ impl InterpreterCore {
     fn primitive_wrapper_value(&self, object_id: ObjectId) -> Option<&Value> {
         self.heap
             .get(object_id.0 as usize)
-            .and_then(|object| object.primitive_value.as_ref())
+            .and_then(|object| object.primitive_value.as_deref())
     }
 
     /// ES2020 7.1.18 ToObject of a primitive: a new wrapper object whose
@@ -103800,13 +108845,13 @@ impl InterpreterCore {
             .heap
             .get(index)
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
-        let previous_bytes = Self::estimate_brand_bytes(previous.brand.as_ref());
+        let previous_bytes = Self::estimate_brand_bytes(previous.brand.as_deref());
         let brand = JsString::from(brand);
         self.apply_memory_component_delta(
             previous_bytes,
             Self::estimate_brand_bytes(Some(&brand)),
         )?;
-        self.mutate_heap(|heap| heap[index].brand = Some(brand));
+        self.mutate_heap(|heap| heap[index].brand = Some(Box::new(brand)));
         Ok(())
     }
 
@@ -103826,7 +108871,7 @@ impl InterpreterCore {
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
         let previous_bytes = Self::estimate_heap_object_bytes(previous);
         let mut projected = previous.clone();
-        projected.primitive_value = Some(value);
+        projected.primitive_value = Some(Box::new(value));
         let projected_bytes = Self::estimate_heap_object_bytes(&projected);
         self.apply_memory_component_delta(previous_bytes, projected_bytes)?;
         self.mutate_heap(|heap| heap[index] = projected);
@@ -103923,6 +108968,32 @@ impl InterpreterCore {
         }
     }
 
+    /// The descriptor of a String's own `key` (ES2020 9.4.3.1
+    /// StringGetOwnProperty, 9.4.3.4 StringCreate): a code-unit index below
+    /// the length, enumerable, and `length`, not enumerable, both read-only
+    /// and non-configurable; `None` for any other key (bd-9vouw.356).
+    fn string_own_property_descriptor(
+        &mut self,
+        text: &JsString,
+        key: &RuntimePropertyKey,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let Some(name) = key.as_str() else {
+            return Ok(None);
+        };
+        let Some(value) = Self::string_own_property_value(text, name) else {
+            return Ok(None);
+        };
+        let fields = PropertyDescriptorFields {
+            value: Some(value),
+            writable: Some(false),
+            get: None,
+            set: None,
+            enumerable: Some(name != "length"),
+            configurable: Some(false),
+        };
+        self.descriptor_object_from_fields(&fields, true).map(Some)
+    }
+
     fn set_class_fields_slot(
         &mut self,
         object_id: ObjectId,
@@ -103935,7 +109006,7 @@ impl InterpreterCore {
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
         let previous_bytes = Self::estimate_heap_object_bytes(previous);
         let mut projected = previous.clone();
-        projected.class_fields = fields;
+        projected.class_fields = fields.map(Box::new);
         let projected_bytes = Self::estimate_heap_object_bytes(&projected);
         self.apply_memory_component_delta(previous_bytes, projected_bytes)?;
         self.mutate_heap(|heap| heap[index] = projected);
@@ -103994,18 +109065,34 @@ impl InterpreterCore {
         self.apply_memory_component_delta(0, metadata_bytes)?;
         self.closure_method_metadata.insert(closure_id, metadata);
 
-        let mut entries = match self
+        let entry = [Value::Int(kind), key, function];
+        // Append to the target's list in place. Copying it into a new array
+        // for every element made defining a class of N elements O(N^2)
+        // (2,000 private fields took 2.9 s to run, bd-9vouw.304).
+        if let Some(Value::Object(list)) = self
             .heap
             .get(target.0 as usize)
-            .and_then(|object| object.class_fields.clone())
+            .and_then(|object| object.class_fields.as_deref().cloned())
         {
-            Some(Value::Object(list)) => self.array_like_values(list)?,
-            _ => Vec::new(),
-        };
-        entries.push(Value::Int(kind));
-        entries.push(key);
-        entries.push(function);
-        let list = self.alloc_array_from_values(&entries)?;
+            let start = self.array_like_length(list)?;
+            for (offset, value) in entry.into_iter().enumerate() {
+                self.set_object_property(list, (start + offset).to_string(), value)?;
+            }
+            let length = start + 3;
+            self.set_object_property(
+                list,
+                "length".to_string(),
+                Value::Int(i64::try_from(length).unwrap_or(i64::MAX)),
+            )?;
+            let cached_length = u32::try_from(length).ok();
+            self.mutate_heap(|heap| {
+                if let Some(object) = heap.get_mut(list.0 as usize) {
+                    object.cached_dense_length = cached_length;
+                }
+            });
+            return Ok(());
+        }
+        let list = self.alloc_array_from_values(&entry)?;
         self.set_class_fields_slot(target, Some(Value::Object(list)))
     }
 
@@ -104442,8 +109529,8 @@ impl InterpreterCore {
             .ok_or(InterpreterError::ObjectNotFound { id: prototype.0 })?;
         let previous_bytes = Self::estimate_heap_object_bytes(previous);
         let mut projected = previous.clone();
-        projected.derived_constructor_parent = Some(parent.clone());
-        projected.derived_constructor_parent_label = Some(parent_label);
+        projected.derived_constructor_parent = Some(Box::new(parent.clone()));
+        projected.derived_constructor_parent_label = Some(Box::new(parent_label));
         projected.is_derived_constructor = true;
         projected.is_default_derived_constructor = default_constructor;
         let projected_bytes = Self::estimate_heap_object_bytes(&projected);
@@ -104511,6 +109598,14 @@ impl InterpreterCore {
         false
     }
 
+    /// The guest-visible value of an intrinsic prototype. The heap keeps
+    /// ObjectId links for property storage, while %Function.prototype%
+    /// exposes the callable value owning that same storage (bd-9vouw.346).
+    fn builtin_prototype_value(&mut self, name: &str) -> Result<Value, InterpreterError> {
+        let prototype = self.ensure_builtin_prototype(name)?;
+        Ok(self.prototype_value_for_link(None, Some(prototype)))
+    }
+
     fn ensure_builtin_prototype(&mut self, name: &str) -> Result<ObjectId, InterpreterError> {
         let canonical =
             canonical_builtin_prototype_name(name).ok_or_else(|| InterpreterError::TypeError {
@@ -104532,17 +109627,21 @@ impl InterpreterCore {
             }
             // ES2020 25.1.2, 22.1.5.2, 25.4.1: %IteratorPrototype% inherits
             // from Object.prototype, the array iterator and generator
-            // prototypes from it. %AsyncGeneratorPrototype%'s
-            // %AsyncIteratorPrototype% is not modeled (Object.prototype).
-            ITERATOR_PROTOTYPE | ASYNC_GENERATOR_PROTOTYPE => {
+            // prototypes from it; ES2018 25.1.3, 25.5.1: so does
+            // %AsyncIteratorPrototype%, %AsyncGeneratorPrototype% from it.
+            ITERATOR_PROTOTYPE | ASYNC_ITERATOR_PROTOTYPE => {
                 Some(self.ensure_builtin_prototype("Object")?)
+            }
+            ASYNC_GENERATOR_PROTOTYPE => {
+                Some(self.ensure_builtin_prototype(ASYNC_ITERATOR_PROTOTYPE)?)
             }
             ARRAY_ITERATOR_PROTOTYPE
             | MAP_ITERATOR_PROTOTYPE
             | SET_ITERATOR_PROTOTYPE
             | GENERATOR_PROTOTYPE
             | iterator_helpers::ITERATOR_HELPER_PROTOTYPE
-            | iterator_helpers::WRAP_FOR_VALID_ITERATOR_PROTOTYPE => {
+            | iterator_helpers::WRAP_FOR_VALID_ITERATOR_PROTOTYPE
+            | iterator_helpers::REGEXP_STRING_ITERATOR_PROTOTYPE => {
                 Some(self.ensure_builtin_prototype(ITERATOR_PROTOTYPE)?)
             }
             "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError" | "EvalError"
@@ -104766,6 +109865,9 @@ impl InterpreterCore {
             self.set_own_property_attributes(prototype, &key, NON_ENUMERABLE_DATA_ATTRIBUTES)?;
         }
         self.install_iteration_prototype_members(canonical, prototype)?;
+        if canonical == "Array" {
+            self.install_array_unscopables(prototype)?;
+        }
         // %GeneratorFunction.prototype%.prototype is %GeneratorPrototype%
         // (ES2020 25.2.3.2), linked when that one is created.
         match canonical {
@@ -104792,6 +109894,29 @@ impl InterpreterCore {
             }
         }
         Ok(prototype)
+    }
+
+    /// Array.prototype[@@unscopables] (ES2020 22.1.3.32 and the names later
+    /// editions add): a null-prototype object whose own `true` data
+    /// properties name the methods a `with` body does not resolve on an
+    /// array, itself non-writable, non-enumerable and configurable.
+    fn install_array_unscopables(&mut self, prototype: ObjectId) -> Result<(), InterpreterError> {
+        let list = self.alloc_object_with_prototype(None)?;
+        self.store_prototype_link(list, None);
+        for name in ARRAY_UNSCOPABLE_NAMES {
+            self.set_object_property(list, name.to_string(), Value::Bool(true))?;
+        }
+        let key = RuntimePropertyKey::Symbol(WellKnownSymbol::Unscopables.id());
+        self.set_object_runtime_property(prototype, key.clone(), Value::Object(list))?;
+        self.set_own_property_attributes(
+            prototype,
+            &key,
+            PropertyAttributes {
+                writable: false,
+                enumerable: false,
+                configurable: true,
+            },
+        )
     }
 
     /// Own members of the iteration intrinsics (ES2020 25.1.2.1, 22.1.5.2,
@@ -104850,8 +109975,19 @@ impl InterpreterCore {
                 }
                 return Ok(());
             }
+            // ES2018 25.1.3.1: its only own member, no @@toStringTag.
+            ASYNC_ITERATOR_PROTOTYPE => {
+                let key = RuntimePropertyKey::Symbol(WellKnownSymbol::AsyncIterator.id());
+                let value = Value::BuiltinFunction(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::AsyncGeneratorIteratorSelf,
+                ));
+                self.set_object_runtime_property(prototype, key.clone(), value)?;
+                self.set_own_property_attributes(prototype, &key, NON_ENUMERABLE_DATA_ATTRIBUTES)?;
+                return Ok(());
+            }
             iterator_helpers::ITERATOR_HELPER_PROTOTYPE
-            | iterator_helpers::WRAP_FOR_VALID_ITERATOR_PROTOTYPE => {
+            | iterator_helpers::WRAP_FOR_VALID_ITERATOR_PROTOTYPE
+            | iterator_helpers::REGEXP_STRING_ITERATOR_PROTOTYPE => {
                 let members = iterator_helpers::ITERATOR_HELPER_METHODS
                     .iter()
                     .filter(|(_, owner, _)| *owner == canonical)
@@ -104874,7 +110010,11 @@ impl InterpreterCore {
                 if canonical == iterator_helpers::WRAP_FOR_VALID_ITERATOR_PROTOTYPE {
                     return Ok(());
                 }
-                ("Iterator Helper", Vec::new(), None)
+                if canonical == iterator_helpers::REGEXP_STRING_ITERATOR_PROTOTYPE {
+                    ("RegExp String Iterator", Vec::new(), None)
+                } else {
+                    ("Iterator Helper", Vec::new(), None)
+                }
             }
             ARRAY_ITERATOR_PROTOTYPE => (
                 "Array Iterator",
@@ -104906,12 +110046,6 @@ impl InterpreterCore {
                     method("next", BuiltinFunctionKind::AsyncGeneratorNext),
                     method("return", BuiltinFunctionKind::AsyncGeneratorReturn),
                     method("throw", BuiltinFunctionKind::AsyncGeneratorThrow),
-                    (
-                        RuntimePropertyKey::Symbol(WellKnownSymbol::AsyncIterator.id()),
-                        Value::BuiltinFunction(BuiltinFunction::new_kind(
-                            BuiltinFunctionKind::AsyncGeneratorIteratorSelf,
-                        )),
-                    ),
                 ],
                 Some("AsyncGeneratorFunction"),
             ),
@@ -105552,7 +110686,7 @@ impl InterpreterCore {
             .heap
             .get(prototype.0 as usize)
             .filter(|object| object.is_derived_constructor)
-            .and_then(|object| object.derived_constructor_parent.clone())?;
+            .and_then(|object| object.derived_constructor_parent.as_deref().cloned())?;
         match parent {
             Value::Str(name) => {
                 let name = name.to_string();
@@ -105648,54 +110782,12 @@ impl InterpreterCore {
         Ok(Value::Undefined)
     }
 
-    /// bd-9vouw.94: the result of Array.from / Array.of called with the
-    /// constructor `constructor`: `new constructor()` holding the elements of
-    /// the plain array the builtin produced (CreateDataPropertyOrThrow per
-    /// index), then `length` set. A construct result that is not an object
-    /// is a TypeError.
-    fn array_static_result_for_constructor(
-        &mut self,
-        module: &Ir3Module,
-        constructor: Value,
-        plain: Value,
-    ) -> Result<Value, InterpreterError> {
-        let Value::Object(plain_id) = plain else {
-            return Ok(plain);
-        };
-        let (instance, label) =
-            self.with_gc_nested_request(vec![Value::Object(plain_id)], |core| {
-                core.invoke_inline_construct_with_labels(
-                    Some(module),
-                    constructor,
-                    Vec::new(),
-                    None,
-                    None,
-                )
-            })?;
-        let label = self
-            .pending_hostcall_result_label
-            .as_ref()
-            .unwrap_or(&Label::Public)
-            .join(&label);
-        self.replace_pending_hostcall_result_label(Some(label))?;
-        let Value::Object(instance_id) = instance else {
-            return Err(InterpreterError::TypeError {
-                expected: "object from the Array.from / Array.of constructor".to_string(),
-                got: instance.type_name().to_string(),
-            });
-        };
-        let length = self.generic_length(Some(module), plain_id)?;
-        for index in 0..usize::try_from(length).unwrap_or(usize::MAX) {
-            if let Some(element) = self.array_index_get(Some(module), plain_id, index)? {
-                self.create_data_property_or_throw(instance_id, index.to_string(), element)?;
-            }
-        }
-        self.set_object_property(
-            instance_id,
-            "length".to_string(),
-            Value::Int(i64::try_from(length).unwrap_or(i64::MAX)),
-        )?;
-        Ok(Value::Object(instance_id))
+    /// Whether `value` is this realm's %Array%: Array.from / Array.of with
+    /// it as `this` build an ordinary Array directly.
+    fn is_intrinsic_array_constructor(value: &Value) -> bool {
+        matches!(value, Value::BuiltinFunction(builtin)
+            if builtin.kind == BuiltinFunctionKind::StandardConstructor
+                && &*builtin.module_specifier == "Array")
     }
 
     /// ES2020 9.4.2.2 ArrayCreate(length). Validate before allocating or
@@ -105794,6 +110886,11 @@ impl InterpreterCore {
     /// %Function.prototype%; `None` for a non-function.
     pub(super) fn function_intrinsic_prototype_name(value: &Value) -> Option<&'static str> {
         match value {
+            Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::FunctionPrototype =>
+            {
+                Some("Object")
+            }
             Value::Function(_) | Value::Closure(_) | Value::BuiltinFunction(_) => Some("Function"),
             Value::GeneratorFunction(_) => Some("GeneratorFunction"),
             Value::AsyncFunction(_) => Some("AsyncFunction"),
@@ -105873,6 +110970,7 @@ impl InterpreterCore {
             builtin.kind,
             BuiltinFunctionKind::DateConstructor
                 | BuiltinFunctionKind::PromiseConstructor
+                | BuiltinFunctionKind::FunctionPrototype
                 | BuiltinFunctionKind::EmitterOnceWrapper
                 // A callable proxy's properties are its proxy record's: every
                 // property operation reaches the traps (bd-9vouw.132).
@@ -106623,6 +111721,29 @@ impl InterpreterCore {
         keys
     }
 
+    /// A materialized standard constructor owns its initial statics and all
+    /// later writes. Deleted members continue on its actual [[Prototype]]
+    /// instead of being synthesized again (bd-9vouw.366). RegExp's legacy
+    /// statics retain their dynamic match-state path; they are not seeded
+    /// on the ordinary property backing.
+    fn authoritative_standard_constructor_backing(
+        &self,
+        module: &Ir3Module,
+        function: &Value,
+        key: &RuntimePropertyKey,
+    ) -> Result<Option<ObjectId>, InterpreterError> {
+        let Value::BuiltinFunction(builtin) = function else {
+            return Ok(None);
+        };
+        if builtin.kind != BuiltinFunctionKind::StandardConstructor
+            || (&*builtin.module_specifier == "RegExp"
+                && key.as_str().is_some_and(is_legacy_regexp_static))
+        {
+            return Ok(None);
+        }
+        self.function_own_property_object(module, function)
+    }
+
     /// bd-9vouw.17: members of a first-class standard constructor value.
     fn standard_constructor_property(
         &mut self,
@@ -106841,13 +111962,16 @@ impl InterpreterCore {
                 expected: "a concrete typed array constructor".to_string(),
                 got: "Abstract class TypedArray not directly constructable".to_string(),
             }),
-            // Creating a generator or async function from source text is
-            // not supported (the Function constructor's contained-codegen
-            // path compiles ordinary functions only): a typed refusal.
-            name if FUNCTION_KIND_INTRINSICS.contains(&name) => Err(InterpreterError::TypeError {
-                expected: "the Function constructor".to_string(),
-                got: format!("{name} from source text is not supported"),
-            }),
+            // A generator or async function from source text, through the
+            // Function constructor's contained-codegen path (bd-9vouw.321).
+            name if FUNCTION_KIND_INTRINSICS.contains(&name) => {
+                let kind = DynamicFunctionKind::for_constructor(name).ok_or_else(|| {
+                    InterpreterError::InternalError {
+                        details: format!("{name} has no dynamic function kind"),
+                    }
+                })?;
+                self.construct_dynamic_function(module, args, kind)
+            }
             "Array" => {
                 let values = self.call_arguments(args)?;
                 if let [length @ (Value::Int(_) | Value::Float(_))] = values.as_slice() {
@@ -106991,7 +112115,17 @@ impl InterpreterCore {
         if let Some(value) = self.object_receiver_static_value_call(module, &tag, args)? {
             return Ok(value);
         }
-        self.dispatch_builtin_hostcall(&tag, args, Some(module))
+        // The value call of a static builtin is its hostcall, which counts
+        // itself as a builtin: counted twice, the dispatch looked nested in
+        // another builtin's frame and could not arm a collection, so since
+        // call-time member resolution (2a427674d) `Reflect.construct(C, a)`
+        // ran a constructor allocating past the object cap without one
+        // (bd-9vouw.77). This frame holds only the tag and the argument
+        // registers across the call.
+        self.gc_exit_builtin();
+        let result = self.dispatch_builtin_hostcall(&tag, args, Some(module));
+        self.gc_enter_builtin();
+        result
     }
 
     /// A value call of `Object.is`, `isExtensible`, `preventExtensions`,
@@ -107172,6 +112306,14 @@ impl InterpreterCore {
             // the empty name (ES2020 19.2.3), bd-9vouw.17.
             "Function" if key == "length" => Some(Value::Int(0)),
             "Function" if key == "name" => Some(Value::str("")),
+            "Function"
+                if matches!(
+                    key,
+                    "hasOwnProperty" | "propertyIsEnumerable" | "isPrototypeOf"
+                ) =>
+            {
+                None
+            }
             "Function" => Self::function_prototype_property(key),
             "Promise" => defined(Self::promise_property_value(key)),
             // DataView: the accessors instances already expose, served from
@@ -107424,6 +112566,79 @@ impl InterpreterCore {
     ) -> bool {
         !(key.as_str() == Some("length")
             && self.builtin_prototypes.get("Array") == Some(&object_id))
+    }
+
+    /// The attributes of the virtual own data property `key` of the
+    /// canonical prototype `object_id`: %Function.prototype%'s `length` and
+    /// `name` are read-only, %Array.prototype%.length is non-configurable,
+    /// and the rest are { writable: true, enumerable: false, configurable:
+    /// true }.
+    fn virtual_property_attributes(
+        &self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> PropertyAttributes {
+        if matches!(key.as_str(), Some("length" | "name"))
+            && self.builtin_prototypes.get("Function") == Some(&object_id)
+        {
+            FUNCTION_NAME_LENGTH_ATTRIBUTES
+        } else if self.virtual_property_is_configurable(object_id, key) {
+            NON_ENUMERABLE_DATA_ATTRIBUTES
+        } else {
+            PropertyAttributes {
+                writable: true,
+                enumerable: false,
+                configurable: false,
+            }
+        }
+    }
+
+    /// bd-9vouw.379: store the virtual own property `key` of the canonical
+    /// prototype `object_id` (a method, `constructor`, @@iterator, or a
+    /// getter-only accessor such as `Map.prototype.size`) as an ordinary own
+    /// property with its attributes, so [[DefineOwnProperty]] validates
+    /// against them and keeps the fields a descriptor leaves out, and a
+    /// [[Set]] replaces only its value. Both took the property as absent:
+    /// `Object.defineProperty(Array.prototype, 'map', { value })` left `map`
+    /// non-writable and non-configurable, and `Array.prototype.forEach =
+    /// Array.prototype.forEach` made it enumerable, so for-in over every
+    /// array listed it. The stored property shadows the virtual one and
+    /// `delete` removes both. Answers whether a property was stored.
+    fn materialize_virtual_own_property(
+        &mut self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> Result<bool, InterpreterError> {
+        if self.heap.get(object_id.0 as usize).is_none_or(|object| {
+            object.contains_own_runtime_property(key)
+                || (object.is_array && key.as_str() == Some("length"))
+        }) || !self
+            .builtin_prototypes
+            .values()
+            .any(|prototype| *prototype == object_id)
+        {
+            return Ok(false);
+        }
+        let (value, attributes) =
+            if let Some(value) = self.canonical_prototype_virtual_property(object_id, key) {
+                (value, self.virtual_property_attributes(object_id, key))
+            } else if let Some(getter) = self.prototype_getter_at(object_id, key) {
+                let setter = key.as_str().and_then(|name| {
+                    self.builtin_prototypes
+                        .iter()
+                        .find(|(_, prototype)| **prototype == object_id)
+                        .and_then(|(owner, _)| Self::prototype_accessor_setter(owner, name))
+                });
+                (
+                    Self::accessor_property_value(Some(Value::BuiltinFunction(getter)), setter),
+                    NON_ENUMERABLE_DATA_ATTRIBUTES,
+                )
+            } else {
+                return Ok(false);
+            };
+        self.set_object_runtime_property(object_id, key.clone(), value)?;
+        self.set_own_property_attributes(object_id, key, attributes)?;
+        Ok(true)
     }
 
     /// `delete` of the virtual own property `key` of a canonical prototype
@@ -108078,6 +113293,9 @@ mod delegated_hostcall_scratch_frame_tests_bd_z1peg3 {
             level: 3,
         };
         core.register_labels[1] = Label::Secret;
+        // A direct write of the label file, as the production writers'
+        // cache maintenance would leave it (bd-9vouw.376).
+        core.register_labels_bytes.set(None);
         core.sync_estimated_memory_bytes().expect("baseline sync");
         let (values_before, labels_before) = register_snapshot(&core, 4);
         let baseline = core.estimated_memory_bytes();
@@ -108291,6 +113509,7 @@ mod delegated_hostcall_scratch_frame_tests_bd_z1peg3 {
         // A hostile/nested path shrank both files below the frame's window.
         core.mutate_registers(|registers| registers.clear());
         core.register_labels.clear();
+        core.register_labels_bytes.set(None);
 
         core.restore_delegated_hostcall_scratch(frame);
         assert_eq!(
@@ -108682,6 +113901,179 @@ mod shared_binding_cell_accounting_tests_bd_sblaq {
         );
     }
 
+    /// bd-9vouw.468: strings built by long concatenations (appends, prepends,
+    /// a read between appends, a node shared by both operands, object and
+    /// array members) are concatenation nodes, charged for their nodes and
+    /// pieces, and the incremental estimate equals the full walk whether or
+    /// not they were joined.
+    #[test]
+    fn concatenation_nodes_keep_memory_accounting_exact_bd_9vouw_468() {
+        let module = lower_script_bd_9vouw_31(
+            "let s = ''; for (let i = 0; i < 3000; i++) s += 'abcdefg';\
+             let t = ''; for (let i = 0; i < 300; i++) t = 'h\\u00e9' + t;\
+             let u = ''; for (let i = 0; i < 300; i++) { u += 'x' + i; u.charCodeAt(0); }\
+             const both = s + s; const o = { s, both }; const kept = [s, t, u];\
+             const sum = s.length + t.length + u.length + both.length + o.s.length\
+               + kept.length + o.both.length;\
+             if (sum !== 127693 || kept[2].slice(-6) !== '98x299') throw new Error('got ' + sum);\
+             s;",
+        );
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]);
+        config.instruction_budget = 10_000_000;
+        let mut core = InterpreterCore::new(config, "bd-9vouw-468");
+        let result = core.execute(&module).expect("concatenation program runs");
+        let Value::Str(text) = &result.value else {
+            panic!(
+                "completion value should be the string, got {:?}",
+                result.value
+            );
+        };
+        assert_eq!(text.len(), 21_000);
+        assert!(text.concat_parts().nodes >= 1, "{:?}", text.concat_parts());
+        // Its nodes are charged beyond what one buffer of its bytes costs.
+        assert!(
+            text.retained_bytes(MEMORY_ESTIMATE_STRING_BASE_BYTES)
+                > MEMORY_ESTIMATE_STRING_BASE_BYTES + 21_000
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    /// bd-9vouw.472: the in-place shift takes a dense array (and the
+    /// program's shift loop leaves the estimate exact); an array with a hole
+    /// or a frozen array is refused, unchanged, for the generic algorithm.
+    #[test]
+    fn dense_shift_moves_values_in_place_with_exact_accounting_bd_9vouw_472() {
+        let module = lower_script_bd_9vouw_31(
+            "const q = []; for (let i = 0; i < 500; i++) q.push('v' + i);\
+             let s = ''; for (let i = 0; i < 250; i++) s += q.shift();\
+             const holed = [1, , 3, 4]; holed.shift();\
+             const frozen = Object.freeze([1, 2]);\
+             if (q.length !== 250 || q[0] !== 'v250' || s.slice(0, 6) !== 'v0v1v2') throw new Error('q');\
+             if (holed.length !== 3 || 0 in holed || holed[2] !== 4) throw new Error('holed');\
+             [q, holed, frozen];",
+        );
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]);
+        config.instruction_budget = 10_000_000;
+        let mut core = InterpreterCore::new(config, "bd-9vouw-472");
+        let result = core.execute(&module).expect("shift program runs");
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        let Value::Object(arrays) = result.value else {
+            panic!("completion value should be an array");
+        };
+        let element = |core: &InterpreterCore, index: &str| match core.heap[arrays.0 as usize]
+            .properties
+            .get(index)
+        {
+            Some(Value::Object(id)) => *id,
+            other => panic!("element {index}: {other:?}"),
+        };
+        let (queue, holed, frozen) = (
+            element(&core, "0"),
+            element(&core, "1"),
+            element(&core, "2"),
+        );
+        assert_eq!(
+            core.shift_dense_array_in_place(queue, 250).expect("shift"),
+            Some(Value::str("v250"))
+        );
+        assert_eq!(core.array_like_length(queue).expect("length"), 249);
+        assert_eq!(
+            core.heap[queue.0 as usize].properties.get("0"),
+            Some(&Value::str("v251"))
+        );
+        assert_eq!(core.heap[queue.0 as usize].properties.get("249"), None);
+        assert_eq!(core.heap[queue.0 as usize].cached_dense_length, Some(249));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        for (refused, len) in [(holed, 3), (frozen, 2)] {
+            let before = core.heap[refused.0 as usize].properties.clone();
+            assert_eq!(
+                core.shift_dense_array_in_place(refused, len)
+                    .expect("shift"),
+                None
+            );
+            assert_eq!(core.heap[refused.0 as usize].properties, before);
+        }
+
+        // The in-place unshift takes the queue too; the frozen array hands
+        // the items back unchanged.
+        let items = vec![Value::str("u0"), Value::Int(1)];
+        assert_eq!(
+            core.unshift_dense_array_in_place(queue, 249, items)
+                .expect("unshift"),
+            Ok(251)
+        );
+        let queue_properties = &core.heap[queue.0 as usize].properties;
+        assert_eq!(queue_properties.get("0"), Some(&Value::str("u0")));
+        assert_eq!(queue_properties.get("1"), Some(&Value::Int(1)));
+        assert_eq!(queue_properties.get("2"), Some(&Value::str("v251")));
+        assert_eq!(queue_properties.get("250"), Some(&Value::str("v499")));
+        assert_eq!(core.array_like_length(queue).expect("length"), 251);
+        assert_eq!(core.heap[queue.0 as usize].cached_dense_length, Some(251));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        let before = core.heap[frozen.0 as usize].properties.clone();
+        assert_eq!(
+            core.unshift_dense_array_in_place(frozen, 2, vec![Value::Int(0)])
+                .expect("unshift"),
+            Err(vec![Value::Int(0)])
+        );
+        assert_eq!(core.heap[frozen.0 as usize].properties, before);
+
+        // The in-place splice: shrink by two, then grow by one.
+        assert_eq!(
+            core.splice_dense_array_in_place(queue, 251, 1, 3, vec![Value::str("s")])
+                .expect("splice"),
+            Ok(vec![Value::Int(1), Value::str("v251"), Value::str("v252")])
+        );
+        assert_eq!(core.array_like_length(queue).expect("length"), 249);
+        let queue_properties = &core.heap[queue.0 as usize].properties;
+        assert_eq!(queue_properties.get("1"), Some(&Value::str("s")));
+        assert_eq!(queue_properties.get("2"), Some(&Value::str("v253")));
+        assert_eq!(queue_properties.get("249"), None);
+        assert_eq!(
+            core.splice_dense_array_in_place(queue, 249, 0, 0, vec![Value::Int(7)])
+                .expect("splice"),
+            Ok(Vec::new())
+        );
+        assert_eq!(core.array_like_length(queue).expect("length"), 250);
+        assert_eq!(
+            core.heap[queue.0 as usize].properties.get("0"),
+            Some(&Value::Int(7))
+        );
+        assert_eq!(core.heap[queue.0 as usize].cached_dense_length, Some(250));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        assert_eq!(
+            core.splice_dense_array_in_place(frozen, 2, 0, 1, Vec::new())
+                .expect("splice"),
+            Err(Vec::new())
+        );
+        assert_eq!(core.heap[frozen.0 as usize].properties, before);
+    }
+
     /// bd-9vouw.31: drive the cold-cell ledger through every transition a real
     /// program produces — per-iteration cells captured by many closures, a
     /// write to a cell that only closures and the live chain share, a generator
@@ -108981,6 +114373,7 @@ pub struct QuickJsLane {
     host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
     timer_effect_authority: Option<Arc<dyn TimerEffectAuthority>>,
     failed_console_output: Option<FailedConsoleSink>,
+    entry_flow_label_ceiling: Option<Label>,
 }
 
 impl Default for QuickJsLane {
@@ -108993,6 +114386,7 @@ impl Default for QuickJsLane {
             host_effect_journal: None,
             timer_effect_authority: None,
             failed_console_output: None,
+            entry_flow_label_ceiling: None,
         }
     }
 }
@@ -109011,6 +114405,7 @@ impl QuickJsLane {
             host_effect_journal: None,
             timer_effect_authority: None,
             failed_console_output: None,
+            entry_flow_label_ceiling: None,
         }
     }
 
@@ -109044,6 +114439,12 @@ impl QuickJsLane {
     /// execution fails, so output printed before a throw is not lost.
     pub fn set_failed_console_output_sink(&mut self, sink: FailedConsoleSink) {
         self.failed_console_output = Some(sink);
+    }
+
+    /// The entry module's flow label ceiling for the cores this lane
+    /// creates (bd-j8f7q).
+    pub fn set_entry_flow_label_ceiling(&mut self, ceiling: Label) {
+        self.entry_flow_label_ceiling = Some(ceiling);
     }
 
     pub fn execute(
@@ -109088,6 +114489,7 @@ impl QuickJsLane {
             self.host_effect_journal.clone(),
             self.timer_effect_authority.clone(),
             self.failed_console_output.clone(),
+            self.entry_flow_label_ceiling.clone(),
             module,
             trace_id,
             hook,
@@ -109126,6 +114528,7 @@ pub struct V8Lane {
     host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
     timer_effect_authority: Option<Arc<dyn TimerEffectAuthority>>,
     failed_console_output: Option<FailedConsoleSink>,
+    entry_flow_label_ceiling: Option<Label>,
 }
 
 impl Default for V8Lane {
@@ -109138,6 +114541,7 @@ impl Default for V8Lane {
             host_effect_journal: None,
             timer_effect_authority: None,
             failed_console_output: None,
+            entry_flow_label_ceiling: None,
         }
     }
 }
@@ -109172,6 +114576,7 @@ fn execute_lane_with_provisioned_stack(
     host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
     timer_effect_authority: Option<Arc<dyn TimerEffectAuthority>>,
     failed_console_output: Option<FailedConsoleSink>,
+    entry_flow_label_ceiling: Option<Label>,
     module: &Ir3Module,
     trace_id: &str,
     hook: Option<Arc<dyn InterpreterHook>>,
@@ -109196,6 +114601,9 @@ fn execute_lane_with_provisioned_stack(
                 }
                 if let Some(authority) = timer_effect_authority {
                     core.set_timer_effect_authority(authority);
+                }
+                if let Some(ceiling) = entry_flow_label_ceiling {
+                    core.set_entry_flow_label_ceiling(ceiling);
                 }
                 let execution = match compact_tier1 {
                     Some(program) => core.execute_ephemeral_with_compact_tier1(module, program),
@@ -109258,6 +114666,7 @@ impl V8Lane {
             host_effect_journal: None,
             timer_effect_authority: None,
             failed_console_output: None,
+            entry_flow_label_ceiling: None,
         }
     }
 
@@ -109293,6 +114702,12 @@ impl V8Lane {
         self.failed_console_output = Some(sink);
     }
 
+    /// The entry module's flow label ceiling for the cores this lane
+    /// creates (bd-j8f7q).
+    pub fn set_entry_flow_label_ceiling(&mut self, ceiling: Label) {
+        self.entry_flow_label_ceiling = Some(ceiling);
+    }
+
     pub fn execute(
         &self,
         module: &Ir3Module,
@@ -109325,6 +114740,7 @@ impl V8Lane {
             self.host_effect_journal.clone(),
             self.timer_effect_authority.clone(),
             self.failed_console_output.clone(),
+            self.entry_flow_label_ceiling.clone(),
             module,
             trace_id,
             hook,
@@ -109804,6 +115220,13 @@ impl LaneRouter {
         self.quickjs
             .set_failed_console_output_sink(Arc::clone(&sink));
         self.v8.set_failed_console_output_sink(sink);
+    }
+
+    /// Give both lanes the entry module's flow label ceiling (bd-j8f7q), so
+    /// an import that cycles back to the entry is checked against it.
+    pub fn set_entry_flow_label_ceiling(&mut self, ceiling: Label) {
+        self.quickjs.set_entry_flow_label_ceiling(ceiling.clone());
+        self.v8.set_entry_flow_label_ceiling(ceiling);
     }
 
     /// Route and execute the module.
@@ -110300,10 +115723,14 @@ fn unescape_code_units(units: &[u16]) -> Vec<u16> {
 // Shared UTF-8 Percent Codec
 // ---------------------------------------------------------------------------
 
-/// Check if a character should be encoded in a URI context.
-/// Based on RFC 3986 unreserved characters: ALPHA / DIGIT / "-" / "." / "_" / "~"
+/// ES2020 18.2.6.1 uriUnescaped: uriAlpha, DecimalDigit and uriMark
+/// (`- _ . ! ~ * ' ( )`), which both encoders leave as written. RFC 3986's
+/// unreserved set lacks `! * ' ( )`, which were escaped.
 fn is_uri_unreserved(c: char) -> bool {
-    matches!(c, 'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~')
+    matches!(
+        c,
+        'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '!' | '~' | '*' | '\'' | '(' | ')'
+    )
 }
 
 /// Check if a character should be encoded in a URI component context (encodeURIComponent).
@@ -110399,6 +115826,44 @@ fn percent_decode_utf8(encoded: &str, reserved: &str) -> Option<String> {
         index += length * 3;
     }
     Some(out)
+}
+
+/// [`percent_decode_utf8`] over a string's exact UTF-16 content: a lone
+/// surrogate, which no escape can contain, is kept as written (ES2020
+/// 18.2.6.1.2: a code unit other than `%` is appended unchanged), and the
+/// well-formed runs between them decode as before. A sequence of escapes
+/// that a surrogate interrupts is malformed either way.
+fn percent_decode_js_string(encoded: &JsString, reserved: &str) -> Option<JsString> {
+    if let Some(text) = encoded.as_str() {
+        return percent_decode_utf8(text, reserved).map(JsString::from);
+    }
+    let units = encoded.code_units_vec();
+    let mut out: Vec<u16> = Vec::with_capacity(units.len());
+    let decode_run = |run: &[u16], out: &mut Vec<u16>| -> Option<()> {
+        let text = String::from_utf16(run).ok()?;
+        out.extend(percent_decode_utf8(&text, reserved)?.encode_utf16());
+        Some(())
+    };
+    let mut run_start = 0;
+    let mut index = 0;
+    while index < units.len() {
+        let unit = units[index];
+        let pair_follows = units
+            .get(index + 1)
+            .is_some_and(|next| (0xDC00..0xE000).contains(next));
+        if (0xD800..0xDC00).contains(&unit) && pair_follows {
+            index += 2;
+            continue;
+        }
+        if (0xD800..0xE000).contains(&unit) {
+            decode_run(&units[run_start..index], &mut out)?;
+            out.push(unit);
+            run_start = index + 1;
+        }
+        index += 1;
+    }
+    decode_run(&units[run_start..], &mut out)?;
+    Some(JsString::from_code_units(&out))
 }
 
 // ---------------------------------------------------------------------------
@@ -111284,11 +116749,12 @@ mod active_builtin_regressions {
         args: &[Value],
     ) -> Result<Value, InterpreterError> {
         let count = u32::try_from(args.len()).expect("test argument count fits u32");
-        core.mutate_registers(|registers| {
-            for (index, value) in args.iter().enumerate() {
-                registers[index] = value.clone();
-            }
-        });
+        // Accounted writes: a seeded string left in a register is live state
+        // the memory walk counts.
+        for (register, value) in (0..count).zip(args) {
+            core.write_reg(register, value.clone())
+                .expect("test argument register");
+        }
         let module = halted_test_module();
         core.dispatch_builtin_function(
             &module,
@@ -111982,7 +117448,7 @@ mod active_builtin_regressions {
         let view = core
             .heap
             .get(view_id.0 as usize)
-            .and_then(|object| object.typed_array.as_ref())
+            .and_then(|object| object.typed_array.as_deref())
             .expect("Uint32Array object must carry view metadata");
         assert_eq!(view.kind, TypedArrayKind::Uint32);
         assert_eq!(view.buffer, buffer_id);
@@ -112080,12 +117546,12 @@ mod active_builtin_regressions {
         let full = core
             .heap
             .get(full_view.0 as usize)
-            .and_then(|object| object.typed_array.as_ref())
+            .and_then(|object| object.typed_array.as_deref())
             .expect("full view metadata should exist");
         let window = core
             .heap
             .get(window_view.0 as usize)
-            .and_then(|object| object.typed_array.as_ref())
+            .and_then(|object| object.typed_array.as_deref())
             .expect("window view metadata should exist");
         assert_eq!(full.buffer, buffer_id);
         assert_eq!(window.buffer, buffer_id);
@@ -112240,7 +117706,7 @@ mod active_builtin_regressions {
         let buffer = core
             .heap
             .get(view_id.0 as usize)
-            .and_then(|object| object.typed_array.as_ref())
+            .and_then(|object| object.typed_array.as_deref())
             .map(|view| view.buffer)
             .expect("view metadata should expose backing buffer");
         assert_eq!(
@@ -112301,7 +117767,7 @@ mod active_builtin_regressions {
         let view = core
             .heap
             .get(view_id.0 as usize)
-            .and_then(|object| object.typed_array.as_ref())
+            .and_then(|object| object.typed_array.as_deref())
             .expect("view metadata must remain attached")
             .clone();
         assert_eq!(
@@ -112469,7 +117935,7 @@ mod active_builtin_regressions {
         let buffer = core
             .heap
             .get(view_id.0 as usize)
-            .and_then(|object| object.typed_array.as_ref())
+            .and_then(|object| object.typed_array.as_deref())
             .map(|view| view.buffer)
             .expect("typed-array metadata should expose backing buffer");
         assert_eq!(
@@ -112804,7 +118270,7 @@ mod active_builtin_regressions {
         let view = core
             .heap
             .get(view_id.0 as usize)
-            .and_then(|object| object.typed_array.as_ref())
+            .and_then(|object| object.typed_array.as_deref())
             .expect("view metadata should exist")
             .clone();
         assert_eq!(
@@ -116378,8 +121844,10 @@ mod async_runtime_tests_current {
                     }),
                     HostIoRequest::NetworkSend { .. }
                     | HostIoRequest::NetworkRecv { .. }
-                    | HostIoRequest::NetworkRequest { .. } => Err(HostIoError::Denied {
-                        reason: "network is outside the entropy fixture".to_string(),
+                    | HostIoRequest::NetworkRequest { .. }
+                    | HostIoRequest::EnvRead { .. } => Err(HostIoError::Denied {
+                        reason: "network and environment are outside the entropy fixture"
+                            .to_string(),
                     }),
                 }
             }
@@ -116593,6 +122061,9 @@ mod async_runtime_tests_current {
                     }
                     HostIoRequest::NetworkRequest { .. } => Ok(HostIoResponse::NetworkRequest {
                         response: Vec::new(),
+                    }),
+                    HostIoRequest::EnvRead { .. } => Err(HostIoError::Denied {
+                        reason: "environment is outside the filesystem fixture".to_string(),
                     }),
                 }
             }
@@ -116913,7 +122384,7 @@ mod async_runtime_tests_current {
             .modules
             .get_mut("cycle.mjs")
             .expect("cycle record")
-            .pending_import_bindings
+            .import_bindings
             .insert(
                 JsString::from("x"),
                 vec![Rc::downgrade(&first.state), Rc::downgrade(&second.state)],
@@ -116949,11 +122420,24 @@ mod async_runtime_tests_current {
             assert_eq!(state.value, Value::Int(42));
             assert!(state.initialized);
         }
-        assert!(
-            core.module_state.modules["cycle.mjs"]
-                .pending_import_bindings
-                .is_empty()
+        // bd-1lsy.4.10.1: the importers stay registered, so a later
+        // publication (a write to the exported binding) reaches them too,
+        // and a cell's label stays the join of everything published to it.
+        assert_eq!(
+            core.module_state.modules["cycle.mjs"].import_bindings[&JsString::from("x")].len(),
+            2
         );
+        core.register_module_export_exact_labeled(
+            JsString::from("x"),
+            Value::Int(43),
+            Label::Public,
+        )
+        .expect("republish to the registered imports");
+        for binding in [&first, &second] {
+            assert_eq!(binding.state().unwrap().value, Value::Int(43));
+        }
+        assert_eq!(first.state().unwrap().label, Label::Secret);
+        assert_eq!(second.state().unwrap().label, Label::Public);
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
@@ -116991,13 +122475,79 @@ mod async_runtime_tests_current {
             .map(|entry| entry.message.as_str())
             .collect();
         assert_eq!(messages, ["42"]);
-        assert!(core.pending_cyclic_import_binding.is_none());
-        assert!(
-            core.module_state
-                .modules
-                .values()
-                .all(|record| record.pending_import_bindings.is_empty())
+        // bd-1lsy.4.10.1: every importer cell still alive holds its export's
+        // value (the cycle's late publications reached them).
+        for record in core.module_state.modules.values() {
+            for (name, watchers) in &record.import_bindings {
+                for cell in watchers.iter().filter_map(Weak::upgrade) {
+                    assert_eq!(Some(&cell.borrow().value), record.exports.get(name));
+                }
+            }
+        }
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
         );
+    }
+
+    /// bd-1lsy.4.10.1: an import follows the exporting module's later writes
+    /// (through the binding, the namespace object and a closure), assigning
+    /// it is a TypeError, and publishing to the importer's cell keeps the
+    /// memory estimate exact without walking every live cell.
+    #[test]
+    fn imports_are_live_and_publication_keeps_memory_accounting_exact_bd_1lsy_4_10_1() {
+        let temp = tempfile::tempdir().expect("live-binding module-graph root");
+        let entry = temp.path().join("entry.mjs");
+        let counter = temp.path().join("counter.mjs");
+        let entry_source = "import { count, inc } from './counter.mjs'; import * as ns from './counter.mjs'; const read = () => count; inc(); inc(); console.log(count, ns.count, read()); try { count = 1; } catch (error) { console.log(error instanceof TypeError, count); }";
+        std::fs::write(&entry, entry_source).expect("write live-binding entry");
+        std::fs::write(
+            &counter,
+            "export let count = 0; export function inc() { count += 'xy'.length; }",
+        )
+        .expect("write live-binding counter");
+
+        let module = lower_module_graph_entry_bd_yn3lv(&entry, entry_source);
+        let mut core = async_module_graph_core_bd_yn3lv(temp.path());
+        let result = core.execute(&module).expect("live imports should run");
+        let messages: Vec<&str> = result
+            .console_output
+            .iter()
+            .map(|entry| entry.message.as_str())
+            .collect();
+        assert_eq!(messages, ["4 4 4", "true 4"]);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    /// bd-9vouw.471: sorting a namespace whose exports were published out of
+    /// order (a hoisted function before an earlier-sorting `let`) keeps its
+    /// @@toStringTag and releases nothing it did not take: the reorder used
+    /// to clear the whole property map, Symbol sidecar included, and left
+    /// the tag's 86 bytes charged.
+    #[test]
+    fn namespace_sort_keeps_to_string_tag_and_exact_accounting_bd_9vouw_471() {
+        let temp = tempfile::tempdir().expect("namespace-sort root");
+        let entry = temp.path().join("entry.mjs");
+        let entry_source = "import * as ns from './m.mjs'; console.log(Object.prototype.toString.call(ns), Object.keys(ns).join(','), ns[Symbol.toStringTag]);";
+        std::fs::write(&entry, entry_source).expect("write namespace-sort entry");
+        std::fs::write(
+            temp.path().join("m.mjs"),
+            "export let count = 0; export function inc() { count++; }",
+        )
+        .expect("write namespace-sort module");
+
+        let module = lower_module_graph_entry_bd_yn3lv(&entry, entry_source);
+        let mut core = async_module_graph_core_bd_yn3lv(temp.path());
+        let result = core.execute(&module).expect("namespace-sort graph runs");
+        let messages: Vec<&str> = result
+            .console_output
+            .iter()
+            .map(|entry| entry.message.as_str())
+            .collect();
+        assert_eq!(messages, ["[object Module] count,inc Module"]);
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
@@ -119415,6 +124965,9 @@ mod async_runtime_tests_current {
                     | HostIoRequest::NetworkRequest { .. } => Err(HostIoError::Denied {
                         reason: "ssrf: endpoint blocked by policy".to_string(),
                     }),
+                    HostIoRequest::EnvRead { .. } => Err(HostIoError::Denied {
+                        reason: "environment is outside the network fixture".to_string(),
+                    }),
                     HostIoRequest::FsRead { .. } => {
                         Ok(HostIoResponse::FsRead { bytes: Vec::new() })
                     }
@@ -119503,6 +125056,9 @@ mod async_runtime_tests_current {
                     | HostIoRequest::NetworkRecv { .. }
                     | HostIoRequest::NetworkRequest { .. } => Err(HostIoError::Io {
                         detail: "TLS send to 127.0.0.1:443: invalid peer certificate".to_string(),
+                    }),
+                    HostIoRequest::EnvRead { .. } => Err(HostIoError::Denied {
+                        reason: "environment is outside the network fixture".to_string(),
                     }),
                     HostIoRequest::FsRead { .. } => {
                         Ok(HostIoResponse::FsRead { bytes: Vec::new() })
@@ -119614,7 +125170,7 @@ mod async_runtime_tests_current {
         let target_id = core.mutate_heap(|h| {
             let id = ObjectId(h.len() as u32);
             let mut obj = HeapObject::new();
-            obj.brand = Some(JsString::from("IncomingMessage"));
+            obj.brand = Some(Box::new(JsString::from("IncomingMessage")));
             h.push(obj);
             id
         });
@@ -121487,6 +127043,65 @@ mod async_runtime_tests_current {
         );
     }
 
+    /// bd-9vouw.501: `f.apply(t, list)` runs `f` as an ordinary frame only
+    /// while nothing in the call carries a label. The isolated call joins a
+    /// labelled list's label into the callee's context, so a Secret list
+    /// still taints the result; an unlabelled one leaves it Public, and the
+    /// staged overflow is gone once the call returns.
+    #[test]
+    fn apply_with_a_labelled_list_keeps_the_isolated_call_bd_9vouw_501() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::CallMethod {
+                    receiver: 0,
+                    callee: 1,
+                    args: RegRange { start: 2, count: 2 },
+                    dst: 4,
+                },
+                Ir3Instruction::Return { value: 4 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 1,
+                frame_size: 1,
+                name: Some("return_argument".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        for (list_label, expected) in [
+            (Label::Public, Label::Public),
+            (Label::Secret, Label::Secret),
+        ] {
+            let mut core = test_interpreter();
+            let list = core
+                .alloc_array_from_values(&[Value::Int(7)])
+                .expect("argument list");
+            core.mutate_registers(|registers| {
+                registers[0] = Value::Function(0);
+                registers[1] = Value::BuiltinFunction(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::FunctionPrototypeApply,
+                ));
+                registers[2] = Value::Undefined;
+                registers[3] = Value::Object(list);
+            });
+            core.set_register_label(3, list_label.clone())
+                .expect("list label");
+            assert_eq!(
+                core.run_loop(&module).expect("apply returns its argument"),
+                Value::Int(7),
+                "{list_label:?} list"
+            );
+            assert_eq!(
+                core.get_register_label(4).expect("apply result label"),
+                &expected,
+                "{list_label:?} list"
+            );
+            assert!(core.argument_overflow.is_empty());
+        }
+    }
+
     #[test]
     fn rest_parameter_joins_trailing_argument_labels_bd_ur3tk_1() {
         let module = test_module_with_functions(
@@ -122705,7 +128320,7 @@ mod async_runtime_tests_current {
         for (key, value) in properties {
             projected_object.properties.insert(key.to_string(), value);
         }
-        projected_object.brand = Some(JsString::from(READABLE_BRAND));
+        projected_object.brand = Some(Box::new(JsString::from(READABLE_BRAND)));
         let object_bytes = InterpreterCore::estimate_heap_object_bytes(&projected_object);
         core.config.max_total_memory_bytes = baseline_bytes
             .saturating_add(state_bytes)
@@ -123963,7 +129578,8 @@ mod async_runtime_tests_current {
                     exports: BTreeMap::new(),
                     star_exports: BTreeMap::new(),
                     flow_label_ceiling: None,
-                    pending_import_bindings: BTreeMap::new(),
+                    import_bindings: BTreeMap::new(),
+                    star_reexporters: BTreeSet::new(),
                     cjs_module_object: None,
                     compiled_module: None,
                     evaluation_promise: None,
@@ -124435,6 +130051,151 @@ mod async_runtime_tests_current {
             reaction_exact.estimated_memory_bytes(),
             reaction_exact.recompute_estimated_memory_bytes()
         );
+    }
+
+    /// The register file's cached byte sum follows every write, and an
+    /// isolated callback's snapshot takes the caller's files whole: the
+    /// callback starts on a fresh file, the caller gets its own back, and the
+    /// estimate matches a full walk throughout.
+    #[test]
+    fn register_bytes_cache_follows_writes_and_isolated_callbacks() {
+        let walk = |core: &InterpreterCore| {
+            InterpreterCore::saturating_sum(
+                core.registers
+                    .iter()
+                    .map(InterpreterCore::estimate_value_bytes),
+            )
+        };
+        let payload = Value::BigInt(Arc::from("cached-register-bytes".repeat(16)));
+        let payload_bytes = InterpreterCore::estimate_value_bytes(&payload);
+        assert!(payload_bytes > 0);
+        let caller_label = Label::Custom {
+            name: "caller-register-label".to_string(),
+            level: 2,
+        };
+
+        let mut core = test_interpreter();
+        assert_eq!(core.registers_memory_bytes(), 0);
+        // The sum above is now cached; a write that did not clear it would
+        // leave it at 0.
+        core.write_reg(2, payload.clone()).expect("caller register");
+        assert_eq!(core.registers_memory_bytes(), payload_bytes);
+        assert_eq!(core.registers_memory_bytes(), walk(&core));
+        core.set_register_label(2, caller_label.clone())
+            .expect("caller label");
+        core.sync_estimated_memory_bytes()
+            .expect("caller state baseline");
+        let baseline = core.estimated_memory_bytes();
+        let caller_label_count = core.register_labels.len();
+
+        let previous_register_bytes = core.registers_memory_bytes();
+        let previous_label_bytes = core.register_context_labels_memory_bytes();
+        let snapshot = core
+            .isolate_module_execution()
+            .expect("isolated snapshot fits");
+        assert_eq!(snapshot.register_bytes, payload_bytes);
+        assert_eq!(snapshot.registers[2], payload);
+        assert_eq!(snapshot.register_labels[2], caller_label);
+        assert_eq!(core.registers.len(), core.config.max_registers as usize);
+        assert!(
+            core.registers
+                .iter()
+                .all(|value| *value == Value::Undefined)
+        );
+        assert_eq!(core.register_labels.len(), caller_label_count);
+        assert!(
+            core.register_labels
+                .iter()
+                .all(|label| *label == Label::Public)
+        );
+        assert_eq!(core.registers_memory_bytes(), 0);
+        assert_eq!(walk(&core), 0);
+
+        let previous_scope_bytes = core.scope_chain_memory_bytes();
+        let previous_call_stack_bytes = core.call_stack_memory_bytes();
+        core.apply_register_context_scope_call_stack_memory_delta(
+            previous_register_bytes,
+            previous_label_bytes,
+            previous_scope_bytes,
+            previous_call_stack_bytes,
+        )
+        .expect("callback setup fits");
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.write_reg(3, payload.clone())
+            .expect("callback register");
+        assert_eq!(core.registers_memory_bytes(), payload_bytes);
+        assert_eq!(core.registers_memory_bytes(), walk(&core));
+        core.restore_module_execution(snapshot, true);
+        assert_eq!(core.read_reg(2).expect("caller register"), payload);
+        assert_eq!(core.read_reg(3).expect("caller register"), Value::Undefined);
+        assert_eq!(
+            core.get_register_label(2).expect("caller label"),
+            &caller_label
+        );
+        assert_eq!(core.registers_memory_bytes(), payload_bytes);
+        assert_eq!(core.registers_memory_bytes(), walk(&core));
+        assert_eq!(core.module_snapshot_in_flight_bytes, 0);
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    /// The hot register writes keep the cached byte sum rather than dropping
+    /// it: an accounted write moves it by the value's delta, a static write
+    /// leaves it, and clearing a frame subtracts what the frame held. Each
+    /// step compares the cache with a full walk; dropping it instead would
+    /// leave `None` behind.
+    #[test]
+    fn register_bytes_cache_survives_hot_register_writes() {
+        let walk = |core: &InterpreterCore| {
+            InterpreterCore::saturating_sum(
+                core.registers
+                    .iter()
+                    .map(InterpreterCore::estimate_value_bytes),
+            )
+        };
+        let cached = |core: &InterpreterCore| {
+            let bytes = core.registers_value_bytes.get();
+            assert_eq!(bytes, Some(walk(core)));
+            bytes.expect("cache kept")
+        };
+        let long = Value::str("register-cache-delta".repeat(8));
+        let short = Value::str("short");
+        let mut core = test_interpreter();
+        assert_eq!(core.registers_memory_bytes(), 0);
+
+        core.write_reg(1, long.clone()).expect("accounted write");
+        let after_long = cached(&core);
+        assert_eq!(after_long, InterpreterCore::estimate_value_bytes(&long));
+        core.write_reg(1, short.clone())
+            .expect("accounted overwrite");
+        assert_eq!(cached(&core), InterpreterCore::estimate_value_bytes(&short));
+        core.write_reg(2, Value::Int(7)).expect("static write");
+        core.write_reg(2, Value::Bool(true))
+            .expect("static overwrite");
+        assert_eq!(cached(&core), InterpreterCore::estimate_value_bytes(&short));
+        core.write_reg_with_label(3, long.clone(), Label::Public)
+            .expect("labelled accounted write");
+        core.write_reg_with_label(4, Value::Null, Label::Public)
+            .expect("labelled static write");
+        let both = cached(&core);
+        assert_eq!(
+            both,
+            InterpreterCore::estimate_value_bytes(&short)
+                + InterpreterCore::estimate_value_bytes(&long)
+        );
+
+        // Registers 0-2: the short string goes, the long one in 3 stays.
+        core.clear_current_register_frame_width(3);
+        assert_eq!(cached(&core), InterpreterCore::estimate_value_bytes(&long));
+        core.clear_current_register_frame_width(5);
+        assert_eq!(cached(&core), 0);
     }
 
     #[test]
@@ -133918,7 +139679,7 @@ mod async_runtime_tests_current {
         let obj_id = core.mutate_heap(|h| {
             let id = ObjectId(h.len() as u32);
             let mut obj = HeapObject::new();
-            obj.brand = Some(JsString::from("IncomingMessage"));
+            obj.brand = Some(Box::new(JsString::from("IncomingMessage")));
             obj.properties
                 .insert("body".to_string(), Value::str("chunk-bytes"));
             h.push(obj);
@@ -134938,8 +140699,69 @@ mod async_runtime_tests_current {
     }
 
     #[test]
+    fn materialized_constructor_reads_preserve_actual_prototype_labels() {
+        for key in [
+            RuntimePropertyKey::String(JsString::from("inherited")),
+            RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id()),
+        ] {
+            for (inherited_label, shadowed_label) in [
+                (Label::Secret, Label::Public),
+                (Label::Public, Label::Secret),
+            ] {
+                let module = test_module_with_functions(
+                    vec![
+                        Ir3Instruction::GetProperty {
+                            obj: 0,
+                            key: 1,
+                            dst: 2,
+                        },
+                        Ir3Instruction::Halt,
+                    ],
+                    vec![],
+                );
+                let mut core = test_interpreter();
+                let constructor =
+                    Value::BuiltinFunction(BuiltinFunction::standard_constructor("Object"));
+                core.ensure_function_own_property_object(&module, &constructor)
+                    .expect("constructor storage should allocate")
+                    .expect("standard constructor has property storage");
+                let function_prototype = core
+                    .ensure_builtin_prototype("Function")
+                    .expect("Function.prototype should allocate");
+                let object_prototype = core
+                    .ensure_builtin_prototype("Object")
+                    .expect("Object.prototype should allocate");
+                core.set_object_runtime_property(object_prototype, key.clone(), Value::Int(7))
+                    .expect("shadowed property should be writable");
+                core.set_own_runtime_property_label(object_prototype, &key, &shadowed_label)
+                    .expect("shadowed property label should be settable");
+                core.set_object_runtime_property(function_prototype, key.clone(), Value::Int(41))
+                    .expect("inherited property should be writable");
+                core.set_own_runtime_property_label(function_prototype, &key, &inherited_label)
+                    .expect("inherited property label should be settable");
+                core.write_reg_with_label(0, constructor, Label::Public)
+                    .expect("constructor register should fit");
+                core.write_reg_with_label(1, key.value(), Label::Public)
+                    .expect("key register should fit");
+                core.write_reg_with_label(2, Value::Undefined, Label::Public)
+                    .expect("destination register should fit");
+
+                core.execute(&module)
+                    .expect("inherited constructor property read should execute");
+
+                assert_eq!(core.read_reg(2).unwrap(), Value::Int(41));
+                assert_eq!(
+                    core.get_register_label(2).unwrap(),
+                    &inherited_label,
+                    "the resolved Function.prototype property supplies the label, including a Public shadow"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn ordinary_own_property_fast_path_matches_forced_fallback_trace_and_ifc() {
-        let run = |force_fallback: bool| {
+        let run = |force_fallback: bool, with_prototype: bool| {
             let module = test_module_with_functions(
                 vec![
                     Ir3Instruction::GetProperty {
@@ -134958,12 +140780,13 @@ mod async_runtime_tests_current {
             let empty_prototype = core
                 .alloc_object_with_prototype(None)
                 .expect("empty prototype should allocate");
-            if force_fallback {
+            if with_prototype {
                 let index = object.0 as usize;
                 core.mutate_heap(|heap| {
                     heap[index].prototype = Some(empty_prototype);
                 });
             }
+            FORCE_GENERIC_OWN_PROPERTY_READS.with(|force| force.set(force_fallback));
             core.set_own_property_label(object, "data", &Label::Secret)
                 .expect("property label should be settable");
             core.mutate_registers(|registers| {
@@ -134984,11 +140807,12 @@ mod async_runtime_tests_current {
                     &RuntimePropertyKey::String(JsString::from("data")),
                 ),
                 !force_fallback,
-                "the empty prototype forces the generic path without changing the depth-0 hit"
+                "the test switch forces the generic path; a prototype does not (bd-9vouw.504)"
             );
             let result = core
                 .execute(&module)
                 .expect("ordinary own-property read should execute");
+            FORCE_GENERIC_OWN_PROPERTY_READS.with(|force| force.set(false));
             assert_eq!(
                 core.nondeterminism_trace_ref(),
                 &result.nondeterminism_trace,
@@ -135005,14 +140829,17 @@ mod async_runtime_tests_current {
             )
         };
 
-        let fast = run(false);
-        let fallback = run(true);
-        assert_eq!(fast.0, Value::Int(41));
-        assert_eq!(fast.1, Label::Secret);
-        assert_eq!(
-            fast, fallback,
-            "fast and generic paths must preserve the read outcome, IFC label, trace, and instruction count"
-        );
+        for with_prototype in [false, true] {
+            let fast = run(false, with_prototype);
+            let fallback = run(true, with_prototype);
+            assert_eq!(fast.0, Value::Int(41));
+            assert_eq!(fast.1, Label::Secret);
+            assert_eq!(
+                fast, fallback,
+                "fast and generic paths must preserve the read outcome, IFC label, trace, and \
+                 instruction count (prototype: {with_prototype})"
+            );
+        }
     }
 
     #[test]
@@ -135051,6 +140878,525 @@ mod async_runtime_tests_current {
 
         assert_eq!(core.read_reg(3).unwrap(), Value::str("classified"));
         assert_eq!(core.get_register_label(3).unwrap(), &Label::Secret);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+
+    #[test]
+    fn array_mapping_preserves_callback_element_and_aggregate_labels_bd_9vouw_110() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Halt,
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 1,
+                arity: 3,
+                frame_size: 3,
+                name: Some("identity".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        for kind in [
+            BuiltinFunctionKind::ArrayMap,
+            BuiltinFunctionKind::ArrayFlatMap,
+        ] {
+            for first_label in [Label::Public, Label::Secret] {
+                let mut core = test_interpreter();
+                let array = core
+                    .alloc_array_from_values(&[Value::str("first"), Value::str("last")])
+                    .expect("source array");
+                core.set_own_property_label(array, "0", &first_label)
+                    .expect("source label");
+                core.write_reg(0, Value::Function(0))
+                    .expect("callback register");
+                let mapped = core
+                    .dispatch_builtin_function(
+                        &module,
+                        &BuiltinFunction::new_kind(kind),
+                        RegRange { start: 0, count: 1 },
+                        Some(Value::Object(array)),
+                        None,
+                    )
+                    .expect("mapping should execute");
+                let Value::Object(mapped) = mapped else {
+                    panic!("{kind:?} must return an array");
+                };
+                assert_eq!(
+                    core.heap[mapped.0 as usize].properties.get("0"),
+                    Some(&Value::str("first")),
+                    "{kind:?}"
+                );
+                assert_eq!(
+                    core.own_property_label(mapped, "0"),
+                    first_label,
+                    "{kind:?}: callback result label must survive storage"
+                );
+                let later_label = if kind == BuiltinFunctionKind::ArrayFlatMap {
+                    first_label.clone()
+                } else {
+                    Label::Public
+                };
+                assert_eq!(
+                    core.own_property_label(mapped, "1"),
+                    later_label,
+                    "{kind:?}: flatMap positions retain earlier callback provenance"
+                );
+                assert_eq!(
+                    core.take_pending_hostcall_result_label()
+                        .unwrap_or(Label::Public),
+                    first_label,
+                    "{kind:?}: the later Public callback must not erase earlier provenance"
+                );
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes(),
+                    "{kind:?}: label storage must remain accounted"
+                );
+            }
+        }
+    }
+
+    fn array_shape_species_module() -> Ir3Module {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Halt,
+                Ir3Instruction::Return { value: 0 },
+                Ir3Instruction::LoadScoped {
+                    dst: 1,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::Return { value: 1 },
+                Ir3Instruction::LoadBool {
+                    dst: 3,
+                    value: false,
+                },
+                Ir3Instruction::Return { value: 3 },
+            ],
+            vec![
+                Ir3FunctionDesc {
+                    entry: 1,
+                    arity: 3,
+                    frame_size: 3,
+                    name: Some("identity".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 2,
+                    arity: 1,
+                    frame_size: 2,
+                    name: Some("existing_species_result".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 4,
+                    arity: 3,
+                    frame_size: 4,
+                    name: Some("reject_element".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+            ],
+        );
+        module.constant_pool.push("array_shape_result".into());
+        module
+    }
+
+    fn install_array_shape_species(core: &mut InterpreterCore, source: ObjectId) -> ObjectId {
+        let result = core.alloc_array_from_values(&[]).expect("species array");
+        core.inject_runtime_global_binding("array_shape_result", Value::Object(result))
+            .expect("Public species result binding");
+        core.write_reg_with_label(8, Value::Object(result), Label::Public)
+            .expect("pre-existing Public alias");
+        let constructor = core
+            .alloc_object_with_prototype(None)
+            .expect("species constructor holder");
+        core.set_object_runtime_property(
+            constructor,
+            RuntimePropertyKey::Symbol(WellKnownSymbol::Species.id()),
+            Value::Function(1),
+        )
+        .expect("species constructor");
+        core.set_object_property(source, "constructor".to_string(), Value::Object(constructor))
+            .expect("source constructor");
+        result
+    }
+
+    fn assert_array_shape_alias_length(core: &mut InterpreterCore, length: i64, label: &Label) {
+        // Read through the alias that predates the call after dropping its
+        // aggregate completion label. Only the stored length provenance remains.
+        core.clear_pending_hostcall_result_label();
+        assert_eq!(core.get_register_label(8).unwrap(), &Label::Public);
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 9,
+                    pool_index: 0,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 8,
+                    key: 9,
+                    dst: 10,
+                },
+                Ir3Instruction::Return { value: 10 },
+            ],
+            vec![],
+        );
+        module.constant_pool.push("length".into());
+        core.ip = 0;
+        let observed = core.run_loop_labeled(&module).expect("alias length read");
+        assert_eq!(observed.value, Value::Int(length));
+        assert_eq!(&observed.label, label);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn filter_prefix_and_empty_length_survive_public_species_alias_bd_9vouw_110() {
+        let module = array_shape_species_module();
+        for first_label in [Label::Public, Label::Secret] {
+            // Identity rejects the first element and keeps the later Public
+            // one. The constant callback rejects everything, but its literal
+            // return still inherits the first element's execution context.
+            for callback in [0, 2] {
+                let mut core = test_interpreter();
+                let source = core
+                    .alloc_array_from_values(&[Value::Bool(false), Value::Bool(true)])
+                    .expect("source array");
+                core.set_own_property_label(source, "0", &first_label)
+                    .expect("first source label");
+                let result = install_array_shape_species(&mut core, source);
+                core.write_reg_with_label(0, Value::Function(callback), Label::Public)
+                    .expect("callback register");
+                let returned = core
+                    .dispatch_builtin_function(
+                        &module,
+                        &BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayFilter),
+                        RegRange { start: 0, count: 1 },
+                        Some(Value::Object(source)),
+                        None,
+                    )
+                    .expect("filter should execute");
+                assert_eq!(returned, Value::Object(result));
+                let (_, later_label) = core
+                    .invoke_labeled_array_callback(
+                        Some(&module),
+                        &Value::Function(callback),
+                        Value::Undefined,
+                        Value::Bool(true),
+                        1,
+                        source,
+                    )
+                    .expect("later callback is Public");
+                assert_eq!(later_label, Label::Public);
+                assert_eq!(
+                    core.take_pending_hostcall_result_label()
+                        .unwrap_or(Label::Public),
+                    first_label
+                );
+                let length = if callback == 0 { 1 } else { 0 };
+                if callback == 0 {
+                    assert_eq!(
+                        core.heap[result.0 as usize].properties.get("0"),
+                        Some(&Value::Bool(true))
+                    );
+                    assert_eq!(core.own_property_label(result, "0"), first_label);
+                }
+                assert_array_shape_alias_length(&mut core, length, &first_label);
+            }
+        }
+    }
+
+    #[test]
+    fn flat_map_empty_source_length_and_mutation_taint_later_species_positions_bd_9vouw_110() {
+        let module = array_shape_species_module();
+        for source_label in [Label::Public, Label::Secret] {
+            for use_mutation_label in [false, true] {
+                for append_public in [false, true] {
+                    let mut core = test_interpreter();
+                    let empty = core.alloc_array_from_values(&[]).expect("empty mapped array");
+                    if use_mutation_label {
+                        core.join_object_mutation_label(empty, &source_label)
+                            .expect("empty source mutation label");
+                    } else {
+                        core.set_own_property_label(empty, "length", &source_label)
+                            .expect("empty source length label");
+                    }
+                    let mut elements = vec![Value::Object(empty)];
+                    if append_public {
+                        elements.push(Value::str("last"));
+                    }
+                    let source = core.alloc_array_from_values(&elements).expect("source array");
+                    let result = install_array_shape_species(&mut core, source);
+                    core.write_reg_with_label(0, Value::Function(0), Label::Public)
+                        .expect("callback register");
+                    let returned = core
+                        .dispatch_builtin_function(
+                            &module,
+                            &BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayFlatMap),
+                            RegRange { start: 0, count: 1 },
+                            Some(Value::Object(source)),
+                            None,
+                        )
+                        .expect("flatMap should execute");
+                    assert_eq!(returned, Value::Object(result));
+                    assert_eq!(
+                        core.take_pending_hostcall_result_label()
+                            .unwrap_or(Label::Public),
+                        source_label,
+                        "empty source: mutation={use_mutation_label}, tail={append_public}"
+                    );
+                    if append_public {
+                        assert_eq!(
+                            core.heap[result.0 as usize].properties.get("0"),
+                            Some(&Value::str("last"))
+                        );
+                        assert_eq!(core.own_property_label(result, "0"), source_label);
+                    }
+                    let length = i64::from(append_public);
+                    assert_array_shape_alias_length(&mut core, length, &source_label);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn array_prefix_custom_label_is_preflighted_before_cloning_bd_9vouw_110() {
+        let mut core = test_interpreter();
+        let source = core.alloc_array_from_values(&[]).expect("source array");
+        let result = core.alloc_array_from_values(&[]).expect("result array");
+        let label = Label::Custom {
+            name: "large-array-length-label".repeat(256),
+            level: 6,
+        };
+        core.set_own_property_label(source, "length", &label)
+            .expect("stored Custom length label");
+        let inherited = core
+            .alloc_object_with_prototype(Some(source))
+            .expect("inherited length receiver");
+        let shadow = core
+            .alloc_object_with_prototype(Some(source))
+            .expect("Public own length receiver");
+        core.set_object_property(shadow, "length".to_string(), Value::Int(0))
+            .expect("Public length shadow");
+        let before = core.estimated_memory_bytes();
+        let label_bytes = InterpreterCore::estimate_label_bytes(&label);
+
+        core.config.max_total_memory_bytes = before + label_bytes - 1;
+        for receiver in [source, inherited] {
+            assert!(matches!(
+                core.array_result_prefix_label(receiver, result, &Label::Public),
+                Err(InterpreterError::MemoryBudgetExceeded { .. })
+            ));
+            assert_eq!(core.estimated_memory_bytes(), before);
+            assert_eq!(core.own_property_label(result, "length"), Label::Public);
+            assert!(core.pending_hostcall_result_label.is_none());
+        }
+
+        // A Public first owner ends the lookup without cloning the inherited
+        // Custom name. Only the winning label's temporary bytes are required.
+        core.config.max_total_memory_bytes = before;
+        assert_eq!(
+            core.array_result_prefix_label(shadow, result, &Label::Public)
+                .expect("Public own length requires no Custom clone"),
+            Label::Public
+        );
+        core.config.max_total_memory_bytes = before + label_bytes;
+        assert_eq!(
+            core.array_result_prefix_label(inherited, result, &Label::Public)
+                .expect("the exact winning label budget should suffice"),
+            label
+        );
+        assert_eq!(core.estimated_memory_bytes(), before);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn flat_map_preserves_labels_stored_in_callback_returned_arrays_bd_9vouw_110() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Halt,
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 1,
+                arity: 3,
+                frame_size: 3,
+                name: Some("identity".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = test_interpreter();
+        let nested = core
+            .alloc_array_from_values(&[Value::str("classified")])
+            .expect("nested array");
+        core.set_own_property_label(nested, "0", &Label::Secret)
+            .expect("nested element label");
+        let array = core
+            .alloc_array_from_values(&[Value::Object(nested)])
+            .expect("source array");
+        core.write_reg(0, Value::Function(0))
+            .expect("callback register");
+        let result = core
+            .dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayFlatMap),
+                RegRange { start: 0, count: 1 },
+                Some(Value::Object(array)),
+                None,
+            )
+            .expect("flatMap should execute");
+        let Value::Object(result) = result else {
+            panic!("flatMap must return an array");
+        };
+        assert_eq!(
+            core.heap[result.0 as usize].properties.get("0"),
+            Some(&Value::str("classified"))
+        );
+        assert_eq!(core.own_property_label(result, "0"), Label::Secret);
+        assert_eq!(
+            core.take_pending_hostcall_result_label(),
+            Some(Label::Secret)
+        );
+    }
+
+    #[test]
+    fn labeled_array_result_write_restores_prior_label_on_refusal_bd_9vouw_110() {
+        let mut core = test_interpreter();
+        let array = core
+            .alloc_array_from_values(&[Value::str("original")])
+            .expect("result array");
+        core.mutate_heap(|heap| heap[array.0 as usize].is_frozen = true);
+        let before = core.estimated_memory_bytes();
+        let error = core
+            .create_labeled_data_property_or_throw(
+                array,
+                "0".to_string(),
+                Value::str("classified"),
+                &Label::Secret,
+            )
+            .expect_err("a frozen species result must reject the write");
+        assert!(matches!(error, InterpreterError::TypeError { .. }));
+        assert_eq!(
+            core.heap[array.0 as usize].properties.get("0"),
+            Some(&Value::str("original"))
+        );
+        assert_eq!(core.own_property_label(array, "0"), Label::Public);
+        assert_eq!(core.estimated_memory_bytes(), before);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn labeled_array_result_write_keeps_secret_labels_on_tight_frozen_refusal_bd_9vouw_110() {
+        for tightly_budgeted in [true, false] {
+            let mut core = test_interpreter();
+            let array = core
+                .alloc_array_from_values(&[Value::str("classified"), Value::str("other")])
+                .expect("species result array");
+            core.set_own_property_label(array, "0", &Label::Secret)
+                .expect("first result label");
+            core.set_own_property_label(array, "1", &Label::Secret)
+                .expect("second result label");
+            core.mutate_heap(|heap| heap[array.0 as usize].is_frozen = true);
+            let before = core.estimated_memory_bytes();
+            if tightly_budgeted {
+                core.config.max_total_memory_bytes = before;
+            }
+            let error = core
+                .create_labeled_data_property_or_throw(
+                    array,
+                    "0".to_string(),
+                    Value::str("public"),
+                    &Label::Public,
+                )
+                .expect_err("a frozen species result must reject replacement");
+            if tightly_budgeted {
+                assert!(matches!(error, InterpreterError::MemoryBudgetExceeded { .. }));
+            } else {
+                assert!(matches!(error, InterpreterError::TypeError { .. }));
+            }
+            // Clearing the first label before a frozen write was refused
+            // required cloning the remaining map to restore it. At this
+            // ceiling that rollback itself failed and exposed the old value.
+            assert_eq!(
+                core.heap[array.0 as usize].properties.get("0"),
+                Some(&Value::str("classified"))
+            );
+            assert_eq!(core.own_property_label(array, "0"), Label::Secret);
+            assert_eq!(core.own_property_label(array, "1"), Label::Secret);
+            assert_eq!(core.estimated_memory_bytes(), before);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn labeled_array_result_write_releases_staged_labels_after_value_budget_refusal_bd_9vouw_110() {
+        let mut core = test_interpreter();
+        let array = core
+            .alloc_array_from_values(&[Value::str("classified"), Value::str("other")])
+            .expect("species result array");
+        core.set_own_property_label(array, "0", &Label::Secret)
+            .expect("first result label");
+        core.set_own_property_label(array, "1", &Label::Secret)
+            .expect("second result label");
+        let before = core.estimated_memory_bytes();
+        // The two small labels fit in this headroom, but the replacement
+        // value does not. This reaches the value writer after label staging.
+        core.config.max_total_memory_bytes = before.saturating_add(4096);
+        let error = core
+            .create_labeled_data_property_or_throw(
+                array,
+                "0".to_string(),
+                Value::str("x".repeat(8192)),
+                &Label::Public,
+            )
+            .expect_err("oversized replacement must be refused");
+        assert!(matches!(error, InterpreterError::MemoryBudgetExceeded { .. }));
+        assert_eq!(
+            core.heap[array.0 as usize].properties.get("0"),
+            Some(&Value::str("classified"))
+        );
+        assert_eq!(core.own_property_label(array, "0"), Label::Secret);
+        assert_eq!(core.own_property_label(array, "1"), Label::Secret);
+        assert_eq!(core.estimated_memory_bytes(), before);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        // A subsequent admitted replacement clears only its own old label
+        // and releases the temporary map on the success path as well.
+        core.create_labeled_data_property_or_throw(
+            array,
+            "0".to_string(),
+            Value::str("public"),
+            &Label::Public,
+        )
+        .expect("a small Public replacement should fit");
+        assert_eq!(
+            core.heap[array.0 as usize].properties.get("0"),
+            Some(&Value::str("public"))
+        );
+        assert_eq!(core.own_property_label(array, "0"), Label::Public);
+        assert_eq!(core.own_property_label(array, "1"), Label::Secret);
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
@@ -135147,6 +141493,90 @@ mod async_runtime_tests_current {
             core.take_pending_hostcall_result_label(),
             Some(Label::Secret)
         );
+    }
+
+    #[test]
+    fn array_aggregate_reads_follow_inherited_element_labels_and_own_shadowing() {
+        use super::active_builtin_regressions::call_builtin_for_test;
+
+        for native_array in [true, false] {
+            for own_shadow in [false, true] {
+                let mut core = test_interpreter();
+                let prototype = core
+                    .alloc_object_with_properties(&[("0", Value::str("classified"))])
+                    .expect("prototype should allocate");
+                core.set_own_property_label(prototype, "0", &Label::Secret)
+                    .expect("inherited element label should fit");
+                let intermediate = core
+                    .alloc_object_with_prototype(Some(prototype))
+                    .expect("intermediate prototype should allocate");
+                let receiver = if native_array {
+                    core.alloc_array_with_prototype(Some(intermediate))
+                } else {
+                    core.alloc_object_with_prototype(Some(intermediate))
+                }
+                .expect("receiver should allocate");
+                core.set_object_property(receiver, "length".to_string(), Value::Int(1))
+                    .expect("array-like length should fit");
+                if own_shadow {
+                    core.set_object_property(receiver, "0".to_string(), Value::str("public"))
+                        .expect("Public own element should fit");
+                }
+
+                let expected_label = if own_shadow {
+                    Label::Public
+                } else {
+                    Label::Secret
+                };
+                let expected_index = if own_shadow { -1 } else { 0 };
+                for (kind, args, expected) in [
+                    (
+                        BuiltinFunctionKind::ArrayJoin,
+                        vec![],
+                        Value::str(if own_shadow { "public" } else { "classified" }),
+                    ),
+                    (
+                        BuiltinFunctionKind::ArrayIncludes,
+                        vec![Value::str("classified")],
+                        Value::Bool(!own_shadow),
+                    ),
+                    (
+                        BuiltinFunctionKind::ArrayIndexOf,
+                        vec![Value::str("classified")],
+                        Value::Int(expected_index),
+                    ),
+                    (
+                        BuiltinFunctionKind::ArrayLastIndexOf,
+                        vec![Value::str("classified")],
+                        Value::Int(expected_index),
+                    ),
+                ] {
+                    core.clear_pending_hostcall_result_label();
+                    let result = call_builtin_for_test(
+                        &mut core,
+                        BuiltinFunction::new_kind(kind),
+                        receiver,
+                        &args,
+                    )
+                    .expect("aggregate read should succeed");
+                    assert_eq!(
+                        result, expected,
+                        "{kind:?}, native_array={native_array}, own_shadow={own_shadow}"
+                    );
+                    assert_eq!(
+                        core.take_pending_hostcall_result_label()
+                            .unwrap_or(Label::Public),
+                        expected_label,
+                        "{kind:?} must use the label of the property that supplied its value; \
+                         native_array={native_array}, own_shadow={own_shadow}"
+                    );
+                }
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
+            }
+        }
     }
 
     #[test]
@@ -135299,6 +141729,158 @@ mod async_runtime_tests_current {
         }
     }
 
+    /// bd-9vouw.504: `static_move` copies a value and label that own no
+    /// dynamic bytes into a destination holding none, label included and with
+    /// the memory estimate unchanged; anything else is left to the accounted
+    /// path, with every register untouched.
+    #[test]
+    fn static_move_copies_only_static_pairs_bd_9vouw_504() {
+        let mut core = test_interpreter();
+        core.mutate_registers(|registers| {
+            registers[0] = Value::Int(5);
+            registers[1] = Value::Undefined;
+            registers[2] = Value::str("owned");
+            registers[3] = Value::Int(1);
+        });
+        core.set_register_label(0, Label::Secret)
+            .expect("source label should be settable");
+        let bytes_before = core.estimated_memory_bytes;
+        assert!(core.static_move(1, 0));
+        assert_eq!(core.read_reg(1).unwrap(), Value::Int(5));
+        assert_eq!(
+            core.get_register_label(1).unwrap(),
+            &Label::Secret,
+            "the source label moves with the value"
+        );
+        assert_eq!(core.estimated_memory_bytes, bytes_before);
+
+        // A string owns bytes as the source or as the replaced destination
+        // value, and a Custom label owns its name.
+        assert!(!core.static_move(3, 2));
+        assert!(!core.static_move(2, 0));
+        core.set_register_label(
+            0,
+            Label::Custom {
+                name: "custom".to_string(),
+                level: 2,
+            },
+        )
+        .expect("custom label should be settable");
+        assert!(!core.static_move(3, 0));
+        assert_eq!(core.read_reg(3).unwrap(), Value::Int(1));
+        assert_eq!(core.get_register_label(3).unwrap(), &Label::Public);
+        assert_eq!(core.read_reg(2).unwrap(), Value::str("owned"));
+        let max_registers = core.config.max_registers;
+        assert!(!core.static_move(max_registers, 1));
+        assert!(!core.static_move(1, max_registers));
+    }
+
+    /// bd-9vouw.504: `join_owned_label_with_temporary_budget` returns the
+    /// owned label for a Public operand without comparing, which is right
+    /// only while Public is the bottom of Label's order, Custom labels of
+    /// level 0 included.
+    #[test]
+    fn public_is_the_bottom_of_the_label_order_bd_9vouw_504() {
+        let core = test_interpreter();
+        for label in [
+            Label::Public,
+            Label::Internal,
+            Label::Confidential,
+            Label::Secret,
+            Label::TopSecret,
+            Label::Custom {
+                name: String::new(),
+                level: 0,
+            },
+            Label::Custom {
+                name: "a".to_string(),
+                level: 0,
+            },
+        ] {
+            assert!(label >= Label::Public, "{label:?}");
+            assert_eq!(
+                core.join_owned_label_with_temporary_budget(label.clone(), &Label::Public)
+                    .unwrap(),
+                label
+            );
+        }
+    }
+
+    /// bd-9vouw.504: setting a Public label on a property without a stored
+    /// label changes nothing (no entry, the same estimate); over a stored
+    /// label it removes the entry and gives back its bytes.
+    #[test]
+    fn public_label_on_an_unlabelled_property_changes_nothing_bd_9vouw_504() {
+        let mut core = test_interpreter();
+        let object = core
+            .alloc_object_with_properties(&[("data", Value::Int(7)), ("other", Value::Int(8))])
+            .expect("ordinary object should allocate");
+        let data = RuntimePropertyKey::String(JsString::from("data"));
+        let bytes_before = core.estimated_memory_bytes;
+        core.set_own_runtime_property_label(object, &data, &Label::Public)
+            .expect("a Public label should fit");
+        assert_eq!(core.estimated_memory_bytes, bytes_before);
+        assert_eq!(core.runtime_property_label(object, &data), Label::Public);
+
+        core.set_own_runtime_property_label(object, &data, &Label::Secret)
+            .expect("a Secret label should fit");
+        assert_eq!(core.runtime_property_label(object, &data), Label::Secret);
+        assert!(core.estimated_memory_bytes > bytes_before);
+        core.set_own_runtime_property_label(object, &data, &Label::Public)
+            .expect("a Public label should fit");
+        assert_eq!(core.runtime_property_label(object, &data), Label::Public);
+        assert_eq!(core.estimated_memory_bytes, bytes_before);
+    }
+
+    /// bd-9vouw.504: the mutation-label join labels an ordinary object, and
+    /// along a Proxy chain stops at the first repeat: two proxies targeting
+    /// each other, and one targeting itself.
+    #[test]
+    fn object_mutation_label_join_follows_proxy_chains_and_stops_on_cycles_bd_9vouw_504() {
+        let mut core = test_interpreter();
+        let plain = core
+            .alloc_object_with_properties(&[])
+            .expect("object should allocate");
+        core.join_object_mutation_label(plain, &Label::Secret)
+            .expect("join should fit");
+        assert_eq!(
+            core.object_mutation_labels.get(&plain),
+            Some(&Label::Secret)
+        );
+
+        let first = core
+            .alloc_object_with_properties(&[])
+            .expect("object should allocate");
+        let second = core
+            .alloc_object_with_properties(&[])
+            .expect("object should allocate");
+        let lone = core
+            .alloc_object_with_properties(&[])
+            .expect("object should allocate");
+        for (proxy, target) in [(first, second), (second, first), (lone, lone)] {
+            core.set_object_brand(proxy, PROXY_TYPE_TAG)
+                .expect("proxy marker should fit");
+            core.set_object_property(proxy, PROXY_TARGET_SLOT.to_string(), Value::Object(target))
+                .expect("proxy target slot should fit");
+        }
+        core.join_object_mutation_label(first, &Label::Confidential)
+            .expect("a two-proxy cycle should end");
+        assert_eq!(
+            core.object_mutation_labels.get(&first),
+            Some(&Label::Confidential)
+        );
+        assert_eq!(
+            core.object_mutation_labels.get(&second),
+            Some(&Label::Confidential)
+        );
+        core.join_object_mutation_label(lone, &Label::Internal)
+            .expect("a self-targeting proxy should end");
+        assert_eq!(
+            core.object_mutation_labels.get(&lone),
+            Some(&Label::Internal)
+        );
+    }
+
     #[test]
     fn ordinary_own_property_fast_path_excludes_proto_proxy_and_missing_keys() {
         let mut core = test_interpreter();
@@ -135400,6 +141982,132 @@ mod async_runtime_tests_current {
             trace_count_before,
             "a malformed Proxy must not emit an ordinary property-found trace"
         );
+    }
+
+    /// bd-9vouw.505: inside a callback scope (an active inline callback
+    /// context), [[Get]] observes the owner's shape label and the property's
+    /// stored label into the context (da779790e). The own-property fast path
+    /// predates that and skipped it: reading a public key of an object whose
+    /// shape a Secret store labelled left the context Public. The read now
+    /// takes the generic path whenever a context is active, for an object
+    /// with or without a prototype.
+    #[test]
+    fn own_property_read_in_a_callback_scope_observes_the_shape_label_bd_9vouw_505() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 2,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+        for with_prototype in [false, true] {
+            let mut core = test_interpreter();
+            let object = core
+                .alloc_object_with_properties(&[("data", Value::Int(7))])
+                .expect("ordinary object should allocate");
+            if with_prototype {
+                let prototype = core
+                    .alloc_object_with_properties(&[])
+                    .expect("prototype should allocate");
+                core.mutate_heap(|heap| heap[object.0 as usize].prototype = Some(prototype));
+            }
+            core.join_object_mutation_label(object, &Label::Secret)
+                .expect("shape label should fit");
+            core.mutate_registers(|registers| {
+                registers[0] = Value::Object(object);
+                registers[1] = Value::str("data");
+            });
+            core.active_inline_callback_context_label = Some(Label::Public);
+            let data = RuntimePropertyKey::String(JsString::from("data"));
+            assert_eq!(core.ordinary_own_property_fast_read(object, &data), None);
+            assert_eq!(core.run_loop(&module), Err(InterpreterError::Halted));
+            assert_eq!(core.read_reg(2).unwrap(), Value::Int(7));
+            assert_eq!(
+                core.active_inline_callback_context_label,
+                Some(Label::Secret),
+                "the read observes the Secret shape label (prototype: {with_prototype})"
+            );
+        }
+    }
+
+    /// bd-9vouw.504: the fast own-property read returns a data property's
+    /// stored label (the label the [[Get]] owner join reads) from one lookup,
+    /// and no label for an accessor, whose getter runs before the join.
+    #[test]
+    fn ordinary_own_property_fast_read_carries_a_data_label_only_bd_9vouw_504() {
+        let mut core = test_interpreter();
+        let object = core
+            .alloc_object_with_properties(&[("data", Value::Int(7))])
+            .expect("ordinary object should allocate");
+        core.set_own_property_label(object, "data", &Label::Secret)
+            .expect("property label should be settable");
+        let data_key = RuntimePropertyKey::String(JsString::from("data"));
+        assert_eq!(
+            core.ordinary_own_property_fast_read(object, &data_key),
+            Some((Value::Int(7), Some(Label::Secret)))
+        );
+        assert_eq!(
+            core.runtime_property_label(object, &data_key),
+            Label::Secret
+        );
+
+        core.set_object_property(
+            object,
+            "accessor".to_string(),
+            Value::Accessor {
+                get: None,
+                set: None,
+            },
+        )
+        .expect("accessor own property should fit");
+        assert!(matches!(
+            core.ordinary_own_property_fast_read(
+                object,
+                &RuntimePropertyKey::String(JsString::from("accessor")),
+            ),
+            Some((Value::Accessor { .. }, None))
+        ));
+        assert_eq!(
+            core.ordinary_own_property_fast_read(
+                object,
+                &RuntimePropertyKey::String(JsString::from("missing")),
+            ),
+            None
+        );
+        core.set_object_brand(object, PROXY_TYPE_TAG)
+            .expect("proxy marker should fit");
+        assert_eq!(
+            core.ordinary_own_property_fast_read(object, &data_key),
+            None,
+            "a proxy-tagged object keeps the generic path"
+        );
+    }
+
+    /// bd-9vouw.504: a small index's shared key is the decimal key the
+    /// formatted path builds; larger and negative integers keep that path.
+    #[test]
+    fn small_index_keys_are_the_decimal_keys_bd_9vouw_504() {
+        let core = test_interpreter();
+        for number in [0_i64, 7, 10, 1023] {
+            let shared = small_index_key(number).expect("a small index has a shared key");
+            assert_eq!(shared, JsString::from(number.to_string()));
+            assert_eq!(small_index_key(number), Some(shared));
+            assert_eq!(
+                core.executable_property_key_from_value(&Value::Int(number)),
+                RuntimePropertyKey::String(JsString::from(number.to_string()))
+            );
+        }
+        for number in [-1_i64, 1024, i64::MAX] {
+            assert_eq!(small_index_key(number), None);
+            assert_eq!(
+                core.executable_property_key_from_value(&Value::Int(number)),
+                RuntimePropertyKey::String(JsString::from(number.to_string()))
+            );
+        }
     }
 
     /// bd-gqaa4/bd-0zybl: the conservative prior-dst join must not clone a
@@ -144134,11 +150842,12 @@ mod tests {
         let max_registers = config.max_registers as usize;
         let mut narrow_only_core =
             InterpreterCore::new(config.clone(), "tier-i-exact-narrow-frame");
-        narrow_only_core.enter_stacked_register_frame_for_function(&module, Some(&plan), 2);
-        assert_eq!(
-            narrow_only_core.stacked_register_frame_clear_width_high_water,
-            1
-        );
+        narrow_only_core
+            .enter_stacked_register_frame_for_function(&module, Some(&plan), 2)
+            .expect("narrow frame entry");
+        // The narrow frame's window is the only part of the file that may
+        // hold a value after its entry (bd-9vouw.499).
+        assert_eq!(narrow_only_core.register_dirty_end, max_registers + 1);
         assert_eq!(narrow_only_core.registers.len(), max_registers * 2);
         assert_eq!(narrow_only_core.register_labels.len(), max_registers * 2);
 
@@ -144838,18 +151547,283 @@ mod tests {
         let mut core = quickjs_test_core();
         let max_registers = core.config.max_registers as usize;
 
-        core.enter_stacked_register_frame(Some(&wide_plan));
+        core.enter_stacked_register_frame(Some(&wide_plan))
+            .expect("wide frame entry");
         core.write_reg_with_label(7, Value::Int(99), Label::Secret)
             .expect("seed stale wide-frame state");
         // Returning restores the caller's window: its base and its width
         // (bd-9vouw.72), so the narrow callee reuses the wide one's slots.
         core.register_base = 0;
         core.register_width = max_registers;
-        core.enter_stacked_register_frame(Some(&narrow_plan));
+        core.enter_stacked_register_frame(Some(&narrow_plan))
+            .expect("narrow frame entry");
 
-        assert_eq!(core.stacked_register_frame_clear_width_high_water, 8);
+        // The wide frame's write raised the dirty end past register 7, so the
+        // narrow entry cleared it (bd-9vouw.499); only its own window may be
+        // dirty after it.
+        assert_eq!(core.register_dirty_end, max_registers + 1);
         assert_eq!(core.registers[max_registers + 7], Value::Undefined);
         assert_eq!(core.register_labels[max_registers + 7], Label::Public);
+
+        // bd-9vouw.499: the next narrow entry clears its own window only;
+        // the wide frame's slots are already clear.
+        core.write_reg_with_label(0, Value::Int(1), Label::Secret)
+            .expect("narrow frame write");
+        core.register_base = 0;
+        core.register_width = max_registers;
+        assert_eq!(core.register_dirty_end, max_registers + 1);
+        core.enter_stacked_register_frame(Some(&narrow_plan))
+            .expect("narrow entry");
+        assert_eq!(core.registers[max_registers], Value::Undefined);
+        assert_eq!(core.register_labels[max_registers], Label::Public);
+        assert_eq!(core.register_dirty_end, max_registers + 1);
+    }
+
+    /// bd-9vouw.499: registers a deeper frame left behind, past the window of
+    /// the next frame entered at a shallower base, are cleared by that entry,
+    /// and a write past every window (a widened builtin window) is cleared
+    /// by the next entry too.
+    #[test]
+    fn stale_registers_of_deeper_frames_are_cleared_by_the_next_entry() {
+        let module = |frame_size: u32| {
+            test_module_with_functions(
+                vec![
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadInt { dst: 0, value: 1 },
+                    Ir3Instruction::Return { value: 0 },
+                ],
+                vec![
+                    Ir3FunctionDesc {
+                        entry: 0,
+                        arity: 0,
+                        frame_size: 1,
+                        name: Some("main".to_string()),
+                        is_generator: false,
+                        rest_param_index: None,
+                    },
+                    Ir3FunctionDesc {
+                        entry: 1,
+                        arity: 0,
+                        frame_size,
+                        name: Some("callee".to_string()),
+                        is_generator: false,
+                        rest_param_index: None,
+                    },
+                ],
+            )
+        };
+        let four = CompactTier1Program::compile(&module(4)).expect("width-4 plan");
+        let two = CompactTier1Program::compile(&module(2)).expect("width-2 plan");
+        let mut core = quickjs_test_core();
+        let max_registers = core.config.max_registers as usize;
+
+        // main -> a (width 4) -> b (width 4); b writes its last register.
+        core.enter_stacked_register_frame(Some(&four)).expect("a");
+        core.enter_stacked_register_frame(Some(&four)).expect("b");
+        assert_eq!(core.register_base, max_registers + 4);
+        core.write_reg_with_label(3, Value::str("left by b"), Label::Secret)
+            .expect("b writes");
+        assert_eq!(core.register_dirty_end, max_registers + 8);
+        // Both return; main calls c (width 2) at a's base.
+        core.register_base = 0;
+        core.register_width = max_registers;
+        core.enter_stacked_register_frame(Some(&two)).expect("c");
+        assert_eq!(core.registers[max_registers + 7], Value::Undefined);
+        assert_eq!(core.register_labels[max_registers + 7], Label::Public);
+        assert_eq!(core.register_dirty_end, max_registers + 2);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        // A write past c's window (as a widened builtin window makes).
+        core.write_reg_with_label(5, Value::Int(9), Label::Secret)
+            .expect("write past the window");
+        assert_eq!(core.register_dirty_end, max_registers + 6);
+        core.register_base = 0;
+        core.register_width = max_registers;
+        core.enter_stacked_register_frame(Some(&two)).expect("d");
+        assert_eq!(core.registers[max_registers + 5], Value::Undefined);
+        assert_eq!(core.register_labels[max_registers + 5], Label::Public);
+        assert_eq!(core.register_dirty_end, max_registers + 2);
+    }
+
+    #[test]
+    fn module_execution_restore_keeps_the_parked_dirty_end_bd_9vouw_500() {
+        let mut core = quickjs_test_core();
+        let max_registers = core.config.max_registers as usize;
+        core.write_reg_with_label(3, Value::Int(7), Label::Secret)
+            .expect("caller writes");
+        assert_eq!(core.register_dirty_end, 4);
+
+        // An isolated call starts on files that are clear throughout.
+        let previous_register_bytes = core.registers_memory_bytes();
+        let previous_label_bytes = core.register_context_labels_memory_bytes();
+        let snapshot = core
+            .isolate_module_execution()
+            .expect("isolated snapshot fits");
+        assert_eq!(core.register_dirty_end, 0);
+        let previous_scope_bytes = core.scope_chain_memory_bytes();
+        let previous_call_stack_bytes = core.call_stack_memory_bytes();
+        core.apply_register_context_scope_call_stack_memory_delta(
+            previous_register_bytes,
+            previous_label_bytes,
+            previous_scope_bytes,
+            previous_call_stack_bytes,
+        )
+        .expect("callback setup fits");
+        core.write_reg(5, Value::Int(1)).expect("callee writes");
+        assert_eq!(core.register_dirty_end, 6);
+        core.restore_module_execution(snapshot, true);
+        // The caller's dirty end, not its file's length: the next call
+        // clears only what is dirty.
+        assert!(core.registers.len() >= max_registers);
+        assert_eq!(core.register_dirty_end, 4);
+        assert_eq!(core.read_reg(3).expect("caller register"), Value::Int(7));
+        assert_eq!(core.read_reg(5).expect("caller register"), Value::Undefined);
+
+        // A rollback snapshot is restored the same way.
+        let snapshot = core
+            .snapshot_module_execution()
+            .expect("rollback snapshot fits");
+        core.write_reg(9, Value::Int(2)).expect("setup writes");
+        assert_eq!(core.register_dirty_end, 10);
+        core.restore_module_execution(snapshot, false);
+        assert_eq!(core.register_dirty_end, 4);
+        assert_eq!(core.read_reg(9).expect("rolled back"), Value::Undefined);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    /// A generator stepped from inside a function alternates between the
+    /// caller's file and the activation's, which differ in length. The core
+    /// keeps a spare of each and hands out the one of the length asked for,
+    /// so neither file is cut and regrown on every step (bd-9vouw.500).
+    #[test]
+    fn spare_register_files_are_matched_by_length_bd_9vouw_500() {
+        let mut core = quickjs_test_core();
+        let window = core.config.max_registers as usize;
+        let cleared = |len: usize| (vec![Value::Undefined; len], vec![Label::Public; len]);
+        let (short_values, short_labels) = cleared(window);
+        let (long_values, long_labels) = cleared(2 * window);
+        let short_address = short_values.as_ptr();
+        let long_address = long_values.as_ptr();
+        core.keep_spare_register_files(short_values, short_labels);
+        core.keep_spare_register_files(long_values, long_labels);
+
+        let (values, _) = core.take_spare_register_files(window);
+        assert_eq!(values.as_ptr(), short_address);
+        core.keep_spare_register_files(values, vec![Label::Public; window]);
+        let (values, _) = core.take_spare_register_files(2 * window);
+        assert_eq!(values.as_ptr(), long_address);
+        core.keep_spare_register_files(values, vec![Label::Public; 2 * window]);
+
+        // No spare of the length: new empty files, and the spares stay.
+        let (values, labels) = core.take_spare_register_files(3 * window);
+        assert!(values.is_empty() && labels.is_empty());
+        assert_eq!(core.spare_register_files.len(), 2);
+        // A third spare evicts the oldest.
+        let (third_values, third_labels) = cleared(window / 2);
+        core.keep_spare_register_files(third_values, third_labels);
+        assert_eq!(core.spare_register_files.len(), SPARE_REGISTER_FILES);
+        assert!(
+            core.spare_register_files
+                .iter()
+                .all(|(values, _)| values.as_ptr() != short_address)
+        );
+        // None kept at all: empty files.
+        core.spare_register_files.clear();
+        assert_eq!(core.take_spare_register_files(window).0.len(), 0);
+
+        // A step from inside a function: the caller's file (two windows) is
+        // taken, the activation's (one window) installed, then the reverse.
+        // From the second step on, each install finds its own file.
+        let (caller_values, caller_labels) = cleared(2 * window);
+        let caller_address = caller_values.as_ptr();
+        core.keep_spare_register_files(caller_values, caller_labels);
+        let (values, _) = core.take_spare_register_files(window);
+        assert!(values.is_empty(), "the caller's file is not cut down");
+        let (activation_values, activation_labels) = cleared(window);
+        let activation_address = activation_values.as_ptr();
+        core.keep_spare_register_files(activation_values, activation_labels);
+        let (values, labels) = core.take_spare_register_files(2 * window);
+        assert_eq!(values.as_ptr(), caller_address);
+        core.keep_spare_register_files(values, labels);
+        let (values, _) = core.take_spare_register_files(window);
+        assert_eq!(values.as_ptr(), activation_address);
+    }
+
+    #[test]
+    fn parked_activation_files_are_moved_out_and_refilled_bd_9vouw_500() {
+        let mut core = quickjs_test_core();
+        let max_registers = core.config.max_registers as usize;
+        let text = Value::str("parked across a step");
+        core.write_reg_with_label(1, text.clone(), Label::Secret)
+            .expect("string register");
+        core.write_reg(4, Value::Int(3)).expect("int register");
+        let value_bytes = core.registers_memory_bytes();
+        assert!(value_bytes > 0);
+        let register_len = core.registers.len();
+        let label_len = core.register_labels.len();
+        assert!(register_len >= max_registers);
+
+        let execution = core.take_generator_execution();
+        // The snapshot keeps only the live prefix (bd-9vouw.167) and the
+        // file's cached byte count.
+        assert_eq!(execution.registers.len(), 5);
+        assert_eq!(execution.register_labels.len(), 5);
+        assert_eq!(execution.register_len, register_len);
+        assert_eq!(execution.register_dirty_end, 5);
+        assert_eq!(execution.registers_value_bytes, Some(value_bytes));
+        // The emptied files are the spare, cleared throughout.
+        assert!(core.registers.is_empty());
+        assert_eq!(core.spare_register_files.len(), 1);
+        let (spare_values, spare_labels) = core
+            .spare_register_files
+            .last()
+            .expect("the taken files are the spare");
+        assert_eq!(spare_values.len(), register_len);
+        assert_eq!(spare_labels.len(), label_len);
+        assert!(spare_values.iter().all(|value| *value == Value::Undefined));
+        assert!(spare_labels.iter().all(|label| *label == Label::Public));
+        let spare_address = spare_values.as_ptr();
+
+        core.install_generator_execution(execution);
+        // Refilled in place: no allocation, no padding pass.
+        assert!(core.spare_register_files.is_empty());
+        assert_eq!(core.registers.as_ptr(), spare_address);
+        assert_eq!(core.registers.len(), register_len);
+        assert_eq!(core.register_labels.len(), label_len);
+        assert_eq!(core.read_reg(1).expect("string register"), text);
+        assert_eq!(
+            core.get_register_label(1).expect("string label"),
+            &Label::Secret
+        );
+        assert_eq!(core.read_reg(4).expect("int register"), Value::Int(3));
+        assert!(
+            core.registers[5..]
+                .iter()
+                .all(|value| *value == Value::Undefined)
+        );
+        assert_eq!(core.registers_value_bytes.get(), Some(value_bytes));
+        // The test build's registers_memory_bytes checks the cache against
+        // a walk of the file.
+        assert_eq!(core.registers_memory_bytes(), value_bytes);
+        assert_eq!(core.register_dirty_end, 5);
+
+        // A file longer than the cap is freed rather than kept.
+        let long = max_registers * (SPARE_REGISTER_FILE_WINDOWS + 1);
+        core.mutate_registers(|registers| registers.resize(long, Value::Undefined));
+        core.register_labels.resize(long, Label::Public);
+        let execution = core.take_generator_execution();
+        assert!(core.spare_register_files.is_empty());
+        core.install_generator_execution(execution);
+        assert_eq!(core.registers.len(), long);
+        assert_eq!(core.register_labels.len(), long);
+        assert_eq!(core.read_reg(1).expect("string register"), text);
+        assert_eq!(core.registers_memory_bytes(), value_bytes);
     }
 
     #[test]
@@ -145292,6 +152266,78 @@ mod tests {
             .saturating_add(InterpreterCore::bigint_add_construction_peak_bytes(
                 left, right,
             ))
+    }
+
+    #[test]
+    fn reducer_register_file_is_reused_clean_and_its_bytes_released() {
+        // The reducer lane keeps its register file between callbacks: the
+        // second callback reads register 5, which only the first one wrote,
+        // and must see `undefined`, not the first callback's BigInt.
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadBigInt {
+                    dst: 5,
+                    value: "7".repeat(64),
+                },
+                Ir3Instruction::Return { value: 5 },
+                Ir3Instruction::Return { value: 5 },
+            ],
+            vec![
+                Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 4,
+                    frame_size: 6,
+                    name: Some("writes_r5".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 2,
+                    arity: 4,
+                    frame_size: 6,
+                    name: Some("reads_r5".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+            ],
+        );
+        let mut core = quickjs_test_core();
+        core.config.max_registers = 8;
+        core.sync_estimated_memory_bytes()
+            .expect("callback fixture accounting");
+        let first = core
+            .invoke_simple_reduce_callback(
+                Some(&module),
+                &Value::Function(0),
+                Value::Int(0),
+                Value::Int(1),
+                0,
+                ObjectId(0),
+            )
+            .expect("first reducer callback");
+        assert!(matches!(first, Value::BigInt(_)));
+        let second = core
+            .invoke_simple_reduce_callback(
+                Some(&module),
+                &Value::Function(1),
+                Value::Int(0),
+                Value::Int(1),
+                1,
+                ObjectId(0),
+            )
+            .expect("second reducer callback");
+        assert_eq!(second, Value::Undefined);
+        assert_eq!(core.simple_callback_temporary_bytes, 0);
+        assert!(
+            core.simple_callback_register_pool
+                .iter()
+                .all(|value| matches!(value, Value::Undefined)),
+            "the pooled register file is all undefined between callbacks"
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]
@@ -150127,8 +157173,8 @@ mod tests {
     #[test]
     fn derived_constructor_metadata_wire_is_atomic_and_label_preserving_bd_ppfz7() {
         let mut object = HeapObject::new();
-        object.derived_constructor_parent = Some(Value::Function(7));
-        object.derived_constructor_parent_label = Some(Label::Secret);
+        object.derived_constructor_parent = Some(Box::new(Value::Function(7)));
+        object.derived_constructor_parent_label = Some(Box::new(Label::Secret));
         object.is_derived_constructor = true;
         object.is_default_derived_constructor = true;
 
@@ -150137,8 +157183,8 @@ mod tests {
             serde_json::from_value(encoded.clone()).expect("round-trip constructor metadata");
         assert_eq!(restored, object);
         assert_eq!(
-            restored.derived_constructor_parent_label,
-            Some(Label::Secret)
+            restored.derived_constructor_parent_label.as_deref(),
+            Some(&Label::Secret)
         );
 
         let mut missing_label = encoded.clone();
@@ -150978,6 +158024,38 @@ mod tests {
                 .expect("native array iterator should finish"),
             None
         );
+    }
+
+    #[test]
+    fn symbol_allocations_charge_their_own_record_bd_9vouw_332() {
+        let mut core = quickjs_test_core();
+        let first = core
+            .allocate_class_private_name_symbol(JsString::from("#f0"))
+            .unwrap();
+        for index in 1..300u32 {
+            let symbol = match index % 3 {
+                0 => core.allocate_private_symbol(None),
+                1 => core.allocate_class_private_name_symbol(JsString::from(format!("#f{index}"))),
+                _ => core.intern_global_symbol(JsString::from(format!("key{index}"))),
+            }
+            .unwrap();
+            assert_eq!(symbol, SymbolId(first.0 + index));
+        }
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "the per-record charges sum to the symbol state's estimate"
+        );
+        // A symbol that does not fit changes neither the state nor the charge.
+        let before_state = core.symbol_state.value.clone();
+        let before_memory = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = before_memory;
+        assert!(matches!(
+            core.intern_global_symbol(JsString::from("new key")),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.symbol_state.value, before_state);
+        assert_eq!(core.estimated_memory_bytes(), before_memory);
     }
 
     #[test]
@@ -152534,6 +159612,32 @@ mod tests {
         }
     }
 
+    /// bd-9vouw.492: the found-property witness event folds through a reused
+    /// buffer; the digest equals the fold of the allocating builder's bytes,
+    /// across a key longer than the kept capacity and short keys after it.
+    #[test]
+    fn property_witness_scratch_folds_the_same_bytes() {
+        let mut core = quickjs_test_core();
+        let long_name = "k".repeat(1_000);
+        let long = RuntimePropertyKey::String(JsString::from(long_name.as_str()));
+        let short = RuntimePropertyKey::String(JsString::from("x"));
+        let mut expected = core.nondeterminism_trace.deterministic_witness;
+        for (key, object_id, depth) in [
+            (&short, ObjectId(3), 0),
+            (&long, ObjectId(4), 2),
+            (&short, ObjectId(5), 1),
+        ] {
+            core.capture_property_resolution_found(key, object_id, depth);
+            expected.fold(
+                NondeterminismSource::PropertyResolution,
+                &property_resolution_found_payload(key, object_id, depth),
+            );
+        }
+        assert_eq!(core.nondeterminism_trace.deterministic_witness, expected);
+        assert_eq!(expected.event_count, 3);
+        assert!(core.property_witness_scratch.capacity() <= PROPERTY_WITNESS_SCRATCH_MAX_CAPACITY);
+    }
+
     #[test]
     fn runtime_property_diagnostics_are_injective_bd_b12xs_5() {
         let empty = RuntimePropertyKey::String(JsString::from(""));
@@ -154054,7 +161158,7 @@ mod tests {
         assert!(matches!(
             err,
             InterpreterError::TypeError { expected, got }
-                if expected == "binding kind 0..=4" && got == "kind 99"
+                if expected == "binding kind 0..=5" && got == "kind 99"
         ));
     }
 
@@ -154099,6 +161203,63 @@ mod tests {
                 name: "bd_0k19b_missing".to_string(),
             }),
             Some("ReferenceError")
+        );
+    }
+
+    /// bd-9vouw.487: LoadName of a name the scope chain resolves carries the
+    /// label the cell holds (as LoadScoped of the same cell does); it used to
+    /// write the value under the destination register's previous label.
+    #[test]
+    fn load_name_of_a_scope_cell_carries_the_cell_label() {
+        let module = test_module_with_pool(
+            vec![
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 0,
+                    kind: BindingKind::Var as u8,
+                },
+                Ir3Instruction::StoreScoped {
+                    src: 0,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::LoadName {
+                    dst: 1,
+                    name_pool_index: 0,
+                    allow_missing: false,
+                },
+                Ir3Instruction::LoadScoped {
+                    dst: 2,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec!["bd_9vouw_487_cell".to_string()],
+        );
+        let mut core = quickjs_test_core();
+        core.mutate_registers(|registers| registers[0] = Value::Int(42));
+        core.set_register_label(0, Label::Secret)
+            .expect("source label should be settable");
+        // Both destinations start strictly below Secret: a read that keeps
+        // the destination's label leaves them Public.
+        core.set_register_label(1, Label::Public)
+            .expect("LoadName destination label should be settable");
+        core.set_register_label(2, Label::Public)
+            .expect("LoadScoped destination label should be settable");
+        core.execute(&module).expect("scope cell round trip");
+
+        assert_eq!(core.read_reg(1).expect("LoadName value"), Value::Int(42));
+        assert_eq!(
+            core.get_register_label(1).expect("LoadName label"),
+            &Label::Secret,
+            "LoadName carries the cell's label"
+        );
+        assert_eq!(
+            core.get_register_label(2).expect("LoadScoped label"),
+            &Label::Secret,
+            "LoadScoped of the same cell (the reference behaviour)"
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
         );
     }
 
@@ -160234,7 +167395,7 @@ mod tests {
         for name in ["Object", "Array", "SyntaxError"] {
             core.ensure_builtin_prototype(name).unwrap();
         }
-        core.set_register(0, Value::str(r#"{"a":[1,2]} trailing"#))
+        core.seed_register(0, Value::str(r#"{"a":[1,2]} trailing"#))
             .expect("invalid JSON input should fit register zero");
         let heap_before = core.heap_size();
 
@@ -161939,7 +169100,8 @@ mod tests {
                 exports: BTreeMap::new(),
                 star_exports: BTreeMap::new(),
                 flow_label_ceiling: None,
-                pending_import_bindings: BTreeMap::new(),
+                import_bindings: BTreeMap::new(),
+                star_reexporters: BTreeSet::new(),
                 cjs_module_object: Some(module_object),
                 compiled_module: None,
                 evaluation_promise: None,
@@ -163560,10 +170722,10 @@ mod lazy_seed_tests {
                 level: 7,
             },
         );
-        object.array_buffer = Some(ArrayBufferBacking {
+        object.array_buffer = Some(Box::new(ArrayBufferBacking {
             label: Label::Secret,
             ..ArrayBufferBacking::with_bytes(vec![0xA5; 257])
-        });
+        }));
         core.mutate_heap(|heap| heap.push(object));
         core.mutate_function_prototypes(|prototypes| {
             prototypes.insert((ContentHash::compute(b"seed-owner"), 3), ObjectId(0));
@@ -165759,7 +172921,7 @@ mod pending_async_register_cost_bd_9vouw_167 {
     use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
     use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
-    fn module_for(source: &str) -> Ir3Module {
+    pub(super) fn module_for(source: &str) -> Ir3Module {
         let tree = CanonicalEs2020Parser
             .parse_with_options(
                 ParserSource {
@@ -165827,5 +172989,117 @@ mod pending_async_register_cost_bd_9vouw_167 {
                 "{lane}: a pending async call costs {per_call} bytes"
             );
         }
+    }
+}
+
+/// bd-9vouw.497: a call fills reused argument vectors, and the call stack
+/// measures its top frame at most once between changes.
+#[cfg(test)]
+mod call_setup_reuse_bd_9vouw_497 {
+    use super::pending_async_register_cost_bd_9vouw_167::module_for;
+    use super::*;
+
+    fn run(source: &str) -> (InterpreterCore, Value) {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.instruction_budget = 1_000_000_000;
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]
+        .into_iter()
+        .collect();
+        let mut core = InterpreterCore::new(config, "call-setup-reuse");
+        let value = core
+            .execute(&module_for(source))
+            .expect("the program runs")
+            .value;
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        (core, value)
+    }
+
+    /// Calls and method calls with no, fewer, more, rest and 70 arguments;
+    /// a 70-argument call drops its vectors and the next call keeps new ones.
+    /// Node v22.2.0 and Bun 1.4.3 print the value, as did the n66 frankenctl.
+    #[test]
+    fn calls_reuse_their_argument_vectors() {
+        let wide_arguments = (0..70)
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let wide_parameters = (0..70).map(|i| format!("p{i}")).collect::<Vec<_>>();
+        let source = format!(
+            "function zero() {{ return 0; }}\n\
+             function one(a) {{ return a; }}\n\
+             function three(a, b, c) {{ return a + b + c; }}\n\
+             function fewer(a, b, c) {{ return String(c) + String(a); }}\n\
+             function more(a) {{ return a + arguments.length; }}\n\
+             function rest(a, ...r) {{ return a + r.length * 10; }}\n\
+             const o = {{ m(a, b) {{ return a * b; }} }};\n\
+             function wide({}) {{ return {}; }}\n\
+             let t = 0, s = '';\n\
+             for (let i = 0; i < 3; i++) {{\n\
+               t += zero() + one(i) + three(i, 1, 2) + more(i, 7, 8) + rest(i, 1, 2, 3) + o.m(i, 3) + wide({wide_arguments});\n\
+               s += fewer(i) + '|';\n\
+             }}\n\
+             t + ':' + s + ':' + three(1, 2, 3);",
+            wide_parameters.join(", "),
+            wide_parameters.join(" + "),
+        );
+        let (core, value) = run(&source);
+        assert_eq!(
+            value,
+            Value::str("7374:undefined0|undefined1|undefined2|:6")
+        );
+        for capacity in [
+            core.call_argument_value_scratch.capacity(),
+            core.call_argument_label_scratch.capacity(),
+        ] {
+            assert!(
+                (1..=CALL_ARGUMENT_SCRATCH_MAX_CAPACITY).contains(&capacity),
+                "the last call kept its vectors: capacity {capacity}"
+            );
+        }
+        assert!(core.call_argument_value_scratch.is_empty());
+        assert!(core.call_argument_label_scratch.is_empty());
+    }
+
+    /// The top frame changes in place when super() initializes a derived
+    /// constructor's `this`, when its instance fields run and when a sloppy
+    /// callee boxes a primitive `this`; recursion and try/finally returns
+    /// push and pop frames over it. The test build checks the call stack's
+    /// total against a full walk at every measurement and each popped-to
+    /// frame's kept estimate against a new one. Node v22.2.0 prints the
+    /// value, as did the n66 frankenctl (Bun runs the file as a module, where
+    /// `this` stays a string).
+    #[test]
+    fn the_top_frame_estimate_follows_its_changes() {
+        let (core, value) = run("class Base { constructor(n) { this.n = n; } }\n\
+             class Derived extends Base {\n\
+               label = 'field-' + this.n;\n\
+               constructor(n) { super(n * 2); this.extra = 'x'.repeat(n); }\n\
+             }\n\
+             function sloppy() { return typeof this + this.length; }\n\
+             String.prototype.sloppy = sloppy;\n\
+             function rec(d, s) { return d === 0 ? s.length : rec(d - 1, s + 'ab'); }\n\
+             function tf(n) { try { if (n > 1) return 'early' + n; } finally { var z = n; } return 'late' + z; }\n\
+             const out = [];\n\
+             for (let i = 0; i < 4; i++) {\n\
+               const d = new Derived(i);\n\
+               out.push(d.n + d.label + d.extra.length, 'str'.sloppy(), rec(i, 'q'), tf(i));\n\
+             }\n\
+             out.join(',');");
+        assert_eq!(
+            value,
+            Value::str(
+                "0field-00,object3,1,late0,2field-21,object3,3,late1,\
+                 4field-42,object3,5,early2,6field-63,object3,7,early3"
+            )
+        );
+        assert!(core.call_stack.is_empty());
+        assert!(core.call_stack.below_top_frame_bytes.is_empty());
     }
 }

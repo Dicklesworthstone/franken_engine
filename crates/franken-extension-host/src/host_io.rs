@@ -37,6 +37,8 @@ pub enum HostIoCapability {
     NetworkRecv,
     /// Read fresh bytes from the host operating-system CSPRNG.
     RandomRead,
+    /// Read one explicitly supplied environment variable.
+    EnvRead,
 }
 
 /// Filesystem operation carried across the engine/host policy seam.
@@ -228,6 +230,7 @@ impl HostIoCapability {
             Self::NetworkSend => "network_send",
             Self::NetworkRecv => "network_recv",
             Self::RandomRead => "random_read",
+            Self::EnvRead => "env_read",
         }
     }
 }
@@ -288,6 +291,11 @@ pub enum HostIoRequest {
     RandomRead {
         byte_len: u64,
     },
+    /// Read one name from the host's explicitly supplied environment snapshot.
+    /// The host process environment is never consulted implicitly.
+    EnvRead {
+        name: String,
+    },
 }
 
 impl HostIoRequest {
@@ -312,6 +320,7 @@ impl HostIoRequest {
             // socket is its natural completion, not a separately-grantable read.
             Self::NetworkRequest { .. } => HostIoCapability::NetworkSend,
             Self::RandomRead { .. } => HostIoCapability::RandomRead,
+            Self::EnvRead { .. } => HostIoCapability::EnvRead,
         }
     }
 
@@ -325,6 +334,7 @@ impl HostIoRequest {
             Self::NetworkRecv { .. } => "network_recv",
             Self::NetworkRequest { .. } => "network_request",
             Self::RandomRead { .. } => "random_read",
+            Self::EnvRead { .. } => "env_read",
         }
     }
 }
@@ -357,6 +367,11 @@ pub enum HostIoResponse {
     /// supplied by a replay transcript.
     RandomRead {
         bytes: Vec<u8>,
+    },
+    /// `None` is an absent name; `Some("")` is a present, empty value.
+    /// This outcome is recorded for replay and carries a Secret IFC floor.
+    EnvRead {
+        value: Option<String>,
     },
 }
 
@@ -501,6 +516,125 @@ impl HostIoProvider for DenyAllHostIo {
     ) -> HostIoOutcome {
         control::OperationControl::new(control).check_host()?;
         self.perform(request, granted)
+    }
+}
+
+/// Hard bounds on explicitly supplied environment authority. The snapshot is
+/// immutable, and only requested values enter the ordinary host-effect journal.
+pub const ENVIRONMENT_SNAPSHOT_MAX_ENTRIES: usize = 4096;
+pub const ENVIRONMENT_NAME_MAX_BYTES: usize = 4096;
+pub const ENVIRONMENT_VALUE_MAX_BYTES: usize = 64 * 1024;
+pub const ENVIRONMENT_SNAPSHOT_MAX_BYTES: usize = 1024 * 1024;
+
+/// Host-owned environment snapshot composed with an existing I/O provider.
+///
+/// Construction is the explicit allowlist: names omitted from `values` are
+/// absent to the guest even when they exist in the host process environment.
+/// There is no ambient `std::env` fallback. All reads still require EnvRead,
+/// and other requests retain the wrapped provider's policy and supervision.
+#[derive(Clone)]
+pub struct EnvironmentSnapshotHostIo {
+    values: std::collections::BTreeMap<String, String>,
+    inner: std::sync::Arc<dyn HostIoProvider>,
+}
+
+impl core::fmt::Debug for EnvironmentSnapshotHostIo {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("EnvironmentSnapshotHostIo")
+            .field("entry_count", &self.values.len())
+            .field("values", &"[redacted]")
+            .finish_non_exhaustive()
+    }
+}
+
+impl EnvironmentSnapshotHostIo {
+    /// Supply a bounded snapshot while denying every other host-I/O family.
+    pub fn new(values: std::collections::BTreeMap<String, String>) -> Result<Self, HostIoError> {
+        Self::with_provider(values, std::sync::Arc::new(DenyAllHostIo))
+    }
+
+    /// Compose explicit environment authority with the existing host provider.
+    pub fn with_provider(
+        values: std::collections::BTreeMap<String, String>,
+        inner: std::sync::Arc<dyn HostIoProvider>,
+    ) -> Result<Self, HostIoError> {
+        if values.len() > ENVIRONMENT_SNAPSHOT_MAX_ENTRIES {
+            return Err(HostIoError::SandboxViolation {
+                detail: "environment snapshot exceeds the entry limit".to_string(),
+            });
+        }
+        let mut total_bytes = 0usize;
+        for (name, value) in &values {
+            validate_environment_name(name)?;
+            if name.is_empty() || value.len() > ENVIRONMENT_VALUE_MAX_BYTES || value.contains('\0')
+            {
+                return Err(HostIoError::SandboxViolation {
+                    detail: "environment snapshot contains an invalid or oversized entry"
+                        .to_string(),
+                });
+            }
+            total_bytes = total_bytes
+                .checked_add(name.len())
+                .and_then(|bytes| bytes.checked_add(value.len()))
+                .filter(|bytes| *bytes <= ENVIRONMENT_SNAPSHOT_MAX_BYTES)
+                .ok_or_else(|| HostIoError::SandboxViolation {
+                    detail: "environment snapshot exceeds the aggregate byte limit".to_string(),
+                })?;
+        }
+        Ok(Self { values, inner })
+    }
+
+    fn read(&self, name: &str, granted: &[HostIoCapability]) -> HostIoOutcome {
+        if !capability_granted(granted, HostIoCapability::EnvRead) {
+            return Err(HostIoError::CapabilityMissing {
+                capability: HostIoCapability::EnvRead,
+            });
+        }
+        validate_environment_name(name)?;
+        Ok(HostIoResponse::EnvRead {
+            value: self.values.get(name).cloned(),
+        })
+    }
+}
+
+/// Validate request shape before it is cloned, journaled or dispatched.
+pub fn validate_environment_name(name: &str) -> Result<(), HostIoError> {
+    if name.len() > ENVIRONMENT_NAME_MAX_BYTES || name.contains(['\0', '=']) {
+        return Err(HostIoError::SandboxViolation {
+            detail: "environment variable name is invalid or exceeds the byte limit".to_string(),
+        });
+    }
+    Ok(())
+}
+
+impl HostIoProvider for EnvironmentSnapshotHostIo {
+    fn name(&self) -> &str {
+        "environment-snapshot-host-io"
+    }
+
+    fn filesystem_exception_provenance(&self) -> HostIoExceptionProvenance {
+        self.inner.filesystem_exception_provenance()
+    }
+
+    fn perform(&self, request: &HostIoRequest, granted: &[HostIoCapability]) -> HostIoOutcome {
+        match request {
+            HostIoRequest::EnvRead { name } => self.read(name, granted),
+            _ => self.inner.perform(request, granted),
+        }
+    }
+
+    fn perform_controlled(
+        &self,
+        request: &HostIoRequest,
+        granted: &[HostIoCapability],
+        control: std::sync::Arc<dyn HostIoControl>,
+    ) -> HostIoOutcome {
+        if let HostIoRequest::EnvRead { name } = request {
+            control::OperationControl::new(control).check_host()?;
+            self.read(name, granted)
+        } else {
+            self.inner.perform_controlled(request, granted, control)
+        }
     }
 }
 
@@ -2639,6 +2773,9 @@ impl HostIoProvider for SandboxedHostIo {
                 data,
             } => self.fs_meta(*operation, path, arguments, data),
             HostIoRequest::RandomRead { byte_len } => self.random_read(*byte_len),
+            HostIoRequest::EnvRead { .. } => Err(HostIoError::Denied {
+                reason: "no explicit environment snapshot installed".to_string(),
+            }),
             _ => unreachable!("network request handled above"),
         }
     }
@@ -2958,6 +3095,9 @@ mod tests {
                 max_len: 1024,
             },
             HostIoRequest::RandomRead { byte_len: 32 },
+            HostIoRequest::EnvRead {
+                name: "NODE_ENV".to_string(),
+            },
         ]
     }
 

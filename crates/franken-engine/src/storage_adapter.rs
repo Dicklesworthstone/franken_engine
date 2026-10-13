@@ -1250,10 +1250,12 @@ pub const FLEET_TRUST_STATE_DATABASE_FILENAME: &str = "fleet_trust_state.db";
 #[cfg(feature = "sibling-persistence")]
 /// Token form of a CREATE TABLE statement for the canonical-shape check:
 /// the trailing `;` dropped, whitespace collapsed and kept out of `(`, `)`
-/// and `,`, and simple identifiers unquoted. sqlmodel's DDL (the table's
-/// creator) quotes every identifier and breaks lines; neither changes the
-/// table, while a different column, type, constraint or collation still
-/// differs.
+/// and `,`, simple identifiers unquoted, and an `IF NOT EXISTS` after
+/// `CREATE TABLE` dropped. sqlmodel's DDL (the table's creator) quotes
+/// every identifier and breaks lines, and FrankenSQLite, like SQLite, stores
+/// the statement without its `IF NOT EXISTS` (since the v0.3.0 dependency
+/// refresh); none of these changes the table, while a different column,
+/// type, constraint or collation still differs.
 fn create_table_sql_tokens(statement: &str) -> String {
     let mut spaced = String::with_capacity(statement.len() + 32);
     for ch in statement.trim().trim_end_matches(';').chars() {
@@ -1265,7 +1267,7 @@ fn create_table_sql_tokens(statement: &str) -> String {
             spaced.push(ch);
         }
     }
-    spaced
+    let mut tokens = spaced
         .split_whitespace()
         .map(|token| {
             match token
@@ -1286,8 +1288,17 @@ fn create_table_sql_tokens(statement: &str) -> String {
                 _ => token,
             }
         })
-        .collect::<Vec<_>>()
-        .join(" ")
+        .collect::<Vec<_>>();
+    let creation_clause = ["CREATE", "TABLE", "IF", "NOT", "EXISTS"];
+    if tokens.len() > creation_clause.len()
+        && tokens
+            .iter()
+            .zip(creation_clause)
+            .all(|(token, keyword)| token.eq_ignore_ascii_case(keyword))
+    {
+        tokens.drain(2..5);
+    }
+    tokens.join(" ")
 }
 
 /// The generated fleet-authority table's shape, compared with what
@@ -5364,6 +5375,17 @@ mod tests {
         assert_ne!(create_table_sql_tokens(&dropped), canonical);
         assert_ne!(
             create_table_sql_tokens(&generated.replace("BIGINT", "INTEGER")),
+            canonical
+        );
+
+        // FrankenSQLite stores the statement without its IF NOT EXISTS (as
+        // SQLite does); the table is the same (gate58: all four real
+        // fleet-backend tests failed on the stored form).
+        let stored = generated.replacen("IF NOT EXISTS ", "", 1);
+        assert_ne!(stored, generated);
+        assert_eq!(create_table_sql_tokens(&stored), canonical);
+        assert_ne!(
+            create_table_sql_tokens(&stored.replace("BIGINT", "INTEGER")),
             canonical
         );
     }

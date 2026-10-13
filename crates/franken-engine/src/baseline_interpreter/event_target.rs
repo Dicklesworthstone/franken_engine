@@ -1266,7 +1266,18 @@ mod abort_graph_tests {
         )
         .expect("empty program lowers")
         .ir3;
-        let core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "abort-graph-unit");
+        // The grants a program's execution has: without HeapAllocate every
+        // allocation helper refuses, and these tests never reached their
+        // checks.
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]
+        .into_iter()
+        .collect();
+        let core = InterpreterCore::new(config, "abort-graph-unit");
         (core, module)
     }
 

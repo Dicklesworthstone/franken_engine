@@ -243,6 +243,29 @@ impl BacktrackRegExp {
         Parser::new(pattern, unicode).pattern().err()
     }
 
+    /// Whether `pattern` has a repetition whose ES2020 result the `regex`
+    /// crate does not reproduce, so it must run here even though the
+    /// automaton could compile it (bd-9vouw.367):
+    /// - a quantified atom that may iterate more than once and holds a
+    ///   capturing group of its own: RepeatMatcher clears those captures at
+    ///   every iteration (ES2020 21.2.2.5.1 step 4), the automaton keeps an
+    ///   earlier iteration's (`/((a)|(b))+/.exec("ab")[2]` is undefined, not
+    ///   "a");
+    /// - a quantified atom that can match the empty string: an iteration
+    ///   that matches empty fails (step 2.b), so the matcher backtracks into
+    ///   other alternatives (`/(a?b??)*/.exec("ab")` matches "ab", not "a").
+    ///
+    /// A pattern this parser rejects is left to the automaton.
+    pub(super) fn needs_es_repetition_semantics(pattern: &str, flags: &str) -> bool {
+        if pattern.len() > MAX_PATTERN_LEN {
+            return false;
+        }
+        let unicode = flags.contains('u') || flags.contains('v');
+        Parser::new(pattern, unicode)
+            .pattern()
+            .is_ok_and(|root| repetition_diverges(&root))
+    }
+
     /// Compiled instructions, a measure of the pattern's memory.
     pub(super) fn program_len(&self) -> usize {
         self.program.len()
@@ -601,6 +624,57 @@ enum Node {
         greedy: bool,
         groups: (usize, usize),
     },
+}
+
+/// Whether some repetition in `node` may iterate more than once over an
+/// atom that holds a capturing group of its own or can match the empty
+/// string (see [`BacktrackRegExp::needs_es_repetition_semantics`]). The
+/// parser bounds the tree's depth by [`MAX_GROUP_NESTING`].
+fn repetition_diverges(node: &Node) -> bool {
+    match node {
+        Node::Repeat {
+            body,
+            max,
+            groups: (from, to),
+            ..
+        } => {
+            let repeats = max.is_none_or(|max| max > 1);
+            // `(x)+` keeps its own capture's last iteration either way; only
+            // the groups nested inside the atom are cleared per iteration.
+            let own_group = matches!(body.as_ref(), Node::Group { index: Some(_), .. });
+            let nested_groups = to
+                .saturating_sub(*from)
+                .saturating_sub(usize::from(own_group));
+            (repeats && (nested_groups > 0 || node_is_nullable(body))) || repetition_diverges(body)
+        }
+        Node::Group { body, .. } | Node::Look { body, .. } => repetition_diverges(body),
+        Node::Concat(nodes) | Node::Alt(nodes) => nodes.iter().any(repetition_diverges),
+        Node::Empty
+        | Node::Char(_)
+        | Node::Any
+        | Node::Class(_)
+        | Node::LineStart
+        | Node::LineEnd
+        | Node::WordBoundary { .. }
+        | Node::BackRef(_) => false,
+    }
+}
+
+/// Whether `node` can match the empty string.
+fn node_is_nullable(node: &Node) -> bool {
+    match node {
+        Node::Empty
+        | Node::LineStart
+        | Node::LineEnd
+        | Node::WordBoundary { .. }
+        | Node::Look { .. }
+        | Node::BackRef(_) => true,
+        Node::Char(_) | Node::Any | Node::Class(_) => false,
+        Node::Group { body, .. } => node_is_nullable(body),
+        Node::Concat(nodes) => nodes.iter().all(node_is_nullable),
+        Node::Alt(nodes) => nodes.iter().any(node_is_nullable),
+        Node::Repeat { body, min, .. } => *min == 0 || node_is_nullable(body),
+    }
 }
 
 /// One element of a character class.
@@ -2210,6 +2284,75 @@ mod tests {
     }
 
     // Expected values are Node v22.2.0's exec results.
+
+    /// bd-9vouw.367: the repetitions that must run here (captures nested in
+    /// a repeated atom, a repeated atom that can match empty) and ones that
+    /// stay on the automaton, whose results agree with ES2020.
+    #[test]
+    fn es_repetition_semantics_selects_divergent_repetitions() {
+        for pattern in [
+            "((a)|(b))+",
+            "(z)((a+)?(b+)?(c))*",
+            "(?:(a)|b)*",
+            r"(?:(\d+),){2,}",
+            "(a?b??)*",
+            "(a*?)*",
+            "(?:a|())*",
+            "x(?:y|z(w))+",
+        ] {
+            assert!(
+                BacktrackRegExp::needs_es_repetition_semantics(pattern, ""),
+                "{pattern}"
+            );
+        }
+        for pattern in [
+            "(a)+",
+            "(ab)*",
+            "a*b+",
+            "(?:ab)+(c)",
+            "(?:(a)|b)?",
+            r"(\w+)\s*=\s*(\d+)",
+            "(a){1}",
+            "(?:(a)|b){0,1}",
+            r"^(?:\d{1,3}\.){3}\d{1,3}$",
+        ] {
+            assert!(
+                !BacktrackRegExp::needs_es_repetition_semantics(pattern, ""),
+                "{pattern}"
+            );
+        }
+    }
+
+    /// The routed patterns' results (bd-9vouw.367).
+    #[test]
+    fn repeated_atoms_clear_nested_captures_and_reject_empty_iterations() {
+        assert_eq!(
+            exec("((a)|(b))+", "", "ab"),
+            Some((0, groups(&[Some("ab"), Some("b"), None, Some("b")])))
+        );
+        assert_eq!(
+            exec("(z)((a+)?(b+)?(c))*", "", "zaacbbbcac"),
+            Some((
+                0,
+                groups(&[
+                    Some("zaacbbbcac"),
+                    Some("z"),
+                    Some("ac"),
+                    Some("a"),
+                    None,
+                    Some("c")
+                ])
+            ))
+        );
+        assert_eq!(
+            exec("(a?b??)*", "", "ab"),
+            Some((0, groups(&[Some("ab"), Some("b")])))
+        );
+        assert_eq!(
+            exec("(a*?)*", "", "aa"),
+            Some((0, groups(&[Some("aa"), Some("a")])))
+        );
+    }
 
     /// `\p{Cs}` on this engine too (a look-behind keeps the pattern here):
     /// it compiles, `\P{Cs}` matches any character and `\p{Cs}` none.

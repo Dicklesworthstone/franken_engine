@@ -6,10 +6,9 @@
 //! guest calls are observable. Expected strings are Node v22.2.0's output for
 //! the same programs.
 //!
-//! No-claim: the receiver's elements are walked from a snapshot taken when
-//! the method starts, so a `has` callback that adds to or deletes from the
-//! receiver mid-walk is not modeled; Function-constructor code is not
-//! granted these methods.
+//! Reentrant mutation and iterator/copy boundaries are covered separately by
+//! `set_algebra_mutation_execution`; Function-constructor authority is not
+//! broadened by either regression suite.
 
 use frankenengine_engine::HybridRouter;
 

@@ -343,6 +343,20 @@ mod tests {
         check("class C { ⟦abstract read(): number⟧ }");
     }
 
+    /// bd-9vouw.432: without semicolons, a field's initializer ends where a
+    /// line starts the next member with a modifier; its modifiers were read
+    /// as part of the initializer and never erased.
+    #[test]
+    fn semicolonless_initializers_stop_at_a_modified_member() {
+        check(
+            "class C {\n  ⟦private⟧ queue⟦: number[]⟧ = []\n  ⟦private⟧ busy⟦: boolean⟧ = false\n  ⟦private⟧ ⟦readonly⟧ size = 2\n  static count = 0\n  ⟦protected⟧ get total() { return 1 }\n  run() { return this.busy }\n}",
+        );
+        // A call's type arguments hold commas that do not end the field.
+        check(
+            "class Cache⟦<K, V>⟧ {\n  ⟦private⟧ cache = new Map⟦<K, V>⟧();\n  ⟦private⟧ maxSize⟦: number⟧;\n  get(key⟦: K⟧) { return this.cache.get(key); }\n}",
+        );
+    }
+
     #[test]
     fn abstract_and_declared_members_create_no_runtime_properties() {
         check(

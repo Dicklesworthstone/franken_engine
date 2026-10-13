@@ -2,8 +2,8 @@
 source: crates/franken-engine/tests/baseline_interpreter_conformance.rs
 expression: actual
 ---
-total=307
-unique=307
+total=308
+unique=308
 duplicates=0
 
 builtin:ApplyHostCall
@@ -56,6 +56,7 @@ builtin:BufferCompare
 builtin:BufferConcat
 builtin:BufferFrom
 builtin:BufferIsBuffer
+builtin:BufferIsEncoding
 builtin:ClearTimeout
 builtin:ClusterFacade
 builtin:ConsoleError

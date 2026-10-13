@@ -309,25 +309,47 @@ impl JsString {
                 let (byte, second) = utf16_boundary(text, *utf16_len, start);
                 let rest = &text[byte..];
                 let count = end - start;
-                if !second {
-                    // Map the end relative to the located start, so a short
-                    // interior slice does not scan the same prefix twice.
-                    let (stop, split_end) = utf16_boundary(rest, *utf16_len - start, count);
-                    if !split_end {
-                        return Self {
-                            utf8: Text::Flat(Arc::from(&rest[..stop])),
-                            shape: Shape::WellFormed { utf16_len: count },
-                        };
-                    }
+                // `rest` begins at the scalar, including its high half when
+                // `start` selected the low half. Keep both coordinates in
+                // that same frame so short slices never rescan the prefix.
+                let skipped = usize::from(second);
+                let (stop, split_end) =
+                    utf16_boundary(rest, *utf16_len - start + skipped, count + skipped);
+                if !second && !split_end {
+                    return Self {
+                        utf8: Text::Flat(Arc::from(&rest[..stop])),
+                        shape: Shape::WellFormed { utf16_len: count },
+                    };
                 }
-                // Only cuts inside a pair need exact-unit reconstruction.
-                // Even here, skip from the located scalar, not from zero.
-                let units: Vec<u16> = rest
-                    .encode_utf16()
-                    .skip(usize::from(second))
-                    .take(count)
-                    .collect();
-                Self::from_code_units(&units)
+                // A split first/last pair proves that the result has a lone
+                // surrogate. Do not try String::from_utf16 only to fail, then
+                // decode the entire slice again for its lossy projection.
+                // The scalar-aligned middle is already valid UTF-8: copy it
+                // verbatim, replacing only the one or two broken edge units.
+                let middle_start = if second {
+                    rest.chars()
+                        .next()
+                        .expect("a split boundary has an astral scalar")
+                        .len_utf8()
+                } else {
+                    0
+                };
+                let middle = &rest[middle_start..stop];
+                let replacement_bytes =
+                    '\u{fffd}'.len_utf8() * (skipped + usize::from(split_end));
+                let mut projection = String::with_capacity(middle.len() + replacement_bytes);
+                if second {
+                    projection.push('\u{fffd}');
+                }
+                projection.push_str(middle);
+                if split_end {
+                    projection.push('\u{fffd}');
+                }
+                let units: Arc<[u16]> = rest.encode_utf16().skip(skipped).take(count).collect();
+                Self {
+                    utf8: Text::Flat(Arc::from(projection)),
+                    shape: Shape::Exact(units),
+                }
             }
             Shape::Exact(units) => Self::from_code_units(&units[start..end]),
         }
@@ -542,7 +564,7 @@ mod tests {
                 let units: Vec<u16> = text.encode_utf16().collect();
                 let (start, end) = if prepend {
                     drop(expected.splice(0..0, units.iter().copied()));
-                    rope = piece.concat(&rope);
+                    rope = piece.concat(&piece);
                     (0, 12)
                 } else {
                     expected.extend_from_slice(&units);
@@ -854,5 +876,93 @@ mod tests {
                 assert_eq!(string.code_point_at(index), reference_point(&units, index));
             }
         }
+    }
+
+    #[test]
+    fn split_pair_slices_match_canonical_storage_and_wire() {
+        for text in [
+            "\u{1f600}",
+            "\u{1f600}\u{1f600}",
+            "a\u{1f600}\u{e9}\u{1f600}z",
+            "\u{10000}\u{fffd}\u{10ffff}",
+        ] {
+            let string = JsString::from(text);
+            let units: Vec<u16> = text.encode_utf16().collect();
+            for start in 0..=units.len() {
+                for end in start..=units.len() {
+                    let expected = JsString::from_code_units(&units[start..end]);
+                    let actual = string.utf16_slice(start, end);
+                    assert_eq!(actual, expected, "{text:?} {start}..{end}");
+                    assert_eq!(
+                        actual.as_utf8_projection(),
+                        String::from_utf16_lossy(&units[start..end])
+                    );
+                    assert_eq!(
+                        serde_json::to_string(&actual).unwrap(),
+                        serde_json::to_string(&expected).unwrap()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn long_split_pair_slices_copy_the_middle_without_renormalizing_it() {
+        let text = format!("\u{1f600}{}\u{10ffff}", "a\u{e9}\u{65e5}".repeat(4096));
+        let units: Vec<u16> = text.encode_utf16().collect();
+        let length = units.len();
+        let string = JsString::from(text.as_str());
+        for (start, end) in [
+            (0, length - 1),
+            (1, length),
+            (1, length - 1),
+            (0, 1),
+            (1, 2),
+            (length - 1, length),
+            (2, length - 2),
+        ] {
+            let expected = JsString::from_code_units(&units[start..end]);
+            let actual = string.utf16_slice(start, end);
+            assert_eq!(actual, expected, "{start}..{end}");
+            assert_eq!(actual.code_units_vec(), units[start..end]);
+            assert_eq!(actual.utf16_len(), end - start);
+            assert_eq!(actual.retained_bytes(24), expected.retained_bytes(24));
+        }
+    }
+
+    #[test]
+    fn split_rope_slices_keep_ancestors_lazy_and_heal_when_rejoined() {
+        let left_text = format!("{}\u{1f600}", "a".repeat(1100));
+        let right_text = format!("\u{1f603}{}", "\u{e9}".repeat(600));
+        let left = JsString::from(left_text.as_str());
+        let right = JsString::from(right_text.as_str());
+        let rope = left.concat(&right);
+        let split = left.utf16_len() - 1;
+        let head = rope.utf16_slice(0, split);
+        let tail = rope.utf16_slice(split, rope.utf16_len());
+        assert!(!head.is_well_formed());
+        assert!(!tail.is_well_formed());
+        assert_unjoined(&rope);
+        let healed = head.concat(&tail);
+        assert!(healed.is_well_formed());
+        assert_eq!(
+            healed.as_str(),
+            Some(format!("{left_text}{right_text}").as_str())
+        );
+        assert_unjoined(&rope);
+        let across = rope.utf16_slice(split, split + 2);
+        assert_eq!(across, JsString::from_code_units(&[0xDE00, 0xD83D]));
+        assert_eq!(across.as_utf8_projection(), "\u{fffd}\u{fffd}");
+        assert_unjoined(&rope);
+    }
+
+    #[test]
+    fn exact_source_slices_still_renormalize_after_removing_lone_edges() {
+        let source = JsString::from_code_units(&[0xD800, 0x61, 0xD83D, 0xDE00, 0x62, 0xDC00]);
+        assert!(!source.is_well_formed());
+        let middle = source.utf16_slice(1, 5);
+        assert!(middle.is_well_formed());
+        assert_eq!(middle.as_str(), Some("a\u{1f600}b"));
+        assert_eq!(serde_json::to_string(&middle).unwrap(), "\"a\u{1f600}b\"");
     }
 }

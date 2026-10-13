@@ -106086,21 +106086,38 @@ impl InterpreterCore {
     /// cells stay in the cold ledger. What remains are the cells of frames
     /// the callee pushed, which nothing else reaches.
     fn released_frame_cell_payload_bytes(&self, callee_frames: &[ScopeFrame]) -> u64 {
-        let restored_maps = self
-            .scope_chain
-            .frames
-            .iter()
-            .map(|frame| Rc::as_ptr(&frame.bindings))
-            .collect::<Vec<_>>();
         let cold = &self.closures.cold_cells;
+        // The cells counted so far. Every return runs this and most release
+        // a few cells, so the first ones are kept on the stack and a set
+        // takes the rest: no allocation for a small frame (bd-9vouw.504).
+        let mut recent = [std::ptr::null::<RefCell<ScopeBindingState>>(); 8];
+        let mut recent_len = 0;
         let mut seen = BTreeSet::new();
         let mut total = 0u64;
         for frame in callee_frames {
-            if restored_maps.contains(&Rc::as_ptr(&frame.bindings)) {
+            if self
+                .scope_chain
+                .frames
+                .iter()
+                .any(|restored| Rc::ptr_eq(&restored.bindings, &frame.bindings))
+            {
                 continue;
             }
             for binding in frame.bindings.values() {
-                if !cold.contains(&binding.state) && seen.insert(Rc::as_ptr(&binding.state)) {
+                if cold.contains(&binding.state) {
+                    continue;
+                }
+                let cell = Rc::as_ptr(&binding.state);
+                let first_sight = if recent[..recent_len].contains(&cell) || seen.contains(&cell) {
+                    false
+                } else if recent_len < recent.len() {
+                    recent[recent_len] = cell;
+                    recent_len += 1;
+                    true
+                } else {
+                    seen.insert(cell)
+                };
+                if first_sight {
                     total = total
                         .saturating_add(Self::estimate_binding_cell_payload_bytes(&binding.state));
                 }

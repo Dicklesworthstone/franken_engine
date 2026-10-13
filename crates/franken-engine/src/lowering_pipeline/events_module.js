@@ -279,7 +279,13 @@
         if (!finished && signal !== undefined && isAborted(signal)) { fail(aborted(signal)); }
         if (values.size > 0) {
           var value = take(values);
-          if (paused && values.size < low) { paused = false; emitter.resume(); }
+          if (paused && values.size < low) {
+            // resume() is user code: it can emit synchronously or throw. Stay
+            // paused until it returns, avoiding nested pause transitions and
+            // allowing a later next() to retry a failed resume.
+            emitter.resume();
+            paused = false;
+          }
           return Promise.resolve(result(value, false));
         }
         if (hasError) {

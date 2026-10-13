@@ -12,8 +12,13 @@
 //! (Han, Hiragana, Katakana, Thai, Lao, Khmer, Myanmar) is refused with a
 //! TypeError instead of answering differently from Node. No-claim: no
 //! locale tailoring; `isWordLike` is "the segment has a letter or digit";
-//! the Segments object holds its methods as own properties (there is no
-//! %SegmentsPrototype%); a lone surrogate in the input is read as U+FFFD.
+//! methods remain bound own properties rather than prototype methods;
+//! a lone surrogate in the input is read as U+FFFD.
+//!
+//! Canonical records and iterator cursors are private heap objects reached
+//! through builtin bound-object edges, which the collector traces. Neither
+//! hidden string properties nor yielded records expose that storage. Every
+//! delivery creates a fresh mutable record sharing immutable string backing.
 
 use super::*;
 
@@ -92,9 +97,6 @@ impl InterpreterCore {
         {
             return Err(Self::intl_segmenter_refusal(script));
         }
-        // Records own their properties, but their immutable input text can
-        // share one backing. Copying the whole input for each segment made
-        // grapheme segmentation allocate quadratically in the input length.
         let input = JsString::from(input);
         let text = input
             .as_str()
@@ -104,30 +106,100 @@ impl InterpreterCore {
             "sentence" => self.segment_records(text.split_sentence_bounds(), &input, false)?,
             _ => self.segment_records(text.graphemes(true), &input, false)?,
         };
-        let list = self.alloc_array_from_values(&records)?;
+        // Non-enumerable properties on the public object are not internal
+        // slots: guests can still read and overwrite them. Only bound native
+        // methods retain this private, null-prototype storage object.
+        let storage = self.alloc_object_with_prototype(None)?;
+        let count = i64::try_from(records.len()).map_err(|_| Self::segment_state_error())?;
+        self.set_object_property(storage, "__input".to_string(), Value::Str(input))?;
+        self.set_object_property(storage, "__count".to_string(), Value::Int(count))?;
+        for (index, record) in records.into_iter().enumerate() {
+            self.set_object_property(storage, index.to_string(), record)?;
+        }
         let object = self.alloc_object_with_prototype(None)?;
         self.set_object_brand(object, "Intl.Segments")?;
-        self.set_object_property(object, "__segments".to_string(), Value::Object(list))?;
-        self.set_object_property(object, "__input".to_string(), Value::Str(input))?;
-        let method = |name: &str| {
-            Value::BuiltinFunction(BuiltinFunction {
-                kind: BuiltinFunctionKind::IntlMethod,
-                module_specifier: BuiltinModuleSpecifier::from_nonempty(&format!(
-                    "Segments.{name}"
-                )),
-                iterator_handle: None,
-                bound_object: Some(object.0),
-            })
-        };
-        self.set_object_property(object, "containing".to_string(), method("containing"))?;
-        self.hide_internal_slots(object, &["__segments", "__input", "containing"])?;
+        self.set_object_property(
+            object,
+            "containing".to_string(),
+            Self::segment_builtin("containing", storage),
+        )?;
+        self.hide_internal_slots(object, &["containing"])?;
         let iterator = RuntimePropertyKey::Symbol(WellKnownSymbol::Iterator.id());
-        self.set_object_runtime_property(object, iterator.clone(), method("iterator"))?;
+        self.set_object_runtime_property(
+            object,
+            iterator.clone(),
+            Self::segment_builtin("iterator", storage),
+        )?;
         self.set_own_property_attributes(object, &iterator, NON_ENUMERABLE_DATA_ATTRIBUTES)?;
         Ok(Value::Object(object))
     }
 
-    /// `segments.containing(index)` and `segments[Symbol.iterator]()`.
+    fn segment_builtin(method: &str, bound: ObjectId) -> Value {
+        Value::BuiltinFunction(BuiltinFunction {
+            kind: BuiltinFunctionKind::IntlMethod,
+            module_specifier: BuiltinModuleSpecifier::from_nonempty(&format!("Segments.{method}")),
+            iterator_handle: None,
+            bound_object: Some(bound.0),
+        })
+    }
+
+    fn segment_state_error() -> InterpreterError {
+        InterpreterError::InternalError {
+            details: "Intl.Segmenter private state is missing or invalid".to_string(),
+        }
+    }
+
+    fn segment_storage_info(&self, storage: ObjectId) -> Result<(JsString, usize), InterpreterError> {
+        let object = self
+            .heap
+            .get(storage.0 as usize)
+            .ok_or_else(Self::segment_state_error)?;
+        match (
+            object.properties.get("__input"),
+            object.properties.get("__count"),
+        ) {
+            (Some(Value::Str(input)), Some(Value::Int(count))) => Ok((
+                input.clone(),
+                usize::try_from(*count).map_err(|_| Self::segment_state_error())?,
+            )),
+            _ => Err(Self::segment_state_error()),
+        }
+    }
+
+    /// Borrow only the selected canonical record; never clone the entire
+    /// collection. Storage is private, so getters and guest mutations cannot
+    /// affect this read or change the ordering of its UTF-16 boundaries.
+    fn segment_data_at(&self, storage: ObjectId, index: usize) -> Result<Segment, InterpreterError> {
+        let record = self
+            .heap
+            .get(storage.0 as usize)
+            .and_then(|object| object.properties.get(&index.to_string()));
+        let Some(Value::Object(record)) = record else {
+            return Err(Self::segment_state_error());
+        };
+        let object = self
+            .heap
+            .get(record.0 as usize)
+            .ok_or_else(Self::segment_state_error)?;
+        let (Some(Value::Str(text)), Some(Value::Int(start))) = (
+            object.properties.get("segment"),
+            object.properties.get("index"),
+        ) else {
+            return Err(Self::segment_state_error());
+        };
+        let word_like = match object.properties.get("isWordLike") {
+            None => None,
+            Some(Value::Bool(flag)) => Some(*flag),
+            _ => return Err(Self::segment_state_error()),
+        };
+        Ok((
+            text.clone(),
+            usize::try_from(*start).map_err(|_| Self::segment_state_error())?,
+            word_like,
+        ))
+    }
+
+    /// `containing`, iterator creation, and native segment-iterator methods.
     pub(super) fn intl_segments_method(
         &mut self,
         module: &Ir3Module,
@@ -135,27 +207,22 @@ impl InterpreterCore {
         method: &str,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        let slots = builtin
-            .bound_object
-            .map(ObjectId)
-            .and_then(|object| self.heap.get(object.0 as usize))
-            .map(|object| {
-                (
-                    object.properties.get("__segments").cloned(),
-                    object.properties.get("__input").cloned(),
-                )
-            });
-        let Some((Some(Value::Object(list)), Some(Value::Str(input)))) = slots else {
-            return Err(InterpreterError::TypeError {
+        let bound = builtin.bound_object.map(ObjectId).ok_or_else(|| {
+            InterpreterError::TypeError {
                 expected: "an Intl.Segmenter Segments object".to_string(),
                 got: "an object without segments".to_string(),
-            });
-        };
-        if method == "iterator" {
-            return self.array_prototype_iterator_for_receiver(Value::Object(list), "values");
+            }
+        })?;
+        match method {
+            "next" => return self.segment_iterator_next(bound),
+            "self" => return Ok(Value::Object(bound)),
+            "iterator" => return self.segment_iterator(bound),
+            "containing" => {}
+            _ => return Err(Self::segment_state_error()),
         }
-        // ECMA-402 18.5.2.1: ToIntegerOrInfinity(index); outside the input
-        // there is no segment.
+        let (input, count) = self.segment_storage_info(bound)?;
+        // ToIntegerOrInfinity may call guest code. Canonical storage is not
+        // reachable from any yielded record, even across that reentrant call.
         let index = match self.builtin_arg(args, 0)? {
             None | Some(Value::Undefined) => 0.0,
             Some(value) => {
@@ -163,37 +230,107 @@ impl InterpreterCore {
                 if number.is_nan() { 0.0 } else { number.trunc() }
             }
         };
-        let length = input.utf16_len();
-        if index < 0.0 || index >= length as f64 {
+        if index < 0.0 || index >= input.utf16_len() as f64 {
             return Ok(Value::Undefined);
         }
-        let index = index as usize;
-        let records = self.array_like_values(list)?;
-        for record in records {
-            let Value::Object(record) = record else {
-                continue;
-            };
-            let (start, text) = match self.heap.get(record.0 as usize).map(|object| {
-                (
-                    object.properties.get("index").cloned(),
-                    object.properties.get("segment").cloned(),
-                )
-            }) {
-                Some((Some(Value::Int(start)), Some(Value::Str(text)))) => (start as usize, text),
-                _ => continue,
-            };
-            if index >= start && index - start < text.utf16_len() {
-                let word_like = self.heap.get(record.0 as usize).and_then(|object| {
-                    match object.properties.get("isWordLike") {
-                        Some(Value::Bool(flag)) => Some(*flag),
-                        _ => None,
-                    }
-                });
-                let fresh = self.segment_record(&(text, start, word_like), &input)?;
-                return Ok(Value::Object(fresh));
+        self.segment_containing(bound, &input, count, index as usize)
+    }
+
+    fn segment_containing(
+        &mut self,
+        storage: ObjectId,
+        input: &JsString,
+        count: usize,
+        index: usize,
+    ) -> Result<Value, InterpreterError> {
+        for slot in 0..count {
+            self.json_charge_work()?;
+            let segment = self.segment_data_at(storage, slot)?;
+            if index >= segment.1 && index - segment.1 < segment.0.utf16_len() {
+                return self.segment_record(&segment, input).map(Value::Object);
             }
         }
         Ok(Value::Undefined)
+    }
+
+    /// A private cursor avoids eagerly copying every record into a new array
+    /// for each iterator. Advancing allocates only the delivered fresh record
+    /// and its IteratorResult, while concurrent iterators keep separate state.
+    fn segment_iterator(&mut self, storage: ObjectId) -> Result<Value, InterpreterError> {
+        self.segment_storage_info(storage)?;
+        let state = self.alloc_object_with_properties(&[
+            ("__storage", Value::Object(storage)),
+            ("__cursor", Value::Int(0)),
+        ])?;
+        let iterator = self.alloc_object_with_prototype(None)?;
+        self.set_object_property(
+            iterator,
+            "next".to_string(),
+            Self::segment_builtin("next", state),
+        )?;
+        self.hide_internal_slots(iterator, &["next"])?;
+        let key = RuntimePropertyKey::Symbol(WellKnownSymbol::Iterator.id());
+        self.set_object_runtime_property(
+            iterator,
+            key.clone(),
+            Self::segment_builtin("self", iterator),
+        )?;
+        self.set_own_property_attributes(iterator, &key, NON_ENUMERABLE_DATA_ATTRIBUTES)?;
+        let tag = RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id());
+        self.set_object_runtime_property(
+            iterator,
+            tag.clone(),
+            Value::str("Segmenter String Iterator"),
+        )?;
+        self.set_own_property_attributes(
+            iterator,
+            &tag,
+            PropertyAttributes {
+                writable: false,
+                enumerable: false,
+                configurable: true,
+            },
+        )?;
+        Ok(Value::Object(iterator))
+    }
+
+    fn segment_iterator_result(&mut self, value: Value, done: bool) -> Result<Value, InterpreterError> {
+        self.alloc_object_with_properties(&[("value", value), ("done", Value::Bool(done))])
+            .map(Value::Object)
+    }
+
+    fn segment_iterator_next(&mut self, state: ObjectId) -> Result<Value, InterpreterError> {
+        self.json_charge_work()?;
+        let slots = self
+            .heap
+            .get(state.0 as usize)
+            .map(|object| {
+                (
+                    object.properties.get("__storage").cloned(),
+                    object.properties.get("__cursor").cloned(),
+                )
+            })
+            .ok_or_else(Self::segment_state_error)?;
+        if matches!(&slots.0, Some(Value::Undefined)) {
+            return self.segment_iterator_result(Value::Undefined, true);
+        }
+        let (Some(Value::Object(storage)), Some(Value::Int(cursor))) = slots else {
+            return Err(Self::segment_state_error());
+        };
+        let cursor = usize::try_from(cursor).map_err(|_| Self::segment_state_error())?;
+        let (input, count) = self.segment_storage_info(storage)?;
+        if cursor >= count {
+            // Exhaustion is sticky and no longer retains the input/records
+            // solely for this iterator. Subsequent calls still get fresh results.
+            self.set_object_property(state, "__storage".to_string(), Value::Undefined)?;
+            return self.segment_iterator_result(Value::Undefined, true);
+        }
+        let segment = self.segment_data_at(storage, cursor)?;
+        let record = self.segment_record(&segment, &input)?;
+        let result = self.segment_iterator_result(Value::Object(record), false)?;
+        // cursor < count <= i64::MAX, so advancing cannot overflow.
+        self.set_object_property(state, "__cursor".to_string(), Value::Int((cursor + 1) as i64))?;
+        Ok(result)
     }
 
     /// A segment data record `{ segment, index, input[, isWordLike] }`.
@@ -273,39 +410,55 @@ mod tests {
         }
     }
 
+    fn object(value: Value) -> ObjectId {
+        let Value::Object(id) = value else {
+            panic!("expected object, got {value:?}");
+        };
+        id
+    }
+
+    fn bound(core: &InterpreterCore, object: ObjectId, method: &str) -> ObjectId {
+        let Some(Value::BuiltinFunction(function)) = core.heap[object.0 as usize].properties.get(method)
+        else {
+            panic!("expected native {method} method");
+        };
+        ObjectId(function.bound_object.expect("bound state"))
+    }
+
+    fn fixture(core: &mut InterpreterCore, text: &str, granularity: &str) -> (ObjectId, ObjectId) {
+        let resolved = core
+            .alloc_object_with_properties(&[("granularity", Value::str(granularity))])
+            .expect("resolved options");
+        let segments = object(core.intl_segment(resolved, text.to_string()).expect("segments"));
+        (segments, bound(core, segments, "containing"))
+    }
+
+    fn delivered(core: &mut InterpreterCore, state: ObjectId) -> Option<ObjectId> {
+        let result = object(core.segment_iterator_next(state).expect("next"));
+        let fields = &core.heap[result.0 as usize].properties;
+        match (fields.get("value"), fields.get("done")) {
+            (Some(Value::Object(record)), Some(Value::Bool(false))) => Some(*record),
+            (Some(Value::Undefined), Some(Value::Bool(true))) => None,
+            _ => panic!("invalid IteratorResult"),
+        }
+    }
+
     #[test]
     fn segmentation_records_share_input_backing_for_every_granularity() {
         for granularity in ["grapheme", "word", "sentence"] {
             let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-sharing");
-            let resolved = core
-                .alloc_object_with_properties(&[("granularity", Value::str(granularity))])
-                .expect("resolved options");
             let input = "A\u{1f44d}\u{1f3fd} e\u{301}. Next!\r\n".repeat(32);
-            let Value::Object(segments) = core
-                .intl_segment(resolved, input.clone())
-                .expect("segment input")
-            else {
-                panic!("expected Segments object");
-            };
-            let shared = string_property(&core, segments, "__input").clone();
+            let (segments, storage) = fixture(&mut core, &input, granularity);
+            assert_ne!(segments, storage);
+            assert!(!core.heap[segments.0 as usize].properties.contains_key("__input"));
+            assert!(!core.heap[segments.0 as usize].properties.contains_key("__segments"));
+            let (shared, count) = core.segment_storage_info(storage).expect("private storage");
             assert_eq!(shared.as_str(), Some(input.as_str()));
             assert_eq!(shared.utf16_len(), input.encode_utf16().count());
-            let Some(Value::Object(list)) = core.heap[segments.0 as usize]
-                .properties
-                .get("__segments")
-                .cloned()
-            else {
-                panic!("expected segment list");
-            };
-            let records = core.array_like_values(list).expect("read segment records");
-            assert!(records.len() > 1, "fixture must exercise repeated records");
-            for record in records {
-                let Value::Object(record) = record else {
-                    panic!("expected segment record");
-                };
+            assert!(count > 1, "fixture must exercise repeated records");
+            for index in 0..count {
+                let record = object(core.heap[storage.0 as usize].properties.get(&index.to_string()).unwrap().clone());
                 let stored = string_property(&core, record, "input");
-                // Content equality alone passed with the quadratic copies.
-                // Every result must retain the very same immutable backing.
                 assert!(std::ptr::eq(
                     stored.as_str().expect("well-formed input"),
                     shared.as_str().expect("well-formed input"),
@@ -324,17 +477,11 @@ mod tests {
         assert_ne!(first, second);
         for record in [first, second] {
             assert!(std::ptr::eq(
-                string_property(&core, record, "input")
-                    .as_str()
-                    .expect("well-formed input"),
+                string_property(&core, record, "input").as_str().expect("well-formed input"),
                 input.as_str().expect("well-formed input"),
             ));
-        }
-        for record in [first, second] {
             assert!(std::ptr::eq(
-                string_property(&core, record, "segment")
-                    .as_str()
-                    .expect("well-formed segment"),
+                string_property(&core, record, "segment").as_str().expect("well-formed segment"),
                 segment.0.as_str().expect("well-formed segment"),
             ));
         }
@@ -343,10 +490,7 @@ mod tests {
         assert_eq!(string_property(&core, second, "segment"), &segment.0);
         core.set_object_property(first, "input".to_string(), Value::str("changed"))
             .expect("replace first record input");
-        assert_eq!(
-            string_property(&core, first, "input").as_str(),
-            Some("changed")
-        );
+        assert_eq!(string_property(&core, first, "input").as_str(), Some("changed"));
         assert_eq!(string_property(&core, second, "input"), &input);
         assert_eq!(input.utf16_len(), 1024);
     }
@@ -392,15 +536,8 @@ mod tests {
             panic!("expected sentence record");
         };
         assert_eq!(string_property(&core, record, "segment"), &input);
-        assert_eq!(
-            core.heap[record.0 as usize].properties.get("index"),
-            Some(&Value::Int(0))
-        );
-        assert!(
-            !core.heap[record.0 as usize]
-                .properties
-                .contains_key("isWordLike")
-        );
+        assert_eq!(core.heap[record.0 as usize].properties.get("index"), Some(&Value::Int(0)));
+        assert!(!core.heap[record.0 as usize].properties.contains_key("isWordLike"));
     }
 
     #[test]
@@ -415,5 +552,151 @@ mod tests {
             assert!(records.is_empty());
             assert_eq!(core.heap.len(), before);
         }
+    }
+
+    #[test]
+    fn native_iterators_are_independent_and_never_deliver_canonical_records() {
+        for granularity in ["grapheme", "word", "sentence"] {
+            let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-cursors");
+            let (_, storage) = fixture(&mut core, "A\u{1f44d}\u{1f3fd}. Next!", granularity);
+            let (input, count) = core.segment_storage_info(storage).expect("storage");
+            let first = object(core.segment_iterator(storage).expect("first iterator"));
+            let second = object(core.segment_iterator(storage).expect("second iterator"));
+            let a = bound(&core, first, "next");
+            let b = bound(&core, second, "next");
+            assert_ne!(first, second);
+            assert_ne!(a, b);
+            for slot in 0..count {
+                let canonical = core.segment_data_at(storage, slot).expect("canonical segment");
+                let left = delivered(&mut core, a).expect("first value");
+                let right = delivered(&mut core, b).expect("second value");
+                assert_ne!(left, right);
+                assert_eq!(string_property(&core, left, "segment"), &canonical.0);
+                assert!(std::ptr::eq(
+                    string_property(&core, left, "segment").as_str().unwrap(),
+                    canonical.0.as_str().unwrap(),
+                ));
+                core.set_object_property(left, "segment".to_string(), Value::str("changed")).unwrap();
+                core.set_object_property(left, "index".to_string(), Value::Int(-1)).unwrap();
+                core.set_object_property(left, "input".to_string(), Value::str("changed")).unwrap();
+                assert_eq!(string_property(&core, right, "segment"), &canonical.0);
+                assert_eq!(core.segment_data_at(storage, slot).unwrap(), canonical);
+                let found = object(core.segment_containing(storage, &input, count, canonical.1).unwrap());
+                assert_eq!(string_property(&core, found, "segment"), &canonical.0);
+                assert_ne!(found, right);
+            }
+            for state in [a, b] {
+                assert_eq!(delivered(&mut core, state), None);
+                assert_eq!(delivered(&mut core, state), None);
+                assert_eq!(core.heap[state.0 as usize].properties.get("__storage"), Some(&Value::Undefined));
+            }
+        }
+    }
+
+    #[test]
+    fn iterator_creation_and_one_step_do_not_copy_the_collection() {
+        let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-lazy-delivery");
+        let (_, storage) = fixture(&mut core, &"x".repeat(256), "grapheme");
+        let before = core.heap.len();
+        let iterator = object(core.segment_iterator(storage).expect("iterator"));
+        assert_eq!(core.heap.len() - before, 2, "only iterator and private cursor");
+        let state = bound(&core, iterator, "next");
+        let before = core.heap.len();
+        assert!(delivered(&mut core, state).is_some());
+        assert_eq!(core.heap.len() - before, 2, "only data record and IteratorResult");
+    }
+
+    #[test]
+    fn empty_iterator_results_are_fresh_and_exhaustion_is_sticky() {
+        let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-empty-iterator");
+        let (_, storage) = fixture(&mut core, "", "grapheme");
+        let iterator = object(core.segment_iterator(storage).unwrap());
+        let state = bound(&core, iterator, "next");
+        let first = object(core.segment_iterator_next(state).unwrap());
+        core.set_object_property(first, "done".to_string(), Value::Bool(false)).unwrap();
+        let second = object(core.segment_iterator_next(state).unwrap());
+        assert_ne!(first, second);
+        assert_eq!(core.heap[second.0 as usize].properties.get("done"), Some(&Value::Bool(true)));
+        assert_eq!(core.heap[second.0 as usize].properties.get("value"), Some(&Value::Undefined));
+    }
+
+    #[test]
+    fn private_segment_state_survives_collection_through_native_methods() {
+        let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-gc");
+        let (segments, storage) = fixture(&mut core, "a\u{1f44d}\u{1f3fd}b", "grapheme");
+        core.set_reg(0, Value::Object(segments));
+        core.collect_garbage().expect("collect with Segments root");
+        let (input, count) = core.segment_storage_info(storage).expect("storage retained");
+        assert_eq!(count, 3);
+        assert_eq!(input.utf16_len(), 6);
+        let iterator = object(core.segment_iterator(storage).unwrap());
+        let state = bound(&core, iterator, "next");
+        core.set_reg(0, Value::Object(iterator));
+        core.collect_garbage().expect("collect with only iterator root");
+        assert!(core.heap.get(segments.0 as usize).is_none());
+        let first = delivered(&mut core, state).expect("first segment");
+        assert_eq!(string_property(&core, first, "segment").as_str(), Some("a"));
+        assert!(delivered(&mut core, state).is_some());
+        assert!(delivered(&mut core, state).is_some());
+        assert_eq!(delivered(&mut core, state), None);
+        core.collect_garbage().expect("collect exhausted iterator");
+        assert!(core.heap.get(storage.0 as usize).is_none());
+        assert_eq!(delivered(&mut core, state), None);
+    }
+
+    #[test]
+    fn exhausted_work_budget_does_not_advance_or_allocate_an_iterator_result() {
+        let config = InterpreterConfig {
+            instruction_budget: 0,
+            ..InterpreterConfig::default()
+        };
+        let mut core = InterpreterCore::new(config, "segment-budget");
+        let (_, storage) = fixture(&mut core, "abc", "grapheme");
+        let iterator = object(core.segment_iterator(storage).unwrap());
+        let state = bound(&core, iterator, "next");
+        let before = core.heap.len();
+        assert!(core.segment_iterator_next(state).is_err());
+        assert_eq!(core.heap.len(), before);
+        assert_eq!(core.heap[state.0 as usize].properties.get("__cursor"), Some(&Value::Int(0)));
+        assert_eq!(core.heap[state.0 as usize].properties.get("__storage"), Some(&Value::Object(storage)));
+    }
+
+    #[test]
+    fn segment_iterator_public_dispatch_matches_node_record_isolation() {
+        let source = r#"
+const seg = new Intl.Segmenter('en', { granularity: 'word' }).segment('Hi, 42!');
+const a = seg[Symbol.iterator]();
+const b = seg[Symbol.iterator]();
+const x = a.next().value;
+const y = b.next().value;
+console.log(x === y, a[Symbol.iterator]() === a);
+x.segment = 'bad'; x.index = 9000; x.input = 'bad'; x.isWordLike = false;
+console.log(JSON.stringify(y), JSON.stringify(seg.containing(1)));
+console.log([...seg].map(x => x.segment).join('|'));
+console.log(seg.__segments, seg.__input, Object.prototype.toString.call(a));
+for (const ignored of a) {}
+const exhausted = a.next(); exhausted.done = false;
+console.log(a.next().done, a.next().value);
+const detached = (() => {
+  const s = new Intl.Segmenter().segment('a👍🏽b');
+  return s[Symbol.iterator]();
+})();
+console.log([...detached].map(x => x.index + ':' + x.segment).join('|'));
+"#;
+        let lines: Vec<String> = crate::HybridRouter::default()
+            .eval(source)
+            .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+            .console_output
+            .into_iter()
+            .map(|entry| entry.message)
+            .collect();
+        assert_eq!(lines, [
+            "false true",
+            r#"{"segment":"Hi","index":0,"input":"Hi, 42!","isWordLike":true} {"segment":"Hi","index":0,"input":"Hi, 42!","isWordLike":true}"#,
+            "Hi|,| |42|!",
+            "undefined undefined [object Segmenter String Iterator]",
+            "true undefined",
+            "0:a|1:👍🏽|5:b",
+        ]);
     }
 }

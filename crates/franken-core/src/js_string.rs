@@ -91,6 +91,8 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use crate::deterministic_serde::CanonicalValue;
 
+mod access;
+
 /// Serde map key marking the exact-code-unit payload of a string that
 /// contains lone surrogates. Well-formed strings serialize as plain strings.
 const WTF16_MAP_KEY: &str = "$wtf16";
@@ -284,6 +286,22 @@ impl Concat {
         joined
     }
 
+    /// Continue a join after its cache check missed. Another reader may
+    /// publish the joined buffer and release the children before we lock
+    /// `parts`; in that case those bytes still have to enter the parent.
+    fn queue_parts_or_joined(&self, text: &mut String, pending: &mut Vec<JsString>) {
+        if let Some([left, right]) = self.parts() {
+            pending.push(right);
+            pending.push(left);
+        } else {
+            text.push_str(
+                self.joined
+                    .get()
+                    .expect("concatenation parts are released only after publication"),
+            );
+        }
+    }
+
     /// The bytes of every piece, left to right, gathered with an explicit
     /// stack: a string appended to many times is a chain that deep.
     fn join(&self) -> Arc<str> {
@@ -298,12 +316,7 @@ impl Concat {
                 Text::Flat(flat) => text.push_str(flat),
                 Text::Concat(node) => match node.joined.get() {
                     Some(joined) => text.push_str(joined),
-                    None => {
-                        if let Some([left, right]) = node.parts() {
-                            pending.push(right);
-                            pending.push(left);
-                        }
-                    }
+                    None => node.queue_parts_or_joined(&mut text, &mut pending),
                 },
             }
         }
@@ -540,54 +553,6 @@ impl JsString {
         }
     }
 
-    /// The UTF-16 code unit at `unit_index`, or `None` out of range. In ASCII
-    /// text it is the byte there; otherwise, when the text up to that index
-    /// is ASCII, the byte there too, found without decoding the prefix
-    /// (bd-9vouw.403).
-    pub fn code_unit_at(&self, unit_index: usize) -> Option<u16> {
-        match &self.shape {
-            Shape::Exact(units) => units.get(unit_index).copied(),
-            Shape::WellFormed { .. } => {
-                let bytes = self.utf8.as_bytes();
-                if self.is_ascii_text() {
-                    return bytes.get(unit_index).map(|byte| u16::from(*byte));
-                }
-                match bytes.get(..=unit_index) {
-                    Some(prefix) if prefix.is_ascii() => Some(u16::from(bytes[unit_index])),
-                    _ => self.utf8.encode_utf16().nth(unit_index),
-                }
-            }
-        }
-    }
-
-    /// The code units from `start` to `end` (UTF-16 offsets, clamped to the
-    /// string) as a string; a boundary inside a surrogate pair keeps the lone
-    /// half. ASCII text is sliced as bytes and other well-formed text decoded
-    /// only up to `end`, so `slice`/`substring`/`substr` no longer copy the
-    /// whole string into code units on every call (bd-9vouw.467).
-    pub fn utf16_slice(&self, start: usize, end: usize) -> JsString {
-        let end = end.min(self.utf16_len());
-        let start = start.min(end);
-        match &self.shape {
-            Shape::WellFormed { .. } if self.is_ascii_text() => Self {
-                utf8: Text::Flat(Arc::from(&self.utf8[start..end])),
-                shape: Shape::WellFormed {
-                    utf16_len: end - start,
-                },
-            },
-            Shape::WellFormed { .. } => {
-                let units: Vec<u16> = self
-                    .utf8
-                    .encode_utf16()
-                    .skip(start)
-                    .take(end - start)
-                    .collect();
-                Self::from_code_units(&units)
-            }
-            Shape::Exact(units) => Self::from_code_units(&units[start..end]),
-        }
-    }
-
     /// Whether every exact code unit is ASCII, without scanning the backing.
     /// Every non-ASCII scalar (or projected lone surrogate) uses more UTF-8
     /// bytes than UTF-16 units, so equality of the lengths is sufficient.
@@ -682,38 +647,6 @@ impl JsString {
             utf8: Text::Concat(Arc::new(Concat::new(left, right))),
             shape,
         }
-    }
-
-    /// ES2020 `CodePointAt`: the Unicode code point at UTF-16 code-unit
-    /// index `unit_index`. A valid high+low surrogate pair combines into its
-    /// supplementary code point; an unpaired surrogate yields its own code
-    /// unit value; out of range yields `None`. (bd-rdnhc)
-    pub fn code_point_at(&self, unit_index: usize) -> Option<u32> {
-        // An ASCII unit is never half of a surrogate pair (bd-9vouw.403).
-        if self.is_ascii_text() {
-            return self
-                .utf8
-                .as_bytes()
-                .get(unit_index)
-                .map(|byte| u32::from(*byte));
-        }
-        if self.is_well_formed()
-            && let Some(prefix) = self.utf8.as_bytes().get(..=unit_index)
-            && prefix.is_ascii()
-        {
-            return Some(u32::from(prefix[unit_index]));
-        }
-        let mut units = self.encode_utf16().skip(unit_index);
-        let first = units.next()?;
-        if is_high_surrogate(first)
-            && let Some(second) = units.next()
-            && is_low_surrogate(second)
-        {
-            let high = u32::from(first) - 0xD800;
-            let low = u32::from(second) - 0xDC00;
-            return Some(0x10000 + (high << 10) + low);
-        }
-        Some(u32::from(first))
     }
 
     /// ES string-iteration elements (the `String.prototype[@@iterator]`

@@ -49817,14 +49817,20 @@ impl InterpreterCore {
         }
         let mut active_callee = callee_value;
         let mut active_callee_label = callee_label;
+        // The active callee's default prototype object, which holds its
+        // constructor metadata, field list and HomeObject (bd-9vouw.504).
+        let mut active_default_prototype = None;
         let mut forwarding_depth = 0usize;
         loop {
             if matches!(&active_callee, Value::Str(_)) {
                 break;
             }
+            let default_prototype =
+                self.default_constructor_prototype_for_value(module, &active_callee)?;
             let (_, default_derived, parent, parent_label) =
-                self.derived_constructor_metadata(module, &active_callee)?;
+                self.derived_constructor_metadata_of_prototype(default_prototype)?;
             if !default_derived {
+                active_default_prototype = Some(default_prototype);
                 break;
             }
             if forwarding_depth >= self.config.max_call_depth {
@@ -49952,8 +49958,12 @@ impl InterpreterCore {
             return Ok(());
         }
 
+        let default_prototype = match active_default_prototype {
+            Some(prototype) => prototype,
+            None => self.default_constructor_prototype_for_value(module, &active_callee)?,
+        };
         let (derived_constructor, _, super_value, super_label) =
-            self.derived_constructor_metadata(module, &active_callee)?;
+            self.derived_constructor_metadata_of_prototype(default_prototype)?;
         let function_index = self.constructor_function_index(&active_callee)?;
         let captured_env = match &active_callee {
             Value::Function(_) => None,
@@ -50017,7 +50027,7 @@ impl InterpreterCore {
         // ES2022 [[Construct]]: a base class's instance fields initialize on
         // the new object before its constructor body (and parameter
         // initializers) run; a derived class's once its super() returns.
-        let class_instance_fields = self.class_instance_field_list(module, &active_callee)?;
+        let class_instance_fields = self.class_instance_field_list(default_prototype);
         let class_instance_fields = match (&class_instance_fields, &construct_this) {
             (Some(fields), Some(Value::Object(object_id))) if !derived_constructor => {
                 self.run_class_field_initializers(
@@ -50049,7 +50059,7 @@ impl InterpreterCore {
         self.stage_arguments_object(module, function, function_index, &active_callee, args)?;
         self.run_pre_call_hook(module, &active_callee, function_index, &argument_values)?;
         let super_home_object =
-            self.constructor_super_home_object(module, &active_callee, function_index)?;
+            self.constructor_super_home_object(module, function_index, default_prototype)?;
 
         let scope_depth = self.scope_chain.depth();
         let captured_env_bytes = captured_env
@@ -56614,8 +56624,13 @@ impl InterpreterCore {
                         continue;
                     }
 
+                    // The callee's default prototype object holds its
+                    // constructor metadata, its instance field list and its
+                    // HomeObject; resolve it once (bd-9vouw.504).
+                    let default_prototype =
+                        self.default_constructor_prototype_for_value(module, &callee_val)?;
                     let (is_derived, is_default_derived, _, _) =
-                        self.derived_constructor_metadata(module, &callee_val)?;
+                        self.derived_constructor_metadata_of_prototype(default_prototype)?;
                     if is_derived || is_default_derived {
                         if let Err(error) = self.enter_constructor_call(
                             module,
@@ -56679,8 +56694,9 @@ impl InterpreterCore {
                             }
 
                             // Allocate the `this` object for the constructor.
-                            let prototype =
-                                self.constructor_prototype_for_value(module, &callee_val)?;
+                            let prototype = self
+                                .constructor_prototype_other_than_default(module, &callee_val)?
+                                .unwrap_or(default_prototype);
                             let builtin_parent = self.builtin_subclass_ancestor_name(prototype)?;
                             // An ordinary object, never an Array exotic
                             // (OrdinaryCreateFromConstructor, bd-9vouw.152).
@@ -56705,9 +56721,8 @@ impl InterpreterCore {
                             // before its constructor body and parameter
                             // initializers run (derived classes do this in
                             // `enter_constructor_call`, once super() returns).
-                            let fields_initialized = self
-                                .class_instance_field_list(module, &callee_val)
-                                .and_then(|fields| match fields {
+                            let fields_initialized =
+                                match self.class_instance_field_list(default_prototype) {
                                     Some(fields) => self.run_class_field_initializers(
                                         module,
                                         this_val.clone(),
@@ -56715,7 +56730,7 @@ impl InterpreterCore {
                                         &fields,
                                     ),
                                     None => Ok(()),
-                                });
+                                };
                             if let Err(error) = fields_initialized {
                                 match self.route_isolated_explicit_throw(module, error)? {
                                     None => continue,
@@ -56744,8 +56759,11 @@ impl InterpreterCore {
                             self.stage_arguments_object(module, func, func_idx, &callee_val, args)?;
 
                             self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
-                            let super_home_object =
-                                self.constructor_super_home_object(module, &callee_val, func_idx)?;
+                            let super_home_object = self.constructor_super_home_object(
+                                module,
+                                func_idx,
+                                default_prototype,
+                            )?;
 
                             // Push constructor frame with `construct_this`.
                             let scope_depth = self.scope_chain.depth();
@@ -108806,8 +108824,22 @@ impl InterpreterCore {
         module: &Ir3Module,
         value: &Value,
     ) -> Result<ObjectId, InterpreterError> {
+        match self.constructor_prototype_other_than_default(module, value)? {
+            Some(prototype) => Ok(prototype),
+            None => self.default_constructor_prototype_for_value(module, value),
+        }
+    }
+
+    /// GetPrototypeFromConstructor's answer when it is not `value`'s default
+    /// prototype object: a reassigned `prototype` property, or a callable
+    /// proxy's `prototype`. `None` means the default answers.
+    fn constructor_prototype_other_than_default(
+        &mut self,
+        module: &Ir3Module,
+        value: &Value,
+    ) -> Result<Option<ObjectId>, InterpreterError> {
         if let Some((value, _)) = self.constructor_prototype_override(module, value)? {
-            return self.constructed_prototype_link(module, value);
+            return self.constructed_prototype_link(module, value).map(Some);
         }
         // A callable proxy newTarget (bd-9vouw.132): GetPrototypeFromConstructor
         // reads its `prototype` through [[Get]], so its get trap or its target
@@ -108815,9 +108847,9 @@ impl InterpreterCore {
         if Self::is_callable_proxy(value) {
             let key = RuntimePropertyKey::String(JsString::from("prototype"));
             let prototype = self.get_v(module, value, &key)?;
-            return self.constructed_prototype_link(module, prototype);
+            return self.constructed_prototype_link(module, prototype).map(Some);
         }
-        self.default_constructor_prototype_for_value(module, value)
+        Ok(None)
     }
 
     /// GetPrototypeFromConstructor step 3-4 (ES2020 9.1.14) for a
@@ -108877,18 +108909,18 @@ impl InterpreterCore {
     /// `super_value`, the parent constructor: `super.m()` called the
     /// parent's static `m`, and a base class's `super.x` threw
     /// (bd-9vouw.363). `super(...)` still takes the parent constructor from
-    /// `super_value`.
+    /// `super_value`. `default_prototype` is the constructor's
+    /// (default_constructor_prototype_for_value).
     fn constructor_super_home_object(
-        &mut self,
+        &self,
         module: &Ir3Module,
-        constructor: &Value,
         function_index: u32,
+        default_prototype: ObjectId,
     ) -> Result<Option<ObjectId>, InterpreterError> {
         if !self.function_uses_lexical_super(module, function_index)? {
             return Ok(None);
         }
-        let prototype = self.default_constructor_prototype_for_value(module, constructor)?;
-        Ok(Some(prototype))
+        Ok(Some(default_prototype))
     }
 
     fn derived_constructor_metadata(
@@ -108897,6 +108929,18 @@ impl InterpreterCore {
         constructor: &Value,
     ) -> Result<(bool, bool, Value, Label), InterpreterError> {
         let prototype = self.default_constructor_prototype_for_value(module, constructor)?;
+        self.derived_constructor_metadata_of_prototype(prototype)
+    }
+
+    /// derived_constructor_metadata for a constructor whose default
+    /// prototype object is already resolved. The [[Construct]] paths
+    /// resolve it once and read the metadata, the instance field list and
+    /// the HomeObject from it (bd-9vouw.504): an entry in
+    /// `function_prototypes` is only ever inserted, never replaced.
+    fn derived_constructor_metadata_of_prototype(
+        &self,
+        prototype: ObjectId,
+    ) -> Result<(bool, bool, Value, Label), InterpreterError> {
         let object = self
             .heap
             .get(prototype.0 as usize)
@@ -108918,20 +108962,12 @@ impl InterpreterCore {
     }
 
     /// The instance field list of a class constructor (recorded on its
-    /// prototype object by `builtin:ClassDefineField`), if it has fields.
-    fn class_instance_field_list(
-        &mut self,
-        module: &Ir3Module,
-        constructor: &Value,
-    ) -> Result<Option<Value>, InterpreterError> {
-        if !matches!(constructor, Value::Closure(_) | Value::Function(_)) {
-            return Ok(None);
-        }
-        let prototype = self.default_constructor_prototype_for_value(module, constructor)?;
-        Ok(self
-            .heap
-            .get(prototype.0 as usize)
-            .and_then(|object| object.class_fields.as_deref().cloned()))
+    /// default prototype object by `builtin:ClassDefineField`), if it has
+    /// fields.
+    fn class_instance_field_list(&self, default_prototype: ObjectId) -> Option<Value> {
+        self.heap
+            .get(default_prototype.0 as usize)
+            .and_then(|object| object.class_fields.as_deref().cloned())
     }
 
     /// Replace an object's engine-private class field list, charging the

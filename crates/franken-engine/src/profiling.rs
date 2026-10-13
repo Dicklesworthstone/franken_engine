@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::ir_contract::Ir3Instruction;
 
+mod opcode;
+
 /// Profiling configuration options.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfilingConfig {
@@ -95,12 +97,21 @@ pub struct ProfilingReport {
     pub config: ProfilingConfig,
 }
 
+// A single initialization-time allocation keeps the interpreter's optional
+// profiler small. Opcode recording only updates this fixed-size table.
+#[derive(Debug)]
+struct OpcodeCounters {
+    counts: [u64; opcode::NAMES.len()],
+    times: [Option<Duration>; opcode::NAMES.len()],
+}
+
 /// Profiler state for collecting execution statistics.
 #[derive(Debug)]
 pub struct Profiler {
     config: ProfilingConfig,
-    instruction_counts: BTreeMap<String, u64>,
-    instruction_times: BTreeMap<String, Duration>,
+    // Recording must not allocate, format operands, or compare string keys.
+    // Preserve the distinction between an untimed opcode and a zero-time sample.
+    opcodes: Box<OpcodeCounters>,
     memory_stats: MemoryStats,
     start_time: Instant,
     /// Wall-clock instant of the most recent hotspot sample, or the profiler's
@@ -119,8 +130,10 @@ impl Profiler {
         let now = Instant::now();
         Self {
             config,
-            instruction_counts: BTreeMap::new(),
-            instruction_times: BTreeMap::new(),
+            opcodes: Box::new(OpcodeCounters {
+                counts: [0; opcode::NAMES.len()],
+                times: [None; opcode::NAMES.len()],
+            }),
             memory_stats: MemoryStats {
                 objects_allocated: 0,
                 arrays_allocated: 0,
@@ -141,8 +154,7 @@ impl Profiler {
             return;
         }
 
-        let name = instruction_name(instruction);
-        *self.instruction_counts.entry(name).or_insert(0) += 1;
+        self.opcodes.counts[opcode::index(instruction)] += 1;
         self.instruction_counter += 1;
 
         // Hotspot sampling tick: when hotspot profiling is on and the
@@ -184,8 +196,8 @@ impl Profiler {
             return;
         }
 
-        let name = instruction_name(instruction);
-        *self.instruction_times.entry(name).or_insert(Duration::ZERO) += duration;
+        *self.opcodes.times[opcode::index(instruction)]
+            .get_or_insert(Duration::ZERO) += duration;
     }
 
     /// Record object allocation.
@@ -223,19 +235,19 @@ impl Profiler {
         let total_execution_time = self.start_time.elapsed();
         let total_execution_time_ns = total_execution_time.as_nanos() as u64;
 
-        // Convert instruction counts and times to stats
+        // Allocate names and ordered maps only at the reporting boundary.
         let mut instruction_stats = BTreeMap::new();
-        for (name, &count) in &self.instruction_counts {
-            let total_time = self
-                .instruction_times
-                .get(name)
-                .copied()
-                .unwrap_or(Duration::ZERO);
+        for (index, &name) in opcode::NAMES.iter().enumerate() {
+            let count = self.opcodes.counts[index];
+            if count == 0 {
+                continue;
+            }
+            let total_time = self.opcodes.times[index].unwrap_or(Duration::ZERO);
             let total_time_ns = total_time.as_nanos() as u64;
             let average_time_ns = total_time_ns.checked_div(count).unwrap_or(0);
 
             instruction_stats.insert(
-                name.clone(),
+                name.to_string(),
                 InstructionStats {
                     count,
                     total_time_ns,
@@ -244,14 +256,25 @@ impl Profiler {
             );
         }
 
-        // Generate hotspots (top 10 by total time)
+        // Preserve the old stable BTreeMap ordering for equal-duration ties,
+        // including timing-only and explicitly recorded zero-duration samples.
         let mut hotspots = Vec::new();
-        let mut instruction_times_vec: Vec<_> = self.instruction_times.iter().collect();
-        instruction_times_vec.sort_by(|a, b| b.1.cmp(a.1)); // Sort by time descending
+        let mut instruction_times_vec: Vec<_> = self
+            .opcodes
+            .times
+            .iter()
+            .enumerate()
+            .filter_map(|(index, time)| time.map(|time| (index, time)))
+            .collect();
+        instruction_times_vec.sort_by(|a, b| {
+            b.1.cmp(&a.1)
+                .then_with(|| opcode::NAMES[a.0].cmp(opcode::NAMES[b.0]))
+        });
 
-        for (name, total_time) in instruction_times_vec.iter().take(10) {
+        for &(index, total_time) in instruction_times_vec.iter().take(10) {
+            let name = opcode::NAMES[index];
             let total_time_ns = total_time.as_nanos() as u64;
-            let count = self.instruction_counts.get(*name).copied().unwrap_or(0);
+            let count = self.opcodes.counts[index];
             let time_percentage = if total_execution_time_ns > 0 {
                 (total_time_ns as f64 / total_execution_time_ns as f64) * 100.0
             } else {
@@ -268,7 +291,7 @@ impl Profiler {
             };
 
             hotspots.push(HotspotInfo {
-                name: (*name).clone(),
+                name: name.to_string(),
                 time_percentage,
                 hit_count: count,
                 average_time_ns,
@@ -289,15 +312,7 @@ impl Profiler {
 
 /// Get a human-readable name for an instruction.
 pub fn instruction_name(instruction: &Ir3Instruction) -> String {
-    // Use Debug formatting to extract instruction name
-    let debug_str = format!("{:?}", instruction);
-    if let Some(brace_pos) = debug_str.find(" {") {
-        debug_str[..brace_pos].to_string()
-    } else if let Some(brace_pos) = debug_str.find("(") {
-        debug_str[..brace_pos].to_string()
-    } else {
-        debug_str
-    }
+    opcode::NAMES[opcode::index(instruction)].to_string()
 }
 
 #[cfg(test)]
@@ -456,3 +471,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "profiling/regressions.rs"]
+mod dense_profiling_regressions;

@@ -42,6 +42,9 @@ use regex::Regex;
 
 use super::InterpreterError;
 
+mod execution;
+use execution::Run;
+
 /// Steps every search may take, plus [`STEP_BUDGET_PER_CHAR`] per input
 /// character.
 const STEP_BUDGET_BASE: u64 = 10_000_000;
@@ -307,51 +310,10 @@ impl BacktrackRegExp {
         sticky: bool,
         steps_left: &mut u64,
     ) -> Result<Option<Captures>, BacktrackError> {
-        let mut run = Run {
-            regexp: self,
-            chars: &input.chars,
-            slots: vec![None; self.group_count * 2],
-            registers: vec![0; self.registers],
-            steps_left: *steps_left,
-        };
-        let result = run.search(input, start, sticky);
-        *steps_left = run.steps_left;
+        let mut run = Run::new(self, input, *steps_left);
+        let result = run.search(start, sticky);
+        *steps_left = run.steps_remaining();
         result
-    }
-}
-
-impl Run<'_> {
-    /// The search loop of [`BacktrackRegExp::exec_at`].
-    fn search(
-        &mut self,
-        input: &PreparedInput,
-        start: usize,
-        sticky: bool,
-    ) -> Result<Option<Captures>, BacktrackError> {
-        let run = self;
-        let length = input.chars.len();
-        let mut at = start;
-        while at <= length {
-            run.slots.fill(None);
-            if run.execute(0, at)?.is_some() {
-                let captures = run
-                    .slots
-                    .chunks(2)
-                    .map(|pair| match (pair[0], pair[1]) {
-                        (Some(from), Some(to)) => {
-                            Some((input.byte_offset(from), input.byte_offset(to)))
-                        }
-                        _ => None,
-                    })
-                    .collect();
-                return Ok(Some(captures));
-            }
-            if sticky {
-                break;
-            }
-            at += 1;
-        }
-        Ok(None)
     }
 }
 
@@ -1172,7 +1134,7 @@ impl Parser {
             {
                 self.index += length;
                 if !self.take_low_half_quantifier()? {
-                    return Ok(self.add_class(RangeSet::default(), false));
+                    return Ok(self.add_class(set, false));
                 }
                 set.push(combine(unit, first), combine(unit, last));
             } else {
@@ -1824,288 +1786,6 @@ impl Compiler {
 }
 
 // ---------------------------------------------------------------------------
-// Execution
-
-enum Frame {
-    /// Resume at `pc` and `position`.
-    Alternative {
-        pc: usize,
-        position: usize,
-    },
-    Slot {
-        slot: usize,
-        old: Option<usize>,
-    },
-    Register {
-        register: usize,
-        old: usize,
-    },
-}
-
-struct Run<'a> {
-    regexp: &'a BacktrackRegExp,
-    chars: &'a [char],
-    slots: Vec<Option<usize>>,
-    registers: Vec<usize>,
-    steps_left: u64,
-}
-
-impl Run<'_> {
-    /// Draw `cost` extra steps for an instruction whose work grows with the
-    /// pattern or the input (a look-around saving every slot, a clear over a
-    /// slot range, a backreference comparing its capture), so one step stays
-    /// bounded work (franken_engine#2 follow-up).
-    fn charge(&mut self, cost: usize) -> Result<(), BacktrackError> {
-        let cost = u64::try_from(cost).unwrap_or(u64::MAX);
-        if self.steps_left < cost {
-            self.steps_left = 0;
-            return Err(BacktrackError::StepBudget);
-        }
-        self.steps_left -= cost;
-        Ok(())
-    }
-
-    /// Run from `pc` at `position` until a `Match`; returns its position.
-    /// On failure every slot and register change is undone.
-    fn execute(
-        &mut self,
-        start_pc: usize,
-        start_position: usize,
-    ) -> Result<Option<usize>, BacktrackError> {
-        let regexp = self.regexp;
-        let chars = self.chars;
-        let mut stack: Vec<Frame> = Vec::new();
-        let mut pc = start_pc;
-        let mut position = start_position;
-        loop {
-            if self.steps_left == 0 {
-                return Err(BacktrackError::StepBudget);
-            }
-            self.steps_left -= 1;
-            let advanced = match &regexp.program[pc] {
-                Inst::Char { c, backward } => self.step(position, *backward, |input| {
-                    if regexp.ignore_case {
-                        regexp.canonicalize(input) == regexp.canonicalize(*c)
-                    } else {
-                        input == *c
-                    }
-                }),
-                Inst::Any { backward } => self.step(position, *backward, |input| {
-                    regexp.dot_all || !is_line_terminator(input)
-                }),
-                Inst::Class { class, backward } => {
-                    let class = &regexp.classes[*class];
-                    self.step(position, *backward, |input| {
-                        regexp.class_matches(class, input)
-                    })
-                }
-                Inst::LineStart => (position == 0
-                    || (regexp.multiline && is_line_terminator(chars[position - 1])))
-                .then_some(position),
-                Inst::LineEnd => (position == chars.len()
-                    || (regexp.multiline && is_line_terminator(chars[position])))
-                .then_some(position),
-                Inst::WordBoundary { negated } => {
-                    let before = position > 0 && is_word_char(chars[position - 1]);
-                    let after = position < chars.len() && is_word_char(chars[position]);
-                    ((before != after) != *negated).then_some(position)
-                }
-                Inst::Split { first, second } => {
-                    stack.push(Frame::Alternative {
-                        pc: *second,
-                        position,
-                    });
-                    pc = *first;
-                    continue;
-                }
-                Inst::Jump(target) => {
-                    pc = *target;
-                    continue;
-                }
-                Inst::Save(slot) => {
-                    stack.push(Frame::Slot {
-                        slot: *slot,
-                        old: self.slots[*slot],
-                    });
-                    self.slots[*slot] = Some(position);
-                    Some(position)
-                }
-                Inst::Clear { from, to } => {
-                    self.charge(to - from)?;
-                    for (offset, value) in self.slots[*from..*to].iter_mut().enumerate() {
-                        if let Some(old) = value.take() {
-                            stack.push(Frame::Slot {
-                                slot: from + offset,
-                                old: Some(old),
-                            });
-                        }
-                    }
-                    Some(position)
-                }
-                Inst::Mark(register) => {
-                    stack.push(Frame::Register {
-                        register: *register,
-                        old: self.registers[*register],
-                    });
-                    self.registers[*register] = position;
-                    Some(position)
-                }
-                Inst::CheckProgress(register) => {
-                    (self.registers[*register] != position).then_some(position)
-                }
-                Inst::CounterReset(counter) => {
-                    stack.push(Frame::Register {
-                        register: *counter,
-                        old: self.registers[*counter],
-                    });
-                    self.registers[*counter] = 0;
-                    Some(position)
-                }
-                Inst::CountedLoop {
-                    counter,
-                    min,
-                    max,
-                    greedy,
-                    body,
-                    exit,
-                } => {
-                    let count = self.registers[*counter];
-                    if count < *min {
-                        pc = *body;
-                    } else if max.is_some_and(|max| count >= max) {
-                        pc = *exit;
-                    } else {
-                        let (first, second) = if *greedy {
-                            (*body, *exit)
-                        } else {
-                            (*exit, *body)
-                        };
-                        stack.push(Frame::Alternative {
-                            pc: second,
-                            position,
-                        });
-                        pc = first;
-                    }
-                    continue;
-                }
-                Inst::CounterStep { counter, mark, min } => {
-                    let count = self.registers[*counter];
-                    if count >= *min && self.registers[*mark] == position {
-                        None
-                    } else {
-                        stack.push(Frame::Register {
-                            register: *counter,
-                            old: count,
-                        });
-                        self.registers[*counter] = count + 1;
-                        Some(position)
-                    }
-                }
-                Inst::BackRef { group, backward } => {
-                    // Comparing the captured text costs its length.
-                    let captured = match (
-                        self.slots.get(group * 2).copied().flatten(),
-                        self.slots.get(group * 2 + 1).copied().flatten(),
-                    ) {
-                        (Some(from), Some(to)) => to.saturating_sub(from),
-                        _ => 0,
-                    };
-                    self.charge(captured)?;
-                    self.backreference(*group, position, *backward)
-                }
-                Inst::Look {
-                    negated,
-                    body,
-                    next,
-                } => {
-                    // Saving and diffing every slot costs the slot count.
-                    self.charge(self.slots.len())?;
-                    let before = self.slots.clone();
-                    let matched = self.execute(*body, position)?.is_some();
-                    if matched == *negated {
-                        // Failed: a failed sub-run has undone its changes;
-                        // a matching negative one has not.
-                        self.slots = before;
-                        None
-                    } else {
-                        if !negated {
-                            // Keep the captures, undoably.
-                            for (slot, old) in before.into_iter().enumerate() {
-                                if self.slots[slot] != old {
-                                    stack.push(Frame::Slot { slot, old });
-                                }
-                            }
-                        }
-                        pc = *next;
-                        continue;
-                    }
-                }
-                Inst::Match => return Ok(Some(position)),
-            };
-            match advanced {
-                Some(next_position) => {
-                    position = next_position;
-                    pc += 1;
-                }
-                None => loop {
-                    match stack.pop() {
-                        None => return Ok(None),
-                        Some(Frame::Slot { slot, old }) => self.slots[slot] = old,
-                        Some(Frame::Register { register, old }) => {
-                            self.registers[register] = old;
-                        }
-                        Some(Frame::Alternative {
-                            pc: resume,
-                            position: at,
-                        }) => {
-                            pc = resume;
-                            position = at;
-                            break;
-                        }
-                    }
-                },
-            }
-        }
-    }
-
-    /// Consume one character in the given direction if it satisfies `test`.
-    fn step(&self, position: usize, backward: bool, test: impl Fn(char) -> bool) -> Option<usize> {
-        if backward {
-            (position > 0 && test(self.chars[position - 1])).then(|| position - 1)
-        } else {
-            (position < self.chars.len() && test(self.chars[position])).then(|| position + 1)
-        }
-    }
-
-    fn backreference(&self, group: usize, position: usize, backward: bool) -> Option<usize> {
-        let (Some(from), Some(to)) = (
-            self.slots.get(group * 2).copied().flatten(),
-            self.slots.get(group * 2 + 1).copied().flatten(),
-        ) else {
-            // An unset group matches the empty string.
-            return Some(position);
-        };
-        let length = to.saturating_sub(from);
-        let start = if backward {
-            position.checked_sub(length)?
-        } else {
-            if position + length > self.chars.len() {
-                return None;
-            }
-            position
-        };
-        let regexp = self.regexp;
-        let same = (0..length).all(|offset| {
-            let (expected, actual) = (self.chars[from + offset], self.chars[start + offset]);
-            expected == actual
-                || (regexp.ignore_case
-                    && regexp.canonicalize(expected) == regexp.canonicalize(actual))
-        });
-        same.then_some(if backward { start } else { position + length })
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Engine selection
 
 /// A compiled RegExp: the `regex` crate's automaton for patterns it can
@@ -2220,11 +1900,13 @@ impl CompiledRegExp {
             }
             Self::Backtracking(regexp) => {
                 let input = PreparedInput::new(text);
-                let mut steps_left = BacktrackRegExp::step_budget(&input);
+                // One operation owns one matcher workspace and one budget.
+                // Search resets logical state, not its reusable allocations.
+                let mut run = Run::new(regexp, &input, BacktrackRegExp::step_budget(&input));
                 let mut at = 0;
                 while at <= input.char_len() {
-                    let Some(spans) = regexp
-                        .exec_at_with_budget(&input, at, false, &mut steps_left)
+                    let Some(spans) = run
+                        .search(at, false)
                         .map_err(|error| GlobalMatchError::Interpreter(budget_error(error)))?
                     else {
                         break;

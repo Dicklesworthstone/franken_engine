@@ -11,6 +11,8 @@
   var bufferConcat = Buffer.concat;
   var bufferSlice = Buffer.prototype.subarray;
   var bufferToString = Buffer.prototype.toString;
+  var bufferCopy = Buffer.prototype.copy;
+  var arrayIsArray = Array.isArray;
   // The discriminator is the same typed FsOperation argument the old direct
   // call lowering emits. In particular, fd lifecycle operations require write
   // authority. No wrapper performs host I/O outside these two intrinsics.
@@ -91,6 +93,68 @@
   }
   function writeSync(fd, data, offset, length, position) {
     return __franken_fs_write('\0fsop:write_fd', fd, data, offset, length, position);
+  }
+  function vectorBuffers(buffers) {
+    if (!arrayIsArray(buffers)) { throw argumentError('buffers (expected Buffer array)'); }
+    // Snapshot entries before I/O. An array getter can mutate a later entry or
+    // re-enter close(); validation must finish before any descriptor effect.
+    var entries = [];
+    var lengths = [];
+    var total = 0;
+    var count = buffers.length;
+    for (var index = 0; index < count; index += 1) {
+      var buffer = buffers[index];
+      var window = bufferWindow(buffer);
+      entries[index] = buffer;
+      lengths[index] = window.length;
+      total += window.length;
+      if (total > 9007199254740991) {
+        var error = new RangeError('Combined buffer length is out of range');
+        error.code = 'ERR_OUT_OF_RANGE';
+        throw error;
+      }
+    }
+    return { entries: entries, lengths: lengths, total: total };
+  }
+  function vectorPosition(position) {
+    // Node's vector APIs use the descriptor cursor unless given a valid,
+    // nonnegative, safe-integer position. No coercion invokes guest code.
+    return typeof position === 'number' && position % 1 === 0 &&
+      position >= 0 && position <= 9007199254740991 ? position : null;
+  }
+  function readvSync(fd, buffers, position) {
+    var vector = vectorBuffers(buffers);
+    if (vector.total === 0) { return 0; }
+    // Coalesce to ONE native descriptor read, then scatter only the returned
+    // prefix. Existing Buffer allocation and host-I/O budgets still apply.
+    // This is not a zero-copy readv syscall; no new host authority is added.
+    var data = bufferAlloc(vector.total);
+    var count = checkedCount(readSync(fd, data, 0, vector.total, vectorPosition(position)),
+      vector.total, 'readv', false);
+    var offset = 0;
+    for (var index = 0; index < vector.entries.length && offset < count; index += 1) {
+      var length = vector.lengths[index];
+      if (length > count - offset) { length = count - offset; }
+      if (length === 0) { continue; }
+      var copied = apply(bufferCopy, data, [vector.entries[index], 0, offset, offset + length]);
+      if (checkedCount(copied, length, 'readv', true) !== length) {
+        var error = new Error('Incomplete scatter from filesystem buffer');
+        error.code = 'EIO';
+        error.syscall = 'readv';
+        throw error;
+      }
+      offset += length;
+    }
+    return count;
+  }
+  function writevSync(fd, buffers, position) {
+    var vector = vectorBuffers(buffers);
+    if (vector.total === 0) { return 0; }
+    // One write preserves the native operation's append/partial-write
+    // behavior. Unlike writeFile, writev reports short writes without retry.
+    var data = bufferConcat(vector.entries, vector.total);
+    return checkedCount(writeSync(fd, data, 0, vector.total, vectorPosition(position)),
+      vector.total, 'writev', false);
   }
   function validateCallback(callback) {
     if (typeof callback !== 'function') {
@@ -303,6 +367,16 @@
         // Like Node, appendFile on an existing handle uses that descriptor's
         // open flags and current offset; it does not reopen or truncate a path.
         return perform('writeFile', function (fd) { writeContents(fd, data, options); });
+      },
+      readv: function (buffers, position) {
+        return perform('readv', function (fd) {
+          return { bytesRead: readvSync(fd, buffers, position), buffers: buffers };
+        });
+      },
+      writev: function (buffers, position) {
+        return perform('writev', function (fd) {
+          return { bytesWritten: writevSync(fd, buffers, position), buffers: buffers };
+        });
       },
       read: function (buffer, offset, length, position) {
         return perform('read', function (fd) {

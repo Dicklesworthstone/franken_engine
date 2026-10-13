@@ -134,3 +134,79 @@ fn a_write_grant_does_not_authorize_whole_file_reads() {
     .expect_err("readFile must still require FsRead");
     assert!(error.to_ascii_lowercase().contains("capabil"), "{error}");
 }
+
+#[test]
+fn file_handle_vectors_preserve_offsets_and_buffer_identity() {
+    let root = tempfile::tempdir().expect("sandbox");
+    std::fs::write(root.path().join("data.txt"), b"abcdefghij").unwrap();
+    let output = run(
+        "const Array = 'guest'; let h; \
+         const input = [Buffer.from('XY'), Buffer.alloc(0), Buffer.from('Z')]; \
+         const output = [Buffer.alloc(2, 45), Buffer.alloc(0), Buffer.alloc(5, 45)]; \
+         require('fs/promises').open('data.txt', 'r+').then(value => { \
+           h = value; return h.writev(input, 2); \
+         }).then(result => { \
+           console.log(result.bytesWritten, result.buffers === input); return h.readv(output, 6); \
+         }).then(result => { \
+           console.log(result.bytesRead, result.buffers === output); \
+           console.log(output[0].toString(), output[2].toString()); return h.read(Buffer.alloc(2)); \
+         }).then(result => { console.log(result.buffer.toString()); return h.close(); });",
+        root.path(),
+        &["fs_read", "fs_write"],
+    )
+    .expect("vector methods route through native descriptor effects");
+    assert_eq!(output, ["3 true", "4 true", "gh ij---", "ab"]);
+    assert_eq!(
+        std::fs::read(root.path().join("data.txt")).unwrap(),
+        b"abXYZfghij"
+    );
+}
+
+#[test]
+fn file_handle_vectors_validate_all_entries_before_io() {
+    let root = tempfile::tempdir().expect("sandbox");
+    let output = run(
+        "let h; require('fs/promises').open('empty.txt', 'w+').then(value => { \
+           h = value; return h.writev([Buffer.from('not written'), 'invalid']); \
+         }).catch(error => { \
+           console.log(error.code); return h.readv([Buffer.alloc(2), 1]); \
+         }).catch(error => { console.log(error.code); return h.close(); });",
+        root.path(),
+        &["fs_read", "fs_write"],
+    )
+    .expect("invalid vector inputs reject without partial I/O");
+    assert_eq!(output, ["ERR_INVALID_ARG_TYPE", "ERR_INVALID_ARG_TYPE"]);
+    assert!(std::fs::read(root.path().join("empty.txt")).unwrap().is_empty());
+}
+
+#[test]
+fn a_vector_entry_getter_cannot_close_the_active_descriptor() {
+    let root = tempfile::tempdir().expect("sandbox");
+    let output = run(
+        "let h; let closing; require('fs/promises').open('data.txt', 'w').then(value => { \
+           h = value; const buffers = [Buffer.from('ab')]; \
+           Object.defineProperty(buffers, '1', {get() { \
+             closing = h.close(); return Buffer.from('cd'); \
+           }}); return h.writev(buffers); \
+         }).then(result => { console.log(result.bytesWritten); return closing; }) \
+         .then(() => console.log(h.fd));",
+        root.path(),
+        &["fs_read", "fs_write"],
+    )
+    .expect("vector admission pins its descriptor across getters");
+    assert_eq!(output, ["4", "-1"]);
+    assert_eq!(std::fs::read(root.path().join("data.txt")).unwrap(), b"abcd");
+}
+
+#[test]
+fn vector_reads_do_not_inherit_write_authority() {
+    let root = tempfile::tempdir().expect("sandbox");
+    std::fs::write(root.path().join("data.txt"), b"data").unwrap();
+    let error = run(
+        "require('fs/promises').open('data.txt', 'r').then(h => h.readv([Buffer.alloc(4)]));",
+        root.path(),
+        &["fs_write"],
+    )
+    .expect_err("nonempty readv must require FsRead");
+    assert!(error.to_ascii_lowercase().contains("capabil"), "{error}");
+}

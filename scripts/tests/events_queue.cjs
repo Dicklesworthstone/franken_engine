@@ -2,7 +2,7 @@
 // Execute the actual engine-owned events prelude with Node transport adapters.
 // This validates its JavaScript, NOT the Rust VM, IFC, or native memory meter.
 // Run: node scripts/tests/events_queue.cjs
-// Optional same-host comparison: node --expose-gc scripts/tests/events_queue.cjs --bench OLD_EVENTS_MODULE.js
+// Optional same-host comparison: node --expose-gc scripts/tests/events_queue.cjs --bench OLD_EVENTS_MODULE.js [--events 150000]
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -135,6 +135,29 @@ async function testPublicAPI() {
   assert.ok(outcomes.slice(1).every(item => item.ok.done));
   assert.equal(e.listenerCount('data'), 0); checks++;
 }
+async function testNativeFixtures() {
+  const rust = fs.readFileSync(path.join(__dirname,
+    '../../crates/franken-engine/tests/events_queue_handoffs.rs'), 'utf8');
+  const constants = new Map([...rust.matchAll(/const ([A-Z_]+): &str = r#"([\s\S]*?)"#;/g)]
+    .map(match => [match[1], match[2]]));
+  const fixtures = [...constants.keys()].filter(name => name.endsWith('_SOURCE'));
+  assert.equal(fixtures.length, 5, 'all native fixtures must be read');
+  for (const name of fixtures) {
+    const expected = constants.get(name.replace(/_SOURCE$/, '_EXPECTED'));
+    assert.equal(typeof expected, 'string', name + ' expected output');
+    await compare('native fixture on host adapters ' + name, async E => {
+      const lines = [];
+      new Function('require', 'console', constants.get(name))(specifier => {
+        assert.ok(specifier === 'events' || specifier === 'node:events');
+        return E;
+      }, {log: (...args) => lines.push(require('node:util').format(...args))});
+      await new Promise(setImmediate);
+      const result = lines.join('\n');
+      assert.equal(result, expected, name + ' declared output');
+      return result;
+    });
+  }
+}
 async function workload(E, kind, n) {
   const e = new E, it = E.on(e, 'data', { close: ['end'] });
   let sum = 0;
@@ -158,13 +181,13 @@ async function workload(E, kind, n) {
   assert.equal(sum, n * (n - 1) / 2);
   return sum;
 }
-async function benchmark(baselinePath) {
+async function benchmark(baselinePath, events) {
   const implementations = [['node', native], ['before', load(fs.readFileSync(baselinePath, 'utf8'))],
     ['candidate', candidate]];
   const results = [];
   for (const kind of ['buffered', 'waiters', 'single-buffered', 'single-waiter']) {
-    for (let warmup = 0; warmup < 3; warmup++) {
-      for (const [, E] of implementations) await workload(E, kind, 5000);
+    for (let warmup = 0; warmup < 6; warmup++) {
+      for (const [, E] of implementations) await workload(E, kind, Math.min(events, 30000));
     }
     const samples = Object.fromEntries(implementations.map(([name]) => [name, []]));
     for (let round = 0; round < 9; round++) {
@@ -172,7 +195,7 @@ async function benchmark(baselinePath) {
         const [name, E] = implementations[(round + offset) % implementations.length];
         if (global.gc) global.gc();
         const start = performance.now();
-        await workload(E, kind, 30000);
+        await workload(E, kind, events);
         samples[name].push(performance.now() - start);
       }
     }
@@ -182,14 +205,21 @@ async function benchmark(baselinePath) {
   }
   console.log(JSON.stringify({ host: process.version,
     scope: 'Engine-owned JavaScript on Node adapters; NOT the Rust VM or a V8-gap measurement',
-    events_per_sample: 30000, results }, null, 2));
+    events_per_sample: events, warmup_rounds: 6, measured_rounds: 9, results }, null, 2));
 }
 (async () => {
-  await testPublicAPI();
-  console.log(`PASS ${checks} public API scenarios`);
+  // Benchmark before correctness cases: warming only the candidate with
+  // adversarial inputs biases its JIT feedback relative to the baseline.
   const flag = process.argv.indexOf('--bench');
   if (flag !== -1) {
     assert.ok(process.argv[flag + 1], '--bench requires a baseline source path');
-    await benchmark(process.argv[flag + 1]);
+    const sizeFlag = process.argv.indexOf('--events');
+    const events = sizeFlag === -1 ? 30000 : Number(process.argv[sizeFlag + 1]);
+    assert.ok(Number.isSafeInteger(events) && events > 0 && events <= 1000000,
+      '--events must be an integer from 1 to 1000000');
+    await benchmark(process.argv[flag + 1], events);
   }
+  await testPublicAPI();
+  await testNativeFixtures();
+  console.log(`PASS ${checks} public API and fixture scenarios`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

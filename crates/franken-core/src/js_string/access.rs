@@ -7,6 +7,8 @@ use std::sync::Arc;
 
 use super::{JsString, Shape, Text, is_high_surrogate, is_low_surrogate};
 
+mod fixed_width;
+
 /// Bound pointer chasing before settling a deeply skewed rope. Without a
 /// limit, a forward scan of an append chain could walk the whole chain for
 /// every character. The fallback joins the original root once, so subsequent
@@ -68,6 +70,9 @@ fn utf16_boundary(text: &str, length: usize, position: usize) -> (usize, bool) {
         return (text.len(), false);
     }
     if let Some(byte) = ascii_middle_boundary(text, length, position) {
+        return (byte, false);
+    }
+    if let Some(byte) = fixed_width::three_byte_boundary(text, length, position) {
         return (byte, false);
     }
     let bytes = text.as_bytes();

@@ -6,6 +6,8 @@
 
 use super::*;
 
+mod reachable;
+
 /// Which edges a reachable-label walk follows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReachableEdges {
@@ -553,121 +555,6 @@ impl InterpreterCore {
         value: &Value,
     ) -> Result<(), InterpreterError> {
         self.observe_reachable_value(value, ReachableEdges::Inspect)
-    }
-
-    /// Objects one step from `object` along `edges`.
-    fn reachable_children(&self, object: ObjectId, edges: ReachableEdges) -> Vec<ObjectId> {
-        let Some(heap_object) = self.heap.get(object.0 as usize) else {
-            return Vec::new();
-        };
-        let object_id = |value: &Value| match value {
-            Value::Object(id) => Some(*id),
-            _ => None,
-        };
-        match edges {
-            // The walk visits each reachable object once and joins labels,
-            // so child order does not matter: no per-key lookup for creation
-            // order (bd-9vouw.333).
-            ReachableEdges::Data => heap_object
-                .properties
-                .values_unordered()
-                .filter_map(object_id)
-                .collect(),
-            ReachableEdges::Inspect => {
-                // Every property inspect can print: string-keyed data in both
-                // key forms and Symbol-keyed data (a separate sidecar that
-                // `values()` skips). Accessors print as [Getter]/[Setter].
-                let mut children: Vec<ObjectId> = heap_object
-                    .properties
-                    .all_data_values()
-                    .filter_map(object_id)
-                    .collect();
-                children.extend(
-                    heap_object
-                        .properties
-                        .baseline_symbol_properties()
-                        .filter_map(|(_, property)| match property {
-                            BaselineSymbolProperty::Data(value) => object_id(value),
-                            BaselineSymbolProperty::Accessor { .. } => None,
-                        }),
-                );
-                // Map keys are storage-key reprs, not values
-                // (`collection_key_repr`); inspect prints the key objects.
-                if let Some(storage_id) = self.collection_storage_id(object, "Map", "__entries")
-                    && let Some(storage) = self.heap.get(storage_id.0 as usize)
-                {
-                    children.extend(
-                        storage
-                            .properties
-                            .keys()
-                            .filter_map(|repr| object_id(&Self::collection_key_from_repr(repr))),
-                    );
-                }
-                // An error's message and name print through the prototype
-                // chain (`chain_data_property`).
-                if self.inspect_is_error(object)
-                    && let Some(prototype) = heap_object.prototype
-                {
-                    children.push(prototype);
-                }
-                children
-            }
-        }
-    }
-
-    fn observe_reachable_value(
-        &mut self,
-        value: &Value,
-        edges: ReachableEdges,
-    ) -> Result<(), InterpreterError> {
-        let Value::Object(root) = value else {
-            return Ok(());
-        };
-        let mut pending = Vec::new();
-        let mut visited = BTreeSet::new();
-        let mut charged = 0_u64;
-        let outcome = (|| {
-            self.json_reserve_temporary(std::mem::size_of::<ObjectId>() as u64)?;
-            charged += std::mem::size_of::<ObjectId>() as u64;
-            pending
-                .try_reserve_exact(1)
-                .map_err(|_| self.memory_budget_error(u64::MAX, self.heap_object_count_u32()))?;
-            pending.push(*root);
-            while let Some(object) = pending.pop() {
-                self.json_charge_work()?;
-                if visited.contains(&object) {
-                    continue;
-                }
-                self.json_reserve_temporary(64)?;
-                charged += 64;
-                visited.insert(object);
-                let label = self
-                    .object_mutation_labels
-                    .get(&object)
-                    .into_iter()
-                    .chain(self.binary_storage_label_ref(object))
-                    .max();
-                if let Some(label) = label {
-                    self.check_temporary_memory_budget(Self::estimate_label_bytes(label))?;
-                    let label = label.clone();
-                    self.json_observe_label(label)?;
-                }
-                let children = self.reachable_children(object, edges);
-                let bytes =
-                    (children.len() as u64).saturating_mul(std::mem::size_of::<ObjectId>() as u64);
-                self.json_reserve_temporary(bytes)?;
-                charged += bytes;
-                pending.try_reserve_exact(children.len()).map_err(|_| {
-                    self.memory_budget_error(u64::MAX, self.heap_object_count_u32())
-                })?;
-                pending.extend(children);
-            }
-            Ok(())
-        })();
-        drop(pending);
-        drop(visited);
-        self.json_release_temporary(charged);
-        outcome
     }
 
     pub(super) fn json_charge_work(&mut self) -> Result<(), InterpreterError> {

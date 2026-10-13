@@ -5,7 +5,7 @@
 //! fs:read/fs:write HostCall under the calling interpreter's capability set.
 //! Reserved intrinsic names cannot be spelled by guest source.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::super::LoweringPipelineError;
 use super::super::with_statement::{
@@ -143,12 +143,246 @@ pub(super) fn rewrite_fs_requires(
 /// In particular, never mix an inlined method with a mutable module object.
 fn direct_fs_calls(tree: &SyntaxTree) -> Result<Option<SyntaxTree>, LoweringPipelineError> {
     let mut rewritten = tree.clone();
+    if !expand_call_only_aliases(&mut rewritten)? {
+        return Ok(None);
+    }
     let mut walker = DirectFsCalls {
         compatible: true,
         calls: 0,
     };
     walker.statements(&mut rewritten.body)?;
     Ok((walker.compatible && walker.calls != 0).then_some(rewritten))
+}
+
+/// Expand call-only const namespaces and synchronous named destructures into
+/// the inline form. DirectFsCalls still owns operation/arity checks and loader
+/// hygiene. Keep declaration order and lexical initialization points; any
+/// incompatible use discards the entire tentative tree, not just that call.
+fn expand_call_only_aliases(tree: &mut SyntaxTree) -> Result<bool, LoweringPipelineError> {
+    // None is a namespace; Some(method) is a destructured function.
+    let mut aliases = BTreeMap::new();
+    let mut declarations = BTreeMap::new();
+    for (statement_index, statement) in tree.body.iter().enumerate() {
+        let Statement::VariableDeclaration(declaration) = statement else {
+            continue;
+        };
+        if declaration.kind != VariableDeclarationKind::Const {
+            continue;
+        }
+        for (declarator_index, declarator) in declaration.declarations.iter().enumerate() {
+            if declarator.initializer.as_ref().and_then(require_member) != Some(None) {
+                continue;
+            }
+            let bindings = match &declarator.pattern {
+                BindingPattern::Identifier(name) => vec![(name.clone(), None)],
+                BindingPattern::ObjectPattern(properties) if !properties.is_empty() => {
+                    let mut bindings = Vec::new();
+                    for property in properties {
+                        let BindingPattern::Identifier(local) = &property.value else {
+                            return Ok(false);
+                        };
+                        let Some(method) = super::super::well_formed_static_name(&property.key)
+                            .filter(|method| super::super::fs_sync_builtin_spec(method).is_some())
+                        else {
+                            return Ok(false);
+                        };
+                        if property.computed {
+                            return Ok(false);
+                        }
+                        bindings.push((local.clone(), Some(method.to_string())));
+                    }
+                    bindings
+                }
+                _ => return Ok(false),
+            };
+            for (name, method) in &bindings {
+                if name == "require" || aliases.insert(name.clone(), method.clone()).is_some() {
+                    return Ok(false);
+                }
+            }
+            declarations.insert((statement_index, declarator_index), bindings);
+        }
+    }
+    if aliases.is_empty() {
+        return Ok(true);
+    }
+    let mut walker = CallOnlyAliases {
+        aliases,
+        initialized: BTreeSet::new(),
+        used: BTreeSet::new(),
+        function_depth: 0,
+        compatible: true,
+    };
+    // Only root declarations qualify. Source-order processing catches reads
+    // before a const initializes, including earlier declarators in one statement.
+    for (statement_index, statement) in tree.body.iter_mut().enumerate() {
+        if let Statement::VariableDeclaration(declaration) = statement {
+            let mut replacements = Vec::new();
+            for (index, mut declarator) in
+                std::mem::take(&mut declaration.declarations).into_iter().enumerate()
+            {
+                if let Some(bindings) = declarations.get(&(statement_index, index)) {
+                    for (name, _) in bindings {
+                        walker.initialized.insert(name.clone());
+                        replacements.push(VariableDeclarator {
+                            pattern: BindingPattern::Identifier(name.clone()),
+                            initializer: Some(Expression::UndefinedLiteral),
+                            span: declarator.span,
+                        });
+                    }
+                } else {
+                    walker.pattern(&mut declarator.pattern)?;
+                    if let Some(initializer) = &mut declarator.initializer {
+                        walker.expression(initializer)?;
+                    }
+                    replacements.push(declarator);
+                }
+            }
+            declaration.declarations = replacements;
+        } else {
+            walker.statement(statement)?;
+        }
+    }
+    // An unused binding is not evidence for changing a bare module load.
+    Ok(walker.compatible && walker.used.len() == walker.aliases.len())
+}
+
+struct CallOnlyAliases {
+    aliases: BTreeMap<String, Option<String>>,
+    initialized: BTreeSet<String>,
+    used: BTreeSet<String>,
+    function_depth: usize,
+    compatible: bool,
+}
+
+impl Walk for CallOnlyAliases {
+    fn statement(&mut self, statement: &mut Statement) -> Outcome {
+        // Export clauses name bindings without visiting Identifier expressions.
+        if matches!(statement, Statement::Export(_) | Statement::Import(_) | Statement::With(_)) {
+            self.compatible = false;
+        }
+        if let Statement::FunctionDeclaration(function) = statement
+            && function.name.as_ref().is_some_and(|name| self.aliases.contains_key(name))
+        {
+            self.compatible = false;
+        }
+        walk_statement(self, statement)
+    }
+
+    fn pattern(&mut self, pattern: &mut BindingPattern) -> Outcome {
+        if pattern.binding_names().iter().any(|name| self.aliases.contains_key(*name)) {
+            self.compatible = false;
+        }
+        if let BindingPattern::ObjectPattern(properties) = pattern
+            && properties.iter().any(|property| property.computed
+                || super::super::well_formed_static_name(&property.key) == Some("constructor"))
+        {
+            self.compatible = false;
+        }
+        walk_pattern(self, pattern)
+    }
+
+    fn function(&mut self, function: FunctionParts<'_>) -> Outcome {
+        if function.own_name.is_some_and(|name| self.aliases.contains_key(name)) {
+            self.compatible = false;
+        }
+        // A hoisted/escaping closure can run before the const initializer.
+        // Without an interprocedural proof, do not erase its binding read.
+        self.function_depth += 1;
+        let outcome = walk_function(self, function);
+        self.function_depth -= 1;
+        outcome
+    }
+
+    fn catch_clause(&mut self, clause: &mut CatchClause) -> Outcome {
+        if clause.parameter.as_ref().is_some_and(|name| self.aliases.contains_key(name)) {
+            self.compatible = false;
+        }
+        self.block(&mut clause.body.body)
+    }
+
+    fn class(
+        &mut self,
+        name: Option<&str>,
+        super_class: Option<&mut Expression>,
+        body: &mut [MethodDefinition],
+    ) -> Outcome {
+        if name.is_some_and(|name| self.aliases.contains_key(name)) {
+            self.compatible = false;
+        }
+        walk_class(self, super_class, body)
+    }
+
+    fn expression(&mut self, expression: &mut Expression) -> Outcome {
+        // Named environment reads still traverse the lowering's IFC source
+        // rules. Other process/global/module surfaces can obtain another loader
+        // or a dynamic-code entry point and must retain observable module values.
+        if let Expression::Member { object, property, computed: false, .. } = expression
+            && matches!(object.as_ref(), Expression::Identifier(name) if name == "process")
+            && !self.aliases.contains_key("process")
+            && super::super::well_formed_static_name(property) == Some("env")
+        {
+            return Ok(());
+        }
+        if let Expression::Call { callee, arguments, .. } = expression {
+            let selected = match callee.as_ref() {
+                Expression::Identifier(local) => self.aliases.get(local)
+                    .and_then(|method| method.as_ref())
+                    .map(|method| (local.clone(), method.clone())),
+                Expression::Member { object, property, computed: false, .. } => {
+                    if let Expression::Identifier(local) = object.as_ref()
+                        && self.aliases.get(local) == Some(&None)
+                    {
+                        super::super::well_formed_static_name(property)
+                            .map(|method| (local.clone(), method.to_string()))
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+            if let Some((local, method)) = selected
+                && self.function_depth == 0
+                && self.initialized.contains(&local)
+            {
+                for argument in arguments.iter_mut() {
+                    self.expression(argument)?;
+                }
+                // DirectFsCalls receives the original arguments and call span;
+                // there is only one native operation/discriminator emitter.
+                **callee = Expression::Member {
+                    object: Box::new(Expression::Call {
+                        callee: Box::new(Expression::Identifier("require".to_string())),
+                        arguments: vec![Expression::StringLiteral("fs".into())],
+                        span: None,
+                    }),
+                    property: Box::new(Expression::Identifier(method)),
+                    computed: false,
+                    span: None,
+                };
+                self.used.insert(local);
+                return Ok(());
+            }
+        }
+        if matches!(expression, Expression::Identifier(name)
+            if self.aliases.contains_key(name)
+                || matches!(name.as_str(), "eval" | "Function" | "globalThis" | "global"
+                    | "self" | "window" | "Reflect" | "Object" | "process" | "module" | "exports"))
+            || matches!(expression, Expression::This | Expression::SloppyThis | Expression::Raw(_))
+        {
+            // Argument/value escape, mutation, typeof and dynamic evaluation
+            // can all make the elided module/function value observable.
+            self.compatible = false;
+        }
+        // Reflection may recover code generation without spelling Function.
+        if let Expression::Member { property, computed, .. }
+            | Expression::OptionalMember { property, computed, .. } = expression
+            && (*computed || super::super::well_formed_static_name(property) == Some("constructor"))
+        {
+            self.compatible = false;
+        }
+        walk_expression(self, expression)
+    }
 }
 
 struct DirectFsCalls {
@@ -636,6 +870,155 @@ mod tests {
             "try {} catch (require) { require('fs').readFileSync('x'); }",
             "const C = class require { method() { require('fs').readFileSync('x'); } };",
             "with (object) { require('fs').readFileSync('x'); }",
+        ] {
+            assert!(direct_fs_calls(&parse(source)).unwrap().is_none(), "{source}");
+        }
+    }
+
+    #[test]
+    fn const_namespaces_and_named_destructures_reuse_the_inline_operation_emitter() {
+        for (method, args, intrinsic, discriminator) in [
+            ("readFileSync", "'x', 'utf8'", "%FsRead", "read"),
+            ("writeFileSync", "'x', 'bytes'", "%FsWrite", "write"),
+            ("appendFileSync", "'x', 'bytes'", "%FsWrite", "append"),
+            ("statSync", "'x'", "%FsRead", "stat"),
+            ("readSync", "fd, buffer, 0, 4, null", "%FsRead", "read_fd"),
+            ("closeSync", "fd", "%FsWrite", "close_fd"),
+        ] {
+            for specifier in ["fs", "node:fs"] {
+                for (declaration, callee) in [
+                    (format!("const io = require('{specifier}');"), format!("io.{method}")),
+                    (format!("const {{ {method} }} = require('{specifier}');"), method.to_string()),
+                    (format!("const {{ {method}: operation }} = require('{specifier}');"), "operation".to_string()),
+                ] {
+                    let tree = parse(&format!("{declaration}\n{callee}({args});"));
+                    let before = serde_json::to_value(&tree).unwrap();
+                    let rewritten = direct_fs_calls(&tree).unwrap().expect("call-only alias");
+                    assert_eq!(rewritten.body.len(), 2);
+                    assert!(!is_module_declaration(&rewritten.body[0]));
+                    let Statement::Expression(statement) = &rewritten.body[1] else { panic!("call"); };
+                    let Expression::Call { callee, arguments, span } = &statement.expression else { panic!("call"); };
+                    assert_eq!(callee.as_ref(), &Expression::Identifier(intrinsic.into()));
+                    assert_eq!(arguments[0], Expression::StringLiteral(format!("\0fsop:{discriminator}").into()));
+                    let inline = direct_fs_calls(&parse(&format!("require('fs').{method}({args});")))
+                        .unwrap().unwrap();
+                    let Statement::Expression(inline) = &inline.body[0] else { panic!("inline call"); };
+                    let Expression::Call { arguments: inline_args, .. } = &inline.expression else { panic!("inline args"); };
+                    assert_eq!(arguments, inline_args, "one shared emitter");
+                    let Statement::Expression(original) = &tree.body[1] else { panic!("original call"); };
+                    let Expression::Call { span: original_span, .. } = &original.expression else { panic!("original span"); };
+                    assert_eq!(span, original_span);
+                    assert_eq!(serde_json::to_value(&tree).unwrap(), before);
+                    assert!(rewrite_fs_requires(&rewritten).unwrap().is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn alias_expansion_keeps_declarator_order_and_non_alias_effects() {
+        let tree = parse("const a = first(), { readFileSync: read, statSync: stat } = require('fs'), z = last(); read('x'); stat('x');");
+        let rewritten = direct_fs_calls(&tree).unwrap().expect("multi-declarator aliases");
+        let Statement::VariableDeclaration(before) = &tree.body[0] else { panic!("declaration"); };
+        let Statement::VariableDeclaration(after) = &rewritten.body[0] else { panic!("declaration"); };
+        assert_eq!(after.kind, VariableDeclarationKind::Const);
+        assert_eq!(after.span, before.span);
+        assert_eq!(after.declarations[0], before.declarations[0]);
+        assert_eq!(after.declarations[3], before.declarations[2]);
+        assert_eq!(after.declarations[1].pattern, BindingPattern::Identifier("read".into()));
+        assert_eq!(after.declarations[2].pattern, BindingPattern::Identifier("stat".into()));
+        for declarator in &after.declarations[1..3] {
+            assert_eq!(declarator.initializer, Some(Expression::UndefinedLiteral));
+            assert_eq!(declarator.span, before.declarations[1].span);
+        }
+    }
+
+    #[test]
+    fn aliases_in_loops_and_branches_are_claimed_only_after_initialization() {
+        for tail in [
+            "if (ready) fs.readFileSync('x'); else fs.existsSync('x');",
+            "for (let i = 0; i < 3; i += 1) { fs.readFileSync('x'); }",
+            "try { fs.readFileSync('x'); } catch (error) { report(error); }",
+        ] {
+            assert!(direct_fs_calls(&parse(&format!("const fs = require('fs'); {tail}")))
+                .unwrap().is_some(), "{tail}");
+        }
+        for source in [
+            "fs.readFileSync('x'); const fs = require('fs');",
+            "const before = fs.readFileSync('x'), fs = require('fs');",
+            "run(); const fs = require('fs'); function run() { fs.readFileSync('x'); }",
+            "const fs = require('fs'); const run = () => fs.readFileSync('x'); run();",
+            "const fs = require('fs'); function f(x = fs.readFileSync('x')) {} f();",
+        ] {
+            assert!(direct_fs_calls(&parse(source)).unwrap().is_none(), "{source}");
+        }
+    }
+
+    #[test]
+    fn one_escaped_mutated_or_async_alias_preserves_the_whole_original_module() {
+        for tail in [
+            "consume(fs);", "const copy = fs;", "typeof fs;", "fs === fs;",
+            "const read = fs.readFileSync;", "fs.readFileSync = replacement;",
+            "delete fs.readFileSync;", "fs.readFileSync.call(null, 'x');",
+            "fs.readFileSync(...args);", "fs.readFileSync('x', 'utf8', extra());",
+            "fs[method]('x');", "fs.readFile('x', callback);", "fs.promises.readFile('x');",
+            "const other = require('node:fs'); consume(other);",
+            "eval('fs');", "globalThis.inspect();", "Reflect.get(fs, 'readFileSync');",
+            "const C = (() => {}).constructor; C('return fs')();",
+            "const {constructor: C} = function () {}; C('return fs')();",
+            "const C = Object.getOwnPropertyDescriptor(() => {}, 'constructor');",
+            "global.eval('fs');", "module.require('fs').readFileSync = replacement;",
+            "process.getBuiltinModule('fs').readFileSync = replacement;",
+        ] {
+            let tree = parse(&format!("const fs = require('fs'); fs.readFileSync('x'); {tail}"));
+            let before = serde_json::to_value(&tree).unwrap();
+            assert!(direct_fs_calls(&tree).unwrap().is_none(), "{tail}");
+            assert_eq!(serde_json::to_value(&tree).unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn alias_shadowing_never_rewrites_a_different_binding() {
+        for tail in [
+            "{ let fs = custom; fs.readFileSync('x'); }",
+            "for (const fs of loaders) fs.readFileSync('x');",
+            "try {} catch (fs) { fs.readFileSync('x'); }",
+            "const C = class fs { read() { return fs.readFileSync('x'); } };",
+            "function f(fs) { return fs.readFileSync('x'); }",
+            "with (scope) { fs.readFileSync('x'); }",
+        ] {
+            let source = format!("const fs = require('fs'); fs.readFileSync('x'); {tail}");
+            assert!(direct_fs_calls(&parse(&source)).unwrap().is_none(), "{tail}");
+        }
+        let tree = parse_goal("const fs = require('fs'); fs.readFileSync('x'); export { fs };", ParseGoal::Module);
+        assert!(direct_fs_calls(&tree).unwrap().is_none());
+    }
+
+    #[test]
+    fn process_named_aliases_keep_property_observations_on_the_object_path() {
+        for source in [
+            "const process = require('fs'); process.readFileSync('x'); process.env;",
+            "const {readFileSync: process} = require('fs'); process('x'); process.env;",
+        ] {
+            // This is an alias property read, not the ambient environment
+            // source. Eliding the declaration would change it into a throw.
+            assert!(direct_fs_calls(&parse(source)).unwrap().is_none(), "{source}");
+        }
+    }
+
+    #[test]
+    fn partial_destructures_and_unused_aliases_are_not_elided() {
+        for source in [
+            "const fs = require('fs');",
+            "const {readFileSync: read, statSync: stat} = require('fs'); read('x');",
+            "const {readFileSync: read, promises} = require('fs'); read('x');",
+            "const {readFileSync: read = fallback} = require('fs'); read('x');",
+            "const {['readFileSync']: read} = require('fs'); read('x');",
+            "const {readFileSync: read, ...rest} = require('fs'); read('x');",
+            "const {readFile} = require('fs'); readFile('x', callback);",
+            "const {readFile} = require('fs/promises'); readFile('x');",
+            "let fs = require('fs'); fs.readFileSync('x');",
+            "const fs = require('fs'); fs.readFileSync('x'); const require = custom;",
         ] {
             assert!(direct_fs_calls(&parse(source)).unwrap().is_none(), "{source}");
         }

@@ -17,6 +17,8 @@
   var getHandle = WeakMap.prototype.get;
   var setHandle = WeakMap.prototype.set;
   var handles;
+  var iteratorKey = Symbol.iterator;
+  var asyncIteratorKey = Symbol.asyncIterator;
   // The discriminator is the same typed FsOperation argument the old direct
   // call lowering emits. In particular, fd lifecycle operations require write
   // authority. No wrapper performs host I/O outside these two intrinsics.
@@ -297,8 +299,7 @@
     return options.encoding === null ? result :
       apply(bufferToString, result, [options.encoding]);
   }
-  function writeContents(fd, data, options) {
-    options = fileOptions(options, 'utf8');
+  function writeChunk(fd, data, options) {
     checkAbort(options.signal);
     if (typeof data === 'string') { data = bufferFrom(data, options.encoding); }
     if (!isBuffer(data)) { throw argumentError('data (expected string or Buffer)'); }
@@ -314,10 +315,30 @@
     }
     checkAbort(options.signal);
   }
+  function iterableSource(data) {
+    if (data === null || (typeof data !== 'object' && typeof data !== 'function')) {
+      throw argumentError('data (expected string, Buffer or iterable)');
+    }
+    // GetMethod once, with async precedence and the original receiver. A
+    // second protocol lookup could run a getter twice or select another source.
+    var key = asyncIteratorKey;
+    var method = data[key];
+    if (method === undefined || method === null) {
+      key = iteratorKey;
+      method = data[key];
+    }
+    if (typeof method !== 'function') {
+      throw argumentError('data (expected string, Buffer or iterable)');
+    }
+    var source = { [iteratorKey]: undefined, [asyncIteratorKey]: undefined };
+    source[key] = function () { return apply(method, data, []); };
+    return source;
+  }
   // Descriptor ownership stays in this closure, never in a guest-writable fd
   // property. These methods use the existing synchronous descriptor effects
   // with Promise completion, not an off-thread I/O backend. Buffer/string I/O
-  // is supported; streams, stat-on-fd and automatic finalization are not.
+  // and iterable writes are supported; stream factories, stat-on-fd and
+  // automatic finalization are not.
   function fileHandle(descriptor) {
     var closing = false;
     var active = 0;
@@ -346,6 +367,43 @@
         finally { active -= 1; finishClose(); }
       });
     }
+    async function writeAll(data, options) {
+      if (closing) {
+        var error = new Error('file closed');
+        error.code = 'EBADF';
+        error.syscall = 'writeFile';
+        throw error;
+      }
+      // Ownership belongs to this async body, not a .then attached to its
+      // public Promise. close() must wait through next(), writes, and iterator
+      // cleanup even if guest code tampers with that Promise's public surface.
+      active += 1;
+      try {
+        options = fileOptions(options, 'utf8');
+        checkAbort(options.signal);
+        if (typeof data === 'string' || isBuffer(data)) {
+          writeChunk(descriptor, data, options);
+          return;
+        }
+        var source = iterableSource(data);
+        checkAbort(options.signal);
+        // Native async iteration supplies backpressure, AsyncFromSync value
+        // awaiting, and IteratorClose on body failures. Never collect the
+        // source into one Buffer. Every chunk retains the same gated write_fd
+        // effect and byte limit; the next chunk is requested only after the
+        // current one has been completely written.
+        for await (var chunk of source) {
+          writeChunk(descriptor, chunk, options);
+        }
+        // Also observe an abort that races the final done:true result.
+        // A pending producer is not preempted: cancellation is checked when
+        // it resumes, before any bytes are written.
+        checkAbort(options.signal);
+      } finally {
+        active -= 1;
+        finishClose();
+      }
+    }
     var handle = {
       get fd() { return closing ? -1 : descriptor; },
       close: function () {
@@ -365,12 +423,12 @@
         return perform('readFile', function (fd) { return readContents(fd, options); });
       },
       writeFile: function (data, options) {
-        return perform('writeFile', function (fd) { writeContents(fd, data, options); });
+        return writeAll(data, options);
       },
       appendFile: function (data, options) {
         // Like Node, appendFile on an existing handle uses that descriptor's
         // open flags and current offset; it does not reopen or truncate a path.
-        return perform('writeFile', function (fd) { writeContents(fd, data, options); });
+        return writeAll(data, options);
       },
       readv: function (buffers, position) {
         return perform('readv', function (fd) {

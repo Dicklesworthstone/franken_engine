@@ -464,11 +464,14 @@ pub(super) fn rewrite_util_requires(
     };
     // The stream facade keeps the declarations it claims: the rewrite does
     // not see their initializers.
-    let claimed = if root.contains("require") {
+    let mut claimed = if root.contains("require") {
         BTreeSet::new()
     } else {
         facade_claimed_stream_declarators(&tree.body)
     };
+    if !root.contains("require") {
+        claimed.extend(facade_claimed_events_declarators(&tree.body));
+    }
     for (index, statement) in rewritten.body.iter_mut().enumerate() {
         let held = take_claimed_initializers(statement, index, &claimed);
         let outcome = rewriter.statement(statement);
@@ -507,6 +510,66 @@ pub(super) fn rewrite_util_requires(
     declarations.append(&mut rewritten.body);
     rewritten.body = declarations;
     Ok(Some(rewritten))
+}
+
+/// Top-level CommonJS `events` declarators that the existing finite
+/// lowering facade has proved safe to consume. Keep their initializers intact
+/// during pure-module rewriting so the authenticated EventEmitter/once lowering
+/// can see the original require shape. Unsupported, escaping, computed or
+/// otherwise observable module uses are deliberately not claimed here.
+fn facade_claimed_events_declarators(body: &[Statement]) -> BTreeSet<(usize, usize)> {
+    let lookup = BTreeMap::new();
+    let emitters = super::confirmed_event_emitter_bindings(body, &lookup);
+    let once = super::confirmed_events_once_destructured_requires(body, &lookup);
+    let modules = super::confirmed_events_module_aliases(body, &lookup);
+    let mut claimed = BTreeSet::new();
+
+    for (statement_index, statement) in body.iter().enumerate() {
+        let Statement::VariableDeclaration(declaration) = statement else {
+            continue;
+        };
+        for (declarator_index, declarator) in declaration.declarations.iter().enumerate() {
+            let Some(initializer) = &declarator.initializer else {
+                continue;
+            };
+            match &declarator.pattern {
+                BindingPattern::Identifier(local)
+                    if (emitters.contains(local)
+                        && (super::is_require_event_emitter_member_initializer(
+                            initializer,
+                            &lookup,
+                        ) || super::is_require_events_module_initializer(initializer, &lookup)))
+                        || (modules.contains(local)
+                            && super::is_require_events_module_initializer(initializer, &lookup)) =>
+                {
+                    claimed.insert((statement_index, declarator_index));
+                }
+                BindingPattern::ObjectPattern(properties)
+                    if super::is_require_events_module_initializer(initializer, &lookup) =>
+                {
+                    let all_claimed = !properties.is_empty()
+                        && properties.iter().all(|property| {
+                            if property.computed {
+                                return false;
+                            }
+                            let BindingPattern::Identifier(local) = &property.value else {
+                                return false;
+                            };
+                            match super::well_formed_static_name(&property.key) {
+                                Some("EventEmitter") => emitters.contains(local),
+                                Some("once") => once.contains(local),
+                                _ => false,
+                            }
+                        });
+                    if all_claimed {
+                        claimed.insert((statement_index, declarator_index));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    claimed
 }
 
 /// The top-level `const { ... } = require('stream')` declarators, as
@@ -1290,6 +1353,52 @@ mod events_tests {
                 .expect("second pass")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn finite_events_facade_keeps_original_require_initializers_for_legacy_lowering() {
+        for source in [
+            "const EventEmitter = require('events'); new EventEmitter();",
+            "const EventEmitter = require('events').EventEmitter; new EventEmitter();",
+            "const { EventEmitter } = require('node:events'); new EventEmitter();",
+            "const { once } = require('events'); once(emitter, 'ready');",
+            "const { EventEmitter: E, once: wait } = require('node:events'); new E(); wait(emitter, 'ready');",
+            "const events = require('events'); events.once(emitter, 'ready');",
+        ] {
+            let tree = parse(source, ParseGoal::Script);
+            assert!(
+                rewrite_util_requires(&tree)
+                    .expect("finite events handoff")
+                    .is_none(),
+                "direct events lowering must receive the untouched AST: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn observable_or_unsupported_events_uses_still_materialize_the_module() {
+        for source in [
+            "const events = require('events'); console.log(events);",
+            "const { EventEmitter, getEventListeners } = require('events'); console.log(getEventListeners); new EventEmitter();",
+            "const events = require('events'); events[method](emitter);",
+        ] {
+            let tree = parse(source, ParseGoal::Script);
+            let rewritten = rewrite_util_requires(&tree)
+                .expect("full events fallback")
+                .expect("observable events module");
+            assert!(
+                rewritten.body.iter().any(|statement| {
+                    matches!(statement,
+                        Statement::VariableDeclaration(declaration)
+                            if matches!(declaration.declarations.as_slice(),
+                                [VariableDeclarator {
+                                    pattern: BindingPattern::Identifier(name),
+                                    ..
+                                }] if name == EVENTS_MODULE_BINDING))
+                }),
+                "full events module must remain for {source}"
+            );
+        }
     }
 
     #[test]

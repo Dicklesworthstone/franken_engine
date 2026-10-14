@@ -210,6 +210,27 @@ enum ExportsTargetResolution {
     NoMatch,
 }
 
+/// Only an invalid TARGET is recoverable by an alternatives array. Invalid
+/// configuration and invalid requested subpaths must propagate through every
+/// enclosing array, rather than selecting an unrelated fallback module.
+#[derive(Debug, PartialEq, Eq)]
+enum PackageTargetError {
+    Target(String),
+    Configuration(String),
+    Specifier(String),
+}
+
+impl fmt::Display for PackageTargetError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (code, detail) = match self {
+            Self::Target(detail) => ("ERR_INVALID_PACKAGE_TARGET", detail),
+            Self::Configuration(detail) => ("ERR_INVALID_PACKAGE_CONFIG", detail),
+            Self::Specifier(detail) => ("ERR_INVALID_MODULE_SPECIFIER", detail),
+        };
+        write!(formatter, "{code}: {detail}")
+    }
+}
+
 fn read_package_manifest(dir: &Path) -> Result<Option<PackageManifest>, String> {
     let path = dir.join("package.json");
     if !path.is_file() {
@@ -334,7 +355,9 @@ fn resolve_package_exports(
         None => return Err(not_exported()),
         Some(entries) => package_mapping_target(entries, subpath).ok_or_else(not_exported)?,
     };
-    match resolve_package_target(package_dir, target, pattern_match, false, conditions)? {
+    match resolve_package_target(package_dir, target, pattern_match, false, conditions)
+        .map_err(|error| error.to_string())?
+    {
         ExportsTargetResolution::Found(path) => Ok(path),
         ExportsTargetResolution::Package(_)
         | ExportsTargetResolution::Excluded
@@ -350,17 +373,44 @@ fn resolve_package_target(
     pattern_match: Option<&str>,
     imports: bool,
     conditions: &[&str],
-) -> Result<ExportsTargetResolution, String> {
+) -> Result<ExportsTargetResolution, PackageTargetError> {
     match target {
         PackageExports::Target(target) => {
+            if let Some(relative) = target.strip_prefix("./") {
+                // Validate the target BEFORE replacing '*'. A bad target may
+                // select another array entry; a bad capture may not. Check the
+                // capture independently even if the target ignores it or only
+                // uses it in a query/fragment: appending '.js' must not disguise
+                // a forbidden '.' or 'node_modules' capture as a valid name.
+                if has_forbidden_package_segment(relative) {
+                    return Err(PackageTargetError::Target(format!(
+                        "has an invalid or escaping package target `{target}`"
+                    )));
+                }
+                let Some(capture) = pattern_match else {
+                    return checked_package_relative_target(package_dir, relative)
+                        .map(ExportsTargetResolution::Found);
+                };
+                if has_forbidden_package_segment(capture) {
+                    return Err(PackageTargetError::Specifier(format!(
+                        "invalid package pattern subpath `{capture}`"
+                    )));
+                }
+                // Materialize only AFTER substitution. A legal pattern may
+                // split a percent escape across its '*' ("./%*", "61.cjs").
+                // Traversal assembled across that boundary is still refused
+                // by the final package-relative check, without array fallback.
+                return checked_package_relative_target(package_dir, &relative.replace('*', capture))
+                    .map_err(|error| match error {
+                        PackageTargetError::Target(detail) => PackageTargetError::Specifier(detail),
+                        other => other,
+                    })
+                    .map(ExportsTargetResolution::Found);
+            }
             let expanded = match pattern_match {
                 Some(capture) => target.replace('*', capture),
                 None => target.to_string(),
             };
-            if let Some(relative) = expanded.strip_prefix("./") {
-                return package_relative_target(package_dir, relative)
-                    .map(ExportsTargetResolution::Found);
-            }
             // Private imports may redirect to another package, but not to an
             // absolute path, a URL, or a relative path outside this package.
             // A missing selected package/file does not select another entry.
@@ -371,11 +421,26 @@ fn resolve_package_target(
             {
                 return Ok(ExportsTargetResolution::Package(expanded));
             }
-            Err(format!("has an invalid package target `{expanded}`"))
+            Err(PackageTargetError::Target(format!(
+                "has an invalid package target `{expanded}`"
+            )))
         }
         PackageExports::Null => Ok(ExportsTargetResolution::Excluded),
-        PackageExports::Invalid => Err("has an invalid package target".to_string()),
+        PackageExports::Invalid => Err(PackageTargetError::Target(
+            "has an invalid package target".to_string(),
+        )),
         PackageExports::Map(entries) => {
+            // Array-index keys have special ECMAScript enumeration order and
+            // are not permitted as conditions. Check the whole visited object
+            // before selecting any branch, but do not visit unmatched branches.
+            if entries
+                .iter()
+                .any(|(key, _)| canonical_array_index(key).is_some())
+            {
+                return Err(PackageTargetError::Configuration(
+                    "package conditions cannot contain numeric property keys".to_string(),
+                ));
+            }
             for (condition, value) in entries {
                 if condition != "default" && !conditions.contains(&condition.as_str()) {
                     continue;
@@ -406,7 +471,8 @@ fn resolve_package_target(
                     Ok(ExportsTargetResolution::NoMatch) => {}
                     Ok(ExportsTargetResolution::Excluded) => last_error = None,
                     Ok(resolved) => return Ok(resolved),
-                    Err(error) => last_error = Some(error),
+                    Err(error @ PackageTargetError::Target(_)) => last_error = Some(error),
+                    Err(error) => return Err(error),
                 }
             }
             last_error.map_or(Ok(ExportsTargetResolution::Excluded), Err)
@@ -417,25 +483,92 @@ fn resolve_package_target(
 /// Convert a relative target's URL path to a file path. Decode once, after
 /// separating query/fragment. Refuse encoded separators and traversal before
 /// joining; the caller still enforces canonical module-root containment.
+#[cfg(test)]
 fn package_relative_target(package_dir: &Path, relative: &str) -> Result<PathBuf, String> {
+    checked_package_relative_target(package_dir, relative).map_err(|error| error.to_string())
+}
+
+fn checked_package_relative_target(
+    package_dir: &Path,
+    relative: &str,
+) -> Result<PathBuf, PackageTargetError> {
     let invalid = || format!("has an invalid or escaping package target `./{relative}`");
-    let decoded = decode_package_url_path(relative).map_err(|_| invalid())?;
-    if decoded.split('/').any(|segment| {
+    // Invalid URL materialization is not an invalid target alternative. Once
+    // selected, encoded separators/invalid encodings cannot fall through to
+    // another file. The outward interpreter error still carries its request.
+    let decoded = decode_package_url_path(relative).map_err(PackageTargetError::Specifier)?;
+    if invalid_package_segments(&decoded) {
+        return Err(PackageTargetError::Target(invalid()));
+    }
+    Ok(package_dir.join(decoded))
+}
+
+fn invalid_package_segments(decoded: &str) -> bool {
+    decoded.split('/').any(|segment| {
         segment.is_empty()
             || matches!(segment, "." | "..")
             || segment.eq_ignore_ascii_case("node_modules")
-    }) {
-        return Err(invalid());
+    })
+}
+
+/// Match reserved segments in the ORIGINAL target/capture, decoding ASCII
+/// escapes once and treating encoded separators as segment boundaries. A
+/// capture is not itself a file URL: a constant target can legitimately
+/// ignore its other bytes. Do not reject UTF-8 or percent syntax here; the
+/// existing URL decoder validates any bytes actually used by the target.
+/// Only twelve bytes per segment are needed, even for a very long request.
+fn has_forbidden_package_segment(path: &str) -> bool {
+    fn forbidden(segment: &[u8; 12], length: usize) -> bool {
+        match length {
+            1 => segment[0] == b'.',
+            2 => segment[..2] == *b"..",
+            12 => segment.eq_ignore_ascii_case(b"node_modules"),
+            _ => false,
+        }
     }
-    Ok(package_dir.join(decoded))
+
+    let bytes = path.as_bytes();
+    let mut cursor = 0;
+    let mut segment = [0_u8; 12];
+    let mut length = 0_usize;
+    while cursor < bytes.len() {
+        let mut byte = bytes[cursor];
+        cursor += 1;
+        if byte == b'%'
+            && let Some(high) = bytes.get(cursor).and_then(|b| (*b as char).to_digit(16))
+            && let Some(low) = bytes.get(cursor + 1).and_then(|b| (*b as char).to_digit(16))
+        {
+            byte = ((high << 4) | low) as u8;
+            cursor += 2;
+        }
+        if matches!(byte, b'/' | b'\\') {
+            if forbidden(&segment, length) {
+                return true;
+            }
+            length = 0;
+        } else {
+            if length < segment.len() {
+                segment[length] = byte;
+            }
+            length = length.saturating_add(1);
+        }
+    }
+    forbidden(&segment, length)
 }
 
 /// URL decoding shared by export targets and unexported ESM subpaths. The
 /// latter are not restricted to an exports map's package-relative segments;
 /// final canonical module-root containment is still required by the loader.
 fn decode_package_url_path(relative: &str) -> Result<String, String> {
-    let invalid = || format!("has an invalid package URL path `{relative}`");
     let pathname = relative.split(['?', '#']).next().unwrap_or(relative);
+    decode_package_pathname(pathname)
+        .map_err(|_| format!("has an invalid package URL path `{relative}`"))
+}
+
+/// Decode the materialized pathname after the URL suffix was separated.
+/// Raw pattern captures are checked independently above, before this step.
+fn decode_package_pathname(pathname: &str) -> Result<String, String> {
+    let invalid = || format!("has an invalid package URL path `{pathname}`");
     let bytes = pathname.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
     let mut cursor = 0;
@@ -482,7 +615,9 @@ fn resolve_package_imports_target(
         return Err(undefined());
     };
     let (target, capture) = package_mapping_target(entries, specifier).ok_or_else(undefined)?;
-    match resolve_package_target(package_dir, target, capture, true, conditions)? {
+    match resolve_package_target(package_dir, target, capture, true, conditions)
+        .map_err(|error| error.to_string())?
+    {
         ExportsTargetResolution::Excluded | ExportsTargetResolution::NoMatch => Err(undefined()),
         resolved => Ok(resolved),
     }
@@ -1209,6 +1344,149 @@ mod tests {
 
     fn exports(json: &str) -> PackageExports {
         serde_json::from_str(json).expect("exports JSON")
+    }
+
+    #[test]
+    fn package_target_fixtures_preserve_selection_and_fatal_errors() {
+        #[derive(Deserialize)]
+        struct Case {
+            id: String,
+            target: String,
+            capture: Option<String>,
+            value: Option<String>,
+            error: Option<String>,
+        }
+        let cases: Vec<Case> = serde_json::from_str(include_str!(
+            "../../tests/fixtures/package_target_validation.json"
+        ))
+        .expect("shared Node target fixtures");
+        assert_eq!(cases.len(), 52);
+        let package_dir = Path::new("/pkg");
+        for case in cases {
+            for conditions in [REQUIRE_EXPORT_CONDITIONS, IMPORT_EXPORT_CONDITIONS] {
+                for imports in [false, true] {
+                    let (key, request) = match (&case.capture, imports) {
+                        (None, false) => (".", ".".to_string()),
+                        (None, true) => ("#x", "#x".to_string()),
+                        (Some(capture), false) => ("./*", format!("./{capture}")),
+                        (Some(capture), true) => ("#x/*", format!("#x/{capture}")),
+                    };
+                    // Keep the original target JSON, including property order.
+                    let mapping = PackageExports::Map(vec![(key.into(), exports(&case.target))]);
+                    let actual = if imports {
+                        resolve_package_imports_target(package_dir, &request, &mapping, conditions)
+                    } else {
+                        resolve_package_exports(package_dir, &request, &mapping, conditions)
+                            .map(ExportsTargetResolution::Found)
+                    };
+                    let context = format!("{} {conditions:?} imports={imports}", case.id);
+                    match (&case.value, &case.error) {
+                        (Some(file), None) => assert_eq!(
+                            actual,
+                            Ok(ExportsTargetResolution::Found(package_dir.join(file))),
+                            "{context}"
+                        ),
+                        (None, Some(expected)) => {
+                            let error = actual.expect_err(&context);
+                            let expected = if expected == "excluded" {
+                                if imports {
+                                    "is not defined"
+                                } else {
+                                    "does not export"
+                                }
+                            } else {
+                                expected.as_str()
+                            };
+                            assert!(error.contains(expected), "{context}: {error}");
+                        }
+                        _ => panic!("fixture must specify exactly one outcome: {context}"),
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pattern_segment_scan_is_bounded_and_decodes_only_once() {
+        for value in [
+            ".",
+            "..",
+            "node_modules",
+            "NODE_MODULES",
+            "%2E",
+            "%2e%2E",
+            "%6Eode_modules",
+            "a%2f..%5cb",
+            "a/./b",
+            "a\\node_modules\\b",
+            "a?ignored/../b",
+            "a#ignored/node_modules/b",
+            "node_modules\\other_text_too_long",
+        ] {
+            assert!(has_forbidden_package_segment(value), "{value}");
+        }
+        for value in [
+            "",
+            "...",
+            "..cjs",
+            "a..",
+            "node_modules_extra",
+            "not_node_modules",
+            "%252e%252e",
+            "%256eode_modules",
+            "%",
+            "%ff",
+            "%zz",
+            "a%2fb",
+            "a?x=node_modules",
+            "a#node_modules",
+        ] {
+            assert!(!has_forbidden_package_segment(value), "{value}");
+        }
+        let long = "x".repeat(16_384);
+        assert!(!has_forbidden_package_segment(&long));
+        assert!(!has_forbidden_package_segment(&format!("node_modules{long}")));
+        assert!(has_forbidden_package_segment(&format!(
+            "{long}/node_modules"
+        )));
+        assert!(!has_forbidden_package_segment(&format!("{long}/..cjs")));
+    }
+
+    #[test]
+    fn substituted_escape_cannot_escape_the_package_or_select_a_fallback() {
+        // Node's literal-target validation does not catch traversal assembled
+        // across a percent escape and '*'. Keep this engine's existing strict
+        // decoded containment, now fatal rather than selecting another module.
+        // This is a containment regression, not a Node-equivalence fixture.
+        for target in ["./%*", "./%2*", "./%6*", "./node_*", "./pre/*"] {
+            let capture = match target {
+                "./%*" => "2e%2e/outside.cjs",
+                "./%2*" => "e/outside.cjs",
+                "./%6*" => "eode_modules/outside.cjs",
+                "./node_*" => "modules/outside.cjs",
+                _ => "../outside.cjs",
+            };
+            let alternatives = PackageExports::Alternatives(vec![
+                PackageExports::Target(target.into()),
+                PackageExports::Target("./fallback.cjs".into()),
+            ]);
+            for conditions in [REQUIRE_EXPORT_CONDITIONS, IMPORT_EXPORT_CONDITIONS] {
+                for imports in [false, true] {
+                    let error = resolve_package_target(
+                        Path::new("/pkg"),
+                        &alternatives,
+                        Some(capture),
+                        imports,
+                        conditions,
+                    )
+                    .expect_err("cannot hide an invalid subpath behind fallback");
+                    assert!(
+                        matches!(error, PackageTargetError::Specifier(_)),
+                        "{target}: {error}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

@@ -83,3 +83,72 @@ fn commonjs_graph_uses_json_mapping_and_bom_semantics() {
 fn esm_graph_uses_json_mapping_and_bom_semantics() {
     execute_graph("module", "import", "mjs");
 }
+
+fn assert_fatal_target(id: &str, diagnostic: &str) {
+    let cases: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("fixtures/package_target_validation.json"))
+            .expect("target fixtures");
+    let case = cases.iter().find(|case| case["id"] == id).expect("target case");
+    for (goal, suffix) in [("commonjs", "cjs"), ("module", "mjs")] {
+        let root = tempfile::tempdir().expect("isolated module root");
+        let directory = root.path().join("node_modules/pkg");
+        fs::create_dir_all(&directory).expect("package directory");
+        let capture = case["capture"].as_str();
+        let key = if capture.is_some() { "./*" } else { "." };
+        let manifest = format!(
+            "{{\"name\":\"pkg\",\"exports\":{{{}:{}}}}}",
+            serde_json::to_string(key).unwrap(),
+            case["target"].as_str().expect("raw target JSON")
+        );
+        fs::write(directory.join("package.json"), manifest).expect("exact manifest");
+        for name in ["first.cjs", "last.cjs"] {
+            fs::write(
+                directory.join(name),
+                "console.log('fallback-body-ran'); module.exports = 1;\n",
+            )
+            .expect("fallback exists but must not run");
+        }
+        let request = capture.map_or_else(|| "pkg".to_string(), |s| format!("pkg/{s}"));
+        let quoted = serde_json::to_string(&request).unwrap();
+        let source = if goal == "commonjs" {
+            format!("require({quoted});\n")
+        } else {
+            format!("import {quoted};\n")
+        };
+        let entry = root.path().join(format!("entry.{suffix}"));
+        fs::write(&entry, source).expect("entry source");
+        let report_path = root.path().join("run.json");
+        let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+            .args(["run", "--input"])
+            .arg(&entry)
+            .args(["--extension-id", "fatal-target", "--goal", goal, "--out"])
+            .arg(&report_path)
+            .output()
+            .expect("execute production CLI");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{id} {goal}: invalid target executed");
+        assert!(stderr.contains(diagnostic), "{id} {goal}: {stderr}");
+        // Some error paths publish a partial execution report. It must not
+        // contain effects from an alternative that should never be selected.
+        if report_path.is_file() {
+            let report: serde_json::Value =
+                serde_json::from_slice(&fs::read(&report_path).unwrap()).expect("report JSON");
+            if let Some(console) = report["console_output"].as_array() {
+                assert!(
+                    console.iter().all(|entry| entry["message"] != "fallback-body-ran"),
+                    "{id} {goal}: invalid target executed a fallback body"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn invalid_conditional_configuration_does_not_run_a_valid_array_fallback() {
+    assert_fatal_target("numeric_deep_array", "ERR_INVALID_PACKAGE_CONFIG");
+}
+
+#[test]
+fn invalid_wildcard_capture_does_not_run_a_constant_array_fallback() {
+    assert_fatal_target("bad_capture_array", "ERR_INVALID_MODULE_SPECIFIER");
+}

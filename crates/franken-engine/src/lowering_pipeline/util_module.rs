@@ -7,12 +7,13 @@
 //! global, the rewrite puts
 //!
 //! ```text
-//! const %util_module = <UTIL_SOURCE>;
+//! const %util_module = <private synchronous loader>;
 //! ```
 //!
-//! first in the program and replaces each such call with `%util_module`
-//! (`util/types` with `%util_module.types`), so every call returns the same
-//! object. No source text can spell a `%` name. UTIL_SOURCE is engine-owned
+//! first in the program and replaces each such call with `%util_module()`
+//! (`util/types` with `%util_module().types`). Successful first-use
+//! initialization is cached; uncalled functions do not initialize modules.
+//! No source text can spell a `%` name. UTIL_SOURCE is engine-owned
 //! JavaScript. It reads standard globals by name; one the program declares
 //! at its top level (`const { TextEncoder } = require('util')`) is read
 //! through `globalThis` instead. `inspect`, `format` and the internal type
@@ -53,6 +54,8 @@ use std::collections::{BTreeMap, BTreeSet};
 mod fs_module;
 #[path = "stream_operators.rs"]
 mod stream_operators;
+#[path = "native_module_loader.rs"]
+mod native_module_loader;
 
 use super::LoweringPipelineError;
 use super::with_statement::{
@@ -423,15 +426,27 @@ pub(super) fn is_module_declaration(statement: &Statement) -> bool {
                     || name == STRING_DECODER_MODULE_BINDING || name == VM_MODULE_BINDING
                     || name == STREAM_MODULE_BINDING
                     || name == STREAM_CONSUMERS_BINDING
+                    || name == BUFFER_MODULE_BINDING
                     || name == QUERYSTRING_MODULE_BINDING
             )
     )
 }
 
-/// Materialize the requested pure builtin modules through the existing
-/// lowering hook. Each is initialized once per program; shadowed `require`
-/// calls and nonliteral specifiers are not rewritten.
+/// Install private first-use loaders through the existing lowering hook.
+/// Filesystem and pure modules, including private dependencies, share one
+/// final AST pass. Direct-call facades and shadowed/nonliteral requires keep
+/// their existing paths. Parsing and lowering are not deferred.
 pub(super) fn rewrite_util_requires(
+    tree: &SyntaxTree,
+) -> Result<Option<SyntaxTree>, LoweringPipelineError> {
+    let Some(mut rewritten) = rewrite_module_objects(tree)? else {
+        return Ok(None);
+    };
+    native_module_loader::defer_modules(&mut rewritten)?;
+    Ok(Some(rewritten))
+}
+
+fn rewrite_module_objects(
     tree: &SyntaxTree,
 ) -> Result<Option<SyntaxTree>, LoweringPipelineError> {
     let fs_rewritten = fs_module::rewrite_fs_requires(tree)?;
@@ -478,8 +493,8 @@ pub(super) fn rewrite_util_requires(
         restore_claimed_initializers(statement, held);
         outcome?;
     }
-    // Enum ordering initializes util before assert. Capturing its comparator
-    // in the engine-owned prelude avoids guest replacement of public exports.
+    // The final loader pass also defers these private dependencies. Their
+    // declarations precede the dependent loader, but initialization is on use.
     if rewriter.modules.contains(&PureModule::Assert) {
         rewriter.modules.insert(PureModule::Util);
     }

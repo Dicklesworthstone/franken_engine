@@ -86,3 +86,23 @@ fn esm_consumers_share_named_exports_and_consume_engine_streams() {
         "STREAM_CONSUMERS_ESM_OK",
     );
 }
+
+#[test]
+fn commonjs_duplex_conversion_completes_sources_pairs_functions_and_promises() {
+    run(
+        include_str!("../../../fixtures/stream_operators/duplex_from.cjs"),
+        "duplex_from.cjs",
+        "script",
+        "DUPLEX_FROM_OK",
+    );
+}
+
+#[test]
+fn esm_duplex_conversion_preserves_named_exports_and_independent_halves() {
+    run(
+        include_str!("../../../fixtures/stream_operators/duplex_from.mjs"),
+        "duplex_from.mjs",
+        "module",
+        "DUPLEX_FROM_ESM_OK",
+    );
+}

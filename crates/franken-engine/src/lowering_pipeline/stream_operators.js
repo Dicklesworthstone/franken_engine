@@ -491,5 +491,228 @@
   install('every', every);
   install('find', find);
   install('reduce', reduce);
+  // Duplex conversion reuses the native stream state machines. A pair is NOT
+  // a pipeline: writing to one endpoint must not consume or feed the other.
+  function installDuplexFrom() {
+    const Duplex = Stream.Duplex;
+    const compose = Stream.compose;
+    const finished = Stream.finished;
+    const isBuffer = Buffer.isBuffer;
+    function reading(value) {
+      return value != null && typeof value.read === 'function' && typeof value.on === 'function' &&
+        typeof value.destroy === 'function' && typeof value.removeListener === 'function';
+    }
+    function writing(value) {
+      return value != null && typeof value.write === 'function' && typeof value.on === 'function' &&
+        typeof value.destroy === 'function' && typeof value.removeListener === 'function';
+    }
+    function onceCallback(callback) {
+      let called = false;
+      return function (error) { if (!called) { called = true; callback(error); } };
+    }
+    function destroyed() { return failure('ERR_STREAM_DESTROYED', 'Cannot operate on a destroyed duplex'); }
+    function cancelledPair() {
+      const error = new Error('The operation was aborted');
+      error.name = 'AbortError'; error.code = 'ABORT_ERR';
+      return error;
+    }
+
+    function pair(readable, writable, fromIterable) {
+      const hasRead = readable != null && readable.readable !== false;
+      const hasWrite = writable != null && writable.writable !== false;
+      let duplex;
+      let readDone = !hasRead;
+      let writeDone = !hasWrite;
+      let wanted = false;
+      let pumping = false;
+      let tearingDown = false;
+      let teardownError;
+      let destroyCallback;
+      let writeCallback;
+      let finalCallback;
+      let cleanRead;
+      let cleanWrite;
+      function finishWrite(error) {
+        const pending = writeCallback; writeCallback = undefined;
+        if (pending) pending(error);
+      }
+      function finishFinal(error) {
+        const pending = finalCallback; finalCallback = undefined;
+        if (pending) pending(error);
+      }
+      function cleanup() {
+        if (hasRead) readable.removeListener('readable', drain);
+        if (cleanRead) { const clean = cleanRead; cleanRead = undefined; clean(); }
+        if (cleanWrite) { const clean = cleanWrite; cleanWrite = undefined; clean(); }
+      }
+      function destroyedEndpoint() {
+        if (!destroyCallback || !readDone || !writeDone) return;
+        const done = destroyCallback; destroyCallback = undefined;
+        cleanup();
+        done(teardownError);
+      }
+      function failed(error) {
+        if (!error) return;
+        if (!teardownError) teardownError = error;
+        if (duplex && !duplex.destroyed) duplex.destroy(error);
+      }
+      function onReadDone(error) {
+        readDone = true; wanted = false;
+        if (error) failed(error);
+        else if (duplex && !duplex.destroyed) duplex.push(null);
+        destroyedEndpoint();
+      }
+      function onWriteDone(error) {
+        writeDone = true;
+        if (error) failed(error);
+        else finishFinal();
+        destroyedEndpoint();
+      }
+      function drain() {
+        if (!wanted || pumping || readDone || duplex.destroyed) return;
+        pumping = true;
+        try {
+          while (wanted && !duplex.destroyed && !readDone) {
+            const chunk = readable.read();
+            if (chunk === null) break;
+            wanted = duplex.push(chunk);
+          }
+        } catch (error) { failed(error); }
+        finally { pumping = false; }
+      }
+      duplex = new Duplex({
+        readable: hasRead, writable: hasWrite,
+        readableObjectMode: hasRead && !!readable.readableObjectMode,
+        writableObjectMode: hasWrite && !!writable.writableObjectMode,
+        // Stream pairs use the realm defaults; source conversion retains the
+        // pull-based Readable.from high-water mark rather than adding prefetch.
+        readableHighWaterMark: fromIterable ? readable.readableHighWaterMark : undefined,
+        read() { wanted = true; drain(); },
+        write(chunk, encoding, callback) {
+          const pending = onceCallback(callback);
+          if (tearingDown || writeDone) { pending(destroyed()); return; }
+          writeCallback = pending;
+          try {
+            writable.write(chunk, encoding, function (error) {
+              if (writeCallback === pending) writeCallback = undefined;
+              pending(error);
+            });
+          } catch (error) { finishWrite(error); }
+        },
+        final(callback) {
+          const pending = onceCallback(callback);
+          if (tearingDown) { pending(teardownError || destroyed()); return; }
+          finalCallback = pending;
+          try {
+            writable.end();
+            if (writeDone) finishFinal();
+          } catch (error) { finishFinal(error); }
+        },
+        destroy(error, callback) {
+          tearingDown = true; wanted = false;
+          teardownError = teardownError || error || ((!readDone || !writeDone) ? cancelledPair() : undefined);
+          destroyCallback = callback;
+          finishWrite(teardownError || destroyed());
+          finishFinal(teardownError || destroyed());
+          // EOS owns error/close observation until both admitted endpoints
+          // complete, including asynchronous destruction and pending writes.
+          if (hasRead && !readDone && !readable.destroyed) readable.destroy(teardownError);
+          if (hasWrite && !writeDone && !writable.destroyed) writable.destroy(teardownError);
+          destroyedEndpoint();
+        }
+      });
+      let watchingRead = false;
+      let watchingWrite = false;
+      try {
+        if (hasRead) {
+          cleanRead = finished(readable, { readable: true, writable: false }, onReadDone);
+          watchingRead = true;
+          readable.on('readable', drain);
+        }
+        if (hasWrite) {
+          cleanWrite = finished(writable, { readable: false, writable: true }, onWriteDone);
+          watchingWrite = true;
+        }
+      } catch (error) {
+        if (!watchingRead) readDone = true;
+        if (!watchingWrite) writeDone = true;
+        // Do not start a half-built wrapper after an endpoint rejects listener
+        // installation. No user data is written by constructing a pair.
+        duplex.on('error', function () {});
+        duplex.destroy(error);
+        throw error;
+      }
+      return duplex;
+    }
+
+    function fromValue(value, depth) {
+      if (depth > 32) throw failure('ERR_INVALID_ARG_VALUE', 'Duplex source nesting exceeds its limit');
+      if (value instanceof Duplex) return value;
+      if (reading(value) || writing(value)) {
+        return pair(reading(value) ? value : undefined, writing(value) ? value : undefined);
+      }
+      // The existing composition owner already supplies cancellable function
+      // input, validates sink return values, and awaits iterator/destructor
+      // cleanup. Do not create another function-pipeline implementation here.
+      if (typeof value === 'function') return compose(value);
+      if (typeof value === 'string' || isBuffer(value)) return pair(apply(from, Readable, [value]), undefined, true);
+      if (value != null && typeof value === 'object') {
+        if (typeof value[asyncIteratorKey] === 'function' || typeof value[iteratorKey] === 'function') {
+          return pair(apply(from, Readable, [value]), undefined, true);
+        }
+        const thenMethod = value.then;
+        if (typeof thenMethod === 'function') {
+          // Observe rejection immediately, even with no read demand. A pending
+          // promise is not a pending iterator.return(): destroy must not await
+          // user work that may never settle, or publish its eventual value.
+          const duplex = new Duplex({ objectMode: true, writable: false, read() {} });
+          const observed = new PromiseClass(function (resolve, reject) {
+            apply(thenMethod, value, [resolve, reject]);
+          });
+          then(observed, function (chunk) {
+            if (duplex.destroyed) return;
+            try {
+              if (chunk != null) duplex.push(chunk);
+              duplex.push(null);
+            } catch (error) { duplex.destroy(error); }
+          }, function (error) {
+            if (!duplex.destroyed) duplex.destroy(error || destroyed());
+          });
+          return duplex;
+        }
+        const r = value.readable;
+        const w = value.writable;
+        if (r !== undefined || w !== undefined) {
+          let readable;
+          let writable;
+          try {
+            if (r != null) readable = reading(r) ? r : fromValue(r, depth + 1);
+            if (w != null) writable = writing(w) ? w : fromValue(w, depth + 1);
+            if ((readable && !reading(readable)) || (writable && !writing(writable)) ||
+              (r != null && readable.readable === false) || (w != null && writable.writable === false)) {
+              throw failure('ERR_INVALID_ARG_VALUE', 'Duplex pair endpoint has no requested side');
+            }
+            return pair(readable, writable);
+          } catch (error) {
+            // Only conversion-created intermediates are ours on setup failure.
+            if (readable && readable !== r) { readable.on('error', function () {}); readable.destroy(); }
+            if (writable && writable !== w) { writable.on('error', function () {}); writable.destroy(); }
+            throw error;
+          }
+        }
+      }
+      throw failure('ERR_INVALID_ARG_TYPE', 'Duplex.from requires a stream, iterable, promise, function, or readable/writable pair');
+    }
+    const descriptor = createObject(null);
+    descriptor.value = function from(body) { return fromValue(body, 0); };
+    descriptor.writable = true;
+    descriptor.enumerable = true;
+    descriptor.configurable = true;
+    defineProperty(Duplex, 'from', descriptor);
+  }
+  // The focused Readable-operator host supplies only Readable. The real module
+  // always supplies Duplex; it is enriched without changing ordinary facades.
+  if (Stream.Duplex !== undefined) installDuplexFrom();
+
   return Stream;
 })

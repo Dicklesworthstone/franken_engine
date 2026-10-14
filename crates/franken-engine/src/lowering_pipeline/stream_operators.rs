@@ -11,7 +11,7 @@
 //! keep their fast path; we do not guess that an alias is an array or a stream.
 
 use super::{
-    Expression, Outcome, PureModule, Statement, Walk, builtin_require_member, walk_expression,
+    BindingPattern, Expression, Outcome, PureModule, Statement, Walk, builtin_require_member, walk_expression,
     walk_statement,
 };
 
@@ -30,6 +30,24 @@ impl Walk for OperatorUse {
     fn statement(&mut self, statement: &mut Statement) -> Outcome {
         if self.found {
             return Ok(());
+        }
+        // A Duplex can consume an independently imported Readable/Writable.
+        // Keep those values on the same real state machines even when their
+        // constructors would be facade-eligible in isolation. Match the export
+        // name, not its local alias; ordinary Readable.from keeps its fast path.
+        if let Statement::VariableDeclaration(declaration) = &*statement {
+            for declarator in &declaration.declarations {
+                if let Some(initializer) = &declarator.initializer
+                    && matches!(builtin_require_member(initializer), Some((PureModule::Stream, None)))
+                    && let BindingPattern::ObjectPattern(properties) = &declarator.pattern
+                    && properties.iter().any(|property| {
+                        super::super::well_formed_static_name(&property.key) == Some("Duplex")
+                    })
+                {
+                    self.found = true;
+                    return Ok(());
+                }
+            }
         }
         walk_statement(self, statement)
     }
@@ -66,7 +84,7 @@ impl Walk for OperatorUse {
                 name,
                 Some(
                     "map" | "filter" | "flatMap" | "toArray" | "forEach"
-                        | "some" | "every" | "find" | "reduce" | "take" | "drop"
+                        | "some" | "every" | "find" | "reduce" | "take" | "drop" | "Duplex"
                 )
             );
             if self.found {
@@ -119,6 +137,22 @@ mod tests {
                 3,
                 "one events, string_decoder and stream module: {source}"
             );
+            assert!(rewrite_util_requires(&rewritten).expect("idempotent rewrite").is_none());
+        }
+    }
+
+    #[test]
+    fn duplex_conversion_keeps_separate_and_aliased_inputs_on_the_native_module() {
+        for source in [
+            "const { Duplex: D } = require('stream'); const { Readable: R } = require('node:stream'); D.from(R.from([1]));",
+            "const { Writable: W } = require('stream'); const { Duplex } = require('node:stream'); Duplex.from(new W({}));",
+            "const s = require('stream'); const { Readable } = require('stream'); s.Duplex.from(Readable.from([1]));",
+            "const D = require('node:stream').Duplex; const { Readable } = require('stream'); D.from(Readable.from([1]));",
+        ] {
+            let tree = parse(source);
+            assert!(requires_stream_module(&tree.body), "{source}");
+            let rewritten = rewrite_util_requires(&tree).expect("duplex rewrite").expect("full stream module");
+            assert_eq!(rewritten.body.iter().filter(|s| is_module_declaration(s)).count(), 3, "{source}");
             assert!(rewrite_util_requires(&rewritten).expect("idempotent rewrite").is_none());
         }
     }

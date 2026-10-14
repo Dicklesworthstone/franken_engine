@@ -987,20 +987,24 @@ impl InterpreterCore {
         ) {
             return Ok(Value::Undefined);
         }
-        self.set_object_property(
-            holder,
-            ELEMENT_ALREADY_CALLED.to_string(),
-            Value::Bool(true),
-        )?;
+        // Argument and provenance admission can fail under containment limits.
+        // Do not consume the one-shot element until those reads have succeeded:
+        // a failed admission must not silently turn a later invocation into a
+        // successful no-op with the aggregate permanently pending.
         let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let label = self.join_arg_range_with_object_mutation_label(args)?;
         let (Value::Int(index), Value::Object(shared)) = (
             self.capability_holder_slot(holder, ELEMENT_INDEX),
             self.capability_holder_slot(holder, ELEMENT_SHARED),
         ) else {
             return Ok(Value::Undefined);
         };
-        let label = self.join_arg_range_with_object_mutation_label(args)?;
         self.join_direct_object_mutation_label(shared, &label)?;
+        self.set_object_property(
+            holder,
+            ELEMENT_ALREADY_CALLED.to_string(),
+            Value::Bool(true),
+        )?;
         let (kind, element) = match builtin.kind {
             BuiltinFunctionKind::PromiseAllSettledResolveElement => {
                 let entry = self.alloc_object_with_properties(&[

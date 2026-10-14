@@ -12,15 +12,21 @@ use super::super::with_statement::{
     FunctionBody, FunctionParts, Outcome, Search, Walk, lexical_names, var_names, walk_class,
     walk_expression, walk_function, walk_pattern, walk_statement, walk_switch_cases,
 };
-use super::{loop_head_names, scoped_walk};
+use super::{NativeModuleSource, loop_head_names, scoped_walk};
+#[cfg(test)]
+use crate::ast::ParseGoal;
 use crate::ast::{
-    BindingPattern, CatchClause, Expression, MethodDefinition, ParseGoal, SourceSpan, Statement,
+    BindingPattern, CatchClause, Expression, MethodDefinition, SourceSpan, Statement,
     SwitchCase, SyntaxTree, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
 };
+#[cfg(test)]
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
 const MODULE_BINDING: &str = "%fs_module";
 const SOURCE: &str = include_str!("fs_module.js");
+// One immutable parser template shared by fs and fs/promises. Every program
+// still receives a clone before renaming and dependency/loader rewriting.
+static FILESYSTEM_SOURCE: NativeModuleSource = NativeModuleSource::new("franken:fs", SOURCE);
 const PLACEHOLDERS: [(&str, &str); 2] = [
     ("__franken_fs_read", "%FsRead"),
     ("__franken_fs_write", "%FsWrite"),
@@ -56,7 +62,7 @@ fn require_member(expression: &Expression) -> Option<Option<&'static str>> {
     };
     if !matches!(callee.as_ref(), Expression::Identifier(name) if name == "require") {
         return None;
-    }
+    };
     let [Expression::StringLiteral(specifier)] = arguments.as_slice() else {
         return None;
     };
@@ -481,23 +487,13 @@ impl Walk for DirectFsCalls {
 }
 
 fn module_source(names: &BTreeSet<String>) -> Result<Expression, LoweringPipelineError> {
-    let invalid = || LoweringPipelineError::InvariantViolation {
-        detail: "the engine's filesystem module source failed to parse",
-    };
-    let tree = CanonicalEs2020Parser
-        .parse_with_options(
-            ParserSource {
-                label: "franken:fs".into(),
-                text: SOURCE.into(),
-            },
-            ParseGoal::Script,
-            &ParserOptions::default(),
-        )
-        .map_err(|_| invalid())?;
-    let [Statement::Expression(statement)] = tree.body.as_slice() else {
-        return Err(invalid());
-    };
-    let mut expression = statement.expression.clone();
+    // Keep the filesystem diagnostic at its existing boundary. The shared
+    // carrier stores only pristine syntax, never renamed host-I/O intrinsics.
+    let mut expression = FILESYSTEM_SOURCE.expression().map_err(|_| {
+        LoweringPipelineError::InvariantViolation {
+            detail: "the engine's filesystem module source failed to parse",
+        }
+    })?;
     ModuleRenamer { names }.expression(&mut expression)?;
     Ok(expression)
 }
@@ -619,6 +615,94 @@ mod tests {
     fn native_module_source_parses_with_protected_globals() {
         let names = GLOBALS.iter().map(|name| (*name).to_string()).collect();
         module_source(&names).expect("the shipped source parses and renames");
+    }
+
+    #[test]
+    fn cached_filesystem_syntax_matches_an_independent_fresh_parse() {
+        let fresh = CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: "franken:fs".into(),
+                    text: SOURCE.into(),
+                },
+                ParseGoal::Script,
+                &ParserOptions::default(),
+            )
+            .expect("fresh filesystem source parses");
+        let [Statement::Expression(statement)] = fresh.body.as_slice() else {
+            panic!("one filesystem module expression");
+        };
+        let cached = FILESYSTEM_SOURCE.expression().expect("cached filesystem source");
+        assert_eq!(cached, statement.expression, "exact syntax and source spans");
+        assert_eq!(cached.canonical_value(), statement.expression.canonical_value());
+    }
+
+    #[test]
+    fn cached_filesystem_syntax_does_not_share_global_or_intrinsic_rewrites() {
+        let pristine = FILESYSTEM_SOURCE.expression().expect("raw parser template");
+        let names = BTreeSet::from(["Buffer".to_string(), "Promise".to_string()]);
+        let mut protected = module_source(&names).expect("protected clone");
+        let protected_names = super::super::tests::free_names(&mut protected);
+        assert!(protected_names.contains("globalThis"));
+        assert!(!protected_names.contains("Buffer"));
+        assert!(!protected_names.contains("Promise"));
+
+        let mut ordinary = module_source(&BTreeSet::new()).expect("unprotected clone");
+        let ordinary_names = super::super::tests::free_names(&mut ordinary);
+        assert!(ordinary_names.contains("Buffer"));
+        assert!(ordinary_names.contains("Promise"));
+        assert!(!ordinary_names.contains("globalThis"));
+        for intrinsic in ["%FsRead", "%FsWrite"] {
+            assert!(ordinary_names.contains(intrinsic));
+            assert!(protected_names.contains(intrinsic));
+        }
+        let mut cached = FILESYSTEM_SOURCE.expression().expect("still pristine");
+        assert_eq!(cached, pristine);
+        let cached_names = super::super::tests::free_names(&mut cached);
+        for (placeholder, intrinsic) in PLACEHOLDERS {
+            assert!(cached_names.contains(placeholder));
+            assert!(!cached_names.contains(intrinsic));
+        }
+    }
+
+    #[test]
+    fn filesystem_cache_survives_mixed_module_loader_and_dependency_rewrites() {
+        let first = parse("const fs = require('fs'); const alias = fs; alias.promises;");
+        let expected = super::super::rewrite_util_requires(&first)
+            .expect("first full rewrite")
+            .expect("module loader");
+        let pristine = FILESYSTEM_SOURCE.expression().expect("cache before mixed rewrite");
+        let mixed = parse(
+            "const Buffer = replacement; const Promise = other; \
+             const fs = require('node:fs/promises'); const stream = require('stream'); \
+             const util = require('util'); console.log(fs, stream, util);",
+        );
+        super::super::rewrite_util_requires(&mixed)
+            .expect("mixed module rewrite")
+            .expect("native dependencies");
+        let repeated = super::super::rewrite_util_requires(&first)
+            .expect("repeat full rewrite")
+            .expect("same module loader");
+        assert_eq!(repeated, expected);
+        assert_eq!(FILESYSTEM_SOURCE.expression().unwrap(), pristine);
+        assert!(super::super::rewrite_util_requires(&repeated).unwrap().is_none());
+    }
+
+    #[test]
+    fn warmed_filesystem_cache_does_not_introduce_loaders_on_direct_calls() {
+        module_source(&GLOBALS.iter().map(|name| (*name).to_string()).collect())
+            .expect("warm and protect one private clone");
+        let tree = parse("require('fs').readFileSync('input', 'utf8');");
+        let rewritten = rewrite_fs_requires(&tree).unwrap().expect("direct call");
+        assert_eq!(rewritten.body.len(), 1);
+        assert!(!is_module_declaration(&rewritten.body[0]));
+        let Statement::Expression(statement) = &rewritten.body[0] else {
+            panic!("direct call statement");
+        };
+        let Expression::Call { callee, .. } = &statement.expression else {
+            panic!("direct call expression");
+        };
+        assert_eq!(callee.as_ref(), &Expression::Identifier("%FsRead".into()));
     }
 
     #[test]

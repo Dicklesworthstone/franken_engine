@@ -92,6 +92,8 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use crate::deterministic_serde::CanonicalValue;
 
 mod access;
+mod rope_compare;
+mod rope_units;
 
 /// Serde map key marking the exact-code-unit payload of a string that
 /// contains lone surrogates. Well-formed strings serialize as plain strings.
@@ -223,12 +225,7 @@ impl Deref for Text {
 
 impl PartialEq for Text {
     fn eq(&self, other: &Self) -> bool {
-        if let (Self::Concat(left), Self::Concat(right)) = (self, other)
-            && Arc::ptr_eq(left, right)
-        {
-            return true;
-        }
-        self.len() == other.len() && self.as_str() == other.as_str()
+        self.len() == other.len() && self.cmp_streaming(other).is_eq()
     }
 }
 
@@ -242,7 +239,7 @@ impl PartialOrd for Text {
 
 impl Ord for Text {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.as_str().cmp(other.as_str())
+        self.cmp_streaming(other)
     }
 }
 
@@ -461,6 +458,11 @@ impl JsString {
     pub fn encode_utf16(&self) -> CodeUnits<'_> {
         CodeUnits {
             inner: match &self.shape {
+                Shape::WellFormed { .. }
+                    if matches!(&self.utf8, Text::Concat(node) if node.joined.get().is_none()) =>
+                {
+                    CodeUnitsInner::Rope(rope_units::RopeUnits::new(self))
+                }
                 Shape::WellFormed { .. } if self.is_ascii_text() => {
                     CodeUnitsInner::Ascii(self.utf8.as_bytes().iter())
                 }
@@ -685,6 +687,16 @@ impl JsString {
     /// U+1F600 sorts *below* U+FF5A here (0xD83D < 0xFF5A) but above it under
     /// code-point order. (bd-rdnhc)
     pub fn utf16_cmp(&self, other: &JsString) -> std::cmp::Ordering {
+        let shared = match (&self.shape, &other.shape) {
+            (Shape::Exact(left), Shape::Exact(right)) => Arc::ptr_eq(left, right),
+            (Shape::WellFormed { .. }, Shape::WellFormed { .. }) => {
+                self.utf8.shares_storage(&other.utf8)
+            }
+            _ => false,
+        };
+        if shared {
+            return std::cmp::Ordering::Equal;
+        }
         if self.is_ascii() && other.is_ascii() {
             return self.utf8.cmp(&other.utf8);
         }
@@ -945,13 +957,13 @@ impl From<&String> for JsString {
 
 impl PartialEq<str> for JsString {
     fn eq(&self, other: &str) -> bool {
-        self.is_well_formed() && self.utf8.len() == other.len() && *self.utf8 == *other
+        self.is_well_formed() && self.utf8.eq_str_streaming(other)
     }
 }
 
 impl PartialEq<&str> for JsString {
     fn eq(&self, other: &&str) -> bool {
-        self.is_well_formed() && self.utf8.len() == other.len() && *self.utf8 == **other
+        self.is_well_formed() && self.utf8.eq_str_streaming(other)
     }
 }
 
@@ -967,6 +979,7 @@ enum CodeUnitsInner<'a> {
     Ascii(std::slice::Iter<'a, u8>),
     WellFormed(std::str::EncodeUtf16<'a>),
     Exact(std::iter::Copied<std::slice::Iter<'a, u16>>),
+    Rope(rope_units::RopeUnits<'a>),
 }
 
 impl Iterator for CodeUnits<'_> {
@@ -978,6 +991,7 @@ impl Iterator for CodeUnits<'_> {
             CodeUnitsInner::Ascii(iter) => iter.next().copied().map(u16::from),
             CodeUnitsInner::WellFormed(iter) => iter.next(),
             CodeUnitsInner::Exact(iter) => iter.next(),
+            CodeUnitsInner::Rope(iter) => iter.next(),
         };
         self.remaining -= usize::from(unit.is_some());
         unit
@@ -996,6 +1010,7 @@ impl Iterator for CodeUnits<'_> {
             CodeUnitsInner::Ascii(iter) => iter.nth(n).copied().map(u16::from),
             CodeUnitsInner::WellFormed(iter) => iter.nth(n),
             CodeUnitsInner::Exact(iter) => iter.nth(n),
+            CodeUnitsInner::Rope(iter) => iter.nth(n),
         };
         // n < remaining, so n + 1 cannot overflow.
         self.remaining -= n + 1;
@@ -1017,6 +1032,9 @@ impl Iterator for CodeUnits<'_> {
             CodeUnitsInner::Ascii(mut iter) => iter.next_back().copied().map(u16::from),
             CodeUnitsInner::WellFormed(iter) => iter.last(),
             CodeUnitsInner::Exact(mut iter) => iter.next_back(),
+            CodeUnitsInner::Rope(mut iter) => {
+                self.remaining.checked_sub(1).and_then(|n| iter.nth(n))
+            }
         }
     }
 
@@ -1029,6 +1047,7 @@ impl Iterator for CodeUnits<'_> {
             CodeUnitsInner::Ascii(iter) => iter.fold(init, |acc, &byte| f(acc, u16::from(byte))),
             CodeUnitsInner::WellFormed(iter) => iter.fold(init, f),
             CodeUnitsInner::Exact(iter) => iter.fold(init, f),
+            CodeUnitsInner::Rope(iter) => iter.fold(init, f),
         }
     }
 }

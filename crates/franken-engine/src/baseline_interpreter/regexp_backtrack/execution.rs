@@ -326,6 +326,34 @@ impl Run<'_> {
         }
     }
 
+    /// A mandatory, case-sensitive first character, proved from bytecode,
+    /// not source spelling. Save(0) writes only the whole-match start; a
+    /// mismatching forward Char immediately undoes it with no other effects.
+    fn required_start_literal(&self, sticky: bool) -> Option<char> {
+        if sticky || self.regexp.ignore_case {
+            return None;
+        }
+        match self.regexp.program.as_slice() {
+            [Inst::Save(0), Inst::Char { c, backward: false }, ..] => Some(*c),
+            _ => None,
+        }
+    }
+
+    /// Skip only fully affordable failed Save(0)/Char attempts. Scanning is
+    /// bounded to 256 characters even with unlimited headroom. A remaining
+    /// zero/one-step allowance returns to execute, preserving the exact
+    /// refusal point and partial capture state rather than fabricating EOF.
+    fn skip_literal_misses(&mut self, at: usize, literal: char) -> usize {
+        let count = ((self.steps_left / 2).min(256) as usize)
+            .min(self.input.chars.len() - at);
+        let missed = self.input.chars[at..at + count]
+            .iter()
+            .position(|&character| character == literal)
+            .unwrap_or(count);
+        self.steps_left -= 2 * missed as u64;
+        missed
+    }
+
     /// Consume one character in the given direction if it satisfies `test`.
     fn step(&self, position: usize, backward: bool, test: impl Fn(char) -> bool) -> Option<usize> {
         if backward {
@@ -408,6 +436,7 @@ impl<'a> Run<'a> {
     ) -> Result<Option<Captures>, BacktrackError> {
         let input = self.input;
         let length = input.chars.len();
+        let literal = self.required_start_literal(sticky);
         let mut at = start;
         if at <= length {
             // A failed execute restores every capture to its entry value.
@@ -418,6 +447,13 @@ impl<'a> Run<'a> {
             self.slots.fill(None);
         }
         while at <= length {
+            if let Some(literal) = literal {
+                let missed = self.skip_literal_misses(at, literal);
+                if missed != 0 {
+                    at += missed;
+                    continue;
+                }
+            }
             let matched = self.execute(0, at, stack);
             // Reuse common workspaces, but do not retain an adversarial peak
             // alongside every later global result. The active stack remains

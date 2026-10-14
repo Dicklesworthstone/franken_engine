@@ -146,3 +146,77 @@ fn many_unentered_groups_do_not_change_search_results_or_instruction_cost() {
     let expected = 2 * 32_768 + 1 + 6 + 2 * 8192 + 1 + 1;
     assert_eq!(budget - run.steps_remaining(), expected);
 }
+
+#[test]
+fn literal_filter_requires_a_mandatory_forward_case_sensitive_prefix() {
+    let input = PreparedInput::new("aaa");
+    for pattern in ["a", "abc(?=)", "a+", "a(?<=(a))", "é(?=)", "😀(?=)"] {
+        let regexp = BacktrackRegExp::new(pattern, "u").unwrap();
+        let run = Run::new(&regexp, &input, 1000);
+        assert_eq!(run.required_start_literal(false), pattern.chars().next());
+        assert_eq!(run.required_start_literal(true), None);
+    }
+    for pattern in ["", "(a)", "a|b", "a*", "a?b", "^a", "(?=a)a", "[ab]"] {
+        let regexp = BacktrackRegExp::new(pattern, "").unwrap();
+        let run = Run::new(&regexp, &input, 1000);
+        assert_eq!(run.required_start_literal(false), None, "{pattern}");
+    }
+    let regexp = BacktrackRegExp::new("a(?=)", "i").unwrap();
+    assert_eq!(Run::new(&regexp, &input, 1000).required_start_literal(false), None);
+}
+
+#[test]
+fn literal_skip_is_bounded_affordable_and_leaves_matcher_state_untouched() {
+    let regexp = BacktrackRegExp::new("n(?=)", "").unwrap();
+    let input = PreparedInput::new(&format!("{}n", "x".repeat(1024)));
+    for at in [0, 1, 767, 768, 769, 1023, 1024, 1025] {
+        for budget in (0..=1025).chain([u64::MAX]) {
+            let mut run = Run::new(&regexp, &input, budget);
+            let slots = run.slots.clone();
+            let skipped = run.skip_literal_misses(at, 'n');
+            let expected = (budget / 2).min(256).min(1024_usize.saturating_sub(at) as u64);
+            assert_eq!(skipped as u64, expected);
+            assert_eq!(run.steps_remaining(), budget - 2 * expected);
+            assert_eq!(run.slots, slots);
+            assert!(run.stack.is_empty());
+            assert_eq!(run.stack.capacity(), 0, "prefilter must not allocate frames");
+            assert!(run.capture_seen.is_empty());
+        }
+    }
+}
+
+#[test]
+fn literal_prefilter_matches_legacy_results_and_partial_state_at_every_boundary() {
+    for (pattern, flags) in [
+        ("n(a)?b(?=)", ""),
+        ("n(?=(a+))a*b\\1", ""),
+        ("n(?!(a))b", ""),
+        ("n(?:a|b){17,20}c", ""),
+        ("é(?<=é)(a)", "u"),
+        ("😀(a)?(?=)", "u"),
+        ("n(?=)", "i"),
+    ] {
+        let regexp = BacktrackRegExp::new(pattern, flags).unwrap();
+        for prefix in [0, 1, 255, 256, 257, 511, 512] {
+            let text = format!("{}naab nab nb éa 😀a", "x".repeat(prefix));
+            let input = PreparedInput::new(&text);
+            for start in [0, prefix, input.char_len(), input.char_len() + 1] {
+                for sticky in [false, true] {
+                    for budget in (0..=2 * prefix as u64 + 64).chain([10_000]) {
+                        let mut candidate = Run::new(&regexp, &input, budget);
+                        let mut reference = Run::new(&regexp, &input, budget);
+                        assert_eq!(
+                            candidate.search(start, sticky),
+                            legacy_search(&mut reference, start, sticky),
+                            "/{pattern}/{flags} prefix={prefix} start={start} budget={budget}"
+                        );
+                        assert_eq!(candidate.steps_remaining(), reference.steps_remaining());
+                        assert_eq!(candidate.slots, reference.slots);
+                        assert_eq!(candidate.registers, reference.registers);
+                        assert!(candidate.stack.is_empty());
+                    }
+                }
+            }
+        }
+    }
+}

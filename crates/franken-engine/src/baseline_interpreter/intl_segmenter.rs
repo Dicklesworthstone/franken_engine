@@ -102,9 +102,9 @@ impl InterpreterCore {
             .as_str()
             .expect("Intl.Segmenter input originates from a Rust String");
         let records = match granularity.as_str() {
-            "word" => self.segment_records(text.split_word_bounds(), &input, true)?,
-            "sentence" => self.segment_records(text.split_sentence_bounds(), &input, false)?,
-            _ => self.segment_records(text.graphemes(true), &input, false)?,
+            "word" => self.segment_records(text.split_word_bounds(), true)?,
+            "sentence" => self.segment_records(text.split_sentence_bounds(), false)?,
+            _ => self.segment_records(text.graphemes(true), false)?,
         };
         // Non-enumerable properties on the public object are not internal
         // slots: guests can still read and overwrite them. Only bound native
@@ -362,8 +362,23 @@ impl InterpreterCore {
     /// A segment data record `{ segment, index, input[, isWordLike] }`.
     fn segment_record(
         &mut self,
-        (text, index, word_like): &Segment,
+        segment: &Segment,
         input: &JsString,
+    ) -> Result<ObjectId, InterpreterError> {
+        self.segment_record_with_input(segment, Some(input))
+    }
+
+    /// Private canonical records need only the segment, start and word flag.
+    /// The input lives once in their owning storage object. Including it in
+    /// every private record charged its entire length per segment, despite
+    /// sharing its immutable backing: ordinary grapheme input hit the memory
+    /// budget quadratically before any result was requested. Public records
+    /// still receive their own input property, in the specified key order,
+    /// through the unchanged ordinary property-accounting path.
+    fn segment_record_with_input(
+        &mut self,
+        (text, index, word_like): &Segment,
+        input: Option<&JsString>,
     ) -> Result<ObjectId, InterpreterError> {
         let mut fields = vec![
             ("segment", Value::Str(text.clone())),
@@ -371,8 +386,10 @@ impl InterpreterCore {
                 "index",
                 Value::Int(i64::try_from(*index).unwrap_or(i64::MAX)),
             ),
-            ("input", Value::Str(input.clone())),
         ];
+        if let Some(input) = input {
+            fields.push(("input", Value::Str(input.clone())));
+        }
         if let Some(word_like) = word_like {
             fields.push(("isWordLike", Value::Bool(*word_like)));
         }
@@ -385,7 +402,6 @@ impl InterpreterCore {
     fn segment_records<'a>(
         &mut self,
         pieces: impl Iterator<Item = &'a str>,
-        input: &JsString,
         word_granularity: bool,
     ) -> Result<Vec<Value>, InterpreterError> {
         let mut records = Vec::new();
@@ -394,7 +410,7 @@ impl InterpreterCore {
             let text = JsString::from(piece);
             let end = index + text.utf16_len();
             let word_like = word_granularity.then(|| piece.chars().any(char::is_alphanumeric));
-            let record = self.segment_record(&(text, index, word_like), input)?;
+            let record = self.segment_record_with_input(&(text, index, word_like), None)?;
             records.push(Value::Object(record));
             index = end;
         }
@@ -484,7 +500,10 @@ mod tests {
             assert!(count > 1, "fixture must exercise repeated records");
             for index in 0..count {
                 let record = object(core.heap[storage.0 as usize].properties.get(&index.to_string()).unwrap().clone());
-                let stored = string_property(&core, record, "input");
+                assert!(!core.heap[record.0 as usize].properties.contains_key("input"));
+                let canonical = core.segment_data_at(storage, index).expect("canonical data");
+                let public = core.segment_record(&canonical, &shared).expect("public record");
+                let stored = string_property(&core, public, "input");
                 assert!(std::ptr::eq(
                     stored.as_str().expect("well-formed input"),
                     shared.as_str().expect("well-formed input"),
@@ -536,9 +555,9 @@ mod tests {
         for word_granularity in [false, true] {
             let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-stream");
             let records = if word_granularity {
-                core.segment_records(text.split_word_bounds(), &input, true)
+                core.segment_records(text.split_word_bounds(), true)
             } else {
-                core.segment_records(text.graphemes(true), &input, false)
+                core.segment_records(text.graphemes(true), false)
             }
             .expect("stream records");
             assert_eq!(records.len(), expected.len());
@@ -555,7 +574,7 @@ mod tests {
         }
         let mut core = InterpreterCore::new(InterpreterConfig::default(), "sentence-stream");
         let records = core
-            .segment_records(text.split_sentence_bounds(), &input, false)
+            .segment_records(text.split_sentence_bounds(), false)
             .expect("stream sentence");
         assert_eq!(records.len(), 1);
         let Value::Object(record) = records[0].clone() else {
@@ -569,11 +588,10 @@ mod tests {
     #[test]
     fn empty_segment_stream_does_not_allocate_records() {
         let mut core = InterpreterCore::new(InterpreterConfig::default(), "empty-segments");
-        let input = JsString::from("");
         let before = core.heap.len();
         for word_granularity in [false, true] {
             let records = core
-                .segment_records(std::iter::empty::<&str>(), &input, word_granularity)
+                .segment_records(std::iter::empty::<&str>(), word_granularity)
                 .expect("empty stream");
             assert!(records.is_empty());
             assert_eq!(core.heap.len(), before);
@@ -832,6 +850,74 @@ console.log(s.containing(3).segment, [...s].map(v => v.segment).join('|'));
             "0:a|0:a|0:a|1:👍🏽|1:👍🏽|5:b|-|-|-|1:👍🏽",
             r#"{"segment":"👍🏽","index":1,"input":"a👍🏽b"}"#,
             "👍🏽 a|👍🏽|b",
+        ]);
+    }
+
+    #[test]
+    fn canonical_segment_memory_grows_linearly_and_long_input_fits_default_budget() {
+        let mut charges = Vec::new();
+        for length in [4096, 8192] {
+            let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-linear-memory");
+            let before = core.estimated_memory_bytes;
+            let (_, storage) = fixture(&mut core, &"x".repeat(length), "grapheme");
+            let (input, count) = core.segment_storage_info(storage).expect("storage");
+            assert_eq!(count, length);
+            charges.push(core.estimated_memory_bytes - before);
+            let last = object(core.segment_containing(storage, &input, count, length - 1).unwrap());
+            assert_eq!(string_property(&core, last, "segment").as_str(), Some("x"));
+            assert_eq!(string_property(&core, last, "input"), &input);
+            assert_eq!(
+                core.heap[last.0 as usize].properties.get("index"),
+                Some(&Value::Int((length - 1) as i64)),
+            );
+        }
+        // More keys and digits add linear metadata, not a second copy of
+        // the whole input per segment. The old 8K case exhausted 64 MiB.
+        assert!(charges[1] > charges[0]);
+        assert!(charges[1] < charges[0] * 3, "charges: {charges:?}");
+    }
+
+    #[test]
+    fn segment_input_preflight_still_refuses_before_allocating_records() {
+        let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-admission");
+        let resolved = core.alloc_object_with_properties(&[
+            ("granularity", Value::str("grapheme")),
+        ]).unwrap();
+        let input = "x".repeat(1024);
+        let before_heap = core.heap.len();
+        let before_bytes = core.estimated_memory_bytes;
+        core.config.max_total_memory_bytes = before_bytes
+            + input.len() as u64 * SEGMENT_NATIVE_BYTES_PER_CODE_UNIT - 1;
+        assert!(core.intl_segment(resolved, input).is_err());
+        assert_eq!(core.heap.len(), before_heap);
+        assert_eq!(core.estimated_memory_bytes, before_bytes);
+    }
+
+    #[test]
+    fn long_segment_input_public_results_keep_all_fields_and_property_order() {
+        let source = r#"
+const input = 'x'.repeat(8192);
+const segments = new Intl.Segmenter().segment(input);
+const last = segments.containing(8191);
+const first = segments[Symbol.iterator]().next().value;
+console.log(last.segment, last.index, last.input === input);
+console.log(first.segment, first.index, first.input === input);
+console.log(Object.keys(last).join(','), segments.containing(8192));
+const words = new Intl.Segmenter('en', { granularity: 'word' }).segment('A 12.');
+console.log(Object.keys(words.containing(2)).join(','), words.containing(2).isWordLike);
+"#;
+        let lines: Vec<String> = crate::HybridRouter::default()
+            .eval(source)
+            .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+            .console_output
+            .into_iter()
+            .map(|entry| entry.message)
+            .collect();
+        assert_eq!(lines, [
+            "x 8191 true",
+            "x 0 true",
+            "segment,index,input undefined",
+            "segment,index,input,isWordLike true",
         ]);
     }
 }

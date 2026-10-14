@@ -23,13 +23,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::js_string::{ExactPropertyMap, JsString};
 
+mod indexed_values;
+use indexed_values::IndexedValues;
+
 // ---------------------------------------------------------------------------
 // OrderedStringMap — baseline string-key property carrier
 // ---------------------------------------------------------------------------
 
 /// A string-keyed map with deterministic ES own-property iteration order.
 ///
-/// Lookup remains backed by a [`BTreeMap`]. Observable iteration follows
+/// Dense numeric keys use direct indexed storage; sparse keys retain an
+/// ordered dictionary. Observable iteration follows
 /// ECMAScript `[[OwnPropertyKeys]]` string-key order: canonical array indices
 /// (`0` through `4294967294`) numerically first, followed by all other strings
 /// in property-creation order. Updating an existing key retains its position;
@@ -45,10 +49,9 @@ use crate::js_string::{ExactPropertyMap, JsString};
 pub struct OrderedStringMap<V> {
     // Ordinary (non-index) well-formed keys.
     by_key: KeyedValues<V>,
-    // Canonical array-index keys with their values, in numeric order. A
-    // lookup compares integers, not decimal strings: an array of N elements
-    // used to cost about log2(N) string comparisons per element access.
-    array_entries: BTreeMap<u32, (String, V)>,
+    // Canonical array-index keys in numeric order. Dense prefixes use
+    // vector offsets; gaps and interior deletion use the ordered dictionary.
+    array_entries: IndexedValues<V>,
     string_insertion_order: Vec<String>,
     // Allocated on first use: an ordinary object's properties have none.
     sidecars: Option<Box<Sidecars<V>>>,
@@ -296,7 +299,7 @@ impl<V> Default for OrderedStringMap<V> {
     fn default() -> Self {
         Self {
             by_key: KeyedValues::new(),
-            array_entries: BTreeMap::new(),
+            array_entries: IndexedValues::new(),
             string_insertion_order: Vec::new(),
             sidecars: None,
         }
@@ -385,13 +388,7 @@ impl<V> OrderedStringMap<V> {
     /// through a key built per write cost an allocation each (bd-9vouw.472).
     pub fn shift_dense_index_values(&mut self, len: u32) -> Option<V> {
         let last = len.checked_sub(1)?;
-        // Keys are unique and sorted: `len` of them from 0 to `last` are
-        // exactly 0..len.
-        let mut keys = self.array_entries.keys();
-        if self.array_entries.len() != len as usize
-            || keys.next() != Some(&0)
-            || keys.next_back().is_some_and(|index| *index != last)
-        {
+        if !self.array_entries.is_dense_prefix(len) {
             return None;
         }
         let mut values = self.array_entries.values_mut().map(|(_, value)| value);
@@ -418,12 +415,7 @@ impl<V> OrderedStringMap<V> {
         else {
             return Err(items);
         };
-        let mut keys = self.array_entries.keys();
-        if self.array_entries.len() != len as usize
-            || (len > 0
-                && (keys.next() != Some(&0)
-                    || keys.next_back().is_some_and(|index| *index != len - 1)))
-        {
+        if !self.array_entries.is_dense_prefix(len) {
             return Err(items);
         }
         let count = items.len();
@@ -467,12 +459,7 @@ impl<V> OrderedStringMap<V> {
         else {
             return Err(items);
         };
-        let mut keys = self.array_entries.keys();
-        if self.array_entries.len() != len as usize
-            || (len > 0
-                && (keys.next() != Some(&0)
-                    || keys.next_back().is_some_and(|index| *index != len - 1)))
-        {
+        if !self.array_entries.is_dense_prefix(len) {
             return Err(items);
         }
         let replaced = items.len().min(delete_count as usize);
@@ -480,9 +467,9 @@ impl<V> OrderedStringMap<V> {
         // The first items take the first deleted slots.
         let mut removed: Vec<V> = self
             .array_entries
-            .range_mut(start..deleted_end)
+            .range_values_mut(start..deleted_end)
             .zip(items)
-            .map(|((_, (_, value)), item)| std::mem::replace(value, item))
+            .map(|((_, value), item)| std::mem::replace(value, item))
             .collect();
         let rotated_from = start + replaced as u32;
         if new_len > len {
@@ -493,8 +480,8 @@ impl<V> OrderedStringMap<V> {
             }
             let mut values: Vec<&mut V> = self
                 .array_entries
-                .range_mut(rotated_from..new_len)
-                .map(|(_, (_, value))| value)
+                .range_values_mut(rotated_from..new_len)
+                .map(|(_, value)| value)
                 .collect();
             let moved = (new_len - len) as usize;
             reverse_values(&mut values);
@@ -506,18 +493,21 @@ impl<V> OrderedStringMap<V> {
             // then remove those entries.
             let mut values: Vec<&mut V> = self
                 .array_entries
-                .range_mut(rotated_from..len)
-                .map(|(_, (_, value))| value)
+                .range_values_mut(rotated_from..len)
+                .map(|(_, value)| value)
                 .collect();
             let surplus = (len - new_len) as usize;
             let (front, back) = values.split_at_mut(surplus);
             reverse_values(front);
             reverse_values(back);
             reverse_values(&mut values);
-            removed.extend(
-                (new_len..len)
-                    .filter_map(|index| self.array_entries.remove(&index).map(|(_, value)| value)),
-            );
+            // Remove from the tail so packed storage never observes an
+            // interior hole. Restore the deleted values' ascending order.
+            let tail_start = removed.len();
+            removed.extend((new_len..len).rev().filter_map(|index| {
+                self.array_entries.remove(&index).map(|(_, value)| value)
+            }));
+            removed[tail_start..].reverse();
         }
         Ok(removed)
     }
@@ -528,15 +518,7 @@ impl<V> OrderedStringMap<V> {
     /// strings append to creation order. Replacing a value moves neither.
     pub fn insert(&mut self, key: String, value: V) -> Option<V> {
         if let Some(index) = canonical_array_index(&key) {
-            return match self.array_entries.entry(index) {
-                std::collections::btree_map::Entry::Occupied(mut entry) => {
-                    Some(std::mem::replace(&mut entry.get_mut().1, value))
-                }
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert((key, value));
-                    None
-                }
-            };
+            return self.array_entries.insert(index, (key, value));
         }
         if !self.by_key.contains_key(&key) {
             self.string_insertion_order.push(key.clone());
@@ -1211,7 +1193,7 @@ impl<'de, V: Deserialize<'de>> Deserialize<'de> for OrderedStringMap<V> {
 
 /// Iterator over [`OrderedStringMap`] entries.
 pub struct OrderedStringMapIter<'a, V> {
-    indexed: std::collections::btree_map::Values<'a, u32, (String, V)>,
+    indexed: indexed_values::Values<'a, V>,
     named: std::slice::Iter<'a, String>,
     by_key: &'a KeyedValues<V>,
 }
@@ -1243,7 +1225,7 @@ impl<'a, V> IntoIterator for &'a OrderedStringMap<V> {
 
 /// Owning iterator over [`OrderedStringMap`] entries.
 pub struct OrderedStringMapIntoIter<V> {
-    indexed: std::collections::btree_map::IntoValues<u32, (String, V)>,
+    indexed: indexed_values::IntoValues<V>,
     keys: std::vec::IntoIter<String>,
     by_key: KeyedValues<V>,
 }

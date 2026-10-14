@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -1123,6 +1124,47 @@ pub trait ModuleResolver {
         context: &ResolutionContext,
         policy: &dyn ModulePolicyHook,
     ) -> ResolutionResult<Vec<ResolutionOutcome>>;
+}
+
+/// Runtime-owned resolver installation used by native execution.
+///
+/// The resolver and policy must be thread-safe because interpreter lanes run on
+/// a provisioned execution thread. The entry referrer is the already-authorized
+/// engine record id for the top-level source; nested loads replace it with the
+/// id of the module currently being evaluated. Keeping this object source-only
+/// lets the existing interpreter retain ownership of parsing, lowering,
+/// CommonJS caching, ESM live bindings, cycles, IFC and effect authority.
+#[derive(Clone)]
+pub struct ExecutionModuleResolver {
+    entry_referrer: String,
+    resolver: Arc<dyn ModuleResolver + Send + Sync>,
+    policy: Arc<dyn ModulePolicyHook + Send + Sync>,
+}
+
+impl ExecutionModuleResolver {
+    pub fn new(
+        entry_referrer: impl Into<String>,
+        resolver: Arc<dyn ModuleResolver + Send + Sync>,
+        policy: Arc<dyn ModulePolicyHook + Send + Sync>,
+    ) -> Self {
+        Self {
+            entry_referrer: entry_referrer.into(),
+            resolver,
+            policy,
+        }
+    }
+
+    pub fn entry_referrer(&self) -> &str {
+        &self.entry_referrer
+    }
+
+    pub fn resolve(
+        &self,
+        request: &ModuleRequest,
+        context: &ResolutionContext,
+    ) -> ResolutionResult<ResolutionOutcome> {
+        self.resolver.resolve(request, context, self.policy.as_ref())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -463,7 +463,10 @@ impl InterpreterCore {
                         None => PromiseHandle(handle),
                     }
                 }
-                Value::Object(object) => {
+                object if object.is_object_like() => {
+                    // ECMAScript Object includes callable and iterator values,
+                    // not only the heap-object representation. Their then
+                    // getters must run before the continuation is registered.
                     exact_value = None;
                     let (promise, observed_label) =
                         self.async_generator_thenable_source(id, object, &label)?;
@@ -537,7 +540,7 @@ impl InterpreterCore {
     fn async_generator_thenable_source(
         &mut self,
         id: u32,
-        object: ObjectId,
+        value: Value,
         floor: &Label,
     ) -> Result<(PromiseHandle, Label), InterpreterError> {
         let backing = self.async_generators[id as usize].generator_id;
@@ -547,12 +550,25 @@ impl InterpreterCore {
             let promise = this.create_promise()?;
             let resolution = (|| {
                 let key = this.executable_property_key_from_value(&Value::str("then"));
-                this.reflect_observe_selected_property(object, &key)?;
-                let then = this.iterator_protocol_property(
-                    Some(owner.as_ref()),
-                    object,
-                    &key,
-                    Value::Object(object),
+                // The source Promise is not yet indexed by an await context.
+                // A getter may collect between event jobs: root both native
+                // locals until resolution publishes its job or settled value.
+                let then = this.with_event_job_gc_request(
+                    vec![value.clone(), Value::Promise(promise.0)],
+                    |this| match &value {
+                        Value::Object(object) => {
+                            this.reflect_observe_selected_property(*object, &key)?;
+                            this.iterator_protocol_property(
+                                Some(owner.as_ref()),
+                                *object,
+                                &key,
+                                value.clone(),
+                            )
+                        }
+                        // Callable and iterator properties use the existing
+                        // generic reader, retaining identity and accessors.
+                        _ => this.get_v(owner.as_ref(), &value, &key),
+                    },
                 )?;
                 let then_bytes = Self::estimate_value_bytes(&then);
                 this.json_reserve_temporary(then_bytes)?;
@@ -571,17 +587,17 @@ impl InterpreterCore {
                         this.enqueue_resolve_thenable(
                             promise,
                             handler,
-                            Value::Object(object),
+                            value,
                             label.clone(),
                         )?;
                     } else {
                         // A non-callable then still fulfills with the original
                         // object, without invoking a guest .call property.
-                        this.fulfill_promise(
-                            promise,
-                            Self::value_to_js_value(&Value::Object(object)),
-                            label.clone(),
-                        )?;
+                        // The exact Promise carrier also represents callable
+                        // and iterator values; the legacy JsValue conversion
+                        // would flatten their identity into a display string.
+                        let result = this.promise_value(&value)?;
+                        this.fulfill_promise(promise, result, label.clone())?;
                     }
                     Ok(label)
                 })();
@@ -1387,7 +1403,7 @@ mod tests {
             .unwrap();
         assert!(core.active_inline_callback_context_label.is_none());
         let (promise, label) = core
-            .async_generator_thenable_source(id, object, &Label::Public)
+            .async_generator_thenable_source(id, Value::Object(object), &Label::Public)
             .unwrap();
         assert_eq!(label, Label::Secret);
         let record = core.promise_store.get(promise).unwrap();
@@ -1415,7 +1431,7 @@ mod tests {
         let before = core.promise_store.estimated_memory_bytes();
         core.config.max_total_memory_bytes = core.estimated_memory_bytes();
         assert!(matches!(
-            core.async_generator_thenable_source(id, object, &Label::Public),
+            core.async_generator_thenable_source(id, Value::Object(object), &Label::Public),
             Err(InterpreterError::MemoryBudgetExceeded { .. })
         ));
         assert!(core.active_inline_callback_context_label.is_none());
@@ -1771,7 +1787,7 @@ mod tests {
         let (mut probe, probe_id, _, object) = thenable_request_core();
         let before = probe.estimated_memory_bytes();
         let (source, _) = probe
-            .async_generator_thenable_source(probe_id, object, &Label::Public)
+            .async_generator_thenable_source(probe_id, Value::Object(object), &Label::Public)
             .unwrap();
         assert_eq!(
             probe.promise_store.get(source).unwrap().state,
@@ -1898,7 +1914,7 @@ mod tests {
                 .unwrap();
             assert!(core.event_loop.microtasks.is_empty());
             let (source, label) = core
-                .async_generator_thenable_source(id, object, &Label::Public)
+                .async_generator_thenable_source(id, Value::Object(object), &Label::Public)
                 .unwrap();
             assert_eq!(label, Label::Secret);
             assert_eq!(core.promise_store.get(source).unwrap().state, PromiseState::Pending);
@@ -2105,5 +2121,311 @@ async function* values() { return yield* iterable; }
     #[test]
     fn delegation_awaits_callable_result_then_without_unwrapping_its_yielded_value() {
         assert_callable_then_fixture(DELEGATED_THEN_SOURCE, DELEGATED_THEN_EXPECTED);
+    }
+
+    fn callable_value_request_core() -> (InterpreterCore, u32, PromiseHandle, Value) {
+        let (core, id, request) = request_core_with_source(
+            Label::Secret,
+            "async function* values() { yield 1; } const it = values(); \
+             function input() { throw 'the value itself is not the then method'; } \
+             input.then = function (resolve) { resolve(42); }; \
+             const holder = { marker: 2871, input };",
+        );
+        let holder = core.heap.iter().find(|entry| {
+            entry.properties.get("marker") == Some(&Value::Int(2871))
+        }).expect("native holder object");
+        let input = holder.properties.get("input").expect("callable value").clone();
+        assert!(input.is_object_like());
+        assert!(!matches!(input, Value::Object(_) | Value::Promise(_)));
+        (core, id, request, input)
+    }
+
+    #[test]
+    fn callable_await_values_publish_owned_sources_and_exact_job_receivers() {
+        use crate::promise_model::Microtask;
+
+        let (mut core, id, request, input) = callable_value_request_core();
+        core.await_async_generator_value(
+            id, AwaitKind::Yield, input.clone(), Label::Secret,
+        ).expect("callable value await");
+        let context = core.async_generator_runtime.continuations.values().next()
+            .expect("owned await continuation");
+        assert!(context.exact_value.is_none(), "a callable is not a primitive shortcut");
+        let source = context.owned_source.expect("PromiseResolve source");
+        let ticket = context.ticket.expect("reaction ticket");
+        assert_eq!(core.promise_store.get(source).unwrap().state, PromiseState::Pending);
+        assert_eq!(core.event_loop.microtasks.pending_count(), 1);
+        assert_accounting(&core);
+        let Microtask::ResolveThenable { promise, thenable, label, .. } =
+            core.event_loop.microtasks.dequeue().expect("thenable job")
+        else { panic!("callable await must assimilate, not fulfill with a function"); };
+        assert_eq!(promise, source);
+        assert_eq!(core.js_value_to_value(&thenable), input);
+        assert_eq!(label, Label::Secret);
+        core.sync_estimated_memory_bytes().unwrap();
+        core.config.max_total_memory_bytes = core.estimated_memory_bytes();
+        core.abort_async_generator(id);
+        assert_aborted(&core, id, request);
+        for handle in [source, ticket] {
+            assert!(core.promise_store.get(handle).unwrap().state.is_rejected());
+        }
+        assert_eq!(core.promise_store.get(request).unwrap().label, Label::Secret);
+        assert_accounting(&core);
+    }
+
+    #[test]
+    fn callable_value_await_refusal_does_not_strand_a_ticket_or_consume_an_exception() {
+        let (mut core, id, request, input) = callable_value_request_core();
+        core.replace_pending_abrupt_slots(Some((Value::Int(9), Label::Secret)), None)
+            .unwrap();
+        let count = core.promise_store.len();
+        let queue = serde_json::to_value(&core.event_loop.microtasks).unwrap();
+        core.config.max_total_memory_bytes = core.estimated_memory_bytes();
+        assert!(matches!(
+            core.await_async_generator_value(id, AwaitKind::Yield, input, Label::Public),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_aborted(&core, id, request);
+        assert_eq!(core.promise_store.len(), count);
+        assert_eq!(serde_json::to_value(&core.event_loop.microtasks).unwrap(), queue);
+        assert_eq!(core.take_pending_exception_slot(), Some((Value::Int(9), Label::Secret)));
+        assert!(core.active_inline_callback_context_label.is_none());
+        assert_accounting(&core);
+    }
+
+    const FUNCTION_VALUES_SOURCE: &str = r#"
+const inputs = [function ordinary() {}, () => 1, (function () {}).bind(null),
+  async function () {}, function* () {}, async function* () {}, Array.prototype.slice, class C {}];
+let calls = 0;
+(async () => {
+  let sum = 0;
+  for (let i = 0; i < inputs.length; i++) {
+    const input = inputs[i]; const answer = 40 + i;
+    Object.defineProperty(input, 'then', { configurable: true, value: function (resolve, reject) {
+      if (this !== input) throw Error('receiver');
+      calls++; resolve(answer); reject('late');
+    } });
+    async function* values() { yield input; yield await input; return input; }
+    const it = values(); const pa = it.next(), pb = it.next(), pc = it.next();
+    const a = await pa, b = await pb, c = await pc;
+    if (a.value !== answer || b.value !== answer || c.value !== answer || a.done || b.done || !c.done)
+      throw Error('callable object bypassed PromiseResolve');
+    sum += a.value + b.value + c.value;
+  }
+  console.log(inputs.length, sum, calls);
+})().catch(error => console.log('FAIL', error.message));
+"#;
+    const FUNCTION_VALUES_EXPECTED: &str = "8 1044 24";
+
+    #[test]
+    fn every_callable_value_representation_assimilates_its_then_property() {
+        assert_callable_then_fixture(FUNCTION_VALUES_SOURCE, FUNCTION_VALUES_EXPECTED);
+    }
+
+    const FUNCTION_PROTOTYPE_SOURCE: &str = r#"
+const events = []; const marker = {};
+function input() { throw 'do not invoke the value'; }
+const prototype = { get then() {
+  events.push(this === input ? 'get' : 'wrong getter receiver');
+  Object.defineProperty(this, 'then', { value: 0 });
+  return function (resolve) {
+    events.push(this === input ? 'then' : 'wrong call receiver'); resolve(marker);
+  };
+} };
+Object.setPrototypeOf(input, prototype);
+async function* values() { yield input; }
+(async () => {
+  const pending = values().next(); events.push('after');
+  queueMicrotask(() => events.push('tick'));
+  const item = await pending;
+  console.log(item.value === marker, item.done, events.join(':'));
+})().catch(error => console.log('FAIL', error.message));
+"#;
+    const FUNCTION_PROTOTYPE_EXPECTED: &str = "true false get:after:then:tick";
+
+    #[test]
+    fn callable_value_inherited_then_runs_once_with_original_receiver_and_job_order() {
+        assert_callable_then_fixture(FUNCTION_PROTOTYPE_SOURCE, FUNCTION_PROTOTYPE_EXPECTED);
+    }
+
+    const FUNCTION_PROXY_SOURCE: &str = r#"
+const marker = {}; let gets = 0, calls = 0;
+const input = new Proxy(function () {}, { get(target, key, receiver) {
+  if (key !== 'then') return Reflect.get(target, key, receiver);
+  gets++;
+  return function (resolve) {
+    if (this !== input) throw Error('proxy receiver'); calls++; resolve(marker);
+  };
+} });
+async function* values(value) { yield value; }
+(async () => {
+  const item = await values(input).next();
+  console.log(item.value === marker, item.done, gets, calls);
+  const pair = Proxy.revocable(function () {}, {}); pair.revoke();
+  try { await values(pair.proxy).next(); }
+  catch (error) { console.log(error.name); }
+})().catch(error => console.log('FAIL', error.message));
+"#;
+    const FUNCTION_PROXY_EXPECTED: &str = "true false 1 1\nTypeError";
+
+    #[test]
+    fn callable_proxy_values_use_get_traps_and_reject_revocation() {
+        assert_callable_then_fixture(FUNCTION_PROXY_SOURCE, FUNCTION_PROXY_EXPECTED);
+    }
+
+    const FUNCTION_GETTER_REJECTION_SOURCE: &str = r#"
+const reason = {}; let gets = 0; const events = [];
+function input() {}
+Object.defineProperty(input, 'then', { get() { gets++; throw reason; } });
+async function* values() {
+  try { yield 0; }
+  catch (error) { yield error === reason ? 'caught' : 'wrong identity'; }
+  finally { events.push('finally'); }
+}
+(async () => {
+  const it = values(); const a = await it.next(), b = await it.return(input), c = await it.next();
+  console.log(a.value, b.value, b.done, c.done, gets, events.join(':'));
+})().catch(error => console.log('FAIL', error.message));
+"#;
+    const FUNCTION_GETTER_REJECTION_EXPECTED: &str = "0 caught false true 1 finally";
+
+    #[test]
+    fn callable_then_getter_rejection_on_return_preserves_catch_finally_and_identity() {
+        assert_callable_then_fixture(FUNCTION_GETTER_REJECTION_SOURCE, FUNCTION_GETTER_REJECTION_EXPECTED);
+    }
+
+    const OBJECT_IDENTITY_SOURCE: &str = r#"
+const values = [function () {}, () => 1, (function () {}).bind(null), async function () {},
+  function* () {}, async function* () {}, Array.prototype.slice, class C {},
+  (function* () {})(), (async function* () {})(), [1][Symbol.iterator]()];
+(async () => {
+  let matched = 0;
+  for (const value of values) {
+    Object.defineProperty(value, 'then', { value: 0, configurable: true });
+    async function* items() { yield value; yield await value; return value; }
+    const it = items(); const a = await it.next(), b = await it.next(), c = await it.next();
+    if (a.value !== value || b.value !== value || c.value !== value || !c.done)
+      throw Error('object identity lost');
+    matched++;
+  }
+  console.log(matched);
+})().catch(error => console.log('FAIL', error.message));
+"#;
+    const OBJECT_IDENTITY_EXPECTED: &str = "11";
+
+    #[test]
+    fn object_like_values_with_non_callable_then_keep_exact_identity() {
+        assert_callable_then_fixture(OBJECT_IDENTITY_SOURCE, OBJECT_IDENTITY_EXPECTED);
+    }
+
+    const PRIMITIVE_AWAIT_SOURCE: &str = r#"
+let gets = 0;
+for (const prototype of [Number.prototype, String.prototype, Boolean.prototype,
+  BigInt.prototype, Symbol.prototype]) {
+  Object.defineProperty(prototype, 'then', { configurable: true, get() { gets++; throw 'boxed'; } });
+}
+const values = [undefined, null, false, -0, NaN, 3.5, 900719925474099312345n, '\ud800x', Symbol('exact')];
+(async () => {
+  let matched = 0;
+  for (const value of values) {
+    async function* items() { yield value; yield await value; return value; }
+    const it = items();
+    const a = await it.next(), b = await it.next(), c = await it.next();
+    if (!Object.is(a.value, value) || !Object.is(b.value, value) || !Object.is(c.value, value))
+      throw Error('primitive changed');
+    matched++;
+  }
+  console.log(matched, gets);
+})().catch(error => console.log('FAIL', error.message));
+"#;
+    const PRIMITIVE_AWAIT_EXPECTED: &str = "9 0";
+
+    #[test]
+    fn primitive_await_never_boxes_to_look_up_then_and_keeps_exact_values() {
+        assert_callable_then_fixture(PRIMITIVE_AWAIT_SOURCE, PRIMITIVE_AWAIT_EXPECTED);
+    }
+
+    const ITERATOR_VALUES_SOURCE: &str = r#"
+let steps = 0;
+const inputs = [(function* () { steps++; yield 1; })(),
+  (async function* () { steps++; yield 2; })(), [1][Symbol.iterator]()];
+async function* values(input) { yield input; }
+(async () => {
+  let sum = 0;
+  for (let i = 0; i < inputs.length; i++) {
+    const input = inputs[i];
+    Object.defineProperty(input, 'then', { value: function (resolve) {
+      if (this !== input) throw Error('iterator receiver'); resolve(6 + i);
+    } });
+    sum += (await values(input).next()).value;
+  }
+  const raw = function () {}; raw.then = () => { throw Error('raw delegated value awaited'); };
+  const iterable = { [Symbol.asyncIterator]() { return { next() { return {value: raw, done: false}; } }; } };
+  async function* forwarded() { yield* iterable; }
+  const item = await forwarded().next();
+  console.log(sum, steps, item.value === raw, item.done);
+})().catch(error => console.log('FAIL', error.message));
+"#;
+    const ITERATOR_VALUES_EXPECTED: &str = "21 0 true false";
+
+    #[test]
+    fn iterator_values_assimilate_without_consumption_or_unwrapping_raw_yield_star() {
+        assert_callable_then_fixture(ITERATOR_VALUES_SOURCE, ITERATOR_VALUES_EXPECTED);
+    }
+
+    const COMPLETED_FUNCTION_RETURN_SOURCE: &str = r#"
+async function* empty() {}
+(async () => {
+  const it = empty(); await it.next(); let reentrant; let gets = 0;
+  function input() { throw 'do not invoke value'; }
+  Object.defineProperty(input, 'then', { get() {
+    gets++; reentrant = it.next();
+    return function (resolve) { resolve(23); };
+  } });
+  const returned = it.return(input); const following = it.next();
+  const a = await returned, b = await reentrant, c = await following;
+  console.log(a.value, a.done, b.value, b.done, c.value, c.done, gets);
+})().catch(error => console.log('FAIL', error.message));
+"#;
+    const COMPLETED_FUNCTION_RETURN_EXPECTED: &str = "23 true undefined true undefined true 1";
+
+    #[test]
+    fn completed_return_assimilates_callable_value_and_serializes_getter_reentry() {
+        assert_callable_then_fixture(COMPLETED_FUNCTION_RETURN_SOURCE, COMPLETED_FUNCTION_RETURN_EXPECTED);
+    }
+
+
+    const EVENT_GETTER_ROOTS_SOURCE: &str = r#"
+let gets = 0;
+function makeInput(index) {
+  function input() { throw 'not the then method'; }
+  const marker = { index };
+  Object.defineProperty(input, 'then', { get() {
+    gets++;
+    for (let i = 0; i < 96; i++) { const garbage = { i, text: 'getter allocation' }; }
+    return function (resolve) {
+      if (this !== input) throw Error('getter lost receiver');
+      resolve(marker);
+    };
+  } });
+  return input;
+}
+async function* values() {
+  for (let i = 0; i < 8; i++) {
+    await 0;
+    yield makeInput(i);
+  }
+}
+(async () => {
+  let sum = 0;
+  for await (const value of values()) sum += value.index;
+  console.log(sum, gets);
+})().catch(error => console.log('FAIL', error.message));
+"#;
+    const EVENT_GETTER_ROOTS_EXPECTED: &str = "28 8";
+
+    #[test]
+    fn event_job_getters_keep_the_receiver_and_unpublished_source_promise_rooted() {
+        assert_callable_then_fixture(EVENT_GETTER_ROOTS_SOURCE, EVENT_GETTER_ROOTS_EXPECTED);
     }
 }

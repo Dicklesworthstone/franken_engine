@@ -246,13 +246,13 @@ impl InterpreterCore {
                 .as_ref()
                 .unwrap_or(&Label::Public),
         );
-        if matches!(value, Value::Promise(_))
-            && let Some(promise) = Self::capability_native_promise(&capability)
+        if let Some(promise) = Self::capability_native_promise(&capability)
+            && value.is_object_like()
         {
-            // A different constructor requires a fresh resolving function:
-            // it observes this promise's `then` and queues its invocation.
-            // Native state adoption would bypass a subclass/own `then` and
-            // would settle the wrapper before the required thenable job.
+            // A native capability can resolve every ECMAScript object through
+            // the existing observable thenable path. Callable and iterator
+            // values use dedicated Value variants; routing only native Promise
+            // values here skipped their Get(then) entirely.
             let Value::BuiltinFunction(resolve) = &capability.resolve else {
                 unreachable!("a native capability has native resolving functions")
             };

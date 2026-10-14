@@ -146,3 +146,40 @@ fn extra_arguments_do_not_settle_another_promise() {
         ),
     ]);
 }
+
+
+#[test]
+fn promise_resolve_assimilates_callable_and_iterator_values() {
+    check_all(&[
+        (
+            "function f() {} f.then = (resolve) => resolve(42); Promise.resolve(f).then((v) => console.log(v));",
+            "42",
+        ),
+        (
+            "const f = (function () {}).bind(null); f.then = (resolve) => resolve(43); Promise.resolve(f).then((v) => console.log(v));",
+            "43",
+        ),
+        (
+            "const it = (function* () { yield 1; })(); it.then = (resolve) => resolve(44); Promise.resolve(it).then((v) => console.log(v));",
+            "44",
+        ),
+        (
+            "function f() {} f.then = 0; Promise.resolve(f).then((v) => console.log(v === f));",
+            "true",
+        ),
+    ]);
+}
+
+#[test]
+fn promise_combinators_use_object_like_constructor_resolution() {
+    check_all(&[
+        (
+            "function f() {} f.then = (resolve) => resolve(51); Promise.all([f]).then((v) => console.log(v[0]));",
+            "51",
+        ),
+        (
+            "const it = [1].values(); it.then = (resolve) => resolve(52); Promise.race([it]).then((v) => console.log(v));",
+            "52",
+        ),
+    ]);
+}

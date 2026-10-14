@@ -238,6 +238,25 @@ impl InterpreterCore {
     /// ES2024 25.1.3.5 DetachArrayBuffer: the bytes are released, the byte
     /// length reads 0, and every view of the buffer goes out of bounds.
     pub(super) fn detach_array_buffer(&mut self, buffer: ObjectId) -> Result<(), InterpreterError> {
+        self.detach_array_buffer_storage(buffer)?;
+        self.refresh_buffer_views(buffer)
+    }
+
+    /// Operation-local candidate list proved complete after the final guest
+    /// callback. The caller must not run guest code or collect between taking
+    /// that snapshot and detaching. This shares the ordinary detacher's byte
+    /// release, view refresh and accounting; only repeated discovery is absent.
+    pub(super) fn detach_array_buffer_with_known_views(
+        &mut self,
+        buffer: ObjectId,
+        candidates: impl Iterator<Item = ObjectId>,
+    ) -> Result<(), InterpreterError> {
+        debug_assert!(self.buffer_backing(buffer)?.max_byte_length.is_none());
+        self.detach_array_buffer_storage(buffer)?;
+        self.refresh_buffer_view_candidates(buffer, candidates)
+    }
+
+    fn detach_array_buffer_storage(&mut self, buffer: ObjectId) -> Result<(), InterpreterError> {
         let object = self
             .heap
             .get(buffer.0 as usize)
@@ -256,14 +275,13 @@ impl InterpreterCore {
                     .insert("byteLength".to_string(), Value::Int(0));
             }
         });
-        self.refresh_buffer_views(buffer)
+        Ok(())
     }
 
     /// Recompute the cached lengths of `buffer`'s views after it resized or
     /// was detached, and drop collected views from its registry.
     fn refresh_buffer_views(&mut self, buffer: ObjectId) -> Result<(), InterpreterError> {
         let backing = self.buffer_backing(buffer)?;
-        let (buffer_len, detached) = (backing.bytes.len(), backing.detached);
         let registered = backing.max_byte_length.is_some();
         let candidates: Vec<ObjectId> = if registered {
             backing.views.clone()
@@ -285,7 +303,24 @@ impl InterpreterCore {
                 .filter_map(|(index, _)| u32::try_from(index).ok().map(ObjectId))
                 .collect()
         };
-        let mut live = Vec::with_capacity(candidates.len());
+        self.refresh_buffer_view_candidates(buffer, candidates.into_iter())
+    }
+
+    fn refresh_buffer_view_candidates(
+        &mut self,
+        buffer: ObjectId,
+        candidates: impl Iterator<Item = ObjectId>,
+    ) -> Result<(), InterpreterError> {
+        let backing = self.buffer_backing(buffer)?;
+        let (buffer_len, detached) = (backing.bytes.len(), backing.detached);
+        let registered = backing.max_byte_length.is_some();
+        // Fixed buffers have no registry to rewrite. Do not allocate a second
+        // list merely to discard it after refreshing their known candidates.
+        let mut live = if registered {
+            Vec::with_capacity(candidates.size_hint().0)
+        } else {
+            Vec::new()
+        };
         for view_id in candidates {
             // A DataView's dropped or restored slots change its estimate.
             let sizes = self.mutate_heap(|heap| {
@@ -298,7 +333,9 @@ impl InterpreterCore {
                 if before != after {
                     self.apply_memory_component_delta(before, after)?;
                 }
-                live.push(view_id);
+                if registered {
+                    live.push(view_id);
+                }
             }
         }
         if registered && live.len() != self.buffer_backing(buffer)?.views.len() {

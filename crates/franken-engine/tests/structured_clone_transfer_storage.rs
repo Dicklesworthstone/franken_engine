@@ -241,3 +241,77 @@ console.log(buffer.byteLength, new Uint8Array(buffer)[4095], new Uint8Array(buff
 fn repeated_transfers_keep_ownership_and_view_invalidation_consistent() {
     check(CHAIN, &["4096 8192 71", "8192 71 0"], None);
 }
+
+const FIXED_BATCH_VIEWS: &str = r#"
+const buffers = [];
+const bytes = [];
+const windows = [];
+const unrelated = new ArrayBuffer(8);
+const unrelatedView = new Uint8Array(unrelated);
+unrelatedView[0] = 211;
+for (let i = 0; i < 48; i++) {
+  const buffer = new ArrayBuffer(16);
+  const view = new Uint8Array(buffer, 1, 7);
+  view[0] = i + 1;
+  buffers.push(buffer);
+  bytes.push(view);
+  windows.push(new DataView(buffer, 2, 4));
+}
+const order = buffers.slice().reverse();
+let late;
+const input = {
+  buffers,
+  aliases: bytes,
+  get final() {
+    late = new Uint8Array(buffers[7], 3, 2);
+    late[0] = 99;
+    return 17;
+  }
+};
+const clone = structuredClone(input, {transfer: order});
+let checksum = 0;
+let sharing = true;
+let detachedViews = 0;
+let dataErrors = 0;
+for (let i = 0; i < buffers.length; i++) {
+  checksum += clone.aliases[i][0];
+  sharing = sharing && clone.aliases[i].buffer === clone.buffers[i];
+  if (buffers[i].byteLength === 0 && bytes[i].length === 0 && bytes[i].byteOffset === 0) detachedViews++;
+  try { windows[i].byteLength; } catch (e) { if (e instanceof TypeError) dataErrors++; }
+}
+console.log(checksum, sharing, detachedViews, dataErrors);
+console.log(clone.final, late.length, new Uint8Array(clone.buffers[7])[3]);
+console.log(unrelated.byteLength, unrelatedView.length, unrelatedView[0]);
+"#;
+
+#[test]
+fn fixed_batch_discovers_every_alias_after_the_final_getter() {
+    check(
+        FIXED_BATCH_VIEWS,
+        &["1176 true 48 48", "17 0 99", "8 8 211"],
+        None,
+    );
+}
+
+const MIXED_BATCH_FALLBACK: &str = r#"
+const fixed = new ArrayBuffer(8);
+const growing = new ArrayBuffer(4, {maxByteLength: 16});
+const fixedView = new Uint8Array(fixed);
+const tracking = new Uint8Array(growing);
+fixedView[0] = 31;
+tracking[0] = 47;
+const clone = structuredClone({fixedView, tracking}, {transfer: [growing, fixed]});
+console.log(fixed.byteLength, growing.byteLength, fixedView.length, tracking.length);
+console.log(clone.fixedView[0], clone.tracking[0], clone.tracking.buffer.resizable);
+clone.tracking.buffer.resize(8);
+console.log(clone.tracking.length, clone.tracking[0], clone.tracking[7]);
+"#;
+
+#[test]
+fn mixed_transfer_lists_keep_resizable_view_semantics() {
+    check(
+        MIXED_BATCH_FALLBACK,
+        &["0 0 0 0", "31 47 true", "8 47 0"],
+        None,
+    );
+}

@@ -4,6 +4,61 @@
 
 use super::*;
 
+const NO_TRANSFER_VIEW: usize = usize::MAX;
+
+struct TransferViewChain {
+    buffer: ObjectId,
+    first: usize,
+    last: usize,
+}
+
+struct TransferViewLink {
+    view: ObjectId,
+    next: usize,
+}
+
+/// Sorted source heads and a single append-only link array. Appending in heap
+/// order preserves each buffer's original refresh order without sorting views
+/// or allocating one Vec/B-tree per source. This is invocation-local scratch,
+/// not a new retained registry on every fixed-length ArrayBuffer.
+struct FixedTransferViews {
+    chains: Vec<TransferViewChain>,
+    links: Vec<TransferViewLink>,
+    charged: u64,
+}
+
+impl FixedTransferViews {
+    fn views(&self, buffer: ObjectId) -> impl Iterator<Item = ObjectId> + '_ {
+        let chain = self.chains
+            .binary_search_by_key(&buffer, |chain| chain.buffer)
+            .expect("every validated fixed transfer has a view-chain head");
+        let mut next = self.chains[chain].first;
+        std::iter::from_fn(move || {
+            if next == NO_TRANSFER_VIEW {
+                return None;
+            }
+            let link = &self.links[next];
+            next = link.next;
+            Some(link.view)
+        })
+    }
+
+    fn push(&mut self, buffer: ObjectId, view: ObjectId) {
+        let chain = self.chains
+            .binary_search_by_key(&buffer, |chain| chain.buffer)
+            .expect("view owner belongs to the validated transfer set");
+        let index = self.links.len();
+        let head = &mut self.chains[chain];
+        if head.last == NO_TRANSFER_VIEW {
+            head.first = index;
+        } else {
+            self.links[head.last].next = index;
+        }
+        head.last = index;
+        self.links.push(TransferViewLink { view, next: NO_TRANSFER_VIEW });
+    }
+}
+
 impl InterpreterCore {
     pub(super) fn structured_clone_with_transfer(
         &mut self,
@@ -90,9 +145,30 @@ impl InterpreterCore {
                 .saturating_add(sources.len() as u64);
             self.structured_clone_charge_transfer_work(work)?;
         }
-        for source in sources {
-            self.structured_clone_commit_transfer(source, state.memory[&source])?;
+        // No callback or collector runs after this point. All-fixed lists can
+        // discover their views together, after getters have created any late
+        // aliases. Low headroom or noncanonical metadata retains the original
+        // per-buffer detacher rather than introducing an optimization refusal.
+        let views = self.structured_clone_fixed_transfer_views(state);
+        let detached = (|| {
+            for source in sources {
+                let target = state.memory[&source];
+                match &views {
+                    Some(views) => {
+                        self.structured_clone_move_transfer_storage(source, target);
+                        self.detach_array_buffer_with_known_views(source, views.views(source))?;
+                    }
+                    None => self.structured_clone_commit_transfer(source, target)?,
+                }
+            }
+            Ok::<(), InterpreterError>(())
+        })();
+        if let Some(views) = views {
+            let charged = views.charged;
+            drop(views);
+            state.release(self, charged);
         }
+        detached?;
         Ok(clone)
     }
 
@@ -260,6 +336,109 @@ impl InterpreterCore {
         Ok(())
     }
 
+    /// An optimization guard, not a new admission policy. Fixed-buffer view
+    /// discovery used to scan H heap objects for each of B transfer entries.
+    /// Two heap passes build B ordered heads and V matching links with O(B+V)
+    /// scratch. Membership checks for heap views take O(log B), giving
+    /// O(H log B + B) worst-case discovery rather than O(B*H). The original
+    /// B*(H+1) virtual charge is still paid before this no-callback phase.
+    fn structured_clone_fixed_transfer_views(
+        &mut self,
+        state: &mut CloneState,
+    ) -> Option<FixedTransferViews> {
+        let sources = &state.transfer_sources;
+        if sources.len() < 2 {
+            return None;
+        }
+        for &source in sources {
+            let object = self.heap.get(source.0 as usize)?;
+            let backing = object.array_buffer.as_deref()?;
+            if backing.detached || backing.max_byte_length.is_some()
+                || object.typed_array.is_some() || object.data_view.is_some()
+                || !matches!(object.properties.get("byteLength"), Some(Value::Int(_)))
+            {
+                return None;
+            }
+        }
+        let mut count = 0usize;
+        for (index, object) in self.heap.iter_live() {
+            if u32::try_from(index).is_ok()
+                && Self::structured_clone_fixed_view_owner(object, sources).ok()?.is_some()
+            {
+                count = count.checked_add(1)?;
+            }
+        }
+        let bytes = (sources.len() as u64)
+            .checked_mul(std::mem::size_of::<TransferViewChain>() as u64)?
+            .checked_add((count as u64)
+                .checked_mul(std::mem::size_of::<TransferViewLink>() as u64)?)?;
+        // Reserve before either allocation. Refused scratch changes no
+        // instruction counter, heap object or source byte; use the old route.
+        if state.reserve(self, bytes).is_err() {
+            return None;
+        }
+        let plan = (|| {
+            let mut chains = Vec::new();
+            chains.try_reserve_exact(state.transfer_sources.len()).ok()?;
+            for &buffer in &state.transfer_sources {
+                chains.push(TransferViewChain {
+                    buffer,
+                    first: NO_TRANSFER_VIEW,
+                    last: NO_TRANSFER_VIEW,
+                });
+            }
+            let mut links = Vec::new();
+            links.try_reserve_exact(count).ok()?;
+            let mut plan = FixedTransferViews { chains, links, charged: bytes };
+            for (index, object) in self.heap.iter_live() {
+                let Ok(index) = u32::try_from(index) else { continue };
+                if let Some(buffer) = Self::structured_clone_fixed_view_owner(
+                    object, &state.transfer_sources,
+                ).ok()? {
+                    plan.push(buffer, ObjectId(index));
+                }
+            }
+            debug_assert_eq!(plan.links.len(), count);
+            Some(plan)
+        })();
+        if plan.is_none() {
+            // Allocation refusal is only a fast-path miss; release this
+            // invocation's reservation, never the caller's existing scratch.
+            state.release(self, bytes);
+        }
+        plan
+    }
+
+    /// Return a view's unique transferred owner, or reject metadata for which
+    /// refresh could add a property while the batch scratch remains live.
+    /// Canonical typed-array slots are Int replacements; detached DataView
+    /// slots only disappear. Exotic/native multi-view carriers keep the old
+    /// route. Unrelated heap objects never influence fast-path admission.
+    fn structured_clone_fixed_view_owner(
+        object: &HeapObject,
+        sources: &BTreeSet<ObjectId>,
+    ) -> Result<Option<ObjectId>, ()> {
+        let typed = object.typed_array.as_ref();
+        let data = object.data_view.as_ref();
+        let typed_owner = typed.map(|view| view.buffer).filter(|owner| sources.contains(owner));
+        let data_owner = data.map(|view| view.buffer).filter(|owner| sources.contains(owner));
+        if typed_owner.is_none() && data_owner.is_none() {
+            return Ok(None);
+        }
+        if typed.is_some() && data.is_some() {
+            return Err(());
+        }
+        if let Some(owner) = typed_owner {
+            if ["length", "byteLength", "byteOffset"].into_iter().all(|key| {
+                matches!(object.properties.get(key), Some(Value::Int(_)))
+            }) {
+                return Ok(Some(owner));
+            }
+            return Err(());
+        }
+        Ok(data_owner)
+    }
+
     /// Prepare an unreachable destination without moving its source bytes.
     /// Resize and labels use the normal accounting/registered-view machinery.
     /// Every destination is prepared before the first ownership exchange, so
@@ -327,6 +506,18 @@ impl InterpreterCore {
         source: ObjectId,
         target: ObjectId,
     ) -> Result<(), InterpreterError> {
+        self.structured_clone_move_transfer_storage(source, target);
+        // Source N + shell M becomes source M + target N; their total charge
+        // is unchanged even for an empty shell. Normal detachment refunds M,
+        // not the N bytes now owned by the target. Source view invalidation
+        // and resizable-view accounting retain their canonical implementation.
+        self.detach_array_buffer(source)
+    }
+
+    /// The existing ownership exchange, separated from discovery so a fully
+    /// validated fixed-buffer batch can use the same move and canonical
+    /// detacher with its operation-local view chain. No guest code runs here.
+    fn structured_clone_move_transfer_storage(&mut self, source: ObjectId, target: ObjectId) {
         debug_assert_ne!(source, target);
         self.mutate_heap(|heap| {
             // Temporarily own the Vec to obtain the two arena entries without
@@ -365,11 +556,6 @@ impl InterpreterCore {
                 .expect("validated clone transfer source remains live")
                 .bytes = placeholder;
         });
-        // Source N + shell M becomes source M + target N; their total charge
-        // is unchanged even for an empty shell. Normal detachment refunds M,
-        // not the N bytes now owned by the target. Source view invalidation
-        // and resizable-view accounting retain their canonical implementation.
-        self.detach_array_buffer(source)
     }
 }
 
@@ -970,5 +1156,210 @@ console.log(Array.from(new Uint8Array(copy.inner)).join(','), inner.byteLength, 
         core.config.cancellation_token = Some(token);
         assert_eq!(core.structured_clone_charge_transfer_work(0), Ok(()));
         assert_eq!(core.structured_clone_charge_transfer_work(1), Err(InterpreterError::Cancelled));
+    }
+
+    fn view_plan_fixture() -> (InterpreterCore, CloneState, [ObjectId; 3], Vec<ObjectId>) {
+        let mut core = runtime();
+        let first = core.alloc_array_buffer_object(16).unwrap();
+        let second = core.alloc_array_buffer_object(16).unwrap();
+        let unrelated = core.alloc_array_buffer_object(16).unwrap();
+        core.join_binary_storage_label(first, &Label::Secret).unwrap();
+        let mut views = Vec::new();
+        // Interleave owners: grouping must not alter either owner's heap order.
+        for owner in [second, first, unrelated, first, second] {
+            views.push(core.alloc_data_view_object(owner, 1, 7).unwrap());
+        }
+        let mut state = state();
+        state.transfer_sources.extend([second, first]);
+        core.json_reserve_temporary(19).unwrap();
+        state.reserve(&mut core, 13).unwrap();
+        (core, state, [first, second, unrelated], views)
+    }
+
+    fn heap_wire(core: &InterpreterCore) -> Vec<(usize, String)> {
+        core.heap.iter_live().map(|(index, object)| {
+            (index, serde_json::to_string(object).unwrap())
+        }).collect()
+    }
+
+    #[test]
+    fn fixed_transfer_view_plan_preserves_membership_order_and_heap() {
+        let (mut core, mut state, [first, second, unrelated], views) = view_plan_fixture();
+        let before = heap_wire(&core);
+        let instructions = core.instructions_executed;
+        let plan = core.structured_clone_fixed_transfer_views(&mut state)
+            .expect("multiple fixed buffers have a batch plan");
+        assert_eq!(plan.chains.len(), 2);
+        assert_eq!(plan.links.len(), 4);
+        assert_eq!(plan.views(first).collect::<Vec<_>>(), [views[1], views[3]]);
+        assert_eq!(plan.views(second).collect::<Vec<_>>(), [views[0], views[4]]);
+        assert!(plan.chains.iter().all(|chain| chain.buffer != unrelated));
+        assert_eq!(heap_wire(&core), before, "discovery must not mutate views or buffers");
+        assert_eq!(core.instructions_executed, instructions, "work was prepaid");
+        assert_eq!(core.json_parse_temporary_bytes, 32 + plan.charged);
+        assert_eq!(state.charged, 13 + plan.charged);
+        let charged = plan.charged;
+        drop(plan);
+        state.release(&mut core, charged);
+        assert_eq!(state.charged, 13);
+        assert_eq!(core.json_parse_temporary_bytes, 32);
+        state.release(&mut core, 13);
+        core.json_release_temporary(19);
+        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+    }
+
+    #[test]
+    fn fixed_batch_detachment_matches_original_after_each_source() {
+        let (mut expected, mut expected_state, ids, _) = view_plan_fixture();
+        let (mut actual, mut actual_state, actual_ids, views) = view_plan_fixture();
+        assert_eq!(ids, actual_ids);
+        let plan = actual.structured_clone_fixed_transfer_views(&mut actual_state).unwrap();
+        // Reverse source-id order to keep observable transfer-list order
+        // independent of the sorted lookup heads.
+        for source in [ids[1], ids[0]] {
+            expected.detach_array_buffer(source).unwrap();
+            actual.detach_array_buffer_with_known_views(source, plan.views(source)).unwrap();
+            assert_eq!(heap_wire(&actual), heap_wire(&expected));
+            assert_eq!(actual.instructions_executed, expected.instructions_executed);
+            assert_eq!(actual.estimated_memory_bytes, expected.estimated_memory_bytes);
+            assert_eq!(actual.binary_storage_label(source), expected.binary_storage_label(source));
+        }
+        for index in [0, 1, 3, 4] {
+            let object = actual.heap.get(views[index].0 as usize).unwrap();
+            assert!(object.data_view.as_ref().unwrap().bounds.unwrap().out_of_bounds);
+            assert!(!object.properties.contains_key("byteLength"));
+            assert!(!object.properties.contains_key("byteOffset"));
+        }
+        assert_eq!(actual.heap.get(views[2].0 as usize).unwrap()
+            .data_view.as_ref().unwrap().byte_length, 7);
+        let charged = plan.charged;
+        drop(plan);
+        actual_state.release(&mut actual, charged);
+        for (core, state) in [(&mut actual, &mut actual_state), (&mut expected, &mut expected_state)] {
+            state.release(core, 13);
+            core.json_release_temporary(19);
+            assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        }
+        assert_eq!(actual.estimated_memory_bytes(), expected.estimated_memory_bytes());
+    }
+
+    #[test]
+    fn fixed_view_plan_scratch_refusal_is_a_side_effect_free_fallback() {
+        let (mut core, mut state, ids, _) = view_plan_fixture();
+        let before = heap_wire(&core);
+        let charged = state.charged;
+        let temporary = core.json_parse_temporary_bytes;
+        let instructions = core.instructions_executed;
+        core.config.max_total_memory_bytes = core.estimated_memory_bytes();
+        assert!(core.structured_clone_fixed_transfer_views(&mut state).is_none());
+        assert_eq!(heap_wire(&core), before);
+        assert_eq!(state.charged, charged);
+        assert_eq!(core.json_parse_temporary_bytes, temporary);
+        assert_eq!(core.instructions_executed, instructions);
+        // A missing optional plan must not disable the ordinary operation.
+        for source in [ids[1], ids[0]] {
+            core.detach_array_buffer(source).unwrap();
+            assert!(core.buffer_backing(source).unwrap().detached);
+        }
+        state.release(&mut core, charged);
+        core.json_release_temporary(19);
+        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+    }
+
+    #[test]
+    fn fixed_view_plan_keeps_resizable_and_noncanonical_sources_on_old_route() {
+        let (mut core, mut state, ids, _) = view_plan_fixture();
+        core.mutate_heap(|heap| {
+            heap.get_mut(ids[1].0 as usize).unwrap().array_buffer
+                .as_deref_mut().unwrap().max_byte_length = Some(32);
+        });
+        let before = heap_wire(&core);
+        assert!(core.structured_clone_fixed_transfer_views(&mut state).is_none());
+        assert_eq!(heap_wire(&core), before);
+        assert_eq!(core.json_parse_temporary_bytes, 32);
+        core.mutate_heap(|heap| {
+            heap.get_mut(ids[1].0 as usize).unwrap().array_buffer
+                .as_deref_mut().unwrap().max_byte_length = None;
+        });
+        core.set_object_property(ids[0], "byteLength".to_string(), Value::str("custom")).unwrap();
+        let before = heap_wire(&core);
+        assert!(core.structured_clone_fixed_transfer_views(&mut state).is_none());
+        assert_eq!(heap_wire(&core), before);
+        assert_eq!(state.charged, 13);
+        state.release(&mut core, 13);
+        core.json_release_temporary(19);
+    }
+
+    #[test]
+    fn fixed_view_plan_handles_empty_chains_and_late_views() {
+        let mut core = runtime();
+        let first = core.alloc_array_buffer_object(8).unwrap();
+        let second = core.alloc_array_buffer_object(8).unwrap();
+        let mut state = state();
+        state.transfer_sources.insert(first);
+        assert!(core.structured_clone_fixed_transfer_views(&mut state).is_none());
+        assert_eq!(state.charged, 0);
+        state.transfer_sources.insert(second);
+        let empty = core.structured_clone_fixed_transfer_views(&mut state).unwrap();
+        assert_eq!(empty.links.len(), 0);
+        assert_eq!(empty.views(first).count(), 0);
+        assert_eq!(empty.views(second).count(), 0);
+        let charged = empty.charged;
+        drop(empty);
+        state.release(&mut core, charged);
+        // The production snapshot is taken only AFTER graph getters. A new
+        // alias created before that snapshot must be discovered and detached.
+        let late = core.alloc_data_view_object(second, 0, 8).unwrap();
+        let plan = core.structured_clone_fixed_transfer_views(&mut state).unwrap();
+        assert_eq!(plan.views(first).count(), 0);
+        assert_eq!(plan.views(second).collect::<Vec<_>>(), [late]);
+        let charged = plan.charged;
+        drop(plan);
+        state.release(&mut core, charged);
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+    }
+
+    #[test]
+    fn fixed_view_plan_requires_replacement_only_typed_array_slots() {
+        let mut core = runtime();
+        let typed = core.alloc_typed_array_with_fresh_buffer(TypedArrayKind::Uint8, 8).unwrap();
+        let first = core.heap.get(typed.0 as usize).unwrap().typed_array.as_ref().unwrap().buffer;
+        let second = core.alloc_array_buffer_object(8).unwrap();
+        let mut state = state();
+        state.transfer_sources.extend([second, first]);
+        let plan = core.structured_clone_fixed_transfer_views(&mut state)
+            .expect("canonical typed-array slots do not grow on detachment");
+        assert_eq!(plan.views(first).collect::<Vec<_>>(), [typed]);
+        let charged = plan.charged;
+        drop(plan);
+        state.release(&mut core, charged);
+
+        // A changed slot must not cause a new mid-detach budget refusal while
+        // optional plan scratch is retained. Leave it to the original path.
+        for key in ["length", "byteLength", "byteOffset"] {
+            let old = core.heap.get(typed.0 as usize).unwrap().properties.get(key).unwrap().clone();
+            core.set_object_property(typed, key.to_string(), Value::Undefined).unwrap();
+            let before = heap_wire(&core);
+            assert!(core.structured_clone_fixed_transfer_views(&mut state).is_none(), "{key}");
+            assert_eq!(heap_wire(&core), before);
+            assert_eq!(state.charged, 0);
+            assert_eq!(core.json_parse_temporary_bytes, 0);
+            core.set_object_property(typed, key.to_string(), old).unwrap();
+        }
+        let plan = core.structured_clone_fixed_transfer_views(&mut state).unwrap();
+        let before = core.estimated_memory_bytes;
+        core.detach_array_buffer_with_known_views(first, plan.views(first)).unwrap();
+        assert!(core.estimated_memory_bytes <= before, "admitted views must not grow retained storage");
+        let object = core.heap.get(typed.0 as usize).unwrap();
+        let view = object.typed_array.as_ref().unwrap();
+        assert_eq!((view.length, view.byte_length), (0, 0));
+        assert!(view.bounds.unwrap().out_of_bounds);
+        for key in ["length", "byteLength", "byteOffset"] {
+            assert_eq!(object.properties.get(key), Some(&Value::Int(0)));
+        }
+        let charged = plan.charged;
+        drop(plan);
+        state.release(&mut core, charged);
+        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
     }
 }

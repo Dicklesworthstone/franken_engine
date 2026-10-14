@@ -192,3 +192,126 @@ fn result_owns_text_independently_of_input_and_next_decode() {
         assert_eq!(state, DecodeState::default());
     }
 }
+
+fn compare_borrowed_call(
+    actual: &mut DecodeState,
+    expected: &mut DecodeState,
+    encoding: &str,
+    bytes: &[u8],
+    fatal: bool,
+    stream: bool,
+) {
+    let got = actual.decode_slice(encoding, bytes, fatal, false, stream);
+    let want = reference(expected, encoding, bytes.to_vec(), fatal, false, stream);
+    assert_eq!(got.as_ref().map(JsString::code_units_vec), want);
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn every_two_byte_utf8_prefix_preserves_bridge_errors_and_state() {
+    for fatal in [false, true] {
+        for a in 0..=u8::MAX {
+            for b in 0..=u8::MAX {
+                let mut actual = DecodeState::default();
+                let mut expected = DecodeState::default();
+                for (bytes, stream) in [
+                    (&[a][..], true),
+                    (&[b, 65, 0xf0, 0x9f, 0x98, 0x80, 90][..], true),
+                    (&[][..], false),
+                ] {
+                    compare_borrowed_call(&mut actual, &mut expected, "utf-8", bytes, fatal, stream);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn borrowed_streams_preserve_original_fatal_reset_and_input_independence() {
+    let mut seed = 0x13ab_9287_u32;
+    for encoding in ["utf-8", "utf-16le", "utf-16be", "windows-1252"] {
+        for fatal in [false, true] {
+            for _ in 0..64 {
+                let mut actual = DecodeState::default();
+                let mut expected = DecodeState::default();
+                for index in 0..24 {
+                    let mut bytes: Vec<u8> = (0..index * 3)
+                        .map(|_| {
+                            seed ^= seed << 13;
+                            seed ^= seed >> 17;
+                            seed ^= seed << 5;
+                            seed as u8
+                        })
+                        .collect();
+                    compare_borrowed_call(
+                        &mut actual, &mut expected, encoding, &bytes, fatal, index % 5 != 4,
+                    );
+                    bytes.fill(0);
+                }
+                compare_borrowed_call(&mut actual, &mut expected, encoding, &[], fatal, false);
+            }
+        }
+    }
+}
+
+fn native_core() -> super::super::InterpreterCore {
+    use super::super::{InterpreterConfig, InterpreterCore, RuntimeCapability};
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.granted_capabilities = [
+        RuntimeCapability::VmDispatch,
+        RuntimeCapability::HeapAllocate,
+        RuntimeCapability::Builtin,
+    ]
+    .into_iter()
+    .collect();
+    InterpreterCore::new(config, "borrowed-decoder-input")
+}
+
+#[test]
+fn native_input_reader_borrows_storage_but_snapshot_consumers_still_copy() {
+    use super::super::Value;
+    let mut core = native_core();
+    let payload = b"original UTF-8 bytes";
+    let array = core.alloc_uint8_array_from_bytes(payload).unwrap();
+    let buffer = core.heap[array.0 as usize].typed_array.as_ref().unwrap().buffer;
+    let pointer = core.with_array_buffer_bytes(buffer, |bytes| bytes.as_ptr()).unwrap();
+    let input = Value::Object(array);
+    core.with_text_codec_input_bytes(&input, |bytes| {
+        assert!(std::ptr::eq(bytes.as_ptr(), pointer));
+        assert_eq!(bytes, payload);
+    }).unwrap();
+    let mut state = DecodeState::default();
+    let text = core.with_text_codec_input_bytes(&input, |bytes| {
+        state.decode_slice("utf-8", bytes, true, false, false)
+    }).unwrap().unwrap();
+    let snapshot = core.text_codec_input_bytes(&input).unwrap();
+    core.with_array_buffer_bytes_mut(buffer, |bytes| bytes.fill(0)).unwrap();
+    assert_eq!(snapshot.as_slice(), &payload[..]);
+    assert_eq!(text.as_str(), Some("original UTF-8 bytes"));
+    assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+}
+
+#[test]
+fn invalid_input_is_rejected_before_carry_or_provenance_is_changed() {
+    use super::super::{DECODER_STATE_SLOT, InterpreterError, Label, RegRange, Value};
+    let mut core = native_core();
+    let decoder = core.construct_text_decoder(None, RegRange { start: 0, count: 0 }).unwrap();
+    let Value::Object(id) = decoder else { panic!("decoder object"); };
+    let prefix = core.alloc_uint8_array_from_bytes(&[0xe2, 0x82]).unwrap();
+    let options = core.alloc_object_with_properties(&[("stream", Value::Bool(true))]).unwrap();
+    core.seed_register(0, Value::Object(prefix)).unwrap();
+    core.seed_register(1, Value::Object(options)).unwrap();
+    core.text_codec_method("decode", decoder.clone(), RegRange { start: 0, count: 2 }).unwrap();
+    let carry = core.heap[id.0 as usize].properties.get(DECODER_STATE_SLOT).cloned();
+    let label = core.object_mutation_labels.get(&id).cloned();
+    core.seed_register(0, Value::Bool(true)).unwrap();
+    core.set_register_label(0, Label::Secret).unwrap();
+    assert!(matches!(
+        core.text_codec_method("decode", decoder, RegRange { start: 0, count: 2 }),
+        Err(InterpreterError::TypeError { .. })
+    ));
+    assert_eq!(core.heap[id.0 as usize].properties.get(DECODER_STATE_SLOT).cloned(), carry);
+    assert_eq!(core.object_mutation_labels.get(&id).cloned(), label);
+    assert!(core.pending_exception.is_none());
+    assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+}

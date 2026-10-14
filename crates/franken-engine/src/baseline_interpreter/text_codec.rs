@@ -247,8 +247,11 @@ impl InterpreterCore {
                     }
                 };
                 // Option accessors may reenter decode or mutate the input.
-                // Read the current state and copy the view only after them.
-                let bytes = self.text_codec_input_bytes(&input)?;
+                // Validate after them, before admitting decoder provenance.
+                // This performs no input copy. The second access below holds
+                // the backing's existing read guard through native decoding;
+                // no guest code runs between validation and that access.
+                self.with_text_codec_input_bytes(&input, |_| ())?;
                 let slot = |core: &Self, key: &str| {
                     core.heap
                         .get(decoder.0 as usize)
@@ -276,7 +279,9 @@ impl InterpreterCore {
                     let label = self.join_arg_range_with_object_mutation_label(args)?;
                     self.join_object_mutation_label(decoder, &label)?;
                 }
-                let decoded = state.decode_string(&encoding, bytes, fatal, ignore_bom, stream);
+                let decoded = self.with_text_codec_input_bytes(&input, |bytes| {
+                    state.decode_slice(&encoding, bytes, fatal, ignore_bom, stream)
+                })?;
                 self.set_object_property(
                     decoder,
                     DECODER_STATE_SLOT.to_string(),
@@ -321,13 +326,24 @@ impl InterpreterCore {
         &self,
         input: &Value,
     ) -> Result<Vec<u8>, InterpreterError> {
+        self.with_text_codec_input_bytes(input, <[u8]>::to_vec)
+    }
+
+    /// Synchronous, non-retaining access through the native backing accessor.
+    /// Callers that need a snapshot keep using text_codec_input_bytes. The
+    /// decoder retains only its copied three-byte carry, never this view.
+    fn with_text_codec_input_bytes<R>(
+        &self,
+        input: &Value,
+        read: impl FnOnce(&[u8]) -> R,
+    ) -> Result<R, InterpreterError> {
         let not_a_buffer = || InterpreterError::TypeError {
             expected: "ArrayBuffer, TypedArray or DataView to decode".to_string(),
             got: input.type_name().to_string(),
         };
         let Value::Object(object_id) = input else {
             return match input {
-                Value::Undefined => Ok(Vec::new()),
+                Value::Undefined => Ok(read(&[])),
                 _ => Err(not_a_buffer()),
             };
         };
@@ -346,10 +362,11 @@ impl InterpreterCore {
             return Err(not_a_buffer());
         };
         self.with_array_buffer_bytes(buffer, |bytes| {
-            bytes
-                .get(offset..offset + length)
-                .map(<[u8]>::to_vec)
-                .unwrap_or_default()
+            let viewed = offset
+                .checked_add(length)
+                .and_then(|end| bytes.get(offset..end))
+                .unwrap_or_default();
+            read(viewed)
         })
     }
 
@@ -443,7 +460,7 @@ fn complete_prefix(encoding: &str, bytes: &[u8]) -> usize {
             // Only a valid but incomplete final scalar can be retained. It
             // occupies at most three bytes, so locate its lead from the end
             // rather than validating the whole input a second time. Full
-            // validation (and any fatal error) still belongs to decode_bytes.
+            // validation (and any fatal error) still belongs to the decoder.
             for start in (bytes.len().saturating_sub(3)..bytes.len()).rev() {
                 if bytes[start] & 0xC0 == 0x80 {
                     continue;

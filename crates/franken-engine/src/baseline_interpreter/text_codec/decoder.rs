@@ -7,10 +7,12 @@
 use super::{DecodeState, JsString, WINDOWS_1252_HIGH, complete_prefix};
 
 impl DecodeState {
-    pub(super) fn decode_string(
+    /// Decode under the caller's backing read guard. Only the bounded carry
+    /// crosses calls; the input slice and any borrowed UTF-8 view cannot escape.
+    pub(super) fn decode_slice(
         &mut self,
         encoding: &str,
-        mut bytes: Vec<u8>,
+        bytes: &[u8],
         fatal: bool,
         ignore_bom: bool,
         stream: bool,
@@ -18,40 +20,94 @@ impl DecodeState {
         if !self.streaming {
             *self = Self::default();
         }
-        if self.pending_len != 0 {
-            // Reuse the owned input copy. The only added bytes are the bounded
-            // carry; nothing points back into an ArrayBuffer supplied by guest.
-            bytes.extend_from_slice(&self.pending[..self.pending_len]);
-            bytes.rotate_right(self.pending_len);
+        let decoded = (|| {
+            if self.pending_len == 0 {
+                return self.decode_part(encoding, bytes, fatal, ignore_bom, stream);
+            }
+            // At most three carried bytes plus four fresh bytes suffice to
+            // finish the previous scalar and find a new scalar boundary.
+            // Never prepend to, resize, or rotate the entire incoming chunk.
+            let carried = self.pending_len;
+            let take = bytes.len().min(4);
+            let mut bridge = [0_u8; 7];
+            bridge[..carried].copy_from_slice(&self.pending[..carried]);
+            bridge[carried..carried + take].copy_from_slice(&bytes[..take]);
+            let bridge = &bridge[..carried + take];
+            if take == bytes.len() {
+                // All input is here, so EOF/error handling must see it as one
+                // sequence (notably a UTF-16 high surrogate plus an odd byte).
+                return self.decode_part(encoding, bridge, fatal, ignore_bom, stream);
+            }
+            let end = complete_prefix(encoding, bridge);
+            // A suffix retains at most three bytes. Four fresh bytes guarantee
+            // progress beyond the old carry, even for malformed input.
+            debug_assert!(end > carried);
+            let first = decode_string(
+                encoding,
+                &bridge[..end],
+                fatal,
+                ignore_bom || self.bom_seen,
+            )?;
+            self.bom_seen |= end != 0;
+            // Bytes after the selected boundary still belong to the original
+            // slice. Revisit them there, not from a copied intermediate tail.
+            let rest = self.decode_part(
+                encoding,
+                &bytes[end - carried..],
+                fatal,
+                ignore_bom,
+                stream,
+            )?;
+            Some(first.concat(&rest))
+        })();
+        if decoded.is_none() {
+            // Reset on either fragment's fatal error, including a valid
+            // prefix followed by an invalid later scalar in the same call.
+            *self = Self::default();
         }
+        decoded
+    }
+
+    /// A complete scalar-boundary segment, possibly with a final carry.
+    fn decode_part(
+        &mut self,
+        encoding: &str,
+        bytes: &[u8],
+        fatal: bool,
+        ignore_bom: bool,
+        stream: bool,
+    ) -> Option<JsString> {
         let end = if stream {
-            complete_prefix(encoding, &bytes)
+            complete_prefix(encoding, bytes)
         } else {
             bytes.len()
         };
-        let decoded =
-            decode_string(encoding, &bytes[..end], fatal, ignore_bom || self.bom_seen);
-        if decoded.is_none() {
-            // Node's decoder is reusable after a fatal decoding failure. Do not
-            // retain stale bytes or its prior BOM decision after that failure.
-            *self = Self::default();
-            return None;
-        }
+        let text = decode_string(encoding, &bytes[..end], fatal, ignore_bom || self.bom_seen)?;
         if !stream {
-            // No carry or BOM decision may survive a successful final flush.
             *self = Self::default();
-            return decoded;
+        } else {
+            self.streaming = true;
+            self.bom_seen |= end != 0;
+            self.pending = [0; 3];
+            self.pending_len = bytes.len() - end;
+            debug_assert!(self.pending_len <= self.pending.len());
+            self.pending[..self.pending_len].copy_from_slice(&bytes[end..]);
         }
-        self.streaming = true;
-        self.bom_seen |= end != 0;
-        self.pending = [0; 3];
-        self.pending_len = bytes.len() - end;
-        debug_assert!(self.pending_len <= self.pending.len());
-        self.pending[..self.pending_len].copy_from_slice(&bytes[end..]);
-        decoded
+        Some(text)
+    }
+
+    #[cfg(test)]
+    pub(super) fn decode_string(
+        &mut self,
+        encoding: &str,
+        bytes: Vec<u8>,
+        fatal: bool,
+        ignore_bom: bool,
+        stream: bool,
+    ) -> Option<JsString> {
+        self.decode_slice(encoding, &bytes, fatal, ignore_bom, stream)
     }
 }
-
 
 pub(super) fn decode_string(
     encoding: &str,

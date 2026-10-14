@@ -133,3 +133,44 @@ fn every_streamed_piece_and_surrogate_flush_preserves_decoding() {
         "utf-16le 1 65533 TypeError R", "utf-16be 1 65533 TypeError R",
     ]);
 }
+
+const BORROWING: &str = r#"var decoder = new TextDecoder('utf-8', {fatal:true});
+// Reenter an active stream, rather than Node's separate stateless fast path.
+decoder.decode(new Uint8Array(), {stream:true});
+var input = new Uint8Array([165,172,66,165]);
+var trace = [];
+var output = decoder.decode(new DataView(input.buffer, 1, 2), {
+  get stream() {
+    trace.push('get');
+    trace.push(decoder.decode(new Uint8Array([226,130]), {stream:true}));
+    input[2] = 67;
+    return false;
+  }
+});
+input.fill(0);
+console.log(output, output.length, trace.join('|'));
+var failure = new Error('option getter');
+decoder.decode(new Uint8Array([226]), {stream:true});
+var caught;
+try {
+  decoder.decode(new Uint8Array([65]), {get stream() {throw failure;}});
+} catch (error) { caught = error === failure; }
+console.log(caught, decoder.decode(new Uint8Array([130,172])));
+var shared = new SharedArrayBuffer(8);
+var view = new Uint8Array(shared, 2, 2);
+view.set([88,89]);
+var sharedText = decoder.decode(view);
+view.fill(0);
+console.log(sharedText, sharedText.slice(0));
+var large = new Uint8Array(131073).fill(65);
+large[0] = 128;
+decoder.decode(new Uint8Array([240,159,152]), {stream:true});
+var joined = decoder.decode(large);
+large.fill(0);
+console.log(joined.length, joined.codePointAt(0), joined.charCodeAt(joined.length-1));
+"#;
+
+#[test]
+fn borrowed_decode_preserves_reentry_carry_and_shared_input_independence() {
+    run(BORROWING, &["€C 2 get|", "true €", "XY XY", "131074 128512 65"]);
+}

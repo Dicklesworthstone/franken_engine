@@ -210,3 +210,35 @@ catch (e) { console.log(e.name, e.code); }
 fn dictionary_and_sequence_validation_do_not_accept_array_like_fallbacks() {
     check(OPTIONS, &["7 8 9", "TypeError ERR_INVALID_ARG_TYPE", "TypeError ERR_INVALID_ARG_TYPE", "TypeError ERR_INVALID_ARG_TYPE", "TypeError ERR_INVALID_ARG_TYPE", "TypeError ERR_INVALID_ARG_TYPE", "TypeError ERR_INVALID_ARG_TYPE", "TypeError ERR_INVALID_ARG_TYPE", "TypeError ERR_INVALID_ARG_TYPE", "TypeError ERR_INVALID_ARG_TYPE"]);
 }
+
+const DIRECT_TRANSFER: &str = r#"
+for (const method of ['transfer', 'transferToFixedLength']) {
+  for (const length of [0, 2, 4, 8]) {
+    const buffer = new ArrayBuffer(4, { maxByteLength: 8 });
+    const view = new Uint8Array(buffer);
+    view.set([1, 2, 3, 4]);
+    const result = buffer[method](length);
+    console.log(method, length, buffer.byteLength, view.length, result.resizable,
+      result.maxByteLength, Array.from(new Uint8Array(result)).join(','));
+  }
+}
+const buffer = new ArrayBuffer(4, { maxByteLength: 8 });
+const result = buffer.transfer({ valueOf() {
+  buffer.resize(6); new Uint8Array(buffer)[5] = 9; return 8;
+} });
+console.log(Array.from(new Uint8Array(result)).join(','), buffer.byteLength);
+let held = new ArrayBuffer(1024);
+new Uint8Array(held)[1023] = 71;
+for (let i = 0; i < 32; i++) {
+  const previous = held;
+  held = previous.transfer();
+  if (previous.byteLength !== 0) throw new Error('transfer did not detach');
+}
+const clone = structuredClone({ held }, { transfer: [held] });
+console.log(held.byteLength, clone.held.byteLength, new Uint8Array(clone.held)[1023]);
+"#;
+
+#[test]
+fn direct_transfers_and_structured_transfers_share_buffer_semantics() {
+    check(DIRECT_TRANSFER, &["transfer 0 0 0 true 8 ", "transfer 2 0 0 true 8 1,2", "transfer 4 0 0 true 8 1,2,3,4", "transfer 8 0 0 true 8 1,2,3,4,0,0,0,0", "transferToFixedLength 0 0 0 false 0 ", "transferToFixedLength 2 0 0 false 2 1,2", "transferToFixedLength 4 0 0 false 4 1,2,3,4", "transferToFixedLength 8 0 0 false 8 1,2,3,4,0,0,0,0", "0,0,0,0,0,9,0,0 0", "0 1024 71"]);
+}

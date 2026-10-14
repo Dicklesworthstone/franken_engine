@@ -24,6 +24,8 @@
 
 use super::*;
 
+mod transfer;
+
 /// The largest `maxByteLength` accepted: Node v22.2.0 accepts 2^45 and
 /// refuses 2^46 ("Array buffer allocation failed") on this host.
 const MAX_RESIZABLE_BYTE_LENGTH: u64 = 1 << 45;
@@ -474,20 +476,7 @@ impl InterpreterCore {
                 ),
             });
         }
-        let copied = backing.bytes[..new_len.min(backing.bytes.len())].to_vec();
-        let label = backing.label.clone();
-        let created = self.alloc_buffer_object(new_len, false)?;
-        self.mutate_heap(|heap| {
-            if let Some(backing) = heap
-                .get_mut(created.0 as usize)
-                .and_then(|object| object.array_buffer.as_deref_mut())
-            {
-                backing.bytes[..copied.len()].copy_from_slice(&copied);
-                backing.max_byte_length = max_byte_length;
-            }
-        });
-        self.join_binary_storage_label(created, &label)?;
-        self.detach_array_buffer(buffer)?;
+        let created = self.array_buffer_copy_and_detach_storage(buffer, new_len, max_byte_length)?;
         Ok(Value::Object(created))
     }
 

@@ -75,3 +75,32 @@ console.log(Number.isNaN(c[0]), Object.is(c[1], -0), c[2] === token);
         );
     }
 }
+
+#[test]
+fn splice_species_and_sort_comparators_cannot_stale_the_property_write_path() {
+    let source = include_str!("fixtures/array_mutation/reentrant_operations.js");
+    let expected: Vec<_> = include_str!("fixtures/array_mutation/reentrant_operations.expected")
+        .lines()
+        .collect();
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        assert_eq!(run(source, lane).expect("reentrant array operations"), expected);
+    }
+}
+
+#[test]
+fn sparse_splice_copy_delete_and_sort_scans_keep_default_resource_limits() {
+    // A custom result avoids reserving a dense removed-items array. Scanning
+    // its absent source indices must still consume the instruction budget.
+    for operation in ["a.splice(0, 4294967294)", "a.sort((x, y) => x - y)"] {
+        let source = format!(
+            "const a = []; a.length = 4294967294; \
+             a.constructor = {{[Symbol.species]: function() {{return {{}};}}}}; \
+             try {{ {operation}; }} catch (e) {{ console.log('caught'); }} \
+             console.log('unreachable');"
+        );
+        for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+            let error = run(&source, lane).expect_err("resource refusal is not a guest exception");
+            assert!(error.to_ascii_lowercase().contains("budget"), "{operation}: {error}");
+        }
+    }
+}

@@ -142,7 +142,11 @@ impl InterpreterCore {
                                 ))
                                 .writable
                         });
-                    let generic = (kind == K::ArrayConcat
+                    // Species construction and writes to the removed-items
+                    // object can run guest code before splice moves elements.
+                    // No pre-call storage proof survives those observations.
+                    let generic = kind == K::ArraySplice
+                        || (kind == K::ArrayConcat
                         && self.concat_spreads_generically(object_id, args)?)
                         || self.converts_object_argument(kind, args)?
                         || length_locked
@@ -221,9 +225,9 @@ impl InterpreterCore {
     }
 
     /// Whether Array.prototype.sort may sort the Array `array_id`'s element
-    /// storage directly: the comparator is undefined or callable, every
-    /// index below the length is an own writable data property, and without
-    /// a comparator every element is a primitive other than a Symbol, whose
+    /// storage directly: the comparator is undefined, every index below the
+    /// length is an own writable data property, and every element is a
+    /// primitive other than a Symbol, whose
     /// ToString runs no guest code. Otherwise the sort runs generically, as
     /// ES2023 23.1.3.30 writes it: holes are skipped and deleted after the
     /// sorted values, element getters and setters run, an object's ToString
@@ -233,11 +237,12 @@ impl InterpreterCore {
         array_id: ObjectId,
         args: RegRange,
     ) -> Result<bool, InterpreterError> {
-        let compared = match self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined) {
-            Value::Undefined => false,
-            comparator if comparator.is_callable() => true,
-            _ => return Ok(false),
-        };
+        // A comparator may freeze the receiver, replace an index with a
+        // setter, or change the prototype. Collect first and perform ordinary
+        // Set/Delete after comparison; do not reuse a pre-callback proof.
+        if !matches!(self.builtin_arg(args, 0)?, None | Some(Value::Undefined)) {
+            return Ok(false);
+        }
         let Some(object) = self.heap.get(array_id.0 as usize) else {
             return Ok(false);
         };
@@ -257,7 +262,6 @@ impl InterpreterCore {
                     | Value::Str(_)
                     | Value::BigInt(_),
                 ) => {}
-                Some(_) if compared => {}
                 Some(_) => return Ok(false),
             }
             if !object.own_property_attributes(&key).writable {
@@ -342,6 +346,9 @@ impl InterpreterCore {
                 | K::ArrayUnshift
                 | K::ArrayReverse
                 | K::ArrayFill
+                | K::ArrayCopyWithin
+                | K::ArraySort
+                | K::ArrayToSorted
                 | K::ArrayMap
                 | K::ArrayFilter
                 | K::ArraySliceMethod
@@ -819,6 +826,7 @@ impl InterpreterCore {
                 }
                 let mut items = self.generic_buffer(len)?;
                 for k in 0..len {
+                    self.charge_native_hole_read()?;
                     let key = Self::generic_index_key(k);
                     // toSorted reads holes as undefined; sort skips them.
                     if !in_place || self.generic_has(m, o, &key)? {
@@ -829,9 +837,11 @@ impl InterpreterCore {
                 if in_place {
                     let count = sorted.len() as u64;
                     for (k, item) in sorted.into_iter().enumerate() {
+                        self.charge_native_hole_read()?;
                         self.generic_set(m, o, &Self::generic_index_key(k as u64), item)?;
                     }
                     for k in count..len {
+                        self.charge_native_hole_read()?;
                         self.generic_delete(m, o, &Self::generic_index_key(k))?;
                     }
                     self.generic_object_value(o)
@@ -999,6 +1009,8 @@ impl InterpreterCore {
         }
         let removed = self.array_species_result(module, o, delete_count)?;
         for k in 0..delete_count {
+            // A hole invokes no callback; scanning removed items is work too.
+            self.charge_native_hole_read()?;
             let key = Self::generic_index_key(start + k);
             if self.generic_has(m, o, &key)? {
                 let element = self.generic_get(m, o, &key)?;
@@ -1011,6 +1023,7 @@ impl InterpreterCore {
                 self.generic_move(m, o, k + delete_count, k + item_count)?;
             }
             for k in ((len - delete_count + item_count)..len).rev() {
+                self.charge_native_hole_read()?;
                 self.generic_delete(m, o, &Self::generic_index_key(k))?;
             }
         } else if item_count > delete_count {
@@ -1019,6 +1032,7 @@ impl InterpreterCore {
             }
         }
         for (offset, item) in items.into_iter().enumerate() {
+            self.charge_native_hole_read()?;
             self.generic_set(m, o, &Self::generic_index_key(start + offset as u64), item)?;
         }
         let length = Self::generic_length_value(len - delete_count + item_count);
@@ -1148,6 +1162,8 @@ impl InterpreterCore {
         b: Value,
         comparator: &Value,
     ) -> Result<Ordering, InterpreterError> {
+        // Comparisons involving undefined do not invoke the comparator.
+        self.charge_native_hole_read()?;
         match (matches!(a, Value::Undefined), matches!(b, Value::Undefined)) {
             (true, true) => return Ok(Ordering::Equal),
             (true, false) => return Ok(Ordering::Greater),

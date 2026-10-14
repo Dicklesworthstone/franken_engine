@@ -115,6 +115,9 @@ pub(super) fn decode_string(
     fatal: bool,
     ignore_bom: bool,
 ) -> Option<JsString> {
+    if let Some(index) = super::single_byte::index(encoding) {
+        return super::single_byte::decode(bytes, index, fatal);
+    }
     match encoding {
         "utf-16le" | "utf-16be" => decode_utf16(bytes, encoding == "utf-16be", fatal, ignore_bom),
         "windows-1252" => {

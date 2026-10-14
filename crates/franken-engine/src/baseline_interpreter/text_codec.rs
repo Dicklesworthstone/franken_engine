@@ -4,8 +4,9 @@
 //! Uint8Array, allocated as `new Uint8Array(n)` is; lone surrogates encode as
 //! U+FFFD. The decoder supports utf-8 (with BOM handling and U+FFFD
 //! replacement of maximal ill-formed subparts, or a TypeError when `fatal`),
-//! utf-16le/be, and windows-1252 (which the `latin1`, `ascii` and `iso-8859-1`
-//! labels name). Unsupported labels are a RangeError. Streaming decode retains
+//! utf-16le/be, and all WHATWG legacy single-byte encodings. `latin1`, `ascii`
+//! and `iso-8859-1` still name windows-1252, not an identity mapping.
+//! Unsupported labels are a RangeError. Streaming decode retains
 //! at most three copied bytes and one BOM decision per decoder. An ordinary
 //! decode call flushes the stream; a subsequent call starts a fresh stream.
 
@@ -13,6 +14,7 @@ use super::*;
 
 mod decoder;
 mod encoder;
+mod single_byte;
 
 #[cfg(test)]
 mod prefix_tests;
@@ -44,7 +46,7 @@ fn canonical_decoder_encoding(label: &str) -> Option<&'static str> {
         | "iso_8859-1:1987" | "l1" | "latin1" | "us-ascii" | "windows-1252" | "x-cp1252" => {
             Some("windows-1252")
         }
-        _ => None,
+        _ => single_byte::canonical_encoding(&label),
     }
 }
 
@@ -456,6 +458,7 @@ fn complete_prefix(encoding: &str, bytes: &[u8]) -> usize {
             end
         }
         "windows-1252" => bytes.len(),
+        _ if single_byte::index(encoding).is_some() => bytes.len(),
         _ => {
             // Only a valid but incomplete final scalar can be retained. It
             // occupies at most three bytes, so locate its lead from the end

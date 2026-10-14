@@ -11,6 +11,7 @@
 
 use super::*;
 
+mod decoder;
 mod encoder;
 
 #[cfg(test)]
@@ -275,13 +276,13 @@ impl InterpreterCore {
                     let label = self.join_arg_range_with_object_mutation_label(args)?;
                     self.join_object_mutation_label(decoder, &label)?;
                 }
-                let decoded = state.decode(&encoding, bytes, fatal, ignore_bom, stream);
+                let decoded = state.decode_string(&encoding, bytes, fatal, ignore_bom, stream);
                 self.set_object_property(
                     decoder,
                     DECODER_STATE_SLOT.to_string(),
                     Value::Int(state.pack()),
                 )?;
-                let units = decoded.ok_or_else(|| InterpreterError::TypeError {
+                let text = decoded.ok_or_else(|| InterpreterError::TypeError {
                     expected: format!("valid {encoding} data"),
                     got: format!("The encoded data was not valid for encoding {encoding}"),
                 })?;
@@ -296,7 +297,7 @@ impl InterpreterCore {
                         .map_or_else(|| state_label.clone(), |pending| pending.join(state_label));
                     self.replace_pending_hostcall_result_label(Some(pending))?;
                 }
-                Ok(Value::Str(JsString::from_code_units(&units)))
+                Ok(Value::Str(text))
             }
             _ => Err(InterpreterError::TypeError {
                 expected: "TextEncoder or TextDecoder method".to_string(),
@@ -401,47 +402,19 @@ impl DecodeState {
         }
     }
 
+    // Keep the existing exact-unit assertions on the production state machine
+    // and converter. Only tests materialize the output as UTF-16 now.
+    #[cfg(test)]
     fn decode(
         &mut self,
         encoding: &str,
-        mut bytes: Vec<u8>,
+        bytes: Vec<u8>,
         fatal: bool,
         ignore_bom: bool,
         stream: bool,
     ) -> Option<Vec<u16>> {
-        if !self.streaming {
-            *self = Self::default();
-        }
-        if self.pending_len != 0 {
-            // Reuse the owned input copy. The only added bytes are the bounded
-            // carry; nothing points back into an ArrayBuffer supplied by guest.
-            bytes.extend_from_slice(&self.pending[..self.pending_len]);
-            bytes.rotate_right(self.pending_len);
-        }
-        let end = if stream {
-            complete_prefix(encoding, &bytes)
-        } else {
-            bytes.len()
-        };
-        let decoded = decode_bytes(encoding, &bytes[..end], fatal, ignore_bom || self.bom_seen);
-        if decoded.is_none() {
-            // Node's decoder is reusable after a fatal decoding failure. Do not
-            // retain stale bytes or its prior BOM decision after that failure.
-            *self = Self::default();
-            return None;
-        }
-        if !stream {
-            // No carry or BOM decision may survive a successful final flush.
-            *self = Self::default();
-            return decoded;
-        }
-        self.streaming = true;
-        self.bom_seen |= end != 0;
-        self.pending = [0; 3];
-        self.pending_len = bytes.len() - end;
-        debug_assert!(self.pending_len <= self.pending.len());
-        self.pending[..self.pending_len].copy_from_slice(&bytes[end..]);
-        decoded
+        self.decode_string(encoding, bytes, fatal, ignore_bom, stream)
+            .map(|text| text.code_units_vec())
     }
 }
 
@@ -492,6 +465,9 @@ fn complete_prefix(encoding: &str, bytes: &[u8]) -> usize {
 /// and the input is invalid. UTF-16 decoding returns scalar values, never
 /// unpaired surrogate code units. An unmatched high surrogate plus one trailing
 /// byte is a single end-of-queue error (WHATWG shared UTF-16 decoder).
+// Retained pre-optimization oracle for decoder differential tests. Production
+// returns runtime strings directly through decoder::decode_string.
+#[cfg(test)]
 fn decode_bytes(encoding: &str, bytes: &[u8], fatal: bool, ignore_bom: bool) -> Option<Vec<u16>> {
     match encoding {
         "utf-16le" | "utf-16be" => {

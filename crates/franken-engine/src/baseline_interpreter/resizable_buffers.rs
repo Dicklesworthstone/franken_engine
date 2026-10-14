@@ -185,7 +185,10 @@ impl InterpreterCore {
     }
 
     /// The buffer's backing store.
-    fn buffer_backing(&self, buffer: ObjectId) -> Result<&ArrayBufferBacking, InterpreterError> {
+    pub(super) fn buffer_backing(
+        &self,
+        buffer: ObjectId,
+    ) -> Result<&ArrayBufferBacking, InterpreterError> {
         self.heap
             .get(buffer.0 as usize)
             .and_then(|object| object.array_buffer.as_deref())
@@ -194,7 +197,7 @@ impl InterpreterCore {
 
     /// Set the byte length of a resizable (growable) buffer: growth zero
     /// fills, and every registered view's cached lengths follow.
-    fn resize_buffer_bytes(
+    pub(super) fn resize_buffer_bytes(
         &mut self,
         buffer: ObjectId,
         new_len: usize,
@@ -232,7 +235,7 @@ impl InterpreterCore {
 
     /// ES2024 25.1.3.5 DetachArrayBuffer: the bytes are released, the byte
     /// length reads 0, and every view of the buffer goes out of bounds.
-    fn detach_array_buffer(&mut self, buffer: ObjectId) -> Result<(), InterpreterError> {
+    pub(super) fn detach_array_buffer(&mut self, buffer: ObjectId) -> Result<(), InterpreterError> {
         let object = self
             .heap
             .get(buffer.0 as usize)

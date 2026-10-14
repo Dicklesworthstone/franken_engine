@@ -18,8 +18,10 @@
 //! Functions, symbols, Promises, WeakMap/WeakSet, generators, iterators,
 //! proxies and other engine objects throw a DataCloneError (`code` 25, with
 //! Node's message). The engine has no DOMException, so that is an Error named
-//! DataCloneError, like btoa's InvalidCharacterError. The `transfer` option
-//! is ignored.
+//! DataCloneError, like btoa's InvalidCharacterError. `options.transfer`
+//! accepts iterable lists of ArrayBuffers. Validation precedes the graph
+//! walk; bytes are read after its getters finish, and sources are detached
+//! only after successful serialization and result preparation.
 //!
 //! The walk keeps its own task stack instead of recursing natively, so
 //! nesting depth is bounded by the instruction and memory budgets, not by the
@@ -28,6 +30,8 @@
 //! property is read, so getters run in Node's order.
 
 use super::*;
+
+mod transfer;
 
 /// Node's DOMException code for DataCloneError.
 const DATA_CLONE_ERR_CODE: i64 = 25;
@@ -46,6 +50,8 @@ const SERIALIZABLE_ERROR_NAMES: [&str; 7] = [
 struct CloneState {
     /// Source object -> its clone, so identity and cycles survive.
     memory: BTreeMap<ObjectId, ObjectId>,
+    /// Source buffers whose bytes remain live until the transfer phase.
+    transfer_sources: BTreeSet<ObjectId>,
     /// Join of every object and property label read, carried to the result.
     label: Label,
     /// Live snapshot/binary-copy charges and conservative memo-entry charges.
@@ -138,27 +144,26 @@ impl InterpreterCore {
             ));
         }
         let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let options = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
         let mut state = CloneState {
             memory: BTreeMap::new(),
+            transfer_sources: BTreeSet::new(),
             label: Label::Public,
             charged: 0,
         };
-        let outcome = self.structured_clone_walk(module, value, &mut state);
+        let mut outcome = self.structured_clone_with_transfer(module, value, options, &mut state);
+        if matches!(outcome, Err(InterpreterError::UncaughtException { .. }))
+            && let Err(error) = self.join_pending_exception_label(&state.label)
+        {
+            outcome = Err(error);
+        }
         // Tasks and their snapshots have dropped on either return path. Drop
         // memo nodes too before releasing this invocation's remaining charge;
         // a caller's reentrant scratch reservation must remain untouched.
         state.memory.clear();
+        state.transfer_sources.clear();
         self.json_release_temporary(state.charged);
-        let clone = outcome?;
-        // The clone holds everything reachable from the argument: its label
-        // is the join of what the walk read, on top of the argument's own.
-        let label = state.label.join(
-            self.pending_hostcall_result_label
-                .as_ref()
-                .unwrap_or(&Label::Public),
-        );
-        self.replace_pending_hostcall_result_label(Some(label))?;
-        Ok(clone)
+        outcome
     }
 
     fn structured_clone_walk(
@@ -286,30 +291,53 @@ impl InterpreterCore {
                             details: "cloned view buffer is not an object".to_string(),
                         });
                     };
+                    let source_buffer = self
+                        .heap
+                        .get(source.0 as usize)
+                        .and_then(|object| {
+                            object.typed_array.as_ref().map(|view| view.buffer).or_else(|| {
+                                object.data_view.as_ref().map(|view| view.buffer)
+                            })
+                        })
+                        .ok_or(InterpreterError::ObjectNotFound { id: source.0 })?;
+                    if state.transfer_sources.contains(&source_buffer) {
+                        // A preceding getter may have grown a transferred RAB
+                        // before this view was reached. Ordinary copied buffers
+                        // retain their earlier snapshot instead.
+                        let length = self.buffer_backing(source_buffer)?.bytes.len();
+                        if self.buffer_backing(buffer)?.bytes.len() != length {
+                            self.resize_buffer_bytes(buffer, length)?;
+                        }
+                    }
                     let object = self
                         .heap
                         .get(source.0 as usize)
                         .ok_or(InterpreterError::ObjectNotFound { id: source.0 })?;
-                    let clone = match (
+                    let (clone, bounds) = match (
                         object.typed_array.as_deref().cloned(),
                         object.data_view.as_deref().cloned(),
                     ) {
-                        (Some(view), _) => self.alloc_typed_array_view_object(
-                            view.kind,
-                            buffer,
-                            view.byte_offset,
-                            view.byte_length,
-                            view.length,
-                        )?,
-                        (None, Some(view)) => {
-                            self.alloc_data_view_object(buffer, view.byte_offset, view.byte_length)?
-                        }
+                        (Some(view), _) => (
+                            self.alloc_typed_array_view_object(
+                                view.kind,
+                                buffer,
+                                view.byte_offset,
+                                view.byte_length,
+                                view.length,
+                            )?,
+                            view.bounds,
+                        ),
+                        (None, Some(view)) => (
+                            self.alloc_data_view_object(buffer, view.byte_offset, view.byte_length)?,
+                            view.bounds,
+                        ),
                         (None, None) => {
                             return Err(InterpreterError::InternalError {
                                 details: "cloned view source is not a view".to_string(),
                             });
                         }
                     };
+                    self.register_buffer_view(clone, bounds)?;
                     state.memory.insert(source, clone);
                     results.push(Value::Object(clone));
                 }
@@ -416,7 +444,25 @@ impl InterpreterCore {
             .map(|view| view.buffer)
             .or_else(|| object.data_view.as_ref().map(|view| view.buffer));
         let array_buffer = object.array_buffer.is_some();
+        let detached = object
+            .array_buffer
+            .as_ref()
+            .is_some_and(|backing| backing.detached);
+        let out_of_bounds = object
+            .typed_array
+            .as_ref()
+            .and_then(|view| view.bounds)
+            .or_else(|| object.data_view.as_ref().and_then(|view| view.bounds))
+            .is_some_and(|bounds| bounds.out_of_bounds);
+        let max_byte_length = object
+            .array_buffer
+            .as_ref()
+            .and_then(|backing| backing.max_byte_length);
         let primitive = object.primitive_value.as_deref().cloned();
+
+        if detached || out_of_bounds {
+            return Err(self.throw_data_clone_error("Detached or out-of-bounds buffer", &state.label));
+        }
 
         if let Some(primitive) = primitive {
             if matches!(primitive, Value::Symbol(_)) {
@@ -443,6 +489,14 @@ impl InterpreterCore {
                 self.with_array_buffer_bytes(id, |source| bytes.extend_from_slice(source))?;
                 let label = self.binary_storage_label(id);
                 let clone = self.alloc_array_buffer_object(length)?;
+                self.mutate_heap(|heap| {
+                    if let Some(backing) = heap
+                        .get_mut(clone.0 as usize)
+                        .and_then(|object| object.array_buffer.as_deref_mut())
+                    {
+                        backing.max_byte_length = max_byte_length;
+                    }
+                });
                 self.with_array_buffer_bytes_mut(clone, |target| target.copy_from_slice(&bytes))?;
                 self.join_binary_storage_label(clone, &label)?;
                 Ok(clone)
@@ -735,6 +789,7 @@ mod resource_tests {
     fn state() -> CloneState {
         CloneState {
             memory: BTreeMap::new(),
+            transfer_sources: BTreeSet::new(),
             label: Label::Public,
             charged: 0,
         }

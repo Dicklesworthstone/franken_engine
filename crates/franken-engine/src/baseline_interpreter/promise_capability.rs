@@ -935,7 +935,14 @@ impl InterpreterCore {
             .unwrap_or(&Label::Public)
             .join(&self.clone_active_execution_context_label()?);
         if kind == PromiseCombinatorKind::Any {
-            let errors = gathered.iter().map(Self::value_to_js_value).collect();
+            // Rejection reasons are arbitrary Values, not just ordinary heap
+            // objects and primitives supported by the legacy display carrier.
+            // Do not turn functions, iterators, native promises or exact scalar
+            // values into strings while constructing AggregateError.errors.
+            let errors = gathered
+                .iter()
+                .map(|value| self.promise_value(value))
+                .collect::<Result<Vec<_>, _>>()?;
             let error = self.build_aggregate_error(errors)?;
             let error = self.js_value_to_value(&error);
             let reject = self.capability_holder_slot(shared, CAPABILITY_REJECT);

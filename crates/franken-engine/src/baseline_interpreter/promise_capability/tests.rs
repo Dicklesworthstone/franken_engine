@@ -260,3 +260,128 @@ fn cleanup_cannot_replace_the_thrown_value_or_erase_its_observation_label() {
         assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
     }
 }
+
+const ANY_EXACT_REASONS_SOURCE: &str = r#"
+(async () => {
+  const reasons = [function reason() {}, () => 1, (function () {}).bind(null),
+    async function () {}, function* () {}, async function* () {}, Array.prototype.slice,
+    (function* () {})(), (async function* () {})(), [1].values(), Promise.resolve(5),
+    Symbol('reason'), 123456789012345678901234567890n, '\ud800', -0, NaN, undefined, null, false, {}];
+  let observations = 0;
+  // Rejection collection is not PromiseResolve: no reason.then getter runs.
+  Object.defineProperty(reasons[0], 'then', { get() { observations++; throw Error('assimilated rejection'); } });
+  let checks = 0;
+  for (const mode of ['custom', 'subclass', 'iterable']) {
+    let promise, syncError, rejectCalls = 0;
+    if (mode === 'custom') {
+      const product = {};
+      function C(executor) {
+        executor(() => { throw Error('resolved all-rejected input'); }, error => {
+          rejectCalls++; syncError = error;
+        });
+        return product;
+      }
+      C.resolve = reason => ({then(resolve, reject) { reject(reason); reject('duplicate'); }});
+      if (Promise.any.call(C, reasons) !== product) throw Error('custom result identity');
+      if (rejectCalls !== 1) throw Error('custom rejection count');
+    } else {
+      class C extends Promise {}
+      C.resolve = reason => ({then(resolve, reject) { reject(reason); reject('duplicate'); }});
+      if (mode === 'subclass') promise = Promise.any.call(C, reasons);
+      else promise = Promise.any((function* () {
+        for (const reason of reasons) yield Promise.reject(reason);
+      })());
+      try { await promise; throw Error('unexpected fulfillment'); }
+      catch (error) { syncError = error; }
+    }
+    if (!(syncError instanceof AggregateError) || syncError.errors.length !== reasons.length)
+      throw Error('aggregate shape');
+    const descriptor = Object.getOwnPropertyDescriptor(syncError, 'errors');
+    if (!descriptor.writable || descriptor.enumerable || !descriptor.configurable)
+      throw Error('errors descriptor');
+    for (let i = 0; i < reasons.length; i++) {
+      if (!Object.is(syncError.errors[i], reasons[i])) throw Error('lost reason ' + mode + ':' + i);
+      checks++;
+    }
+  }
+  if (observations !== 0) throw Error('rejection then observed');
+  console.log('exact reasons', checks, observations);
+})().catch(error => console.log('FAIL', error.message));
+"#;
+const ANY_EXACT_REASONS_EXPECTED: &str = "exact reasons 60 0";
+
+#[test]
+fn any_preserves_all_rejection_representations_without_assimilation() {
+    assert_fixture(ANY_EXACT_REASONS_SOURCE, ANY_EXACT_REASONS_EXPECTED);
+}
+
+const ANY_ORDER_SOURCE: &str = r#"
+(async () => {
+  const first = function first() {}, second = [1].values(), third = 77n;
+  const reasons = [first, second, third]; const rejectors = []; let closeCalls = 0;
+  class C extends Promise {}
+  C.resolve = index => ({then(resolve, reject) { rejectors[index] = reject; }});
+  const source = { [Symbol.iterator]() {
+    let index = 0;
+    return { next() { return index < 3 ? {value: index++, done: false} : {done: true}; },
+      return() { closeCalls++; return {}; } };
+  } };
+  const promise = Promise.any.call(C, source);
+  let completed = false, aggregate;
+  promise.then(() => { throw Error('fulfilled'); }, error => { completed = true; aggregate = error; });
+  rejectors[2](third); rejectors[0](first); rejectors[2]('duplicate');
+  await 0;
+  if (completed) throw Error('premature aggregate');
+  rejectors[1](second); rejectors[0]('late');
+  try { await promise; } catch (error) { aggregate = error; }
+  if (!completed || aggregate.errors.length !== 3 || closeCalls !== 0) throw Error('completion count');
+  for (let i = 0; i < reasons.length; i++) {
+    if (aggregate.errors[i] !== reasons[i]) throw Error('input order or identity');
+  }
+  let empty;
+  try { await Promise.any.call(C, []); } catch (error) { empty = error; }
+  if (!(empty instanceof AggregateError) || empty.errors.length !== 0) throw Error('empty any');
+  console.log('ordering', aggregate.errors.length, closeCalls, empty.errors.length);
+})().catch(error => console.log('FAIL', error.message));
+"#;
+const ANY_ORDER_EXPECTED: &str = "ordering 3 0 0";
+
+#[test]
+fn any_retains_input_order_across_out_of_order_and_duplicate_rejections() {
+    assert_fixture(ANY_ORDER_SOURCE, ANY_ORDER_EXPECTED);
+}
+
+#[test]
+fn any_aggregate_uses_exact_native_values_and_retains_the_shared_label() {
+    let source = "const holder = {marker: 9312, values: [function () {}, [1].values(), 99n, '\\ud800']};";
+    let module = module(source);
+    let mut core = InterpreterCore::new(config(false), "any-exact-carriers");
+    core.execute(&module).unwrap();
+    let holder = core.heap.iter().find(|entry| entry.properties.get("marker") == Some(&Value::Int(9312)))
+        .expect("source holder");
+    let values = holder.properties.get("values").unwrap().clone();
+    let mut originals = Vec::new();
+    for index in 0..4 {
+        originals.push(core.get_v(&module, &values, &InterpreterCore::generic_index_key(index)).unwrap());
+    }
+    let promise = core.create_promise().unwrap();
+    let shared = core.alloc_object_with_properties(&[
+        (SHARED_LENGTH, Value::Int(4)),
+        (SHARED_REMAINING, Value::Int(1)),
+        (SHARED_VALUES, values),
+        (CAPABILITY_RESOLVE, core.make_promise_capability(BuiltinFunctionKind::PromiseResolve, promise)),
+        (CAPABILITY_REJECT, core.make_promise_capability(BuiltinFunctionKind::PromiseReject, promise)),
+    ]).unwrap();
+    core.join_direct_object_mutation_label(shared, &Label::Secret).unwrap();
+    core.promise_combinator_element_done(&module, PromiseCombinatorKind::Any, shared).unwrap();
+    let record = core.promise_store.get(promise).unwrap();
+    let PromiseState::Rejected(error) = &record.state else { panic!("any must reject"); };
+    assert_eq!(record.label, Label::Secret);
+    let error = core.js_value_to_value(error);
+    let errors = core.get_v(&module, &error, &RuntimePropertyKey::String(JsString::from("errors"))).unwrap();
+    for (index, original) in originals.into_iter().enumerate() {
+        let actual = core.get_v(&module, &errors, &InterpreterCore::generic_index_key(index as u64)).unwrap();
+        assert_eq!(actual, original);
+    }
+    assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+}

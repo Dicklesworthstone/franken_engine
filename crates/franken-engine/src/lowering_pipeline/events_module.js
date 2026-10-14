@@ -246,6 +246,7 @@
     var waiters = queue();
     var finished = false;
     var paused = false;
+    var flowDepth = 0;
     var hasError = false;
     var terminalError;
     function result(value, done) { return { value: value, done: done }; }
@@ -268,25 +269,43 @@
         put(values, args);
         if (!paused && values.size > high) {
           paused = true;
-          emitter.pause();
+          flowDepth++;
+          try { emitter.pause(); } catch (error) { fail(error); }
+          finally { flowDepth--; }
         }
+        resumeProducer();
       }
     }
     function fail(error) { finish(error, true); }
     function close() { finish(undefined, false); }
+    function resumeProducer() {
+      // A pause callback may consume queued events or request another next().
+      // Do not resume until that callback has finished changing producer state.
+      // A resume callback, on the other hand, MUST allow pause immediately:
+      // synchronous producers stop only when the high watermark is observed
+      // inside emit(). Publishing `paused = false` afterwards lost that pause.
+      if (flowDepth !== 0) { return; }
+      while (!finished && paused && values.size < low) {
+        paused = false;
+        flowDepth++;
+        try { emitter.resume(); } catch (error) { fail(error); }
+        finally { flowDepth--; }
+        // Reconcile demand created inside pause/resume without recursive
+        // resume calls. Already closed/aborted iterators never restart a source
+        // merely because their pre-terminal buffered events are being drained.
+      }
+    }
     var iterator = {
       next: function () {
         if (!finished && signal !== undefined && isAborted(signal)) { fail(aborted(signal)); }
         if (values.size > 0) {
           var value = take(values);
-          if (paused && values.size < low) {
-            // resume() is user code: it can emit synchronously or throw. Stay
-            // paused until it returns, avoiding nested pause transitions and
-            // allowing a later next() to retry a failed resume.
-            emitter.resume();
-            paused = false;
-          }
-          return Promise.resolve(result(value, false));
+          // Reserve this delivery before invoking user code. A failing resume
+          // becomes the iterator's terminal error, after already queued events,
+          // instead of throwing from next() and silently losing this value.
+          var ready = Promise.resolve(result(value, false));
+          resumeProducer();
+          return ready;
         }
         if (hasError) {
           hasError = false;
@@ -295,7 +314,9 @@
           return Promise.reject(error);
         }
         if (finished) { return Promise.resolve(result(undefined, true)); }
-        return new Promise(function (resolve, reject) { put(waiters, { resolve: resolve, reject: reject }); });
+        var pending = new Promise(function (resolve, reject) { put(waiters, { resolve: resolve, reject: reject }); });
+        resumeProducer();
+        return pending;
       },
       return: function () { close(); return Promise.resolve(result(undefined, true)); },
       throw: function (error) {

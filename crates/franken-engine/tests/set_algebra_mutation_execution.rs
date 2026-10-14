@@ -80,3 +80,62 @@ fn adversarial_reinsertion_stops_at_native_budget_not_a_guest_catch() {
         );
     }
 }
+
+/// Public-only countermetric for the native callback observation scope. The
+/// identical source and expected trace are also checked against live Node by
+/// scripts/test_set_algebra_protocol.cjs; that runner does not execute Rust.
+#[test]
+fn protocol_observation_scope_preserves_public_values_order_and_memory() {
+    use frankenengine_engine::ast::ParseGoal;
+    use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore, Value};
+    use frankenengine_engine::capability::RuntimeCapability;
+    use frankenengine_engine::ifc_artifacts::Label;
+    use frankenengine_engine::ir_contract::Ir0Module;
+    use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+    use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
+
+    let source = include_str!("fixtures/set_algebra/protocol_observations.js");
+    let expected = include_str!("fixtures/set_algebra/protocol_observations.expected").trim_end();
+    let tree = CanonicalEs2020Parser
+        .parse_with_options(
+            ParserSource {
+                label: "set-protocol.js".into(),
+                text: source.into(),
+            },
+            ParseGoal::Script,
+            &ParserOptions::default(),
+        )
+        .expect("protocol regression parses");
+    let module = lower_ir0_to_ir3(
+        &Ir0Module::from_syntax_tree(tree, "set-protocol.js"),
+        &LoweringContext::new("set-protocol", "set-protocol", "builtin-only"),
+    )
+    .expect("protocol regression lowers")
+    .ir3;
+    for throughput in [false, true] {
+        for stress in [None, Some(7)] {
+            let mut config = if throughput {
+                InterpreterConfig::v8_defaults()
+            } else {
+                InterpreterConfig::quickjs_defaults()
+            };
+            config.granted_capabilities = [
+                RuntimeCapability::VmDispatch,
+                RuntimeCapability::HeapAllocate,
+                RuntimeCapability::Builtin,
+            ]
+            .into_iter()
+            .collect();
+            let mut core = InterpreterCore::new(config, "set-protocol");
+            core.set_gc_stress_interval(stress);
+            let result = core.execute(&module).expect("native protocol execution");
+            assert_eq!(result.value, Value::str(expected));
+            assert_eq!(result.completion_label, Label::Public);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes(),
+                "throughput={throughput}, GC={stress:?}"
+            );
+        }
+    }
+}

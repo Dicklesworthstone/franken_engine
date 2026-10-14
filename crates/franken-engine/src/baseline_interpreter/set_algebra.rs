@@ -66,7 +66,75 @@ impl InterpreterCore {
         if let Some(collection_label) = self.object_mutation_labels.get(&this_id) {
             label = label.join(collection_label);
         }
-        let record = self.get_set_record(module, other, &mut label)?;
+        // A Set operation may call arbitrary size/has/keys/iterator hooks.
+        // Keep their observations in one scope, including early boolean
+        // exits and the normal IteratorClose path. A later public callback
+        // must not replace an earlier confidential membership decision.
+        let previous_bytes = self
+            .active_inline_callback_context_label
+            .as_ref()
+            .map(Self::estimate_label_bytes)
+            .unwrap_or(0);
+        self.json_reserve_temporary(previous_bytes)?;
+        if let Err(error) =
+            self.apply_memory_component_delta(previous_bytes, Self::estimate_label_bytes(&label))
+        {
+            self.json_release_temporary(previous_bytes);
+            return Err(error);
+        }
+        let previous = self.active_inline_callback_context_label.replace(label);
+        let mut outcome = self.set_algebra_observed(module, method, this_id, other);
+        if let Err(error) = self.observe_scoped_callback_result() {
+            outcome = Err(error);
+        }
+        // Seal native language errors under the observations that caused
+        // them. Budget/cancellation failures are not guest throw completions.
+        if let Err(error) = &outcome
+            && Self::js_catchable_error_name(error).is_some()
+        {
+            outcome = match self.scoped_native_error(error) {
+                Ok(error) | Err(error) => Err(error),
+            };
+        }
+        let context = self
+            .active_inline_callback_context_label
+            .take()
+            .expect("nested Set operations restore the caller observation scope");
+        if outcome.is_ok() {
+            if let Err(error) = self
+                .clone_dominant_label_with_temporary_budget(
+                    &context,
+                    self.pending_hostcall_result_label
+                        .as_ref()
+                        .unwrap_or(&Label::Public),
+                    0,
+                )
+                .and_then(|label| self.replace_pending_hostcall_result_label(Some(label)))
+            {
+                outcome = Err(error);
+            }
+        } else if matches!(outcome, Err(InterpreterError::UncaughtException { .. }))
+            && let Err(error) = self.join_pending_exception_label(&context)
+        {
+            outcome = Err(error);
+        }
+        self.active_inline_callback_context_label = previous;
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(Self::estimate_label_bytes(&context))
+            .saturating_add(previous_bytes);
+        self.json_release_temporary(previous_bytes);
+        outcome
+    }
+
+    fn set_algebra_observed(
+        &mut self,
+        module: &Ir3Module,
+        method: &str,
+        this_id: ObjectId,
+        other: Value,
+    ) -> Result<Value, InterpreterError> {
+        let record = self.get_set_record(module, other)?;
         let this_size = self.set_data_size(this_id) as f64;
         let result = match method {
             "union" => {
@@ -174,7 +242,6 @@ impl InterpreterCore {
                 });
             }
         };
-        self.replace_pending_hostcall_result_label(Some(label))?;
         Ok(result)
     }
 
@@ -185,7 +252,6 @@ impl InterpreterCore {
         &mut self,
         module: &Ir3Module,
         object: Value,
-        label: &mut Label,
     ) -> Result<SetRecord, InterpreterError> {
         if !object.is_object_like() {
             return Err(InterpreterError::TypeError {
@@ -193,12 +259,13 @@ impl InterpreterCore {
                 got: object.type_name().to_string(),
             });
         }
-        let raw_size = self.get_v(module, &object, &Self::set_record_key("size"))?;
+        let raw_size = self.set_algebra_get(module, &object, &Self::set_record_key("size"))?;
         let mut size_label = None;
         let number = self.builtin_argument_to_number(Some(module), raw_size, &mut size_label)?;
         if let Some(size_label) = size_label {
-            *label = label.join(&size_label);
+            self.json_observe_label(size_label)?;
         }
+        self.observe_scoped_callback_result()?;
         if number.is_nan() {
             return Err(InterpreterError::TypeError {
                 expected: "set-like object with a numeric size".to_string(),
@@ -213,14 +280,14 @@ impl InterpreterCore {
         }
         // Read in spec order without a temporary Vec. These are only two
         // values and both remain live in the returned record.
-        let has = self.get_v(module, &object, &Self::set_record_key("has"))?;
+        let has = self.set_algebra_get(module, &object, &Self::set_record_key("has"))?;
         if !has.is_callable() {
             return Err(InterpreterError::TypeError {
                 expected: "set-like object with a callable has".to_string(),
                 got: has.type_name().to_string(),
             });
         }
-        let keys = self.get_v(module, &object, &Self::set_record_key("keys"))?;
+        let keys = self.set_algebra_get(module, &object, &Self::set_record_key("keys"))?;
         if !keys.is_callable() {
             return Err(InterpreterError::TypeError {
                 expected: "set-like object with a callable keys".to_string(),
@@ -243,8 +310,8 @@ impl InterpreterCore {
         value: &Value,
     ) -> Result<bool, InterpreterError> {
         Ok(self
-            .invoke_inline_method_call(
-                Some(module),
+            .set_algebra_call(
+                module,
                 record.has.clone(),
                 record.object.clone(),
                 vec![value.clone()],
@@ -259,8 +326,8 @@ impl InterpreterCore {
         module: &Ir3Module,
         record: &SetRecord,
     ) -> Result<SetRecordKeys, InterpreterError> {
-        let iterator = self.invoke_inline_method_call(
-            Some(module),
+        let iterator = self.set_algebra_call(
+            module,
             record.keys.clone(),
             record.object.clone(),
             Vec::new(),
@@ -271,7 +338,7 @@ impl InterpreterCore {
                 got: iterator.type_name().to_string(),
             });
         }
-        let next = self.get_v(module, &iterator, &Self::set_record_key("next"))?;
+        let next = self.set_algebra_get(module, &iterator, &Self::set_record_key("next"))?;
         Ok(SetRecordKeys {
             iterator,
             next,
@@ -290,8 +357,8 @@ impl InterpreterCore {
     ) -> Result<(), InterpreterError> {
         loop {
             self.json_charge_work()?;
-            let step = self.invoke_inline_method_call(
-                Some(module),
+            let step = self.set_algebra_call(
+                module,
                 keys.next.clone(),
                 keys.iterator.clone(),
                 Vec::new(),
@@ -302,10 +369,10 @@ impl InterpreterCore {
                     got: step.type_name().to_string(),
                 });
             }
-            if self.get_v(module, &step, &keys.done_key)?.is_truthy() {
+            if self.set_algebra_get(module, &step, &keys.done_key)?.is_truthy() {
                 return Ok(());
             }
-            let value = self.get_v(module, &step, &keys.value_key)?;
+            let value = self.set_algebra_get(module, &step, &keys.value_key)?;
             if !visit(self, Self::collection_canonical_member(value))? {
                 return self.close_set_record_keys(module, keys);
             }
@@ -320,7 +387,7 @@ impl InterpreterCore {
         keys: SetRecordKeys,
     ) -> Result<(), InterpreterError> {
         let iterator = keys.iterator;
-        let return_method = self.get_v(module, &iterator, &Self::set_record_key("return"))?;
+        let return_method = self.set_algebra_get(module, &iterator, &Self::set_record_key("return"))?;
         if matches!(return_method, Value::Undefined | Value::Null) {
             return Ok(());
         }
@@ -331,7 +398,7 @@ impl InterpreterCore {
             });
         }
         let result =
-            self.invoke_inline_method_call(Some(module), return_method, iterator, Vec::new())?;
+            self.set_algebra_call(module, return_method, iterator, Vec::new())?;
         if !result.is_object_like() {
             return Err(InterpreterError::TypeError {
                 expected: "iterator return result object".to_string(),
@@ -339,6 +406,49 @@ impl InterpreterCore {
             });
         }
         Ok(())
+    }
+
+    /// Preserve inherited/Proxy selection labels before a getter can throw
+    /// or reenter. Reading the next protocol property cannot erase them.
+    fn set_algebra_get(
+        &mut self,
+        module: &Ir3Module,
+        receiver: &Value,
+        key: &RuntimePropertyKey,
+    ) -> Result<Value, InterpreterError> {
+        let object = self
+            .iterator_carrier_backing_id(receiver, "Set protocol object")?
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "Set protocol object".to_string(),
+                got: receiver.type_name().to_string(),
+            })?;
+        let value =
+            self.iterator_protocol_property(Some(module), object, key, receiver.clone())?;
+        self.observe_scoped_callback_result()?;
+        Ok(value)
+    }
+
+    /// The return label matters even when the return value is discarded
+    /// (IteratorClose) or immediately converted to a boolean (other.has).
+    /// All later callbacks inherit the accumulated observation context.
+    fn set_algebra_call(
+        &mut self,
+        module: &Ir3Module,
+        callable: Value,
+        receiver: Value,
+        arguments: Vec<Value>,
+    ) -> Result<Value, InterpreterError> {
+        let context = self.json_parse_context_label()?;
+        let (value, label) = self.invoke_inline_method_call_with_argument_label(
+            Some(module),
+            callable,
+            receiver,
+            arguments,
+            Some(context),
+        )?;
+        self.json_observe_label(label)?;
+        self.observe_scoped_callback_result()?;
+        Ok(value)
     }
 
     fn set_record_key(name: &str) -> RuntimePropertyKey {
@@ -398,3 +508,6 @@ impl InterpreterCore {
         outcome
     }
 }
+
+#[cfg(test)]
+mod tests;

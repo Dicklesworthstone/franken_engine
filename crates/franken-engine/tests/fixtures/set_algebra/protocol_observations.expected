@@ -1,0 +1,18 @@
+union/1:1,2,3:size,number,has,keys,k,next,n0,d0,v0,n1,d1,v1,n2,d2
+intersection/1:2:size,number,has,keys,k,next,n0,d0,v0,n1,d1,v1,n2,d2
+difference/1:1:size,number,has,keys,k,next,n0,d0,v0,n1,d1,v1,n2,d2
+symmetricDifference/1:1,3:size,number,has,keys,k,next,n0,d0,v0,n1,d1,v1,n2,d2
+isSubsetOf/1:false:size,number,has,keys
+isSupersetOf/1:false:size,number,has,keys,k,next,n0,d0,v0,n1,d1,v1,return,r
+isDisjointFrom/1:false:size,number,has,keys,k,next,n0,d0,v0,return,r
+union/10:1,2,3:size,number,has,keys,k,next,n0,d0,v0,n1,d1,v1,n2,d2
+intersection/10:2:size,number,has,keys,h1,h2
+difference/10:1:size,number,has,keys,h1,h2
+symmetricDifference/10:1,3:size,number,has,keys,k,next,n0,d0,v0,n1,d1,v1,n2,d2
+isSubsetOf/10:false:size,number,has,keys,h1
+isSupersetOf/10:false:size,number,has,keys
+isDisjointFrom/10:false:size,number,has,keys,h1,h2
+abrupt:12 exact throws,0 closes
+callable:1
+proxy:2:size,has,keys
+zero:1:Infinity

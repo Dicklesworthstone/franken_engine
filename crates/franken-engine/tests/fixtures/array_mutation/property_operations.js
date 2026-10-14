@@ -16,6 +16,7 @@ function operation(a, name) {
     case 'unshift': return a.unshift(5);
     case 'reverse': return a.reverse();
     case 'fill': return a.fill(9);
+    case 'copyWithin': return a.copyWithin(0, 1);
   }
 }
 function run(label, method, prepare) {
@@ -27,7 +28,7 @@ function run(label, method, prepare) {
   try { operation(a, method); } catch (e) { result = e.name; }
   console.log(label + '/' + method + ' ' + result + ' ' + state(a) + ' ' + (log || '-'));
 }
-const methods = ['push', 'pop', 'shift', 'unshift', 'reverse', 'fill'];
+const methods = ['push', 'pop', 'shift', 'unshift', 'reverse', 'fill', 'copyWithin'];
 for (const method of methods) {
   run('accessor', method, (a, note) => {
     Object.defineProperty(a, '1', {
@@ -130,3 +131,17 @@ let assigned = '';
 Object.defineProperty(borrowed, '0', { set(v) { assigned += v; }, configurable: true });
 Array.prototype.fill.call(borrowed, 4, 0, 1);
 console.log('borrowed-fill ' + state(borrowed) + ' ' + assigned);
+
+// Non-writable length is not a non-writable element; these do not grow it.
+for (const method of ['fill', 'copyWithin']) {
+  run('length-readonly', method, a => {
+    Object.defineProperty(a, 'length', { writable: false });
+  });
+}
+const decorated = [1, 2, 3];
+for (let n = 0; n < 16; n++) {
+  Object.defineProperty(decorated, 'named' + n, { value: n });
+}
+Object.defineProperty(decorated, '01', { value: 99, writable: false });
+decorated.fill(8, 1, 2);
+console.log('metadata-narrow-fill ' + state(decorated) + ' ' + decorated['01']);

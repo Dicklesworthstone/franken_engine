@@ -28,6 +28,11 @@ getter-only/fill TypeError 3:accessor,20,30 -
 readonly/fill TypeError 3:10,20,30 -
 locked-tail/fill ok 3:9,9,9 -
 inherited/fill ok 3:9,-,9 set-p1=9
+accessor/copyWithin ok 3:21,accessor,30 get1,set1=30
+getter-only/copyWithin TypeError 3:accessor,20,30 -
+readonly/copyWithin TypeError 3:10,20,30 -
+locked-tail/copyWithin ok 3:20,30,30 -
+inherited/copyWithin ok 3:22,-,30 get-p1,set-p1=30
 tail-getter/pop ok 2:10,20 get2
 tail-readonly-deletable/pop ok 2:10,20 -
 getter-throws/shift RangeError 3:10,accessor,30 get1
@@ -55,6 +60,9 @@ frozen/reverse TypeError 3:10,20,30 -
 sealed/fill ok 3:9,9,9 -
 nonextensible/fill ok 3:9,9,9 -
 frozen/fill TypeError 3:10,20,30 -
+sealed/copyWithin ok 3:20,30,30 -
+nonextensible/copyWithin ok 3:20,30,30 -
+frozen/copyWithin TypeError 3:10,20,30 -
 empty-frozen/fill ok
 empty-frozen/reverse ok
 empty-frozen/shift TypeError
@@ -63,3 +71,6 @@ narrow-fill 3:accessor,7,3
 overflow-push RangeError 4294967295 17
 prototype-proxy 3:1,2,3 1=2;2=3;
 borrowed-fill 3:accessor,2,3 4
+length-readonly/fill ok 3:9,9,9 -
+length-readonly/copyWithin ok 3:20,30,30 -
+metadata-narrow-fill 3:1,8,3 99

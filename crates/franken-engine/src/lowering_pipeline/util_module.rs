@@ -51,6 +51,8 @@ use std::collections::{BTreeMap, BTreeSet};
 // Filesystem methods retain the caller's FsRead/FsWrite checks at invocation.
 #[path = "fs_module.rs"]
 mod fs_module;
+#[path = "stream_operators.rs"]
+mod stream_operators;
 
 use super::LoweringPipelineError;
 use super::with_statement::{
@@ -146,7 +148,16 @@ const EVENTS_SOURCE: &str = include_str!("events_module.js");
 const ASSERT_SOURCE: &str = include_str!("assert_module.js");
 const TIMERS_SOURCE: &str = include_str!("timers_module.js");
 const STRING_DECODER_SOURCE: &str = include_str!("string_decoder_module.js");
-const STREAM_SOURCE: &str = include_str!("stream_module.js");
+// Install collection operators on the same realm-owned constructor returned
+// by the stream factory. Both files remain engine-owned source parsed by the
+// native lowerer; no second module instance or additional host authority.
+const STREAM_SOURCE: &str = concat!(
+    "(",
+    include_str!("stream_operators.js"),
+    ")(",
+    include_str!("stream_module.js"),
+    ")",
+);
 const BUFFER_SOURCE: &str = include_str!("buffer_module.js");
 // The factory reads no guest globals and returns the realm's cached module.
 // Its methods are native callable values, not wrappers with separate identities.
@@ -488,6 +499,9 @@ pub(super) fn rewrite_util_requires(
 /// `class X extends Readable` would bind it to nothing; counting every
 /// reference leaves such a program to the module instead.
 fn facade_claimed_stream_declarators(body: &[Statement]) -> BTreeSet<(usize, usize)> {
+    if stream_operators::requires_stream_module(body) {
+        return BTreeSet::new();
+    }
     let lookup = BTreeMap::new();
     let confirmed = [
         (

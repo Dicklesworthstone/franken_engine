@@ -88,9 +88,7 @@ impl InterpreterCore {
             let work = (self.heap_size() as u64)
                 .saturating_mul(sources.len() as u64)
                 .saturating_add(sources.len() as u64);
-            for _ in 0..work {
-                self.json_charge_work()?;
-            }
+            self.structured_clone_charge_transfer_work(work)?;
         }
         for source in sources {
             self.structured_clone_commit_transfer(source, state.memory[&source])?;
@@ -227,6 +225,41 @@ impl InterpreterCore {
         );
     }
 
+    /// Charge an already-sized native operation without dispatching one Rust
+    /// call per virtual work unit. With no cancellation token, the only effect
+    /// of each successful json_charge_work is incrementing the instruction
+    /// counter. Consume precisely the affordable prefix before a refusal,
+    /// including a counter/budget at u64::MAX. A configured token keeps the
+    /// original per-unit polling path, including cancellation-before-budget
+    /// ordering. A zero-sized operation observes neither counter nor token.
+    fn structured_clone_charge_transfer_work(
+        &mut self,
+        work: u64,
+    ) -> Result<(), InterpreterError> {
+        if work == 0 {
+            return Ok(());
+        }
+        if self.config.cancellation_token.is_some() {
+            for _ in 0..work {
+                self.json_charge_work()?;
+            }
+            return Ok(());
+        }
+        // The real first charge handles an already-exhausted or invalid seed
+        // exactly as the original loop, without duplicating its entry checks.
+        self.json_charge_work()?;
+        let remaining = work - 1;
+        let headroom = self.config.instruction_budget - self.instructions_executed;
+        self.instructions_executed += remaining.min(headroom);
+        if remaining > headroom {
+            return Err(InterpreterError::BudgetExhausted {
+                executed: self.instructions_executed,
+                budget: self.config.instruction_budget,
+            });
+        }
+        Ok(())
+    }
+
     /// Prepare an unreachable destination without moving its source bytes.
     /// Resize and labels use the normal accounting/registered-view machinery.
     /// Every destination is prepared before the first ownership exchange, so
@@ -242,9 +275,7 @@ impl InterpreterCore {
         self.json_charge_work()?;
         let length = self.buffer_backing(source)?.bytes.len();
         Self::structured_clone_transfer_length(length)?;
-        for _ in 0..(length as u64).div_ceil(64) {
-            self.json_charge_work()?;
-        }
+        self.structured_clone_charge_transfer_work((length as u64).div_ceil(64))?;
         let label = self.binary_storage_label(source);
         state.label = state.label.join(&label);
         // A shell materialized by CloneTask::View still needs its final
@@ -875,5 +906,69 @@ console.log(Array.from(new Uint8Array(copy.inner)).join(','), inner.byteLength, 
                 Err(InterpreterError::RangeError { .. })
             ));
         }
+    }
+
+    #[test]
+    fn transfer_bulk_work_matches_every_small_budget_prefix() {
+        let mut expected = runtime();
+        let mut actual = runtime();
+        expected.json_reserve_temporary(23).unwrap();
+        actual.json_reserve_temporary(23).unwrap();
+        // Include invalid native/replay seeds above the configured budget.
+        // A configured live or cancelled token must use the old polling path.
+        for token_state in 0..3 {
+            for budget in 0..17 {
+                for executed in 0..20 {
+                    for work in 0..25 {
+                        for core in [&mut expected, &mut actual] {
+                            core.instructions_executed = executed;
+                            core.config.instruction_budget = budget;
+                            core.config.cancellation_token = if token_state == 0 {
+                                None
+                            } else {
+                                let token = CancellationToken::new();
+                                if token_state == 2 {
+                                    token.cancel();
+                                }
+                                Some(token)
+                            };
+                        }
+                        let reference = (0..work).try_for_each(|_| expected.json_charge_work());
+                        let result = actual.structured_clone_charge_transfer_work(work);
+                        assert_eq!(result, reference,
+                            "token {token_state} budget {budget} executed {executed} work {work}");
+                        assert_eq!(actual.instructions_executed, expected.instructions_executed);
+                        assert_eq!(actual.json_parse_temporary_bytes, 23);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn transfer_bulk_work_handles_maximum_counter_and_zero_cost() {
+        let mut core = runtime();
+        core.config.cancellation_token = None;
+        core.instructions_executed = 0;
+        core.config.instruction_budget = u64::MAX;
+        // This is an algorithmic regression, not a wall-clock assertion: a
+        // per-unit implementation cannot finish this successful charge loop.
+        assert_eq!(core.structured_clone_charge_transfer_work(u64::MAX), Ok(()));
+        assert_eq!(core.instructions_executed, u64::MAX);
+        assert_eq!(core.structured_clone_charge_transfer_work(0), Ok(()));
+        assert_eq!(
+            core.structured_clone_charge_transfer_work(1),
+            Err(InterpreterError::BudgetExhausted { executed: u64::MAX, budget: u64::MAX })
+        );
+        core.instructions_executed = u64::MAX - 3;
+        assert_eq!(
+            core.structured_clone_charge_transfer_work(4),
+            Err(InterpreterError::BudgetExhausted { executed: u64::MAX, budget: u64::MAX })
+        );
+        let token = CancellationToken::new();
+        token.cancel();
+        core.config.cancellation_token = Some(token);
+        assert_eq!(core.structured_clone_charge_transfer_work(0), Ok(()));
+        assert_eq!(core.structured_clone_charge_transfer_work(1), Err(InterpreterError::Cancelled));
     }
 }

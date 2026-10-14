@@ -376,7 +376,10 @@ impl InterpreterCore {
     }
 
     /// A fresh Uint8Array holding `bytes`, allocated as `new Uint8Array(n)`.
-    fn alloc_uint8_array_from_bytes(&mut self, bytes: &[u8]) -> Result<ObjectId, InterpreterError> {
+    pub(super) fn alloc_uint8_array_from_bytes(
+        &mut self,
+        bytes: &[u8],
+    ) -> Result<ObjectId, InterpreterError> {
         let view = self.alloc_typed_array_with_fresh_buffer(TypedArrayKind::Uint8, bytes.len())?;
         let buffer = self
             .heap

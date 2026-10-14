@@ -21,11 +21,11 @@ impl InterpreterCore {
         left: Value,
         right: Value,
     ) -> Result<Ordering, InterpreterError> {
-        let left = self.sort_string_key(module, left)?;
+        let left = self.sort_string_key_coerced(module, left)?;
         let left_bytes = Self::estimate_value_bytes(&Value::Str(left.clone()));
         self.json_reserve_temporary(left_bytes)?;
         let outcome = (|| {
-            let right = self.sort_string_key(module, right)?;
+            let right = self.sort_string_key_coerced(module, right)?;
             let right_bytes = Self::estimate_value_bytes(&Value::Str(right.clone()));
             self.json_reserve_temporary(right_bytes)?;
             let ordering = left.utf16_cmp(&right);
@@ -38,7 +38,7 @@ impl InterpreterCore {
         outcome
     }
 
-    fn sort_string_key(
+    fn sort_string_key_coerced(
         &mut self,
         module: Option<&Ir3Module>,
         value: Value,

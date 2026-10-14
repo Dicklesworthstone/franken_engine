@@ -1,0 +1,170 @@
+[
+  {
+    "name": "terminal-pending-value",
+    "source": "(async () => {\nconst events=[]; let release, settled=false, count=0;\nconst source={ [Symbol.iterator]() { return {\n  next() { if(count++===0) return {value:7,done:false};\n    return {get done(){events.push('done');return true;},get value(){events.push('value');\n      return {then(resolve){events.push('then');release=resolve;}};}};\n  }, return(){events.push('unexpected-close');return {};}\n};}};\nconst work=Array.fromAsync(source).then(out=>{settled=true;events.push('fulfilled:'+out.join(','));});\nfor(let i=0;i<12;i++) await Promise.resolve();\nconsole.log('pending',settled,typeof release,events.join('|'));\nrelease(99); await work; console.log(events.join('|'));\n})()\n",
+    "expected": "pending false function done|value|then\ndone|value|then|fulfilled:7"
+  },
+  {
+    "name": "terminal-rejected-value",
+    "source": "(async () => {\nlet count=0, closes=0, mapped=0; const reason={};\nconst source={ [Symbol.iterator]() {return {\n next(){return count++===0?{value:2,done:false}:{value:Promise.reject(reason),done:true};},\n return(){closes++;return {};}\n};}};\nlet caught=false;\ntry {await Array.fromAsync(source,x=>{mapped++;return x;});}catch(error){caught=error===reason;}\nconsole.log(caught,count,closes,mapped);\n})()\n",
+    "expected": "true 2 0 1",
+    "node_v22_16_0": {
+      "reason": "Node 22 calls return after rejection of a done:true sync value; AsyncFromSyncIteratorContinuation must not close in that case.",
+      "output": "true 2 1 1"
+    }
+  },
+  {
+    "name": "terminal-value-getter-throws",
+    "source": "(async () => {\nlet closes=0;const reason=Symbol('end'),events=[];\nconst source={ [Symbol.iterator]() {return {\n next(){return {get done(){events.push('done');return true;},get value(){events.push('value');throw reason;}};},\n return(){closes++;return {};}\n};}};\nlet same=false;try{await Array.fromAsync(source);}catch(error){same=error===reason;}\nconsole.log(same,closes,events.join('|'));\n})()\n",
+    "expected": "true 0 done|value",
+    "node_v22_16_0": {
+      "reason": "Node 22 closes after IteratorValue throws; the wrapper rejects without IteratorClose at this boundary.",
+      "output": "true 1 done|value"
+    }
+  },
+  {
+    "name": "sync-next-is-captured-once",
+    "source": "(async () => {\nlet reads=0,calls=0;\nconst iterator={get next(){reads++;return function(){\n if(this!==iterator||arguments.length!==0) throw Error('receiver or arguments');\n calls++;if(calls===1){Object.defineProperty(iterator,'next',{value(){throw Error('re-read');}});return {value:3,done:false};}\n return {done:true};\n};}};\nconst source={[Symbol.iterator](){return iterator;}};\nconst out=await Array.fromAsync(source);console.log(reads,calls,out.join(','));\n})()\n",
+    "expected": "1 2 3",
+    "node_v22_16_0": {
+      "reason": "Node 22 reads the sync next getter twice instead of retaining the GetIteratorFromMethod record.",
+      "output": "2 2 3"
+    }
+  },
+  {
+    "name": "step-failure-does-not-close",
+    "source": "(async () => {\nfor(const site of ['next','done','value']){\n const reason={};let closes=0,values=0;\n const source={[Symbol.iterator](){return {\n next(){if(site==='next')throw reason;return {get done(){if(site==='done')throw reason;return false;},get value(){values++;throw reason;}};},\n return(){closes++;return {};}\n };}};\n let same=false;try{await Array.fromAsync(source);}catch(error){same=error===reason;}\n console.log(site,same,closes,values);\n}\n})()\n",
+    "expected": "next true 0 0\ndone true 0 0\nvalue true 0 1",
+    "node_v22_16_0": {
+      "reason": "Node 22 calls return after a next/done/value failure; the specified wrapper rejects without closing.",
+      "output": "next true 1 0\ndone true 1 0\nvalue true 1 1"
+    }
+  },
+  {
+    "name": "step-rejection-has-wrapper-await",
+    "source": "(async () => {\nconst order=[];\nconst source={[Symbol.iterator](){return {next(){throw 3;}};}};\nconst p=Array.fromAsync(source).catch(e=>order.push('caught:'+e));\nqueueMicrotask(()=>order.push('queued'));\norder.push('sync');await p;console.log(order.join('|'));\n})()\n",
+    "expected": "sync|queued|caught:3"
+  },
+  {
+    "name": "yield-rejection-closes-without-reading-return-result",
+    "source": "(async () => {\nconst reason={},events=[];\nconst source={[Symbol.iterator](){return {\n next(){return {value:Promise.reject(reason),done:false};},\n return(){events.push('return');return {get done(){throw Error('read done');},get value(){throw Error('read value');},get then(){throw Error('read then');}};}\n};}};\nlet same=false;try{await Array.fromAsync(source);}catch(e){same=e===reason;}\nconsole.log(same,events.join('|'));\n})()\n",
+    "expected": "true return",
+    "node_v22_16_0": {
+      "reason": "Node 22 does not complete this throwing-return-result-accessor probe within the bounded reference run.",
+      "nonsettling": true
+    }
+  },
+  {
+    "name": "mapper-failure-awaits-cleanup-value",
+    "source": "(async () => {\nconst reason={},events=[];let release,settled=false;\nconst iterator={next(){return {value:1,done:false};},\n return(){events.push('return:'+arguments.length+':'+(this===iterator));return {\n get done(){events.push('done');return true;},get value(){events.push('value');return {\n then(resolve){events.push('then');release=resolve;}};}};}\n};\nconst work=Array.fromAsync({[Symbol.iterator](){return iterator;}},()=>{throw reason;})\n .catch(e=>{settled=true;events.push('same:'+(e===reason));});\nfor(let i=0;i<14;i++)await Promise.resolve();\nconsole.log('pending',settled,typeof release,events.join('|'));\nrelease(99);await work;console.log(events.join('|'));\n})()\n",
+    "expected": "pending false function return:0:true|done|value|then\nreturn:0:true|done|value|then|same:true"
+  },
+  {
+    "name": "cleanup-rejected-value-does-not-close-twice",
+    "source": "(async () => {\nconst original={},cleanup={},events=[];\nlet closes=0;\nconst source={[Symbol.iterator](){return {\n next(){return {value:1,done:false};},\n return(){closes++;return {get done(){events.push('done');return false;},get value(){events.push('value');return Promise.reject(cleanup);}};}\n};}};\nlet same=false;try{await Array.fromAsync(source,()=>{throw original;});}catch(e){same=e===original;}\nconsole.log(same,closes,events.join('|'));\n})()\n",
+    "expected": "true 1 done|value",
+    "node_v22_16_0": {
+      "reason": "Node 22 does not complete the rejected sync cleanup-value probe within the bounded reference run.",
+      "nonsettling": true
+    }
+  },
+  {
+    "name": "falsy-mapper-errors-survive-cleanup",
+    "source": "(async () => {\nlet checked=0;\nfor(const original of [undefined,null,false,-0,17n,Symbol('x'),'\\ud800']){\n let closed=0;\n const source={[Symbol.iterator](){return {\n next(){return {value:1,done:false};},\n return(){closed++;try{throw 'nested';}catch(e){}return {done:true,value:Promise.resolve(9)};}\n };}};\n let caught=false;try{await Array.fromAsync(source,()=>{throw original;});}catch(e){caught=Object.is(e,original);}\n if(!caught||closed!==1)throw Error('identity');checked++;\n}\nconsole.log('exact',checked);\n})()\n",
+    "expected": "exact 7"
+  },
+  {
+    "name": "generator-terminal-rejection",
+    "source": "(async () => {\nconst original={};let final=0;\nfunction* source(){try{yield 4;return Promise.reject(original);}finally{final++;}}\nlet caught=false;try{await Array.fromAsync(source());}catch(e){caught=e===original;}\nconsole.log(caught,final);\n})()\n",
+    "expected": "true 1"
+  },
+  {
+    "name": "generator-finally-yield-awaits-value",
+    "source": "(async () => {\nconst original={},events=[];let release,settled=false;\nfunction* source(){try{yield 3;}finally{events.push('finally');yield {then(resolve){events.push('then');release=resolve;}};events.push('after-yield');}}\nconst iterator=source();\nconst work=Array.fromAsync(iterator,()=>{throw original;}).catch(e=>{settled=true;events.push('same:'+(e===original));});\nfor(let i=0;i<14;i++)await Promise.resolve();\nconsole.log('pending',settled,typeof release,events.join('|'));\nrelease(0);await work;console.log(events.join('|'));console.log(iterator.next().done,events.join('|'));\n})()\n",
+    "expected": "pending false function finally|then\nfinally|then|same:true\ntrue finally|then|same:true|after-yield"
+  },
+  {
+    "name": "async-terminal-value-is-not-read",
+    "source": "(async () => {\nconst events=[];\nconst source={get [Symbol.iterator](){throw Error('wrong protocol');},[Symbol.asyncIterator](){return {\n next(){return {done:true,get value(){throw Error('terminal async value');}};}\n};}};\nconst out=await Array.fromAsync(source);console.log(out.length);\n})()\n",
+    "expected": "0"
+  },
+  {
+    "name": "basic-source-controls",
+    "source": "(async () => {\nconsole.log((await Array.fromAsync([1,Promise.resolve(2),3],x=>x*2)).join(','));\nconsole.log((await Array.fromAsync('A\ud83d\ude00B')).join('|'));\nconsole.log((await Array.fromAsync(new Set([2,4,2]))).join(','));\nconsole.log(JSON.stringify(await Array.fromAsync({length:3,0:Promise.resolve(1),2:3})));\nasync function* source(){yield 7;yield 8;}\nconsole.log((await Array.fromAsync(source())).join(','));\n})()\n",
+    "expected": "2,4,6\nA|\ud83d\ude00|B\n2,4\n[1,null,3]\n7,8"
+  },
+  {
+    "name": "thenable-cleanup-is-an-iterator-result-not-a-promise",
+    "source": "(async () => {\nlet thenReads=0,closed=0;const original={};\nconst source={[Symbol.iterator](){return {next(){return {value:1,done:false};},return(){closed++;return {get then(){thenReads++;throw Error('wrong assimilation');},done:true,value:5};}};}};\nlet same=false;try{await Array.fromAsync(source,()=>{throw original;});}catch(e){same=e===original;}\nconsole.log(same,closed,thenReads);\n})()\n",
+    "expected": "true 1 0"
+  },
+  {
+    "name": "independent-overlapping-cleanups",
+    "source": "(async () => {\nconst releases=[],reasons=[{},{}],results=[];\nfunction start(index){return Array.fromAsync({[Symbol.iterator](){return {\n next(){return {value:index,done:false};},return(){return {done:true,value:{then(resolve){releases[index]=resolve;}}};}\n};}},()=>{throw reasons[index];}).catch(e=>results.push(index+':'+(e===reasons[index])));}\nconst first=start(0),second=start(1);\nfor(let i=0;i<20;i++)await Promise.resolve();\nconsole.log('waiting',results.length,releases.length);\nreleases[1](1);await second;releases[0](0);await first;console.log(results.join('|'));\n})()\n",
+    "expected": "waiting 0 2\n1:true|0:true"
+  },
+  {
+    "name": "cleanup-missing",
+    "source": "(async () => {\nconst mode=\"missing\";const original={},other={};let calls=0,done=0,value=0;\nconst iterator={next(){return {value:1,done:false};}};\nif(mode!=='missing')Object.defineProperty(iterator,'return',{get(){\n if(mode==='null')return null;if(mode==='noncallable')return 1;if(mode==='get-throws')throw other;\n return function(){calls++;if(mode==='call-throws')throw other;if(mode==='primitive')return 0;\n return {get done(){done++;if(mode==='done-throws')throw other;return true;},get value(){value++;throw other;}};};\n}});\nlet same=false;try{await Array.fromAsync({[Symbol.iterator](){return iterator;}},()=>{throw original;});}catch(e){same=e===original;}\nconsole.log(same,calls,done,value);\n})()\n",
+    "expected": "true 0 0 0"
+  },
+  {
+    "name": "cleanup-null",
+    "source": "(async () => {\nconst mode=\"null\";const original={},other={};let calls=0,done=0,value=0;\nconst iterator={next(){return {value:1,done:false};}};\nif(mode!=='missing')Object.defineProperty(iterator,'return',{get(){\n if(mode==='null')return null;if(mode==='noncallable')return 1;if(mode==='get-throws')throw other;\n return function(){calls++;if(mode==='call-throws')throw other;if(mode==='primitive')return 0;\n return {get done(){done++;if(mode==='done-throws')throw other;return true;},get value(){value++;throw other;}};};\n}});\nlet same=false;try{await Array.fromAsync({[Symbol.iterator](){return iterator;}},()=>{throw original;});}catch(e){same=e===original;}\nconsole.log(same,calls,done,value);\n})()\n",
+    "expected": "true 0 0 0"
+  },
+  {
+    "name": "cleanup-noncallable",
+    "source": "(async () => {\nconst mode=\"noncallable\";const original={},other={};let calls=0,done=0,value=0;\nconst iterator={next(){return {value:1,done:false};}};\nif(mode!=='missing')Object.defineProperty(iterator,'return',{get(){\n if(mode==='null')return null;if(mode==='noncallable')return 1;if(mode==='get-throws')throw other;\n return function(){calls++;if(mode==='call-throws')throw other;if(mode==='primitive')return 0;\n return {get done(){done++;if(mode==='done-throws')throw other;return true;},get value(){value++;throw other;}};};\n}});\nlet same=false;try{await Array.fromAsync({[Symbol.iterator](){return iterator;}},()=>{throw original;});}catch(e){same=e===original;}\nconsole.log(same,calls,done,value);\n})()\n",
+    "expected": "true 0 0 0",
+    "node_v22_16_0": {
+      "reason": "Node 22 does not complete this cleanup failure probe within the bounded reference run.",
+      "nonsettling": true
+    }
+  },
+  {
+    "name": "cleanup-get-throws",
+    "source": "(async () => {\nconst mode=\"get-throws\";const original={},other={};let calls=0,done=0,value=0;\nconst iterator={next(){return {value:1,done:false};}};\nif(mode!=='missing')Object.defineProperty(iterator,'return',{get(){\n if(mode==='null')return null;if(mode==='noncallable')return 1;if(mode==='get-throws')throw other;\n return function(){calls++;if(mode==='call-throws')throw other;if(mode==='primitive')return 0;\n return {get done(){done++;if(mode==='done-throws')throw other;return true;},get value(){value++;throw other;}};};\n}});\nlet same=false;try{await Array.fromAsync({[Symbol.iterator](){return iterator;}},()=>{throw original;});}catch(e){same=e===original;}\nconsole.log(same,calls,done,value);\n})()\n",
+    "expected": "true 0 0 0",
+    "node_v22_16_0": {
+      "reason": "Node 22 does not complete this cleanup failure probe within the bounded reference run.",
+      "nonsettling": true
+    }
+  },
+  {
+    "name": "cleanup-call-throws",
+    "source": "(async () => {\nconst mode=\"call-throws\";const original={},other={};let calls=0,done=0,value=0;\nconst iterator={next(){return {value:1,done:false};}};\nif(mode!=='missing')Object.defineProperty(iterator,'return',{get(){\n if(mode==='null')return null;if(mode==='noncallable')return 1;if(mode==='get-throws')throw other;\n return function(){calls++;if(mode==='call-throws')throw other;if(mode==='primitive')return 0;\n return {get done(){done++;if(mode==='done-throws')throw other;return true;},get value(){value++;throw other;}};};\n}});\nlet same=false;try{await Array.fromAsync({[Symbol.iterator](){return iterator;}},()=>{throw original;});}catch(e){same=e===original;}\nconsole.log(same,calls,done,value);\n})()\n",
+    "expected": "true 1 0 0",
+    "node_v22_16_0": {
+      "reason": "Node 22 does not complete this cleanup failure probe within the bounded reference run.",
+      "nonsettling": true
+    }
+  },
+  {
+    "name": "cleanup-primitive",
+    "source": "(async () => {\nconst mode=\"primitive\";const original={},other={};let calls=0,done=0,value=0;\nconst iterator={next(){return {value:1,done:false};}};\nif(mode!=='missing')Object.defineProperty(iterator,'return',{get(){\n if(mode==='null')return null;if(mode==='noncallable')return 1;if(mode==='get-throws')throw other;\n return function(){calls++;if(mode==='call-throws')throw other;if(mode==='primitive')return 0;\n return {get done(){done++;if(mode==='done-throws')throw other;return true;},get value(){value++;throw other;}};};\n}});\nlet same=false;try{await Array.fromAsync({[Symbol.iterator](){return iterator;}},()=>{throw original;});}catch(e){same=e===original;}\nconsole.log(same,calls,done,value);\n})()\n",
+    "expected": "true 1 0 0",
+    "node_v22_16_0": {
+      "reason": "Node 22 does not complete this cleanup failure probe within the bounded reference run.",
+      "nonsettling": true
+    }
+  },
+  {
+    "name": "cleanup-done-throws",
+    "source": "(async () => {\nconst mode=\"done-throws\";const original={},other={};let calls=0,done=0,value=0;\nconst iterator={next(){return {value:1,done:false};}};\nif(mode!=='missing')Object.defineProperty(iterator,'return',{get(){\n if(mode==='null')return null;if(mode==='noncallable')return 1;if(mode==='get-throws')throw other;\n return function(){calls++;if(mode==='call-throws')throw other;if(mode==='primitive')return 0;\n return {get done(){done++;if(mode==='done-throws')throw other;return true;},get value(){value++;throw other;}};};\n}});\nlet same=false;try{await Array.fromAsync({[Symbol.iterator](){return iterator;}},()=>{throw original;});}catch(e){same=e===original;}\nconsole.log(same,calls,done,value);\n})()\n",
+    "expected": "true 1 1 0",
+    "node_v22_16_0": {
+      "reason": "Node 22 does not complete this cleanup failure probe within the bounded reference run.",
+      "nonsettling": true
+    }
+  },
+  {
+    "name": "cleanup-value-throws",
+    "source": "(async () => {\nconst mode=\"value-throws\";const original={},other={};let calls=0,done=0,value=0;\nconst iterator={next(){return {value:1,done:false};}};\nif(mode!=='missing')Object.defineProperty(iterator,'return',{get(){\n if(mode==='null')return null;if(mode==='noncallable')return 1;if(mode==='get-throws')throw other;\n return function(){calls++;if(mode==='call-throws')throw other;if(mode==='primitive')return 0;\n return {get done(){done++;if(mode==='done-throws')throw other;return true;},get value(){value++;throw other;}};};\n}});\nlet same=false;try{await Array.fromAsync({[Symbol.iterator](){return iterator;}},()=>{throw original;});}catch(e){same=e===original;}\nconsole.log(same,calls,done,value);\n})()\n",
+    "expected": "true 1 1 1",
+    "node_v22_16_0": {
+      "reason": "Node 22 does not complete this cleanup failure probe within the bounded reference run.",
+      "nonsettling": true
+    }
+  }
+]

@@ -10,6 +10,8 @@
 
 use super::*;
 
+mod sync_protocol;
+
 /// The object Array.from fills: a fresh Array, or the object `new C(...)`
 /// returned for a constructor `this` (ES2020 22.1.2.1 steps 5.a and 12.a),
 /// which gets its elements through [[DefineOwnProperty]] and its length
@@ -692,12 +694,22 @@ enum FromAsyncSource {
     SyncIterator,
     /// Indexed reads up to the source's length.
     ArrayLike,
+    /// A sync iterator whose original next/return result objects are observable.
+    SyncProtocol,
 }
 
-const FROM_ASYNC_SOURCES: [FromAsyncSource; 3] = [
+/// Keep explicit sync protocol objects out of the for-of adapter: for-of
+/// discards terminal values and return results, but async-from-sync awaits them.
+enum FromAsyncSyncIterator {
+    Protocol { iterator: Value, next: Value },
+    Native(Value),
+}
+
+const FROM_ASYNC_SOURCES: [FromAsyncSource; 4] = [
     FromAsyncSource::AsyncIterator,
     FromAsyncSource::SyncIterator,
     FromAsyncSource::ArrayLike,
+    FromAsyncSource::SyncProtocol,
 ];
 
 /// What the pending await of an `Array.fromAsync` call waits for.
@@ -719,9 +731,11 @@ enum FromAsyncAwait {
     Element,
     /// The mapper's result for an array-like element.
     MappedElement,
+    /// Value of a sync return result, before the outer AsyncIteratorClose await.
+    SyncCloseValue,
 }
 
-const FROM_ASYNC_AWAITS: [FromAsyncAwait; 7] = [
+const FROM_ASYNC_AWAITS: [FromAsyncAwait; 8] = [
     FromAsyncAwait::Next,
     FromAsyncAwait::SyncValue,
     FromAsyncAwait::SyncStep,
@@ -729,6 +743,7 @@ const FROM_ASYNC_AWAITS: [FromAsyncAwait; 7] = [
     FromAsyncAwait::Close,
     FromAsyncAwait::Element,
     FromAsyncAwait::MappedElement,
+    FromAsyncAwait::SyncCloseValue,
 ];
 
 /// `Array.fromAsync` (ES2024 23.1.2.1, bd-9vouw.172). The spec runs the body
@@ -738,7 +753,7 @@ const FROM_ASYNC_AWAITS: [FromAsyncAwait; 7] = [
 /// holder) as reactions on the awaited promise. The microtask ticks match
 /// the spec's: one per awaited value, and two per sync-iterator step (the
 /// async-from-sync value wrapper, then the await of the step's promise).
-/// Like Array.from here, the result is always an Array, never `new this()`.
+/// The result is still always an Array, never `new this()` (unlike Array.from).
 impl InterpreterCore {
     pub(super) fn array_from_async_builtin(
         &mut self,
@@ -846,8 +861,17 @@ impl InterpreterCore {
             return self.array_from_async_request_next(module, holder, label);
         }
         if let Some(iterator) = self.array_from_async_sync_iterator(module, &items, label)? {
-            self.array_from_async_set_source(holder, FromAsyncSource::SyncIterator)?;
-            self.array_from_async_set(holder, "__iterator", iterator)?;
+            match iterator {
+                FromAsyncSyncIterator::Protocol { iterator, next } => {
+                    self.array_from_async_set_source(holder, FromAsyncSource::SyncProtocol)?;
+                    self.array_from_async_set(holder, "__iterator", iterator)?;
+                    self.array_from_async_set(holder, "__next", next)?;
+                }
+                FromAsyncSyncIterator::Native(iterator) => {
+                    self.array_from_async_set_source(holder, FromAsyncSource::SyncIterator)?;
+                    self.array_from_async_set(holder, "__iterator", iterator)?;
+                }
+            }
             return self.array_from_async_request_next(module, holder, label);
         }
         // Array-like: LengthOfArrayLike once, then each element in turn.
@@ -894,7 +918,7 @@ impl InterpreterCore {
         module: &Ir3Module,
         items: &Value,
         label: &Label,
-    ) -> Result<Option<Value>, InterpreterError> {
+    ) -> Result<Option<FromAsyncSyncIterator>, InterpreterError> {
         let backing = self.array_from_source_backing(items)?;
         let method = match backing {
             Some(object) => {
@@ -910,15 +934,10 @@ impl InterpreterCore {
                 Vec::new(),
                 Some(label.clone()),
             )?;
-            let init = self.prepare_custom_iterator_result(module, iterator)?;
-            return self
-                .init_iterator_from_state(items.clone(), init, IterationKind::ForOf)
-                .map(Some);
+            return self.array_from_async_capture_sync(module, iterator).map(Some);
         }
         if matches!(items, Value::Iterator(_) | Value::Generator(_)) {
-            return self
-                .init_for_of_iterator(Some(module), items.clone())
-                .map(Some);
+            return self.array_from_async_capture_sync(module, items.clone()).map(Some);
         }
         if let Some(object) = backing
             && self.array_from_has_explicit_iterator(object)?
@@ -928,12 +947,12 @@ impl InterpreterCore {
         if let Value::Object(object) = items
             && let Some(iterator) = self.array_from_collection_iterator(*object)?
         {
-            return Ok(Some(iterator));
+            return Ok(Some(FromAsyncSyncIterator::Native(iterator)));
         }
         if matches!(items, Value::Str(_)) {
             return self
                 .init_for_of_iterator(Some(module), items.clone())
-                .map(Some);
+                .map(|iterator| Some(FromAsyncSyncIterator::Native(iterator)));
         }
         Ok(None)
     }
@@ -1038,6 +1057,9 @@ impl InterpreterCore {
                 }
                 self.array_from_async_request_next(module, holder, label)
             }
+            FromAsyncAwait::SyncCloseValue => {
+                self.array_from_async_sync_close_settled(module, holder, label)
+            }
             FromAsyncAwait::Close => self.array_from_async_reject_closed(holder),
             FromAsyncAwait::Element => {
                 let mapper = self.array_from_async_slot(holder, "__mapper")?;
@@ -1085,6 +1107,11 @@ impl InterpreterCore {
                 // tick later.
                 if !self.array_from_async_slot(holder, "__done")?.is_truthy() {
                     let iterator = self.array_from_async_slot(holder, "__iterator")?;
+                    if self.array_from_async_source(holder)? == FromAsyncSource::SyncProtocol {
+                        return self.array_from_async_sync_value_rejected(
+                            module, holder, reason, label,
+                        );
+                    }
                     let closed = self.close_iterator(module, iterator, IteratorCloseReason::Throw);
                     self.array_from_async_discard_close_error(closed)?;
                 }
@@ -1102,6 +1129,9 @@ impl InterpreterCore {
             FromAsyncAwait::Mapped => {
                 let error = self.throw_guest_value(reason, label.clone())?;
                 self.array_from_async_close(module, holder, error, label)
+            }
+            FromAsyncAwait::SyncCloseValue => {
+                self.array_from_async_sync_close_settled(module, holder, label)
             }
             FromAsyncAwait::Close => self.array_from_async_reject_closed(holder),
             FromAsyncAwait::Next
@@ -1177,6 +1207,9 @@ impl InterpreterCore {
                     FromAsyncAwait::SyncValue,
                     label,
                 )
+            }
+            FromAsyncSource::SyncProtocol => {
+                self.array_from_async_sync_protocol_next(module, holder, label)
             }
             FromAsyncSource::ArrayLike => Err(InterpreterError::InternalError {
                 details: "Array.fromAsync iterator step on an array-like source".to_string(),
@@ -1288,9 +1321,9 @@ impl InterpreterCore {
     /// AsyncIteratorClose(iterator, throw completion): call `return()` and
     /// await its result, then reject with the error that closed the
     /// iterator. A missing, throwing or non-callable `return` rejects at
-    /// once (the throw completion wins). For a sync iterator the async-from-
-    /// sync `return()` runs the sync one now; its result's value is not
-    /// awaited, so the rejection comes one tick before the spec's.
+    /// once (the throw completion wins). An explicit sync iterator retains
+    /// its return result and awaits its value before the outer close await.
+    /// Implicit native fallbacks have no observable return result.
     fn array_from_async_close(
         &mut self,
         module: &Ir3Module,
@@ -1300,6 +1333,10 @@ impl InterpreterCore {
     ) -> Result<(), InterpreterError> {
         let (reason, reason_label) = self.thrown_completion_value(error, label)?;
         let iterator = self.array_from_async_slot(holder, "__iterator")?;
+        if self.array_from_async_source(holder)? == FromAsyncSource::SyncProtocol {
+            self.array_from_async_keep_close_reason(holder, reason, &reason_label)?;
+            return self.array_from_async_sync_protocol_close(module, holder, &reason_label);
+        }
         if self.array_from_async_source(holder)? == FromAsyncSource::SyncIterator {
             let closed = self.close_iterator(module, iterator, IteratorCloseReason::Throw);
             self.array_from_async_discard_close_error(closed)?;

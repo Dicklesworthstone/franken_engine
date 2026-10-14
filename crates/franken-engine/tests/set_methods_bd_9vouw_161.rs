@@ -87,3 +87,26 @@ fn set_methods_set_record_errors() {
         "TypeError TypeError RangeError TypeError TypeError TypeError ok 1 isDisjointFrom function"
     );
 }
+
+/// A long set-like iterator must read each result's done/value exactly once.
+/// This also exercises the hot IteratorStep path where done/value property-key
+/// carriers are reused for the whole iterator instead of rebuilt per element.
+#[test]
+fn long_set_like_iterator_reads_result_fields_once_per_step() {
+    let source = "var nextCalls = 0, doneReads = 0, valueReads = 0;\n\
+         var limit = 4096;\n\
+         var like = { size: limit, has: () => false, keys: function () {\n\
+           var i = 0;\n\
+           return { next: function () {\n\
+             nextCalls++;\n\
+             var value = i++;\n\
+             return {\n\
+               get done() { doneReads++; return value >= limit; },\n\
+               get value() { valueReads++; return value; }\n\
+             };\n\
+           } };\n\
+         } };\n\
+         var result = new Set().union(like);\n\
+         [result.size, result.has(0), result.has(limit - 1), nextCalls, doneReads, valueReads].join(' ');";
+    assert_eq!(eval(source), "4096 true true 4097 4097 4096");
+}

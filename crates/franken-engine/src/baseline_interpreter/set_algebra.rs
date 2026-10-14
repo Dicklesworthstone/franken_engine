@@ -35,6 +35,10 @@ struct SetRecord {
 struct SetRecordKeys {
     iterator: Value,
     next: Value,
+    // IteratorStep reads these on every element. Build their exact string
+    // carriers once per iterator instead of allocating two JsStrings per step.
+    done_key: RuntimePropertyKey,
+    value_key: RuntimePropertyKey,
 }
 
 impl InterpreterCore {
@@ -207,19 +211,22 @@ impl InterpreterCore {
                 message: "set-like object size must not be negative".to_string(),
             });
         }
-        let mut members = Vec::with_capacity(2);
-        for name in ["has", "keys"] {
-            let member = self.get_v(module, &object, &Self::set_record_key(name))?;
-            if !member.is_callable() {
-                return Err(InterpreterError::TypeError {
-                    expected: format!("set-like object with a callable {name}"),
-                    got: member.type_name().to_string(),
-                });
-            }
-            members.push(member);
+        // Read in spec order without a temporary Vec. These are only two
+        // values and both remain live in the returned record.
+        let has = self.get_v(module, &object, &Self::set_record_key("has"))?;
+        if !has.is_callable() {
+            return Err(InterpreterError::TypeError {
+                expected: "set-like object with a callable has".to_string(),
+                got: has.type_name().to_string(),
+            });
         }
-        let keys = members.pop().expect("two members were read");
-        let has = members.pop().expect("two members were read");
+        let keys = self.get_v(module, &object, &Self::set_record_key("keys"))?;
+        if !keys.is_callable() {
+            return Err(InterpreterError::TypeError {
+                expected: "set-like object with a callable keys".to_string(),
+                got: keys.type_name().to_string(),
+            });
+        }
         Ok(SetRecord {
             object,
             size,
@@ -265,7 +272,12 @@ impl InterpreterCore {
             });
         }
         let next = self.get_v(module, &iterator, &Self::set_record_key("next"))?;
-        Ok(SetRecordKeys { iterator, next })
+        Ok(SetRecordKeys {
+            iterator,
+            next,
+            done_key: Self::set_record_key("done"),
+            value_key: Self::set_record_key("value"),
+        })
     }
 
     /// IteratorStepValue over an already acquired record. An early normal
@@ -290,15 +302,12 @@ impl InterpreterCore {
                     got: step.type_name().to_string(),
                 });
             }
-            if self
-                .get_v(module, &step, &Self::set_record_key("done"))?
-                .is_truthy()
-            {
+            if self.get_v(module, &step, &keys.done_key)?.is_truthy() {
                 return Ok(());
             }
-            let value = self.get_v(module, &step, &Self::set_record_key("value"))?;
+            let value = self.get_v(module, &step, &keys.value_key)?;
             if !visit(self, Self::collection_canonical_member(value))? {
-                return self.close_set_record_keys(module, keys.iterator);
+                return self.close_set_record_keys(module, keys);
             }
         }
     }
@@ -308,8 +317,9 @@ impl InterpreterCore {
     fn close_set_record_keys(
         &mut self,
         module: &Ir3Module,
-        iterator: Value,
+        keys: SetRecordKeys,
     ) -> Result<(), InterpreterError> {
+        let iterator = keys.iterator;
         let return_method = self.get_v(module, &iterator, &Self::set_record_key("return"))?;
         if matches!(return_method, Value::Undefined | Value::Null) {
             return Ok(());

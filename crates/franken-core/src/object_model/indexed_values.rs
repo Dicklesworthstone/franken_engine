@@ -113,17 +113,70 @@ impl<V> IndexedValues<V> {
         *self = Self::new();
     }
 
-    /// Promote before invoking user-supplied Rust predicates. If a predicate
-    /// unwinds after removing an interior entry, the map must still have valid
-    /// numeric keys; Vec::retain_mut alone would silently compact the indices.
-    pub(super) fn retain(&mut self, keep: impl FnMut(&u32, &mut (String, V)) -> bool) {
+    /// Visit every entry once in numeric order. An all-keep pass leaves packed
+    /// storage (and its allocation) alone. Only the first actual hole requires
+    /// promotion: subsequent callbacks can panic without reindexing the live
+    /// suffix. Successful filtering can recover a dense prefix; ordinary
+    /// insertion/deletion still never oscillates between storage forms.
+    pub(super) fn retain(&mut self, mut keep: impl FnMut(&u32, &mut (String, V)) -> bool) {
         if self.is_empty() {
+            self.clear();
             return;
         }
-        self.promote();
-        if let Self::Dictionary(entries) = self {
+        if let Self::Packed(entries) = self {
+            let first_removed = entries.iter_mut().enumerate().find_map(|(index, entry)| {
+                let index = index as u32;
+                (!keep(&index, entry)).then_some(index)
+            });
+            let Some(first_removed) = first_removed else {
+                return;
+            };
+            if first_removed as usize == entries.len() - 1 {
+                drop(self.remove(&first_removed));
+                return;
+            }
+            self.promote();
+            // Apply the already-evaluated rejection before another callback.
+            // Rechecking it would duplicate side effects, and delaying it
+            // would leave the wrong partial map if the next callback panics.
+            drop(self.remove(&first_removed));
+            if let Self::Dictionary(entries) = self {
+                entries.retain(|index, entry| *index < first_removed || keep(index, entry));
+            }
+        } else if let Self::Dictionary(entries) = self {
             entries.retain(keep);
         }
+        self.repack_dense_prefix();
+    }
+
+    /// Recovery belongs to the already-linear retain operation, not to each
+    /// sparse write or hole repair. Unique ordered keys from zero through
+    /// len-1 prove density without a scan or key parsing. Reserve before moving
+    /// anything: inability to allocate this optional representation leaves
+    /// the successfully filtered dictionary intact. Values and keys move;
+    /// neither requires Clone, and no index-sized sparse allocation occurs.
+    fn repack_dense_prefix(&mut self) {
+        let Self::Dictionary(entries) = self else {
+            return;
+        };
+        if entries.is_empty() {
+            self.clear();
+            return;
+        }
+        let Ok(last) = u32::try_from(entries.len() - 1) else {
+            return;
+        };
+        if entries.first_key_value().is_none_or(|(key, _)| *key != 0)
+            || entries.last_key_value().is_none_or(|(key, _)| *key != last)
+        {
+            return;
+        }
+        let mut packed = Vec::new();
+        if packed.try_reserve_exact(entries.len()).is_err() {
+            return;
+        }
+        packed.extend(std::mem::take(entries).into_values());
+        *self = Self::Packed(packed);
     }
 
     /// The map contains exactly 0..len, independently of its storage form.
@@ -634,5 +687,254 @@ mod tests {
                 assert_eq!(values.get(&u32::MAX), None);
             }
         }
+    }
+
+    #[test]
+    fn retain_all_keeps_the_packed_allocation_and_tail_rejection_stays_packed() {
+        let mut values = dense(4096);
+        let (address, capacity) = match &values {
+            IndexedValues::Packed(entries) => (entries.as_ptr(), entries.capacity()),
+            IndexedValues::Dictionary(_) => unreachable!(),
+        };
+        let key_addresses: Vec<_> = values.values().map(|entry| entry.0.as_ptr()).collect();
+        let mut next = 0_u32;
+        values.retain(|index, (_, value)| {
+            assert_eq!(*index, next);
+            next += 1;
+            *value += 7;
+            true
+        });
+        assert_eq!(next, 4096);
+        let IndexedValues::Packed(entries) = &values else {
+            panic!("all-keep retain must not build a dictionary");
+        };
+        assert_eq!((entries.as_ptr(), entries.capacity()), (address, capacity));
+        for (index, (key, value)) in entries.iter().enumerate() {
+            assert_eq!(*value, index as u64 + 7);
+            assert_eq!(key.as_ptr(), key_addresses[index]);
+        }
+        values.retain(|index, _| *index != 4095);
+        assert_eq!(values.len(), 4095);
+        assert!(matches!(values, IndexedValues::Packed(_)));
+        assert_eq!(values.get(&4094).map(|entry| entry.1), Some(4101));
+    }
+
+    #[test]
+    fn successful_prefix_filters_recover_packing_without_erasing_sparse_keys() {
+        for dictionary in [false, true] {
+            for kept in [0_u32, 1, 7, 32] {
+                let mut values = dense(32);
+                if dictionary {
+                    values.promote();
+                }
+                values.retain(|index, _| *index < kept);
+                let IndexedValues::Packed(entries) = &values else {
+                    panic!("a successful prefix filter should recover packed storage");
+                };
+                assert_eq!(entries.len(), kept as usize);
+                if kept == 0 {
+                    assert_eq!(entries.capacity(), 0);
+                }
+                for index in kept..64 {
+                    values.insert(index, (index.to_string(), u64::from(index)));
+                }
+                assert!(matches!(values, IndexedValues::Packed(_)));
+                assert_eq!(values, dense(64));
+            }
+        }
+        let mut sparse = dense(8);
+        sparse.insert(u32::MAX - 1, ((u32::MAX - 1).to_string(), 99));
+        sparse.retain(|index, _| *index != 1);
+        assert!(matches!(sparse, IndexedValues::Dictionary(_)));
+        assert_eq!(sparse.get(&1), None);
+        assert_eq!(sparse.get(&2).map(|entry| entry.1), Some(2));
+        assert_eq!(sparse.get(&(u32::MAX - 1)).map(|entry| entry.1), Some(99));
+        sparse.insert(1, ("1".into(), 1));
+        assert!(matches!(sparse, IndexedValues::Dictionary(_)), "insertion must not repack");
+        sparse.retain(|index, _| *index < 8);
+        assert!(matches!(sparse, IndexedValues::Packed(_)));
+        assert_eq!(sparse, dense(8));
+    }
+
+    #[test]
+    fn retain_partial_states_and_callbacks_match_btree_at_every_panic_boundary() {
+        for len in 0..=6_u32 {
+            for mask in 0..(1_u32 << len) {
+                // len means no panic. Mutate BEFORE the panic so the current
+                // entry, as well as every previously visited entry, is checked.
+                for panic_at in 0..=len {
+                    for dictionary in [false, true] {
+                        let mut actual = dense(len);
+                        if dictionary {
+                            actual.promote();
+                        }
+                        let mut expected: BTreeMap<_, _> = (0..len)
+                            .map(|index| (index, (index.to_string(), u64::from(index))))
+                            .collect();
+                        let mut actual_visits = Vec::new();
+                        let mut expected_visits = Vec::new();
+                        let actual_result = catch_unwind(AssertUnwindSafe(|| {
+                            actual.retain(|index, (key, value)| {
+                                actual_visits.push(*index);
+                                key.push('!');
+                                *value += 100;
+                                assert_ne!(*index, panic_at, "deliberate predicate panic");
+                                mask & (1 << *index) != 0
+                            });
+                        }));
+                        let expected_result = catch_unwind(AssertUnwindSafe(|| {
+                            expected.retain(|index, (key, value)| {
+                                expected_visits.push(*index);
+                                key.push('!');
+                                *value += 100;
+                                assert_ne!(*index, panic_at, "deliberate predicate panic");
+                                mask & (1 << *index) != 0
+                            });
+                        }));
+                        assert_eq!(actual_result.is_err(), expected_result.is_err());
+                        assert_eq!(actual_visits, expected_visits);
+                        assert_eq!(actual.len(), expected.len());
+                        for index in 0..=len {
+                            assert_eq!(actual.get(&index), expected.get(&index),
+                                "len={len} mask={mask} panic_at={panic_at} dictionary={dictionary}");
+                        }
+                        assert_eq!(actual.values().collect::<Vec<_>>(), expected.values().collect::<Vec<_>>());
+                        assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn retain_recovery_moves_non_clone_values_and_drops_only_rejections() {
+        struct Owned {
+            bytes: Box<[u8; 16]>,
+            dropped: Rc<Cell<usize>>,
+        }
+        impl Drop for Owned {
+            fn drop(&mut self) {
+                self.dropped.set(self.dropped.get() + 1);
+            }
+        }
+        for dictionary in [false, true] {
+            let dropped = Rc::new(Cell::new(0));
+            let mut values = IndexedValues::new();
+            for index in 0..16_u32 {
+                values.insert(index, (index.to_string(), Owned {
+                    bytes: Box::new([index as u8; 16]),
+                    dropped: Rc::clone(&dropped),
+                }));
+            }
+            let addresses: Vec<_> = values.values()
+                .map(|(key, value)| (key.as_ptr(), value.bytes.as_ptr())).collect();
+            if dictionary {
+                values.promote();
+            }
+            values.retain(|index, (_, value)| {
+                value.bytes[0] += 32;
+                *index < 7
+            });
+            assert!(matches!(values, IndexedValues::Packed(_)));
+            assert_eq!(dropped.get(), 9);
+            for index in 0..7_u32 {
+                let (key, value) = values.get(&index).unwrap();
+                assert_eq!((key.as_ptr(), value.bytes.as_ptr()), addresses[index as usize]);
+                assert_eq!(value.bytes[0], index as u8 + 32);
+            }
+            values.clear();
+            assert_eq!(dropped.get(), 16);
+        }
+    }
+
+    #[test]
+    fn retain_drop_panic_leaves_the_same_numeric_suffix_as_btree() {
+        use std::cell::RefCell;
+
+        struct DropPanic {
+            index: u32,
+            panic_at: u32,
+            drops: Rc<RefCell<Vec<u32>>>,
+        }
+        impl Drop for DropPanic {
+            fn drop(&mut self) {
+                self.drops.borrow_mut().push(self.index);
+                assert_ne!(self.index, self.panic_at, "deliberate destructor panic");
+            }
+        }
+        for panic_at in [0_u32, 3, 7] {
+            let actual_drops = Rc::new(RefCell::new(Vec::new()));
+            let expected_drops = Rc::new(RefCell::new(Vec::new()));
+            let mut actual = IndexedValues::new();
+            let mut expected = BTreeMap::new();
+            for index in 0..8_u32 {
+                actual.insert(index, (index.to_string(), DropPanic {
+                    index, panic_at, drops: Rc::clone(&actual_drops),
+                }));
+                expected.insert(index, (index.to_string(), DropPanic {
+                    index, panic_at, drops: Rc::clone(&expected_drops),
+                }));
+            }
+            let mut actual_visits = Vec::new();
+            let mut expected_visits = Vec::new();
+            assert!(catch_unwind(AssertUnwindSafe(|| {
+                actual.retain(|index, _| {
+                    actual_visits.push(*index);
+                    *index < panic_at
+                });
+            })).is_err());
+            assert!(catch_unwind(AssertUnwindSafe(|| {
+                expected.retain(|index, _| {
+                    expected_visits.push(*index);
+                    *index < panic_at
+                });
+            })).is_err());
+            assert_eq!(actual_visits, expected_visits);
+            assert_eq!(*actual_drops.borrow(), *expected_drops.borrow());
+            assert_eq!(actual.values().map(|(_, value)| value.index).collect::<Vec<_>>(),
+                expected.values().map(|(_, value)| value.index).collect::<Vec<_>>());
+            assert!(!actual.contains_key(&panic_at));
+            // The panicking value is already removed, so ordinary destruction
+            // of the survivors must neither re-panic nor double-drop it.
+            drop(actual);
+            drop(expected);
+            assert_eq!(*actual_drops.borrow(), *expected_drops.borrow());
+            assert_eq!(actual_drops.borrow().len(), 8);
+        }
+    }
+
+    #[test]
+    fn retained_parent_carrier_keeps_exact_order_wire_and_dense_moves() {
+        use super::super::{OrderedStringMap, canonical_array_index};
+        use crate::js_string::JsString;
+
+        let lone = JsString::from_code_units(&[0xD800]);
+        let mut map = OrderedStringMap::new();
+        map.insert("z".into(), 90_i64);
+        map.insert_exact(lone.clone(), 99);
+        map.insert("a".into(), 91);
+        for index in 0..32 {
+            map.insert(index.to_string(), i64::from(index));
+        }
+        let original_wire = serde_json::to_string(&map).unwrap();
+        map.retain(|_, _| true);
+        assert!(matches!(map.array_entries, IndexedValues::Packed(_)));
+        assert_eq!(serde_json::to_string(&map).unwrap(), original_wire);
+        map.retain(|key, _| canonical_array_index(key).is_none_or(|index| index < 8));
+        assert!(matches!(map.array_entries, IndexedValues::Packed(_)));
+        assert_eq!(map.exact_len(), 11);
+        assert_eq!(map.get_exact(&lone), Some(&99));
+        assert_eq!(map.shift_dense_index_values(8), Some(0));
+        map.unshift_dense_index_values(7, vec![40, 41]).unwrap();
+        assert_eq!(map.splice_dense_index_values(9, 2, 3, vec![50]), Ok(vec![1, 2, 3]));
+        assert!(matches!(map.array_entries, IndexedValues::Packed(_)));
+        assert_eq!(map.index_values().copied().collect::<Vec<_>>(), [40, 41, 50, 4, 5, 6, 7]);
+        let wire = serde_json::to_string(&map).unwrap();
+        let decoded: OrderedStringMap<i64> = serde_json::from_str(&wire).unwrap();
+        assert_eq!(decoded, map);
+        assert_eq!(serde_json::to_string(&decoded).unwrap(), wire);
+        let names: Vec<_> = map.exact_keys().into_iter()
+            .filter(|key| key.as_str().and_then(canonical_array_index).is_none()).collect();
+        assert_eq!(names, [JsString::from("z"), lone, JsString::from("a")]);
     }
 }

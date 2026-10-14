@@ -77,9 +77,11 @@ impl InterpreterCore {
         if !in_place {
             Self::generic_array_create_length(len)?;
         }
-        // generic_buffer preflights the allocation; now retain its actual
-        // capacity in the ledger while getters and comparators can reenter.
-        let mut items = self.generic_buffer(len)?;
+        // sort skips holes: logical length is not an allocation request.
+        // In particular, do not reject a huge sparse/proxy length before its
+        // first HasProperty/Get can throw. toSorted materializes every index
+        // and keeps its existing ArrayCreate/resource preflight.
+        let mut items = if in_place { Vec::new() } else { self.generic_buffer(len)? };
         let mut retained = buffer_bytes::<Value>(items.capacity());
         self.json_reserve_temporary(retained)?;
         let outcome = (|| {
@@ -100,6 +102,7 @@ impl InterpreterCore {
                     })?;
                     self.json_reserve_temporary(bytes)?;
                     retained = next;
+                    self.reserve_sort_slot(&mut items, &mut retained)?;
                     items.push(value);
                 }
             }
@@ -132,6 +135,45 @@ impl InterpreterCore {
         drop(items);
         self.json_release_temporary(retained);
         outcome
+    }
+
+    /// Grow a capture buffer from the values actually observed, never from a
+    /// guest-supplied logical length. Keep both capacity and payload charges
+    /// owned by the caller until its common cleanup, including failed growth.
+    fn reserve_sort_slot<T>(
+        &mut self,
+        buffer: &mut Vec<T>,
+        retained: &mut u64,
+    ) -> Result<(), InterpreterError> {
+        if buffer.len() < buffer.capacity() {
+            return Ok(());
+        }
+        let minimum = buffer.len().checked_add(1).ok_or_else(|| {
+            self.memory_budget_error(u64::MAX, self.heap_object_count_u32())
+        })?;
+        let capacity = buffer.capacity().checked_mul(2).unwrap_or(minimum).max(minimum).max(8);
+        let old_bytes = buffer_bytes::<T>(buffer.capacity());
+        let requested = buffer_bytes::<T>(capacity).saturating_sub(old_bytes);
+        let next = retained.checked_add(requested).ok_or_else(|| {
+            self.memory_budget_error(u64::MAX, self.heap_object_count_u32())
+        })?;
+        self.json_reserve_temporary(requested)?;
+        *retained = next;
+        buffer.try_reserve_exact(capacity - buffer.len()).map_err(|_| {
+            self.memory_budget_error(u64::MAX, self.heap_object_count_u32())
+        })?;
+        // The allocator may grant more capacity than requested. Admit that
+        // surplus before a later getter or comparator can reenter the engine.
+        let surplus = buffer_bytes::<T>(buffer.capacity())
+            .saturating_sub(old_bytes.saturating_add(requested));
+        if surplus != 0 {
+            let next = retained.checked_add(surplus).ok_or_else(|| {
+                self.memory_budget_error(u64::MAX, self.heap_object_count_u32())
+            })?;
+            self.json_reserve_temporary(surplus)?;
+            *retained = next;
+        }
+        Ok(())
     }
 
     fn sort_captured_values(

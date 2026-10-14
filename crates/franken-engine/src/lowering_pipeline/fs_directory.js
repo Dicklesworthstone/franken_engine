@@ -312,9 +312,11 @@
   function globSegment(value) {
     if (value === '**') return { globstar: true };
     const tokens = [];
+    let literal = true;
     for (let i = 0; i < value.length; i++) {
       const c = value[i];
       if (c === '*' || c === '?') {
+        literal = false;
         if (value[i + 1] === '(') throw globUnsupported();
         if (c !== '*' || tokens.length === 0 || tokens[tokens.length - 1].kind !== '*') {
           tokens[tokens.length] = { kind: c };
@@ -329,6 +331,7 @@
         if (value[end] === ']') end++;
         while (end < value.length && value[end] !== ']') end++;
         if (end === value.length) { tokens[tokens.length] = { kind: 'literal', value: c }; continue; }
+        literal = false;
         const ranges = [];
         for (let j = first; j < end; j++) {
           if (value[j] === '[' && (value[j + 1] === ':' || value[j + 1] === '.')) throw globUnsupported();
@@ -342,7 +345,10 @@
         i = end;
       } else tokens[tokens.length] = { kind: 'literal', value: c };
     }
-    return { globstar: false, tokens: tokens };
+    // Keep an own undefined slot on wildcard segments so guest prototype
+    // properties cannot turn a wildcard into a literal. Validate the entire
+    // segment above before specializing; unsupported extglobs still refuse.
+    return { globstar: false, tokens: tokens, literal: literal ? value : undefined };
   }
   function classMatches(token, c) {
     let found = false;
@@ -353,6 +359,13 @@
     return token.negate ? !found : found;
   }
   function segmentMatches(segment, name, budget) {
+    if (segment.literal !== undefined) {
+      // Workspace manifests and static directory prefixes need no DP rows.
+      // Equality preserves exact UTF-16 and dot-name semantics. Charge a
+      // conservative linear comparison bound without changing the work cap.
+      chargeGlob(budget, segment.literal.length + name.length + 1);
+      return segment.literal === name;
+    }
     const tokens = segment.tokens;
     const first = tokens[0];
     if (name[0] === '.' && !(first && ((first.kind === 'literal' && first.value === '.') ||

@@ -1,0 +1,159 @@
+[
+  {
+    "name": "aliases",
+    "source": "const units = text => Array.from(text, c => c.codePointAt(0));\nconst bytes = values => new Uint8Array(values);\nfor (const label of ['csshiftjis', 'ms932', 'ms_kanji', 'shift-jis', 'shift_jis', 'sjis', 'windows-31j', 'x-sjis', 'cseucpkdfmtjapanese', 'euc-jp', 'x-euc-jp']) {\n  console.log(new TextDecoder('\\t' + label.toUpperCase() + '\\r\\n').encoding);\n}\n",
+    "expected": [
+      "shift_jis",
+      "shift_jis",
+      "shift_jis",
+      "shift_jis",
+      "shift_jis",
+      "shift_jis",
+      "shift_jis",
+      "shift_jis",
+      "euc-jp",
+      "euc-jp",
+      "euc-jp"
+    ]
+  },
+  {
+    "name": "shift-jis-text-and-halfwidth",
+    "source": "const units = text => Array.from(text, c => c.codePointAt(0));\nconst bytes = values => new Uint8Array(values);\nconst d = new TextDecoder('shift_jis');\nfor (const input of [[0x93,0xfa,0x96,0x7b,0x8c,0xea], [0x82,0xa0,0x82,0xa2,0x82,0xa4], [0x5c,0x7e,0xa1,0xdf], [0xfa,0x40], [0xf0,0x40,0xf9,0xfc]])\n  console.log(JSON.stringify(units(d.decode(bytes(input)))));\n",
+    "expected": [
+      "[26085,26412,35486]",
+      "[12354,12356,12358]",
+      "[92,126,65377,65439]",
+      "[8560]",
+      "[57344,59223]"
+    ]
+  },
+  {
+    "name": "euc-jp-both-indexes-and-halfwidth",
+    "source": "const units = text => Array.from(text, c => c.codePointAt(0));\nconst bytes = values => new Uint8Array(values);\nconst d = new TextDecoder('euc-jp');\nfor (const input of [[0xc6,0xfc,0xcb,0xdc,0xb8,0xec], [0xa4,0xa2,0xa4,0xa4,0xa4,0xa6], [0x8e,0xa1,0x8e,0xdf], [0x8f,0xa2,0xaf,0x8f,0xa2,0xb7,0x8f,0xb0,0xa1], [0xa4,0xa2,0x8f,0xa2,0xaf,0xa4,0xa4]])\n  console.log(JSON.stringify(units(d.decode(bytes(input)))));\n",
+    "expected": [
+      "[26085,26412,35486]",
+      "[12354,12356,12358]",
+      "[65377,65439]",
+      "[728,65374,19970]",
+      "[12354,728,12356]"
+    ]
+  },
+  {
+    "name": "windows-jis-punctuation",
+    "source": "const units = text => Array.from(text, c => c.codePointAt(0));\nconst bytes = values => new Uint8Array(values);\nfor (const [encoding,input] of [\n  ['shift_jis',[0x81,0x5f,0x81,0x60,0x81,0x61,0x81,0x7c]],\n  ['euc-jp',[0xa1,0xc0,0xa1,0xc1,0xa1,0xc2,0xa1,0xdd]]\n]) console.log(JSON.stringify(units(new TextDecoder(encoding).decode(bytes(input)))));\n",
+    "expected": [
+      "[65340,65374,8741,65293]",
+      "[65340,65374,8741,65293]"
+    ]
+  },
+  {
+    "name": "byte-80-is-a-valid-shift-jis-scalar",
+    "source": "const units = text => Array.from(text, c => c.codePointAt(0));\nconst bytes = values => new Uint8Array(values);\nfor (const fatal of [false,true]) {\n  try { console.log(JSON.stringify(units(new TextDecoder('shift_jis',{fatal}).decode(bytes([0x80]))))); }\n  catch (error) { console.log(error.name); }\n}\n",
+    "expected": [
+      "[128]",
+      "[128]"
+    ]
+  },
+  {
+    "name": "ascii-delimiters-survive-malformed-pairs",
+    "source": "const units = text => Array.from(text, c => c.codePointAt(0));\nconst bytes = values => new Uint8Array(values);\nfor (const [encoding,input] of [\n  ['shift_jis',[0x81,0x22,0x41,0x82,0x7f,0x40]],\n  ['euc-jp',[0x8e,0x22,0x41,0x8f,0xa2,0x5c,0xa4,0x00]],\n  ['shift_jis',[0x81,0xff,0x82,0xa0]],\n  ['euc-jp',[0x8f,0x8f,0xa4,0xa2]]\n]) console.log(JSON.stringify(units(new TextDecoder(encoding).decode(bytes(input)))));\n",
+    "expected": [
+      "[65533,34,65,65533,127,64]",
+      "[65533,34,65,65533,92,65533,0]",
+      "[65533,12354]",
+      "[65533,12354]"
+    ]
+  },
+  {
+    "name": "empty-streaming-chunks-and-eof",
+    "source": "const units = text => Array.from(text, c => c.codePointAt(0));\nconst bytes = values => new Uint8Array(values);\nfor (const [encoding,prefix] of [['shift_jis',[0x82]],['euc-jp',[0x8e]],['euc-jp',[0x8f]],['euc-jp',[0x8f,0xa2]]]) {\n  const d = new TextDecoder(encoding);\n  const a = d.decode(bytes(prefix), {stream:true});\n  const b = d.decode(undefined, {stream:true});\n  const c = d.decode();\n  console.log(a.length, b.length, JSON.stringify(units(c)), d.decode().length);\n}\n",
+    "expected": [
+      "0 0 [65533] 0",
+      "0 0 [65533] 0",
+      "0 0 [65533] 0",
+      "0 0 [65533] 0"
+    ]
+  },
+  {
+    "name": "every-three-way-chunk-boundary",
+    "source": "const units = text => Array.from(text, c => c.codePointAt(0));\nconst bytes = values => new Uint8Array(values);\nlet count = 0;\nfor (const [encoding,input,expected] of [\n  ['shift_jis',[0x41,0x82,0xa0,0xa1,0x93,0xfa], [65,12354,65377,26085]],\n  ['euc-jp',[0x41,0xa4,0xa2,0x8f,0xa2,0xaf,0x8e,0xa1],[65,12354,728,65377]]\n]) {\n  for (let i=0; i<=input.length; i++) for(let j=i; j<=input.length; j++) {\n    const d = new TextDecoder(encoding);\n    let out = d.decode(bytes(input.slice(0,i)), {stream:true});\n    out += d.decode(bytes(input.slice(i,j)), {stream:true});\n    out += d.decode(bytes(input.slice(j)), {stream:true});\n    out += d.decode();\n    if (JSON.stringify(units(out)) !== JSON.stringify(expected)) throw Error('partition '+i+':'+j);\n    count++;\n  }\n}\nconsole.log(count);\n",
+    "expected": [
+      "73"
+    ]
+  },
+  {
+    "name": "fatal-reuse-after-bad-continuation-and-eof",
+    "source": "const units = text => Array.from(text, c => c.codePointAt(0));\nconst bytes = values => new Uint8Array(values);\nfor (const [encoding,prefix] of [['shift_jis',[0x82]],['euc-jp',[0x8e]],['euc-jp',[0x8f,0xa2]]]) {\n  for (const flush of [false,true]) {\n    const d = new TextDecoder(encoding, {fatal:true});\n    d.decode(bytes(prefix), {stream:true});\n    try { d.decode(bytes(flush ? [] : [0x22]), {stream:!flush}); console.log('unexpected-success'); }\n    catch(error) { console.log(error.name, d.decode(bytes([0x4f,0x4b]))); }\n  }\n}\n",
+    "expected": [
+      "TypeError OK",
+      "TypeError OK",
+      "TypeError OK",
+      "TypeError OK",
+      "TypeError OK",
+      "TypeError OK"
+    ],
+    "contract": "Existing engine reset-on-fatal policy, not WHATWG unconsumed-input-queue retention."
+  },
+  {
+    "name": "input-views-use-their-byte-window",
+    "source": "const units = text => Array.from(text, c => c.codePointAt(0));\nconst bytes = values => new Uint8Array(values);\nfor (const [encoding,input] of [['shift_jis',[0x93,0xfa,0x96,0x7b,0x8c,0xea]],['euc-jp',[0xc6,0xfc,0xcb,0xdc,0xb8,0xec]]]) {\n  const all = bytes([0xff,0xff,...input,0xff,0xff]);\n  const d = new TextDecoder(encoding);\n  console.log(JSON.stringify(units(d.decode(new DataView(all.buffer,2,6)))));\n  console.log(JSON.stringify(units(d.decode(new Uint16Array(all.buffer,2,3)))));\n}\n",
+    "expected": [
+      "[26085,26412,35486]",
+      "[26085,26412,35486]",
+      "[26085,26412,35486]",
+      "[26085,26412,35486]"
+    ]
+  },
+  {
+    "name": "carry-is-a-snapshot-not-an-input-reference",
+    "source": "const units = text => Array.from(text, c => c.codePointAt(0));\nconst bytes = values => new Uint8Array(values);\nfor (const [encoding,prefix,suffix] of [['shift_jis',[0x82],[0xa0]],['euc-jp',[0x8f,0xa2],[0xb7]]]) {\n  const d = new TextDecoder(encoding), buffer = bytes(prefix);\n  d.decode(buffer, {stream:true});\n  buffer.fill(0);\n  console.log(JSON.stringify(units(d.decode(bytes(suffix)))));\n}\n",
+    "expected": [
+      "[12354]",
+      "[65374]"
+    ]
+  },
+  {
+    "name": "reentrant-stream-options-see-current-decoder-state",
+    "source": "const units = text => Array.from(text, c => c.codePointAt(0));\nconst bytes = values => new Uint8Array(values);\nfor (const [encoding,prefix,suffix,outer] of [['shift_jis',[0x82],[0xa0],[0x82,0xa4]],['euc-jp',[0xa4],[0xa2],[0xa4,0xa6]]]) {\n  const d = new TextDecoder(encoding); let nested;\n  d.decode(bytes(prefix), {stream:true});\n  const result = d.decode(bytes(outer), {get stream() {\n    nested = d.decode(bytes(suffix), {stream:true}); return false;\n  }});\n  console.log(JSON.stringify(units(nested)), JSON.stringify(units(result)));\n}\n",
+    "expected": [
+      "[12354] [12358]",
+      "[12354] [12358]"
+    ]
+  },
+  {
+    "name": "option-getter-mutations-precede-native-input-borrow",
+    "source": "const units = text => Array.from(text, c => c.codePointAt(0));\nconst bytes = values => new Uint8Array(values);\nfor (const [encoding,input] of [['shift_jis',[0x82,0xa0]],['euc-jp',[0xa4,0xa2]]]) {\n  const d = new TextDecoder(encoding), b = bytes(input);\n  const result = d.decode(b, { get stream() { b[1] += 2; return false; }});\n  console.log(JSON.stringify(units(result)));\n}\n",
+    "expected": [
+      "[12356]",
+      "[12356]"
+    ]
+  },
+  {
+    "name": "non-ascii-label-whitespace-and-unrelated-encodings-reject",
+    "source": "const units = text => Array.from(text, c => c.codePointAt(0));\nconst bytes = values => new Uint8Array(values);\nfor(const label of ['\\u00a0shift_jis','euc-jp\\u00a0','shift_jisx','eucjp','utf-32']) {\n  try { new TextDecoder(label); console.log('unexpected-success'); }\n  catch(error) { console.log(error.name); }\n}\n",
+    "expected": [
+      "RangeError",
+      "RangeError",
+      "RangeError",
+      "RangeError",
+      "RangeError"
+    ]
+  },
+  {
+    "name": "invalid-high-bytes-are-not-python-cp932-private-characters",
+    "source": "const units = text => Array.from(text, c => c.codePointAt(0));\nconst bytes = values => new Uint8Array(values);\nconsole.log(JSON.stringify(units(new TextDecoder('shift_jis').decode(bytes([0xa0,0xfd,0xfe,0xff])))));\nconsole.log(JSON.stringify(units(new TextDecoder('euc-jp').decode(bytes([0x80,0x90,0xa0,0xff])))));\n",
+    "expected": [
+      "[65533,65533,65533,65533]",
+      "[65533,65533,65533,65533]"
+    ]
+  },
+  {
+    "name": "independent-decoders-and-unicode-codecs-do-not-share-carry",
+    "source": "const units = text => Array.from(text, c => c.codePointAt(0));\nconst bytes = values => new Uint8Array(values);\nconst s = new TextDecoder('shift_jis'), e = new TextDecoder('euc-jp'), u = new TextDecoder('utf-8');\ns.decode(bytes([0x82]), {stream:true});\ne.decode(bytes([0x8f,0xa2]), {stream:true});\nu.decode(bytes([0xe2,0x82]), {stream:true});\nconsole.log(JSON.stringify(units(e.decode(bytes([0xb7])))));\nconsole.log(JSON.stringify(units(u.decode(bytes([0xac])))));\nconsole.log(JSON.stringify(units(s.decode(bytes([0xa0])))));\n",
+    "expected": [
+      "[65374]",
+      "[8364]",
+      "[12354]"
+    ]
+  }
+]

@@ -4,7 +4,8 @@
 //! Uint8Array, allocated as `new Uint8Array(n)` is; lone surrogates encode as
 //! U+FFFD. The decoder supports utf-8 (with BOM handling and U+FFFD
 //! replacement of maximal ill-formed subparts, or a TypeError when `fatal`),
-//! utf-16le/be, and all WHATWG legacy single-byte encodings. `latin1`, `ascii`
+//! utf-16le/be, Shift_JIS, EUC-JP, and all WHATWG legacy single-byte encodings.
+//! `latin1`, `ascii`
 //! and `iso-8859-1` still name windows-1252, not an identity mapping.
 //! Unsupported labels are a RangeError. Streaming decode retains
 //! at most three copied bytes and one BOM decision per decoder. An ordinary
@@ -14,6 +15,7 @@ use super::*;
 
 mod decoder;
 mod encoder;
+mod japanese;
 mod single_byte;
 
 #[cfg(test)]
@@ -46,7 +48,8 @@ fn canonical_decoder_encoding(label: &str) -> Option<&'static str> {
         | "iso_8859-1:1987" | "l1" | "latin1" | "us-ascii" | "windows-1252" | "x-cp1252" => {
             Some("windows-1252")
         }
-        _ => single_byte::canonical_encoding(&label),
+        _ => single_byte::canonical_encoding(&label)
+            .or_else(|| japanese::canonical_encoding(&label)),
     }
 }
 
@@ -582,7 +585,8 @@ mod tests {
         assert_eq!(canonical_decoder_encoding(" UTF8 "), Some("utf-8"));
         assert_eq!(canonical_decoder_encoding("latin1"), Some("windows-1252"));
         assert_eq!(canonical_decoder_encoding("utf-16"), Some("utf-16le"));
-        assert_eq!(canonical_decoder_encoding("shift_jis"), None);
+        assert_eq!(canonical_decoder_encoding("shift_jis"), Some("shift_jis"));
+        assert_eq!(canonical_decoder_encoding("utf-32"), None);
     }
 
     #[test]

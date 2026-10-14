@@ -20,6 +20,9 @@ impl DecodeState {
         if !self.streaming {
             *self = Self::default();
         }
+        if let Some(codec) = super::japanese::Encoding::from_name(encoding) {
+            return super::japanese::decode(self, codec, bytes, fatal, stream);
+        }
         let decoded = (|| {
             if self.pending_len == 0 {
                 return self.decode_part(encoding, bytes, fatal, ignore_bom, stream);
@@ -115,6 +118,9 @@ pub(super) fn decode_string(
     fatal: bool,
     ignore_bom: bool,
 ) -> Option<JsString> {
+    if let Some(codec) = super::japanese::Encoding::from_name(encoding) {
+        return super::japanese::decode(&mut DecodeState::default(), codec, bytes, fatal, false);
+    }
     if let Some(index) = super::single_byte::index(encoding) {
         return super::single_byte::decode(bytes, index, fatal);
     }

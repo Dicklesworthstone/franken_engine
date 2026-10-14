@@ -34,11 +34,14 @@ pub(super) struct Run<'a> {
     registers: Vec<usize>,
     steps_left: u64,
     stack: Vec<Frame>,
+    // Allocated once, and only if an assertion actually writes captures.
+    // A compaction touches and clears only the slots present in its suffix.
+    capture_seen: Vec<bool>,
 }
 
 impl Run<'_> {
     /// Draw `cost` extra steps for an instruction whose work grows with the
-    /// pattern or the input (a look-around saving every slot, a clear over a
+    /// pattern or the input (a look-around's capture allowance, a clear over a
     /// slot range, a backreference comparing its capture), so one step stays
     /// bounded work (franken_engine#2 follow-up).
     fn charge(&mut self, cost: usize) -> Result<(), BacktrackError> {
@@ -220,24 +223,23 @@ impl Run<'_> {
                     body,
                     next,
                 } => {
-                    // Saving and diffing every slot costs the slot count.
+                    // Preserve the original capture allowance and exact
+                    // refusal boundary, even though no full snapshot is made.
                     self.charge(self.slots.len())?;
-                    let before = self.slots.clone();
-                    let matched = self.execute(*body, position, stack)?.is_some();
+                    let assertion_floor = stack.len();
+                    let matched = self
+                        .execute_inner(*body, position, stack, assertion_floor)?
+                        .is_some();
+                    if matched {
+                        if *negated {
+                            self.discard_assertion_captures(stack, assertion_floor);
+                        } else {
+                            self.commit_assertion_captures(stack, assertion_floor);
+                        }
+                    }
                     if matched == *negated {
-                        // Failed: a failed sub-run has undone its changes;
-                        // a matching negative one has not.
-                        self.slots.copy_from_slice(&before);
                         None
                     } else {
-                        if !negated {
-                            // Keep the captures, undoably.
-                            for (slot, old) in before.into_iter().enumerate() {
-                                if self.slots[slot] != old {
-                                    stack.push(Frame::Slot { slot, old });
-                                }
-                            }
-                        }
                         pc = *next;
                         continue;
                     }
@@ -273,12 +275,64 @@ impl Run<'_> {
         }
     }
 
+    /// Commit a positive assertion atomically: no internal choice or register
+    /// undo may survive, only the pre-assertion value of each changed capture.
+    /// Repeated writes retain the FIRST old value in the surviving history.
+    /// Internal frames were already charged by their instructions; compacted
+    /// capture frames propagated through an enclosing assertion are bounded
+    /// by the unchanged per-slot allowance charged at each Look instruction.
+    fn commit_assertion_captures(&mut self, stack: &mut Vec<Frame>, floor: usize) {
+        let mut write = floor;
+        for read in floor..stack.len() {
+            let (slot, old) = match &stack[read] {
+                Frame::Slot { slot, old } => (*slot, *old),
+                _ => continue,
+            };
+            if self.capture_seen.is_empty() {
+                self.capture_seen.resize(self.slots.len(), false);
+            }
+            if !self.capture_seen[slot] {
+                self.capture_seen[slot] = true;
+                stack[write] = Frame::Slot { slot, old };
+                write += 1;
+            }
+        }
+        // Reset only touched bits, not the full capture array. Remove writes
+        // whose final value equals their initial value, as the snapshot did.
+        let mut retained = floor;
+        for read in floor..write {
+            let (slot, old) = match &stack[read] {
+                Frame::Slot { slot, old } => (*slot, *old),
+                _ => unreachable!("only capture slots survive assertion compaction"),
+            };
+            self.capture_seen[slot] = false;
+            if self.slots[slot] != old {
+                stack[retained] = Frame::Slot { slot, old };
+                retained += 1;
+            }
+        }
+        stack.truncate(retained);
+    }
+
+    /// A matching negative assertion fails without exporting its captures.
+    /// Undo its slot history in reverse, never taking an internal alternative.
+    /// Its successful sub-run's private repetition registers remain scratch,
+    /// just as in the snapshot executor (which restored only capture slots).
+    fn discard_assertion_captures(&mut self, stack: &mut Vec<Frame>, floor: usize) {
+        while stack.len() > floor {
+            if let Some(Frame::Slot { slot, old }) = stack.pop() {
+                self.slots[slot] = old;
+            }
+        }
+    }
+
     /// Consume one character in the given direction if it satisfies `test`.
     fn step(&self, position: usize, backward: bool, test: impl Fn(char) -> bool) -> Option<usize> {
         if backward {
             (position > 0 && test(self.input.chars[position - 1])).then(|| position - 1)
         } else {
-            (position < self.input.chars.len() && test(self.input.chars[position])).then(|| position + 1)
+            (position < self.input.chars.len() && test(self.input.chars[position]))
+                .then(|| position + 1)
         }
     }
 
@@ -322,6 +376,7 @@ impl<'a> Run<'a> {
             registers: vec![0; regexp.registers],
             steps_left,
             stack: Vec::new(),
+            capture_seen: Vec::new(),
         }
     }
 

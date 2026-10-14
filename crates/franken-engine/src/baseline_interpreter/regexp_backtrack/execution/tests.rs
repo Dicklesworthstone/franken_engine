@@ -1,8 +1,8 @@
 //! Differential checks against the pre-workspace executor. The reference
 //! owns a separate stack per invocation and is never compiled in production.
 
-use super::*;
 use super::super::{CaptureRetention, CompiledRegExp, RetentionBudget};
+use super::*;
 
 impl Run<'_> {
     fn execute_reference(
@@ -418,4 +418,112 @@ fn global_retention_modes_keep_exact_spans_and_charges() {
                 .is_err()
         );
     }
+}
+
+fn first_assertion_body(regexp: &BacktrackRegExp) -> usize {
+    regexp
+        .program
+        .iter()
+        .find_map(|instruction| match instruction {
+            Inst::Look { body, .. } => Some(*body),
+            _ => None,
+        })
+        .expect("fixture contains an assertion")
+}
+
+#[test]
+fn assertion_journal_keeps_first_old_values_and_discards_internal_choices() {
+    let regexp = BacktrackRegExp::new(r"(?=((a)|(b))+)", "").unwrap();
+    let text = "ab".repeat(512);
+    let input = PreparedInput::new(&text);
+    let mut run = Run::new(&regexp, &input, 1_000_000);
+    run.slots[0] = Some(17);
+    let before = run.slots.clone();
+    let mut stack = vec![Frame::Alternative { pc: 7, position: 11 }];
+    assert_eq!(
+        run.execute_inner(first_assertion_body(&regexp), 0, &mut stack, 1),
+        Ok(Some(text.len()))
+    );
+    assert!(stack.len() > MAX_RETAINED_FRAMES);
+    let after = run.slots.clone();
+    let changed = before.iter().zip(&after).filter(|(a, b)| a != b).count();
+    run.commit_assertion_captures(&mut stack, 1);
+    assert_eq!(run.slots, after);
+    assert_eq!(stack.len(), changed + 1);
+    assert!(
+        stack[1..]
+            .iter()
+            .all(|frame| matches!(frame, Frame::Slot { .. }))
+    );
+    assert!(run.capture_seen.iter().all(|seen| !seen));
+    // Reversing the compacted history must recover the earliest old value,
+    // not the value before the final write of a repeated capture.
+    run.discard_assertion_captures(&mut stack, 1);
+    assert_eq!(run.slots, before);
+    assert_eq!(stack.len(), 1);
+    assert!(matches!(
+        stack[0],
+        Frame::Alternative { pc: 7, position: 11 }
+    ));
+}
+
+#[test]
+fn negative_assertion_rolls_back_repeated_and_nested_capture_writes() {
+    let regexp = BacktrackRegExp::new(r"(?=((a(?=(b)))|b)+)", "").unwrap();
+    let input = PreparedInput::new("abab");
+    let mut run = Run::new(&regexp, &input, 100_000);
+    let before = run.slots.clone();
+    let mut stack = vec![Frame::Alternative { pc: 3, position: 7 }];
+    assert_eq!(
+        run.execute_inner(first_assertion_body(&regexp), 0, &mut stack, 1),
+        Ok(Some(input.char_len()))
+    );
+    assert_ne!(run.slots, before);
+    run.discard_assertion_captures(&mut stack, 1);
+    assert_eq!(run.slots, before);
+    assert!(run.capture_seen.iter().all(|seen| !seen));
+    assert_eq!(stack.len(), 1);
+    assert!(matches!(stack[0], Frame::Alternative { pc: 3, position: 7 }));
+}
+
+#[test]
+fn capture_free_assertions_need_no_capture_scratch_even_with_many_outer_groups() {
+    let pattern = format!("{}(?=a)(?!(?:b|c))a", "()".repeat(10_000));
+    let regexp = BacktrackRegExp::new(&pattern, "").unwrap();
+    let input = PreparedInput::new("a");
+    let expected = reference_search(&regexp, &input, 0, true, 100_000);
+    let mut run = Run::new(&regexp, &input, 100_000);
+    assert_eq!((run.search(0, true), run.steps_remaining()), expected);
+    assert!(run.capture_seen.is_empty());
+    assert_eq!(run.capture_seen.capacity(), 0);
+}
+
+#[test]
+fn assertion_scratch_is_reused_and_clean_after_nested_searches_and_exhaustion() {
+    let regexp = BacktrackRegExp::new(r"(?=(a(?=(b))))ab|(?!(c))a|b", "").unwrap();
+    let input = PreparedInput::new("abcab");
+    let mut run = Run::new(&regexp, &input, 1_000_000);
+    assert!(run.search(0, true).unwrap().is_some());
+    assert_eq!(run.capture_seen.len(), run.slots.len());
+    let scratch = run.capture_seen.as_ptr();
+    let capacity = run.capture_seen.capacity();
+    for _ in 0..64 {
+        for at in 0..=input.char_len() {
+            let expected = reference_search(&regexp, &input, at, true, run.steps_remaining());
+            assert_eq!(run.search(at, true), expected.0);
+            assert_eq!(run.steps_remaining(), expected.1);
+            assert_eq!(run.capture_seen.as_ptr(), scratch);
+            assert_eq!(run.capture_seen.capacity(), capacity);
+            assert!(run.capture_seen.iter().all(|seen| !seen));
+            assert!(run.stack.is_empty());
+        }
+    }
+    // Enter an assertion, but exhaust before its nested assertion completes.
+    run.steps_left = 2 + run.slots.len() as u64 + 2;
+    let expected = reference_search(&regexp, &input, 0, true, run.steps_remaining());
+    assert_eq!(run.search(0, true), expected.0);
+    assert_eq!(run.steps_remaining(), expected.1);
+    assert_eq!(run.steps_remaining(), 0);
+    assert!(run.capture_seen.iter().all(|seen| !seen));
+    assert!(run.stack.is_empty());
 }

@@ -69,6 +69,7 @@ use crate::lowering_pipeline::{
     AmbientAuthorityGrant, Ir2FlowProofArtifact, LoweringContext, LoweringEvent,
     LoweringPipelineError, LoweringPipelineOutput, PassWitness, lower_ir0_to_ir3,
 };
+use crate::module_resolver::{ModuleSyntax, ResolutionOutcome};
 use crate::optimal_stopping::{
     EscalationPolicy, Observation as StoppingObservation, OptimalStoppingCertificate,
     STOPPING_SCHEMA_VERSION, StoppingDecision,
@@ -1650,6 +1651,12 @@ pub enum OrchestratorError {
     },
     EmptySource,
     EmptyExtensionId,
+    /// A pre-resolved entry cannot safely enter the single-module execution
+    /// path. Dependency-bearing graphs must use the runtime resolver handoff
+    /// once the interpreter source-loader seam is installed.
+    ResolvedEntryRejected {
+        detail: String,
+    },
     /// The post-execution IR4 witness failed linkage verification against the
     /// executed IR3 (bd-drb55). Fail-closed: a run whose witness cannot be
     /// verified is not published as a success.
@@ -1714,6 +1721,9 @@ impl fmt::Display for OrchestratorError {
             ),
             Self::EmptySource => f.write_str("extension source is empty"),
             Self::EmptyExtensionId => f.write_str("extension_id is empty"),
+            Self::ResolvedEntryRejected { detail } => {
+                write!(f, "resolved entry rejected: {detail}")
+            }
             Self::WitnessSealing { detail } => {
                 write!(f, "ir4 witness sealing failed: {detail}")
             }
@@ -2517,6 +2527,87 @@ impl ExecutionOrchestrator {
             source_ingestion: prepared.source_ingestion,
             ir2_flow_proof_artifact: prepared.lowering_output.ir2_flow_proof_artifact,
         })
+    }
+
+    /// Execute a resolver-authorized, source-delivered entry through the
+    /// ordinary native orchestration pipeline.
+    ///
+    /// This is the closed-world single-module bridge used by product adapters
+    /// that already implement `ModuleResolver`: the caller supplies a
+    /// successful `ResolutionOutcome`, and the engine consumes its exact
+    /// source and stable record id instead of reopening a path. Runtime
+    /// parsing, lowering, execution, IFC, evidence and containment remain
+    /// unchanged. Dependency-bearing records fail closed here rather than
+    /// silently falling back to ambient filesystem/package resolution.
+    pub fn execute_resolved_entry(
+        &mut self,
+        package: &ExtensionPackage,
+        resolved: &ResolutionOutcome,
+    ) -> Result<OrchestratorResult, OrchestratorError> {
+        let record = &resolved.module.record;
+        if !record.dependencies.is_empty() {
+            return Err(OrchestratorError::ResolvedEntryRejected {
+                detail: format!(
+                    "module '{}' declares {} dependency edge(s); runtime resolver injection is required for graph execution",
+                    record.id,
+                    record.dependencies.len()
+                ),
+            });
+        }
+
+        match record.syntax {
+            ModuleSyntax::EsModule if self.config.parse_goal != ParseGoal::Module => {
+                return Err(OrchestratorError::ResolvedEntryRejected {
+                    detail: format!(
+                        "ES module '{}' requires OrchestratorConfig.parse_goal = Module",
+                        record.id
+                    ),
+                });
+            }
+            ModuleSyntax::CommonJs
+                if self.config.parse_goal != ParseGoal::Script || !self.config.commonjs_entry =>
+            {
+                return Err(OrchestratorError::ResolvedEntryRejected {
+                    detail: format!(
+                        "CommonJS module '{}' requires Script goal with commonjs_entry = true",
+                        record.id
+                    ),
+                });
+            }
+            ModuleSyntax::Wasm => {
+                return Err(OrchestratorError::ResolvedEntryRejected {
+                    detail: format!(
+                        "Wasm module '{}' must use the native Wasm runtime lane",
+                        record.id
+                    ),
+                });
+            }
+            _ => {}
+        }
+
+        let granted = Self::execution_capabilities(package);
+        let missing = record
+            .required_capabilities
+            .difference(&granted)
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        if !missing.is_empty() {
+            return Err(OrchestratorError::ResolvedEntryRejected {
+                detail: format!(
+                    "module '{}' requires capabilities not granted by the execution package: {}",
+                    record.id,
+                    missing.join(",")
+                ),
+            });
+        }
+
+        let mut delivered = package.clone();
+        delivered.source = record.source.clone();
+        delivered.source_file = Some(record.id.clone());
+        // Source delivery is already closed-world. Do not reinterpret the
+        // opaque resolver id as a filesystem containment root.
+        delivered.module_root = None;
+        self.execute(&delivered)
     }
 
     /// Execute an extension package through the full pipeline.

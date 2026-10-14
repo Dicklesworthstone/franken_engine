@@ -113,3 +113,81 @@ fn directory_iteration_never_infers_read_authority_from_write_permission() {
         assert!(error.to_ascii_lowercase().contains("capabil"), "{error}");
     }
 }
+
+#[test]
+fn glob_discovery_prunes_unreachable_and_excluded_trees_on_both_lanes() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let root = tempfile::tempdir().unwrap();
+        fixture(root.path());
+        std::fs::create_dir_all(root.path().join("unrelated/private")).unwrap();
+        std::fs::write(root.path().join("unrelated/private/file.txt"), b"not read").unwrap();
+        let (lines, effects) = run(
+            "const fs=require('node:fs');const String='guest';const Object='guest';\
+             console.log(fs.globSync(['tree/**/*.txt','tree/a.txt'],\
+             {exclude:['tree/sub/deep/**']}).sort().join(','));",
+            root.path(), &["fs_read"], lane,
+        ).expect("glob uses the real protected filesystem factory");
+        assert_eq!(lines, ["tree/a.txt,tree/sub/b.txt"]);
+        let directories: Vec<_> = effects.iter().filter_map(|(request, _)| {
+            match request {
+                HostIoRequest::FsMeta { operation: FsOperation::ReadDir, path, .. } => Some(path),
+                _ => None,
+            }
+        }).collect();
+        assert_eq!(directories.len(), 3, "root, tree, and tree/sub only");
+        assert!(directories.iter().all(|path| !path.contains("unrelated") && !path.ends_with("/deep")));
+        assert!(effects.iter().all(|(request, _)| request.required_capability() == HostIoCapability::FsRead));
+    }
+}
+
+#[test]
+fn glob_async_iterator_returns_without_acquiring_unrequested_descendants() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let root = tempfile::tempdir().unwrap();
+        fixture(root.path());
+        let (lines, effects) = run(
+            "const {glob}=require('fs/promises');(async function(){\
+             const unopened=glob('tree/**');await unopened.return();\
+             const scan=glob('tree/**',{withFileTypes:true});\
+             const first=await scan.next();console.log(first.value.name,first.value.isDirectory());\
+             await scan.return();console.log((await scan.next()).done);})();",
+            root.path(), &["fs_read"], lane,
+        ).expect("native async iterator cleanup and completion");
+        assert_eq!(lines, ["tree true", "true"]);
+        assert_eq!(effects.iter().filter(|(request, _)| matches!(request,
+            HostIoRequest::FsMeta { operation: FsOperation::ReadDir, .. })).count(), 1);
+    }
+}
+
+#[test]
+fn glob_braces_ranges_and_async_iteration_produce_exact_completion_output() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let root = tempfile::tempdir().unwrap();
+        fixture(root.path());
+        let (lines, _) = run(
+            "const fs=require('fs');(async function(){const files=[];\
+             for await(const entry of fs.promises.glob('tree/{a,sub/[b-c]}.txt'))files.push(entry);\
+             console.log('GLOB_COMPLETE',files.sort().join(','));})();",
+            root.path(), &["fs_read"], lane,
+        ).expect("native generator drains all matching paths");
+        assert_eq!(lines, ["GLOB_COMPLETE tree/a.txt,tree/sub/b.txt"]);
+    }
+}
+
+#[test]
+fn glob_invalid_queries_fail_before_io_and_no_match_does_not_grant_authority() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let root = tempfile::tempdir().unwrap();
+        fixture(root.path());
+        let (lines, effects) = run(
+            "const fs=require('fs');try{fs.globSync('../*');}catch(e){console.log(e.code);}\
+             try{fs.globSync(new Array(129).fill('*'));}catch(e){console.log(e.code);}",
+            root.path(), &[], lane,
+        ).expect("query validation requires no filesystem authority");
+        assert_eq!(lines, ["ERR_FS_GLOB_UNSUPPORTED", "ERR_FS_GLOB_LIMIT"]);
+        assert!(effects.is_empty());
+        let refused = run("require('fs').globSync('missing/**/*.txt');", root.path(), &["fs_write"], lane)
+            .expect_err("even no-match discovery requires explicit read authority");
+        assert!(refused.to_ascii_lowercase().contains("capabil"), "{refused}");
+    }
+}

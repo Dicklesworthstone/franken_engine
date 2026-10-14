@@ -13,6 +13,9 @@ use super::*;
 
 mod encoder;
 
+#[cfg(test)]
+mod prefix_tests;
+
 /// The internal-slot tags of encoder and decoder instances.
 pub(super) const TEXT_ENCODER_TYPE: &str = "TextEncoder";
 pub(super) const TEXT_DECODER_TYPE: &str = "TextDecoder";
@@ -464,13 +467,21 @@ fn complete_prefix(encoding: &str, bytes: &[u8]) -> usize {
         }
         "windows-1252" => bytes.len(),
         _ => {
-            let mut offset = 0;
-            while let Err(error) = std::str::from_utf8(&bytes[offset..]) {
-                offset += error.valid_up_to();
-                match error.error_len() {
-                    Some(length) => offset += length,
-                    None => return offset,
+            // Only a valid but incomplete final scalar can be retained. It
+            // occupies at most three bytes, so locate its lead from the end
+            // rather than validating the whole input a second time. Full
+            // validation (and any fatal error) still belongs to decode_bytes.
+            for start in (bytes.len().saturating_sub(3)..bytes.len()).rev() {
+                if bytes[start] & 0xC0 == 0x80 {
+                    continue;
                 }
+                // Checking the small suffix also rejects overlong starts,
+                // surrogate encodings and scalars above U+10FFFF. Merely
+                // counting continuation bytes would incorrectly buffer them.
+                return match std::str::from_utf8(&bytes[start..]) {
+                    Err(error) if error.error_len().is_none() => start + error.valid_up_to(),
+                    _ => bytes.len(),
+                };
             }
             bytes.len()
         }

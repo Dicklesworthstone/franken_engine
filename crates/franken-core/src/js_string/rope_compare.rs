@@ -41,28 +41,7 @@ impl Text {
         }
         let mut left = ByteCursor::new(self);
         let mut right = ByteCursor::new(other);
-        loop {
-            match (left.fill(), right.fill()) {
-                (false, false) => return Ordering::Equal,
-                (false, true) => return Ordering::Less,
-                (true, false) => return Ordering::Greater,
-                (true, true) => {}
-            }
-            let left_leaf = left.leaf.as_ref().expect("fill supplied a leaf");
-            let right_leaf = right.leaf.as_ref().expect("fill supplied a leaf");
-            let count = (left_leaf.len() - left.offset).min(right_leaf.len() - right.offset);
-            // Shared leaves at the same offset need no byte scan, even
-            // when the enclosing concatenation nodes are different.
-            if left.offset != right.offset || !Arc::ptr_eq(left_leaf, right_leaf) {
-                let order = left_leaf.as_bytes()[left.offset..left.offset + count]
-                    .cmp(&right_leaf.as_bytes()[right.offset..right.offset + count]);
-                if order != Ordering::Equal {
-                    return order;
-                }
-            }
-            left.offset += count;
-            right.offset += count;
-        }
+        left.cmp_remaining(&mut right)
     }
 
     pub(super) fn eq_str_streaming(&self, other: &str) -> bool {
@@ -78,65 +57,148 @@ impl Text {
         let mut cursor = ByteCursor::new(self);
         let mut compared = 0;
         while cursor.fill() {
-            let leaf = cursor.leaf.as_ref().expect("fill supplied a leaf");
-            let bytes = &leaf.as_bytes()[cursor.offset..];
-            if bytes != &other.as_bytes()[compared..compared + bytes.len()] {
+            let bytes = cursor.flat_suffix();
+            let count = bytes.len();
+            if bytes != &other.as_bytes()[compared..compared + count] {
                 return false;
             }
-            compared += bytes.len();
-            cursor.offset = leaf.len();
+            compared += count;
+            cursor.offset += count;
         }
         compared == other.len()
     }
 }
 
-/// Each frame owns a shared immutable subtree. The explicit stack handles
-/// skewed ropes without recursive traversal and releases locks before reads.
+/// Keep whole subtrees at the frontier until comparison needs their contents.
+/// Eagerly filling two leaf cursors loses the chance to skip a shared DAG:
+/// a few shared nodes can represent billions of identical bytes.
+///
+/// `offset` applies only to the last entry, and can be nonzero only when that
+/// entry has a published flat buffer. Byte comparisons may split a scalar;
+/// offsets index byte slices, never `str` slices. No lock survives expansion.
 struct ByteCursor {
     pending: Vec<Text>,
-    leaf: Option<Arc<str>>,
     offset: usize,
+    #[cfg(test)]
+    expanded_nodes: usize,
+    #[cfg(test)]
+    compared_bytes: usize,
 }
 
 impl ByteCursor {
     fn new(text: &Text) -> Self {
         Self {
             pending: vec![text.clone()],
-            leaf: None,
             offset: 0,
+            #[cfg(test)]
+            expanded_nodes: 0,
+            #[cfg(test)]
+            compared_bytes: 0,
+        }
+    }
+
+    fn discard_consumed(&mut self) -> bool {
+        while let Some(text) = self.pending.last() {
+            debug_assert!(self.offset <= text.len());
+            if self.offset != text.len() {
+                return true;
+            }
+            self.pending.pop();
+            self.offset = 0;
+        }
+        false
+    }
+
+    fn expand_front(&mut self) {
+        debug_assert_eq!(self.offset, 0);
+        let Some(Text::Concat(node)) = self.pending.pop() else {
+            unreachable!("only an unmaterialized concatenation needs expansion");
+        };
+        #[cfg(test)]
+        {
+            self.expanded_nodes += 1;
+        }
+        if let Some(joined) = node.joined.get() {
+            self.pending.push(Text::Flat(Arc::clone(joined)));
+        } else if let Some([left, right]) = node.parts() {
+            self.pending.push(right.utf8);
+            self.pending.push(left.utf8);
+        } else {
+            // Publication can win after the cache check but before parts().
+            self.pending.push(Text::Flat(Arc::clone(node.joined.get().expect(
+                "concatenation parts are released only after publication",
+            ))));
         }
     }
 
     fn fill(&mut self) -> bool {
-        if self.leaf.as_ref().is_some_and(|leaf| self.offset < leaf.len()) {
-            return true;
-        }
-        self.leaf = None;
-        self.offset = 0;
-        while let Some(text) = self.pending.pop() {
-            let leaf = match text {
-                Text::Flat(flat) => flat,
-                Text::Concat(node) => {
-                    if let Some(joined) = node.joined.get() {
-                        Arc::clone(joined)
-                    } else if let Some([left, right]) = node.parts() {
-                        self.pending.push(right.utf8);
-                        self.pending.push(left.utf8);
-                        continue;
-                    } else {
-                        // Publication wins a race with our first cache read.
-                        Arc::clone(node.joined.get().expect(
-                            "concatenation parts are released only after publication",
-                        ))
-                    }
-                }
-            };
-            if !leaf.is_empty() {
-                self.leaf = Some(leaf);
+        while self.discard_consumed() {
+            if self.pending.last().and_then(Text::available_flat).is_some() {
                 return true;
             }
+            self.expand_front();
         }
         false
+    }
+
+    fn flat_suffix(&self) -> &[u8] {
+        let text = self
+            .pending
+            .last()
+            .and_then(Text::available_flat)
+            .expect("fill supplied a flat buffer");
+        &text.as_bytes()[self.offset..]
+    }
+
+    fn cmp_remaining(&mut self, other: &mut Self) -> Ordering {
+        loop {
+            match (self.discard_consumed(), other.discard_consumed()) {
+                (false, false) => return Ordering::Equal,
+                (false, true) => return Ordering::Less,
+                (true, false) => return Ordering::Greater,
+                (true, true) => {}
+            }
+            let left = self.pending.last().expect("nonempty frontier");
+            let right = other.pending.last().expect("nonempty frontier");
+            if self.offset == other.offset && left.shares_storage(right) {
+                // Equality of immutable backing proves the whole remaining
+                // subtree, not just its first leaf. Do not lock its children.
+                self.pending.pop();
+                other.pending.pop();
+                self.offset = 0;
+                other.offset = 0;
+                continue;
+            }
+            match (left.available_flat(), right.available_flat()) {
+                (Some(left), Some(right)) => {
+                    let count = (left.len() - self.offset).min(right.len() - other.offset);
+                    if self.offset != other.offset || !Arc::ptr_eq(left, right) {
+                        #[cfg(test)]
+                        {
+                            self.compared_bytes += count;
+                        }
+                        let order = left.as_bytes()[self.offset..self.offset + count]
+                            .cmp(&right.as_bytes()[other.offset..other.offset + count]);
+                        if order != Ordering::Equal {
+                            return order;
+                        }
+                    }
+                    self.offset += count;
+                    other.offset += count;
+                }
+                (None, None) => {
+                    // Expand the larger frontier first, allowing a child to
+                    // align with a shared subtree at the other frontier.
+                    if left.len() >= right.len() {
+                        self.expand_front();
+                    } else {
+                        other.expand_front();
+                    }
+                }
+                (None, Some(_)) => self.expand_front(),
+                (Some(_), None) => other.expand_front(),
+            }
+        }
     }
 }
 
@@ -174,7 +236,10 @@ mod tests {
                         assert_eq!(a == b, left == right);
                         assert_eq!(a == right, left == right);
                         assert_eq!(a.eq(right), left == right);
-                        assert_eq!(a.utf16_cmp(&b), left.encode_utf16().cmp(right.encode_utf16()));
+                        assert_eq!(
+                            a.utf16_cmp(&b),
+                            left.encode_utf16().cmp(right.encode_utf16())
+                        );
                         assert_unjoined(&a);
                         assert_unjoined(&b);
                     }
@@ -261,5 +326,165 @@ mod tests {
         assert_ne!(a, "");
         assert_unjoined(&a);
         assert_unjoined(&b);
+    }
+
+    fn join(left: JsString, right: JsString) -> JsString {
+        let shape = left.joined_shape(&right);
+        JsString::joined(left, right, shape)
+    }
+
+    fn shared_gigabyte() -> JsString {
+        // Thirty nodes, not a gigabyte allocation. Comparisons must skip
+        // this identical subtree without walking its billion leaf uses.
+        let mut prefix = JsString::from("x");
+        for _ in 0..30 {
+            prefix = join(prefix.clone(), prefix);
+        }
+        prefix
+    }
+
+    fn measured_order(left: &JsString, right: &JsString) -> (Ordering, usize, usize) {
+        let mut left = ByteCursor::new(&left.utf8);
+        let mut right = ByteCursor::new(&right.utf8);
+        let order = left.cmp_remaining(&mut right);
+        (
+            order,
+            left.expanded_nodes + right.expanded_nodes,
+            left.compared_bytes + right.compared_bytes,
+        )
+    }
+
+    #[test]
+    fn shared_gigabyte_prefix_needs_only_two_expansions_and_one_byte() {
+        let prefix = shared_gigabyte();
+        assert_eq!(prefix.len(), 1 << 30);
+        let left = join(prefix.clone(), JsString::from("a"));
+        let right = join(prefix.clone(), JsString::from("b"));
+        // Counter assertions bound the production path's actual node
+        // expansions and bytes submitted to slice comparison, not timing.
+        assert_eq!(measured_order(&left, &right), (Ordering::Less, 2, 1));
+        assert_eq!(left.cmp(&right), Ordering::Less);
+        assert_eq!(left.utf16_cmp(&right), Ordering::Less);
+        assert_unjoined(&prefix);
+        assert_unjoined(&left);
+        assert_unjoined(&right);
+    }
+
+    #[test]
+    fn shared_frontiers_align_across_different_ancestor_grouping() {
+        let prefix = shared_gigabyte();
+        let left = join(
+            join(JsString::from("ab"), prefix.clone()),
+            JsString::from("a"),
+        );
+        let right = join(
+            JsString::from("ab"),
+            join(prefix.clone(), JsString::from("b")),
+        );
+        let (order, expanded, bytes) = measured_order(&left, &right);
+        assert_eq!(order, Ordering::Less);
+        assert!(expanded <= 6, "expanded {expanded} nodes");
+        assert_eq!(bytes, 3);
+        assert_unjoined(&prefix);
+        assert_unjoined(&left);
+        assert_unjoined(&right);
+    }
+
+    #[test]
+    fn shared_suffix_is_skipped_after_differently_partitioned_unicode_prefixes() {
+        let suffix = shared_gigabyte();
+        let left = join(rope("ab", "\u{e9}"), suffix.clone());
+        let right = join(rope("a", "b\u{e9}"), suffix.clone());
+        let (order, expanded, bytes) = measured_order(&left, &right);
+        assert_eq!(order, Ordering::Equal);
+        assert!(expanded <= 6, "expanded {expanded} nodes");
+        assert_eq!(bytes, 4);
+        assert_eq!(left.cmp(&right), Ordering::Equal);
+        assert_unjoined(&suffix);
+        assert_unjoined(&left);
+        assert_unjoined(&right);
+    }
+
+    #[test]
+    fn shared_backing_at_different_offsets_is_not_an_equal_frontier() {
+        let backing = JsString::from("ababa");
+        let mut left = ByteCursor::new(&backing.utf8);
+        let mut right = ByteCursor::new(&backing.utf8);
+        left.offset = 1;
+        right.offset = 2;
+        assert_eq!(left.cmp_remaining(&mut right), Ordering::Greater);
+        assert_eq!(left.compared_bytes, 3);
+
+        // A byte frontier need not be at a UTF-8 scalar boundary. Compare
+        // byte slices, never index a str with one of these offsets.
+        let unicode = JsString::from("\u{e9}\u{1f600}");
+        for a in 0..=unicode.len() {
+            for b in 0..=unicode.len() {
+                let mut left = ByteCursor::new(&unicode.utf8);
+                let mut right = ByteCursor::new(&unicode.utf8);
+                left.offset = a;
+                right.offset = b;
+                assert_eq!(
+                    left.cmp_remaining(&mut right),
+                    unicode.as_bytes()[a..].cmp(&unicode.as_bytes()[b..])
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_shared_node_published_before_comparison_still_skips_by_identity() {
+        let shared = rope("\u{e9}", "\u{1f600}");
+        let left = join(shared.clone(), JsString::from("a"));
+        let right = join(shared.clone(), JsString::from("b"));
+        assert!(shared.as_str().is_some());
+        assert_eq!(measured_order(&left, &right), (Ordering::Less, 2, 1));
+        assert_unjoined(&left);
+        assert_unjoined(&right);
+    }
+
+    #[test]
+    fn deterministic_shared_dags_match_flat_bytes_and_exact_units() {
+        fn next(state: &mut u64) -> usize {
+            *state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            (*state >> 32) as usize
+        }
+
+        for seed in 0..16_u64 {
+            let mut state = seed + 1;
+            let mut values: Vec<(JsString, String)> =
+                ["", "a", "b", "\0", "\u{e9}", "\u{65e5}", "\u{1f600}", "\u{ffff}"]
+                    .into_iter()
+                    .map(|text| (JsString::from(text), text.to_owned()))
+                    .collect();
+            for _ in 0..96 {
+                let a = next(&mut state) % values.len();
+                let b = next(&mut state) % values.len();
+                if values[a].1.len() + values[b].1.len() > 4096 {
+                    continue;
+                }
+                let text = format!("{}{}", values[a].1, values[b].1);
+                let value = join(values[a].0.clone(), values[b].0.clone());
+                values.push((value, text));
+            }
+            for _ in 0..512 {
+                let a = next(&mut state) % values.len();
+                let b = next(&mut state) % values.len();
+                let (left, left_text) = &values[a];
+                let (right, right_text) = &values[b];
+                assert_eq!(left.cmp(right), left_text.cmp(right_text));
+                assert_eq!(left == right, left_text == right_text);
+                assert_eq!(left.eq(right_text.as_str()), left_text == right_text);
+                assert_eq!(
+                    left.utf16_cmp(right),
+                    left_text.encode_utf16().cmp(right_text.encode_utf16())
+                );
+            }
+            for (value, _) in &values {
+                if matches!(&value.utf8, Text::Concat(_)) {
+                    assert_unjoined(value);
+                }
+            }
+        }
     }
 }

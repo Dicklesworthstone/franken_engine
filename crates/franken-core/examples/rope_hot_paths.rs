@@ -21,11 +21,15 @@ fn measure(
     expected: u64,
     operation: impl Fn(&JsString, &JsString) -> u64,
 ) {
-    // Every pair was built before the clock starts. Each rope is visited
-    // once, so a previous iteration cannot hide its first-read join cost.
+    // All inputs are built before the clock starts. Most cases use fresh
+    // roots; repeated_equal_unshared deliberately reuses them to expose
+    // warm repeated-comparison costs alongside first-read costs.
     let start = Instant::now();
     for (left, right) in &inputs {
-        assert_eq!(black_box(operation(black_box(left), black_box(right))), expected);
+        assert_eq!(
+            black_box(operation(black_box(left), black_box(right))),
+            expected
+        );
     }
     let elapsed = start.elapsed().as_nanos();
     println!(
@@ -83,5 +87,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     measure("flat_order_control", flat_pairs, 0, |left, right| {
         order_code(left.cmp(right))
     });
+    // A compact shared DAG represents 1 MiB. The two roots differ only
+    // after it: identity should skip the entire shared prefix, not expand
+    // all its logical leaf uses. Appending these suffixes cannot coalesce
+    // with the final 1 KiB leaf. Keep size bounded for the old flattening path.
+    let mut prefix = JsString::from("x".repeat(1024));
+    for _ in 0..10 {
+        prefix = prefix.concat(&prefix);
+    }
+    let shared_pairs = (0..rounds)
+        .map(|_| (prefix.concat(&a), prefix.concat(&b)))
+        .collect();
+    measure("byte_order_shared_dag_prefix", shared_pairs, 0, |left, right| {
+        order_code(left.cmp(right))
+    });
+
+    // Countermetric: equal but independently allocated ropes, repeatedly
+    // compared. A flatten-once implementation can amortize its copy here;
+    // streaming must pay for every traversal. Do not replace these inputs
+    // with shared leaves or fresh roots, which would hide this tradeoff.
+    let mut repeated_left = JsString::empty();
+    let mut repeated_right = JsString::empty();
+    for index in 0..128 {
+        let piece = format!("{index:04}:{}", "x".repeat(2048));
+        repeated_left = repeated_left.concat(&JsString::from(piece.as_str()));
+        repeated_right = repeated_right.concat(&JsString::from(piece));
+    }
+    let repeated_pairs = (0..rounds)
+        .map(|_| (repeated_left.clone(), repeated_right.clone()))
+        .collect();
+    measure(
+        "byte_order_repeated_equal_unshared",
+        repeated_pairs,
+        1,
+        |left, right| order_code(left.cmp(right)),
+    );
     Ok(())
 }

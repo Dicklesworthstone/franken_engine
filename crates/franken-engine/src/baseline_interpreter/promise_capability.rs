@@ -351,14 +351,41 @@ impl InterpreterCore {
         capability: &PromiseCapabilityRecord,
         error: InterpreterError,
     ) -> Result<Value, InterpreterError> {
+        let completion = self.promise_rejection_completion(error)?;
+        self.reject_capability_with_completion(module, capability, completion)
+    }
+
+    /// Capture the thrown value AND the observation context before any other
+    /// guest call can replace the pending exception/result-label slots. Fatal
+    /// runtime errors are not JavaScript completions and leave those slots alone.
+    fn promise_rejection_completion(
+        &mut self,
+        error: InterpreterError,
+    ) -> Result<(Value, Label), InterpreterError> {
         let (thrown, label) = self.catchable_thrown_value(error)?;
-        let label = label
+        let label = self.promise_rejection_context(label)?;
+        Ok((thrown, label))
+    }
+
+    fn promise_rejection_context(&mut self, label: Label) -> Result<Label, InterpreterError> {
+        Ok(label
             .join(&self.clone_active_execution_context_label()?)
             .join(
                 self.pending_hostcall_result_label
                     .as_ref()
                     .unwrap_or(&Label::Public),
-            );
+            ))
+    }
+
+    fn reject_capability_with_completion(
+        &mut self,
+        module: &Ir3Module,
+        capability: &PromiseCapabilityRecord,
+        (thrown, label): (Value, Label),
+    ) -> Result<Value, InterpreterError> {
+        // Retain the captured failure's floor and any additional observations
+        // made during cleanup. Public cleanup must not declassify the failure.
+        let label = self.promise_rejection_context(label)?;
         self.invoke_inline_method_call_with_argument_label(
             Some(module),
             capability.reject.clone(),
@@ -367,6 +394,47 @@ impl InterpreterCore {
             Some(label),
         )?;
         Ok(capability.promise.clone())
+    }
+
+    fn reject_combinator_step(
+        &mut self,
+        module: &Ir3Module,
+        capability: &PromiseCapabilityRecord,
+        iterator: Value,
+        error: InterpreterError,
+    ) -> Result<Value, InterpreterError> {
+        // UncaughtException carries a description, not the thrown Value.
+        // Capture the real completion before IteratorClose can overwrite it.
+        // This also refuses cancellation, budget exhaustion and host faults
+        // BEFORE invoking a guest return getter, return method or reject hook.
+        let completion = self.promise_rejection_completion(error)?;
+        self.with_event_job_gc_request(
+            vec![
+                completion.0.clone(),
+                iterator.clone(),
+                capability.promise.clone(),
+                capability.resolve.clone(),
+                capability.reject.clone(),
+            ],
+            |this| {
+                if let Err(close_error) =
+                    this.close_iterator(module, iterator, IteratorCloseReason::Throw)
+                {
+                    // A guest cleanup error loses to the original throw. A
+                    // fatal cleanup failure still stops native execution.
+                    if !matches!(close_error, InterpreterError::UncaughtException { .. })
+                        && Self::js_catchable_error_name(&close_error).is_none()
+                    {
+                        return Err(close_error);
+                    }
+                }
+                // A close implementation may restore its saved exception slot.
+                // This path owns its original completion separately; no cleanup
+                // exception may leak into the capability's reject invocation.
+                let _ = this.take_pending_exception_slot();
+                this.reject_capability_with_completion(module, capability, completion)
+            },
+        )
     }
 
     /// Whether %Promise.prototype%.then is still the intrinsic one (an
@@ -717,14 +785,7 @@ impl InterpreterCore {
                 }
             };
             if let Err(error) = self.promise_combinator_step(module, kind, &run, index, value) {
-                // IteratorClose with a throw completion: the original error
-                // wins over one from `return`.
-                if let Err(close_error) =
-                    self.close_iterator(module, iterator.clone(), IteratorCloseReason::Throw)
-                {
-                    self.catchable_thrown_value(close_error)?;
-                }
-                return self.reject_capability_with_error(module, &run.capability, error);
+                return self.reject_combinator_step(module, &run.capability, iterator, error);
             }
             index += 1;
         }
@@ -958,3 +1019,6 @@ impl InterpreterCore {
         Ok(Value::Undefined)
     }
 }
+
+#[cfg(test)]
+mod tests;

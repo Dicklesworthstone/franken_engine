@@ -1,0 +1,262 @@
+//! Combinator failure ownership at the real parser/interpreter boundary.
+//! Embedded JavaScript also supplies an independently executable Node oracle.
+use super::*;
+use crate::promise_model::PromiseState;
+
+fn module(source: &str) -> Ir3Module {
+    let tree = crate::parser_api_stability::parse_script(source).expect("source parses");
+    lower_ir0_to_ir3(
+        &Ir0Module::from_syntax_tree(tree, "promise-combinator-completions.js"),
+        &LoweringContext::new("combinator", "completion-ownership", "builtin-only"),
+    )
+    .expect("source lowers")
+    .ir3
+}
+
+fn config(throughput: bool) -> InterpreterConfig {
+    let mut config = if throughput {
+        InterpreterConfig::v8_defaults()
+    } else {
+        InterpreterConfig::quickjs_defaults()
+    };
+    config.instruction_budget = 100_000_000;
+    config.granted_capabilities = [
+        RuntimeCapability::VmDispatch,
+        RuntimeCapability::HeapAllocate,
+        RuntimeCapability::Builtin,
+        RuntimeCapability::Console,
+    ]
+    .into_iter()
+    .collect();
+    config
+}
+
+fn assert_fixture(source: &str, expected: &str) {
+    let module = module(source);
+    for throughput in [false, true] {
+        for stress in [None, Some(7)] {
+            let mut core = InterpreterCore::new(config(throughput), "combinator-completions");
+            core.set_gc_stress_interval(stress);
+            let result = core.execute(&module).expect("native execution");
+            let actual = result.console_output.iter().map(|entry| entry.message.as_str())
+                .collect::<Vec<_>>().join("\n");
+            assert_eq!(actual, expected, "throughput={throughput}, stress={stress:?}");
+            assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        }
+    }
+}
+
+const CLOSE_IDENTITY_SOURCE: &str = r#"
+(async () => {
+  const reasons = [undefined, null, false, -0, Symbol('reason'), 17n, '\ud800', function reason() {}, {}];
+  const modes = ['missing', 'null', 'noncallable', 'normal', 'primitive', 'getThrow', 'callThrow', 'handled'];
+  let checked = 0;
+  for (const method of ['all', 'allSettled', 'any', 'race']) {
+    for (const site of ['resolve', 'thenGet', 'thenCall']) {
+      for (const mode of modes) {
+        for (const reason of reasons) {
+          const events = []; const cleanup = {};
+          class C extends Promise {}
+          C.resolve = function () {
+            events.push('resolve');
+            if (site === 'resolve') throw reason;
+            return { get then() {
+              events.push('thenGet');
+              if (site === 'thenGet') throw reason;
+              return function () { events.push('thenCall'); throw reason; };
+            } };
+          };
+          const iterator = { next() { events.push('next'); return {value: 1, done: false}; } };
+          if (mode !== 'missing') Object.defineProperty(iterator, 'return', { get() {
+            events.push('returnGet');
+            if (mode === 'getThrow') throw cleanup;
+            if (mode === 'null') return null;
+            if (mode === 'noncallable') return 1;
+            return function () {
+              if (this !== iterator) throw Error('close receiver');
+              events.push('returnCall');
+              if (mode === 'callThrow') throw cleanup;
+              if (mode === 'handled') { try { throw cleanup; } catch (caught) {} }
+              return mode === 'primitive' ? 0 : {};
+            };
+          } });
+          const iterable = { [Symbol.iterator]() { events.push('iterator'); return iterator; } };
+          let rejected = false;
+          try { await Promise[method].call(C, iterable); }
+          catch (caught) { rejected = true; if (!Object.is(caught, reason)) throw Error('lost original'); }
+          if (!rejected) throw Error('not rejected');
+          let expected = 'iterator:next:resolve';
+          if (site !== 'resolve') expected += ':thenGet';
+          if (site === 'thenCall') expected += ':thenCall';
+          if (mode !== 'missing') expected += ':returnGet';
+          if (['normal', 'primitive', 'callThrow', 'handled'].includes(mode)) expected += ':returnCall';
+          if (events.join(':') !== expected) throw Error('close order ' + events.join(':'));
+          checked++;
+        }
+      }
+    }
+  }
+  console.log('identity', checked);
+})().catch(error => console.log('FAIL', error.message));
+"#;
+const CLOSE_IDENTITY_EXPECTED: &str = "identity 864";
+
+#[test]
+fn original_completions_survive_every_observable_iterator_close_failure() {
+    assert_fixture(CLOSE_IDENTITY_SOURCE, CLOSE_IDENTITY_EXPECTED);
+}
+
+const ITERATOR_FAILURE_SOURCE: &str = r#"
+(async () => {
+  let checked = 0;
+  for (const method of ['all', 'allSettled', 'any', 'race']) {
+    for (const site of ['next', 'done', 'value']) {
+      const reason = {}; let closes = 0, resolves = 0;
+      class C extends Promise {}
+      C.resolve = value => { resolves++; return Promise.resolve(value); };
+      const iterator = {
+        next() {
+          if (site === 'next') throw reason;
+          return { get done() { if (site === 'done') throw reason; return false; },
+            get value() { throw reason; } };
+        },
+        get return() { closes++; throw Error('must not close a failed iterator step'); }
+      };
+      let rejected = false;
+      try { await Promise[method].call(C, { [Symbol.iterator]() { return iterator; } }); }
+      catch (caught) { rejected = caught === reason; }
+      if (!rejected || closes !== 0 || resolves !== 0) throw Error('iterator failure boundary');
+      checked++;
+    }
+  }
+  console.log('iterator', checked);
+})().catch(error => console.log('FAIL', error.message));
+"#;
+const ITERATOR_FAILURE_EXPECTED: &str = "iterator 12";
+
+#[test]
+fn iterator_step_failures_do_not_invoke_return_or_constructor_resolve() {
+    assert_fixture(ITERATOR_FAILURE_SOURCE, ITERATOR_FAILURE_EXPECTED);
+}
+
+const CUSTOM_REJECT_SOURCE: &str = r#"
+let checked = 0;
+for (const method of ['all', 'allSettled', 'any', 'race']) {
+  for (const rejectThrows of [false, true]) {
+    const original = {}, closeFailure = {}, rejectFailure = {}, product = {};
+    const events = [];
+    function C(executor) {
+      executor(function () { throw Error('unexpected fulfillment'); }, function (reason) {
+        'use strict';
+        if (this !== undefined || reason !== original) throw Error('reject argument/receiver');
+        events.push('reject');
+        if (rejectThrows) throw rejectFailure;
+      });
+      return product;
+    }
+    C.resolve = function () { events.push('resolve'); throw original; };
+    const iterable = { [Symbol.iterator]() { return {
+      next() { return {value: 1, done: false}; },
+      return() { events.push('return'); throw closeFailure; }
+    }; } };
+    let escaped = false;
+    try {
+      if (Promise[method].call(C, iterable) !== product) throw Error('capability identity');
+    } catch (error) {
+      if (!rejectThrows || error !== rejectFailure) throw error;
+      escaped = true;
+    }
+    if (escaped !== rejectThrows || events.join(':') !== 'resolve:return:reject')
+      throw Error('custom reject completion');
+    checked++;
+  }
+}
+console.log('custom', checked);
+"#;
+const CUSTOM_REJECT_EXPECTED: &str = "custom 8";
+
+#[test]
+fn arbitrary_capabilities_observe_the_original_reason_and_their_own_reject_failure() {
+    assert_fixture(CUSTOM_REJECT_SOURCE, CUSTOM_REJECT_EXPECTED);
+}
+
+fn failure_core(close_body: &str) -> (InterpreterCore, Ir3Module, Value, ObjectId, PromiseCapabilityRecord) {
+    let source = format!(
+        "const state = {{marker: 9182, closes: 0}}; \
+         const iterable = {{[Symbol.iterator]() {{return {{ \
+           next() {{return {{value: 1, done: false}};}}, \
+           get return() {{state.closes++; {close_body}}} \
+         }};}}}}; \
+         const holder = {{marker: 9183, state, iterable}};"
+    );
+    let module = module(&source);
+    let mut core = InterpreterCore::new(config(false), "combinator-failure-injection");
+    core.execute(&module).expect("setup executes");
+    let holder = core.heap.iter().find(|entry| entry.properties.get("marker") == Some(&Value::Int(9183)))
+        .expect("holder");
+    let iterable = holder.properties.get("iterable").unwrap().clone();
+    let Value::Object(state) = holder.properties.get("state").unwrap().clone() else { panic!("state"); };
+    let iterator = core.init_for_of_iterator(Some(&module), iterable).expect("native iterator");
+    let promise = core.create_promise().unwrap();
+    let capability = PromiseCapabilityRecord {
+        promise: Value::Promise(promise.0),
+        resolve: core.make_promise_capability(BuiltinFunctionKind::PromiseResolve, promise),
+        reject: core.make_promise_capability(BuiltinFunctionKind::PromiseReject, promise),
+    };
+    (core, module, iterator, state, capability)
+}
+
+#[test]
+fn fatal_step_errors_skip_guest_cleanup_and_rejection_even_at_the_memory_ceiling() {
+    // Inject the actual interpreter error variants at the post-step seam; this
+    // is a native state-transition test, not a simulated cancellation token.
+    for error in [
+        InterpreterError::Cancelled,
+        InterpreterError::BudgetExhausted { executed: 3, budget: 2 },
+        InterpreterError::MemoryBudgetExceeded {
+            requested_bytes: 2, max_bytes: 1,
+            requested_heap_objects: 0, max_heap_objects: 1,
+        },
+        InterpreterError::CapabilityDenied { capability: "fs:write".into() },
+        InterpreterError::InternalError { details: "host failed".into() },
+    ] {
+        let (mut core, module, iterator, state, capability) = failure_core("throw 'cleanup must not run';");
+        core.replace_pending_abrupt_slots(Some((Value::Int(9), Label::Secret)), None).unwrap();
+        let expected = format!("{error:?}");
+        let heap_len = core.heap.len();
+        let promises = core.promise_store.len();
+        core.config.max_total_memory_bytes = core.estimated_memory_bytes();
+        let actual = core.reject_combinator_step(&module, &capability, iterator, error).unwrap_err();
+        assert_eq!(format!("{actual:?}"), expected);
+        assert_eq!(core.heap[state.0 as usize].properties.get("closes"), Some(&Value::Int(0)));
+        let promise = InterpreterCore::capability_native_promise(&capability).unwrap();
+        assert_eq!(core.promise_store.get(promise).unwrap().state, PromiseState::Pending);
+        assert_eq!(core.heap.len(), heap_len);
+        assert_eq!(core.promise_store.len(), promises);
+        assert_eq!(core.take_pending_exception_slot(), Some((Value::Int(9), Label::Secret)));
+        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+    }
+}
+
+#[test]
+fn cleanup_cannot_replace_the_thrown_value_or_erase_its_observation_label() {
+    for thrown_label in [Label::Public, Label::Secret] {
+        let (mut core, module, iterator, state, capability) = failure_core("throw {replacement: true};");
+        let reason = Value::Object(state);
+        core.replace_pending_abrupt_slots(Some((reason.clone(), thrown_label)), None).unwrap();
+        core.replace_pending_hostcall_result_label(Some(Label::Secret)).unwrap();
+        let result = core.reject_combinator_step(
+            &module, &capability, iterator,
+            InterpreterError::UncaughtException { value: "description is not identity".into() },
+        ).expect("reject original completion");
+        assert_eq!(result, capability.promise);
+        let promise = InterpreterCore::capability_native_promise(&capability).unwrap();
+        let record = core.promise_store.get(promise).unwrap();
+        let PromiseState::Rejected(value) = &record.state else { panic!("must reject"); };
+        assert_eq!(core.js_value_to_value(value), reason);
+        assert_eq!(record.label, Label::Secret);
+        assert_eq!(core.heap[state.0 as usize].properties.get("closes"), Some(&Value::Int(1)));
+        assert!(core.take_pending_exception_slot().is_none());
+        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+    }
+}

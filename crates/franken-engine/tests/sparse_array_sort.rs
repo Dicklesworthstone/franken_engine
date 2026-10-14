@@ -65,3 +65,22 @@ fn to_sorted_cannot_hide_materialized_holes_from_the_memory_budget() {
         assert!(error.to_ascii_lowercase().contains("budget"), "{error}");
     }
 }
+
+#[test]
+fn maximum_logical_length_needs_work_only_for_present_properties() {
+    // Exact outputs follow sort's skip-holes and ascending-delete steps. This
+    // maximum-length case is native-only: Node 22's empty-array scan exceeded
+    // the reference timeout. The shared oracle uses the same shapes at 2^17.
+    let source = r#"
+const a = []; a.length = 4294967295;
+console.log(a.sort((x, y) => x - y) === a, a.length, Object.keys(a).length);
+a[7] = 3; a[50000] = 2; a[4294967294] = 1;
+a.sort((x, y) => x - y);
+console.log(a[0], a[1], a[2], a.length, 7 in a, 50000 in a, 4294967294 in a);
+"#;
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        assert_eq!(run(source, lane).expect("bounded sparse work"), [
+            "true 4294967295 0", "1 2 3 4294967295 false false false",
+        ]);
+    }
+}

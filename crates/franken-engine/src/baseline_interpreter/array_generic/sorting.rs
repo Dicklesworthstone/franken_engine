@@ -7,6 +7,8 @@
 
 use super::*;
 
+mod sparse;
+
 impl InterpreterCore {
     /// Sort keys are JavaScript strings, not their lossy UTF-8 display. Keep
     /// lone surrogates and reuse the canonical rope-aware UTF-16 comparator.
@@ -85,7 +87,14 @@ impl InterpreterCore {
         let mut retained = buffer_bytes::<Value>(items.capacity());
         self.json_reserve_temporary(retained)?;
         let outcome = (|| {
-            for index in 0..len {
+            let indices = if in_place {
+                self.sparse_sort_indices(object, 0, len, true, &mut retained)?
+            } else {
+                None
+            };
+            let reads = indices.as_ref().map_or(len, |indices| indices.len() as u64);
+            for step in 0..reads {
+                let index = indices.as_ref().map_or(step, |indices| u64::from(indices[step as usize]));
                 self.charge_native_hole_read()?;
                 let key = Self::generic_index_key(index);
                 let present = !in_place || self.generic_has(m, object, &key)?;
@@ -106,6 +115,12 @@ impl InterpreterCore {
                     items.push(value);
                 }
             }
+            if let Some(indices) = indices {
+                let bytes = buffer_bytes::<u32>(indices.capacity());
+                drop(indices);
+                self.json_release_temporary(bytes);
+                retained -= bytes;
+            }
             self.sort_captured_values(m, &mut items, &comparator)?;
             if in_place {
                 for (index, value) in items.iter().enumerate() {
@@ -117,7 +132,13 @@ impl InterpreterCore {
                         core.generic_set(m, object, &key, value.clone())
                     })?;
                 }
-                for index in items.len() as u64..len {
+                // A comparator or prefix setter may have added tail properties.
+                // Enumerate AFTER every write, never from the capture snapshot.
+                let from = items.len() as u64;
+                let indices = self.sparse_sort_indices(object, from, len, false, &mut retained)?;
+                let deletes = indices.as_ref().map_or(len.saturating_sub(from), |indices| indices.len() as u64);
+                for step in 0..deletes {
+                    let index = indices.as_ref().map_or(from + step, |indices| u64::from(indices[step as usize]));
                     self.charge_native_hole_read()?;
                     self.reflect_admit_mutation_label(object)?;
                     self.generic_delete(m, object, &Self::generic_index_key(index))?;

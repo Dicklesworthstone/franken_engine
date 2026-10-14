@@ -89,9 +89,14 @@ fn splice_species_and_sort_comparators_cannot_stale_the_property_write_path() {
 
 #[test]
 fn sparse_splice_copy_delete_and_sort_scans_keep_default_resource_limits() {
-    // A custom result avoids reserving a dense removed-items array. Scanning
-    // its absent source indices must still consume the instruction budget.
-    for operation in ["a.splice(0, 4294967294)", "a.sort((x, y) => x - y)"] {
+    // A custom result avoids reserving a dense removed-items array. Splice
+    // still scans its absent source indices. Sort can now skip proven ordinary
+    // holes, so use a Proxy whose has trap makes EVERY hole observable. Keep
+    // the exact budget and uncatchable-refusal assertions, not a timing limit.
+    for operation in [
+        "a.splice(0, 4294967294)",
+        "Array.prototype.sort.call(new Proxy(a, {has() {return false;}}), (x, y) => x - y)",
+    ] {
         let source = format!(
             "const a = []; a.length = 4294967294; \
              a.constructor = {{[Symbol.species]: function() {{return {{}};}}}}; \

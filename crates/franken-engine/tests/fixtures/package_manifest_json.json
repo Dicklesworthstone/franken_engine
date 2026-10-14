@@ -1,0 +1,86 @@
+[
+  {
+    "id": "duplicate_node",
+    "manifest": "{\"name\":\"pkg\",\"exports\":{\"node\":\"./first.cjs\",\"node\":\"./last.cjs\"}}",
+    "specifier": "pkg",
+    "require": "last.cjs",
+    "import": "last.cjs"
+  },
+  {
+    "id": "duplicate_preserves_position",
+    "manifest": "{\"name\":\"pkg\",\"exports\":{\"default\":\"./first.cjs\",\"node\":\"./first.cjs\",\"default\":\"./last.cjs\"}}",
+    "specifier": "pkg",
+    "require": "last.cjs",
+    "import": "last.cjs"
+  },
+  {
+    "id": "duplicate_escaped_condition",
+    "manifest": "{\"name\":\"pkg\",\"exports\":{\"node\":\"./first.cjs\",\"n\\u006fde\":\"./last.cjs\"}}",
+    "specifier": "pkg",
+    "require": "last.cjs",
+    "import": "last.cjs"
+  },
+  {
+    "id": "duplicate_nested_conditions",
+    "manifest": "{\"name\":\"pkg\",\"exports\":{\"node\":{\"require\":\"./first.cjs\",\"import\":\"./import.cjs\",\"require\":\"./last.cjs\"}}}",
+    "specifier": "pkg",
+    "require": "last.cjs",
+    "import": "import.cjs"
+  },
+  {
+    "id": "duplicate_exact_export",
+    "manifest": "{\"name\":\"pkg\",\"exports\":{\"./x\":\"./first.cjs\",\"./x\":\"./last.cjs\"}}",
+    "specifier": "pkg/x",
+    "require": "last.cjs",
+    "import": "last.cjs"
+  },
+  {
+    "id": "duplicate_pattern_export",
+    "manifest": "{\"name\":\"pkg\",\"exports\":{\"./*\":\"./first.cjs\",\"./*\":\"./*.cjs\"}}",
+    "specifier": "pkg/last",
+    "require": "last.cjs",
+    "import": "last.cjs"
+  },
+  {
+    "id": "duplicate_import",
+    "manifest": "{\"name\":\"pkg\",\"imports\":{\"#x\":\"./first.cjs\",\"#x\":\"./last.cjs\"}}",
+    "specifier": "#x",
+    "require": "last.cjs",
+    "import": "last.cjs"
+  },
+  {
+    "id": "duplicate_import_pattern",
+    "manifest": "{\"name\":\"pkg\",\"imports\":{\"#x/*\":\"./first.cjs\",\"#x/*\":\"./*.cjs\"}}",
+    "specifier": "#x/last",
+    "require": "last.cjs",
+    "import": "last.cjs"
+  },
+  {
+    "id": "bom",
+    "manifest": "\ufeff{\"name\":\"pkg\",\"exports\":\"./last.cjs\"}",
+    "specifier": "pkg",
+    "require": "last.cjs",
+    "import": "last.cjs"
+  },
+  {
+    "id": "bom_and_duplicate",
+    "manifest": "\ufeff{\"name\":\"pkg\",\"exports\":{\"default\":\"./first.cjs\",\"node\":\"./first.cjs\",\"default\":\"./last.cjs\"}}",
+    "specifier": "pkg",
+    "require": "last.cjs",
+    "import": "last.cjs"
+  },
+  {
+    "id": "unknown_metadata",
+    "manifest": "{\"name\":\"pkg\",\"description\":{},\"description\":[null,1,{},[]],\"__proto__\":{\"exports\":\"./first.cjs\"},\"exports\":\"./last.cjs\"}",
+    "specifier": "pkg",
+    "require": "last.cjs",
+    "import": "last.cjs"
+  },
+  {
+    "id": "plain_condition_order",
+    "manifest": "{\"name\":\"pkg\",\"exports\":{\"require\":\"./require.cjs\",\"import\":\"./import.cjs\",\"default\":\"./first.cjs\"}}",
+    "specifier": "pkg",
+    "require": "require.cjs",
+    "import": "import.cjs"
+  }
+]

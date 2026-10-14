@@ -155,9 +155,19 @@ impl<'de> Deserialize<'de> for PackageExports {
                 self,
                 mut map: A,
             ) -> Result<Self::Value, A::Error> {
-                let mut entries = Vec::new();
-                while let Some(entry) = map.next_entry()? {
-                    entries.push(entry);
+                let mut entries: Vec<(String, PackageExports)> = Vec::new();
+                let mut positions = BTreeMap::<String, usize>::new();
+                while let Some((key, value)) = map.next_entry::<String, PackageExports>()? {
+                    // JSON.parse replaces duplicate properties without moving
+                    // their original insertion position. Keeping both entries
+                    // selected the FIRST value, while sorting keys or moving a
+                    // replacement to the end changes conditional precedence.
+                    if let Some(&position) = positions.get(&key) {
+                        entries[position].1 = value;
+                    } else {
+                        positions.insert(key.clone(), entries.len());
+                        entries.push((key, value));
+                    }
                 }
                 Ok(PackageExports::Map(entries))
             }
@@ -223,7 +233,11 @@ fn read_package_manifest_file(path: &Path) -> Result<PackageManifest, String> {
             path.display()
         ));
     }
-    serde_json::from_slice(&bytes).map_err(|error| format!("invalid {}: {error}", path.display()))
+    // Node accepts one UTF-8 BOM at the start of package.json. Charge it to
+    // the existing byte limit before stripping it; do not trim malformed JSON
+    // or accept a second/interior BOM as whitespace.
+    let json = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes);
+    serde_json::from_slice(json).map_err(|error| format!("invalid {}: {error}", path.display()))
 }
 
 /// Split a bare specifier into its package name (`name` or `@scope/name`)
@@ -1195,6 +1209,89 @@ mod tests {
 
     fn exports(json: &str) -> PackageExports {
         serde_json::from_str(json).expect("exports JSON")
+    }
+
+    #[test]
+    fn manifest_json_fixtures_select_the_node_reference_files() {
+        #[derive(Deserialize)]
+        struct Case {
+            id: String,
+            manifest: String,
+            specifier: String,
+            require: String,
+            import: String,
+        }
+        let cases: Vec<Case> = serde_json::from_str(include_str!(
+            "../../tests/fixtures/package_manifest_json.json"
+        ))
+        .expect("shared Node reference fixtures");
+        assert_eq!(cases.len(), 12);
+        for case in cases {
+            let root = tempfile::tempdir().expect("module root");
+            let directory = root.path().join("node_modules/pkg");
+            write_package_fixture(root.path(), "node_modules/pkg/package.json", &case.manifest);
+            for name in ["first.cjs", "last.cjs", "require.cjs", "import.cjs", "index.js"] {
+                write_package_fixture(&directory, name, "module.exports = 1;");
+            }
+            let mut core = package_test_core(root.path());
+            core.current_module_specifier = Some(directory.join("probe.cjs").display().to_string());
+            for (conditions, expected) in [
+                (REQUIRE_EXPORT_CONDITIONS, &case.require),
+                (IMPORT_EXPORT_CONDITIONS, &case.import),
+            ] {
+                let actual = core
+                    .resolve_bare_package_specifier(&case.specifier, conditions)
+                    .unwrap_or_else(|error| panic!("{} {conditions:?}: {error}", case.id));
+                assert_eq!(
+                    actual.canonicalize().expect("resolved file"),
+                    directory.join(expected).canonicalize().expect("expected file"),
+                    "{} {conditions:?}",
+                    case.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn duplicate_mapping_keys_can_revoke_or_invalidate_an_earlier_target() {
+        for last in ["null", "false", "5", "{}", "[]"] {
+            let json = format!(r#"{{"node":"./first.cjs","node":{last}}}"#);
+            assert!(resolve(&json, ".").is_err(), "{json}");
+            let json = format!(r##"{{"#x":"./first.cjs","#x":{last}}}"##);
+            assert!(import_target(&json, "#x").is_err(), "{json}");
+        }
+        let PackageExports::Map(entries) = exports(
+            r#"{"node":"./old.cjs","default":"./fallback.cjs","node":"./new.cjs"}"#,
+        ) else {
+            panic!("ordered mapping");
+        };
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0], ("node".to_string(), PackageExports::Target("./new.cjs".into())));
+        assert_eq!(entries[1].0, "default");
+    }
+
+    #[test]
+    fn package_manifest_bom_does_not_relax_size_or_json_validation() {
+        let root = tempfile::tempdir().expect("module root");
+        let mut bounded = "\u{feff}{}".to_string();
+        bounded.push_str(&" ".repeat(MAX_PACKAGE_MANIFEST_BYTES as usize - bounded.len()));
+        write_package_fixture(root.path(), "bounded/package.json", &bounded);
+        read_package_manifest(&root.path().join("bounded")).expect("one BOM within byte cap");
+        bounded.push(' ');
+        write_package_fixture(root.path(), "oversize/package.json", &bounded);
+        assert!(
+            read_package_manifest(&root.path().join("oversize"))
+                .expect_err("BOM bytes count against the original cap")
+                .contains("exceeds")
+        );
+        for (index, source) in ["\u{feff}\u{feff}{}", " \u{feff}{}", "\u{feff}{", "\u{feff}{}x"]
+            .iter()
+            .enumerate()
+        {
+            let name = format!("invalid-{index}");
+            write_package_fixture(root.path(), &format!("{name}/package.json"), source);
+            assert!(read_package_manifest(&root.path().join(name)).is_err(), "{source:?}");
+        }
     }
 
     fn resolve(json: &str, subpath: &str) -> Result<PathBuf, String> {

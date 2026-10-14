@@ -252,19 +252,35 @@
   function isOptionLikeValue(value) {
     return value !== null && value !== undefined && value.length > 1 && value.charAt(0) === '-';
   }
+  var parseArgsSlice = Array.prototype.slice;
+  var parseArgsApply = Reflect.apply;
   function argsToTokens(args, options) {
     var tokens = [];
     var index = -1;
     var groupCount = 0;
-    var remaining = args.slice();
-    while (remaining.length > 0) {
-      var arg = remaining.shift();
-      var nextArg = remaining[0];
+    // A cursor over snapshot blocks replaces shift/unshift of the whole
+    // remaining argv. Each argument/expanded flag is visited once. In
+    // particular, a large short group must not become a host call's argument
+    // list (unshift.apply), nor repeatedly move the remaining argument tail.
+    // Separate blocks preserve Node's unusual '--' inside a short group and
+    // its token indices without mutating the caller's array.
+    var snapshot = parseArgsApply(parseArgsSlice, args, []);
+    var remaining = snapshot.length ? { items: snapshot, position: 0, next: null } : null;
+    function take() {
+      var value = remaining.items[remaining.position++];
+      while (remaining !== null && remaining.position === remaining.items.length) {
+        remaining = remaining.next;
+      }
+      return value;
+    }
+    while (remaining !== null) {
+      var arg = take();
+      var nextArg = remaining === null ? undefined : remaining.items[remaining.position];
       if (groupCount > 0) { groupCount--; } else { index++; }
       if (arg === '--') {
         tokens.push({ kind: 'option-terminator', index: index });
-        for (var r = 0; r < remaining.length; r++) {
-          tokens.push({ kind: 'positional', index: ++index, value: remaining[r] });
+        while (remaining !== null) {
+          tokens.push({ kind: 'positional', index: ++index, value: take() });
         }
         break;
       }
@@ -276,7 +292,7 @@
         value = undefined;
         inlineValue = undefined;
         if (optionSetting(options, longOption, 'type') === 'string' && nextArg !== undefined && nextArg !== null) {
-          value = remaining.shift();
+          value = take();
           inlineValue = false;
         }
         tokens.push({ kind: 'option', name: longOption, rawName: arg, index: index, value: value, inlineValue: inlineValue });
@@ -295,7 +311,7 @@
             break;
           }
         }
-        remaining.unshift.apply(remaining, expanded);
+        remaining = { items: expanded, position: 0, next: remaining };
         groupCount = expanded.length;
         continue;
       }
@@ -310,7 +326,7 @@
         value = undefined;
         inlineValue = undefined;
         if (optionSetting(options, longOption, 'type') === 'string' && nextArg !== undefined && nextArg !== null) {
-          value = remaining.shift();
+          value = take();
           inlineValue = false;
         }
         tokens.push({ kind: 'option', name: longOption, rawName: arg, index: index, value: value, inlineValue: inlineValue });
@@ -328,17 +344,25 @@
     }
     return tokens;
   }
-  function checkOptionUsage(options, allowPositionals, token) {
-    if (!Object.prototype.hasOwnProperty.call(options, token.name)) {
+  function checkOptionUsage(options, allowPositionals, allowNegative, token) {
+    var name = token.name;
+    // An explicitly declared no-* option wins validation. Otherwise only a
+    // declared boolean admits the synthetic spelling; a string option may
+    // not silently lose its required value. Retain rawName in diagnostics.
+    if (!Object.prototype.hasOwnProperty.call(options, name) && allowNegative &&
+        name.slice(0, 3) === 'no-' && optionSetting(options, name.slice(3), 'type') === 'boolean') {
+      name = name.slice(3);
+    }
+    if (!Object.prototype.hasOwnProperty.call(options, name)) {
       var suggest = allowPositionals
         ? ". To specify a positional argument starting with a '-', place it at the end of the command after '--', as in '-- " +
           JSON.stringify(token.rawName)
         : '';
       throw parseArgsError('ERR_PARSE_ARGS_UNKNOWN_OPTION', "Unknown option '" + token.rawName + "'" + suggest);
     }
-    var short = optionSetting(options, token.name, 'short');
-    var shortAndLong = (short ? '-' + short + ', ' : '') + '--' + token.name;
-    var type = optionSetting(options, token.name, 'type');
+    var short = optionSetting(options, name, 'short');
+    var shortAndLong = (short ? '-' + short + ', ' : '') + '--' + name;
+    var type = optionSetting(options, name, 'type');
     if (type === 'string' && typeof token.value !== 'string') {
       throw parseArgsError('ERR_PARSE_ARGS_INVALID_OPTION_VALUE', "Option '" + shortAndLong + " <value>' argument missing");
     }
@@ -356,9 +380,20 @@
         token.rawName + "'?\nTo specify an option argument starting with a dash use " + example + '.');
     }
   }
-  function storeOption(longOption, optionValue, options, values) {
+  function storeOption(token, allowNegative, options, values) {
+    var longOption = token.name;
+    var optionValue = token.value;
     if (longOption === '__proto__') { return; }
-    var newValue = optionValue === undefined || optionValue === null ? true : optionValue;
+    // Negation is a valueless-option operation, including a short alias for
+    // an explicit no-* boolean. Token.name exposes the normalized key while
+    // rawName, index and the absent value/inlineValue remain unchanged.
+    var negative = allowNegative && (optionValue === undefined || optionValue === null) &&
+      longOption.slice(0, 3) === 'no-';
+    if (negative) {
+      longOption = longOption.slice(3);
+      token.name = longOption;
+    }
+    var newValue = negative ? false : optionValue === undefined || optionValue === null ? true : optionValue;
     if (optionSetting(options, longOption, 'multiple')) {
       if (values[longOption]) { values[longOption].push(newValue); } else { values[longOption] = [newValue]; }
     } else {
@@ -373,6 +408,8 @@
     if (strict === undefined || strict === null) { strict = true; }
     var allowPositionals = ownValue(config, 'allowPositionals');
     if (allowPositionals === undefined || allowPositionals === null) { allowPositionals = !strict; }
+    var allowNegative = ownValue(config, 'allowNegative');
+    if (allowNegative === undefined || allowNegative === null) { allowNegative = false; }
     var returnTokens = ownValue(config, 'tokens');
     if (returnTokens === undefined || returnTokens === null) { returnTokens = false; }
     var options = ownValue(config, 'options');
@@ -384,6 +421,7 @@
     }
     validateParseArgsBoolean(strict, 'strict');
     validateParseArgsBoolean(allowPositionals, 'allowPositionals');
+    validateParseArgsBoolean(allowNegative, 'allowNegative');
     validateParseArgsBoolean(returnTokens, 'tokens');
     validateParseArgsObject(options, 'options');
     Object.keys(options).forEach(function (longOption) {
@@ -429,10 +467,10 @@
     tokens.forEach(function (token) {
       if (token.kind === 'option') {
         if (strict) {
-          checkOptionUsage(options, allowPositionals, token);
+          checkOptionUsage(options, allowPositionals, allowNegative, token);
           checkOptionLikeValue(token);
         }
-        storeOption(token.name, token.value, options, result.values);
+        storeOption(token, allowNegative, options, result.values);
       } else if (token.kind === 'positional') {
         if (!allowPositionals) {
           throw parseArgsError('ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL',

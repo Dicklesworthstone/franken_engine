@@ -1,0 +1,6 @@
+fifo a,b,c,other,zero 2,1,1,1,0
+widths big,small 1 1
+coercion 0,1,2,3 index,count
+reentry 3 1 0,1,2,late
+finite 16 16
+bulk 512 130816

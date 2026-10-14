@@ -28,6 +28,9 @@
 
 use super::*;
 
+#[cfg(test)]
+mod tests;
+
 /// The members of the `Atomics` namespace, in Node v22.2.0's order.
 pub(super) const ATOMICS_METHODS: [&str; 13] = [
     "load",
@@ -253,39 +256,75 @@ impl InterpreterCore {
                 } else {
                     self.atomics_integer_arg(module, args, 2)?.max(0.0)
                 };
+                // Count conversion is observable even for an unshared view,
+                // but that view has no waiter list to scan (25.4.10 step 6).
+                if !self
+                    .heap
+                    .get(view.buffer.0 as usize)
+                    .is_some_and(|buffer| buffer.brand() == Some("SharedArrayBuffer"))
+                {
+                    return Ok(Value::Int(0));
+                }
                 let byte_index = Self::atomics_byte_index(view, index);
                 let label = self.join_arg_range_label(args)?;
-                self.prune_settled_atomics_waiters();
-                let mut woken: i64 = 0;
-                let mut position = 0;
-                while position < self.atomics_async_waiters.len() && (woken as f64) < count {
-                    let waiter = &self.atomics_async_waiters[position];
-                    if waiter.buffer != view.buffer || waiter.byte_index != byte_index {
-                        position += 1;
-                        continue;
-                    }
-                    let waiter = self.atomics_async_waiters.remove(position);
-                    self.estimated_memory_bytes = self
-                        .estimated_memory_bytes
-                        .saturating_sub(ATOMICS_WAITER_BYTES);
-                    if let Some(timer_id) = waiter.timer_id {
-                        // Its timeout macrotask is now inert.
-                        self.active_timers.remove(&timer_id);
-                    }
-                    self.fulfill_promise(
-                        waiter.promise,
-                        crate::object_model::JsValue::Str("ok".to_string()),
-                        label.clone(),
-                    )?;
-                    woken += 1;
-                }
-                Ok(Value::Int(woken))
+                self.notify_atomics_waiters(view.buffer, byte_index, count, &label)
+                    .map(Value::Int)
             }
             _ => Err(InterpreterError::TypeError {
                 expected: "an Atomics method".to_string(),
                 got: method.to_string(),
             }),
         }
+    }
+
+    /// Settle the first `count` live waiters at one byte address in FIFO order.
+    ///
+    /// Keep the queue rooted and charged while promise settlement admits its
+    /// reactions. No guest handler runs synchronously in `fulfill_promise`.
+    /// Compact once afterwards, on both success and failure, rather than
+    /// shifting the remaining Vec after every wakeup (quadratic for a batch).
+    /// A refused settlement must not orphan a still-pending promise or cancel
+    /// its timer. Already committed settlements are not rolled back.
+    fn notify_atomics_waiters(
+        &mut self,
+        buffer: ObjectId,
+        byte_index: usize,
+        count: f64,
+        label: &Label,
+    ) -> Result<i64, InterpreterError> {
+        self.prune_settled_atomics_waiters();
+        let mut attempted_settlement = false;
+        let outcome = (|| {
+            let mut woken = 0_i64;
+            for position in 0..self.atomics_async_waiters.len() {
+                if (woken as f64) >= count {
+                    break;
+                }
+                // Native queue scans consume the same work budget as other
+                // builtins, even when every entry belongs to another address.
+                self.json_charge_work()?;
+                let waiter = &self.atomics_async_waiters[position];
+                if waiter.buffer != buffer || waiter.byte_index != byte_index {
+                    continue;
+                }
+                let promise = waiter.promise;
+                attempted_settlement = true;
+                self.fulfill_promise(
+                    promise,
+                    crate::object_model::JsValue::Str("ok".to_string()),
+                    label.clone(),
+                )?;
+                woken += 1;
+            }
+            Ok(woken)
+        })();
+        // Settlement may fail after an earlier waiter has completed. Retire
+        // exactly the completed records; preserve every pending record's order,
+        // timeout and memory charge, including the one whose admission failed.
+        if attempted_settlement {
+            self.prune_settled_atomics_waiters();
+        }
+        outcome
     }
 
     /// ValidateIntegerTypedArray (ES2020 24.4.1.1): an integer typed array
@@ -526,15 +565,24 @@ impl InterpreterCore {
         Ok(promise)
     }
 
-    /// Drop the waiters whose promise has settled (a timeout fired), so
-    /// `notify` neither counts nor wakes them.
+    /// Retire settled waiters in one stable compaction, including their timer
+    /// ownership. A queued timeout task becomes inert once its active timer is
+    /// removed; its unref entry must also go, rather than accumulating forever
+    /// after successful notifications.
     fn prune_settled_atomics_waiters(&mut self) {
         let before = self.atomics_async_waiters.len();
         let store = &self.promise_store;
+        let timers = &mut self.active_timers;
+        let unref = &mut self.unref_timer_ids;
         self.atomics_async_waiters.retain(|waiter| {
-            store
+            let pending = store
                 .get(waiter.promise)
-                .is_ok_and(|record| record.state == crate::promise_model::PromiseState::Pending)
+                .is_ok_and(|record| record.state == crate::promise_model::PromiseState::Pending);
+            if !pending && let Some(timer_id) = waiter.timer_id {
+                timers.remove(&timer_id);
+                unref.remove(&timer_id);
+            }
+            pending
         });
         let removed = (before - self.atomics_async_waiters.len()) as u64;
         self.estimated_memory_bytes = self

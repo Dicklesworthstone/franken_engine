@@ -194,8 +194,136 @@ fn letter_element(c: char) -> Element {
     }
 }
 
+// The ASCII projection has exactly the same primary classes as Element, but
+// borrows digit runs instead of allocating a Vec for every digit. ASCII has
+// no decomposition or secondary weights, so only the primary and case levels
+// need to be visited. Keep this separate from the Unicode tailoring above.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum AsciiPrimary<'a> {
+    Space(u8),
+    Punctuation(u16),
+    Digits(usize, &'a [u8]),
+    Letter(u8),
+    Other(u8),
+}
+
+const ASCII_PUNCTUATION_RANK: [u8; 128] = {
+    let mut ranks = [u8::MAX; 128];
+    let bytes = PUNCTUATION_ORDER.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        ranks[bytes[index] as usize] = index as u8;
+        index += 1;
+    }
+    ranks
+};
+
+struct AsciiElements<'a> {
+    remaining: &'a [u8],
+    numeric: bool,
+    ignore_punctuation: bool,
+}
+
+impl<'a> AsciiElements<'a> {
+    fn new(text: &'a str, options: &CollationOptions) -> Self {
+        debug_assert!(text.is_ascii());
+        Self {
+            remaining: text.as_bytes(),
+            numeric: options.numeric,
+            ignore_punctuation: options.ignore_punctuation,
+        }
+    }
+}
+
+impl<'a> Iterator for AsciiElements<'a> {
+    type Item = (AsciiPrimary<'a>, u8);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let (&byte, rest) = self.remaining.split_first()?;
+            let text = self.remaining;
+            self.remaining = rest;
+            // char::is_whitespace includes vertical tab; u8's ASCII
+            // whitespace predicate does not. Preserve the Unicode path.
+            if matches!(byte, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r') {
+                if self.ignore_punctuation {
+                    continue;
+                }
+                return Some((AsciiPrimary::Space(byte), 0));
+            }
+            if byte.is_ascii_digit() {
+                let mut end = 1;
+                if self.numeric {
+                    while end < text.len() && text[end].is_ascii_digit() {
+                        end += 1;
+                    }
+                }
+                self.remaining = &text[end..];
+                let mut digits = &text[..end];
+                if self.numeric {
+                    while digits.first() == Some(&b'0') {
+                        digits = &digits[1..];
+                    }
+                }
+                return Some((AsciiPrimary::Digits(digits.len(), digits), 0));
+            }
+            if byte.is_ascii_alphabetic() {
+                return Some((
+                    AsciiPrimary::Letter(byte.to_ascii_lowercase()),
+                    u8::from(byte.is_ascii_uppercase()),
+                ));
+            }
+            if byte.is_ascii_punctuation() {
+                if self.ignore_punctuation {
+                    continue;
+                }
+                let rank = ASCII_PUNCTUATION_RANK[usize::from(byte)];
+                let weight = if rank == u8::MAX {
+                    0x100 + u16::from(byte)
+                } else {
+                    u16::from(rank)
+                };
+                return Some((AsciiPrimary::Punctuation(weight), 0));
+            }
+            return Some((AsciiPrimary::Other(byte), 0));
+        }
+    }
+}
+
+fn ascii_compare(a: &str, b: &str, options: &CollationOptions) -> Ordering {
+    let mut left = AsciiElements::new(a, options);
+    let mut right = AsciiElements::new(b, options);
+    let compare_case = matches!(options.sensitivity, Sensitivity::Case | Sensitivity::Variant);
+    let mut case = Ordering::Equal;
+    loop {
+        match (left.next(), right.next()) {
+            (None, None) => return case,
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some((left, left_case)), Some((right, right_case))) => {
+                let primary = left.cmp(&right);
+                if primary != Ordering::Equal {
+                    return primary;
+                }
+                // A later primary difference outranks an earlier case
+                // difference. Remember case, but finish the primary level.
+                if compare_case && case == Ordering::Equal {
+                    case = left_case.cmp(&right_case);
+                }
+            }
+        }
+    }
+}
+
 /// Compare `a` with `b` as `a.localeCompare(b, undefined, options)` does.
 pub(super) fn locale_compare(a: &str, b: &str, options: &CollationOptions) -> Ordering {
+    if a.is_ascii() && b.is_ascii() {
+        return ascii_compare(a, b, options);
+    }
+    unicode_compare(a, b, options)
+}
+
+fn unicode_compare(a: &str, b: &str, options: &CollationOptions) -> Ordering {
     let (left, right) = (elements(a, options), elements(b, options));
     let primary = left
         .iter()
@@ -322,5 +450,129 @@ mod tests {
         };
         assert_eq!(locale_compare("a-b", "ab", &ignore), Ordering::Equal);
         assert_eq!(locale_compare("a", "b", &ignore), Ordering::Less);
+    }
+
+    fn all_options() -> impl Iterator<Item = CollationOptions> {
+        [
+            Sensitivity::Base,
+            Sensitivity::Accent,
+            Sensitivity::Case,
+            Sensitivity::Variant,
+        ]
+        .into_iter()
+        .flat_map(|sensitivity| {
+            [false, true].into_iter().flat_map(move |numeric| {
+                [false, true]
+                    .into_iter()
+                    .map(move |ignore_punctuation| CollationOptions {
+                        sensitivity,
+                        numeric,
+                        ignore_punctuation,
+                    })
+            })
+        })
+    }
+
+    #[test]
+    fn ascii_fast_path_matches_unicode_for_every_byte_and_option() {
+        let mut texts = vec![String::new()];
+        texts.extend((0u8..128).map(|byte| char::from(byte).to_string()));
+        for options in all_options() {
+            for left in &texts {
+                for right in &texts {
+                    assert_eq!(
+                        locale_compare(left, right, &options),
+                        unicode_compare(left, right, &options),
+                        "{left:?} versus {right:?}: {options:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ascii_fast_path_preserves_whole_string_levels_and_numeric_boundaries() {
+        let mut texts: Vec<String> = [
+            "", "a", "A", "ab", "Ab", "aB", "AB", "ac", "Ac", "a0", "A00",
+            "a1", "A01", "a10", "A2", "0", "00", "0001", "01", "1", "9", "10",
+            "1-2", "12", "1 2", "1-02", "1\x0b2", "a-b", "ab-", "-AB", "a\0b",
+            "a\x7fb", "\t", "\x0b", "\x0c", "~", "$", "_",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        texts.push(format!("item{}9", "0".repeat(2048)));
+        texts.push(format!("item{}8", "9".repeat(2048)));
+        texts.push(format!("item{}9", "9".repeat(2048)));
+        for options in all_options() {
+            for left in &texts {
+                for right in &texts {
+                    assert_eq!(
+                        locale_compare(left, right, &options),
+                        unicode_compare(left, right, &options),
+                        "{left:?} versus {right:?}: {options:?}"
+                    );
+                }
+            }
+        }
+        let numeric = CollationOptions {
+            numeric: true,
+            ..CollationOptions::default()
+        };
+        assert_eq!(locale_compare("A2", "a10", &numeric), Ordering::Less);
+        assert_eq!(locale_compare("A", "aa", &numeric), Ordering::Less);
+        let ignore = CollationOptions {
+            ignore_punctuation: true,
+            ..numeric
+        };
+        // Punctuation is removed after recognizing digit runs, not before.
+        assert_eq!(locale_compare("1-2", "12", &ignore), Ordering::Less);
+    }
+
+    #[test]
+    fn ascii_fast_path_matches_unicode_on_generated_multilevel_keys() {
+        // Deterministic, no dependency on a randomized hash or test seed.
+        let alphabet = b"aAzZ019- _.$\t\x0b\0\x7f";
+        let mut state = 0x92d6_8ca2_14ef_379bu64;
+        let mut key = || {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let length = (state >> 32) as usize % 48;
+            let mut text = String::new();
+            for _ in 0..length {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                text.push(char::from(alphabet[(state >> 32) as usize % alphabet.len()]));
+            }
+            text
+        };
+        for _ in 0..1024 {
+            let left = key();
+            let right = key();
+            for options in all_options() {
+                assert_eq!(
+                    locale_compare(&left, &right, &options),
+                    unicode_compare(&left, &right, &options),
+                    "{left:?} versus {right:?}: {options:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn non_ascii_and_mixed_inputs_keep_the_unicode_path() {
+        for options in all_options() {
+            for left in [
+                "e", "é", "e\u{301}", "ß", "ss", "ﬁ", "fi", "a２", "a2", "Ω", "日",
+            ] {
+                for right in [
+                    "E", "é", "e\u{301}", "ss", "SS", "fi", "a12", "a９", "я", "中",
+                ] {
+                    assert_eq!(
+                        locale_compare(left, right, &options),
+                        unicode_compare(left, right, &options),
+                        "{left:?} versus {right:?}: {options:?}"
+                    );
+                }
+            }
+        }
     }
 }

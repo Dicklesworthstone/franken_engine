@@ -91,7 +91,7 @@ impl InterpreterCore {
             }
         }
         for source in sources {
-            self.detach_array_buffer(source)?;
+            self.structured_clone_commit_transfer(source, state.memory[&source])?;
         }
         Ok(clone)
     }
@@ -225,9 +225,12 @@ impl InterpreterCore {
         );
     }
 
-    /// Prepare an unreachable destination without detaching its source. Resize
-    /// and labels use the same accounting/registered-view machinery as normal
-    /// buffers. Even on a late budget failure no source has been detached yet.
+    /// Prepare an unreachable destination without moving its source bytes.
+    /// Resize and labels use the normal accounting/registered-view machinery.
+    /// Every destination is prepared before the first ownership exchange, so
+    /// a late admission failure cannot detach an earlier source. The graph's
+    /// sized shells remain necessary for ordinary view construction; no third,
+    /// payload-sized staging allocation is needed to transfer their storage.
     fn structured_clone_prepare_transfer(
         &mut self,
         source: ObjectId,
@@ -241,21 +244,49 @@ impl InterpreterCore {
         }
         let label = self.binary_storage_label(source);
         state.label = state.label.join(&label);
-        state.reserve(self, length as u64)?;
-        let outcome = (|| {
-            let mut bytes = Vec::new();
-            bytes.try_reserve_exact(length).map_err(|_| {
-                self.memory_budget_error(u64::MAX, self.heap_object_count_u32())
-            })?;
-            self.with_array_buffer_bytes(source, |input| bytes.extend_from_slice(input))?;
-            if self.buffer_backing(target)?.bytes.len() != length {
-                self.resize_buffer_bytes(target, length)?;
-            }
-            self.with_array_buffer_bytes_mut(target, |output| output.copy_from_slice(&bytes))?;
-            self.join_binary_storage_label(target, &label)
-        })();
-        state.release(self, length as u64);
-        outcome
+        if self.buffer_backing(target)?.bytes.len() != length {
+            self.resize_buffer_bytes(target, length)?;
+        }
+        self.join_binary_storage_label(target, &label)
+    }
+
+    /// Move the source allocation into its prepared destination. Called only
+    /// after all sources, destinations, labels and detachment work have been
+    /// admitted. No guest code runs from preparation through the last detach.
+    fn structured_clone_commit_transfer(
+        &mut self,
+        source: ObjectId,
+        target: ObjectId,
+    ) -> Result<(), InterpreterError> {
+        debug_assert_ne!(source, target);
+        self.mutate_heap(|heap| {
+            // Temporarily own the Vec to obtain the two arena entries without
+            // unsafe or simultaneous mutable borrows, as ArrayBuffer.transfer
+            // does. Exchange only bytes: view registries, resizable maxima and
+            // labels belong to their own objects, not to the moved allocation.
+            let payload = std::mem::take(
+                &mut heap
+                    .get_mut(source.0 as usize)
+                    .and_then(|object| object.array_buffer.as_deref_mut())
+                    .expect("validated clone transfer source remains live")
+                    .bytes,
+            );
+            let destination = heap
+                .get_mut(target.0 as usize)
+                .and_then(|object| object.array_buffer.as_deref_mut())
+                .expect("prepared clone transfer destination remains live");
+            debug_assert_eq!(payload.len(), destination.bytes.len());
+            let placeholder = std::mem::replace(&mut destination.bytes, payload);
+            heap.get_mut(source.0 as usize)
+                .and_then(|object| object.array_buffer.as_deref_mut())
+                .expect("validated clone transfer source remains live")
+                .bytes = placeholder;
+        });
+        // Both buffers keep their charged length during the exchange. Normal
+        // detachment now releases the placeholder and its charge, while the
+        // original allocation survives on the target. Source view invalidation
+        // and resizable-view accounting still have one canonical implementation.
+        self.detach_array_buffer(source)
     }
 }
 
@@ -285,18 +316,26 @@ mod tests {
     }
 
     #[test]
-    fn transfer_preparation_copies_current_bytes_and_preserves_outer_scratch() {
+    fn transfer_preparation_preserves_current_bytes_until_commit_and_outer_scratch() {
         let mut core = runtime();
         let source = core.alloc_array_buffer_object(1024).unwrap();
         let target = core.alloc_array_buffer_object(1024).unwrap();
         core.with_array_buffer_bytes_mut(source, |bytes| bytes.fill(37))
             .unwrap();
+        let address = core.buffer_backing(source).unwrap().bytes.as_ptr();
         core.json_reserve_temporary(19).unwrap();
         let mut state = state();
         core.structured_clone_prepare_transfer(source, target, &mut state)
             .unwrap();
         assert!(!core.buffer_backing(source).unwrap().detached);
+        assert_eq!(core.buffer_backing(source).unwrap().bytes, vec![37; 1024]);
+        assert_eq!(core.buffer_backing(source).unwrap().bytes.as_ptr(), address);
+        assert_eq!(core.buffer_backing(target).unwrap().bytes, vec![0; 1024]);
+        core.structured_clone_commit_transfer(source, target).unwrap();
+        assert!(core.buffer_backing(source).unwrap().detached);
+        assert!(core.buffer_backing(source).unwrap().bytes.is_empty());
         assert_eq!(core.buffer_backing(target).unwrap().bytes, vec![37; 1024]);
+        assert_eq!(core.buffer_backing(target).unwrap().bytes.as_ptr(), address);
         assert_eq!(state.charged, 0);
         assert_eq!(core.json_parse_temporary_bytes, 19);
         core.json_release_temporary(19);
@@ -307,7 +346,9 @@ mod tests {
     fn transfer_preparation_memory_refusal_leaves_both_buffers_unchanged() {
         let mut core = runtime();
         let source = core.alloc_array_buffer_object(1024).unwrap();
-        let target = core.alloc_array_buffer_object(1024).unwrap();
+        // Simulate a source grown by a late graph getter: the destination must
+        // still admit its real 1024-byte growth before any payload moves.
+        let target = core.alloc_array_buffer_object(0).unwrap();
         core.with_array_buffer_bytes_mut(source, |bytes| bytes.fill(37))
             .unwrap();
         let before = core.estimated_memory_bytes();
@@ -318,14 +359,14 @@ mod tests {
         ));
         assert!(!core.buffer_backing(source).unwrap().detached);
         assert_eq!(core.buffer_backing(source).unwrap().bytes, vec![37; 1024]);
-        assert_eq!(core.buffer_backing(target).unwrap().bytes, vec![0; 1024]);
+        assert!(core.buffer_backing(target).unwrap().bytes.is_empty());
         assert_eq!(core.json_parse_temporary_bytes, 0);
         assert_eq!(core.estimated_memory_bytes(), before);
         assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
     }
 
     #[test]
-    fn transfer_preparation_observes_cancellation_before_payload_allocation() {
+    fn transfer_preparation_observes_cancellation_before_payload_movement() {
         let mut core = runtime();
         let source = core.alloc_array_buffer_object(1024).unwrap();
         let target = core.alloc_array_buffer_object(1024).unwrap();
@@ -354,7 +395,319 @@ mod tests {
         assert_eq!(state.label, Label::Secret);
         assert_eq!(core.binary_storage_label(target), Label::Secret);
         assert!(!core.buffer_backing(source).unwrap().detached);
+        core.structured_clone_commit_transfer(source, target).unwrap();
+        assert!(core.buffer_backing(source).unwrap().detached);
+        assert_eq!(core.binary_storage_label(target), Label::Secret);
         assert_eq!(core.json_parse_temporary_bytes, 0);
         assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+    }
+
+    #[test]
+    fn prepared_transfers_move_original_allocations_with_no_payload_scratch() {
+        for (initial, current) in [(0, 0), (1, 1), (1024, 1024), (16, 32), (32, 7)] {
+            for maximum in [None, Some(65_536)] {
+                let mut core = runtime();
+                let source = core.alloc_array_buffer_object(initial).unwrap();
+                let target = core.alloc_array_buffer_object(initial).unwrap();
+                core.mutate_heap(|heap| {
+                    for id in [source, target] {
+                        heap.get_mut(id.0 as usize)
+                            .unwrap()
+                            .array_buffer
+                            .as_deref_mut()
+                            .unwrap()
+                            .max_byte_length = maximum;
+                    }
+                });
+                core.resize_buffer_bytes(source, current).unwrap();
+                core.with_array_buffer_bytes_mut(source, |bytes| {
+                    for (index, byte) in bytes.iter_mut().enumerate() {
+                        *byte = (index % 251) as u8;
+                    }
+                })
+                .unwrap();
+                let address = core.buffer_backing(source).unwrap().bytes.as_ptr();
+                let expected = core.buffer_backing(source).unwrap().bytes.clone();
+                let mut state = state();
+                core.structured_clone_prepare_transfer(source, target, &mut state)
+                    .unwrap();
+                assert_eq!(state.charged, 0);
+                assert_eq!(core.json_parse_temporary_bytes, 0);
+                assert_eq!(core.buffer_backing(source).unwrap().bytes, expected);
+                assert_eq!(core.buffer_backing(source).unwrap().bytes.as_ptr(), address);
+                let prepared_memory = core.estimated_memory_bytes();
+                core.structured_clone_commit_transfer(source, target).unwrap();
+                let result = core.buffer_backing(target).unwrap();
+                assert_eq!(result.bytes.as_ptr(), address, "payload was copied");
+                assert_eq!(result.bytes, expected);
+                assert_eq!(result.max_byte_length, maximum);
+                assert!(!result.detached);
+                assert!(core.buffer_backing(source).unwrap().detached);
+                assert_eq!(core.estimated_memory_bytes(), prepared_memory - current as u64);
+                assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+            }
+        }
+    }
+
+    #[test]
+    fn preparation_needs_no_third_payload_allocation() {
+        let mut core = runtime();
+        let source = core.alloc_array_buffer_object(65_536).unwrap();
+        let target = core.alloc_array_buffer_object(65_536).unwrap();
+        let before = core.estimated_memory_bytes();
+        // Existing source + destination payloads are already charged. The old
+        // staging reservation rejected this case; no quota changes are needed.
+        core.config.max_total_memory_bytes = before + 512;
+        let mut state = state();
+        core.structured_clone_prepare_transfer(source, target, &mut state)
+            .unwrap();
+        assert_eq!(state.charged, 0);
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(core.estimated_memory_bytes(), before);
+        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+    }
+
+    #[test]
+    fn preparation_retains_work_refusal_boundaries_before_any_bytes_move() {
+        for length in [0, 1, 63, 64, 65, 129] {
+            let required = 1 + (length as u64).div_ceil(64);
+            for available in 0..=required {
+                let mut core = runtime();
+                let source = core.alloc_array_buffer_object(length).unwrap();
+                let target = core.alloc_array_buffer_object(length).unwrap();
+                core.with_array_buffer_bytes_mut(source, |bytes| bytes.fill(83))
+                    .unwrap();
+                let before = core.estimated_memory_bytes();
+                let executed = core.instructions_executed;
+                core.config.instruction_budget = executed + available;
+                let mut state = state();
+                let outcome = core.structured_clone_prepare_transfer(source, target, &mut state);
+                if available < required {
+                    assert!(matches!(outcome, Err(InterpreterError::BudgetExhausted { .. })));
+                } else {
+                    outcome.unwrap();
+                }
+                assert!(!core.buffer_backing(source).unwrap().detached);
+                assert_eq!(core.buffer_backing(source).unwrap().bytes, vec![83; length]);
+                assert_eq!(core.buffer_backing(target).unwrap().bytes, vec![0; length]);
+                assert_eq!(state.charged, 0);
+                assert_eq!(core.json_parse_temporary_bytes, 0);
+                assert_eq!(core.estimated_memory_bytes(), before);
+                assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+            }
+        }
+    }
+
+    /// Make a real builtin call, including transfer-list conversion, graph
+    /// traversal, final work admission, source detach and scratch cleanup.
+    fn seeded_transfer_call(core: &mut InterpreterCore) -> [ObjectId; 2] {
+        let a = core.alloc_array_buffer_object(8).unwrap();
+        let b = core.alloc_array_buffer_object(16).unwrap();
+        core.with_array_buffer_bytes_mut(a, |bytes| bytes.fill(37)).unwrap();
+        core.with_array_buffer_bytes_mut(b, |bytes| bytes.fill(91)).unwrap();
+        let list = core.alloc_array_with_prototype(None).unwrap();
+        for (index, id) in [a, b].into_iter().enumerate() {
+            core.generic_create_data_property(None, list, index as u64, Value::Object(id))
+                .unwrap();
+        }
+        let graph = core
+            .alloc_object_with_properties(&[("first", Value::Object(a)), ("again", Value::Object(a))])
+            .unwrap();
+        let options = core
+            .alloc_object_with_properties(&[("transfer", Value::Object(list))])
+            .unwrap();
+        core.seed_register(0, Value::Object(graph)).unwrap();
+        core.seed_register(1, Value::Object(options)).unwrap();
+        [a, b]
+    }
+
+    fn call(core: &mut InterpreterCore) -> Result<Value, InterpreterError> {
+        core.structured_clone_builtin(None, RegRange { start: 0, count: 2 })
+    }
+
+    #[test]
+    fn builtin_moves_payload_and_preserves_graph_identity_and_unreferenced_transfers() {
+        let mut core = runtime();
+        let [a, b] = seeded_transfer_call(&mut core);
+        let address = core.buffer_backing(a).unwrap().bytes.as_ptr();
+        core.json_reserve_temporary(19).unwrap();
+        let Value::Object(cloned) = call(&mut core).unwrap() else {
+            panic!("cloned object expected");
+        };
+        let Value::Object(target) = core.heap[cloned.0 as usize].properties.get("first").unwrap()
+        else {
+            panic!("transferred buffer expected");
+        };
+        assert_eq!(core.heap[cloned.0 as usize].properties.get("again"), Some(&Value::Object(*target)));
+        assert_eq!(core.buffer_backing(*target).unwrap().bytes.as_ptr(), address);
+        assert_eq!(core.buffer_backing(*target).unwrap().bytes, vec![37; 8]);
+        for source in [a, b] {
+            assert!(core.buffer_backing(source).unwrap().detached);
+            assert!(core.buffer_backing(source).unwrap().bytes.is_empty());
+        }
+        assert_eq!(core.json_parse_temporary_bytes, 19);
+        core.json_release_temporary(19);
+        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+    }
+
+    #[test]
+    fn builtin_work_refusal_never_transfers_only_part_of_the_list() {
+        let mut probe = runtime();
+        seeded_transfer_call(&mut probe);
+        let before = probe.instructions_executed;
+        call(&mut probe).unwrap();
+        let required = probe.instructions_executed - before;
+        assert!(required > 0);
+        // Exhaust immediately, during traversal, and at the final pre-detach
+        // work boundary. All guest buffers must retain their actual allocation.
+        for available in [0, required / 2, required - 1] {
+            let mut core = runtime();
+            let sources = seeded_transfer_call(&mut core);
+            let addresses = sources.map(|id| core.buffer_backing(id).unwrap().bytes.as_ptr());
+            core.config.instruction_budget = core.instructions_executed + available;
+            assert!(matches!(call(&mut core), Err(InterpreterError::BudgetExhausted { .. })));
+            for (index, id) in sources.into_iter().enumerate() {
+                let backing = core.buffer_backing(id).unwrap();
+                assert!(!backing.detached);
+                assert_eq!(backing.bytes.as_ptr(), addresses[index]);
+                assert_eq!(backing.bytes, vec![if index == 0 { 37 } else { 91 }; if index == 0 { 8 } else { 16 }]);
+            }
+            assert_eq!(core.json_parse_temporary_bytes, 0);
+            assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        }
+    }
+
+    fn execute_transfer_source(source: &str, expected: &[&str]) {
+        let tree = crate::parser_api_stability::parse_script(source).unwrap();
+        let module = crate::lowering_pipeline::lower_ir0_to_ir3(
+            &crate::ir_contract::Ir0Module::from_syntax_tree(tree, "clone-storage-move.js"),
+            &crate::lowering_pipeline::LoweringContext::new(
+                "clone-storage-move", "transfer-storage", "builtin-only",
+            ),
+        )
+        .unwrap()
+        .ir3;
+        for throughput in [false, true] {
+            for stress in [None, Some(7)] {
+                let mut config = if throughput {
+                    InterpreterConfig::v8_defaults()
+                } else {
+                    InterpreterConfig::quickjs_defaults()
+                };
+                config.instruction_budget = 10_000_000;
+                config.granted_capabilities = [
+                    RuntimeCapability::VmDispatch,
+                    RuntimeCapability::HeapAllocate,
+                    RuntimeCapability::Builtin,
+                    RuntimeCapability::Console,
+                ]
+                .into_iter()
+                .collect();
+                let mut core = InterpreterCore::new(config, "clone-storage-move");
+                core.set_gc_stress_interval(stress);
+                let result = core.execute(&module).unwrap();
+                let lines: Vec<&str> = result.console_output.iter()
+                    .map(|entry| entry.message.as_str()).collect();
+                assert_eq!(lines, expected, "throughput={throughput}, stress={stress:?}");
+                assert_eq!(core.json_parse_temporary_bytes, 0);
+                assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+            }
+        }
+    }
+
+    const LATE_TRANSFER_STORAGE: &str = r#"
+const a = new ArrayBuffer(4, { maxByteLength: 16 });
+const b = new ArrayBuffer(3);
+const orphan = new ArrayBuffer(2);
+const tracking = new Uint8Array(a, 1);
+const fixed = new Uint8Array(a, 1, 2);
+const data = new DataView(a, 1);
+new Uint8Array(a).set([1,2,3,4]);
+new Uint8Array(b).set([5,6,7]);
+const log = [];
+const input = { a, tracking, fixed, data, b, again: a,
+  get mutate() {
+    log.push('outer');
+    a.resize(7);
+    new Uint8Array(a)[6] = 99;
+    return { get nested() {
+      log.push('nested'); new Uint8Array(a)[1] = 42;
+      new Uint8Array(b)[2] = 88; return 1;
+    } };
+  }
+};
+input.self = input;
+const copy = structuredClone(input, { transfer: [b, orphan, a] });
+console.log(log.join(','), a.byteLength, b.byteLength, orphan.byteLength, tracking.length, fixed.length);
+console.log(copy.self === copy, copy.again === copy.a, copy.tracking.buffer === copy.a, copy.data.buffer === copy.a);
+console.log(Array.from(new Uint8Array(copy.a)).join(','), Array.from(new Uint8Array(copy.b)).join(','));
+console.log(copy.a.resizable, copy.a.maxByteLength, copy.fixed.length, copy.tracking.length, copy.data.byteLength);
+copy.a.resize(10);
+console.log(copy.fixed.length, copy.tracking.length, copy.data.byteLength, copy.tracking[5], copy.tracking[8]);
+try { data.getUint8(0); } catch (error) { console.log(error.name); }
+let held = copy.a;
+for (let i = 0; i < 32; i++) {
+  const old = held;
+  held = structuredClone(old, { transfer: [old] });
+  if (old.byteLength !== 0) throw new Error('source stayed attached');
+}
+console.log(held.byteLength, held.resizable, held.maxByteLength, new Uint8Array(held)[6]);
+"#;
+
+    #[test]
+    fn moved_transfers_keep_late_bytes_resizable_views_and_repeated_ownership() {
+        execute_transfer_source(LATE_TRANSFER_STORAGE, &[
+            "outer,nested 0 0 0 0 0",
+            "true true true true",
+            "1,42,3,4,0,0,99 5,6,88",
+            "true 16 2 6 6",
+            "2 9 9 99 0",
+            "TypeError",
+            "10 true 16 99",
+        ]);
+    }
+
+    const TRANSFER_STORAGE_FAILURES: &str = r#"
+const a = new ArrayBuffer(4);
+const b = new ArrayBuffer(2);
+new Uint8Array(a).set([1,2,3,4]);
+new Uint8Array(b).set([5,6]);
+const sentinel = {};
+try {
+  structuredClone({ a, get late() {
+    new Uint8Array(a)[3] = 77;
+    throw sentinel;
+  } }, { transfer: [a,b] });
+} catch (error) {
+  console.log(error === sentinel, a.byteLength, b.byteLength, new Uint8Array(a)[3]);
+}
+try { structuredClone({ a, bad: Symbol('x') }, { transfer: [a,b] }); }
+catch (error) { console.log(error.name, error.code, a.byteLength, b.byteLength); }
+let reads = 0;
+try {
+  structuredClone({ get a() { reads++; return a; } }, { transfer: [a,b,a] });
+} catch (error) { console.log(error.name, error.code, reads, a.byteLength, b.byteLength); }
+let inner;
+const c = new ArrayBuffer(2);
+new Uint8Array(c).set([8,9]);
+const copy = structuredClone({ a, alias: a, get inner() {
+  inner = structuredClone(c, { transfer: [c] }); return inner;
+} }, { transfer: [a,b] });
+console.log(c.byteLength, b.byteLength, inner.byteLength);
+console.log(a.byteLength, copy.alias === copy.a, Array.from(new Uint8Array(copy.a)).join(','));
+new Uint8Array(inner)[0] = 99;
+console.log(Array.from(new Uint8Array(copy.inner)).join(','), inner.byteLength, copy.inner !== inner);
+"#;
+
+    #[test]
+    fn failed_transfer_preparation_preserves_guest_effects_and_recoverable_sources() {
+        execute_transfer_source(TRANSFER_STORAGE_FAILURES, &[
+            "true 4 2 77",
+            "DataCloneError 25 4 2",
+            "DataCloneError 25 0 4 2",
+            "0 0 2",
+            "0 true 1,2,3,77",
+            "8,9 2 true",
+        ]);
     }
 }

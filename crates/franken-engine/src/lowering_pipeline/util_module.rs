@@ -84,6 +84,7 @@ const TIMERS_MODULE_BINDING: &str = "%timers_module";
 const STRING_DECODER_MODULE_BINDING: &str = "%string_decoder_module";
 const VM_MODULE_BINDING: &str = "%vm_module";
 const STREAM_MODULE_BINDING: &str = "%stream_module";
+const STREAM_CONSUMERS_BINDING: &str = "%stream_consumers";
 const BUFFER_MODULE_BINDING: &str = "%buffer_module";
 const QUERYSTRING_MODULE_BINDING: &str = "%querystring_module";
 
@@ -97,6 +98,7 @@ enum PureModule {
     Vm,
     Buffer,
     Querystring,
+    StreamConsumers,
     // After Events and StringDecoder: its declaration reads theirs.
     Stream,
 }
@@ -113,6 +115,7 @@ impl PureModule {
             Self::Buffer => BUFFER_MODULE_BINDING,
             Self::Querystring => QUERYSTRING_MODULE_BINDING,
             Self::Stream => STREAM_MODULE_BINDING,
+            Self::StreamConsumers => STREAM_CONSUMERS_BINDING,
         }
     }
 }
@@ -158,6 +161,7 @@ const STREAM_SOURCE: &str = concat!(
     include_str!("stream_module.js"),
     ")",
 );
+const STREAM_CONSUMERS_SOURCE: &str = include_str!("stream_consumers.js");
 const BUFFER_SOURCE: &str = include_str!("buffer_module.js");
 // The factory reads no guest globals and returns the realm's cached module.
 // Its methods are native callable values, not wrappers with separate identities.
@@ -259,6 +263,8 @@ fn builtin_require_member(expression: &Expression) -> Option<(PureModule, Option
         Some((PureModule::Querystring, None))
     } else if *specifier == "stream" || *specifier == "node:stream" {
         Some((PureModule::Stream, None))
+    } else if *specifier == "stream/consumers" || *specifier == "node:stream/consumers" {
+        Some((PureModule::StreamConsumers, None))
     } else if *specifier == "stream/promises" || *specifier == "node:stream/promises" {
         Some((PureModule::Stream, Some("promises")))
     } else {
@@ -365,6 +371,17 @@ const BUFFER_GLOBALS: [&str; 12] = [
     "btoa",
 ];
 
+const STREAM_CONSUMERS_GLOBALS: [&str; 8] = [
+    "Array",
+    "Blob",
+    "Buffer",
+    "JSON",
+    "Object",
+    "Reflect",
+    "Symbol",
+    "TextDecoder",
+];
+
 const STREAM_GLOBALS: [&str; 19] = [
     "AbortController",
     "AbortSignal",
@@ -405,6 +422,7 @@ pub(super) fn is_module_declaration(statement: &Statement) -> bool {
                     || name == ASSERT_MODULE_BINDING || name == TIMERS_MODULE_BINDING
                     || name == STRING_DECODER_MODULE_BINDING || name == VM_MODULE_BINDING
                     || name == STREAM_MODULE_BINDING
+                    || name == STREAM_CONSUMERS_BINDING
                     || name == QUERYSTRING_MODULE_BINDING
             )
     )
@@ -703,6 +721,7 @@ fn parse_module_source(module: PureModule) -> Result<Expression, LoweringPipelin
         PureModule::Buffer => ("franken:buffer", BUFFER_SOURCE),
         PureModule::Querystring => ("franken:querystring", QUERYSTRING_SOURCE),
         PureModule::Stream => ("franken:stream", STREAM_SOURCE),
+        PureModule::StreamConsumers => ("franken:stream/consumers", STREAM_CONSUMERS_SOURCE),
     };
     let parse_failed = || LoweringPipelineError::InvariantViolation {
         detail: "the engine's pure builtin module source failed to parse",
@@ -740,6 +759,7 @@ fn module_source(
         PureModule::Buffer => &BUFFER_GLOBALS,
         PureModule::Querystring => &[],
         PureModule::Stream => &STREAM_GLOBALS,
+        PureModule::StreamConsumers => &STREAM_CONSUMERS_GLOBALS,
     };
     let mut renamer = ModuleRenamer {
         through_global_object: globals

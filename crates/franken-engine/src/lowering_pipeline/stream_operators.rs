@@ -10,7 +10,10 @@
 //! for ALL stream constructors in the program. Ordinary facade-only programs
 //! keep their fast path; we do not guess that an alias is an array or a stream.
 
-use super::{Expression, Outcome, Statement, Walk, walk_expression, walk_statement};
+use super::{
+    Expression, Outcome, PureModule, Statement, Walk, builtin_require_member, walk_expression,
+    walk_statement,
+};
 
 pub(super) fn requires_stream_module(body: &[Statement]) -> bool {
     let mut search = OperatorUse { found: false };
@@ -33,6 +36,16 @@ impl Walk for OperatorUse {
 
     fn expression(&mut self, expression: &mut Expression) -> Outcome {
         if self.found {
+            return Ok(());
+        }
+        // A consumer drives its source through async iteration rather than a
+        // constructor-specific HostCall. Keep sources passed into it on the
+        // full stream state machine path, even without an operator member.
+        if matches!(
+            builtin_require_member(expression),
+            Some((PureModule::StreamConsumers, None))
+        ) {
+            self.found = true;
             return Ok(());
         }
         if let Expression::Member { property, computed, .. }
@@ -127,5 +140,50 @@ mod tests {
         for source in ["const x = { map: 1 };", "const text = 'stream.map(fn)';"] {
             assert!(!requires_stream_module(&parse(source).body));
         }
+    }
+
+    #[test]
+    fn consumers_materialize_once_and_keep_stream_sources_on_the_complete_path() {
+        for (source, count) in [
+            ("const a = require('stream/consumers'); const b = require('node:stream/consumers');", 1),
+            ("const { Readable } = require('stream'); const c = require('stream/consumers'); c.text(Readable.from(['a']));", 4),
+        ] {
+            let tree = parse(source);
+            let rewritten = rewrite_util_requires(&tree)
+                .expect("consumer rewrite")
+                .expect("consumer module is materialized");
+            assert_eq!(
+                rewritten.body.iter().filter(|s| is_module_declaration(s)).count(),
+                count,
+                "{source}"
+            );
+            assert!(rewrite_util_requires(&rewritten).expect("second pass").is_none());
+        }
+        for source in [
+            "function f(require) { return require('stream/consumers'); }",
+            "const name = 'stream/consumers'; require(name);",
+            "require('stream/consumers/unknown');",
+        ] {
+            assert!(rewrite_util_requires(&parse(source)).expect("rewrite").is_none());
+        }
+    }
+
+    #[test]
+    fn consumer_source_protects_all_realm_globals_without_host_authority() {
+        use super::super::{STREAM_CONSUMERS_GLOBALS, module_source, parse_module_source, tests::free_names};
+        use std::collections::BTreeSet;
+
+        let expected: BTreeSet<String> = STREAM_CONSUMERS_GLOBALS
+            .iter()
+            .map(|name| name.to_string())
+            .collect();
+        assert_eq!(
+            free_names(&mut parse_module_source(PureModule::StreamConsumers).expect("parses")),
+            expected
+        );
+        assert_eq!(
+            free_names(&mut module_source(&expected, PureModule::StreamConsumers).expect("protected source")),
+            BTreeSet::from(["globalThis".to_string()])
+        );
     }
 }

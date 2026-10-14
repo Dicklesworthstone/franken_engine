@@ -66,3 +66,23 @@ fn esm_operators_share_alias_identity_and_complete_async_work() {
         "READABLE_OPERATORS_ESM_OK [6]",
     );
 }
+
+#[test]
+fn commonjs_consumers_share_aliases_and_consume_engine_streams() {
+    run(
+        include_str!("../../../fixtures/stream_operators/consumers.cjs"),
+        "consumers.cjs",
+        "script",
+        "STREAM_CONSUMERS_OK",
+    );
+}
+
+#[test]
+fn esm_consumers_share_named_exports_and_consume_engine_streams() {
+    run(
+        include_str!("../../../fixtures/stream_operators/consumers.mjs"),
+        "consumers.mjs",
+        "module",
+        "STREAM_CONSUMERS_ESM_OK",
+    );
+}

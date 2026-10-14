@@ -171,3 +171,79 @@ test('splice-holes-stay-holes', () => {
   const a = [1, , 3, , 5]; const r = a.splice(1, 3, 8);
   return state(a) + ' ' + state(r);
 });
+
+test('sort-nested-comparator-keeps-separate-snapshots', () => {
+  const outer = [{k: 2, id: 'a'}, {k: 1, id: 'b'}, {k: 2, id: 'c'}];
+  const inner = [9, 3, 6]; let entered = false;
+  outer.sort((x, y) => {
+    if (!entered) { entered = true; inner.sort((a, b) => a - b); }
+    return x.k - y.k;
+  });
+  return outer.map(x => x.id).join('') + ' ' + inner.join(',');
+});
+test('sort-after-comparator-failure-can-run-again', () => {
+  const a = [3, 2, 1], token = {}; let caught = 0;
+  for (let n = 0; n < 16; n++) {
+    try { a.sort(() => {throw token;}); } catch (e) { if (e === token) caught++; }
+  }
+  a.sort((x, y) => x - y);
+  return caught + ' ' + state(a);
+});
+test('toSorted-captures-values-after-source-getters-delete-themselves', () => {
+  const source = {
+    length: 3,
+    get 0() {delete this[0]; return 'cc';},
+    get 1() {delete this[1]; return 'aa';},
+    2: 'bb'
+  };
+  const result = Array.prototype.toSorted.call(source, (a, b) => a < b ? -1 : a > b ? 1 : 0);
+  return result.join('|') + ' ' + Object.keys(source).join(',');
+});
+test('toSorted-materializes-holes-without-comparing-undefined', () => {
+  const source = {length: 4, 0: 3, 2: 1}; let undefinedSeen = false;
+  const result = Array.prototype.toSorted.call(source, (a, b) => {
+    undefinedSeen = undefinedSeen || a === undefined || b === undefined;
+    return a - b;
+  });
+  return state(result) + ' ' + Object.keys(result).join(',') + ' ' + undefinedSeen;
+});
+
+// Sorting compares exact UTF-16 units, not a lossy Rust String projection.
+function units(text) {
+  let result = '';
+  for (let i = 0; i < text.length; i++) result += (i ? '.' : '') + text.charCodeAt(i);
+  return result;
+}
+test('sort-exact-utf16-arraylike', () => {
+  const keys = ['\ufffd', '\udfff', '\ud800', '\ue000', '\ud83d\ude00', '\ud800a', 'a', '\udc00'];
+  const object = {length: keys.length};
+  for (let i = 0; i < keys.length; i++) object[i] = keys[i];
+  const same = Array.prototype.sort.call(object) === object;
+  let result = '';
+  for (let i = 0; i < keys.length; i++) result += (i ? ',' : '') + units(object[i]);
+  return same + ' ' + result;
+});
+test('toSorted-exact-utf16-proxy', () => {
+  const original = ['\ufffd', '\udfff', , '\ud800'];
+  const result = Array.prototype.toSorted.call(new Proxy(original, {}));
+  return result.slice(0, 3).map(units).join(',') + ' ' + (result[3] === undefined)
+    + ' ' + units(original[0]) + ' ' + (2 in original);
+});
+test('sort-exact-object-keys-and-stability', () => {
+  const prefix = 'key'.repeat(128);
+  let hints = true;
+  function item(id, suffix) {
+    return {id, [Symbol.toPrimitive](hint) {hints = hints && hint === 'string'; return prefix + suffix;}};
+  }
+  const a = [item('r', '\ufffd'), item('b', '\udfff'), item('a', '\ud800'),
+             item('c', '\ud800'), item('e', '\ue000'), item('d', '\ud83d\ude00')];
+  a.sort();
+  return a.map(x => x.id).join('') + ' ' + hints;
+});
+test('sort-symbol-keys-observe-comparison-boundary', () => {
+  const symbol = Symbol('key');
+  const one = {0: symbol, length: 1};
+  const singleton = Array.prototype.sort.call(one) === one;
+  const two = {0: symbol, 1: 'x', length: 2};
+  return singleton + ' ' + errorOf(() => Array.prototype.sort.call(two)) + ' ' + (two[0] === symbol);
+});

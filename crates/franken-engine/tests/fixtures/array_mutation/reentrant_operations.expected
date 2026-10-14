@@ -20,3 +20,11 @@ splice-result-length-throws-before-source-writes RangeError 3:10,20,30 10
 splice-insertion-and-explicit-undefined 5:1,8,9,2,3 0:
 splice-species-getter-throws-identity true 3:1,2,3
 splice-holes-stay-holes 3:1,8,5 3:-,3,-
+sort-nested-comparator-keeps-separate-snapshots bac 3,6,9
+sort-after-comparator-failure-can-run-again 16 3:1,2,3
+toSorted-captures-values-after-source-getters-delete-themselves aa|bb|cc 2,length
+toSorted-materializes-holes-without-comparing-undefined 4:1,3,undefined,undefined 0,1,2,3 false
+sort-exact-utf16-arraylike true 97,55296,55296.97,55357.56832,56320,57343,57344,65533
+toSorted-exact-utf16-proxy 55296,57343,65533 true 65533 false
+sort-exact-object-keys-and-stability acdber true
+sort-symbol-keys-observe-comparison-boundary true TypeError true

@@ -28,6 +28,7 @@ use super::*;
 use std::cmp::Ordering;
 
 mod mutation;
+mod sorting;
 
 const MAX_SAFE_LENGTH: u64 = (1 << 53) - 1;
 
@@ -147,7 +148,7 @@ impl InterpreterCore {
                     // No pre-call storage proof survives those observations.
                     let generic = kind == K::ArraySplice
                         || (kind == K::ArrayConcat
-                        && self.concat_spreads_generically(object_id, args)?)
+                            && self.concat_spreads_generically(object_id, args)?)
                         || self.converts_object_argument(kind, args)?
                         || length_locked
                         || self.array_mutation_requires_generic(object_id, kind, args)?
@@ -227,11 +228,11 @@ impl InterpreterCore {
     /// Whether Array.prototype.sort may sort the Array `array_id`'s element
     /// storage directly: the comparator is undefined, every index below the
     /// length is an own writable data property, and every element is a
-    /// primitive other than a Symbol, whose
-    /// ToString runs no guest code. Otherwise the sort runs generically, as
+    /// primitive other than a Symbol, whose ToString runs no guest code.
+    /// Otherwise the sort runs generically, as
     /// ES2023 23.1.3.30 writes it: holes are skipped and deleted after the
     /// sorted values, element getters and setters run, an object's ToString
-    /// calls its `toString`, and any other comparator is a TypeError.
+    /// calls its `toString`, and a non-callable comparator is a TypeError.
     fn array_sorts_on_element_storage(
         &self,
         array_id: ObjectId,
@@ -812,42 +813,7 @@ impl InterpreterCore {
                 accumulator
             }
             K::ArraySort | K::ArrayToSorted => {
-                let comparator = arg(self, 0)?;
-                if !matches!(comparator, Value::Undefined) && !comparator.is_callable() {
-                    return Err(InterpreterError::TypeError {
-                        expected: "undefined or callable comparator".to_string(),
-                        got: comparator.type_name().to_string(),
-                    });
-                }
-                let len = self.generic_length(m, o)?;
-                let in_place = kind == K::ArraySort;
-                if !in_place {
-                    Self::generic_array_create_length(len)?;
-                }
-                let mut items = self.generic_buffer(len)?;
-                for k in 0..len {
-                    self.charge_native_hole_read()?;
-                    let key = Self::generic_index_key(k);
-                    // toSorted reads holes as undefined; sort skips them.
-                    if !in_place || self.generic_has(m, o, &key)? {
-                        items.push(self.generic_get(m, o, &key)?);
-                    }
-                }
-                let sorted = self.generic_merge_sort(m, items, &comparator)?;
-                if in_place {
-                    let count = sorted.len() as u64;
-                    for (k, item) in sorted.into_iter().enumerate() {
-                        self.charge_native_hole_read()?;
-                        self.generic_set(m, o, &Self::generic_index_key(k as u64), item)?;
-                    }
-                    for k in count..len {
-                        self.charge_native_hole_read()?;
-                        self.generic_delete(m, o, &Self::generic_index_key(k))?;
-                    }
-                    self.generic_object_value(o)
-                } else {
-                    Value::Object(self.alloc_array_from_values(&sorted)?)
-                }
+                self.generic_sort_properties(module, kind, o, args)?
             }
             K::ArrayToReversed => {
                 let len = self.generic_length(m, o)?;
@@ -1124,37 +1090,6 @@ impl InterpreterCore {
         })
     }
 
-    /// A stable merge sort with ES2020 23.1.3.27.1 SortCompare: undefined
-    /// last, the comparator's ToNumber result (NaN is 0), else the UTF-16
-    /// order of ToString.
-    fn generic_merge_sort(
-        &mut self,
-        m: Option<&Ir3Module>,
-        items: Vec<Value>,
-        comparator: &Value,
-    ) -> Result<Vec<Value>, InterpreterError> {
-        if items.len() <= 1 {
-            return Ok(items);
-        }
-        let mut right = items;
-        let left = right.drain(..right.len() / 2).collect();
-        let left = self.generic_merge_sort(m, left, comparator)?;
-        let right = self.generic_merge_sort(m, right, comparator)?;
-        let mut merged = Vec::with_capacity(left.len() + right.len());
-        let (mut left, mut right) = (left.into_iter().peekable(), right.into_iter().peekable());
-        while let (Some(a), Some(b)) = (left.peek(), right.peek()) {
-            let ordering = self.generic_sort_compare(m, a.clone(), b.clone(), comparator)?;
-            if ordering == Ordering::Greater {
-                merged.extend(right.next());
-            } else {
-                merged.extend(left.next());
-            }
-        }
-        merged.extend(left);
-        merged.extend(right);
-        Ok(merged)
-    }
-
     fn generic_sort_compare(
         &mut self,
         m: Option<&Ir3Module>,
@@ -1177,11 +1112,13 @@ impl InterpreterCore {
                 Value::Undefined,
                 vec![a, b],
             )?;
+            // ToNumber may itself call guest code. Retain the comparator's
+            // observations before that second callback replaces its result.
+            self.observe_scoped_callback_result()?;
             let number = self.generic_to_number(m, result)?;
             return Ok(number.partial_cmp(&0.0).unwrap_or(Ordering::Equal));
         }
-        let (a, b) = (self.generic_to_string(m, a)?, self.generic_to_string(m, b)?);
-        Ok(a.encode_utf16().cmp(b.encode_utf16()))
+        self.compare_sort_strings(m, a, b)
     }
 
     /// IsArray (ES2020 7.2.2), looking through proxies to their targets;

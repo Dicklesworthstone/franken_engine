@@ -109,6 +109,8 @@
     var entries = [];
     var lengths = [];
     var total = 0;
+    var nonempty = 0;
+    var single;
     var count = buffers.length;
     for (var index = 0; index < count; index += 1) {
       var buffer = buffers[index];
@@ -116,13 +118,15 @@
       entries[index] = window.buffer;
       lengths[index] = window.length;
       total += window.length;
+      if (window.length !== 0) { nonempty += 1; single = window.buffer; }
       if (total > 9007199254740991) {
         var error = new RangeError('Combined buffer length is out of range');
         error.code = 'ERR_OUT_OF_RANGE';
         throw error;
       }
     }
-    return { entries: entries, lengths: lengths, total: total };
+    return { entries: entries, lengths: lengths, total: total,
+      single: nonempty === 1 ? single : undefined };
   }
   function vectorPosition(position) {
     // Node's vector APIs use the descriptor cursor unless given a valid,
@@ -133,12 +137,14 @@
   function readvSync(fd, buffers, position) {
     var vector = vectorBuffers(buffers);
     if (vector.total === 0) { return 0; }
-    // Coalesce to ONE native descriptor read, then scatter only the returned
-    // prefix. Existing Buffer allocation and host-I/O budgets still apply.
-    // This is not a zero-copy readv syscall; no new host authority is added.
-    var data = bufferAlloc(vector.total);
+    // A single nonempty byte view is already a native read target. Validate
+    // every entry first, including empty entries and getters after that view.
+    // Multiple targets still stage one read and scatter its returned prefix;
+    // in particular, overlapping views must keep their ordered scatter.
+    var data = vector.single === undefined ? bufferAlloc(vector.total) : vector.single;
     var count = checkedCount(readSync(fd, data, 0, vector.total, vectorPosition(position)),
       vector.total, 'readv', false);
+    if (vector.single !== undefined) { return count; }
     var offset = 0;
     for (var index = 0; index < vector.entries.length && offset < count; index += 1) {
       var length = vector.lengths[index];
@@ -160,7 +166,7 @@
     if (vector.total === 0) { return 0; }
     // One write preserves the native operation's append/partial-write
     // behavior. Unlike writeFile, writev reports short writes without retry.
-    var data = bufferConcat(vector.entries, vector.total);
+    var data = vector.single === undefined ? bufferConcat(vector.entries, vector.total) : vector.single;
     return checkedCount(writeSync(fd, data, 0, vector.total, vectorPosition(position)),
       vector.total, 'writev', false);
   }
@@ -293,19 +299,33 @@
     options = fileOptions(options, null);
     var chunks = [];
     var total = 0;
+    var chunk;
+    var filled = 0;
     // A short read is not EOF (pipes and interrupted reads can return less
-    // than requested). Only a zero count ends the descriptor stream.
+    // than requested). Fill the current allocation across short reads: keeping
+    // a 16 KiB backing store for every tiny subarray made retained memory grow
+    // with the number of reads instead of the number of bytes. Only zero ends
+    // the descriptor stream; all native requests remain at most 16 KiB.
     for (;;) {
       checkAbort(options.signal);
-      var chunk = bufferAlloc(16384);
-      var count = checkedCount(readSync(fd, chunk, 0, chunk.length, null),
-        chunk.length, 'read', false);
+      if (chunk === undefined) { chunk = bufferAlloc(16384); filled = 0; }
+      var remaining = chunk.length - filled;
+      var count = checkedCount(readSync(fd, chunk, filled, remaining, null),
+        remaining, 'read', false);
       checkAbort(options.signal);
       if (count === 0) { break; }
-      chunks[chunks.length] = count === chunk.length ? chunk :
-        apply(bufferSlice, chunk, [0, count]);
       total += count;
+      filled += count;
+      if (filled === chunk.length) {
+        chunks[chunks.length] = chunk;
+        chunk = undefined;
+      }
     }
+    if (filled !== 0) {
+      chunks[chunks.length] = apply(bufferSlice, chunk, [0, filled]);
+    }
+    // Compact even a single partial chunk so a tiny public result does not
+    // keep its entire 16 KiB staging allocation alive.
     var result = bufferConcat(chunks, total);
     return options.encoding === null ? result :
       apply(bufferToString, result, [options.encoding]);

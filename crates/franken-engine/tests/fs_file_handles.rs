@@ -223,3 +223,53 @@ fn file_handle_whole_file_and_iterable_writes_preserve_view_bytes() {
         b"ABCDBCABCDBC"
     );
 }
+
+#[test]
+fn file_handle_read_file_preserves_multichunk_utf8_and_cursor() {
+    let root = tempfile::tempdir().expect("sandbox");
+    let text = format!("#{}\u{20ac}{}", "x".repeat(16383), "\u{1f603}".repeat(9000));
+    std::fs::write(root.path().join("unicode.txt"), &text).unwrap();
+    let output = run(
+        "let h; require('fs/promises').open('unicode.txt').then(value => { \
+           h = value; return h.read(Buffer.alloc(1)); \
+         }).then(result => { \
+           console.log(result.bytesRead, result.buffer.toString()); return h.readFile('utf8'); \
+         }).then(text => { \
+           console.log(text.length, text.charCodeAt(16383), text.charCodeAt(16384), \
+             text.charCodeAt(text.length - 1)); return h.readFile(); \
+         }).then(empty => { console.log(empty.length); return h.close(); });",
+        root.path(),
+        &["fs_read", "fs_write"],
+    )
+    .expect("descriptor contents are assembled before decoding");
+    assert_eq!(output, ["1 #", "34384 8364 55357 56835", "0"]);
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("unicode.txt")).unwrap(),
+        text
+    );
+}
+
+#[test]
+fn file_handle_single_nonempty_vector_preserves_view_offsets_and_short_read_tail() {
+    let root = tempfile::tempdir().expect("sandbox");
+    let output = run(
+        "let h; const data = Buffer.from('ABCD'); \
+         const parts = [Buffer.alloc(0), data, new Uint8Array(0)]; \
+         const out = new Uint8Array(8); out.fill(45); \
+         const target = new DataView(out.buffer, 2, 4); \
+         const targets = [new Uint8Array(0), target, Buffer.alloc(0)]; \
+         require('fs/promises').open('single.txt', 'w+').then(value => { \
+           h = value; return h.writev(parts, 0); \
+         }).then(result => { \
+           console.log(result.bytesWritten, result.buffers === parts); return h.readv(targets, 1); \
+         }).then(result => { \
+           console.log(result.bytesRead, result.buffers === targets); \
+           console.log(Buffer.from(out.buffer).toString()); return h.close(); \
+         });",
+        root.path(),
+        &["fs_read", "fs_write"],
+    )
+    .expect("single-window vector descriptor operations");
+    assert_eq!(output, ["4 true", "3 true", "--BCD---"]);
+    assert_eq!(std::fs::read(root.path().join("single.txt")).unwrap(), b"ABCD");
+}

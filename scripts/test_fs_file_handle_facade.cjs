@@ -14,7 +14,7 @@ const source = fs.readFileSync(process.env.FRANKEN_FS_SOURCE || path.join(__dirn
   '../crates/franken-engine/src/lowering_pipeline/fs_module.js'), 'utf8');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'franken-fs-handles-'));
 let nextFile = 0;
-function fixture(hook = () => {}) {
+function fixture(hook = () => {}, globals = {}) {
   const calls = [];
   const dispatch = (authority, discriminator, ...args) => {
     const operation = discriminator.slice('\0fsop:'.length);
@@ -36,6 +36,7 @@ function fixture(hook = () => {}) {
     __franken_fs_read: (...args) => dispatch('fs_read', ...args),
     __franken_fs_write: (...args) => dispatch('fs_write', ...args),
   };
+  Object.assign(context, globals);
   return {
     facade: vm.runInNewContext(source, context), calls, context,
     file: path.join(root, `file-${nextFile++}`),
@@ -353,4 +354,155 @@ test('view option getters cannot close a descriptor before its active read drain
   assert.equal(Buffer.from(buffer.buffer).toString(), 'safe');
   await closing;
   assert.deepEqual(calls.map(call => call.operation), ['open', 'read_fd', 'close_fd']);
+});
+
+// Count only the facade's explicit staging requests, not Node's allocator or
+// FrankenEngine heap usage. The wrapped methods still operate on real Buffers.
+function measuredBuffers() {
+  const counts = { allocations: 0, allocatedBytes: 0, concats: 0, copies: 0 };
+  const methods = Object.assign(Object.create(Buffer.prototype), {
+    copy(...args) {
+      counts.copies++;
+      return Reflect.apply(Buffer.prototype.copy, this, args);
+    },
+  });
+  const api = Object.assign(Object.create(Buffer), {
+    prototype: methods,
+    alloc(length, ...args) {
+      counts.allocations++;
+      counts.allocatedBytes += length;
+      return Buffer.alloc(length, ...args);
+    },
+    concat(...args) { counts.concats++; return Buffer.concat(...args); },
+  });
+  return { api, counts };
+}
+
+test('short-read staging is bounded by payload bytes, not fragment count', async t => {
+  for (const [size, fragment] of [[0, 1], [17, 1], [16384, 7], [49157, 7]]) {
+    const { api, counts } = measuredBuffers();
+    const { facade, file, calls } = fixture((authority, operation, args) => {
+      if (operation === 'read_fd') args[3] = Math.min(args[3], fragment);
+    }, { Buffer: api });
+    const payload = Buffer.alloc(size);
+    for (let i = 0; i < size; i++) payload[i] = (i * 37 + 11) & 255;
+    fs.writeFileSync(file, payload);
+    const handle = await facade.promises.open(file);
+    try {
+      const data = await handle.readFile();
+      assert.deepEqual(data, payload);
+      assert.equal(data.length, size, 'unused staging bytes must never escape');
+      // One active block, including the EOF probe after an exactly full block.
+      const bound = Math.floor(size / 16384) + 1;
+      t.diagnostic(`${size} bytes / ${fragment}-byte reads: ${counts.allocations} staging allocations`);
+      assert.equal(counts.allocations, bound);
+      assert.equal(counts.allocatedBytes, bound * 16384);
+      assert.equal(counts.concats, 1, 'compact the final public Buffer once');
+      const reads = calls.filter(call => call.operation === 'read_fd');
+      assert(reads.length >= Math.ceil(size / fragment) + 1);
+      assert(reads.every(call => call.authority === 'fs_read' && call.args[3] <= 16384));
+      assert.equal(new Set(reads.map(call => call.args[1])).size, bound);
+    } finally { await handle.close(); }
+  }
+});
+
+test('one nonempty vector borrows its Buffer window without staging or scatter', async () => {
+  for (const typed of [false, true]) {
+    const { api, counts } = measuredBuffers();
+    const { facade, file, calls } = fixture(undefined, { Buffer: api });
+    const handle = await facade.promises.open(file, 'w+');
+    try {
+      const backing = Uint8Array.from([45, 65, 66, 67, 68, 45]);
+      const data = typed ? new DataView(backing.buffer, 1, 4) : Buffer.from('ABCD');
+      const parts = [Buffer.alloc(0), data, new Uint8Array(0)];
+      const put = await handle.writev(parts, 0);
+      assert.equal(put.buffers, parts);
+      assert.equal(put.bytesWritten, 4);
+      const out = Buffer.alloc(8, 45);
+      const target = typed ? new DataView(out.buffer, out.byteOffset + 2, 4) : out.subarray(2, 6);
+      const targets = [new Uint8Array(0), target, Buffer.alloc(0)];
+      const got = await handle.readv(targets, 1);
+      assert.equal(got.buffers, targets);
+      assert.equal(got.bytesRead, 3, 'short read leaves the last byte untouched');
+      assert.equal(out.toString(), '--BCD---');
+      assert.deepEqual(counts, { allocations: 0, allocatedBytes: 0, concats: 0, copies: 0 });
+      const effects = calls.filter(call => /^(read|write)_fd$/.test(call.operation));
+      assert.equal(effects.length, 2);
+      if (!typed) {
+        assert.equal(effects[0].args[1], data);
+        assert.equal(effects[1].args[1], target);
+      } else {
+        assert.equal(effects[0].args[1].buffer, data.buffer);
+        assert.equal(effects[0].args[1].byteOffset, data.byteOffset);
+        assert.equal(effects[1].args[1].buffer, target.buffer);
+        assert.equal(effects[1].args[1].byteOffset, target.byteOffset);
+      }
+    } finally { await handle.close(); }
+  }
+});
+
+test('single-vector selection still visits trailing getters before any I/O', async () => {
+  for (const operation of ['readv', 'writev']) {
+    const { facade, file, calls } = fixture();
+    const handle = await facade.promises.open(file, 'w+');
+    const failure = new Error('invalid tail');
+    let closing;
+    const parts = [Buffer.from('data')];
+    Object.defineProperty(parts, 1, { get() {
+      closing = handle.close();
+      throw failure;
+    } });
+    await assert.rejects(handle[operation](parts), error => error === failure);
+    await closing;
+    assert.deepEqual(calls.map(call => call.operation), ['open', 'close_fd']);
+    assert.equal(fs.statSync(file).size, 0);
+  }
+});
+
+test('packed reads reject a count larger than the remaining window', async () => {
+  const { facade, file, context } = fixture();
+  fs.writeFileSync(file, 'data');
+  const handle = await facade.promises.open(file);
+  let reads = 0;
+  context.__franken_fs_read = (tag, fd, data, offset, length, position) => {
+    if (++reads === 1) return fs.readSync(fd, data, offset, 1, position);
+    assert.equal(offset, 1);
+    assert.equal(length, 16383);
+    return 16384; // Fits the allocation but exceeds the authorized byte window.
+  };
+  try {
+    await assert.rejects(handle.readFile(), { code: 'EIO', syscall: 'read' });
+    assert.equal(reads, 2);
+  } finally { await handle.close(); }
+});
+
+test('short-read packing preserves UTF-8 assembly, abort checks and close draining', async () => {
+  const { api, counts } = measuredBuffers();
+  const controller = new AbortController();
+  let abort = false;
+  let closing;
+  let handle;
+  const { facade, file, calls } = fixture((authority, operation, args) => {
+    if (operation === 'read_fd') {
+      args[3] = Math.min(args[3], 3);
+      if (abort) { closing = handle.close(); controller.abort('stop'); }
+    }
+  }, { Buffer: api });
+  const text = 'x'.repeat(16383) + '\u20ac' + '\ud83d\ude03'.repeat(30);
+  fs.writeFileSync(file, text);
+  handle = await facade.promises.open(file);
+  assert.equal(await handle.readFile('utf8'), text);
+  await handle.close();
+  handle = await facade.promises.open(file);
+  const before = counts.allocations;
+  await assert.rejects(handle.readFile({ signal: AbortSignal.abort('pre') }),
+    { code: 'ABORT_ERR', cause: 'pre' });
+  assert.equal(counts.allocations, before, 'pre-abort must precede staging allocation');
+  const priorReads = calls.filter(call => call.operation === 'read_fd').length;
+  abort = true;
+  await assert.rejects(handle.readFile({ signal: controller.signal }),
+    { code: 'ABORT_ERR', cause: 'stop' });
+  await closing;
+  assert.equal(calls.filter(call => call.operation === 'read_fd').length, priorReads + 1);
+  assert.equal(calls.at(-1).operation, 'close_fd');
 });

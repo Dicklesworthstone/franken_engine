@@ -15,7 +15,7 @@
 //! methods remain bound own properties rather than prototype methods;
 //! a lone surrogate in the input is read as U+FFFD.
 //!
-//! Canonical records and iterator cursors are private heap objects reached
+//! Canonical data and iterator cursors are private heap objects reached
 //! through builtin bound-object edges, which the collector traces. Neither
 //! hidden string properties nor yielded records expose that storage. Every
 //! delivery creates a fresh mutable record sharing immutable string backing.
@@ -32,6 +32,9 @@ type Segment = (JsString, usize, Option<bool>);
 /// unit even though segmentation no longer stages full slice and tuple
 /// buffers. Streaming must not silently relax the input memory limit.
 const SEGMENT_NATIVE_BYTES_PER_CODE_UNIT: u64 = 96;
+/// Private canonical rows occupy three numeric properties: shared text,
+/// UTF-16 start, and Bool/Undefined word flag. No guest object per segment.
+const SEGMENT_ROW_WIDTH: usize = 3;
 
 impl InterpreterCore {
     /// ECMA-402 18.1.1 steps 7-13: localeMatcher and granularity.
@@ -82,15 +85,19 @@ impl InterpreterCore {
             Some(Value::Str(granularity)) => granularity.to_string(),
             _ => "grapheme".to_string(),
         };
-        // Retain the preflight admission check before segmentation begins.
-        // Records are now built and charged as pieces arrive, rather than
-        // after staging a slice vector and a vector of owned segment tuples.
-        // Removing those buffers must not widen the admitted input sizes.
+        // Keep the input admission limit. Actual rows are additionally charged
+        // through normal property writes, including every numeric key and value.
         let code_units = u64::try_from(input.encode_utf16().count()).unwrap_or(u64::MAX);
         let transient = code_units.saturating_mul(SEGMENT_NATIVE_BYTES_PER_CODE_UNIT);
         let requested = self.estimated_memory_bytes.saturating_add(transient);
         if self.memory_request_exceeds_budget(requested, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(requested, self.heap_object_count_u32()));
+        }
+        // Prepay linear input work before dictionary detection, segmentation
+        // and string construction. A single enormous grapheme/word/sentence
+        // must not evade the per-piece meter below.
+        for _ in 0..=input.len() / 256 {
+            self.json_charge_work()?;
         }
         if granularity == "word"
             && let Some(script) = input.chars().find_map(dictionary_script)
@@ -101,21 +108,20 @@ impl InterpreterCore {
         let text = input
             .as_str()
             .expect("Intl.Segmenter input originates from a Rust String");
-        let records = match granularity.as_str() {
-            "word" => self.segment_records(text.split_word_bounds(), true)?,
-            "sentence" => self.segment_records(text.split_sentence_bounds(), false)?,
-            _ => self.segment_records(text.graphemes(true), false)?,
-        };
         // Non-enumerable properties on the public object are not internal
         // slots: guests can still read and overwrite them. Only bound native
         // methods retain this private, null-prototype storage object.
         let storage = self.alloc_object_with_prototype(None)?;
-        let count = i64::try_from(records.len()).map_err(|_| Self::segment_state_error())?;
-        self.set_object_property(storage, "__input".to_string(), Value::Str(input))?;
+        self.set_object_property(storage, "__input".to_string(), Value::Str(input.clone()))?;
+        let count = match granularity.as_str() {
+            "word" => self.segment_store_pieces(storage, text.split_word_bounds(), true)?,
+            "sentence" => self.segment_store_pieces(storage, text.split_sentence_bounds(), false)?,
+            _ => self.segment_store_pieces(storage, text.graphemes(true), false)?,
+        };
+        let count = i64::try_from(count).map_err(|_| Self::segment_state_error())?;
+        // Publish the row count only after every row was successfully charged.
+        // On a failure the incomplete private object has never escaped.
         self.set_object_property(storage, "__count".to_string(), Value::Int(count))?;
-        for (index, record) in records.into_iter().enumerate() {
-            self.set_object_property(storage, index.to_string(), record)?;
-        }
         let object = self.alloc_object_with_prototype(None)?;
         self.set_object_brand(object, "Intl.Segments")?;
         self.set_object_property(
@@ -166,29 +172,38 @@ impl InterpreterCore {
         }
     }
 
-    /// Borrow only the selected canonical record; never clone the entire
-    /// collection. Storage is private, so getters and guest mutations cannot
-    /// affect this read or change the ordering of its UTF-16 boundaries.
+    fn segment_row_slots(index: usize) -> Result<[usize; SEGMENT_ROW_WIDTH], InterpreterError> {
+        let last = index
+            .checked_mul(SEGMENT_ROW_WIDTH)
+            .and_then(|first| first.checked_add(SEGMENT_ROW_WIDTH - 1))
+            .ok_or_else(Self::segment_state_error)?;
+        Ok([last - 2, last - 1, last])
+    }
+
+    /// Borrow only the selected private row. Numeric lookups avoid decimal
+    /// key allocation and a second heap-object lookup on ordinary inputs.
+    /// The fallback preserves the property carrier's non-index key boundary.
     fn segment_data_at(&self, storage: ObjectId, index: usize) -> Result<Segment, InterpreterError> {
-        let record = self
-            .heap
-            .get(storage.0 as usize)
-            .and_then(|object| object.properties.get(&index.to_string()));
-        let Some(Value::Object(record)) = record else {
-            return Err(Self::segment_state_error());
-        };
         let object = self
             .heap
-            .get(record.0 as usize)
+            .get(storage.0 as usize)
             .ok_or_else(Self::segment_state_error)?;
-        let (Some(Value::Str(text)), Some(Value::Int(start))) = (
-            object.properties.get("segment"),
-            object.properties.get("index"),
-        ) else {
+        let Some(Value::Int(count)) = object.properties.get("__count") else {
             return Err(Self::segment_state_error());
         };
-        let word_like = match object.properties.get("isWordLike") {
-            None => None,
+        if index >= usize::try_from(*count).map_err(|_| Self::segment_state_error())? {
+            return Err(Self::segment_state_error());
+        }
+        let [text_slot, start_slot, word_slot] = Self::segment_row_slots(index)?;
+        let get = |slot: usize| match u32::try_from(slot) {
+            Ok(slot) if slot < u32::MAX => object.properties.get_index(slot),
+            _ => object.properties.get(&slot.to_string()),
+        };
+        let (Some(Value::Str(text)), Some(Value::Int(start))) = (get(text_slot), get(start_slot)) else {
+            return Err(Self::segment_state_error());
+        };
+        let word_like = match get(word_slot) {
+            Some(Value::Undefined) => None,
             Some(Value::Bool(flag)) => Some(*flag),
             _ => return Err(Self::segment_state_error()),
         };
@@ -362,23 +377,8 @@ impl InterpreterCore {
     /// A segment data record `{ segment, index, input[, isWordLike] }`.
     fn segment_record(
         &mut self,
-        segment: &Segment,
-        input: &JsString,
-    ) -> Result<ObjectId, InterpreterError> {
-        self.segment_record_with_input(segment, Some(input))
-    }
-
-    /// Private canonical records need only the segment, start and word flag.
-    /// The input lives once in their owning storage object. Including it in
-    /// every private record charged its entire length per segment, despite
-    /// sharing its immutable backing: ordinary grapheme input hit the memory
-    /// budget quadratically before any result was requested. Public records
-    /// still receive their own input property, in the specified key order,
-    /// through the unchanged ordinary property-accounting path.
-    fn segment_record_with_input(
-        &mut self,
         (text, index, word_like): &Segment,
-        input: Option<&JsString>,
+        input: &JsString,
     ) -> Result<ObjectId, InterpreterError> {
         let mut fields = vec![
             ("segment", Value::Str(text.clone())),
@@ -386,35 +386,54 @@ impl InterpreterCore {
                 "index",
                 Value::Int(i64::try_from(*index).unwrap_or(i64::MAX)),
             ),
+            ("input", Value::Str(input.clone())),
         ];
-        if let Some(input) = input {
-            fields.push(("input", Value::Str(input.clone())));
-        }
         if let Some(word_like) = word_like {
             fields.push(("isWordLike", Value::Bool(*word_like)));
         }
         self.alloc_object_with_properties(&fields)
     }
 
-    /// Stream UAX #29 pieces directly into charged record objects. There is
-    /// no full-input slice/tuple staging, and each piece gets one immutable
-    /// text backing shared by all fresh records referring to that segment.
-    fn segment_records<'a>(
+    /// Stream UAX #29 pieces into scalar/string rows in one private object.
+    /// Every property uses normal memory admission; no full-input Vec of
+    /// records, per-piece heap object, or duplicate input property is retained.
+    /// Transient text is reserved before allocation and released on either
+    /// success or property-admission failure. Public results remain fresh.
+    fn segment_store_pieces<'a>(
         &mut self,
-        pieces: impl Iterator<Item = &'a str>,
+        storage: ObjectId,
+        mut pieces: impl Iterator<Item = &'a str>,
         word_granularity: bool,
-    ) -> Result<Vec<Value>, InterpreterError> {
-        let mut records = Vec::new();
-        let mut index = 0;
-        for piece in pieces {
+    ) -> Result<usize, InterpreterError> {
+        let mut count = 0;
+        let mut index = 0usize;
+        loop {
+            // Poll before asking the Unicode iterator to scan its next piece.
+            self.json_charge_work()?;
+            let Some(piece) = pieces.next() else { break };
+            if piece.is_empty() {
+                return Err(Self::segment_state_error());
+            }
+            let slots = Self::segment_row_slots(count)?;
+            let start = i64::try_from(index).map_err(|_| Self::segment_state_error())?;
+            let temporary = Self::estimate_string_bytes(piece);
+            self.json_reserve_temporary(temporary)?;
             let text = JsString::from(piece);
-            let end = index + text.utf16_len();
-            let word_like = word_granularity.then(|| piece.chars().any(char::is_alphanumeric));
-            let record = self.segment_record_with_input(&(text, index, word_like), None)?;
-            records.push(Value::Object(record));
-            index = end;
+            let length = text.utf16_len();
+            let stored = self.set_object_property(storage, slots[0].to_string(), Value::Str(text));
+            self.json_release_temporary(temporary);
+            stored?;
+            self.set_object_property(storage, slots[1].to_string(), Value::Int(start))?;
+            let word_like = if word_granularity {
+                Value::Bool(piece.chars().any(char::is_alphanumeric))
+            } else {
+                Value::Undefined
+            };
+            self.set_object_property(storage, slots[2].to_string(), word_like)?;
+            index = index.checked_add(length).ok_or_else(Self::segment_state_error)?;
+            count += 1;
         }
-        Ok(records)
+        Ok(count)
     }
 
     fn intl_segmenter_refusal(script: &str) -> InterpreterError {
@@ -498,9 +517,11 @@ mod tests {
             assert_eq!(shared.as_str(), Some(input.as_str()));
             assert_eq!(shared.utf16_len(), input.encode_utf16().count());
             assert!(count > 1, "fixture must exercise repeated records");
+            assert_eq!(
+                core.heap[storage.0 as usize].properties.index_values().count(),
+                count * SEGMENT_ROW_WIDTH,
+            );
             for index in 0..count {
-                let record = object(core.heap[storage.0 as usize].properties.get(&index.to_string()).unwrap().clone());
-                assert!(!core.heap[record.0 as usize].properties.contains_key("input"));
                 let canonical = core.segment_data_at(storage, index).expect("canonical data");
                 let public = core.segment_record(&canonical, &shared).expect("public record");
                 let stored = string_property(&core, public, "input");
@@ -554,17 +575,18 @@ mod tests {
         ];
         for word_granularity in [false, true] {
             let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-stream");
-            let records = if word_granularity {
-                core.segment_records(text.split_word_bounds(), true)
+            let storage = core.alloc_object_with_prototype(None).unwrap();
+            let count = if word_granularity {
+                core.segment_store_pieces(storage, text.split_word_bounds(), true)
             } else {
-                core.segment_records(text.graphemes(true), false)
+                core.segment_store_pieces(storage, text.graphemes(true), false)
             }
-            .expect("stream records");
-            assert_eq!(records.len(), expected.len());
-            for (record, (piece, index, word_like)) in records.into_iter().zip(expected) {
-                let Value::Object(record) = record else {
-                    panic!("expected segment record");
-                };
+            .expect("stream rows");
+            core.set_object_property(storage, "__count".to_string(), Value::Int(count as i64)).unwrap();
+            assert_eq!(count, expected.len());
+            for (slot, (piece, index, word_like)) in expected.into_iter().enumerate() {
+                let data = core.segment_data_at(storage, slot).unwrap();
+                let record = core.segment_record(&data, &input).unwrap();
                 assert_eq!(string_property(&core, record, "segment").as_str(), Some(piece));
                 let properties = &core.heap[record.0 as usize].properties;
                 assert_eq!(properties.get("index"), Some(&Value::Int(index)));
@@ -573,13 +595,14 @@ mod tests {
             }
         }
         let mut core = InterpreterCore::new(InterpreterConfig::default(), "sentence-stream");
-        let records = core
-            .segment_records(text.split_sentence_bounds(), false)
+        let storage = core.alloc_object_with_prototype(None).unwrap();
+        let count = core
+            .segment_store_pieces(storage, text.split_sentence_bounds(), false)
             .expect("stream sentence");
-        assert_eq!(records.len(), 1);
-        let Value::Object(record) = records[0].clone() else {
-            panic!("expected sentence record");
-        };
+        assert_eq!(count, 1);
+        core.set_object_property(storage, "__count".to_string(), Value::Int(count as i64)).unwrap();
+        let data = core.segment_data_at(storage, 0).unwrap();
+        let record = core.segment_record(&data, &input).unwrap();
         assert_eq!(string_property(&core, record, "segment"), &input);
         assert_eq!(core.heap[record.0 as usize].properties.get("index"), Some(&Value::Int(0)));
         assert!(!core.heap[record.0 as usize].properties.contains_key("isWordLike"));
@@ -588,13 +611,17 @@ mod tests {
     #[test]
     fn empty_segment_stream_does_not_allocate_records() {
         let mut core = InterpreterCore::new(InterpreterConfig::default(), "empty-segments");
+        let storage = core.alloc_object_with_prototype(None).unwrap();
         let before = core.heap.len();
+        let before_bytes = core.estimated_memory_bytes;
         for word_granularity in [false, true] {
-            let records = core
-                .segment_records(std::iter::empty::<&str>(), word_granularity)
+            let count = core
+                .segment_store_pieces(storage, std::iter::empty::<&str>(), word_granularity)
                 .expect("empty stream");
-            assert!(records.is_empty());
+            assert_eq!(count, 0);
             assert_eq!(core.heap.len(), before);
+            assert_eq!(core.estimated_memory_bytes, before_bytes);
+            assert!(core.heap[storage.0 as usize].properties.is_empty());
         }
     }
 
@@ -690,14 +717,12 @@ mod tests {
 
     #[test]
     fn exhausted_work_budget_does_not_advance_or_allocate_an_iterator_result() {
-        let config = InterpreterConfig {
-            instruction_budget: 0,
-            ..InterpreterConfig::default()
-        };
-        let mut core = InterpreterCore::new(config, "segment-budget");
+        let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-budget");
         let (_, storage) = fixture(&mut core, "abc", "grapheme");
         let iterator = object(core.segment_iterator(storage).unwrap());
         let state = bound(&core, iterator, "next");
+        // Construction is metered too; exhaust only the next() under test.
+        core.config.instruction_budget = 0;
         let before = core.heap.len();
         assert!(core.segment_iterator_next(state).is_err());
         assert_eq!(core.heap.len(), before);
@@ -919,5 +944,107 @@ console.log(Object.keys(words.containing(2)).join(','), words.containing(2).isWo
             "segment,index,input undefined",
             "segment,index,input,isWordLike true",
         ]);
+    }
+
+    #[test]
+    fn canonical_segment_table_has_constant_heap_object_count() {
+        for (granularity, text) in [
+            ("grapheme", "x".repeat(8192)),
+            ("word", "x ".repeat(4096)),
+            ("sentence", "Next! ".repeat(2048)),
+        ] {
+            let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-flat-table");
+            let resolved = core.alloc_object_with_properties(&[
+                ("granularity", Value::str(granularity)),
+            ]).unwrap();
+            let before = core.heap.len();
+            let segments = object(core.intl_segment(resolved, text).unwrap());
+            let storage = bound(&core, segments, "containing");
+            let (input, count) = core.segment_storage_info(storage).unwrap();
+            assert!(count > 1000);
+            assert_eq!(core.heap.len() - before, 2, "storage and Segments only");
+            let properties = &core.heap[storage.0 as usize].properties;
+            assert_eq!(properties.len(), count * SEGMENT_ROW_WIDTH + 2);
+            assert!(properties.index_values().all(|value| !matches!(value, Value::Object(_))));
+            let canonical = core.segment_data_at(storage, count - 1).unwrap();
+            let before = core.heap.len();
+            let record = object(core.segment_containing(storage, &input, count, canonical.1).unwrap());
+            assert_eq!(core.heap.len() - before, 1);
+            assert_eq!(string_property(&core, record, "segment"), &canonical.0);
+            assert_eq!(string_property(&core, record, "input"), &input);
+        }
+    }
+
+    #[test]
+    fn segment_construction_work_refusal_precedes_private_state_allocation() {
+        let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-construction-budget");
+        let resolved = core.alloc_object_with_prototype(None).unwrap();
+        core.config.instruction_budget = 0;
+        let before_heap = core.heap.len();
+        let before_bytes = core.estimated_memory_bytes;
+        assert!(core.intl_segment(resolved, "x".repeat(1024)).is_err());
+        assert_eq!(core.heap.len(), before_heap);
+        assert_eq!(core.estimated_memory_bytes, before_bytes);
+    }
+
+    #[test]
+    fn segment_store_polls_before_advancing_the_unicode_iterator() {
+        let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-stream-budget");
+        let storage = core.alloc_object_with_prototype(None).unwrap();
+        core.config.instruction_budget = 0;
+        let pulled = std::cell::Cell::new(0usize);
+        let pieces = std::iter::from_fn(|| {
+            pulled.set(pulled.get() + 1);
+            Some("x")
+        });
+        let before_heap = core.heap.len();
+        let before_bytes = core.estimated_memory_bytes;
+        assert!(core.segment_store_pieces(storage, pieces, false).is_err());
+        assert_eq!(pulled.get(), 0);
+        assert_eq!(core.heap.len(), before_heap);
+        assert_eq!(core.estimated_memory_bytes, before_bytes);
+        assert!(core.heap[storage.0 as usize].properties.is_empty());
+    }
+
+    #[test]
+    fn segment_row_memory_refusal_releases_its_temporary_reservation() {
+        let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-row-memory");
+        let storage = core.alloc_object_with_prototype(None).unwrap();
+        let piece = "x".repeat(128);
+        let temporary = InterpreterCore::estimate_string_bytes(&piece);
+        let before = core.estimated_memory_bytes;
+        core.json_reserve_temporary(37).unwrap();
+        let prior_temporary = core.json_parse_temporary_bytes;
+        // Admit the text reservation, but not its first charged property.
+        core.config.max_total_memory_bytes = before + prior_temporary + temporary + 1;
+        assert!(core.segment_store_pieces(storage, std::iter::once(piece.as_str()), false).is_err());
+        assert_eq!(core.estimated_memory_bytes, before);
+        assert_eq!(core.json_parse_temporary_bytes, prior_temporary);
+        assert!(core.heap[storage.0 as usize].properties.is_empty());
+        assert!(core.segment_data_at(storage, 0).is_err());
+        core.json_release_temporary(37);
+    }
+
+    #[test]
+    fn malformed_private_segment_rows_fail_closed_without_panicking() {
+        for (column, replacement) in [
+            (0, Value::Int(1)),
+            (1, Value::Int(-1)),
+            (2, Value::str("not a word flag")),
+        ] {
+            let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-row-shape");
+            let (_, storage) = fixture(&mut core, "abc", "grapheme");
+            let slots = InterpreterCore::segment_row_slots(0).unwrap();
+            core.set_object_property(storage, slots[column].to_string(), replacement).unwrap();
+            assert!(core.segment_data_at(storage, 0).is_err());
+            assert!(core.segment_data_at(storage, 3).is_err());
+            assert!(core.segment_data_at(storage, usize::MAX).is_err());
+        }
+        assert!(InterpreterCore::segment_row_slots(usize::MAX).is_err());
+        let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-count-shape");
+        let (_, storage) = fixture(&mut core, "abc", "grapheme");
+        core.set_object_property(storage, "__count".to_string(), Value::Int(-1)).unwrap();
+        assert!(core.segment_storage_info(storage).is_err());
+        assert!(core.segment_data_at(storage, 0).is_err());
     }
 }

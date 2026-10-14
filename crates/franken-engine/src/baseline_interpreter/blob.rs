@@ -74,9 +74,7 @@ impl InterpreterCore {
         match parts {
             Value::Undefined => {}
             parts if parts.is_object_like() => {
-                for part in self.blob_part_values(module, parts)? {
-                    self.append_blob_part(&part, &mut bytes)?;
-                }
+                self.append_blob_parts(module, parts, &mut bytes)?;
             }
             other => {
                 return Err(InterpreterError::TypeError {
@@ -160,36 +158,29 @@ impl InterpreterCore {
         )
     }
 
-    /// The blob parts of `parts`, the whole sequence first as WebIDL
-    /// converts it. An Array goes through the budget-checked element buffer;
-    /// any other iterable (a typed array iterates natively, one `Value` per
-    /// byte) is collected with the growing `Vec` charged at each step, so
-    /// `new Blob(new Uint8Array(48 << 20))` is refused instead of building
-    /// ~1-2 GB of `Value`s before the first part is appended.
-    fn blob_part_values(
+    /// Node snapshots each yielded binary part before requesting the next.
+    /// Eagerly collecting Values both changed those snapshots and retained
+    /// one Value per part (even for millions of empty strings). Reuse native
+    /// iteration and append immediately; do not duplicate the source list.
+    /// Already accumulated bytes remain charged while guest next() executes,
+    /// including reentrant constructors. Empty parts still consume work.
+    fn append_blob_parts(
         &mut self,
         module: &Ir3Module,
         parts: Value,
-    ) -> Result<Vec<Value>, InterpreterError> {
-        if let Value::Object(array_id) = parts
-            && self
-                .heap
-                .get(array_id.0 as usize)
-                .is_some_and(|object| object.is_array)
-            && !self.array_from_has_explicit_iterator(array_id)?
-        {
-            return self.array_like_values(array_id);
-        }
+        bytes: &mut Vec<u8>,
+    ) -> Result<(), InterpreterError> {
         let iterator = self.init_for_of_iterator(Some(module), parts)?;
-        let mut values = Vec::new();
-        while let Some(value) = self.advance_for_of_iterator(Some(module), iterator.clone())? {
-            values.push(value);
-            self.check_temporary_memory_budget(
-                u64::try_from(values.len().saturating_mul(std::mem::size_of::<Value>()))
-                    .unwrap_or(u64::MAX),
-            )?;
+        loop {
+            self.json_charge_work()?;
+            let scratch = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+            self.json_reserve_temporary(scratch)?;
+            let next = self.advance_for_of_iterator(Some(module), iterator.clone());
+            self.json_release_temporary(scratch);
+            let Some(value) = next? else { break; };
+            self.append_blob_part(&value, bytes)?;
         }
-        Ok(values)
+        Ok(())
     }
 
     /// A fresh blob object holding `bytes`, its bytes charged.
@@ -374,9 +365,19 @@ impl InterpreterCore {
                 }
                 let promise = self.create_fulfilled_promise(
                     Self::value_to_js_value(&Value::Object(buffer)),
-                    label,
+                    label.clone(),
                 )?;
-                Ok(Value::Promise(promise.0))
+                if method == "bytes" {
+                    // Node's async byte-view operation observes completion of
+                    // the binary read before resolving its public promise.
+                    // Use native promise adoption, not synchronous settlement
+                    // or a guest-replaceable Promise/Uint8Array constructor.
+                    let read = self.create_promise()?;
+                    self.resolve_promise_to_native(read, promise, label)?;
+                    Ok(Value::Promise(read.0))
+                } else {
+                    Ok(Value::Promise(promise.0))
+                }
             }
             _ => Err(InterpreterError::TypeError {
                 expected: "a Blob.prototype method".to_string(),

@@ -23,7 +23,11 @@ use crate::ast::{
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
 const MODULE_BINDING: &str = "%fs_module";
-const SOURCE: &str = include_str!("fs_module.js");
+// Compose bulk copying with the same filesystem object and private host calls.
+// The copier never obtains a new provider or ambient filesystem authority.
+const SOURCE: &str = concat!(
+    "(", include_str!("fs_copy.js"), ")(", include_str!("fs_module.js"), ")",
+);
 // One immutable parser template shared by fs and fs/promises. Every program
 // still receives a clone before renaming and dependency/loader rewriting.
 static FILESYSTEM_SOURCE: NativeModuleSource = NativeModuleSource::new("franken:fs", SOURCE);
@@ -31,7 +35,7 @@ const PLACEHOLDERS: [(&str, &str); 2] = [
     ("__franken_fs_read", "%FsRead"),
     ("__franken_fs_write", "%FsWrite"),
 ];
-const GLOBALS: [&str; 11] = [
+const GLOBALS: [&str; 13] = [
     "Promise",
     "Reflect",
     "TypeError",
@@ -43,6 +47,8 @@ const GLOBALS: [&str; 11] = [
     "Symbol",
     "ArrayBuffer",
     "AggregateError",
+    "Object",
+    "String",
 ];
 
 pub(super) fn intrinsic_capability(name: &str) -> Option<&'static str> {
@@ -609,6 +615,27 @@ mod tests {
                 &ParserOptions::default(),
             )
             .expect("test source parses")
+    }
+
+    #[test]
+    fn recursive_copy_uses_one_filesystem_module_not_a_direct_or_ambient_call() {
+        for source in [
+            "const { cpSync } = require('fs'); cpSync('src', 'dst', {recursive: true});",
+            "const { cp: copy } = require('node:fs/promises'); copy('src', 'dst');",
+            "const fs = require('fs'); fs.promises.cp('src', 'dst');",
+        ] {
+            let tree = parse(source);
+            assert!(direct_fs_calls(&tree).unwrap().is_none());
+            let rewritten = rewrite_fs_requires(&tree).unwrap().expect("filesystem module");
+            assert_eq!(rewritten.body.iter().filter(|s| is_module_declaration(s)).count(), 1);
+            assert!(rewrite_fs_requires(&rewritten).unwrap().is_none());
+        }
+        let names = GLOBALS.iter().map(|name| (*name).to_string()).collect();
+        let mut expression = module_source(&names).expect("protected composite source");
+        assert_eq!(
+            super::super::tests::free_names(&mut expression),
+            BTreeSet::from(["globalThis".into(), "%FsRead".into(), "%FsWrite".into(), "require".into()])
+        );
     }
 
     #[test]

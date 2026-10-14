@@ -146,3 +146,80 @@ fn file_handle_globals_are_not_captured_from_guest_lexical_bindings() {
     assert_eq!(output, ["2 16384"]);
     assert_eq!(std::fs::read(root.path().join("shadow.txt")).unwrap(), b"ok");
 }
+
+#[test]
+fn file_handle_array_buffer_views_use_byte_windows_and_keep_identity() {
+    let root = tempfile::tempdir().expect("sandbox");
+    std::fs::write(root.path().join("views.txt"), b"abcdef").unwrap();
+    let output = run(
+        "let h; const bytes = new Uint8Array(12); bytes.fill(45); \
+         const words = new Uint16Array(bytes.buffer, 2, 3); \
+         const view = new DataView(bytes.buffer, 3, 4); \
+         require('fs/promises').open('views.txt', 'r+').then(value => { \
+           h = value; return h.read(words, {offset: 1, length: 4, position: 1}); \
+         }).then(result => { \
+           console.log(result.bytesRead, result.buffer === words); \
+           console.log(Buffer.from(bytes.buffer).toString('hex')); \
+           return h.write(view, 1, 2, 0); \
+         }).then(result => { \
+           console.log(result.bytesWritten, result.buffer === view); return h.close(); \
+         });",
+        root.path(),
+        &["fs_read", "fs_write"],
+    )
+    .expect("native ArrayBufferView descriptor operations");
+    assert_eq!(output, ["4 true", "2d2d2d626364652d2d2d2d2d", "2 true"]);
+    assert_eq!(std::fs::read(root.path().join("views.txt")).unwrap(), b"cdcdef");
+}
+
+#[test]
+fn file_handle_vectors_and_sync_exports_accept_mixed_byte_views() {
+    let root = tempfile::tempdir().expect("sandbox");
+    let output = run(
+        "const fs = require('node:fs'); let h; \
+         const bytes = new Uint8Array([33, 65, 66, 67, 68, 33]); \
+         const parts = [new DataView(bytes.buffer, 1, 2), \
+           new Uint16Array(bytes.buffer, 2, 1), new Uint8Array(0)]; \
+         const out = new Uint8Array(8); out.fill(45); \
+         const targets = [new Uint16Array(out.buffer, 2, 1), new DataView(out.buffer, 5, 2)]; \
+         fs.promises.open('vectors.txt', 'w+').then(value => { \
+           h = value; return h.writev(parts, 0); \
+         }).then(result => { \
+           console.log(result.bytesWritten, result.buffers === parts); \
+           return h.readv(targets, 0); \
+         }).then(result => { \
+           console.log(result.bytesRead, result.buffers === targets); \
+           console.log(Buffer.from(out.buffer).toString()); \
+           console.log(fs.writevSync(h.fd, parts, 0), fs.readvSync(h.fd, targets, 0)); \
+           return h.close(); \
+         });",
+        root.path(),
+        &["fs_read", "fs_write"],
+    )
+    .expect("native mixed view vector operations");
+    assert_eq!(output, ["4 true", "4 true", "--AB-BC-", "4 4"]);
+    assert_eq!(std::fs::read(root.path().join("vectors.txt")).unwrap(), b"ABBC");
+}
+
+#[test]
+fn file_handle_whole_file_and_iterable_writes_preserve_view_bytes() {
+    let root = tempfile::tempdir().expect("sandbox");
+    let output = run(
+        "let h; const bytes = new Uint8Array([33, 33, 65, 66, 67, 68, 33, 33]); \
+         const words = new Uint16Array(bytes.buffer, 2, 2); \
+         const view = new DataView(bytes.buffer, 3, 2); \
+         require('fs/promises').open('chunks.txt', 'w+').then(value => { \
+           h = value; return h.writeFile(words); \
+         }).then(() => h.appendFile(view)) \
+         .then(() => h.writeFile([words, view])) \
+         .then(() => h.close()).then(() => console.log('closed'));",
+        root.path(),
+        &["fs_read", "fs_write"],
+    )
+    .expect("native byte views and iterable chunks");
+    assert_eq!(output, ["closed"]);
+    assert_eq!(
+        std::fs::read(root.path().join("chunks.txt")).unwrap(),
+        b"ABCDBCABCDBC"
+    );
+}

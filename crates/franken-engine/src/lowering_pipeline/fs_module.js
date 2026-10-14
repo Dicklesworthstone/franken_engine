@@ -103,7 +103,7 @@
     return __franken_fs_write('\0fsop:write_fd', fd, data, offset, length, position);
   }
   function vectorBuffers(buffers) {
-    if (!arrayIsArray(buffers)) { throw argumentError('buffers (expected Buffer array)'); }
+    if (!arrayIsArray(buffers)) { throw argumentError('buffers (expected ArrayBufferView array)'); }
     // Snapshot entries before I/O. An array getter can mutate a later entry or
     // re-enter close(); validation must finish before any descriptor effect.
     var entries = [];
@@ -113,7 +113,7 @@
     for (var index = 0; index < count; index += 1) {
       var buffer = buffers[index];
       var window = bufferWindow(buffer);
-      entries[index] = buffer;
+      entries[index] = window.buffer;
       lengths[index] = window.length;
       total += window.length;
       if (total > 9007199254740991) {
@@ -228,8 +228,17 @@
     error.code = 'ERR_INVALID_ARG_TYPE';
     return error;
   }
+  function byteBuffer(buffer) {
+    if (isBuffer(buffer)) { return buffer; }
+    if (!isView(buffer)) { throw argumentError('buffer (expected ArrayBufferView)'); }
+    // Buffer.from(view) converts ELEMENTS (and loses DataView contents).
+    // The ArrayBuffer overload instead shares precisely the view's bytes,
+    // including a nonzero byteOffset, without copying or changing identity
+    // in the public result. Native descriptor effects still receive a Buffer.
+    return bufferFrom(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  }
   function bufferWindow(buffer, offset, length) {
-    if (!isBuffer(buffer)) { throw argumentError('buffer (expected Buffer)'); }
+    buffer = byteBuffer(buffer);
     if (offset === undefined) { offset = 0; }
     if (length === undefined) { length = buffer.length - offset; }
     if (typeof offset !== 'number' || typeof length !== 'number') {
@@ -241,7 +250,7 @@
       error.code = 'ERR_OUT_OF_RANGE';
       throw error;
     }
-    return { offset: offset, length: length };
+    return { buffer: buffer, offset: offset, length: length };
   }
   function fileOptions(options, defaultEncoding) {
     if (options === undefined || options === null) { options = {}; }
@@ -304,7 +313,7 @@
   function writeChunk(fd, data, options) {
     checkAbort(options.signal);
     if (typeof data === 'string') { data = bufferFrom(data, options.encoding); }
-    if (!isBuffer(data)) { throw argumentError('data (expected string or Buffer)'); }
+    data = byteBuffer(data);
     var offset = 0;
     while (offset < data.length) {
       checkAbort(options.signal);
@@ -383,7 +392,7 @@
       try {
         options = fileOptions(options, 'utf8');
         checkAbort(options.signal);
-        if (typeof data === 'string' || isBuffer(data)) {
+        if (typeof data === 'string' || isBuffer(data) || isView(data)) {
           writeChunk(descriptor, data, options);
           return;
         }
@@ -445,7 +454,7 @@
       read: function (buffer, offset, length, position) {
         return perform('read', function (fd) {
           var options;
-          if (!isBuffer(buffer)) {
+          if (!isBuffer(buffer) && !isView(buffer)) {
             options = buffer === undefined ? {} : buffer;
             if (options === null || typeof options !== 'object') {
               throw argumentError('options');
@@ -463,7 +472,8 @@
           }
           var window = bufferWindow(buffer, offset, length);
           if (position === undefined || position === -1) { position = null; }
-          var count = readSync(fd, buffer, window.offset, window.length, position);
+          var count = checkedCount(readSync(fd, window.buffer, window.offset, window.length, position),
+            window.length, 'read', false);
           return { bytesRead: count, buffer: buffer };
         });
       },
@@ -485,7 +495,8 @@
           }
           var window = bufferWindow(buffer, offset, length);
           if (position === undefined || position === -1) { position = null; }
-          var count = writeSync(fd, buffer, window.offset, window.length, position);
+          var count = checkedCount(writeSync(fd, window.buffer, window.offset, window.length, position),
+            window.length, 'write', false);
           return { bytesWritten: count, buffer: data };
         });
       }
@@ -614,6 +625,7 @@
     readlinkSync: readlinkSync, symlinkSync: symlinkSync, truncateSync: truncateSync,
     mkdtempSync: mkdtempSync, openSync: openSync, closeSync: closeSync, fsyncSync: fsyncSync,
     readSync: readSync, writeSync: writeSync,
+    readvSync: readvSync, writevSync: writevSync,
     readFile: readFile, writeFile: writeFile, appendFile: appendFile,
     constants: constants, promises: promises
   };

@@ -10,7 +10,7 @@ const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const { test } = require('node:test');
-const source = fs.readFileSync(path.join(__dirname,
+const source = fs.readFileSync(process.env.FRANKEN_FS_SOURCE || path.join(__dirname,
   '../crates/franken-engine/src/lowering_pipeline/fs_module.js'), 'utf8');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'franken-fs-handles-'));
 let nextFile = 0;
@@ -219,4 +219,138 @@ test('open retains the existing FsWrite effect instead of bypassing the provider
   });
   await assert.rejects(facade.promises.open(file, 'w'), error => error === denied);
   assert.equal(fs.existsSync(file), false);
+});
+
+test('all ArrayBufferView handle windows count bytes and preserve identity like Node', async () => {
+  const constructors = [Int8Array, Uint8Array, Uint8ClampedArray, Int16Array,
+    Uint16Array, Int32Array, Uint32Array, Float32Array, Float64Array,
+    BigInt64Array, BigUint64Array, DataView];
+  async function exercise(open, file, Type) {
+    const handle = await open(file, 'w+');
+    try {
+      const backing = new ArrayBuffer(64);
+      const bytes = new Uint8Array(backing);
+      for (let i = 0; i < bytes.length; ++i) bytes[i] = 33 + i;
+      const view = new Type(backing, 8, 4);
+      const put = await handle.write(view, { offset: 1, length: view.byteLength - 2, position: 0 });
+      assert.equal(put.buffer, view, Type.name);
+      bytes.fill(45);
+      const got = await handle.read(view, { offset: 1, length: view.byteLength - 2, position: 0 });
+      assert.equal(got.buffer, view, Type.name);
+      const explicit = await handle.read({ buffer: view, offset: 0, length: 1, position: 0 });
+      assert.equal(explicit.buffer, view, Type.name);
+      return [put.bytesWritten, got.bytesRead, explicit.bytesRead,
+        Buffer.from(backing).toString('hex'), fs.readFileSync(file).toString('hex')];
+    } finally { await handle.close(); }
+  }
+  for (const Type of constructors) {
+    const { facade, calls, file } = fixture();
+    assert.deepEqual(await exercise(facade.promises.open, file, Type),
+      await exercise(fs.promises.open, file + '-node', Type), Type.name);
+    const effects = calls.filter(call => /^(read|write)_fd$/.test(call.operation));
+    assert.equal(effects.length, 3);
+    for (const effect of effects) {
+      assert(Buffer.isBuffer(effect.args[1]), 'native boundary receives a byte Buffer');
+      assert.equal(effect.authority, effect.operation === 'read_fd' ? 'fs_read' : 'fs_write');
+    }
+  }
+});
+
+test('mixed and overlapping vector views match Node, including partial EOF and cursor', async () => {
+  async function exercise(open, file) {
+    const handle = await open(file, 'w+');
+    try {
+      const source = Uint8Array.from([33, 65, 66, 67, 68, 69, 70, 33]);
+      const inputs = [new DataView(source.buffer, 1, 2),
+        new Uint16Array(source.buffer, 2, 2), new Uint8Array(0)];
+      const put = await handle.writev(inputs, 0);
+      assert.equal(put.buffers, inputs);
+      const target = new Uint8Array(12).fill(45);
+      const outputs = [new Uint16Array(target.buffer, 2, 2),
+        new DataView(target.buffer, 4, 4), new Uint8Array(0)];
+      const got = await handle.readv(outputs, 0);
+      assert.equal(got.buffers, outputs);
+      const sequential = new DataView(new ArrayBuffer(2));
+      const cursor = await handle.read(sequential);
+      assert.equal(cursor.buffer, sequential);
+      return [put.bytesWritten, got.bytesRead, cursor.bytesRead,
+        Buffer.from(target).toString(), Buffer.from(sequential.buffer).toString(),
+        fs.readFileSync(file).toString()];
+    } finally { await handle.close(); }
+  }
+  const { facade, calls, file } = fixture();
+  assert.deepEqual(await exercise(facade.promises.open, file),
+    await exercise(fs.promises.open, file + '-node'));
+  assert.equal(calls.filter(call => call.operation === 'write_fd').length, 1);
+  assert.equal(calls.filter(call => call.operation === 'read_fd').length, 2);
+});
+
+test('fs exports synchronous vector I/O over the same gated descriptor operations', () => {
+  const { facade, calls, file } = fixture();
+  const fd = facade.openSync(file, 'w+');
+  try {
+    const bytes = Uint8Array.from([45, 97, 98, 99, 100, 45]);
+    const inputs = [new DataView(bytes.buffer, 1, 2), bytes.subarray(3, 5)];
+    assert.equal(facade.writevSync(fd, inputs, 0), 4);
+    const output = new Uint8Array(8).fill(45);
+    assert.equal(facade.readvSync(fd, [new DataView(output.buffer, 1, 2),
+      new Uint16Array(output.buffer, 4, 2)], 0), 4);
+    assert.equal(Buffer.from(output).toString(), '-ab-cd--');
+    assert.equal(facade.readvSync(fd, [], 0), 0);
+    assert.equal(facade.writevSync(fd, [new DataView(new ArrayBuffer(0))], 0), 0);
+    assert.deepEqual(calls.map(call => call.operation), ['open', 'write_fd', 'read_fd']);
+  } finally { facade.closeSync(fd); }
+});
+
+test('typed views and iterable chunks write their byte windows, not their elements', async () => {
+  async function exercise(open, file) {
+    const handle = await open(file, 'w+');
+    try {
+      const backing = Uint8Array.from([45, 45, 65, 66, 67, 68, 69, 70, 45, 45]);
+      const words = new Uint16Array(backing.buffer, 2, 2);
+      const data = new DataView(backing.buffer, 5, 3);
+      await handle.writeFile(words);
+      await handle.appendFile(data);
+      await handle.writeFile((async function* () { yield words; yield data; })());
+      return fs.readFileSync(file).toString();
+    } finally { await handle.close(); }
+  }
+  const { facade, file } = fixture();
+  assert.deepEqual(await exercise(facade.promises.open, file),
+    await exercise(fs.promises.open, file + '-node'));
+});
+
+test('cross-realm views are accepted, but invalid views/windows reject before I/O', async () => {
+  const { facade, calls, file } = fixture();
+  const handle = await facade.promises.open(file, 'w+');
+  try {
+    const view = vm.runInNewContext('new DataView(new ArrayBuffer(8), 2, 3)');
+    view.setUint8(0, 65);
+    assert.equal((await handle.write(view)).buffer, view);
+    const before = calls.length;
+    for (const value of [{ buffer: new ArrayBuffer(4), byteLength: 4 },
+      new ArrayBuffer(4), new Proxy(new Uint8Array(4), {})]) {
+      await assert.rejects(handle.write(value), { code: 'ERR_INVALID_ARG_TYPE' });
+      await assert.rejects(handle.readv([view, value]), { code: 'ERR_INVALID_ARG_TYPE' });
+    }
+    for (const offset of [-1, 0.5, NaN, Infinity, 4]) {
+      await assert.rejects(handle.read(view, offset, 1, 0), { code: 'ERR_OUT_OF_RANGE' });
+    }
+    assert.equal(calls.length, before, 'validation failure must not touch the descriptor');
+  } finally { await handle.close(); }
+});
+
+test('view option getters cannot close a descriptor before its active read drains', async () => {
+  const { facade, calls, file } = fixture();
+  fs.writeFileSync(file, 'safe');
+  const handle = await facade.promises.open(file, 'r');
+  const buffer = new DataView(new ArrayBuffer(4));
+  let closing;
+  const result = await handle.read(buffer, {
+    get offset() { closing = handle.close(); return 0; }, length: 4,
+  });
+  assert.equal(result.buffer, buffer);
+  assert.equal(Buffer.from(buffer.buffer).toString(), 'safe');
+  await closing;
+  assert.deepEqual(calls.map(call => call.operation), ['open', 'read_fd', 'close_fd']);
 });

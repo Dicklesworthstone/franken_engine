@@ -457,6 +457,9 @@
       createReadStream: function (options) {
         return new (streamClasses().ReadStream)(undefined, options, handle);
       },
+      createWriteStream: function (options) {
+        return new (streamClasses().WriteStream)(undefined, options, handle);
+      },
       writeFile: function (data, options) {
         return writeAll(data, options);
       },
@@ -533,6 +536,8 @@
       writeFile: handle.writeFile,
       appendFile: handle.appendFile,
       read: handle.read,
+      write: handle.write,
+      sync: handle.sync,
       close: handle.close,
       descriptor: function () { return closing ? -1 : descriptor; }
     }]);
@@ -575,7 +580,7 @@
       }
       return value;
     }
-    function settings(options, owner) {
+    function settings(options, owner, writable) {
       if (options === undefined || options === null) { options = {}; }
       if (typeof options === 'string') { options = { encoding: options }; }
       if (typeof options !== 'object') { throw argumentError('options'); }
@@ -583,7 +588,7 @@
       // All I/O in this adapter belongs to the existing gated host provider.
       if (options.fs !== undefined) { throw argumentError('options.fs (unsupported provider override)'); }
       var start = options.start;
-      var end = options.end;
+      var end = writable ? undefined : options.end;
       var fd = owner === undefined ? options.fd : owner;
       var flags = options.flags;
       var mode = options.mode;
@@ -592,6 +597,26 @@
       var encoding = options.encoding;
       var emitClose = options.emitClose;
       var signal = options.signal;
+      var flush = writable ? options.flush : undefined;
+      if (flush !== undefined && typeof flush !== 'boolean') { throw argumentError('options.flush'); }
+      // Validate here, not only in the stream constructor. The engine-owned
+      // stream implementation does not provide all of Node's option checks.
+      if (highWaterMark !== undefined) { position(highWaterMark, 'highWaterMark'); }
+      if (encoding !== undefined && encoding !== null && !isEncoding(encoding)) {
+        throw argumentError('encoding');
+      }
+      var addAbort;
+      var removeAbort;
+      if (signal !== undefined) {
+        if (signal === null || typeof signal !== 'object' || typeof signal.aborted !== 'boolean') {
+          throw argumentError('options.signal');
+        }
+        addAbort = signal.addEventListener;
+        removeAbort = signal.removeEventListener;
+        if (typeof addAbort !== 'function' || typeof removeAbort !== 'function') {
+          throw argumentError('options.signal');
+        }
+      }
       if (start !== undefined) { position(start, 'start'); }
       if (end === undefined) { end = 1 / 0; }
       if (end !== 1 / 0) { position(end, 'end'); }
@@ -604,14 +629,17 @@
           handleOperation(fd, 'descriptor') === undefined) { throw argumentError('fd'); }
       if (typeof fd === 'number') { position(fd, 'fd'); }
       return { start: start, end: end, fd: fd,
-        flags: flags === undefined ? 'r' : flags, mode: mode,
+        flags: flags === undefined ? (writable ? 'w' : 'r') : flags, mode: mode,
         autoClose: autoClose === undefined ? true : !!autoClose,
         highWaterMark: highWaterMark === undefined ? 65536 : highWaterMark,
-        encoding: encoding, emitClose: emitClose, signal: signal };
+        encoding: encoding, emitClose: emitClose, signal: signal, flush: flush === true,
+        addAbort: addAbort, removeAbort: removeAbort };
     }
     function bindOwner(state, owner) {
       state.owner = owner;
       state.read = handleOperation(owner, 'read');
+      state.write = handleOperation(owner, 'write');
+      state.sync = handleOperation(owner, 'sync');
       state.close = handleOperation(owner, 'close');
       state.descriptor = handleOperation(owner, 'descriptor');
     }
@@ -619,14 +647,56 @@
       // Never consult a guest-writable .then on an exposed handle Promise.
       return apply(promiseThen, promise, [success, failure]);
     }
+    function failure(reason) {
+      // Error-first stream callbacks cannot represent a falsy rejection.
+      // Preserve its cause instead of turning a rejected operation into EOF
+      // or reporting a successfully closed/flushed file.
+      if (reason) { return reason; }
+      var error = new Error('Filesystem stream operation failed');
+      error.code = 'EIO';
+      error.cause = reason;
+      return error;
+    }
     function closeOwner(state, callback) {
       if (state.owner === undefined) { callback(); return; }
-      observe(state.close(), function () { callback(); }, callback);
+      if (state.closeCompletion === undefined) {
+        var resolveClose;
+        var rejectClose;
+        // Publish before invoking either effect: repeated/reentrant closes
+        // join this operation, including its fsync, rather than repeating it.
+        state.closeCompletion = new NativePromise(function (resolve, reject) {
+          resolveClose = resolve;
+          rejectClose = reject;
+        });
+        function release(syncError) {
+          observe(state.close(), function () {
+            if (syncError) { rejectClose(syncError); } else { resolveClose(); }
+          }, function (closeError) {
+            closeError = failure(closeError);
+            rejectClose(syncError ? new NativeAggregateError([syncError, closeError],
+              'Filesystem flush and descriptor close both failed') : closeError);
+          });
+        }
+        if (state.options.flush && state.descriptor() >= 0) {
+          observe(state.sync(), function () { release(); }, function (error) { release(failure(error)); });
+        } else { release(); }
+      }
+      observe(state.closeCompletion, function () { callback(); }, callback);
     }
     function drainDestroy(state) {
       if (state.destroyCallback === undefined || state.inflight !== 0) { return; }
       var callback = state.destroyCallback;
       state.destroyCallback = undefined;
+      if (state.abortListener !== undefined) {
+        var listener = state.abortListener;
+        state.abortListener = undefined;
+        try { apply(state.options.removeAbort, state.options.signal, ['abort', listener]); }
+        catch (error) {
+          error = failure(error);
+          state.destroyError = state.destroyError ? new NativeAggregateError([state.destroyError, error],
+            'Filesystem stream and abort-listener cleanup both failed') : error;
+        }
+      }
       function done(closeError) {
         state.destroyFinished = true;
         var error = state.destroyError;
@@ -642,6 +712,9 @@
     }
     function construct(stream, callback) {
       var state = stateOf(stream);
+      // Pre-abort or listener-registration failure must not open/truncate a
+      // path while the base stream is waiting for construction to settle.
+      if (state.abortRequested) { callback(); return; }
       if (state.owner !== undefined) {
         if (state.descriptor() < 0) {
           var error = new Error('file closed');
@@ -661,7 +734,7 @@
         drainDestroy(state);
       }, function (error) {
         state.inflight -= 1;
-        callback(error);
+        callback(failure(error));
         drainDestroy(state);
       });
     }
@@ -681,13 +754,34 @@
       stream.path = path;
       stream.flags = options.flags;
       stream.mode = options.mode;
+      // The engine's generic stream constructors do not consume signal.
+      // Install one adapter-owned listener for both read and write streams;
+      // cleanup belongs to _destroy even when emitClose is false.
+      if (options.signal !== undefined) {
+        function abort() {
+          try {
+            checkAbort(options.signal);
+          } catch (error) {
+            state.abortRequested = true;
+            stream.destroy(failure(error));
+          }
+        }
+        state.abortListener = abort;
+        try {
+          apply(options.addAbort, options.signal, ['abort', abort, { once: true }]);
+          abort();
+        } catch (error) {
+          state.abortRequested = true;
+          stream.destroy(failure(error));
+        }
+      }
       return state;
     }
     class ReadStream extends streams.Readable {
       constructor(path, options, owner) {
         var config = settings(options, owner);
         super({ highWaterMark: config.highWaterMark, encoding: config.encoding,
-          autoDestroy: config.autoClose, emitClose: config.emitClose, signal: config.signal });
+          autoDestroy: config.autoClose, emitClose: config.emitClose });
         initialize(this, path, config);
       }
       get fd() {
@@ -709,7 +803,7 @@
         if (length <= 0) { this.push(null); return; }
         var buffer;
         try { buffer = bufferAlloc(length); }
-        catch (error) { this.destroy(error); return; }
+        catch (error) { this.destroy(failure(error)); return; }
         var stream = this;
         state.inflight += 1;
         observe(state.read(buffer, 0, length, state.offset), function (result) {
@@ -724,7 +818,7 @@
               // full 16 KiB allocation for every tiny provider fragment.
               if (count !== buffer.length) {
                 try { buffer = bufferFrom(apply(bufferSlice, buffer, [0, count])); }
-                catch (error) { stream.destroy(error); drainDestroy(state); return; }
+                catch (error) { stream.destroy(failure(error)); drainDestroy(state); return; }
               }
               stream.push(buffer);
             }
@@ -732,7 +826,7 @@
           drainDestroy(state);
         }, function (error) {
           state.inflight -= 1;
-          stream.destroy(error);
+          stream.destroy(failure(error));
           drainDestroy(state);
         });
       }
@@ -758,7 +852,152 @@
         this.destroy();
       }
     }
-    fileStreamClasses = { ReadStream: ReadStream };
+    function destroyedWrite() {
+      var error = new Error('Cannot call write after a stream was destroyed');
+      error.code = 'ERR_STREAM_DESTROYED';
+      return error;
+    }
+    function writeWindow(chunk, encoding) {
+      if (typeof chunk === 'string') { chunk = bufferFrom(chunk, encoding); }
+      var buffer = byteBuffer(chunk);
+      return { buffer: buffer, length: buffer.length };
+    }
+    function writeWindows(stream, windows, callback) {
+      var state = stateOf(stream);
+      var index = 0;
+      var offset = 0;
+      var pending;
+      var cursor = 0;
+      var stop = 0;
+      state.inflight += 1;
+      function done(error) {
+        state.inflight -= 1;
+        callback(error);
+        drainDestroy(state);
+      }
+      function advance() {
+        if (stream.destroyed) { done(state.destroyError || destroyedWrite()); return; }
+        if (cursor === stop) {
+          while (index < windows.length && offset === windows[index].length) { index += 1; offset = 0; }
+          if (index === windows.length) { done(); return; }
+          try {
+            var window = windows[index];
+            var available = window.length - offset;
+            if (available >= 16384 || index + 1 === windows.length) {
+              // Borrow large or final windows; no payload-sized staging copy.
+              var length = available > 16384 ? 16384 : available;
+              pending = window.buffer;
+              cursor = offset;
+              stop = offset + length;
+              offset += length;
+            } else {
+              // Corked tiny writes share a bounded batch, rather than one
+              // host effect each or a copy of the entire unbounded queue.
+              var total = 0;
+              var scan = index;
+              var skipped = offset;
+              while (scan < windows.length && total < 16384) {
+                var take = windows[scan].length - skipped;
+                if (take > 16384 - total) { take = 16384 - total; }
+                total += take;
+                scan += 1;
+                skipped = 0;
+              }
+              pending = bufferAlloc(total);
+              var filled = 0;
+              while (filled < total) {
+                var take = windows[index].length - offset;
+                if (take > total - filled) { take = total - filled; }
+                if (take !== 0) {
+                  var copied = apply(bufferCopy, windows[index].buffer,
+                    [pending, filled, offset, offset + take]);
+                  if (checkedCount(copied, take, 'writev', true) !== take) {
+                    throw failure(undefined);
+                  }
+                }
+                filled += take;
+                offset += take;
+                if (offset === windows[index].length) { index += 1; offset = 0; }
+              }
+              cursor = 0;
+              stop = total;
+            }
+          } catch (error) { done(failure(error)); return; }
+        }
+        observe(state.write(pending, cursor, stop - cursor, state.offset), function (result) {
+          var count;
+          try { count = checkedCount(result.bytesWritten, stop - cursor, 'write', true); }
+          catch (error) { done(error); return; }
+          cursor += count;
+          state.bytes += count;
+          if (state.offset !== undefined) { state.offset += count; }
+          // Partial writes reuse the same batch and advance only by bytes
+          // actually accepted. The next iteration is a Promise continuation,
+          // not synchronous recursion through a short-writing host provider.
+          advance();
+        }, function (error) { done(failure(error)); });
+      }
+      advance();
+    }
+    class WriteStream extends streams.Writable {
+      constructor(path, options, owner) {
+        var config = settings(options, owner, true);
+        super({ highWaterMark: config.highWaterMark, defaultEncoding: config.encoding,
+          decodeStrings: true, autoDestroy: config.autoClose,
+          emitClose: config.emitClose });
+        initialize(this, path, config);
+      }
+      get fd() {
+        var state = stateOf(this);
+        if (state.owner === undefined) { return null; }
+        var fd = state.descriptor();
+        return fd < 0 ? null : fd;
+      }
+      get pending() { return this.fd === null; }
+      get bytesWritten() { return stateOf(this).bytes; }
+      _construct(callback) { construct(this, callback); }
+      _write(chunk, encoding, callback) {
+        var window;
+        try { window = writeWindow(chunk, encoding); }
+        catch (error) { callback(failure(error)); return; }
+        writeWindows(this, [window], callback);
+      }
+      _writev(chunks, callback) {
+        var windows = [];
+        // Snapshot and validate all entries before any descriptor effect.
+        try {
+          for (var index = 0; index < chunks.length; index += 1) {
+            var entry = chunks[index];
+            windows[windows.length] = writeWindow(entry.chunk, entry.encoding);
+          }
+        } catch (error) { callback(failure(error)); return; }
+        writeWindows(this, windows, callback);
+      }
+      _destroy(error, callback) {
+        var state = stateOf(this);
+        state.destroyError = error;
+        state.destroyCallback = callback;
+        drainDestroy(state);
+      }
+      close(callback) {
+        if (callback !== undefined) { validateCallback(callback); }
+        var state = stateOf(this);
+        state.forceClose = true;
+        if (state.destroyFinished) {
+          var stream = this;
+          closeOwner(state, function (error) {
+            if (callback) { callback(error); }
+            else if (error) { stream.emit('error', error); }
+          });
+          return;
+        }
+        if (callback) { this.once('close', function () { callback(state.finalError || undefined); }); }
+        // Unlike a reader, close on a writer must drain queued writes first.
+        if (this.writableFinished) { this.destroy(); }
+        else { this.once('finish', function () { this.destroy(); }); this.end(); }
+      }
+    }
+    fileStreamClasses = { ReadStream: ReadStream, WriteStream: WriteStream };
     return fileStreamClasses;
   }
   async function writeIterablePath(path, data, options, defaultFlag) {
@@ -866,6 +1105,10 @@
       return new (streamClasses().ReadStream)(path, options);
     },
     get ReadStream() { return streamClasses().ReadStream; },
+    createWriteStream: function (path, options) {
+      return new (streamClasses().WriteStream)(path, options);
+    },
+    get WriteStream() { return streamClasses().WriteStream; },
     constants: constants, promises: promises
   };
 })()

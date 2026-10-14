@@ -5,13 +5,23 @@ use std::process::Command;
 
 fn run_util_program(preamble: &str, goal: &str, body: &str) -> Vec<String> {
     let root = tempfile::tempdir().expect("temp dir");
-    let entry = root.path().join(if goal == "module" { "entry.mjs" } else { "entry.cjs" });
+    let entry = root.path().join(if goal == "module" {
+        "entry.mjs"
+    } else {
+        "entry.cjs"
+    });
     std::fs::write(&entry, format!("{preamble}\n{body}")).expect("write source");
     let report_path = root.path().join("report.json");
     let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
         .args(["run", "--input"])
         .arg(&entry)
-        .args(["--goal", goal, "--extension-id", "util-cli-collections", "--out"])
+        .args([
+            "--goal",
+            goal,
+            "--extension-id",
+            "util-cli-collections",
+            "--out",
+        ])
         .arg(&report_path)
         .output()
         .expect("execute native engine");
@@ -26,7 +36,12 @@ fn run_util_program(preamble: &str, goal: &str, body: &str) -> Vec<String> {
         .as_array()
         .expect("console_output")
         .iter()
-        .map(|entry| entry["message"].as_str().expect("console message").to_owned())
+        .map(|entry| {
+            entry["message"]
+                .as_str()
+                .expect("console message")
+                .to_owned()
+        })
         .collect()
 }
 
@@ -69,6 +84,51 @@ console.log(group.tokens.length + ':' + group.tokens[64].index + ':' + group.val
     for (preamble, goal) in [
         ("const util = require('node:util');", "script"),
         ("import * as util from 'node:util';", "module"),
+    ] {
+        assert_eq!(run_util_program(preamble, goal, body), expected);
+    }
+}
+
+#[test]
+fn native_util_and_assert_share_unordered_collection_semantics() {
+    let body = r#"
+const a = new Map(); const b = new Map();
+for (let i = 0; i < 64; i++) a.set('package-' + i, { version: i });
+for (let i = 63; i >= 0; i--) b.set('package-' + i, { version: i });
+console.log(util.isDeepStrictEqual(a, b));
+b.get('package-32').version = -1;
+console.log(util.isDeepStrictEqual(a, b));
+const shared = { x: 1 };
+const left = new Map([[shared, 'a'], [{ x: 1 }, 'b'], ['primitive', 1]]);
+const right = new Map([[shared, 'b'], [{ x: 1 }, 'a'], ['primitive', 1]]);
+console.log(util.isDeepStrictEqual(left, right));
+const loopA = new Map(); const loopB = new Map();
+loopA.set('self', loopA); loopB.set('self', loopB);
+console.log(util.isDeepStrictEqual(loopA, loopB));
+console.log(util.isDeepStrictEqual(new Set([1, '1', NaN, null]), new Set([null, NaN, '1', 1])));
+console.log(util.isDeepStrictEqual(new Map([[NaN, -0]]), new Map([[NaN, 0]])));
+assert.deepStrictEqual(left, right);
+assert.deepStrictEqual(loopA, loopB);
+console.log('assert-shared-util');
+"#;
+    let expected = vec![
+        "true",
+        "false",
+        "true",
+        "true",
+        "true",
+        "false",
+        "assert-shared-util",
+    ];
+    for (preamble, goal) in [
+        (
+            "const util = require('node:util'); const assert = require('node:assert/strict');",
+            "script",
+        ),
+        (
+            "import * as util from 'node:util'; import assert from 'node:assert/strict';",
+            "module",
+        ),
     ] {
         assert_eq!(run_util_program(preamble, goal, body), expected);
     }

@@ -592,6 +592,12 @@
   // contents with a fabricated sequence during a structural comparison.
   var mapEntries = Map.prototype.entries;
   var setValues = Set.prototype.values;
+  var MapClass = Map;
+  var mapHas = Map.prototype.has;
+  var mapGet = Map.prototype.get;
+  var mapSet = Map.prototype.set;
+  var mapDelete = Map.prototype.delete;
+  var collectionApply = Reflect.apply;
   function enumerableKeys(value) {
     var keys = Reflect.ownKeys(value);
     var result = [];
@@ -604,13 +610,40 @@
   }
   function unorderedEqual(a, b, seen, isMap) {
     var iterate = isMap ? mapEntries : setValues;
+    // Primitive keys (including symbols, NaN and function identities) can
+    // only match the identical key. Index the right-hand snapshot once
+    // instead of scanning it for every left-hand entry. Objects still need
+    // one-to-one structural matching; object-key identity alone is not enough
+    // for Maps whose structurally equal keys may carry different values.
+    // Snapshot values as well as keys: a value getter in a nested comparison
+    // must not rewrite a later candidate through the original Map.
+    var primitive = new MapClass();
     var candidates = [];
-    for (var candidate of Reflect.apply(iterate, b, [])) {
-      candidates.push(candidate);
+    var candidateCount = 0;
+    for (var candidate of collectionApply(iterate, b, [])) {
+      var key = isMap ? candidate[0] : candidate;
+      if (key === null || typeof key !== 'object') {
+        collectionApply(mapSet, primitive, [key, isMap ? candidate[1] : true]);
+      } else {
+        candidates.push(candidate);
+      }
+      candidateCount++;
     }
     var matched = [];
     var count = 0;
-    for (var entry of Reflect.apply(iterate, a, [])) {
+    for (var entry of collectionApply(iterate, a, [])) {
+      var entryKey = isMap ? entry[0] : entry;
+      if (entryKey === null || typeof entryKey !== 'object') {
+        if (!collectionApply(mapHas, primitive, [entryKey]) ||
+            (isMap && !deepEqual(entry[1], collectionApply(mapGet, primitive, [entryKey]), seen))) {
+          return false;
+        }
+        // Consume the match. Reentrant mutation/reinsertion of a left key
+        // must not allow the same right-hand snapshot entry to match twice.
+        collectionApply(mapDelete, primitive, [entryKey]);
+        count++;
+        continue;
+      }
       var found = false;
       for (var i = 0; i < candidates.length; i++) {
         if (matched[i]) {
@@ -633,7 +666,7 @@
         return false;
       }
     }
-    return count === candidates.length;
+    return count === candidateCount;
   }
   // Compare the visible range, not a view's entire backing store. Construct
   // byte views only after checking lengths; indexed reads stay on the native

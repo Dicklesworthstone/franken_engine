@@ -56,6 +56,10 @@ mod fs_module;
 mod stream_operators;
 #[path = "native_module_loader.rs"]
 mod native_module_loader;
+#[path = "native_module_source.rs"]
+mod native_module_source;
+
+use native_module_source::NativeModuleSource;
 
 use super::LoweringPipelineError;
 use super::with_statement::{
@@ -63,9 +67,12 @@ use super::with_statement::{
     walk_expression, walk_function, walk_statement, walk_switch_cases,
 };
 use crate::ast::{
-    BindingPattern, CatchClause, Expression, MethodDefinition, ParseGoal, SourceSpan, Statement,
+    BindingPattern, CatchClause, Expression, MethodDefinition, SourceSpan, Statement,
     SwitchCase, SyntaxTree, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
 };
+#[cfg(test)]
+use crate::ast::ParseGoal;
+#[cfg(test)]
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
 /// `util.inspect(value, { depth })`: the console formatter at a depth.
@@ -788,36 +795,39 @@ fn restore_claimed_initializers(statement: &mut Statement, held: Vec<(usize, Exp
     }
 }
 
+// Fixed engine-owned sources only: no guest-controlled cache key and no
+// unbounded growth with package count. Each source parses on its first request;
+// unused modules allocate no AST. The retained syntax is never program-renamed.
+fn module_syntax_source(module: PureModule) -> &'static NativeModuleSource {
+    static UTIL: NativeModuleSource = NativeModuleSource::new("franken:util", UTIL_SOURCE);
+    static EVENTS: NativeModuleSource = NativeModuleSource::new("franken:events", EVENTS_SOURCE);
+    static ASSERT: NativeModuleSource = NativeModuleSource::new("franken:assert", ASSERT_SOURCE);
+    static TIMERS: NativeModuleSource = NativeModuleSource::new("franken:timers", TIMERS_SOURCE);
+    static DECODER: NativeModuleSource =
+        NativeModuleSource::new("franken:string_decoder", STRING_DECODER_SOURCE);
+    static VM: NativeModuleSource = NativeModuleSource::new("franken:vm", VM_SOURCE);
+    static BUFFER: NativeModuleSource = NativeModuleSource::new("franken:buffer", BUFFER_SOURCE);
+    static QUERYSTRING: NativeModuleSource =
+        NativeModuleSource::new("franken:querystring", QUERYSTRING_SOURCE);
+    static STREAM: NativeModuleSource = NativeModuleSource::new("franken:stream", STREAM_SOURCE);
+    static CONSUMERS: NativeModuleSource =
+        NativeModuleSource::new("franken:stream/consumers", STREAM_CONSUMERS_SOURCE);
+    match module {
+        PureModule::Util => &UTIL,
+        PureModule::Events => &EVENTS,
+        PureModule::Assert => &ASSERT,
+        PureModule::Timers => &TIMERS,
+        PureModule::StringDecoder => &DECODER,
+        PureModule::Vm => &VM,
+        PureModule::Buffer => &BUFFER,
+        PureModule::Querystring => &QUERYSTRING,
+        PureModule::Stream => &STREAM,
+        PureModule::StreamConsumers => &CONSUMERS,
+    }
+}
+
 fn parse_module_source(module: PureModule) -> Result<Expression, LoweringPipelineError> {
-    let (label, source) = match module {
-        PureModule::Util => ("franken:util", UTIL_SOURCE),
-        PureModule::Events => ("franken:events", EVENTS_SOURCE),
-        PureModule::Assert => ("franken:assert", ASSERT_SOURCE),
-        PureModule::Timers => ("franken:timers", TIMERS_SOURCE),
-        PureModule::StringDecoder => ("franken:string_decoder", STRING_DECODER_SOURCE),
-        PureModule::Vm => ("franken:vm", VM_SOURCE),
-        PureModule::Buffer => ("franken:buffer", BUFFER_SOURCE),
-        PureModule::Querystring => ("franken:querystring", QUERYSTRING_SOURCE),
-        PureModule::Stream => ("franken:stream", STREAM_SOURCE),
-        PureModule::StreamConsumers => ("franken:stream/consumers", STREAM_CONSUMERS_SOURCE),
-    };
-    let parse_failed = || LoweringPipelineError::InvariantViolation {
-        detail: "the engine's pure builtin module source failed to parse",
-    };
-    let tree = CanonicalEs2020Parser
-        .parse_with_options(
-            ParserSource {
-                label: label.into(),
-                text: source.into(),
-            },
-            ParseGoal::Script,
-            &ParserOptions::default(),
-        )
-        .map_err(|_| parse_failed())?;
-    let [Statement::Expression(statement)] = tree.body.as_slice() else {
-        return Err(parse_failed());
-    };
-    Ok(statement.expression.clone())
+    module_syntax_source(module).expression()
 }
 
 /// UTIL_SOURCE parsed, with its intrinsics renamed and the globals the
@@ -1098,6 +1108,69 @@ mod tests {
             walker.free.remove(constant);
         }
         walker.free
+    }
+
+    #[test]
+    fn cached_syntax_matches_fresh_parses_for_every_pure_module() {
+        for (module, label, source) in [
+            (PureModule::Util, "franken:util", UTIL_SOURCE),
+            (PureModule::Events, "franken:events", EVENTS_SOURCE),
+            (PureModule::Assert, "franken:assert", ASSERT_SOURCE),
+            (PureModule::Timers, "franken:timers", TIMERS_SOURCE),
+            (PureModule::StringDecoder, "franken:string_decoder", STRING_DECODER_SOURCE),
+            (PureModule::Vm, "franken:vm", VM_SOURCE),
+            (PureModule::Buffer, "franken:buffer", BUFFER_SOURCE),
+            (PureModule::Querystring, "franken:querystring", QUERYSTRING_SOURCE),
+            (PureModule::Stream, "franken:stream", STREAM_SOURCE),
+            (PureModule::StreamConsumers, "franken:stream/consumers", STREAM_CONSUMERS_SOURCE),
+        ] {
+            let tree = CanonicalEs2020Parser
+                .parse_with_options(
+                    ParserSource { label: label.into(), text: source.into() },
+                    ParseGoal::Script,
+                    &ParserOptions::default(),
+                )
+                .expect("fresh reference parse");
+            let [Statement::Expression(statement)] = tree.body.as_slice() else {
+                panic!("one module expression for {label}");
+            };
+            let cached = parse_module_source(module).expect("cached module source");
+            assert_eq!(cached, statement.expression, "exact syntax and spans for {label}");
+            assert_eq!(
+                cached.canonical_value(),
+                statement.expression.canonical_value(),
+                "canonical syntax for {label}"
+            );
+        }
+    }
+
+    #[test]
+    fn cached_syntax_does_not_share_guest_global_protection_or_loader_rewrites() {
+        let pristine = parse_module_source(PureModule::Util).expect("base template");
+        let names = BTreeSet::from(["Object".to_string(), "Promise".to_string()]);
+        let mut protected = module_source(&names, PureModule::Util).expect("renamed clone");
+        let protected_names = free_names(&mut protected);
+        assert!(protected_names.contains("globalThis"));
+        assert!(!protected_names.contains("Object"));
+        assert!(!protected_names.contains("Promise"));
+        let mut ordinary = module_source(&BTreeSet::new(), PureModule::Util).expect("fresh clone");
+        let ordinary_names = free_names(&mut ordinary);
+        assert!(ordinary_names.contains("Object"));
+        assert!(ordinary_names.contains("Promise"));
+        assert!(!ordinary_names.contains("globalThis"));
+
+        let tree = CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: "cache-loader-isolation.js".into(),
+                    text: "const a = require('assert'); const u = require('util');".into(),
+                },
+                ParseGoal::Script,
+                &ParserOptions::default(),
+            )
+            .expect("program parse");
+        rewrite_util_requires(&tree).expect("private dependency and loader rewrites");
+        assert_eq!(parse_module_source(PureModule::Util).unwrap(), pristine);
     }
 
     /// MODULE_GLOBALS lists every global UTIL_SOURCE reads; anything else

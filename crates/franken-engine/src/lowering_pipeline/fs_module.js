@@ -3,6 +3,7 @@
   // Capture realm helpers before guest code can replace their public bindings.
   // Capturing them performs no builtin call and grants no filesystem authority.
   var NativePromise = Promise;
+  var promiseThen = Promise.prototype.then;
   var apply = Reflect.apply;
   var bufferAlloc = Buffer.alloc;
   var bufferFrom = Buffer.from;
@@ -368,8 +369,8 @@
   // Descriptor ownership stays in this closure, never in a guest-writable fd
   // property. These methods use the existing synchronous descriptor effects
   // with Promise completion, not an off-thread I/O backend. Buffer/string I/O
-  // and iterable writes are supported; stream factories, stat-on-fd and
-  // automatic finalization are not.
+  // and iterable writes are supported. Read streams below share this owner;
+  // stat-on-fd and automatic finalization are not implemented here.
   function fileHandle(descriptor) {
     var closing = false;
     var active = 0;
@@ -453,6 +454,9 @@
       readFile: function (options) {
         return perform('readFile', function (fd) { return readContents(fd, options); });
       },
+      createReadStream: function (options) {
+        return new (streamClasses().ReadStream)(undefined, options, handle);
+      },
       writeFile: function (data, options) {
         return writeAll(data, options);
       },
@@ -527,7 +531,10 @@
     apply(setHandle, handles, [handle, {
       readFile: handle.readFile,
       writeFile: handle.writeFile,
-      appendFile: handle.appendFile
+      appendFile: handle.appendFile,
+      read: handle.read,
+      close: handle.close,
+      descriptor: function () { return closing ? -1 : descriptor; }
     }]);
     return handle;
   }
@@ -536,6 +543,223 @@
         (typeof value !== 'object' && typeof value !== 'function')) { return undefined; }
     var operations = apply(getHandle, handles, [value]);
     return operations === undefined ? undefined : operations[name];
+  }
+  function open(path, flags, mode) {
+    return new NativePromise(function (resolve) {
+      if (handles === undefined) { handles = new NativeWeakMap(); }
+      if (flags === undefined) { flags = 'r'; }
+      resolve(fileHandle(openSync(path, flags, mode)));
+    });
+  }
+  // These are adapters over the SAME engine-owned stream module that serves
+  // require('stream'), not a second stream state machine. The pure-module
+  // lowering resolves the literal require before guest execution. It embeds
+  // the stream dependency with the full fs facade; no path is opened merely
+  // by loading either module. Class/owner registries initialize on first use.
+  var fileStreamClasses;
+  function streamClasses() {
+    if (fileStreamClasses !== undefined) { return fileStreamClasses; }
+    var streams = require('stream');
+    var states = new NativeWeakMap();
+    function stateOf(stream) {
+      var state = apply(getHandle, states, [stream]);
+      if (state === undefined) { throw argumentError('stream receiver'); }
+      return state;
+    }
+    function position(value, name) {
+      if (typeof value !== 'number') { throw argumentError(name); }
+      if (value % 1 !== 0 || value < 0 || value > 9007199254740991) {
+        var error = new RangeError('Invalid ' + name + ' position');
+        error.code = 'ERR_OUT_OF_RANGE';
+        throw error;
+      }
+      return value;
+    }
+    function settings(options, owner) {
+      if (options === undefined || options === null) { options = {}; }
+      if (typeof options === 'string') { options = { encoding: options }; }
+      if (typeof options !== 'object') { throw argumentError('options'); }
+      // Do not silently accept a replacement provider while ignoring it.
+      // All I/O in this adapter belongs to the existing gated host provider.
+      if (options.fs !== undefined) { throw argumentError('options.fs (unsupported provider override)'); }
+      var start = options.start;
+      var end = options.end;
+      var fd = owner === undefined ? options.fd : owner;
+      var flags = options.flags;
+      var mode = options.mode;
+      var autoClose = options.autoClose;
+      var highWaterMark = options.highWaterMark;
+      var encoding = options.encoding;
+      var emitClose = options.emitClose;
+      var signal = options.signal;
+      if (start !== undefined) { position(start, 'start'); }
+      if (end === undefined) { end = 1 / 0; }
+      if (end !== 1 / 0) { position(end, 'end'); }
+      if (start !== undefined && start > end) {
+        var error = new RangeError('start must not exceed end');
+        error.code = 'ERR_OUT_OF_RANGE';
+        throw error;
+      }
+      if (fd !== undefined && fd !== null && typeof fd !== 'number' &&
+          handleOperation(fd, 'descriptor') === undefined) { throw argumentError('fd'); }
+      if (typeof fd === 'number') { position(fd, 'fd'); }
+      return { start: start, end: end, fd: fd,
+        flags: flags === undefined ? 'r' : flags, mode: mode,
+        autoClose: autoClose === undefined ? true : !!autoClose,
+        highWaterMark: highWaterMark === undefined ? 65536 : highWaterMark,
+        encoding: encoding, emitClose: emitClose, signal: signal };
+    }
+    function bindOwner(state, owner) {
+      state.owner = owner;
+      state.read = handleOperation(owner, 'read');
+      state.close = handleOperation(owner, 'close');
+      state.descriptor = handleOperation(owner, 'descriptor');
+    }
+    function observe(promise, success, failure) {
+      // Never consult a guest-writable .then on an exposed handle Promise.
+      return apply(promiseThen, promise, [success, failure]);
+    }
+    function closeOwner(state, callback) {
+      if (state.owner === undefined) { callback(); return; }
+      observe(state.close(), function () { callback(); }, callback);
+    }
+    function drainDestroy(state) {
+      if (state.destroyCallback === undefined || state.inflight !== 0) { return; }
+      var callback = state.destroyCallback;
+      state.destroyCallback = undefined;
+      function done(closeError) {
+        state.destroyFinished = true;
+        var error = state.destroyError;
+        if (closeError) {
+          error = error ? new NativeAggregateError([error, closeError],
+            'Filesystem stream and descriptor close both failed') : closeError;
+        }
+        state.finalError = error;
+        callback(error);
+      }
+      if (state.options.autoClose || state.forceClose) { closeOwner(state, done); }
+      else { done(); }
+    }
+    function construct(stream, callback) {
+      var state = stateOf(stream);
+      if (state.owner !== undefined) {
+        if (state.descriptor() < 0) {
+          var error = new Error('file closed');
+          error.code = 'EBADF';
+          callback(error);
+        } else { callback(); }
+        return;
+      }
+      state.inflight += 1;
+      observe(open(state.path, state.options.flags, state.options.mode), function (owner) {
+        bindOwner(state, owner);
+        state.inflight -= 1;
+        var fd = state.descriptor();
+        callback();
+        stream.emit('open', fd);
+        stream.emit('ready');
+        drainDestroy(state);
+      }, function (error) {
+        state.inflight -= 1;
+        callback(error);
+        drainDestroy(state);
+      });
+    }
+    function initialize(stream, path, options) {
+      var state = { path: path, options: options, owner: undefined,
+        inflight: 0, bytes: 0, offset: options.start, forceClose: false,
+        destroyCallback: undefined, destroyError: null, destroyFinished: false };
+      if (options.fd !== undefined && options.fd !== null) {
+        var owner = options.fd;
+        if (typeof owner === 'number') {
+          if (handles === undefined) { handles = new NativeWeakMap(); }
+          owner = fileHandle(owner);
+        }
+        bindOwner(state, owner);
+      }
+      apply(setHandle, states, [stream, state]);
+      stream.path = path;
+      stream.flags = options.flags;
+      stream.mode = options.mode;
+      return state;
+    }
+    class ReadStream extends streams.Readable {
+      constructor(path, options, owner) {
+        var config = settings(options, owner);
+        super({ highWaterMark: config.highWaterMark, encoding: config.encoding,
+          autoDestroy: config.autoClose, emitClose: config.emitClose, signal: config.signal });
+        initialize(this, path, config);
+      }
+      get fd() {
+        var state = stateOf(this);
+        if (state.owner === undefined) { return null; }
+        var fd = state.descriptor();
+        return fd < 0 ? null : fd;
+      }
+      get pending() { return this.fd === null; }
+      get bytesRead() { return stateOf(this).bytes; }
+      _construct(callback) { construct(this, callback); }
+      _read(size) {
+        var state = stateOf(this);
+        if (this.destroyed || state.inflight !== 0) { return; }
+        var remaining = state.options.end - (state.offset === undefined ? state.bytes : state.offset) + 1;
+        var length = size > 0 ? size : 1;
+        if (length > 16384) { length = 16384; }
+        if (length > remaining) { length = remaining; }
+        if (length <= 0) { this.push(null); return; }
+        var buffer;
+        try { buffer = bufferAlloc(length); }
+        catch (error) { this.destroy(error); return; }
+        var stream = this;
+        state.inflight += 1;
+        observe(state.read(buffer, 0, length, state.offset), function (result) {
+          state.inflight -= 1;
+          var count = result.bytesRead;
+          state.bytes += count;
+          if (state.offset !== undefined) { state.offset += count; }
+          if (!stream.destroyed) {
+            if (count === 0) { stream.push(null); }
+            else {
+              // Compact a short result; a slow consumer must not retain a
+              // full 16 KiB allocation for every tiny provider fragment.
+              if (count !== buffer.length) {
+                try { buffer = bufferFrom(apply(bufferSlice, buffer, [0, count])); }
+                catch (error) { stream.destroy(error); drainDestroy(state); return; }
+              }
+              stream.push(buffer);
+            }
+          }
+          drainDestroy(state);
+        }, function (error) {
+          state.inflight -= 1;
+          stream.destroy(error);
+          drainDestroy(state);
+        });
+      }
+      _destroy(error, callback) {
+        var state = stateOf(this);
+        state.destroyError = error;
+        state.destroyCallback = callback;
+        drainDestroy(state);
+      }
+      close(callback) {
+        if (callback !== undefined) { validateCallback(callback); }
+        var state = stateOf(this);
+        state.forceClose = true;
+        if (state.destroyFinished) {
+          var stream = this;
+          closeOwner(state, function (error) {
+            if (callback) { callback(error); }
+            else if (error) { stream.emit('error', error); }
+          });
+          return;
+        }
+        if (callback) { this.once('close', function () { callback(state.finalError || undefined); }); }
+        this.destroy();
+      }
+    }
+    fileStreamClasses = { ReadStream: ReadStream };
+    return fileStreamClasses;
   }
   async function writeIterablePath(path, data, options, defaultFlag) {
     // Resolve user-controlled options and iterator getters before acquiring a
@@ -582,16 +806,7 @@
   }
   var promises = {
     constants: constants,
-    open: function open(path, flags, mode) {
-      return new NativePromise(function (resolve) {
-        // Initialize before opening a descriptor: allocation failure must not
-        // strand a newly opened fd. Merely constructing fs still calls no
-        // builtin and creates no registry.
-        if (handles === undefined) { handles = new NativeWeakMap(); }
-        if (flags === undefined) { flags = 'r'; }
-        resolve(fileHandle(openSync(path, flags, mode)));
-      });
-    },
+    open: open,
     mkdir: asPromise(mkdirSync), readdir: asPromise(readdirSync),
     stat: asPromise(statSync), lstat: asPromise(lstatSync),
     unlink: asPromise(unlinkSync), rmdir: asPromise(rmdirSync), rm: asPromise(rmSync),
@@ -647,6 +862,10 @@
     readSync: readSync, writeSync: writeSync,
     readvSync: readvSync, writevSync: writevSync,
     readFile: readFile, writeFile: writeFile, appendFile: appendFile,
+    createReadStream: function (path, options) {
+      return new (streamClasses().ReadStream)(path, options);
+    },
+    get ReadStream() { return streamClasses().ReadStream; },
     constants: constants, promises: promises
   };
 })()

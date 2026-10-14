@@ -3,8 +3,9 @@
 //! This is storage, not Array semantics: lengths, descriptors, prototypes,
 //! labels and resource admission remain with the existing callers. Dense
 //! prefixes use direct indexing; interior deletion keeps bounded holey slots.
-//! Gaps and sufficiently sparse storage use the ordered dictionary, never an
-//! index-sized allocation. No Value is cloned or replaced with undefined.
+//! Nearby forward gaps can also use bounded holey slots. Distant gaps and
+//! sufficiently sparse storage use the dictionary without index-sized allocation.
+//! No Value is cloned or replaced with undefined.
 
 use std::collections::{BTreeMap, btree_map};
 use std::fmt;
@@ -74,9 +75,9 @@ impl<V> IndexedValues<V> {
                     entries.push((key, value));
                     return None;
                 }
-                // A sparse write must not reserve index-sized native storage.
-                self.promote();
-                self.insert(index, (key, value))
+                // Admit nearby gaps by live occupancy before reserving slots.
+                // Distant writes still go straight to the sparse dictionary.
+                self.insert_forward_gap(index, (key, value))
             }
             Self::Holey(entries) => {
                 let offset = index as usize;
@@ -92,6 +93,9 @@ impl<V> IndexedValues<V> {
                     entries.slots.push(Some((key, value)));
                     entries.live += 1;
                     return None;
+                }
+                if offset > entries.slots.len() {
+                    return self.insert_forward_gap(index, (key, value));
                 }
                 self.promote();
                 self.insert(index, (key, value))

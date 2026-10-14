@@ -1,0 +1,18 @@
+gap 19 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,18 false false
+undefined true false true
+repaired 19 18 19
+identity true false
+inherited prototype true false
+names 22 named non-index exact
+slice 5 17 18 false prototype true
+removed-inherited undefined false
+builder 354 321 33 55617
+backfill 33 354 354
+copyWithin -64,65,66,67 true
+truncate-regrow 20 false false 19
+descriptor false 44
+remote 4294967295 0,1,2,5,4294967294 9 false
+remote-shrink 6 0,1,2,5
+sort 19 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16 false false
+json [1,2,3,4,5,6,null,null,8]
+locked-length true 8 false

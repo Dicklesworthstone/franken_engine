@@ -51,6 +51,52 @@ impl<V> HoleyValues<V> {
 }
 
 impl<V> IndexedValues<V> {
+    /// Insert beyond the current slot span. The density proof uses live
+    /// entries, not the guest's index. Reserve before moving packed entries;
+    /// refusal leaves their ownership intact for the dictionary fallback.
+    pub(super) fn insert_forward_gap(&mut self, index: u32, entry: (String, V)) -> Option<V> {
+        let offset = index as usize;
+        match self {
+            Self::Packed(entries) => {
+                debug_assert!(offset > entries.len());
+                if let Some(capacity) = gap_capacity(entries.len(), entries.len(), offset, 0) {
+                    let mut slots = Vec::new();
+                    if slots.try_reserve_exact(capacity).is_ok() && slots.capacity() <= capacity {
+                        let mut prepared = Box::new(HoleyValues {
+                            slots,
+                            live: entries.len() + 1,
+                        });
+                        prepared.slots.extend(std::mem::take(entries).into_iter().map(Some));
+                        prepared.slots.resize_with(offset, || None);
+                        prepared.slots.push(Some(entry));
+                        *self = Self::Holey(prepared);
+                        return None;
+                    }
+                }
+            }
+            Self::Holey(entries) => {
+                debug_assert!(offset > entries.slots.len());
+                if let Some(capacity) = gap_capacity(
+                    entries.live, entries.slots.len(), offset, entries.slots.capacity(),
+                ) {
+                    let admitted = capacity <= entries.slots.capacity()
+                        || entries.slots.try_reserve_exact(capacity - entries.slots.len()).is_ok();
+                    if admitted && entries.slots.capacity() <= capacity {
+                        entries.slots.resize_with(offset, || None);
+                        entries.slots.push(Some(entry));
+                        entries.live += 1;
+                        return None;
+                    }
+                }
+            }
+            Self::Dictionary(_) => {}
+        }
+        // No index-sized allocation, payload clone or key renumbering. Once
+        // sparse, ordinary backfill does not repeatedly migrate storage.
+        self.promote();
+        self.insert(index, entry)
+    }
+
     pub(super) fn make_holey(&mut self) {
         let Self::Packed(entries) = self else {
             return;
@@ -90,6 +136,32 @@ impl<V> IndexedValues<V> {
             entries.retain(|index, entry| (*index as usize) < cursor || keep(index, entry));
         }
     }
+}
+
+// Bound zero-initialization and later tail trimming independently of the
+// array's size. This is a native-work limit, not a measured tuning optimum.
+const MAX_FORWARD_GAP: usize = 64;
+
+/// Maximum admitted slot capacity after adding one live entry. Existing
+/// headroom may be consumed down to half occupancy, but a new allocation
+/// requires at least two-thirds occupancy. Reserving twice the live count
+/// then leaves geometric headroom instead of reallocating on every gap.
+/// Arithmetic refusal happens before any allocation or ownership movement.
+fn gap_capacity(live: usize, span: usize, offset: usize, capacity: usize) -> Option<usize> {
+    if offset.checked_sub(span)? > MAX_FORWARD_GAP {
+        return None;
+    }
+    let required = offset.checked_add(1)?;
+    let next_live = live.checked_add(1)?;
+    let limit = next_live.checked_mul(2)?;
+    if required > limit || capacity > limit {
+        return None;
+    }
+    if required <= capacity {
+        return Some(capacity);
+    }
+    let growth_threshold = next_live.checked_add(next_live / 2)?;
+    (required <= growth_threshold).then_some(limit)
 }
 
 /// Flatten skips holes, but cannot report an exact remaining size itself.
@@ -137,3 +209,6 @@ impl<I: FusedIterator> FusedIterator for Counted<I> {}
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod growth_tests;

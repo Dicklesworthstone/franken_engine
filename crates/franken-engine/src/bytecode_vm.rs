@@ -60,7 +60,7 @@ impl Value {
 }
 
 /// Instruction set for the deterministic bytecode VM.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Instruction {
     LoadConst {
         dst: Register,
@@ -351,7 +351,7 @@ impl BytecodeVm {
                 return Err(error);
             }
 
-            let instruction = match program.instructions.get(ip).cloned() {
+            let instruction = match program.instructions.get(ip).copied() {
                 Some(value) => value,
                 None => {
                     let error = VmError::MissingReturn;
@@ -369,14 +369,14 @@ impl BytecodeVm {
             };
 
             steps += 1;
-            let opcode = instruction.opcode_name().to_string();
+            let opcode = instruction.opcode_name();
 
             match self.execute_instruction(program, ip, steps, instruction) {
                 Ok(ControlFlow::Continue { next_ip, cache_hit }) => {
                     self.record_event(EventRecord {
                         step: steps,
                         ip: ip as u32,
-                        opcode: &opcode,
+                        opcode,
                         event: "instruction",
                         outcome: "ok",
                         error_code: None,

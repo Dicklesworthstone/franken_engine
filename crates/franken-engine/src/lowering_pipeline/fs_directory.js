@@ -578,8 +578,7 @@
       yield* visit(physical, '', 0, included, excluded);
     }
   }
-  function globSync(pattern, settings) {
-    const config = globOptions(pattern, settings);
+  function collectGlob(config) {
     config.collect = true;
     const output = [];
     for (const entry of globEntries(config)) {
@@ -588,6 +587,31 @@
     }
     return output;
   }
+  function globSync(pattern, settings) {
+    return collectGlob(globOptions(pattern, settings));
+  }
+  const globCallback = function glob(pattern, settings, callback) {
+    if (typeof settings === 'function') { callback = settings; settings = undefined; }
+    if (typeof callback !== 'function') throw invalid('callback');
+    // Capture query/options now, but deliver validation and traversal errors
+    // asynchronously. No host effects happen before the first reaction. This
+    // remains the shared synchronous host backend, not off-thread filesystem I/O.
+    let config;
+    const prepared = new PromiseClass(function (resolve) {
+      config = globOptions(pattern, settings);
+      resolve();
+    });
+    const result = apply(promiseThen, prepared, [function () { return collectGlob(config); }]);
+    // Separate success/error reactions: a user callback throwing must never
+    // invoke that callback a second time. It rejects the completion reaction,
+    // not the traversal. Node 22.16 instead calls a throwing callback again;
+    // once-only completion is an explicitly tested reference difference.
+    apply(promiseThen, result, [function (entries) {
+      apply(callback, undefined, [null, entries]);
+    }, function (failure) {
+      apply(callback, undefined, [failure]);
+    }]);
+  };
   async function* glob(pattern, settings) {
     // No filesystem access until demand. AsyncGenerator owns serialized next,
     // return and throw; returning releases the suspended snapshot frames.
@@ -597,6 +621,7 @@
   property(fs, 'opendirSync', opendirSync);
   property(fs.promises, 'opendir', opendir);
   property(fs, 'globSync', globSync);
+  property(fs, 'glob', globCallback);
   property(fs.promises, 'glob', glob);
   return fs;
 })

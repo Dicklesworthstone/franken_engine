@@ -357,3 +357,129 @@ test('static leaf predicates are honored, including the known Node 22.16 referen
     t.diagnostic('REFERENCE DIFFERENCE: this Node version skips the a.js predicate for src/*.js; production filters the leaf. Not a parity pass.');
   }
 });
+
+function callbackGlob(io, pattern, options) {
+  return new Promise((resolve, reject) => {
+    assert.equal(io.glob(pattern, options, (error, values) => error ? reject(error) : resolve(values)), undefined);
+  });
+}
+for (const pattern of ['**/*.js', 'packages/*/package.json', ['src/**', '**/*.js'], []]) {
+  for (const typed of [false, true]) {
+    test(`callback discovery shares sync/iterator results: ${JSON.stringify(pattern)}, typed=${typed}`, async t => {
+      const root = fixture(t), { io } = factory();
+      const options = { cwd: root, withFileTypes: typed, exclude: ['node_modules/**', 'dist/**'] };
+      const expected = rows(await callbackGlob(fs, pattern, options), root);
+      assert.deepEqual(rows(await callbackGlob(io, pattern, options), root), expected);
+      assert.deepEqual(rows(io.globSync(pattern, options), root), expected);
+    });
+  }
+}
+test('callback-only overload returns undefined and does not run inline', async () => {
+  const { io, calls } = factory(); let sync = true;
+  assert.equal(io.glob.name, 'glob'); assert.equal(io.glob.length, 3);
+  const result = new Promise((resolve, reject) => {
+    assert.equal(io.glob([], function (error, entries) {
+      try {
+        assert.equal(sync, false); assert.equal(this, undefined);
+        assert.equal(arguments.length, 2); assert.equal(error, null);
+        assert.deepEqual(entries, []); resolve();
+      } catch (failure) { reject(failure); }
+    }), undefined);
+  });
+  sync = false; await result;
+  assert.equal(calls.length, 0);
+});
+test('callback query is captured before return but no host effects run inline', async t => {
+  const root = fixture(t), { io, calls } = factory();
+  const pattern = ['src/*.js'], options = { cwd: root, exclude: [] };
+  const pending = callbackGlob(io, pattern, options);
+  assert.equal(calls.length, 0);
+  pattern[0] = '**'; options.cwd = '/unused'; options.exclude.push('**');
+  assert.deepEqual(await pending, ['src/a.js']);
+});
+test('callback type errors are synchronous and do not inspect queries or perform I/O', () => {
+  const { io, calls } = factory();
+  const pattern = []; Object.defineProperty(pattern, 0, { get() { throw Error('query inspected'); } });
+  for (const value of [null, undefined, 0, 'callback', {}]) {
+    assert.throws(() => io.glob(pattern, {}, value), { code: 'ERR_INVALID_ARG_TYPE' });
+  }
+  assert.equal(calls.length, 0);
+});
+test('query errors are delivered asynchronously once with no partial result', async () => {
+  const { io, calls } = factory();
+  for (const [pattern, options] of [[null, {}], ['*', { exclude: 42 }], ['../*', {}]]) {
+    let sync = true, count = 0;
+    const completion = new Promise((resolve, reject) => {
+      io.glob(pattern, options, function (error) {
+        try {
+          count++; assert.equal(sync, false); assert.equal(arguments.length, 1);
+          assert(error.code); resolve();
+        } catch (failure) { reject(failure); }
+      });
+    });
+    sync = false; await completion; await Promise.resolve(); assert.equal(count, 1);
+  }
+  assert.equal(calls.length, 0);
+});
+test('provider and predicate failures keep identity through callback completion', async t => {
+  const root = fixture(t);
+  for (const failure of [Error('provider refused'), null, undefined, false]) {
+    const { io } = factory({ readdirSync() { throw failure; } });
+    let count = 0;
+    await new Promise((resolve, reject) => io.glob('**/*.js', { cwd: root }, function (error) {
+      try { count++; assert.equal(arguments.length, 1); assert.equal(error, failure); resolve(); }
+      catch (wrong) { reject(wrong); }
+    }));
+    await Promise.resolve(); assert.equal(count, 1);
+  }
+  const { io } = factory(), failure = Error('predicate refused');
+  await assert.rejects(callbackGlob(io, '**/*.js', { cwd: root, exclude() { throw failure; } }), e => e === failure);
+  assert.deepEqual(await callbackGlob(io, '**/*.js', { cwd: root + '/missing' }), []);
+});
+test('callback discovery retains predicate pruning and bounded typed accounting', async t => {
+  const root = fixture(t), { io, calls } = factory();
+  const options = { cwd: root, withFileTypes: true, exclude: entry => entry.name === 'node_modules' || entry.name === 'dist' };
+  assert.deepEqual(rows(await callbackGlob(io, '**/*.js', options), root), rows(await callbackGlob(fs, '**/*.js', options), root));
+  assert(!calls.some(c => c[0] === 'readdirSync' && (c[1].includes('/node_modules') || c[1].endsWith('/dist'))));
+  const wide = factory({ realpathSync: x => x, readdirSync: () => new Array(100001) }).io;
+  await assert.rejects(callbackGlob(wide, '*', { cwd: '/safe' }), { code: 'ERR_FS_DIR_LIMIT' });
+});
+test('callback return values are ignored rather than assimilated', async () => {
+  const { io } = factory(); let inspected = 0;
+  await new Promise(resolve => io.glob([], () => {
+    resolve(); return { get then() { inspected++; throw Error('callback return inspected'); } };
+  }));
+  await Promise.resolve(); assert.equal(inspected, 0);
+});
+test('captured Promise reactions survive public replacement during submission', async t => {
+  const root = fixture(t), { io } = factory();
+  const original = Promise.prototype.then;
+  let pending;
+  try {
+    Promise.prototype.then = () => { throw Error('public then replaced'); };
+    pending = callbackGlob(io, 'src/*.js', { cwd: root });
+  } finally { Promise.prototype.then = original; }
+  assert.deepEqual(await pending, ['src/a.js']);
+});
+test('a throwing completion callback is never invoked twice, with Node difference reported', t => {
+  const { spawnSync } = require('node:child_process');
+  const program = `
+    'use strict'; const fs=require('node:fs'), vm=require('node:vm');
+    const io=process.argv[1]==='candidate' ? vm.runInThisContext(fs.readFileSync(process.argv[2],'utf8'))({
+      promises:{},readdirSync:fs.readdirSync,lstatSync:fs.lstatSync,realpathSync:fs.realpathSync
+    }) : fs;
+    let calls=0;
+    process.on('uncaughtException',e=>console.log('UNEXPECTED_UNCAUGHT',e.message));
+    process.on('unhandledRejection',e=>console.log('CALLBACK_THROW',e.message,calls));
+    io.glob([],()=>{calls++;throw Error('completion');});
+  `;
+  for (const mode of ['reference', 'candidate']) {
+    const result = spawnSync(process.execPath, ['--no-warnings', '-e', program, mode,
+      path.join(__dirname, '../../crates/franken-engine/src/lowering_pipeline/fs_directory.js')], { encoding: 'utf8', timeout: 5000 });
+    assert.equal(result.error, undefined); assert.equal(result.status, 0);
+    assert.equal(result.stderr, '');
+    if (mode === 'reference' && result.stdout !== 'CALLBACK_THROW completion 1\n') {
+      t.diagnostic('REFERENCE DIFFERENCE: ' + result.stdout.trim() + '; production invokes the callback once. Not a parity pass.');
+    } else assert.equal(result.stdout, 'CALLBACK_THROW completion 1\n');
+  }
+});

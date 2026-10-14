@@ -191,3 +191,77 @@ fn glob_invalid_queries_fail_before_io_and_no_match_does_not_grant_authority() {
         assert!(refused.to_ascii_lowercase().contains("capabil"), "{refused}");
     }
 }
+
+#[test]
+fn callback_glob_drains_before_completion_and_prunes_with_typed_predicates() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let root = tempfile::tempdir().unwrap();
+        fixture(root.path());
+        let (lines, effects) = run(
+            "const {glob}=require('node:fs');const Promise='guest';const Reflect='guest';\
+             let sync=true;glob('tree/**/*.txt',{withFileTypes:true,\
+             exclude(entry){return entry.isDirectory()&&entry.name==='deep';}},\
+             function(error,entries){if(error)throw error;\
+             console.log('CALLBACK_GLOB',sync,entries.map(e=>e.name).sort().join(','));});\
+             console.log('SUBMITTED');sync=false;",
+            root.path(),
+            &["fs_read"],
+            lane,
+        )
+        .expect("shared callback collector completes with protected Promise helpers");
+        assert_eq!(lines, ["SUBMITTED", "CALLBACK_GLOB false a.txt,b.txt"]);
+        let directories: Vec<_> = effects.iter().filter_map(|(request, _)| {
+            match request {
+                HostIoRequest::FsMeta { operation: FsOperation::ReadDir, path, .. } => Some(path),
+                _ => None,
+            }
+        }).collect();
+        assert_eq!(directories.len(), 3);
+        assert!(directories.iter().all(|path| !path.ends_with("/deep")));
+        assert!(effects.iter().all(|(request, _)| request.required_capability() == HostIoCapability::FsRead));
+    }
+}
+
+#[test]
+fn callback_glob_validation_errors_complete_without_filesystem_effects() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let root = tempfile::tempdir().unwrap();
+        let (lines, effects) = run(
+            "const fs=require('fs');let sync=true;\
+             fs.glob(null,function(error){console.log('INVALID',sync,error.code,arguments.length);});\
+             console.log('SUBMITTED');sync=false;",
+            root.path(),
+            &[],
+            lane,
+        )
+        .expect("validation failure reaches the callback without acquiring read authority");
+        assert_eq!(lines, ["SUBMITTED", "INVALID false ERR_INVALID_ARG_TYPE 1"]);
+        assert!(effects.is_empty());
+    }
+}
+
+#[test]
+fn predicate_mutations_do_not_change_captured_glob_descent_or_retain_failed_scans() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let root = tempfile::tempdir().unwrap();
+        fixture(root.path());
+        let (lines, effects) = run(
+            "const fs=require('fs');(async function(){const names=[];\
+             for await(const entry of fs.promises.glob('tree/**/*.txt',{withFileTypes:true,\
+             exclude(entry){if(entry.name==='sub'){entry.name='../outside';entry.isDirectory=()=>false;}return false;}}))\
+             names.push(entry.name);console.log('PREDICATE_FILES',names.sort().join(','));\
+             const failure={marker:42};const scan=fs.promises.glob('tree/**/*.txt',{exclude(){throw failure;}});\
+             try{await scan.next();}catch(error){console.log('SAME_FAILURE',error===failure);}\
+             console.log('CLOSED_SCAN',(await scan.next()).done);})();",
+            root.path(),
+            &["fs_read"],
+            lane,
+        )
+        .expect("predicate invocation cannot rewrite traversal decisions");
+        assert_eq!(lines, ["PREDICATE_FILES a.txt,b.txt,c.txt", "SAME_FAILURE true", "CLOSED_SCAN true"]);
+        assert!(effects.iter().all(|(request, _)| match request {
+            HostIoRequest::FsMeta { path, .. } => !path.contains("outside"),
+            _ => true,
+        }));
+    }
+}

@@ -106,3 +106,23 @@ fn esm_duplex_conversion_preserves_named_exports_and_independent_halves() {
         "DUPLEX_FROM_ESM_OK",
     );
 }
+
+#[test]
+fn duplex_pair_carries_bidirectional_pipelines_and_object_identity() {
+    run(
+        include_str!("../../../fixtures/stream_operators/duplex_pair.cjs"),
+        "duplex_pair.cjs",
+        "script",
+        "DUPLEX_PAIR_OK 10,20,30,40 true",
+    );
+}
+
+#[test]
+fn duplex_pair_esm_exports_complete_binary_half_close() {
+    run(
+        include_str!("../../../fixtures/stream_operators/duplex_pair.mjs"),
+        "duplex_pair.mjs",
+        "module",
+        "DUPLEX_PAIR_ESM_OK a😀b",
+    );
+}

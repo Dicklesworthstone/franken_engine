@@ -714,5 +714,110 @@
   // always supplies Duplex; it is enriched without changing ordinary facades.
   if (Stream.Duplex !== undefined) installDuplexFrom();
 
+  // A duplex pair is a local transport, not two unbounded forwarding queues.
+  // Each native Writable owns its ordinary queue; only its active callback is
+  // retained here while the peer's Readable buffer applies backpressure.
+  const PairDuplex = Stream.Duplex;
+  function duplexPair(options) {
+    const left = { stream: undefined, peer: undefined, write: undefined, final: undefined,
+      end: undefined, stopped: false };
+    const right = { stream: undefined, peer: left, write: undefined, final: undefined,
+      end: undefined, stopped: false };
+    left.peer = right;
+
+    function disconnected() {
+      return failure('ERR_STREAM_DESTROYED', 'The duplex pair endpoint is destroyed');
+    }
+    function acknowledge(state, error) {
+      const done = state.write;
+      state.write = undefined;
+      if (done !== undefined) done(error);
+    }
+    function finalise(state, error) {
+      const done = state.final;
+      state.final = undefined;
+      const observer = state.end;
+      state.end = undefined;
+      if (observer !== undefined) observer.stream.removeListener('end', observer.listener);
+      if (done !== undefined) done(error);
+    }
+    function endpoint(state) {
+      // Methods live on the prototype so ordinary Duplex options (including
+      // explicit read/write/final/destroy overrides) retain constructor
+      // semantics. The transport state never lives in guest-writable fields.
+      return new (class DuplexEndpoint extends PairDuplex {
+        constructor() { super(options); }
+        _read() {
+          const peer = state.peer;
+          if (peer !== undefined) acknowledge(peer);
+        }
+        _write(chunk, encoding, callback) {
+          const peer = state.peer;
+          if (state.stopped || peer === undefined || peer.stopped || peer.stream.destroyed) {
+            callback(disconnected());
+            return;
+          }
+          // Publish ownership before push: a flowing peer may synchronously
+          // read, destroy either endpoint or invoke another write from data.
+          state.write = callback;
+          let accepted;
+          try { accepted = peer.stream.push(chunk, encoding); }
+          catch (error) { acknowledge(state, error); return; }
+          if (accepted && state.write === callback) acknowledge(state);
+        }
+        _final(callback) {
+          const peer = state.peer;
+          if (state.stopped || peer === undefined || peer.stopped || peer.stream.destroyed) {
+            callback(disconnected());
+            return;
+          }
+          state.final = callback;
+          const onEnd = function () { finalise(state); };
+          state.end = { stream: peer.stream, listener: onEnd };
+          // End of the writer means end of the peer's readable half. Finish
+          // waits for those bytes to be consumed, not merely for EOF to queue.
+          peer.stream.once('end', onEnd);
+          try {
+            peer.stream.push(null);
+            if (peer.stream.readableEnded) finalise(state);
+          } catch (error) { finalise(state, error); }
+        }
+        _destroy(error, callback) {
+          state.stopped = true;
+          const peer = state.peer;
+          state.peer = undefined;
+          if (peer !== undefined) peer.peer = undefined;
+          const pendingError = error || disconnected();
+          // Retire admitted callbacks before dropping transport ownership.
+          // Unlike Node 22's pending-write teardown, they cannot be stranded
+          // until somebody reads an endpoint after its partner was destroyed.
+          acknowledge(state, pendingError);
+          finalise(state, pendingError);
+          if (peer !== undefined && !peer.stopped && !peer.stream.destroyed) {
+            peer.stream.destroy(error);
+          }
+          callback(error);
+        }
+      })();
+    }
+    left.stream = endpoint(left);
+    try { right.stream = endpoint(right); }
+    catch (error) {
+      left.peer = undefined;
+      right.peer = undefined;
+      left.stream.destroy();
+      throw error;
+    }
+    return [left.stream, right.stream];
+  }
+  if (Stream.Duplex !== undefined) {
+    const descriptor = createObject(null);
+    descriptor.value = duplexPair;
+    descriptor.writable = true;
+    descriptor.enumerable = true;
+    descriptor.configurable = true;
+    defineProperty(Stream, 'duplexPair', descriptor);
+  }
+
   return Stream;
 })

@@ -41,7 +41,10 @@ impl Walk for OperatorUse {
                     && matches!(builtin_require_member(initializer), Some((PureModule::Stream, None)))
                     && let BindingPattern::ObjectPattern(properties) = &declarator.pattern
                     && properties.iter().any(|property| {
-                        super::super::well_formed_static_name(&property.key) == Some("Duplex")
+                        matches!(
+                            super::super::well_formed_static_name(&property.key),
+                            Some("Duplex" | "duplexPair")
+                        )
                     })
                 {
                     self.found = true;
@@ -84,7 +87,7 @@ impl Walk for OperatorUse {
                 name,
                 Some(
                     "map" | "filter" | "flatMap" | "toArray" | "forEach"
-                        | "some" | "every" | "find" | "reduce" | "take" | "drop" | "Duplex"
+                        | "some" | "every" | "find" | "reduce" | "take" | "drop" | "Duplex" | "duplexPair"
                 )
             );
             if self.found {
@@ -154,6 +157,27 @@ mod tests {
             let rewritten = rewrite_util_requires(&tree).expect("duplex rewrite").expect("full stream module");
             assert_eq!(rewritten.body.iter().filter(|s| is_module_declaration(s)).count(), 3, "{source}");
             assert!(rewrite_util_requires(&rewritten).expect("idempotent rewrite").is_none());
+        }
+    }
+
+    #[test]
+    fn paired_transport_keeps_pipeline_constructor_values_on_the_complete_module() {
+        for source in [
+            "const { duplexPair: pair } = require('stream'); const { Readable } = require('node:stream'); pair(); Readable.from([1]);",
+            "const pair = require('node:stream').duplexPair; const { Writable } = require('stream'); pair(); new Writable({});",
+            "const s = require('stream'); const { Transform: T } = require('node:stream'); s.duplexPair(); new T({});",
+        ] {
+            let tree = parse(source);
+            assert!(requires_stream_module(&tree.body), "{source}");
+            let rewritten = rewrite_util_requires(&tree)
+                .expect("paired transport rewrite")
+                .expect("complete stream module");
+            assert_eq!(
+                rewritten.body.iter().filter(|s| is_module_declaration(s)).count(),
+                3,
+                "{source}"
+            );
+            assert!(rewrite_util_requires(&rewritten).expect("second pass").is_none());
         }
     }
 

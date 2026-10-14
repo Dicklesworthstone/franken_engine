@@ -27,8 +27,10 @@ use super::*;
 
 use std::cmp::Ordering;
 
+mod iteration;
 mod mutation;
 mod sorting;
+use iteration::LiveArrayCursor;
 
 const MAX_SAFE_LENGTH: u64 = (1 << 53) - 1;
 
@@ -352,6 +354,17 @@ impl InterpreterCore {
                 | K::ArrayToSorted
                 | K::ArrayMap
                 | K::ArrayFilter
+                | K::ArrayForEach
+                | K::ArraySome
+                | K::ArrayEvery
+                | K::ArrayFind
+                | K::ArrayFindIndex
+                | K::ArrayFindLast
+                | K::ArrayFindLastIndex
+                | K::ArrayReduce
+                | K::ArrayReduceRight
+                | K::ArrayIndexOf
+                | K::ArrayLastIndexOf
                 | K::ArraySliceMethod
                 | K::ArraySplice
                 | K::ArrayConcat
@@ -528,55 +541,25 @@ impl InterpreterCore {
                     len as f64 - 1.0
                 };
                 let mut found = -1i64;
-                if let Some(present) = self.generic_present_indices(o, len)? {
-                    // A huge sparse array-like: only its present indices.
-                    let first = from.max(0.0) as u64;
-                    let candidates: Vec<u64> = if forward {
-                        present.into_iter().filter(|&k| k >= first).collect()
-                    } else if from >= 0.0 {
-                        present
-                            .into_iter()
-                            .rev()
-                            .filter(|&k| k <= from as u64)
-                            .collect()
-                    } else {
-                        Vec::new()
-                    };
-                    for k in candidates {
-                        let key = Self::generic_index_key(k);
-                        if self.generic_has(m, o, &key)?
-                            && Self::strict_eq_values(&self.generic_get(m, o, &key)?, &search)
-                        {
-                            found = k as i64;
-                            break;
-                        }
-                    }
-                } else if forward {
-                    let mut k = from.max(0.0) as u64;
-                    while k < len {
-                        let key = Self::generic_index_key(k);
-                        if self.generic_has(m, o, &key)?
-                            && Self::strict_eq_values(&self.generic_get(m, o, &key)?, &search)
-                        {
-                            found = k as i64;
-                            break;
-                        }
-                        k += 1;
-                    }
+                let (front, back) = if forward {
+                    ((from.max(0.0) as u64).min(len), len)
                 } else if from >= 0.0 {
-                    let mut k = from as u64;
-                    loop {
-                        let key = Self::generic_index_key(k);
-                        if self.generic_has(m, o, &key)?
-                            && Self::strict_eq_values(&self.generic_get(m, o, &key)?, &search)
-                        {
+                    (0, (from as u64).min(len - 1) + 1)
+                } else {
+                    (0, 0)
+                };
+                let mut indices = LiveArrayCursor::new(front, back, !forward, false);
+                while let Some(k) = indices.next(self, o)? {
+                    let key = Self::generic_index_key(k);
+                    let present = self.generic_has(m, o, &key)?;
+                    self.observe_scoped_callback_result()?;
+                    if present {
+                        let element = self.generic_get(m, o, &key)?;
+                        self.observe_scoped_callback_result()?;
+                        if Self::strict_eq_values(&element, &search) {
                             found = k as i64;
                             break;
                         }
-                        if k == 0 {
-                            break;
-                        }
-                        k -= 1;
                     }
                 }
                 Value::Int(found)
@@ -765,24 +748,20 @@ impl InterpreterCore {
                     });
                 }
                 let backwards = kind == K::ArrayReduceRight;
-                let mut indices: Box<dyn Iterator<Item = u64>> =
-                    match self.generic_present_indices(o, len)? {
-                        Some(present) if backwards => Box::new(present.into_iter().rev()),
-                        Some(present) => Box::new(present.into_iter()),
-                        None => Box::new(
-                            (0..len).map(move |step| if backwards { len - 1 - step } else { step }),
-                        ),
-                    };
+                let mut indices = LiveArrayCursor::new(0, len, backwards, false);
                 let mut accumulator = if args.count > 1 {
                     Some(arg(self, 1)?)
                 } else {
                     None
                 };
                 if accumulator.is_none() {
-                    for k in indices.by_ref() {
+                    while let Some(k) = indices.next(self, o)? {
                         let key = Self::generic_index_key(k);
-                        if self.generic_has(m, o, &key)? {
+                        let present = self.generic_has(m, o, &key)?;
+                        self.observe_scoped_callback_result()?;
+                        if present {
                             accumulator = Some(self.generic_get(m, o, &key)?);
+                            self.observe_scoped_callback_result()?;
                             break;
                         }
                     }
@@ -793,10 +772,13 @@ impl InterpreterCore {
                         got: "empty Array.prototype.reduce without initialValue".to_string(),
                     });
                 };
-                for k in indices {
+                while let Some(k) = indices.next(self, o)? {
                     let key = Self::generic_index_key(k);
-                    if self.generic_has(m, o, &key)? {
+                    let present = self.generic_has(m, o, &key)?;
+                    self.observe_scoped_callback_result()?;
+                    if present {
                         let element = self.generic_get(m, o, &key)?;
+                        self.observe_scoped_callback_result()?;
                         accumulator = self.invoke_inline_method_call(
                             m,
                             callback.clone(),
@@ -808,6 +790,7 @@ impl InterpreterCore {
                                 self.generic_object_value(o),
                             ],
                         )?;
+                        self.observe_scoped_callback_result()?;
                     }
                 }
                 accumulator
@@ -1030,25 +1013,16 @@ impl InterpreterCore {
             K::ArrayFind | K::ArrayFindIndex | K::ArrayFindLast | K::ArrayFindLastIndex
         );
         let mut filtered = 0u64;
-        // A hole-skipping method over a huge sparse array-like visits only the
-        // indices present (generic_present_indices); each is re-checked below.
-        let present = if visits_holes {
-            None
-        } else {
-            self.generic_present_indices(o, len)?
-        };
-        let steps: Box<dyn Iterator<Item = u64>> = match present {
-            Some(indices) => Box::new(indices.into_iter()),
-            None => {
-                Box::new((0..len).map(move |step| if backwards { len - 1 - step } else { step }))
-            }
-        };
-        for k in steps {
+        let mut steps = LiveArrayCursor::new(0, len, backwards, visits_holes);
+        while let Some(k) = steps.next(self, o)? {
             let key = Self::generic_index_key(k);
-            if !visits_holes && !self.generic_has(m, o, &key)? {
-                continue;
+            if !visits_holes {
+                let present = self.generic_has(m, o, &key)?;
+                self.observe_scoped_callback_result()?;
+                if !present { continue; }
             }
             let element = self.generic_get(m, o, &key)?;
+            self.observe_scoped_callback_result()?;
             let outcome = self.invoke_inline_method_call(
                 m,
                 callback.clone(),
@@ -1059,6 +1033,7 @@ impl InterpreterCore {
                     self.generic_object_value(o),
                 ],
             )?;
+            self.observe_scoped_callback_result()?;
             match kind {
                 K::ArrayMap => {
                     let result = result.expect("map allocates its result");
@@ -1140,58 +1115,6 @@ impl InterpreterCore {
             expected: "bounded Proxy target chain".to_string(),
             got: format!("depth {MAX_PROTOTYPE_CHAIN_DEPTH}"),
         })
-    }
-
-    /// The indices below `len` at which HasProperty(o, k) holds, ascending,
-    /// when `len` is huge and they can be read without running guest code:
-    /// `o` and its prototype chain are ordinary objects (no Proxy, Array,
-    /// typed array or wrapper) and only `o` has integer keys, so the present
-    /// indices are its own integer keys (accessors included). Probing every
-    /// index of `{ length: 2 ** 32 }` ran out of budget where Node answers
-    /// at once. `None`: probe each index.
-    fn generic_present_indices(
-        &self,
-        o: ObjectId,
-        len: u64,
-    ) -> Result<Option<Vec<u64>>, InterpreterError> {
-        const SPARSE_SCAN_MIN_LENGTH: u64 = 1 << 16;
-        if len < SPARSE_SCAN_MIN_LENGTH {
-            return Ok(None);
-        }
-        let mut indices = Vec::new();
-        let mut current = Some(o);
-        for depth in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
-            let Some(id) = current else {
-                break;
-            };
-            if self.proxy_record(id)?.is_some() {
-                return Ok(None);
-            }
-            let Some(object) = self.heap.get(id.0 as usize) else {
-                return Ok(None);
-            };
-            if object.is_array || object.typed_array.is_some() || object.primitive_value.is_some() {
-                return Ok(None);
-            }
-            for key in object.properties.keys() {
-                let Ok(index) = key.parse::<u64>() else {
-                    continue;
-                };
-                if index.to_string() != *key || index >= len {
-                    continue;
-                }
-                if depth > 0 {
-                    return Ok(None);
-                }
-                indices.push(index);
-            }
-            current = self.observable_prototype_link(object, id);
-        }
-        if current.is_some() {
-            return Ok(None);
-        }
-        indices.sort_unstable();
-        Ok(Some(indices))
     }
 
     /// ArrayCreate(len)'s RangeError (ES2020 9.4.2.2) for toReversed,

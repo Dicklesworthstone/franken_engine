@@ -1,0 +1,27 @@
+forEach-inserts 0:a;50000:b;90000:z;
+same-count-replacement 0,40000
+map-future-property 131072 0,50000,90000 8
+filter-future-property 1,4,3
+some-future-property true 0,50000
+every-future-property false 0,50000
+reduce-adds 6 0,50000,90000
+reduce-initial-getter 6 50000,90000
+reduceRight-adds 6 90000,50000,0
+reduceRight-initial-getter 6 50000,0
+getter-replaces-prototype 0:a;20000:p;
+inherited-nonenumerable 0:a;20000:own;60000:p;
+prototype-getter-adds 0:a;40000:b;
+fixed-length-and-no-revisit 0,50000 1
+callback-receiver-and-this true true
+indexOf-getter-adds 50000
+lastIndexOf-getter-adds 50000
+indexOf-from-conversion 40000 1
+from-boundaries -1 -1 0 0 -1
+large-named-index 4294967295 4294967295
+proxy-installed-during-callback true 1,2
+first-proxy-trap-throw true get:length;has:0;
+new-getter-throw-identity true 0
+nested-cursors 0,40000,70000 0,40000,70000
+find-family-visits-holes 0,1,2,3 3,2,1,0 1 2
+noncanonical-names 0
+empty-reduce-and-initial TypeError 9

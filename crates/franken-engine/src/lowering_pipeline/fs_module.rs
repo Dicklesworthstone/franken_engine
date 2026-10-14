@@ -23,10 +23,11 @@ use crate::ast::{
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
 const MODULE_BINDING: &str = "%fs_module";
-// Compose bulk copying with the same filesystem object and private host calls.
-// The copier never obtains a new provider or ambient filesystem authority.
+// Compose directory iteration and copying with the same filesystem object.
+// Both adapters retain the existing private host calls and admission boundary.
 const SOURCE: &str = concat!(
-    "(", include_str!("fs_copy.js"), ")(", include_str!("fs_module.js"), ")",
+    "(", include_str!("fs_directory.js"), ")((",
+    include_str!("fs_copy.js"), ")(", include_str!("fs_module.js"), "))",
 );
 // One immutable parser template shared by fs and fs/promises. Every program
 // still receives a clone before renaming and dependency/loader rewriting.
@@ -615,6 +616,33 @@ mod tests {
                 &ParserOptions::default(),
             )
             .expect("test source parses")
+    }
+
+    #[test]
+    fn directory_iteration_uses_the_shared_module_without_erasing_loader_bindings() {
+        for source in [
+            "const { opendirSync: open } = require('fs'); open('tree', {recursive: true});",
+            "const { opendir } = require('node:fs/promises'); opendir('tree');",
+            "const fs = require('fs'); const d = fs.opendirSync('tree'); d.readSync(); d.closeSync();",
+        ] {
+            let tree = parse(source);
+            assert!(direct_fs_calls(&tree).unwrap().is_none());
+            let rewritten = rewrite_fs_requires(&tree).unwrap().expect("directory module");
+            assert_eq!(rewritten.body.iter().filter(|s| is_module_declaration(s)).count(), 1);
+            assert!(rewrite_fs_requires(&rewritten).unwrap().is_none());
+        }
+        for source in [
+            "function scan(require) { return require('fs').opendirSync('tree'); }",
+            "const require = custom; require('fs/promises').opendir('tree');",
+        ] {
+            assert!(rewrite_fs_requires(&parse(source)).unwrap().is_none());
+        }
+        let names = GLOBALS.iter().map(|name| (*name).to_string()).collect();
+        let mut expression = module_source(&names).expect("all directory helpers protected");
+        assert_eq!(
+            super::super::tests::free_names(&mut expression),
+            BTreeSet::from(["globalThis".into(), "%FsRead".into(), "%FsWrite".into(), "require".into()])
+        );
     }
 
     #[test]

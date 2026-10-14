@@ -1,0 +1,65 @@
+accessor/push ok 4:10,accessor,30,40 -
+getter-only/push ok 4:accessor,20,30,40 -
+readonly/push ok 4:10,20,30,40 -
+locked-tail/push ok 4:10,20,30,40 -
+inherited/push ok 4:10,-,30,40 -
+accessor/pop ok 2:10,accessor -
+getter-only/pop ok 2:accessor,20 -
+readonly/pop ok 2:10,20 -
+locked-tail/pop TypeError 3:10,20,30 -
+inherited/pop ok 2:10,- -
+accessor/shift ok 2:21,accessor get1,set1=30
+getter-only/shift TypeError 3:accessor,20,30 get0
+readonly/shift TypeError 3:10,20,30 -
+locked-tail/shift TypeError 3:20,30,30 -
+inherited/shift ok 2:22,- get-p1,set-p1=30
+accessor/unshift ok 4:5,accessor,21,30 get1,set1=10
+getter-only/unshift TypeError 4:accessor,11,20,30 get0
+readonly/unshift TypeError 4:10,10,20,30 -
+locked-tail/unshift ok 4:5,10,20,30 -
+inherited/unshift ok 4:5,-,22,30 get-p1,set-p1=10
+accessor/reverse ok 3:30,accessor,10 -
+getter-only/reverse TypeError 3:accessor,20,30 get0
+readonly/reverse TypeError 3:10,20,30 -
+locked-tail/reverse ok 3:30,20,10 -
+inherited/reverse ok 3:30,-,10 -
+accessor/fill ok 3:9,accessor,9 set1=9
+getter-only/fill TypeError 3:accessor,20,30 -
+readonly/fill TypeError 3:10,20,30 -
+locked-tail/fill ok 3:9,9,9 -
+inherited/fill ok 3:9,-,9 set-p1=9
+tail-getter/pop ok 2:10,20 get2
+tail-readonly-deletable/pop ok 2:10,20 -
+getter-throws/shift RangeError 3:10,accessor,30 get1
+setter-changes-next/fill TypeError 3:accessor,20,30 set0=9
+setter-changes-next/reverse TypeError 3:accessor,20,30 get0,set0=30
+prototype-growth-setter/push ok 4:10,20,30,- set-p3=40
+prototype-growth-readonly/push TypeError 3:10,20,30 -
+prototype-growth-setter/unshift ok 4:5,10,20,- set-p3=30
+prototype-growth-readonly/unshift TypeError 3:10,20,30 -
+sealed/push TypeError 3:10,20,30 -
+nonextensible/push TypeError 3:10,20,30 -
+frozen/push TypeError 3:10,20,30 -
+sealed/pop TypeError 3:10,20,30 -
+nonextensible/pop ok 2:10,20 -
+frozen/pop TypeError 3:10,20,30 -
+sealed/shift TypeError 3:20,30,30 -
+nonextensible/shift ok 2:20,30 -
+frozen/shift TypeError 3:10,20,30 -
+sealed/unshift TypeError 3:10,20,30 -
+nonextensible/unshift TypeError 3:10,20,30 -
+frozen/unshift TypeError 3:10,20,30 -
+sealed/reverse ok 3:30,20,10 -
+nonextensible/reverse ok 3:30,20,10 -
+frozen/reverse TypeError 3:10,20,30 -
+sealed/fill ok 3:9,9,9 -
+nonextensible/fill ok 3:9,9,9 -
+frozen/fill TypeError 3:10,20,30 -
+empty-frozen/fill ok
+empty-frozen/reverse ok
+empty-frozen/shift TypeError
+empty-frozen/pop TypeError
+narrow-fill 3:accessor,7,3
+overflow-push RangeError 4294967295 17
+prototype-proxy 3:1,2,3 1=2;2=3;
+borrowed-fill 3:accessor,2,3 4

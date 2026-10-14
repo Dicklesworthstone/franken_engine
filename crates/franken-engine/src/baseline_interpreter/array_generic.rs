@@ -27,6 +27,8 @@ use super::*;
 
 use std::cmp::Ordering;
 
+mod mutation;
+
 const MAX_SAFE_LENGTH: u64 = (1 << 53) - 1;
 
 impl InterpreterCore {
@@ -144,6 +146,7 @@ impl InterpreterCore {
                         && self.concat_spreads_generically(object_id, args)?)
                         || self.converts_object_argument(kind, args)?
                         || length_locked
+                        || self.array_mutation_requires_generic(object_id, kind, args)?
                         || (kind == K::ArraySort
                             && !self.array_sorts_on_element_storage(object_id, args)?)
                         || (kind == K::ArrayCopyWithin
@@ -276,13 +279,8 @@ impl InterpreterCore {
         let Some(Value::Int(length)) = object.properties.get("length") else {
             return false;
         };
-        (0..*length).all(|index| {
-            let key = RuntimePropertyKey::String(JsString::from(index.to_string()));
-            !matches!(
-                object.own_runtime_property_value(&key),
-                None | Some(Value::Accessor { .. })
-            ) && object.own_property_attributes(&key).writable
-        })
+        u32::try_from(*length)
+            .is_ok_and(|length| mutation::plain_writable_range(object, 0, length))
     }
 
     /// Whether concat on the Array `receiver` must spread generically: an
@@ -338,7 +336,13 @@ impl InterpreterCore {
         use BuiltinFunctionKind as K;
         if matches!(
             kind,
-            K::ArrayMap
+            K::ArrayPush
+                | K::ArrayPop
+                | K::ArrayShift
+                | K::ArrayUnshift
+                | K::ArrayReverse
+                | K::ArrayFill
+                | K::ArrayMap
                 | K::ArrayFilter
                 | K::ArraySliceMethod
                 | K::ArraySplice
@@ -348,7 +352,8 @@ impl InterpreterCore {
         ) {
             // Length, species constructors, element reads and callbacks can
             // each replace the pending result slot. Keep their observations
-            // alive until every write to an arbitrary species result finishes.
+            // alive until every write finishes, including in-place mutations
+            // whose getters/setters can change descriptors and throw mid-move.
             return self.generic_species_scope(|core| {
                 core.array_method_generic_body(module, kind, object, args)
             });
@@ -379,6 +384,7 @@ impl InterpreterCore {
                     return Err(Self::generic_length_error());
                 }
                 for index in 0..args.count {
+                    self.charge_native_hole_read()?;
                     let item = arg(self, index)?;
                     self.generic_set(m, o, &Self::generic_index_key(len), item)?;
                     len += 1;
@@ -393,6 +399,7 @@ impl InterpreterCore {
                     self.generic_set(m, o, &Self::generic_length_key(), Value::Int(0))?;
                     Value::Undefined
                 } else {
+                    self.charge_native_hole_read()?;
                     let key = Self::generic_index_key(len - 1);
                     let element = self.generic_get(m, o, &key)?;
                     self.generic_delete(m, o, &key)?;
@@ -428,6 +435,7 @@ impl InterpreterCore {
                         self.generic_move(m, o, k - 1, k + count - 1)?;
                     }
                     for index in 0..args.count {
+                        self.charge_native_hole_read()?;
                         let item = arg(self, index)?;
                         self.generic_set(m, o, &Self::generic_index_key(u64::from(index)), item)?;
                     }
@@ -624,6 +632,7 @@ impl InterpreterCore {
                 let len = self.generic_length(m, o)?;
                 let middle = len / 2;
                 for lower in 0..middle {
+                    self.charge_native_hole_read()?;
                     let upper = len - lower - 1;
                     let (lower_key, upper_key) = (
                         Self::generic_index_key(lower),
@@ -699,6 +708,7 @@ impl InterpreterCore {
                 let start = self.generic_relative_index(m, arg(self, 1)?, len, 0)?;
                 let end = self.generic_relative_index(m, arg(self, 2)?, len, len)?;
                 for k in start..end.max(start) {
+                    self.charge_native_hole_read()?;
                     self.generic_set(m, o, &Self::generic_index_key(k), value.clone())?;
                 }
                 self.generic_object_value(o)
@@ -1565,6 +1575,9 @@ impl InterpreterCore {
         from: u64,
         to: u64,
     ) -> Result<(), InterpreterError> {
+        // Moving a hole runs no guest code. Meter it too, so selecting the
+        // generic path cannot turn a sparse shift/unshift into unbounded work.
+        self.charge_native_hole_read()?;
         let (from_key, to_key) = (Self::generic_index_key(from), Self::generic_index_key(to));
         if self.generic_has(m, o, &from_key)? {
             let value = self.generic_get(m, o, &from_key)?;

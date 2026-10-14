@@ -263,7 +263,7 @@
   function globLimit() { return error('ERR_FS_GLOB_LIMIT', 'Glob resource limit exceeded'); }
   function globUnsupported() {
     return error('ERR_FS_GLOB_UNSUPPORTED',
-      'Glob supports relative slash-separated patterns, brace lists, UTF-8 cwd, and pattern-array exclusions');
+      'Glob supports relative slash-separated patterns, brace lists, UTF-8 cwd, and synchronous predicate or pattern-array exclusions');
   }
   function chargeGlob(budget, amount) {
     if (amount > MAX_GLOB_WORK - budget.work) throw globLimit();
@@ -468,12 +468,40 @@
     const follow = settings.followSymlinks;
     const depth = settings.maxDepth;
     if (typed !== undefined && typeof typed !== 'boolean') throw invalid('options.withFileTypes');
-    if ((follow !== undefined && follow !== false) || depth !== undefined || typeof exclude === 'function') throw globUnsupported();
-    if (exclude !== undefined && !isArray(exclude)) throw invalid('options.exclude');
+    if ((follow !== undefined && follow !== false) || depth !== undefined) throw globUnsupported();
+    const predicate = typeof exclude === 'function' ? exclude : undefined;
+    if (exclude !== undefined && predicate === undefined && !isArray(exclude)) throw invalid('options.exclude');
     const budget = { work: 0, patternUnits: 0 };
     return { cwd: cwd === undefined ? '.' : path(cwd), typed: typed === true,
       include: compileGlobs(pattern, budget, false),
-      exclude: compileGlobs(exclude === undefined ? [] : exclude, budget, true), budget: budget };
+      exclude: compileGlobs(exclude === undefined || predicate !== undefined ? [] : exclude, budget, true),
+      predicate: predicate, budget: budget, collect: false, outputUnits: 0 };
+  }
+  function predicateExcludes(config, record, relative, directory, descend) {
+    if (config.predicate === undefined) return false;
+    chargeGlob(config.budget, 1);
+    // The Node 22 band supplies a basename for each entry, plus a relative
+    // directory route before descent in string mode. Typed callbacks receive
+    // the real Dirent instead. Match/traversal decisions use captured records,
+    // never fields a predicate can replace. Predicates are synchronous: their
+    // return value is tested for truthiness, not awaited or then-inspected.
+    if (config.typed) {
+      property(record.value, 'parentPath', directory);
+      property(record.value, 'path', directory);
+      return !!apply(config.predicate, undefined, [record.value]);
+    }
+    if (apply(config.predicate, undefined, [record.name])) return true;
+    if (!descend) return false;
+    chargeGlob(config.budget, 1);
+    return !!apply(config.predicate, undefined, [relative]);
+  }
+  function globResult(config, value, units) {
+    // Charge captured names, not guest-mutable Dirent fields or their getters.
+    if (config.collect) {
+      config.outputUnits += units;
+      if (config.outputUnits > MAX_NAMES) throw globLimit();
+    }
+    return value;
   }
   function* globEntries(config) {
     if (config.include.length === 0) return;
@@ -501,10 +529,17 @@
           const blocked = advanceGlobs(config.exclude, exclusions, record.name, config.budget);
           if (globAccepts(config.exclude, blocked, record.directory)) continue;
           const descend = record.directory && globCanDescend(config.include, next);
-          if (globAccepts(config.include, next, record.directory)) {
+          const matches = globAccepts(config.include, next, record.directory);
+          if (!matches && !descend) continue;
+          // Evaluate before publication AND before acquiring a child snapshot.
+          // A predicate may mutate the filesystem; the existing descent check
+          // below must still run after it, even when no directory was yielded.
+          if (predicateExcludes(config, record, name, directory, descend)) continue;
+          if (matches) {
             property(record.value, 'parentPath', directory);
             property(record.value, 'path', directory);
-            yield config.typed ? record.value : name;
+            yield globResult(config, config.typed ? record.value : name,
+              config.typed ? record.name.length + directory.length : name.length);
           }
           if (descend) {
             const info = lstat(target);
@@ -528,8 +563,8 @@
           property(info, 'name', name);
           property(info, 'parentPath', slice(physical, 0, split) || '/');
           property(info, 'path', slice(physical, 0, split) || '/');
-          yield info;
-        } else yield '.';
+          yield globResult(config, info, name.length + (slice(physical, 0, split) || '/').length);
+        } else yield globResult(config, '.', 1);
         publishedRoot = true;
       }
     }
@@ -545,11 +580,10 @@
   }
   function globSync(pattern, settings) {
     const config = globOptions(pattern, settings);
+    config.collect = true;
     const output = [];
-    let names = 0;
     for (const entry of globEntries(config)) {
-      names += config.typed ? entry.name.length + entry.parentPath.length : entry.length;
-      if (names > MAX_NAMES || output.length >= MAX_ENTRIES) throw globLimit();
+      if (output.length >= MAX_ENTRIES) throw globLimit();
       output[output.length] = entry;
     }
     return output;

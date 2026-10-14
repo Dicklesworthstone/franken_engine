@@ -179,7 +179,7 @@ test('invalid and unsupported query contracts refuse before filesystem access', 
     assert.throws(() => io.globSync(p));
     await assert.rejects(collect(io.promises.glob(p)));
   }
-  for (const options of [null, [], {cwd:{}}, {exclude:'dist'}, {exclude:()=>false}, {withFileTypes:1}, {followSymlinks:true}, {maxDepth:2}]) {
+  for (const options of [null, [], {cwd:{}}, {exclude:'dist'}, {exclude:{}}, {withFileTypes:1}, {followSymlinks:true}, {maxDepth:2}]) {
     assert.throws(() => io.globSync('*', options));
   }
   assert.equal(calls.length, 0);
@@ -214,4 +214,146 @@ test('captured helpers survive replacement of public filesystem and string metho
     result = io.globSync('{src,dist}/*.js', { cwd: root });
   } finally { String.prototype.split = split; String.prototype.slice = slice; }
   assert.deepEqual(result.sort(), ['dist/x.js', 'src/a.js']);
+});
+
+for (const pattern of ['**', '**/*.js', ['**/*.js', 'src/**']]) {
+  for (const typed of [false, true]) {
+    test(`predicate discovery agrees with Node: ${JSON.stringify(pattern)}, typed=${typed}`, async t => {
+      const root = fixture(t), { io, calls } = factory();
+      const exclude = typed ? entry => entry.name === 'node_modules' || entry.name === 'dist' || entry.name === 'c.js' :
+        name => name === 'node_modules' || name === 'dist' || name === 'c.js';
+      const options = { cwd: root, withFileTypes: typed, exclude };
+      const expected = rows(fs.globSync(pattern, options), root);
+      assert.deepEqual(rows(io.globSync(pattern, options), root), expected);
+      assert.deepEqual(rows(await collect(io.promises.glob(pattern, options)), root), expected);
+      assert(!calls.some(c => c[0] === 'readdirSync' && (c[1].includes('/node_modules') || c[1].endsWith('/dist'))));
+    });
+  }
+}
+test('string predicate can prune a nested relative directory route', async t => {
+  const root = fixture(t), { io, calls } = factory();
+  const options = { cwd: root, exclude: name => name === 'src/deep' };
+  const expected = fs.globSync('**/*.js', options).sort();
+  assert.deepEqual(io.globSync('**/*.js', options).sort(), expected);
+  assert.deepEqual((await collect(io.promises.glob('**/*.js', options))).sort(), expected);
+  assert(!calls.some(c => c[0] === 'readdirSync' && c[1].endsWith('/src/deep')));
+});
+test('predicate and options are captured once, before callback reentry', t => {
+  const root = fixture(t), { io } = factory();
+  let gets = 0, invoked = 0;
+  const options = { cwd: root, withFileTypes: true, get exclude() {
+    gets++;
+    return function (entry) {
+      assert.equal(arguments.length, 1);
+      assert.equal(this, undefined);
+      if (invoked++ === 0) {
+        options.cwd = '/unused'; options.withFileTypes = false;
+        Object.defineProperty(options, 'exclude', { value() { throw Error('late replacement'); } });
+        assert.deepEqual(io.globSync('src/*.js', { cwd: root }), ['src/a.js']);
+      }
+      return entry.name === 'dist';
+    };
+  } };
+  const expected = rows(fs.globSync('**/*.js', { cwd: root, withFileTypes: true, exclude: entry => entry.name === 'dist' }), root);
+  assert.deepEqual(rows(io.globSync('**/*.js', options), root), expected);
+  assert.equal(gets, 1);
+  assert(invoked > 1);
+});
+test('typed predicates cannot redirect or suppress descent by rewriting Dirents', async t => {
+  const root = fixture(t), { io, calls } = factory();
+  const options = { cwd: root, withFileTypes: true, exclude(entry) {
+    if (entry.name === 'src') {
+      entry.name = '../node_modules'; entry.parentPath = '/outside';
+      entry.isDirectory = () => false; entry.isSymbolicLink = () => true;
+    }
+    return false;
+  } };
+  const result = rows(await collect(io.promises.glob('src/**/*.js', options)), root);
+  assert.deepEqual(result.map(row => row[0]), ['src/a.js', 'src/deep/c.js']);
+  assert(!calls.some(c => c[0] === 'readdirSync' && (c[1].includes('node_modules') || c[1] === '/outside')));
+});
+test('filesystem mutation in a nonmatching-directory predicate is checked before descent', t => {
+  const root = fixture(t), { io, calls } = factory();
+  assert.throws(() => io.globSync('src/**/*.js', { cwd: root, withFileTypes: true, exclude(entry) {
+    if (entry.name === 'src') {
+      fs.renameSync(root + '/src', root + '/retained');
+      fs.symlinkSync('node_modules', root + '/src');
+    }
+    return false;
+  } }), { code: 'ERR_FS_DIR_CHANGED' });
+  assert.equal(calls.filter(c => c[0] === 'readdirSync').length, 1);
+});
+test('async predicate execution is demand-driven and stops on return', async t => {
+  const root = fixture(t), { io, calls } = factory();
+  let predicates = 0;
+  const options = { cwd: root, exclude() { predicates++; return false; } };
+  const unopened = io.promises.glob('**/*.js', options);
+  await unopened.return();
+  assert.equal(predicates, 0); assert.equal(calls.length, 0);
+  const scan = io.promises.glob('**/*.js', options);
+  assert.equal((await scan.next()).value, 'app.js');
+  const observed = [predicates, calls.length];
+  await scan.return();
+  assert.deepEqual(await scan.next(), { done: true, value: undefined });
+  assert.deepEqual([predicates, calls.length], observed);
+});
+test('predicate failures retain identity, including falsy thrown values, without partial success', async t => {
+  const root = fixture(t), { io } = factory();
+  for (const failure of [undefined, null, 0, 'stop', Error('predicate failure')]) {
+    const options = { cwd: root, exclude() { throw failure; } };
+    assert.throws(() => io.globSync('**/*.js', options), e => Object.is(e, failure));
+    const scan = io.promises.glob('**/*.js', options);
+    await assert.rejects(scan.next(), e => Object.is(e, failure));
+    assert.deepEqual(await scan.next(), { done: true, value: undefined });
+  }
+  assert.deepEqual(io.globSync('src/*.js', { cwd: root }), ['src/a.js']);
+});
+test('a predicate failure after publication closes all suspended traversal frames', async t => {
+  const root = fixture(t), { io, calls } = factory();
+  const failure = Error('after first match'); let stopped = false;
+  const scan = io.promises.glob('**/*.js', { cwd: root, exclude() { if (stopped) throw failure; return false; } });
+  assert.equal((await scan.next()).value, 'app.js');
+  stopped = true;
+  await assert.rejects(scan.next(), e => e === failure);
+  const count = calls.length;
+  await scan.return();
+  assert.deepEqual(await scan.next(), { done: true, value: undefined });
+  assert.equal(calls.length, count);
+});
+test('predicate return values use synchronous truthiness without touching then', async t => {
+  const root = fixture(t), { io } = factory();
+  const sentinel = { get then() { throw Error('must not assimilate predicate return'); } };
+  const options = { cwd: root, exclude: () => sentinel };
+  assert.deepEqual(io.globSync('**/*.js', options), []);
+  assert.deepEqual(await collect(io.promises.glob('**/*.js', options)), []);
+  assert.deepEqual(fs.globSync('**/*.js', options), []);
+});
+test('predicate-mutable names cannot bypass collected-name limits or invoke getters during accounting', () => {
+  let reads = 0;
+  const root = '/safe/' + 'd'.repeat(3000);
+  const { io } = factory({ realpathSync: x => x, readdirSync: () =>
+    Array.from({ length: 2000 }, (_, i) => ({ name: String(i), isDirectory: () => false, isSymbolicLink: () => false })) });
+  assert.throws(() => io.globSync('*', { cwd: root, withFileTypes: true, exclude(entry) {
+    Object.defineProperty(entry, 'name', { get() { reads++; throw Error('mutable name read'); } });
+    return false;
+  } }), { code: 'ERR_FS_GLOB_LIMIT' });
+  assert.equal(reads, 0);
+});
+test('predicate cannot turn provider refusal into an empty successful scan', async t => {
+  const root = fixture(t), refusal = Object.assign(Error('no read capability'), { code: 'ERR_CAPABILITY_MISSING' });
+  const { io } = factory({ readdirSync() { throw refusal; } });
+  let invoked = 0;
+  const options = { cwd: root, exclude() { invoked++; return true; } };
+  assert.throws(() => io.globSync('**/*.js', options), e => e === refusal);
+  await assert.rejects(collect(io.promises.glob('**/*.js', options)), e => e === refusal);
+  assert.equal(invoked, 0);
+});
+test('static leaf predicates are honored, including the known Node 22.16 reference difference', t => {
+  const root = fixture(t), { io } = factory();
+  const options = { cwd: root, exclude: name => name === 'a.js' };
+  assert.deepEqual(io.globSync('src/*.js', options), []);
+  const reference = fs.globSync('src/*.js', options);
+  if (reference.length !== 0) {
+    t.diagnostic('REFERENCE DIFFERENCE: this Node version skips the a.js predicate for src/*.js; production filters the leaf. Not a parity pass.');
+  }
 });

@@ -126,3 +126,23 @@ fn duplex_pair_esm_exports_complete_binary_half_close() {
         "DUPLEX_PAIR_ESM_OK a😀b",
     );
 }
+
+#[test]
+fn abort_signal_commonjs_cancels_without_reading_and_detaches_after_success() {
+    run(
+        include_str!("../../../fixtures/stream_operators/abort_signal.cjs"),
+        "abort_signal.cjs",
+        "script",
+        "STREAM_ABORT_SIGNAL_OK",
+    );
+}
+
+#[test]
+fn abort_signal_esm_preserves_cause_and_closes_both_paired_endpoints() {
+    run(
+        include_str!("../../../fixtures/stream_operators/abort_signal.mjs"),
+        "abort_signal.mjs",
+        "module",
+        "STREAM_ABORT_SIGNAL_ESM_OK",
+    );
+}

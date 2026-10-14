@@ -1,0 +1,23 @@
+'use strict';
+const { addAbortSignal: attach } = require('stream');
+const { Readable: Source, Writable: Sink } = require('node:stream');
+(async () => {
+  const controller = new AbortController(), reason = { reason: 42 };
+  let error, reads = 0;
+  const stream = new Source({ read() { reads++; } });
+  stream.on('error', value => { error = value; });
+  const closed = new Promise(resolve => stream.once('close', resolve));
+  if (attach(controller.signal, stream) !== stream) throw new Error('identity');
+  controller.abort(reason); await closed;
+  if (reads !== 0 || error.code !== 'ABORT_ERR' || error.cause !== reason) throw new Error('abort');
+  const second = new AbortController();
+  let writes = 0;
+  const output = new Sink({ autoDestroy: false, write(value, encoding, done) { writes++; done(); } });
+  attach(second.signal, output);
+  const complete = new Promise(resolve => output.once('finish', resolve));
+  output.end('ok'); await complete;
+  second.abort('late');
+  if (writes !== 1 || output.destroyed) throw new Error('completion cleanup');
+  output.destroy();
+  console.log('STREAM_ABORT_SIGNAL_OK');
+})().catch(error => { console.log('STREAM_ABORT_SIGNAL_FAILED', error.message); });

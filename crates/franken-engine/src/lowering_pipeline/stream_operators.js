@@ -819,5 +819,97 @@
     defineProperty(Stream, 'duplexPair', descriptor);
   }
 
+  const getOwnDescriptor = Object.getOwnPropertyDescriptor;
+  function addAbortSignal(signal, stream) {
+    try { apply(signalAborted, signal, []); }
+    catch (error) { throw failure('ERR_INVALID_ARG_TYPE', 'The "signal" argument must be an AbortSignal'); }
+    if (stream == null || typeof stream.on !== 'function' || typeof stream.removeListener !== 'function' ||
+        typeof stream.destroy !== 'function' ||
+        (!stream._readableState && !stream._writableState)) {
+      throw failure('ERR_INVALID_ARG_TYPE', 'The "stream" argument must be a Node-style stream');
+    }
+    const originalDestroy = stream._destroy;
+    if (typeof originalDestroy !== 'function') {
+      throw failure('ERR_INVALID_ARG_TYPE', 'The stream must have a callable destructor');
+    }
+    const read = !!stream._readableState && stream.readable !== false;
+    const write = !!stream._writableState && stream.writable !== false;
+    function ended(target) {
+      return target.destroyed || ((!read || target.readableEnded) && (!write || target.writableFinished));
+    }
+    if (ended(stream)) return stream;
+    const originalDescriptor = getOwnDescriptor(stream, '_destroy');
+    let watched = stream;
+    let scope;
+    let hooked = false;
+    let released = false;
+    function release() {
+      if (released) return;
+      released = true;
+      const target = watched;
+      watched = undefined;
+      signal = undefined;
+      try {
+        target.removeListener('end', onTerminal);
+        target.removeListener('finish', onTerminal);
+        target.removeListener('close', onTerminal);
+        if (hooked && target._destroy === onDestroy) {
+          if (originalDescriptor === undefined) delete target._destroy;
+          else defineProperty(target, '_destroy', originalDescriptor);
+        }
+      } finally {
+        if (scope !== undefined) { const active = scope; scope = undefined; active.release(); }
+      }
+    }
+    function onTerminal() {
+      // A manually emitted event is not proof that the other duplex half is
+      // finished. Cancellation remains attached until actual terminal state.
+      if (!released && ended(watched)) release();
+    }
+    function onDestroy(error, done) {
+      // Destruction is observable even with emitClose:false and a destructor
+      // that has not called back yet. Detach before invoking user cleanup;
+      // never swallow its error or wait for another public stream event.
+      release();
+      return apply(originalDestroy, this, [error, done]);
+    }
+    function onAbort() {
+      if (released || scope === undefined) return;
+      let aborted;
+      try { scope.check(); } catch (error) { aborted = error; }
+      if (aborted !== undefined) {
+        const target = watched;
+        release();
+        target.destroy(aborted);
+      }
+    }
+    // Use a private native dependent signal, not a public abort event that
+    // synthetic dispatch or stopImmediatePropagation can consume/suppress.
+    scope = scopeFor(signal, onAbort);
+    try {
+      const descriptor = createObject(null);
+      descriptor.value = onDestroy;
+      descriptor.writable = true;
+      descriptor.configurable = originalDescriptor === undefined || originalDescriptor.configurable;
+      descriptor.enumerable = originalDescriptor !== undefined && originalDescriptor.enumerable;
+      defineProperty(stream, '_destroy', descriptor);
+      hooked = true;
+      stream.on('end', onTerminal);
+      stream.on('finish', onTerminal);
+      stream.on('close', onTerminal);
+      if (ended(stream)) release();
+      else onAbort();
+    } catch (error) { release(); throw error; }
+    return stream;
+  }
+  if (Stream.Duplex !== undefined) {
+    const descriptor = createObject(null);
+    descriptor.value = addAbortSignal;
+    descriptor.writable = true;
+    descriptor.enumerable = true;
+    descriptor.configurable = true;
+    defineProperty(Stream, 'addAbortSignal', descriptor);
+  }
+
   return Stream;
 })

@@ -43,7 +43,7 @@ impl Walk for OperatorUse {
                     && properties.iter().any(|property| {
                         matches!(
                             super::super::well_formed_static_name(&property.key),
-                            Some("Duplex" | "duplexPair")
+                            Some("Duplex" | "duplexPair" | "addAbortSignal")
                         )
                     })
                 {
@@ -87,7 +87,7 @@ impl Walk for OperatorUse {
                 name,
                 Some(
                     "map" | "filter" | "flatMap" | "toArray" | "forEach"
-                        | "some" | "every" | "find" | "reduce" | "take" | "drop" | "Duplex" | "duplexPair"
+                        | "some" | "every" | "find" | "reduce" | "take" | "drop" | "Duplex" | "duplexPair" | "addAbortSignal"
                 )
             );
             if self.found {
@@ -171,6 +171,27 @@ mod tests {
             assert!(requires_stream_module(&tree.body), "{source}");
             let rewritten = rewrite_util_requires(&tree)
                 .expect("paired transport rewrite")
+                .expect("complete stream module");
+            assert_eq!(
+                rewritten.body.iter().filter(|s| is_module_declaration(s)).count(),
+                3,
+                "{source}"
+            );
+            assert!(rewrite_util_requires(&rewritten).expect("second pass").is_none());
+        }
+    }
+
+    #[test]
+    fn cancellation_keeps_separately_imported_stream_constructors_materialized() {
+        for source in [
+            "const { addAbortSignal: attach } = require('stream'); const { Readable: R } = require('node:stream'); attach(signal, new R({}));",
+            "const attach = require('node:stream').addAbortSignal; const { Writable } = require('stream'); attach(signal, new Writable({}));",
+            "const s = require('stream'); const { PassThrough } = require('node:stream'); s.addAbortSignal(signal, new PassThrough());",
+        ] {
+            let tree = parse(source);
+            assert!(requires_stream_module(&tree.body), "{source}");
+            let rewritten = rewrite_util_requires(&tree)
+                .expect("cancellation rewrite")
                 .expect("complete stream module");
             assert_eq!(
                 rewritten.body.iter().filter(|s| is_module_declaration(s)).count(),

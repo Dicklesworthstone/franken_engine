@@ -57,6 +57,8 @@ struct UnitCursor {
     byte: usize,
     units_left: usize,
     low: Option<u16>,
+    #[cfg(test)]
+    decoded_scalars: usize,
 }
 
 impl UnitCursor {
@@ -67,6 +69,8 @@ impl UnitCursor {
             byte: 0,
             units_left: 0,
             low: None,
+            #[cfg(test)]
+            decoded_scalars: 0,
         }
     }
 
@@ -77,12 +81,79 @@ impl UnitCursor {
         }
         let text = self.leaf.as_ref()?;
         let scalar = text[self.byte..].chars().next()?;
+        #[cfg(test)]
+        {
+            self.decoded_scalars += 1;
+        }
         self.byte += scalar.len_utf8();
         let mut units = [0; 2];
         let encoded = scalar.encode_utf16(&mut units);
         self.low = encoded.get(1).copied();
         self.units_left -= 1;
         Some(encoded[0])
+    }
+
+    /// Position within a leaf without decoding a discarded Unicode prefix.
+    /// Whole-scalar suffixes admit ASCII and three-byte BMP length proofs;
+    /// other text is decoded from the nearer end. No index or cache is kept.
+    fn skip_in_leaf(&mut self, mut n: usize) {
+        debug_assert!(n < self.units_left);
+        if n == 0 {
+            return;
+        }
+        // A buffered low surrogate is not represented in the byte suffix.
+        // Consume it before proving widths or counting backward from the end.
+        if self.low.take().is_some() {
+            self.units_left -= 1;
+            n -= 1;
+            if n == 0 {
+                return;
+            }
+        }
+        let text = self.leaf.as_ref().expect("in-range leaf skip needs a leaf");
+        let suffix = &text[self.byte..];
+        if suffix.len() == self.units_left {
+            self.byte += n;
+            self.units_left -= n;
+            return;
+        }
+        // Three UTF-8 bytes is the maximum per UTF-16 unit. Equality proves
+        // every scalar is three-byte BMP; unlike an average of two bytes,
+        // this cannot be forged by mixing ASCII with wider characters.
+        if self.units_left.checked_mul(3) == Some(suffix.len()) {
+            self.byte += n * 3;
+            self.units_left -= n;
+            return;
+        }
+        let remaining = self.units_left - n;
+        if n <= remaining {
+            for _ in 0..n {
+                self.next_in_leaf().expect("skip stays inside its leaf");
+            }
+            return;
+        }
+        let mut distance = remaining;
+        for (byte, scalar) in suffix.char_indices().rev() {
+            #[cfg(test)]
+            {
+                self.decoded_scalars += 1;
+            }
+            let width = scalar.len_utf16();
+            if distance <= width {
+                self.byte += byte;
+                self.units_left = remaining;
+                if distance < width {
+                    // The requested unit is the low half. Its scalar's bytes
+                    // are consumed, but the low half remains to be returned.
+                    self.byte += scalar.len_utf8();
+                    let mut units = [0; 2];
+                    self.low = Some(scalar.encode_utf16(&mut units)[1]);
+                }
+                return;
+            }
+            distance -= width;
+        }
+        unreachable!("cached UTF-16 length must agree with the leaf")
     }
 
     // Whole-leaf folds preserve the standard library's tight UTF-8 decoder
@@ -126,23 +197,7 @@ impl UnitCursor {
     fn nth(&mut self, mut n: usize) -> Option<u16> {
         loop {
             if n < self.units_left {
-                // For a complete scalar suffix, equal byte/unit lengths
-                // prove ASCII without scanning. A pending low surrogate
-                // must be excluded: it can cancel a later scalar's excess
-                // bytes (for example, after the high half in "😀é").
-                if self.low.is_none()
-                    && self
-                        .leaf
-                        .as_ref()
-                        .is_some_and(|leaf| leaf.len() - self.byte == self.units_left)
-                {
-                    self.byte += n;
-                    self.units_left -= n;
-                } else {
-                    for _ in 0..n {
-                        self.next_in_leaf()?;
-                    }
-                }
+                self.skip_in_leaf(n);
                 return self.next_in_leaf();
             }
             n -= self.units_left;
@@ -352,5 +407,110 @@ mod tests {
         }
         assert_eq!(value.encode_utf16().fold(0_usize, |n, _| n + 1), 8193);
         assert_unjoined(&value);
+    }
+
+    #[test]
+    fn near_end_unicode_skips_decode_only_the_short_suffix() {
+        let text = "\u{e9}\u{1f600}\u{65e5}".repeat(32768);
+        let expected: Vec<u16> = text.encode_utf16().collect();
+        let value = rope(&text, "tail");
+        for distance in 1..=12 {
+            let index = expected.len() - distance;
+            let mut cursor = UnitCursor::new(&value);
+            assert_eq!(cursor.nth(index), Some(expected[index]));
+            assert!(
+                cursor.decoded_scalars <= distance + 1,
+                "decoded {} scalars for a suffix of {distance} units",
+                cursor.decoded_scalars
+            );
+            let rest = cursor.fold(Vec::new(), |mut units, unit| {
+                units.push(unit);
+                units
+            });
+            let mut suffix = expected[index + 1..].to_vec();
+            suffix.extend("tail".encode_utf16());
+            assert_eq!(rest, suffix);
+            assert_unjoined(&value);
+        }
+    }
+
+    #[test]
+    fn three_byte_bmp_skip_uses_cached_width_not_a_prefix_scan() {
+        let text = "\u{800}\u{65e5}\u{ffff}".repeat(32768);
+        let expected: Vec<u16> = text.encode_utf16().collect();
+        let value = rope(&text, "tail");
+        for index in [1, 255, expected.len() / 2, expected.len() - 1] {
+            let mut cursor = UnitCursor::new(&value);
+            assert_eq!(cursor.nth(index), Some(expected[index]));
+            assert_eq!(cursor.decoded_scalars, 1);
+            assert_unjoined(&value);
+        }
+    }
+
+    #[test]
+    fn reverse_skip_handles_pending_and_selected_surrogate_halves() {
+        for text in [
+            format!("\u{1f600}{}\u{1f603}z", "\u{e9}x".repeat(128)),
+            format!("\u{1f600}{}\u{1f603}", "a".repeat(256)),
+            format!("\u{1f600}{}\u{1f603}", "\u{65e5}".repeat(256)),
+        ] {
+            let expected: Vec<u16> = text.encode_utf16().collect();
+            let value = rope(&text, "tail");
+            for distance in 1..=5 {
+                let mut cursor = UnitCursor::new(&value);
+                assert_eq!(cursor.nth(0), Some(expected[0]));
+                assert!(cursor.low.is_some());
+                let index = expected.len() - distance;
+                assert_eq!(cursor.nth(index - 1), Some(expected[index]));
+                assert!(cursor.decoded_scalars <= distance + 2);
+                let cloned = cursor.clone();
+                let rest = cursor.fold(Vec::new(), |mut units, unit| {
+                    units.push(unit);
+                    units
+                });
+                let mut suffix = expected[index + 1..].to_vec();
+                suffix.extend("tail".encode_utf16());
+                assert_eq!(rest, suffix);
+                assert_eq!(
+                    cloned.fold(Vec::new(), |mut units, unit| {
+                        units.push(unit);
+                        units
+                    }),
+                    suffix
+                );
+                assert_unjoined(&value);
+            }
+        }
+    }
+
+    #[test]
+    fn every_partial_leaf_skip_matches_exact_units_for_mixed_widths() {
+        let alphabet = ["a", "\u{e9}", "\u{65e5}", "\u{1f600}"];
+        for a in alphabet {
+            for b in alphabet {
+                for c in alphabet {
+                    let text = format!("{a}{b}{c}{a}{b}{c}");
+                    let value = rope(&text, "\u{1f603}tail");
+                    let expected: Vec<u16> = format!("{text}\u{1f603}tail")
+                        .encode_utf16()
+                        .collect();
+                    for consumed in 0..expected.len() {
+                        for index in consumed..expected.len() {
+                            let mut cursor = UnitCursor::new(&value);
+                            for unit in &expected[..consumed] {
+                                assert_eq!(cursor.nth(0), Some(*unit));
+                            }
+                            assert_eq!(cursor.nth(index - consumed), Some(expected[index]));
+                            let rest = cursor.fold(Vec::new(), |mut units, unit| {
+                                units.push(unit);
+                                units
+                            });
+                            assert_eq!(rest, expected[index + 1..]);
+                        }
+                    }
+                    assert_unjoined(&value);
+                }
+            }
+        }
     }
 }

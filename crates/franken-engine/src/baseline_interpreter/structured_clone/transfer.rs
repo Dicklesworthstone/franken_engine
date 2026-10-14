@@ -34,16 +34,18 @@ impl InterpreterCore {
             }
         }
 
-        // The graph's memo points at ordinary, correctly sized buffer shells.
-        // Views can be constructed over them without bypassing their normal
-        // bounds/heap checks. Payload preparation below deliberately happens
-        // AFTER serialization: a later getter may mutate these source bytes.
+        // Reserve identities, not a second copy of every transferred payload.
+        // CloneTask::View sizes a shell before constructing a cloned view, so
+        // ordinary view bounds and allocation admission remain in force.
+        // Buffers with no cloned views stay empty until ownership moves after
+        // all graph getters, including entries the graph never reaches.
         for &source in &sources {
             self.json_charge_work()?;
             let backing = self.buffer_backing(source)?;
-            let (length, maximum) = (backing.bytes.len(), backing.max_byte_length);
+            let maximum = backing.max_byte_length;
+            Self::structured_clone_transfer_length(backing.bytes.len())?;
             state.reserve(self, CLONE_MEMO_ENTRY_BYTES)?;
-            let target = self.alloc_array_buffer_object(length)?;
+            let target = self.alloc_array_buffer_object(0)?;
             self.mutate_heap(|heap| {
                 if let Some(backing) = heap
                     .get_mut(target.0 as usize)
@@ -228,9 +230,9 @@ impl InterpreterCore {
     /// Prepare an unreachable destination without moving its source bytes.
     /// Resize and labels use the normal accounting/registered-view machinery.
     /// Every destination is prepared before the first ownership exchange, so
-    /// a late admission failure cannot detach an earlier source. The graph's
-    /// sized shells remain necessary for ordinary view construction; no third,
-    /// payload-sized staging allocation is needed to transfer their storage.
+    /// a late admission failure cannot detach an earlier source. Materialize
+    /// payload storage only for shells whose cloned views need final bounds.
+    /// A viewless shell acquires its bytes directly in the commit phase.
     fn structured_clone_prepare_transfer(
         &mut self,
         source: ObjectId,
@@ -239,15 +241,51 @@ impl InterpreterCore {
     ) -> Result<(), InterpreterError> {
         self.json_charge_work()?;
         let length = self.buffer_backing(source)?.bytes.len();
+        Self::structured_clone_transfer_length(length)?;
         for _ in 0..(length as u64).div_ceil(64) {
             self.json_charge_work()?;
         }
         let label = self.binary_storage_label(source);
         state.label = state.label.join(&label);
-        if self.buffer_backing(target)?.bytes.len() != length {
+        // A shell materialized by CloneTask::View still needs its final
+        // size/bounds. A zero-length resizable shell can also have tracking
+        // views: its registry, not a nonempty payload, detects that case.
+        // Fixed zero-length buffers cannot grow. No-view shells stay empty,
+        // even for large or unreferenced transfer entries.
+        let backing = self.buffer_backing(target)?;
+        let materialized = !backing.bytes.is_empty() || !backing.views.is_empty();
+        if materialized && backing.bytes.len() != length {
             self.resize_buffer_bytes(target, length)?;
         }
+        // Admit an integer byteLength slot before the irreversible phase,
+        // rather than relying on a particular allocator's property layout.
+        // On refusal it describes the shell, never bytes it does not own yet.
+        let shell_length = self.buffer_backing(target)?.bytes.len();
+        let has_length_slot = self.heap.get(target.0 as usize).is_some_and(|object| {
+            matches!(object.properties.get("byteLength"), Some(Value::Int(_)))
+        });
+        if !has_length_slot {
+            self.set_object_property(
+                target,
+                "byteLength".to_string(),
+                Value::Int(i64::try_from(shell_length).unwrap_or(i64::MAX)),
+            )?;
+        }
+        // All label admission still precedes every payload move.
         self.join_binary_storage_label(target, &label)
+    }
+
+    /// An empty shell must not bypass the per-buffer admission that a sized
+    /// allocation enforced, including native/replay-originated source buffers.
+    fn structured_clone_transfer_length(length: usize) -> Result<(), InterpreterError> {
+        if length as u64 > MAX_ARRAY_BUFFER_BYTE_LENGTH {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "Array buffer allocation failed: byteLength {length} exceeds the per-buffer cap of {MAX_ARRAY_BUFFER_BYTE_LENGTH} bytes"
+                ),
+            });
+        }
+        Ok(())
     }
 
     /// Move the source allocation into its prepared destination. Called only
@@ -271,21 +309,35 @@ impl InterpreterCore {
                     .expect("validated clone transfer source remains live")
                     .bytes,
             );
+            let length = payload.len();
             let destination = heap
                 .get_mut(target.0 as usize)
-                .and_then(|object| object.array_buffer.as_deref_mut())
                 .expect("prepared clone transfer destination remains live");
-            debug_assert_eq!(payload.len(), destination.bytes.len());
-            let placeholder = std::mem::replace(&mut destination.bytes, payload);
+            let backing = destination
+                .array_buffer
+                .as_deref_mut()
+                .expect("clone transfer destination is an ArrayBuffer");
+            debug_assert!(
+                backing.bytes.len() == length
+                    || (backing.bytes.is_empty() && backing.views.is_empty())
+            );
+            let placeholder = std::mem::replace(&mut backing.bytes, payload);
+            // Preparation admitted this Int slot before the irreversible
+            // phase. Updating it neither allocates nor changes its estimate.
+            *destination
+                .properties
+                .get_mut("byteLength")
+                .expect("prepared clone transfer shell has a byteLength slot") =
+                Value::Int(i64::try_from(length).unwrap_or(i64::MAX));
             heap.get_mut(source.0 as usize)
                 .and_then(|object| object.array_buffer.as_deref_mut())
                 .expect("validated clone transfer source remains live")
                 .bytes = placeholder;
         });
-        // Both buffers keep their charged length during the exchange. Normal
-        // detachment now releases the placeholder and its charge, while the
-        // original allocation survives on the target. Source view invalidation
-        // and resizable-view accounting still have one canonical implementation.
+        // Source N + shell M becomes source M + target N; their total charge
+        // is unchanged even for an empty shell. Normal detachment refunds M,
+        // not the N bytes now owned by the target. Source view invalidation
+        // and resizable-view accounting retain their canonical implementation.
         self.detach_array_buffer(source)
     }
 }
@@ -346,9 +398,9 @@ mod tests {
     fn transfer_preparation_memory_refusal_leaves_both_buffers_unchanged() {
         let mut core = runtime();
         let source = core.alloc_array_buffer_object(1024).unwrap();
-        // Simulate a source grown by a late graph getter: the destination must
-        // still admit its real 1024-byte growth before any payload moves.
-        let target = core.alloc_array_buffer_object(0).unwrap();
+        // A zero-length shell with a tracking view must still admit the real
+        // 1024-byte growth before any payload moves. A viewless shell need not.
+        let (target, _) = empty_tracking_target(&mut core, 1024);
         core.with_array_buffer_bytes_mut(source, |bytes| bytes.fill(37))
             .unwrap();
         let before = core.estimated_memory_bytes();
@@ -709,5 +761,119 @@ console.log(Array.from(new Uint8Array(copy.inner)).join(','), inner.byteLength, 
             "0 true 1,2,3,77",
             "8,9 2 true",
         ]);
+    }
+
+    /// A clone view reached before a later source-buffer growth: its shell
+    /// still has zero bytes, but final preparation must refresh its bounds.
+    fn empty_tracking_target(core: &mut InterpreterCore, maximum: usize) -> (ObjectId, ObjectId) {
+        let target = core.alloc_array_buffer_object(0).unwrap();
+        core.mutate_heap(|heap| {
+            heap.get_mut(target.0 as usize).unwrap().array_buffer
+                .as_deref_mut().unwrap().max_byte_length = Some(maximum);
+        });
+        let view = core.alloc_data_view_object(target, 0, 0).unwrap();
+        core.register_buffer_view(view, Some(ViewBounds {
+            fixed_length: None,
+            out_of_bounds: false,
+        })).unwrap();
+        (target, view)
+    }
+
+    #[test]
+    fn viewless_transfer_preparation_keeps_the_shell_empty() {
+        for maximum in [None, Some(65_544)] {
+            let mut core = runtime();
+            let source = core.alloc_array_buffer_object(65_536).unwrap();
+            let target = core.alloc_array_buffer_object(0).unwrap();
+            core.mutate_heap(|heap| {
+                for id in [source, target] {
+                    heap.get_mut(id.0 as usize).unwrap().array_buffer
+                        .as_deref_mut().unwrap().max_byte_length = maximum;
+                }
+            });
+            core.with_array_buffer_bytes_mut(source, |bytes| bytes[65_535] = 71).unwrap();
+            let address = core.buffer_backing(source).unwrap().bytes.as_ptr();
+            core.json_reserve_temporary(13).unwrap();
+            let before = core.estimated_memory_bytes();
+            // Enough metadata headroom, but neither a payload shell nor a copy.
+            core.config.max_total_memory_bytes = before + 1024;
+            core.structured_clone_prepare_transfer(source, target, &mut state()).unwrap();
+            assert!(core.buffer_backing(target).unwrap().bytes.is_empty());
+            assert_eq!(core.heap.get(target.0 as usize).unwrap().properties.get("byteLength"),
+                Some(&Value::Int(0)));
+            assert_eq!(core.buffer_backing(source).unwrap().bytes.as_ptr(), address);
+            core.structured_clone_commit_transfer(source, target).unwrap();
+            let backing = core.buffer_backing(target).unwrap();
+            assert_eq!(backing.bytes.as_ptr(), address);
+            assert_eq!(backing.bytes.len(), 65_536);
+            assert_eq!(backing.bytes[65_535], 71);
+            assert_eq!(backing.max_byte_length, maximum);
+            assert_eq!(core.heap.get(target.0 as usize).unwrap().properties.get("byteLength"),
+                Some(&Value::Int(65_536)));
+            assert_eq!(core.json_parse_temporary_bytes, 13);
+            core.json_release_temporary(13);
+            assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        }
+    }
+
+    #[test]
+    fn resizable_view_shells_follow_late_growth_and_shrink_before_movement() {
+        for length in [0, 4, 16] {
+            let mut core = runtime();
+            let source = core.alloc_array_buffer_object(8).unwrap();
+            let (target, view) = empty_tracking_target(&mut core, 32);
+            core.structured_clone_prepare_transfer(source, target, &mut state()).unwrap();
+            assert_eq!(core.buffer_backing(target).unwrap().bytes.len(), 8);
+            core.resize_buffer_bytes(source, length).unwrap();
+            let address = core.buffer_backing(source).unwrap().bytes.as_ptr();
+            core.structured_clone_prepare_transfer(source, target, &mut state()).unwrap();
+            assert_eq!(core.heap.get(view.0 as usize).unwrap().data_view
+                .as_deref().unwrap().byte_length, length);
+            core.structured_clone_commit_transfer(source, target).unwrap();
+            assert_eq!(core.buffer_backing(target).unwrap().bytes.as_ptr(), address);
+            assert_eq!(core.buffer_backing(target).unwrap().bytes.len(), length);
+            core.resize_buffer_bytes(target, 24).unwrap();
+            assert_eq!(core.heap.get(view.0 as usize).unwrap().data_view
+                .as_deref().unwrap().byte_length, 24);
+            assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        }
+    }
+
+    #[test]
+    fn mixed_empty_and_sized_shells_release_only_discarded_payloads() {
+        let mut core = runtime();
+        let first = core.alloc_array_buffer_object(4096).unwrap();
+        let first_target = core.alloc_array_buffer_object(0).unwrap();
+        let second = core.alloc_array_buffer_object(8).unwrap();
+        let second_target = core.alloc_array_buffer_object(8).unwrap();
+        let first_address = core.buffer_backing(first).unwrap().bytes.as_ptr();
+        let second_address = core.buffer_backing(second).unwrap().bytes.as_ptr();
+        let mut state = state();
+        for (source, target) in [(first, first_target), (second, second_target)] {
+            core.structured_clone_prepare_transfer(source, target, &mut state).unwrap();
+        }
+        for (source, target, address) in [
+            (first, first_target, first_address),
+            (second, second_target, second_address),
+        ] {
+            core.structured_clone_commit_transfer(source, target).unwrap();
+            assert_eq!(core.buffer_backing(target).unwrap().bytes.as_ptr(), address);
+            assert!(core.buffer_backing(source).unwrap().detached);
+            assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        }
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+    }
+
+    #[test]
+    fn empty_shells_do_not_bypass_the_per_buffer_limit() {
+        assert!(InterpreterCore::structured_clone_transfer_length(0).is_ok());
+        let maximum = usize::try_from(MAX_ARRAY_BUFFER_BYTE_LENGTH).unwrap();
+        assert!(InterpreterCore::structured_clone_transfer_length(maximum).is_ok());
+        if let Some(oversized) = maximum.checked_add(1) {
+            assert!(matches!(
+                InterpreterCore::structured_clone_transfer_length(oversized),
+                Err(InterpreterError::RangeError { .. })
+            ));
+        }
     }
 }

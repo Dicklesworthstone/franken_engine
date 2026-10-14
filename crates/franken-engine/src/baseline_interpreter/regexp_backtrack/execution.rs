@@ -409,8 +409,15 @@ impl<'a> Run<'a> {
         let input = self.input;
         let length = input.chars.len();
         let mut at = start;
-        while at <= length {
+        if at <= length {
+            // A failed execute restores every capture to its entry value.
+            // Clear once per search, not once per candidate: the latter
+            // costs input_length * capture_count even on immediate misses.
+            // Success and budget refusal leave this loop; the next search
+            // starts clean, including reuse after a caught budget error.
             self.slots.fill(None);
+        }
+        while at <= length {
             let matched = self.execute(0, at, stack);
             // Reuse common workspaces, but do not retain an adversarial peak
             // alongside every later global result. The active stack remains
@@ -442,3 +449,6 @@ impl<'a> Run<'a> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod search_regressions;

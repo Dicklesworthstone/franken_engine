@@ -626,11 +626,19 @@ impl BytecodeVm {
                 if let Some(entry) = self.inline_cache.get_mut(&cache_key)
                     && entry.shape_id == object_shape
                     && entry.property_index == property_index
-                    && let Some(value) = object_ref.load_slot(entry.slot_index)
                 {
-                    entry.hits += 1;
-                    cache_hit = true;
-                    loaded = value;
+                    // usize::MAX denotes a cached absent property. Shape changes
+                    // invalidate this negative result just like a positive slot.
+                    let cached = if entry.slot_index == usize::MAX {
+                        Some(Value::Undefined)
+                    } else {
+                        object_ref.load_slot(entry.slot_index)
+                    };
+                    if let Some(value) = cached {
+                        entry.hits += 1;
+                        cache_hit = true;
+                        loaded = value;
+                    }
                 }
 
                 if !cache_hit {
@@ -922,6 +930,97 @@ mod tests {
                 .iter()
                 .any(|event| event.opcode == "load_prop_cached" && event.cache_hit == Some(true))
         );
+    }
+
+    #[test]
+    fn missing_property_negative_cache_hits_until_shape_transition() {
+        let program = Program {
+            constants: vec![Value::Int(7)],
+            property_pool: vec!["missing".to_string()],
+            instructions: vec![
+                Instruction::NewObject { dst: r(0) },
+                Instruction::LoadPropCached {
+                    dst: r(1),
+                    object: r(0),
+                    property_index: 0,
+                },
+                Instruction::LoadPropCached {
+                    dst: r(2),
+                    object: r(0),
+                    property_index: 0,
+                },
+                Instruction::LoadConst {
+                    dst: r(3),
+                    const_index: 0,
+                },
+                Instruction::StoreProp {
+                    object: r(0),
+                    property_index: 0,
+                    value: r(3),
+                },
+                Instruction::LoadPropCached {
+                    dst: r(4),
+                    object: r(0),
+                    property_index: 0,
+                },
+                Instruction::Return { src: r(4) },
+            ],
+        };
+        // Both load sites initially miss. A repeated visit to the same
+        // instruction pointer is required to observe negative caching.
+        let looping = Program {
+            instructions: vec![
+                Instruction::NewObject { dst: r(0) },
+                Instruction::LoadConst {
+                    dst: r(5),
+                    const_index: 0,
+                },
+                Instruction::LoadPropCached {
+                    dst: r(1),
+                    object: r(0),
+                    property_index: 0,
+                },
+                Instruction::Sub {
+                    dst: r(5),
+                    lhs: r(5),
+                    rhs: r(6),
+                },
+                Instruction::JumpIfFalse {
+                    condition: r(5),
+                    target: 6,
+                },
+                Instruction::Jump { target: 2 },
+                Instruction::Return { src: r(1) },
+            ],
+            constants: vec![Value::Int(2)],
+            ..program.clone()
+        };
+        // Register 6 defaults to Undefined, so use a dedicated decrement constant.
+        let mut looping = looping;
+        looping.constants.push(Value::Int(1));
+        looping.instructions.insert(
+            2,
+            Instruction::LoadConst {
+                dst: r(6),
+                const_index: 1,
+            },
+        );
+        if let Instruction::JumpIfFalse { target, .. } = &mut looping.instructions[5] {
+            *target = 7;
+        }
+        if let Instruction::Jump { target } = &mut looping.instructions[6] {
+            *target = 3;
+        }
+        let mut vm = BytecodeVm::new("negative-property-cache", 8, 64);
+        let report = vm.execute(&looping).expect("loop should finish");
+        assert_eq!(report.result, Value::Undefined);
+        assert_eq!(report.cache_stats.misses, 1);
+        assert_eq!(report.cache_stats.hits, 1);
+
+        let mut vm = BytecodeVm::new("negative-cache-shape", 8, 64);
+        let report = vm.execute(&program).expect("shape transition should invalidate");
+        assert_eq!(report.result, Value::Int(7));
+        assert_eq!(report.cache_stats.misses, 3);
     }
 
     #[test]

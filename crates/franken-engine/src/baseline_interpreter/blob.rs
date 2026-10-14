@@ -2,18 +2,18 @@
 //! is an immutable byte sequence with a MIME type. The engine keeps both in
 //! the object's `blob` slot, so no guest-visible property holds them (the
 //! bd-9vouw.150 lesson); `size` and `type` are accessors on Blob.prototype
-//! (prototype_getters), `slice`, `text` and `arrayBuffer` its methods, and
+//! (prototype_getters), `slice`, `text`, `bytes` and `arrayBuffer` its methods, and
 //! its @@toStringTag is "Blob". sqids checks `new Blob([alphabet]).size`
 //! against the alphabet's length to refuse multibyte alphabets.
 //!
-//! Not modeled: `stream()`, `bytes()`, `File`, the `endings: 'native'`
+//! Not modeled: `stream()`, `File`, the `endings: 'native'`
 //! option, structured cloning of a blob.
 
 use super::*;
 
 /// The methods of Blob.prototype; a [`BuiltinFunctionKind::BlobMethod`]'s
 /// specifier is one of them.
-pub(super) const BLOB_METHODS: [&str; 3] = ["slice", "text", "arrayBuffer"];
+pub(super) const BLOB_METHODS: [&str; 4] = ["slice", "text", "arrayBuffer", "bytes"];
 
 /// A blob's bytes and its type (already lowercased, File API 4.1 step 3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -269,6 +269,36 @@ impl InterpreterCore {
         Ok(String::from_utf8_lossy(bytes).into_owned())
     }
 
+    /// File API bytes()/arrayBuffer(): each call owns a fresh writable copy.
+    /// The staging buffer is charged through the engine's shared native-scratch
+    /// accounting, including while the destination and its prototype allocate.
+    /// Never clone BlobData (including its MIME type) before budget admission.
+    /// Both outcomes release scratch; the source remains immutable and charged.
+    fn copy_blob_binary(
+        &mut self,
+        receiver: &Value,
+        typed: bool,
+    ) -> Result<ObjectId, InterpreterError> {
+        let method = if typed { "bytes" } else { "arrayBuffer" };
+        let length = self.require_blob_data(receiver, method)?.bytes.len();
+        let scratch = u64::try_from(length).unwrap_or(u64::MAX);
+        self.json_reserve_temporary(scratch)?;
+        let result = (|| {
+            let bytes = self.require_blob_data(receiver, method)?.bytes.clone();
+            if typed {
+                self.alloc_uint8_array_from_bytes(&bytes)
+            } else {
+                let buffer = self.alloc_array_buffer_object(length)?;
+                self.with_array_buffer_bytes_mut(buffer, |backing| {
+                    backing[..length].copy_from_slice(&bytes);
+                })?;
+                Ok(buffer)
+            }
+        })();
+        self.json_release_temporary(scratch);
+        result
+    }
+
     /// `get Blob.prototype.size` / `type` on a blob.
     pub(super) fn blob_getter(&self, id: ObjectId, key: &str) -> Option<Value> {
         let blob = self.heap.get(id.0 as usize)?.blob.as_ref()?;
@@ -281,7 +311,7 @@ impl InterpreterCore {
         }
     }
 
-    /// Blob.prototype.slice / text / arrayBuffer (File API 4.3). A result
+    /// Blob.prototype.slice / text / arrayBuffer / bytes. A result
     /// carries the receiver's label, its object label and the arguments'.
     pub(super) fn blob_method(
         &mut self,
@@ -331,15 +361,17 @@ impl InterpreterCore {
                     .create_fulfilled_promise(Self::value_to_js_value(&Value::str(text)), label)?;
                 Ok(Value::Promise(promise.0))
             }
-            "arrayBuffer" => {
-                // Keep this path's existing staging copy: the destination
-                // mutation borrows the interpreter mutably. Slicing and text
-                // decoding no longer pay for this full-payload clone.
-                let data = self.require_blob_data(&receiver, method)?.clone();
-                let buffer = self.alloc_array_buffer_object(data.bytes.len())?;
-                self.with_array_buffer_bytes_mut(buffer, |backing| {
-                    backing[..data.bytes.len()].copy_from_slice(&data.bytes);
-                })?;
+            "arrayBuffer" | "bytes" => {
+                let buffer = self.copy_blob_binary(&receiver, method == "bytes")?;
+                // Preserve provenance on the object AND its backing store,
+                // rather than relying only on the fulfilled Promise's label.
+                self.join_object_mutation_label(buffer, &label)?;
+                let backing = self.heap.get(buffer.0 as usize)
+                    .and_then(|object| object.typed_array.as_deref())
+                    .map(|view| view.buffer);
+                if let Some(backing) = backing {
+                    self.join_object_mutation_label(backing, &label)?;
+                }
                 let promise = self.create_fulfilled_promise(
                     Self::value_to_js_value(&Value::Object(buffer)),
                     label,
@@ -526,6 +558,93 @@ mod tests {
                 core.copy_blob_range(&receiver, 0, 0),
                 Err(InterpreterError::TypeError { .. })
             ));
+        }
+    }
+
+    #[test]
+    fn bytes_method_is_registered_without_changing_existing_methods() {
+        for name in ["slice", "text", "arrayBuffer", "bytes"] {
+            let method = BuiltinFunction::blob_method(name).unwrap();
+            assert_eq!(method.display_name(), name);
+        }
+        assert!(BuiltinFunction::blob_method("not-a-blob-method").is_none());
+    }
+
+    #[test]
+    fn binary_reads_keep_exact_bytes_and_independent_writable_backings() {
+        let mut core = core();
+        for source in [vec![], vec![0, 255, 239, 187, 191, 13, 10, 128]] {
+            let blob = core.alloc_blob(source.clone(), "text/plain".into()).unwrap();
+            let receiver = Value::Object(blob);
+            let first = core.copy_blob_binary(&receiver, true).unwrap();
+            let second = core.copy_blob_binary(&receiver, true).unwrap();
+            let raw = core.copy_blob_binary(&receiver, false).unwrap();
+            let first_view = core.heap[first.0 as usize].typed_array.as_deref().unwrap().clone();
+            let second_view = core.heap[second.0 as usize].typed_array.as_deref().unwrap().clone();
+            assert_eq!(first_view.kind, TypedArrayKind::Uint8);
+            assert_eq!(first_view.byte_offset, 0);
+            assert_eq!(first_view.byte_length, source.len());
+            assert_ne!(first_view.buffer, second_view.buffer);
+            assert_ne!(first_view.buffer, raw);
+            assert_eq!(core.text_codec_input_bytes(&Value::Object(first)).unwrap(), source);
+            assert_eq!(core.text_codec_input_bytes(&Value::Object(raw)).unwrap(), source);
+            core.with_array_buffer_bytes_mut(first_view.buffer, |bytes| bytes.fill(7)).unwrap();
+            assert_eq!(core.text_codec_input_bytes(&Value::Object(second)).unwrap(), source);
+            assert_eq!(core.text_codec_input_bytes(&Value::Object(raw)).unwrap(), source);
+            assert_eq!(core.require_blob_data(&receiver, "bytes").unwrap().bytes, source);
+            assert_eq!(core.json_parse_temporary_bytes, 0);
+        }
+        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+    }
+
+    #[test]
+    fn binary_read_refuses_staging_before_allocating_and_releases_failed_scratch() {
+        for typed in [false, true] {
+            let mut core = core();
+            let blob = core.alloc_blob(vec![42; 4096], String::new()).unwrap();
+            let receiver = Value::Object(blob);
+            let baseline = core.estimated_memory_bytes();
+            let objects = core.heap.len();
+            core.config.max_total_memory_bytes = baseline + 4095;
+            assert!(matches!(core.copy_blob_binary(&receiver, typed),
+                Err(InterpreterError::MemoryBudgetExceeded { .. })));
+            assert_eq!(core.heap.len(), objects);
+            assert_eq!(core.estimated_memory_bytes(), baseline);
+            assert_eq!(core.json_parse_temporary_bytes, 0);
+            // Staging fits but the simultaneously live destination cannot.
+            core.config.max_total_memory_bytes = baseline + 4096;
+            assert!(matches!(core.copy_blob_binary(&receiver, typed),
+                Err(InterpreterError::MemoryBudgetExceeded { .. })));
+            assert_eq!(core.json_parse_temporary_bytes, 0);
+            assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        }
+    }
+
+    #[test]
+    fn binary_reads_do_not_consume_or_release_an_outer_native_scratch_reservation() {
+        let mut core = core();
+        let blob = core.alloc_blob(vec![1, 2, 3], String::new()).unwrap();
+        core.json_reserve_temporary(97).unwrap();
+        let outer = core.json_parse_temporary_bytes;
+        for typed in [false, true] {
+            core.copy_blob_binary(&Value::Object(blob), typed).unwrap();
+            assert_eq!(core.json_parse_temporary_bytes, outer);
+        }
+        core.json_release_temporary(97);
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+    }
+
+    #[test]
+    fn binary_reads_refuse_unbranded_receivers_before_any_allocation() {
+        let mut core = core();
+        let baseline = core.estimated_memory_bytes();
+        for receiver in [Value::Undefined, Value::Null, Value::str("not a blob")] {
+            for typed in [false, true] {
+                assert!(matches!(core.copy_blob_binary(&receiver, typed),
+                    Err(InterpreterError::TypeError { .. })));
+                assert_eq!(core.estimated_memory_bytes(), baseline);
+                assert_eq!(core.json_parse_temporary_bytes, 0);
+            }
         }
     }
 }

@@ -1,7 +1,7 @@
 (function () {
   'use strict';
   // Capture realm helpers before guest code can replace their public bindings.
-  // Capturing them performs no builtin call and grants no filesystem authority.
+  // Capturing them performs no filesystem effect and grants no filesystem authority.
   var NativePromise = Promise;
   var promiseThen = Promise.prototype.then;
   var apply = Reflect.apply;
@@ -22,6 +22,17 @@
   var asyncIteratorKey = Symbol.asyncIterator;
   var isView = ArrayBuffer.isView;
   var NativeAggregateError = AggregateError;
+  // Authenticate byte windows at the same boundary for scalar, vector and
+  // stream I/O. Public view metadata (including subclass getters) is not the
+  // storage selected by the caller's ArrayBufferView. Capture realm accessors
+  // before guest code replaces them, as the shared stream/decoder modules do.
+  var typedPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+  var typedBuffer = Object.getOwnPropertyDescriptor(typedPrototype, 'buffer').get;
+  var typedOffset = Object.getOwnPropertyDescriptor(typedPrototype, 'byteOffset').get;
+  var typedLength = Object.getOwnPropertyDescriptor(typedPrototype, 'byteLength').get;
+  var dataBuffer = Object.getOwnPropertyDescriptor(DataView.prototype, 'buffer').get;
+  var dataOffset = Object.getOwnPropertyDescriptor(DataView.prototype, 'byteOffset').get;
+  var dataLength = Object.getOwnPropertyDescriptor(DataView.prototype, 'byteLength').get;
   // The discriminator is the same typed FsOperation argument the old direct
   // call lowering emits. In particular, fd lifecycle operations require write
   // authority. No wrapper performs host I/O outside these two intrinsics.
@@ -236,13 +247,25 @@
     return error;
   }
   function byteBuffer(buffer) {
-    if (isBuffer(buffer)) { return buffer; }
     if (!isView(buffer)) { throw argumentError('buffer (expected ArrayBufferView)'); }
-    // Buffer.from(view) converts ELEMENTS (and loses DataView contents).
-    // The ArrayBuffer overload instead shares precisely the view's bytes,
-    // including a nonzero byteOffset, without copying or changing identity
-    // in the public result. Native descriptor effects still receive a Buffer.
-    return bufferFrom(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    var backing;
+    var offset;
+    var length;
+    try { backing = apply(typedBuffer, buffer, []); }
+    catch (error) {
+      // Only brand selection belongs in this catch. A failure reading a
+      // genuine typed array's bounds must not retry through another brand.
+      backing = apply(dataBuffer, buffer, []);
+      offset = apply(dataOffset, buffer, []);
+      length = apply(dataLength, buffer, []);
+      return bufferFrom(backing, offset, length);
+    }
+    offset = apply(typedOffset, buffer, []);
+    length = apply(typedLength, buffer, []);
+    // Normalize Buffers too: an own length getter must not control later
+    // bounds checks. This makes a fresh byte view, not a payload copy. Public
+    // read/write results still return the original caller-supplied object.
+    return bufferFrom(backing, offset, length);
   }
   function bufferWindow(buffer, offset, length) {
     buffer = byteBuffer(buffer);

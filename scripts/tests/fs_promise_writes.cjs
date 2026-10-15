@@ -191,3 +191,112 @@ test('FileHandle arguments retain their existing cursor and ownership', async ()
   assert.equal(fs.readFileSync(f.file,'utf8'),'abXY!f');
   assert.deepEqual(order(f),['write_fd','write_fd']);assert.equal(f.open.size,1);await handle.close();
 });
+
+function redirectedView(kind, text = 'REAL') {
+  const storage = Uint8Array.from(Buffer.from('__' + text + '__'));
+  const decoy = Uint8Array.from(Buffer.from('FAKE'));
+  const view = kind === 'uint16' ? new Uint16Array(storage.buffer, 2, 2) :
+    kind === 'data' ? new DataView(storage.buffer, 2, 4) :
+    kind === 'buffer' ? Buffer.from(storage.buffer, 2, 4) :
+    kind === 'foreign' ? vm.runInNewContext('new Uint8Array(storage, 2, 4)', { storage: storage.buffer }) :
+    new Uint8Array(storage.buffer, 2, 4);
+  Object.defineProperties(view, {
+    buffer: { value: decoy.buffer, configurable: true },
+    byteOffset: { value: 0, configurable: true },
+    byteLength: { value: 4, configurable: true }
+  });
+  return { view, storage, decoy };
+}
+for (const kind of ['uint8', 'uint16', 'data', 'buffer', 'foreign']) {
+  test('descriptor read/write use actual byte windows, not own metadata: ' + kind, async () => {
+    const f = fixture();
+    for (const api of [fs.promises, f.api.promises]) {
+      const input = redirectedView(kind), output = redirectedView(kind, '----');
+      const handle = await api.open(f.file, 'w+');
+      try {
+        const written = await handle.write(input.view, 0, 4, 0);
+        assert.equal(written.bytesWritten, 4); assert.equal(written.buffer, input.view);
+        assert.equal(fs.readFileSync(f.file, 'utf8'), 'REAL');
+        const read = await handle.read(output.view, 0, 4, 0);
+        assert.equal(read.bytesRead, 4); assert.equal(read.buffer, output.view);
+        assert.equal(Buffer.from(output.storage).toString(), '__REAL__');
+        assert.equal(Buffer.from(output.decoy).toString(), 'FAKE');
+      } finally { await handle.close(); }
+    }
+    assert.equal(f.open.size, 0);
+  });
+}
+
+test('vector operations share authenticated windows and original result identities', async () => {
+  const f = fixture(), handle = await f.api.promises.open(f.file, 'w+');
+  try {
+    const inputs = [redirectedView('data'), redirectedView('uint16')];
+    const buffers = inputs.map(input => input.view);
+    const written = await handle.writev(buffers, 0);
+    assert.equal(written.bytesWritten, 8); assert.equal(written.buffers, buffers);
+    assert.equal(fs.readFileSync(f.file, 'utf8'), 'REALREAL');
+    const outputs = [redirectedView('foreign', '----'), redirectedView('data', '----')];
+    const targets = outputs.map(output => output.view);
+    const read = await handle.readv(targets, 0);
+    assert.equal(read.bytesRead, 8); assert.equal(read.buffers, targets);
+    for (const output of outputs) {
+      assert.equal(Buffer.from(output.storage).toString(), '__REAL__');
+      assert.equal(Buffer.from(output.decoy).toString(), 'FAKE');
+    }
+    // The public sync vector APIs use the same admission and scatter path.
+    for (const output of outputs) output.storage.fill(45, 2, 6);
+    assert.equal(f.api.readvSync(handle.fd, targets, 0), 8);
+    for (const output of outputs) assert.equal(Buffer.from(output.storage).toString(), '__REAL__');
+    assert.equal(f.api.writevSync(handle.fd, buffers, 0), 8);
+  } finally { await handle.close(); }
+});
+
+test('candidate: scalar and iterable writes cannot be redirected by view metadata', async () => {
+  // Node 22.16 writeFile itself reads public view metadata and writes FAKE for
+  // these inputs, unlike its descriptor write API above. This is an explicit
+  // engine admission contract, not a claim of Node parity for poisoned views.
+  for (const kind of ['uint8', 'uint16', 'data', 'buffer', 'foreign']) {
+    for (const iterable of [false, true]) {
+      const f = fixture(), input = redirectedView(kind);
+      const data = iterable ? [input.view] : input.view;
+      await f.api.promises.writeFile(f.file, data, { flush: true });
+      await f.api.promises.appendFile(f.file, data);
+      assert.equal(fs.readFileSync(f.file, 'utf8'), 'REALREAL'); checkClosed(f);
+      const handle = await f.api.promises.open(f.file, 'a');
+      try { await handle.writeFile(data); } finally { await handle.close(); }
+      assert.equal(fs.readFileSync(f.file, 'utf8'), 'REALREALREAL');
+    }
+  }
+});
+
+test('candidate: metadata accessors do not execute during descriptor admission', async () => {
+  const f = fixture(), handle = await f.api.promises.open(f.file, 'w+');
+  let getters = 0;
+  try {
+    for (const kind of ['uint8', 'data', 'buffer']) {
+      const input = redirectedView(kind);
+      for (const name of ['buffer', 'byteOffset', 'byteLength', 'length']) {
+        Object.defineProperty(input.view, name, { get() { getters++; throw Error('guest metadata'); }, configurable: true });
+      }
+      const result = await handle.write(input.view, 0, 4, 0);
+      assert.equal(result.bytesWritten, 4); assert.equal(result.buffer, input.view);
+      await handle.read(input.view, 0, 4, 0);
+      assert.equal(getters, 0);
+    }
+  } finally { await handle.close(); }
+  assert.equal(fs.readFileSync(f.file, 'utf8'), 'REAL');
+});
+
+test('authenticated windows still validate every vector entry before effects', async () => {
+  const f = fixture(), handle = await f.api.promises.open(f.file, 'w+');
+  const input = redirectedView('data');
+  try {
+    for (const bad of [{ buffer: input.storage.buffer, byteOffset: 2, byteLength: 4 }, new Proxy(input.view, {})]) {
+      f.calls.length = 0;
+      await assert.rejects(handle.writev([input.view, bad]), { code: 'ERR_INVALID_ARG_TYPE' });
+      await assert.rejects(handle.readv([input.view, bad]), { code: 'ERR_INVALID_ARG_TYPE' });
+      assert.deepEqual(order(f), []); assert.equal(f.open.size, 1);
+    }
+  } finally { await handle.close(); }
+  assert.equal(fs.readFileSync(f.file).length, 0);
+});

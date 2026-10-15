@@ -126,3 +126,62 @@ fn scalar_path_does_not_gain_write_authority_from_a_read_grant() {
         assert!(!root.path().join("forbidden").exists());
     }
 }
+
+#[test]
+fn descriptor_io_cannot_redirect_a_view_to_its_replaced_buffer_property() {
+    let source = r#"
+const fs=require('node:fs/promises');
+(async function(){
+  const bytes=Uint8Array.from([95,95,45,45,45,45,95,95]);
+  const decoy=Uint8Array.from([70,65,75,69]);
+  const view=new DataView(bytes.buffer,2,4);
+  Object.defineProperties(view,{buffer:{value:decoy.buffer},byteOffset:{value:0},byteLength:{value:4}});
+  const handle=await fs.open('data','r+');
+  try{
+    const read=await handle.read(view,0,4,0);
+    console.log('READ',read.bytesRead,read.buffer===view,Buffer.from(bytes).toString(),Buffer.from(decoy).toString());
+    const written=await handle.write(view,0,4,0);
+    console.log('WRITE',written.bytesWritten,written.buffer===view);
+  }finally{await handle.close();}
+  console.log('VIEW_COMPLETE');
+})();
+"#;
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("data"), b"GOOD").unwrap();
+        let (lines, _) = run(source, root.path(), lane, &["fs_read", "fs_write"]).unwrap();
+        assert_eq!(lines, ["READ 4 true __GOOD__ FAKE", "WRITE 4 true", "VIEW_COMPLETE"]);
+        assert_eq!(std::fs::read(root.path().join("data")).unwrap(), b"GOOD");
+    }
+}
+
+#[test]
+fn shared_whole_file_and_vector_admission_never_calls_guest_view_metadata() {
+    // This protected admission contract intentionally differs from Node 22.16
+    // writeFile's reads of public view metadata. It is not a parity fixture.
+    let source = r#"
+const fs=require('fs/promises');
+(async function(){
+  const bytes=Uint8Array.from([95,95,82,69,65,76,95,95]);
+  const view=Buffer.from(bytes.buffer,2,4);let calls=0;
+  for(const key of ['buffer','byteOffset','byteLength','length']){
+    Object.defineProperty(view,key,{get(){calls++;throw Error('guest metadata');}});
+  }
+  await fs.writeFile('data',view,{flush:true});
+  const handle=await fs.open('data','a');
+  try{
+    const inputs=[view];const written=await handle.writev(inputs);
+    console.log('VECTOR',written.bytesWritten,written.buffers===inputs);
+  }finally{await handle.close();}
+  console.log('SAFE_BYTES_COMPLETE',calls);
+})();
+"#;
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let root = tempfile::tempdir().unwrap();
+        let (lines, effects) = run(source, root.path(), lane, &["fs_write"]).unwrap();
+        assert_eq!(lines, ["VECTOR 4 true", "SAFE_BYTES_COMPLETE 0"]);
+        assert_eq!(std::fs::read(root.path().join("data")).unwrap(), b"REALREAL");
+        assert!(effects.iter().all(|(request, _)| request.required_capability()
+            == frankenengine_extension_host::host_io::HostIoCapability::FsWrite));
+    }
+}

@@ -129,6 +129,29 @@ impl InterpreterCore {
             {
                 return Ok((NextIndex::Probe, inspected));
             }
+            if back <= u64::from(u32::MAX) {
+                // Canonical numeric keys already have an ordered index. Do not
+                // walk or parse the entire property dictionary to find its next
+                // entry. The bounded holey search may return an absent boundary;
+                // Has/Get below remains authoritative for that candidate.
+                let (candidate, work) = object.properties
+                    .probe_index_key(front as u32..back as u32, backwards);
+                for _ in 0..work {
+                    self.charge_native_hole_read()?;
+                }
+                inspected = inspected.saturating_add(work as u64);
+                if let Some(index) = candidate.map(u64::from)
+                    && selected.is_none_or(|previous| {
+                        if backwards { index > previous } else { index < previous }
+                    })
+                {
+                    selected = Some(index);
+                }
+                let object = self.heap.get(id.0 as usize)
+                    .expect("no guest call changed the receiver");
+                current = self.observable_prototype_link(object, id);
+                continue;
+            }
             let count = object.properties.exact_len();
             // Precharge the entire retained carrier before walking it. A
             // large named-key dictionary must not hide an unmetered scan.

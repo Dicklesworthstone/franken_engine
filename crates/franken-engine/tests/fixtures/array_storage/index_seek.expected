@@ -1,0 +1,4 @@
+forward 256 32640 1 65536
+reverse 256 32640 true 1
+live 10000:1;30000:3;50000:5;70000:7;
+hole-run 160 21936 false true

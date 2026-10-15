@@ -166,6 +166,82 @@ fn gap_capacity(live: usize, span: usize, offset: usize, capacity: usize) -> Opt
     (required <= growth_threshold).then_some(limit)
 }
 
+
+// A storage probe may inspect at most this many holey slots. Return the next
+// unproved index at the bound instead of scanning an unbounded hole run before
+// the runtime regains control of its work/cancellation meter.
+const MAX_INDEX_PROBE_SLOTS: usize = 64;
+
+impl<V> super::super::OrderedStringMap<V> {
+    /// Seek a possible own canonical index in `range`, in either direction.
+    ///
+    /// `None` proves this carrier has no numeric key in the whole range.
+    /// `Some(index)` proves only that indices BEFORE it in the chosen direction
+    /// are absent: the index itself may be the next unexamined holey slot.
+    /// Consumers must still perform their ordinary presence/property checks,
+    /// and separately account for prototypes, exotics, labels and wide keys.
+    /// No result may be retained across a callback as an absence proof.
+    ///
+    /// The second result counts storage probes, not tree key comparisons.
+    /// Packed/tree storage needs one direct/range lookup (tree work is bounded
+    /// by its u32 key space); holey storage inspects at most 64 slots. No key or
+    /// value is cloned and no allocation or persistent search state is needed.
+    #[doc(hidden)]
+    pub fn probe_index_key(
+        &self,
+        range: std::ops::Range<u32>,
+        backwards: bool,
+    ) -> (Option<u32>, usize) {
+        self.array_entries.probe_index_key(range, backwards)
+    }
+}
+
+impl<V> IndexedValues<V> {
+    fn probe_index_key(
+        &self,
+        range: std::ops::Range<u32>,
+        backwards: bool,
+    ) -> (Option<u32>, usize) {
+        if range.start >= range.end {
+            return (None, 0);
+        }
+        match self {
+            Self::Packed(entries) => {
+                let end = (range.end as usize).min(entries.len());
+                let index = ((range.start as usize) < end)
+                    .then(|| if backwards { (end - 1) as u32 } else { range.start });
+                (index, 1)
+            }
+            Self::Dictionary(entries) => {
+                let mut range = entries.range(range);
+                let entry = if backwards { range.next_back() } else { range.next() };
+                (entry.map(|(&index, _)| index), 1)
+            }
+            Self::Holey(entries) => {
+                let mut front = (range.start as usize).min(entries.slots.len());
+                let mut back = (range.end as usize).min(entries.slots.len());
+                let mut inspected = 0;
+                while front < back {
+                    let index = if backwards { back - 1 } else { front };
+                    if inspected == MAX_INDEX_PROBE_SLOTS {
+                        return (Some(index as u32), inspected);
+                    }
+                    inspected += 1;
+                    if entries.slots[index].is_some() {
+                        return (Some(index as u32), inspected);
+                    }
+                    if backwards {
+                        back = index;
+                    } else {
+                        front = index + 1;
+                    }
+                }
+                (None, inspected)
+            }
+        }
+    }
+}
+
 /// Flatten skips holes, but cannot report an exact remaining size itself.
 /// Each whole-carrier iterator starts with the authoritative live count.
 /// The counter works for arbitrary interleaving of next and next_back.
@@ -214,3 +290,6 @@ mod tests;
 
 #[cfg(test)]
 mod growth_tests;
+
+#[cfg(test)]
+mod seek_tests;

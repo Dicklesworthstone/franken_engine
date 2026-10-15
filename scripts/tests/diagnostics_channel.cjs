@@ -149,3 +149,139 @@ compare('large repeated publication does not lose subscribers or messages', (dc,
   for(let i=0;i<32;i++)assert.equal(c.unsubscribe(add),true);
   return [sum,count,c.hasSubscribers,c.unsubscribe(add)];
 });
+
+function watch(trace, context, rows) {
+  for (const event of ['start','end','error','asyncStart','asyncEnd'])
+    trace[event].subscribe(value => rows.push([event, value === context, value.result, value.error]));
+}
+compare('inactive promise and callback traces preserve unwrapped results and arguments', async (dc, name) => {
+  const t=dc.tracingChannel(name), value=Promise.resolve(42), context={}, cb=()=>9;
+  const same=t.tracePromise(()=>value,context)===value;
+  const raw=t.tracePromise(()=>7,null);
+  const callbackSame=t.traceCallback(x=>x,99,context,null,cb)===cb;
+  let caught=false;try{t.tracePromise(()=>{throw false;});}catch(e){caught=e===false;}
+  return [same,raw,callbackSame,caught,Object.keys(context),await value];
+});
+compare('active promise tracing observes returned values and actual async completion order', async (dc,name)=>{
+  const out=[];
+  for(const value of [42,null,Promise.resolve('ready'),{then(resolve){resolve('thenable');}}]){
+    const t=dc.tracingChannel(name+out.length),c={},rows=[];watch(t,c,rows);
+    const p=t.tracePromise(function(a,b){rows.push(['call',this.base,a,b]);return value;},c,{base:40},1,2);
+    rows.push(['returned']);const result=await p;
+    out.push([result,rows,c.result]);
+  }
+  return out;
+});
+compare('promise rejections retain every falsy error and bracket async completion', async(dc,name)=>{
+  const out=[];
+  for(const reason of [undefined,null,false,0,'','failure']){
+    const t=dc.tracingChannel(name+out.length),c={},rows=[];watch(t,c,rows);
+    let same=false;try{await t.tracePromise(()=>Promise.reject(reason),c);}catch(e){same=e===reason;}
+    out.push([same,rows,Object.hasOwn(c,'error'),c.error]);
+  }
+  return out;
+});
+compare('promise tracing synchronous throws stay synchronous with start error end', (dc,name)=>{
+  const t=dc.tracingChannel(name),c={},rows=[];watch(t,c,rows);let caught=false;
+  try{t.tracePromise(()=>{throw false;},c);}catch(e){caught=e===false;}
+  return [caught,rows,c];
+});
+compare('promise tracing uses actual start and asyncStart store scopes', async(dc,name)=>{
+  const t=dc.tracingChannel(name),store=new AsyncLocalStorage(),rows=[];
+  t.start.bindStore(store,()=> 'start-scope');t.asyncStart.bindStore(store,()=> 'async-scope');
+  for(const event of ['start','end','error','asyncStart','asyncEnd'])t[event].subscribe(()=>rows.push([event,store.getStore()]));
+  return store.run('outer',async()=>{
+    const result=await t.tracePromise(async()=>{rows.push(['call',store.getStore()]);await Promise.resolve();rows.push(['resume',store.getStore()]);return 42;});
+    return [result,rows,store.getStore()];
+  });
+});
+compare('result setter failures reject without fabricating a traced function error',async(dc,name)=>{
+  const t=dc.tracingChannel(name),rows=[],reason='setter';
+  for(const event of ['start','end','error','asyncStart','asyncEnd'])t[event].subscribe(()=>rows.push(event));
+  const context={set result(value){rows.push('setter:'+value);throw reason;}};
+  let caught;try{await t.tracePromise(()=>42,context);}catch(e){caught=e;}
+  return [caught,rows];
+});
+compare('concurrent promise traces retain their own contexts through reversed settlement',async(dc,name)=>{
+  const t=dc.tracingChannel(name),rows=[];let resolveA,resolveB;
+  for(const event of ['start','end','asyncStart','asyncEnd'])t[event].subscribe(c=>rows.push(event+':'+c.id+':'+c.result));
+  const a={id:'a'},b={id:'b'};
+  const pa=t.tracePromise(()=>new Promise(resolve=>resolveA=resolve),a);
+  const pb=t.tracePromise(()=>new Promise(resolve=>resolveB=resolve),b);
+  resolveB(2);await pb;resolveA(1);await pa;return [a,b,rows];
+});
+compare('callback argument position is relative and coerced before starting a trace',(dc,name)=>{
+  const rows=[];
+  for(const position of [undefined,-1,0,1,-2,null,'0',0.5,NaN,Infinity,99]){
+    const t=dc.tracingChannel(name+rows.length),c={},events=[];watch(t,c,events);
+    let call=false;
+    try{const returned=t.traceCallback(cb=>{call=true;cb(null,42);return 7;},position,c,null,()=>{});rows.push([returned,call,c,events]);}
+    catch(e){rows.push([e.name,e.code,call,c,events]);}
+  }
+  return rows;
+});
+compare('callback tracing retains both receivers and all callback arguments',(dc,name)=>{
+  const t=dc.tracingChannel(name),context={},rows=[];watch(t,context,rows);
+  const receiver={},callbackReceiver={};let seen;
+  const result=t.traceCallback(function(a,cb,b){rows.push(['call',this===receiver,a,b]);return cb.call(callbackReceiver,null,42,'extra');},1,context,receiver,1,
+    function(...args){seen=[this===callbackReceiver,...args];return 99;},2);
+  return [result,seen,context,rows];
+});
+compare('delayed callbacks produce asynchronous spans after synchronous end',async(dc,name)=>{
+  const t=dc.tracingChannel(name),c={},rows=[];watch(t,c,rows);let callback;
+  const result=t.traceCallback(cb=>{callback=cb;return 19;},-1,c,null,()=>rows.push(['callback']));
+  rows.push(['returned']);await Promise.resolve();callback(null,42);return [result,rows,c];
+});
+compare('callback error slots follow error-first truthiness without discarding arguments',(dc,name)=>{
+  const rows=[];
+  for(const error of [undefined,null,false,0,'','failure']){
+    const t=dc.tracingChannel(name+rows.length),c={},events=[];watch(t,c,events);let values;
+    t.traceCallback(cb=>cb(error,7,8),0,c,null,(...args)=>values=args);
+    rows.push([values,c,events]);
+  }
+  return rows;
+});
+compare('multiple callback deliveries are traced independently and do not clear context fields',(dc,name)=>{
+  const t=dc.tracingChannel(name),c={},rows=[];watch(t,c,rows);let cb;
+  t.traceCallback(callback=>{cb=callback;},0,c,null,(...values)=>rows.push(['callback',...values]));
+  cb('failure',1);cb(null,2);return [c,rows];
+});
+compare('callback throws always close async spans, but only synchronous invocation traces error',(dc,name)=>{
+  const rows=[];
+  for(const immediate of [true,false]){
+    const t=dc.tracingChannel(name+rows.length),c={},events=[];watch(t,c,events);let cb,caught;
+    try{t.traceCallback(callback=>{cb=callback;if(immediate)callback(null,4);},0,c,null,()=>{throw false;});if(!immediate)cb(null,4);}
+    catch(e){caught=e===false;}
+    rows.push([caught,c,events]);
+  }
+  return rows;
+});
+compare('callback continuation enters the asyncStart store and restores the caller scope',(dc,name)=>{
+  const t=dc.tracingChannel(name),store=new AsyncLocalStorage(),rows=[];let cb;
+  t.start.bindStore(store,()=> 'start-scope');t.asyncStart.bindStore(store,c=>'callback:'+c.result);
+  for(const event of ['start','end','error','asyncStart','asyncEnd'])t[event].subscribe(()=>rows.push([event,store.getStore()]));
+  store.run('outer',()=>{
+    t.traceCallback(callback=>{cb=callback;rows.push(['function',store.getStore()]);},0,{},null,()=>rows.push(['callback',store.getStore()]));
+    rows.push(['between',store.getStore()]);cb(null,42);rows.push(['after',store.getStore()]);
+  });
+  return rows;
+});
+compare('promise traces publish ordered completion across many invocations',async(dc,name)=>{
+  const t=dc.tracingChannel(name);let start=0,end=0,asyncStart=0,asyncEnd=0,sum=0;
+  const listeners={start:()=>start++,end:()=>end++,asyncStart:c=>{asyncStart++;sum+=c.result;},asyncEnd:()=>asyncEnd++};
+  t.subscribe(listeners);for(let i=0;i<1024;i++)assert.equal(await t.tracePromise(async()=>i),i);
+  t.unsubscribe(listeners);return [start,end,asyncStart,asyncEnd,sum,t.hasSubscribers];
+});
+test('real uncaught delivery preserves failures; microtask versus nextTick order is an explicit difference',()=>{
+  const {spawnSync}=require('node:child_process');
+  function probe(candidate){
+    const code=`const rows=[]; const dc=${candidate ? `require('node:vm').runInNewContext(require('node:fs').readFileSync(${JSON.stringify(source)},'utf8'),{queueMicrotask})` : "require('node:diagnostics_channel')"};
+      const reason=Error('subscriber');process.once('uncaughtException',error=>{if(error!==reason)throw error;rows.push('uncaught');});
+      queueMicrotask(()=>rows.push('queued'));const c=dc.channel('uncaught-case');c.subscribe(()=>{throw reason;});c.publish({});rows.push('sync');
+      setImmediate(()=>console.log(rows.join(',')));`;
+    const result=spawnSync(process.execPath,['-e',code],{encoding:'utf8',timeout:5000});
+    assert.equal(result.status,0,result.stderr);assert.equal(result.stderr,'');return result.stdout;
+  }
+  assert.equal(probe(false),'sync,uncaught,queued\n');
+  assert.equal(probe(true),'sync,queued,uncaught\n');
+});

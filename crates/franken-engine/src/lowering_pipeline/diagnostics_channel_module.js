@@ -18,6 +18,7 @@
   const weakSet = WeakMap.prototype.set;
   const slice = Array.prototype.slice;
   const splice = Array.prototype.splice;
+  const at = Array.prototype.at;
   const Type = TypeError;
   const schedule = queueMicrotask;
   const registry = new MapClass();
@@ -162,6 +163,58 @@
       const channels = this;
       return channels.start.runStores(context, function () {
         try { const value = apply(fn, thisArg, args); context.result = value; return value; }
+        catch (error) { context.error = error; channels.error.publish(context); throw error; }
+        finally { channels.end.publish(context); }
+      });
+    }
+    tracePromise(fn, context, thisArg, ...args) {
+      // An inactive trace is transparent, including promise identity and
+      // non-promise return values. Active traces observe actual settlement.
+      if (!this.hasSubscribers) return apply(fn, thisArg, args);
+      if (context === undefined) context = {};
+      const channels = this;
+      async function settle(input) {
+        let value, failed = false;
+        try { value = await input; }
+        catch (error) { failed = true; value = error; }
+        if (failed) { context.error = value; channels.error.publish(context); }
+        else context.result = value;
+        // Promise reactions already inherit the start store scope. Unlike
+        // callback continuation, this phase publishes without rebinding the
+        // asyncStart store (the reference's two tracing APIs differ here).
+        channels.asyncStart.publish(context);
+        try { if (failed) throw value; return value; }
+        finally { channels.asyncEnd.publish(context); }
+      }
+      return channels.start.runStores(context, function () {
+        try { return settle(apply(fn, thisArg, args)); }
+        // A throw before the function returns is still synchronous. Do not
+        // confuse it with rejection of the function's returned promise.
+        catch (error) { context.error = error; channels.error.publish(context); throw error; }
+        finally { channels.end.publish(context); }
+      });
+    }
+    traceCallback(fn, position, context, thisArg, ...args) {
+      if (!this.hasSubscribers) return apply(fn, thisArg, args);
+      if (position === undefined) position = -1;
+      const callback = apply(at, args, [position]);
+      if (typeof callback !== 'function') throw invalid('callback');
+      if (context === undefined) context = {};
+      const channels = this;
+      function tracedCallback(...values) {
+        // Callback error slots follow the error-first convention: falsy
+        // slots are success; thrown and rejected falsy values remain errors.
+        if (values[0]) { context.error = values[0]; channels.error.publish(context); }
+        else context.result = values[1];
+        const receiver = this;
+        channels.asyncStart.runStores(context, function () {
+          try { apply(callback, receiver, values); }
+          finally { channels.asyncEnd.publish(context); }
+        });
+      }
+      apply(splice, args, [position, 1, tracedCallback]);
+      return channels.start.runStores(context, function () {
+        try { return apply(fn, thisArg, args); }
         catch (error) { context.error = error; channels.error.publish(context); throw error; }
         finally { channels.end.publish(context); }
       });

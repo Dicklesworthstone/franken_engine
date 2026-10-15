@@ -3,7 +3,8 @@
 //! Sort indices, not Value payloads. The top-down split and merge decisions
 //! intentionally match the previous allocating merge sort, including equality
 //! and the point where a comparator throws. No comparison result is cached:
-//! callbacks may mutate the objects held by later comparisons.
+//! callbacks may mutate the objects held by later comparisons. Only default
+//! sorting of immutable primitive keys may probe for an already monotone run.
 
 use super::*;
 
@@ -235,20 +236,30 @@ impl InterpreterCore {
                 self.json_reserve_temporary(actual - reserved)?;
                 reserved = actual;
             }
-            for index in 0..items.len() {
+            // Classify while doing the already-metered index initialization.
+            // A late object/Symbol/rope must veto the entire probe: even an
+            // early comparison can invoke observable conversion on fallback.
+            let mut primitive_only = matches!(comparator, Value::Undefined);
+            for (index, value) in items.iter().enumerate() {
                 self.charge_native_hole_read()?;
+                primitive_only = primitive_only && immutable_sort_primitive(value);
                 order.push(index);
                 if index < scratch_len {
                     scratch.push(0);
                 }
             }
-            stable_order(&mut order, &mut scratch, &mut |left, right| {
-                let ordering = self.generic_sort_compare(
-                    module, items[left].clone(), items[right].clone(), comparator,
-                )?;
-                self.observe_scoped_callback_result()?;
-                Ok::<_, InterpreterError>(ordering)
-            })?;
+            {
+                let mut compare = |left: usize, right: usize| {
+                    let ordering = self.generic_sort_compare(
+                        module, items[left].clone(), items[right].clone(), comparator,
+                    )?;
+                    self.observe_scoped_callback_result()?;
+                    Ok::<_, InterpreterError>(ordering)
+                };
+                if !primitive_only || !monotone_order(&mut order, &mut compare)? {
+                    stable_order(&mut order, &mut scratch, &mut compare)?;
+                }
+            }
             apply_order(items, &mut order, &mut || self.charge_native_hole_read())?;
             Ok(())
         })();
@@ -257,6 +268,50 @@ impl InterpreterCore {
         self.json_release_temporary(reserved);
         outcome
     }
+}
+
+/// These keys cannot execute guest code or change between comparisons. Keep
+/// the same flat-string boundary as primitive::compare: ropes retain their
+/// general scratch admission, and Symbols retain their observable throw point.
+/// In particular, an object that usually converts to a number is not eligible.
+fn immutable_sort_primitive(value: &Value) -> bool {
+    match value {
+        Value::Str(text) => text.concat_parts().nodes == 0,
+        Value::Undefined | Value::Null | Value::Bool(_) | Value::Int(_)
+        | Value::Float(_) | Value::BigInt(_) => true,
+        _ => false,
+    }
+}
+
+/// Prove one whole monotone run using n-1 metered comparisons. The caller
+/// must first prove that comparisons have no guest-observable side effects.
+/// Nondecreasing runs preserve ties as-is; descending runs must be STRICT,
+/// since reversing a run containing equal keys would violate sort stability.
+/// A miss or comparison error leaves every index untouched for the original
+/// merge path or common cleanup. Reverse only after the complete proof.
+fn monotone_order<E>(
+    order: &mut [usize],
+    compare: &mut impl FnMut(usize, usize) -> Result<Ordering, E>,
+) -> Result<bool, E> {
+    if order.len() < 2 {
+        return Ok(true);
+    }
+    let descending = compare(order[0], order[1])? == Ordering::Greater;
+    for pair in order[1..].windows(2) {
+        let ordering = compare(pair[0], pair[1])?;
+        let continues = if descending {
+            ordering == Ordering::Greater
+        } else {
+            ordering != Ordering::Greater
+        };
+        if !continues {
+            return Ok(false);
+        }
+    }
+    if descending {
+        order.reverse();
+    }
+    Ok(true)
 }
 
 /// Consume destination->source order by following each cycle, without an
@@ -338,7 +393,11 @@ fn stable_order<E>(
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_order, stable_order};
+    use super::{
+        InterpreterConfig, InterpreterCore, InterpreterError, JsString, Label,
+        ObjectId, RuntimeCapability, Value, apply_order, immutable_sort_primitive,
+        monotone_order, stable_order,
+    };
     use std::cmp::Ordering;
 
     // The previous allocation-heavy merge topology, independent of the new
@@ -573,6 +632,185 @@ mod tests {
             drop(items);
             assert!(drops.iter().all(|count| count.get() == 1));
         }
+    }
+
+    #[test]
+    fn monotone_runs_need_one_comparison_per_adjacent_pair() {
+        for length in [0, 1, 2, 3, 16, 17, 255, 256, 257, 1024] {
+            for pattern in 0..3 {
+                let values: Vec<_> = (0..length).map(|index| match pattern {
+                    0 => index,
+                    1 => length - index,
+                    _ => index / 3,
+                }).collect();
+                let mut order: Vec<_> = (0..length).collect();
+                let mut calls = 0;
+                assert!(monotone_order(&mut order, &mut |a, b| {
+                    calls += 1;
+                    Ok::<_, ()>(values[a].cmp(&values[b]))
+                }).unwrap());
+                let mut expected: Vec<_> = (0..length).collect();
+                expected.sort_by_key(|index| values[*index]);
+                assert_eq!(order, expected);
+                assert_eq!(calls, length.saturating_sub(1));
+            }
+        }
+    }
+
+    #[test]
+    fn descending_ties_and_disordered_runs_keep_the_stable_fallback() {
+        for values in [
+            vec![3, 2, 2, 1], vec![4, 3, 2, 2], vec![1, 1, 0],
+            vec![0, 1, 0], vec![3, 1, 2], vec![0, 1, 2, 3, 2],
+        ] {
+            let original: Vec<_> = (0..values.len()).collect();
+            let mut order = original.clone();
+            assert!(!monotone_order(&mut order, &mut |a, b| {
+                Ok::<_, ()>(values[a].cmp(&values[b]))
+            }).unwrap());
+            assert_eq!(order, original, "failed proof must not permute indices");
+            stable_order(&mut order, &mut vec![0; values.len() / 2], &mut |a, b| {
+                Ok::<_, ()>(values[a].cmp(&values[b]))
+            }).unwrap();
+            let mut expected = original;
+            expected.sort_by_key(|index| values[*index]);
+            assert_eq!(order, expected);
+        }
+    }
+
+    #[test]
+    fn every_probe_refusal_preserves_the_original_index_order() {
+        for length in 2..65 {
+            for descending in [false, true] {
+                for fail_at in 1..length {
+                    let original: Vec<_> = (0..length).collect();
+                    let mut order = original.clone();
+                    let mut calls = 0;
+                    let result = monotone_order(&mut order, &mut |a, b| {
+                        calls += 1;
+                        if calls == fail_at { return Err(fail_at); }
+                        Ok(if descending { b.cmp(&a) } else { a.cmp(&b) })
+                    });
+                    assert_eq!(result, Err(fail_at));
+                    assert_eq!(calls, fail_at);
+                    assert_eq!(order, original);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn monotone_eligibility_excludes_every_observable_conversion_carrier() {
+        use std::sync::Arc;
+
+        for value in [
+            Value::Object(ObjectId(0)), Value::Function(0), Value::Closure(0),
+            Value::Iterator(0), Value::Generator(0), Value::Promise(0),
+            Value::Accessor { get: None, set: None },
+            Value::Str(JsString::from("a".repeat(2048))
+                .concat(&JsString::from("b".repeat(2048)))),
+        ] {
+            assert!(!immutable_sort_primitive(&value));
+        }
+        for value in [
+            Value::Undefined, Value::Null, Value::Bool(true), Value::Bool(false),
+            Value::Int(i64::MIN), Value::Float(f64::NAN.into()),
+            Value::Float((-0.0).into()), Value::Float(f64::INFINITY.into()),
+            Value::BigInt(Arc::from("123456789012345678901234567890")),
+            Value::Str(JsString::from("\u{1f600}\u{e000}")),
+            Value::Str(JsString::from_code_units(&[0xd800])),
+        ] {
+            assert!(immutable_sort_primitive(&value));
+        }
+    }
+
+    fn sort_config(mut config: InterpreterConfig) -> InterpreterConfig {
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch, RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ].into_iter().collect();
+        config
+    }
+
+    #[test]
+    fn native_default_monotone_sort_has_linear_work_and_releases_scratch() {
+        for config in [InterpreterConfig::quickjs_defaults(), InterpreterConfig::v8_defaults()] {
+            for descending in [false, true] {
+                let mut core = InterpreterCore::new(sort_config(config.clone()), "monotone-sort");
+                core.json_observe_label(Label::Public).unwrap();
+                // Four-digit decimal spelling preserves the default lexical
+                // ordering here; this is NOT a numeric-comparator fast path.
+                let expected: Vec<_> = (1000..1257).map(Value::Int).collect();
+                let mut items = expected.clone();
+                if descending { items.reverse(); }
+                let before = core.native_hole_reads.get();
+                core.sort_captured_values(None, &mut items, &Value::Undefined).unwrap();
+                assert_eq!(items, expected);
+                let count = items.len() as u64;
+                let swaps = if descending { count / 2 } else { 0 };
+                // Index initialization + adjacent comparisons + permutation
+                // destinations and swaps all use the real shared work meter.
+                assert_eq!(core.native_hole_reads.get() - before, 3 * count - 1 + swaps);
+                assert_eq!(core.json_parse_temporary_bytes, 0);
+                assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+            }
+        }
+    }
+
+    #[test]
+    fn native_default_sort_preserves_equal_cross_type_keys_and_undefined_tail() {
+        for config in [InterpreterConfig::quickjs_defaults(), InterpreterConfig::v8_defaults()] {
+            let mut core = InterpreterCore::new(sort_config(config), "monotone-sort-ties");
+            core.json_observe_label(Label::Public).unwrap();
+            let mut items = vec![
+                Value::Undefined, Value::Int(3), Value::Int(2),
+                Value::Str(JsString::from("2")), Value::Int(1), Value::Int(10),
+            ];
+            core.sort_captured_values(None, &mut items, &Value::Undefined).unwrap();
+            assert_eq!(items, vec![
+                Value::Int(1), Value::Int(10), Value::Int(2),
+                Value::Str(JsString::from("2")), Value::Int(3), Value::Undefined,
+            ]);
+            assert_eq!(core.json_parse_temporary_bytes, 0);
+            assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        }
+    }
+
+    #[test]
+    fn native_probe_budget_refusal_does_not_publish_partial_sorting() {
+        for config in [InterpreterConfig::quickjs_defaults(), InterpreterConfig::v8_defaults()] {
+            for compared in [0, 1, 63, 255] {
+                let mut core = InterpreterCore::new(sort_config(config.clone()), "monotone-sort-budget");
+                core.json_observe_label(Label::Public).unwrap();
+                let original: Vec<_> = (1000..1257).rev().map(Value::Int).collect();
+                let mut items = original.clone();
+                let before = core.native_hole_reads.get();
+                core.config.instruction_budget = core.instructions_executed + before
+                    + items.len() as u64 + compared;
+                assert!(matches!(
+                    core.sort_captured_values(None, &mut items, &Value::Undefined),
+                    Err(InterpreterError::BudgetExhausted { .. })
+                ));
+                assert_eq!(items, original);
+                assert_eq!(core.json_parse_temporary_bytes, 0);
+                assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+            }
+        }
+    }
+
+    #[test]
+    fn native_monotone_probe_keeps_pending_callback_provenance() {
+        let mut core = InterpreterCore::new(
+            sort_config(InterpreterConfig::quickjs_defaults()), "monotone-sort-provenance",
+        );
+        core.json_observe_label(Label::Public).unwrap();
+        core.replace_pending_hostcall_result_label(Some(Label::Secret)).unwrap();
+        let mut items = vec![Value::Int(1), Value::Int(2), Value::Int(3)];
+        core.sort_captured_values(None, &mut items, &Value::Undefined).unwrap();
+        assert_eq!(items, vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+        assert_eq!(core.active_inline_callback_context_label, Some(Label::Secret));
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
     }
 
 }

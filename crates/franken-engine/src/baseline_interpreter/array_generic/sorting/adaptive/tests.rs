@@ -1,0 +1,173 @@
+use super::*;
+use super::super::{InterpreterConfig, InterpreterCore, InterpreterError, Label, RuntimeCapability, Value};
+
+fn ordered(values: &[i32]) -> (Vec<usize>, usize) {
+    let mut order: Vec<_> = (0..values.len()).collect();
+    let mut canaries = vec![usize::MAX; values.len() / 2 + 2];
+    let mut calls = 0;
+    sort(&mut order, &mut canaries[1..1 + values.len() / 2], &mut |a, b| {
+        calls += 1;
+        Ok::<_, ()>(values[a].cmp(&values[b]))
+    }).unwrap();
+    assert_eq!(canaries[0], usize::MAX);
+    assert_eq!(*canaries.last().unwrap(), usize::MAX);
+    let mut expected: Vec<_> = (0..values.len()).collect();
+    expected.sort_by_key(|index| values[*index]);
+    assert_eq!(order, expected, "values={values:?}");
+    (order, calls)
+}
+
+#[test]
+fn every_small_duplicate_pattern_keeps_original_equal_identities() {
+    for length in 0..=8_u32 {
+        for mut code in 0..3_usize.pow(length) {
+            let values: Vec<_> = (0..length).map(|_| {
+                let value = (code % 3) as i32;
+                code /= 3;
+                value
+            }).collect();
+            ordered(&values);
+        }
+    }
+}
+
+#[test]
+fn unequal_adjacent_runs_use_only_the_smaller_scratch_in_both_directions() {
+    for left in 1..24 {
+        for right in 1..24 {
+            for repeats in [1, 2, 7] {
+                let values: Vec<_> = (0..left).map(|i| (i / repeats) as i32)
+                    .chain((0..right).map(|i| (i / repeats) as i32 - 3)).collect();
+                let mut order: Vec<_> = (0..values.len()).collect();
+                let mut scratch = vec![usize::MAX; left.min(right) + 2];
+                merge(&mut order, left, &mut scratch[1..1 + left.min(right)], &mut |a, b| {
+                    Ok::<_, ()>(values[a].cmp(&values[b]))
+                }).unwrap();
+                let mut expected: Vec<_> = (0..values.len()).collect();
+                expected.sort_by_key(|i| values[*i]);
+                assert_eq!(order, expected, "left={left} right={right} repeats={repeats}");
+                assert_eq!(scratch[0], usize::MAX);
+                assert_eq!(*scratch.last().unwrap(), usize::MAX);
+            }
+        }
+    }
+}
+
+#[test]
+fn generated_runs_and_skewed_length_classes_match_the_stable_oracle() {
+    let mut seed = 0x521a_d2026_u64;
+    for length in (0..128).chain([255, 256, 257, 1023, 1024, 2049]) {
+        for _ in 0..8 {
+            let values: Vec<_> = (0..length).map(|_| {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+                ((seed >> 32) % 97) as i32
+            }).collect();
+            ordered(&values);
+        }
+    }
+    // Descending powers of two fill distinct stack classes; a later large
+    // run collapses them all. Repeat and perturb by one around each boundary.
+    for delta in [0, 1] {
+        let mut values = Vec::new();
+        for power in (1..16).rev().chain(1..16) {
+            let length = (1 << power) + delta;
+            values.extend((0..length).map(|index| index as i32));
+        }
+        ordered(&values);
+    }
+}
+
+#[test]
+fn partially_ordered_inputs_do_not_pay_for_full_recursive_sorting() {
+    let length = 8192;
+    for values in [
+        (1..length).chain([0]).collect::<Vec<i32>>(),
+        (2048..length).chain(0..2048).collect(),
+        (0..8).rev().flat_map(|block| (block * 1024)..((block + 1) * 1024)).collect(),
+    ] {
+        let (_, calls) = ordered(&values);
+        let mut reference: Vec<_> = (0..values.len()).collect();
+        let mut reference_calls = 0;
+        super::super::stable_order(&mut reference, &mut vec![0; values.len() / 2], &mut |a, b| {
+            reference_calls += 1;
+            Ok::<_, ()>(values[a].cmp(&values[b]))
+        }).unwrap();
+        assert!(calls < 3 * values.len(), "{calls} adaptive comparisons");
+        assert!(2 * calls < reference_calls, "{calls} vs {reference_calls}");
+    }
+    for length in [0, 1, 2, 31, 4096] {
+        for values in [
+            (0..length).collect::<Vec<_>>(),
+            (0..length).rev().collect(),
+            (0..length).map(|index| index / 3).collect(),
+        ] {
+            assert_eq!(ordered(&values).1, values.len().saturating_sub(1));
+        }
+    }
+}
+
+#[test]
+fn every_comparison_refusal_stops_immediately_without_touching_payloads() {
+    let values = [6, 4, 4, 2, 9, 8, 3, 1, 7, 0, 5];
+    let calls = ordered(&values).1;
+    for fail_at in 1..=calls {
+        let mut order: Vec<_> = (0..values.len()).collect();
+        let mut scratch = vec![usize::MAX; values.len() / 2 + 2];
+        let mut calls = 0;
+        let result = sort(&mut order, &mut scratch[1..1 + values.len() / 2], &mut |a, b| {
+            calls += 1;
+            if calls == fail_at { Err(fail_at) } else { Ok(values[a].cmp(&values[b])) }
+        });
+        assert_eq!(result, Err(fail_at));
+        assert_eq!(calls, fail_at);
+        assert_eq!(scratch[0], usize::MAX);
+        assert_eq!(*scratch.last().unwrap(), usize::MAX);
+        assert_eq!(values, [6, 4, 4, 2, 9, 8, 3, 1, 7, 0, 5]);
+    }
+}
+
+fn core(mut config: InterpreterConfig) -> InterpreterCore {
+    config.granted_capabilities = [
+        RuntimeCapability::VmDispatch, RuntimeCapability::HeapAllocate, RuntimeCapability::Builtin,
+    ].into_iter().collect();
+    let mut core = InterpreterCore::new(config, "adaptive-sort");
+    core.json_observe_label(Label::Public).unwrap();
+    core
+}
+
+#[test]
+fn native_partial_runs_keep_provenance_and_release_existing_scratch_in_both_profiles() {
+    for config in [InterpreterConfig::quickjs_defaults(), InterpreterConfig::v8_defaults()] {
+        let mut core = core(config);
+        let mut items: Vec<_> = (2000..5000).chain(1000..2000).map(Value::Int).collect();
+        core.replace_pending_hostcall_result_label(Some(Label::Secret)).unwrap();
+        let before = core.native_hole_reads.get();
+        core.sort_captured_values(None, &mut items, &Value::Undefined).unwrap();
+        assert_eq!(items, (1000..5000).map(Value::Int).collect::<Vec<_>>());
+        assert!(core.native_hole_reads.get() - before < 6 * items.len() as u64);
+        assert_eq!(core.active_inline_callback_context_label, Some(Label::Secret));
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+    }
+}
+
+#[test]
+fn native_refusal_during_a_merge_never_publishes_partial_sorting() {
+    let values = [1004, 1005, 1006, 1000, 1001, 1002, 1003];
+    let comparisons = ordered(&values).1;
+    for config in [InterpreterConfig::quickjs_defaults(), InterpreterConfig::v8_defaults()] {
+        for compared in 0..comparisons {
+            let mut core = core(config.clone());
+            let original: Vec<_> = values.iter().map(|value| Value::Int(i64::from(*value))).collect();
+            let mut items = original.clone();
+            let before = core.native_hole_reads.get();
+            core.config.instruction_budget = core.instructions_executed + before
+                + items.len() as u64 + compared as u64;
+            assert!(matches!(core.sort_captured_values(None, &mut items, &Value::Undefined),
+                Err(InterpreterError::BudgetExhausted { .. })));
+            assert_eq!(items, original);
+            assert_eq!(core.json_parse_temporary_bytes, 0);
+            assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        }
+    }
+}

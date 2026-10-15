@@ -4,10 +4,11 @@
 //! intentionally match the previous allocating merge sort, including equality
 //! and the point where a comparator throws. No comparison result is cached:
 //! callbacks may mutate the objects held by later comparisons. Only default
-//! sorting of immutable primitive keys may probe for an already monotone run.
+//! sorting of immutable primitive keys may discover and merge natural runs.
 
 use super::*;
 
+mod adaptive;
 mod primitive;
 mod sparse;
 
@@ -215,8 +216,9 @@ impl InterpreterCore {
         if items.len() < 2 {
             return Ok(());
         }
-        // Keep only the left half of a merge out of place. The destination
-        // permutation is consumed directly, so it needs no inverse buffer.
+        // Half-size scratch suffices: the callback path saves its left half,
+        // and the adaptive path saves the smaller adjacent run. The
+        // destination permutation needs no inverse buffer.
         let scratch_len = items.len() / 2;
         let mut reserved = buffer_bytes::<usize>(items.len())
             .saturating_add(buffer_bytes::<usize>(scratch_len));
@@ -256,7 +258,9 @@ impl InterpreterCore {
                     self.observe_scoped_callback_result()?;
                     Ok::<_, InterpreterError>(ordering)
                 };
-                if !primitive_only || !monotone_order(&mut order, &mut compare)? {
+                if primitive_only {
+                    adaptive::sort(&mut order, &mut scratch, &mut compare)?;
+                } else {
                     stable_order(&mut order, &mut scratch, &mut compare)?;
                 }
             }
@@ -289,6 +293,7 @@ fn immutable_sort_primitive(value: &Value) -> bool {
 /// since reversing a run containing equal keys would violate sort stability.
 /// A miss or comparison error leaves every index untouched for the original
 /// merge path or common cleanup. Reverse only after the complete proof.
+#[cfg(test)]
 fn monotone_order<E>(
     order: &mut [usize],
     compare: &mut impl FnMut(usize, usize) -> Result<Ordering, E>,

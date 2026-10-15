@@ -27,8 +27,9 @@ const MODULE_BINDING: &str = "%fs_module";
 // All adapters retain the same private host calls and admission boundary.
 const SOURCE: &str = concat!(
     "(", include_str!("fs_callbacks.js"), ")(",
+    "(", include_str!("fs_recursive_readdir.js"), ")(",
     "(", include_str!("fs_directory.js"), ")((",
-    include_str!("fs_copy.js"), ")(", include_str!("fs_module.js"), ")))",
+    include_str!("fs_copy.js"), ")(", include_str!("fs_module.js"), "))))",
 );
 // One immutable parser template shared by fs and fs/promises. Every program
 // still receives a clone before renaming and dependency/loader rewriting.
@@ -463,6 +464,12 @@ impl Walk for DirectFsCalls {
             && require_member(object) == Some(None)
             && let Some(method) = super::super::well_formed_static_name(property)
             && let Some(spec) = super::super::fs_sync_builtin_spec(method)
+            // Recursive options need the shared directory collector, not the
+            // native single-directory effect. Dynamic options fail this proof.
+            && (method != "readdirSync"
+                || arguments.get(1).is_none_or(|options| matches!(options,
+                    Expression::UndefinedLiteral | Expression::NullLiteral
+                    | Expression::StringLiteral(_))))
             && arguments.len() >= spec.min_args
             && arguments.len() <= spec.max_args
             && !arguments.iter().any(|argument| matches!(argument, Expression::SpreadElement(_)))
@@ -1185,4 +1192,31 @@ mod tests {
             assert!(direct_fs_calls(&parse(source)).unwrap().is_none(), "{source}");
         }
     }
+    #[test]
+    fn recursive_readdir_and_dynamic_options_never_bypass_the_directory_collector() {
+        for source in [
+            "require('fs').readdirSync('tree', {recursive: true});",
+            "const fs = require('fs'); fs.readdirSync('tree', options);",
+            "const {readdirSync: scan} = require('fs'); scan('tree', {recursive: true});",
+            "require('fs').readdirSync('tree'); require('fs').readdirSync('tree', options);",
+        ] {
+            let tree = parse(source);
+            assert!(direct_fs_calls(&tree).unwrap().is_none(), "{source}");
+            let rewritten = rewrite_fs_requires(&tree).unwrap().expect("directory collector");
+            assert_eq!(rewritten.body.iter().filter(|s| is_module_declaration(s)).count(), 1);
+            assert!(rewrite_fs_requires(&rewritten).unwrap().is_none());
+            assert_eq!(tree, parse(source));
+        }
+        for source in [
+            "require('fs').readdirSync('tree');",
+            "require('fs').readdirSync('tree', 'utf8');",
+            "const {readdirSync: scan} = require('fs'); scan('tree', null);",
+        ] {
+            let rewritten = direct_fs_calls(&parse(source)).unwrap().expect("proven shallow");
+            assert!(!rewritten.body.iter().any(is_module_declaration), "{source}");
+        }
+        let tree = parse("function f(require) { return require('fs').readdirSync('tree', {recursive:true}); }");
+        assert!(rewrite_fs_requires(&tree).unwrap().is_none());
+    }
+
 }

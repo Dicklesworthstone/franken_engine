@@ -20,7 +20,8 @@ use std::time::{Duration, Instant};
 
 use crate::baseline_interpreter::{ExecutionResult, InterpreterConfig, InterpreterHook};
 use crate::execution_work_budget::{
-    ExecutionTask, ExecutionTaskControl, ExecutionTaskJoinError, ExecutionTaskStartError,
+    ExecutionAdmission, ExecutionTask, ExecutionTaskControl, ExecutionTaskJoinError,
+    ExecutionTaskStartError,
     ExecutionWorkPool, WorkBudgetError,
 };
 use crate::ir_contract::Ir3Module;
@@ -67,6 +68,7 @@ pub enum ExecutionGroupStartError {
     Allocation,
     IdentityExhausted,
     Admission(WorkBudgetError),
+    Preparation(WorkBudgetError),
     Worker(ExecutionTaskStartError),
 }
 
@@ -78,6 +80,7 @@ impl fmt::Display for ExecutionGroupStartError {
             Self::Allocation => f.write_str("native execution group could not reserve task storage"),
             Self::IdentityExhausted => f.write_str("native execution group task identities exhausted"),
             Self::Admission(error) => write!(f, "native execution group admission: {error}"),
+            Self::Preparation(error) => write!(f, "native execution group preparation: {error}"),
             Self::Worker(error) => write!(f, "native execution group worker: {error}"),
         }
     }
@@ -86,7 +89,7 @@ impl fmt::Display for ExecutionGroupStartError {
 impl std::error::Error for ExecutionGroupStartError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Admission(error) => Some(error),
+            Self::Admission(error) | Self::Preparation(error) => Some(error),
             Self::Worker(error) => Some(error),
             _ => None,
         }
@@ -202,6 +205,32 @@ impl ExecutionTaskGroup {
         trace_id: impl Into<String>,
         current_hook: Option<Arc<dyn InterpreterHook>>,
     ) -> Result<ExecutionTaskId, ExecutionGroupStartError> {
+        self.spawn_with_preparation(module, current_config, trace_id, |_, _| Ok(current_hook))
+    }
+
+    /// Prepare host bindings against the EXACT admission the worker will consume.
+    /// This trusted, synchronous host callback runs only after storage and quota
+    /// admission and before spawning any thread. It may install the existing
+    /// admission-bound I/O/process decorators in the current configuration or
+    /// returned policy hook. A borrowed admission cannot start another VM.
+    ///
+    /// The native dispatcher still clamps any changed instruction limit to the
+    /// prepaid ceiling and preserves current capabilities/caller cancellation.
+    /// Preparation failure consumes quota and closes escaped admission controls;
+    /// unwinding also closes this group, cancelling other group workers without
+    /// revoking parent/sibling groups. Revocation during preparation is rechecked
+    /// by native spawn. Completed external effects are not rolled back here.
+    /// This callback is not guest code and must enforce its own blocking limits.
+    pub fn spawn_with_preparation(
+        &mut self,
+        module: Ir3Module,
+        mut current_config: InterpreterConfig,
+        trace_id: impl Into<String>,
+        prepare: impl FnOnce(
+            &ExecutionAdmission,
+            &mut InterpreterConfig,
+        ) -> Result<Option<Arc<dyn InterpreterHook>>, WorkBudgetError>,
+    ) -> Result<ExecutionTaskId, ExecutionGroupStartError> {
         if self.is_closed() {
             return Err(ExecutionGroupStartError::Closed);
         }
@@ -223,6 +252,16 @@ impl ExecutionTaskGroup {
             .pool
             .reserve(current_config.instruction_budget)
             .map_err(ExecutionGroupStartError::Admission)?;
+        if admission.task_control().is_cancelled() {
+            return Err(ExecutionGroupStartError::Admission(WorkBudgetError::Revoked));
+        }
+        let current_hook = {
+            // A caught setup panic must not leave sibling work running against
+            // potentially interrupted shared host state. Drop never waits.
+            let _guard = PreparationUnwindGuard(self.control());
+            prepare(&admission, &mut current_config)
+                .map_err(ExecutionGroupStartError::Preparation)?
+        };
         let task = admission
             .spawn_with_hook(module, current_config, trace_id, current_hook)
             .map_err(ExecutionGroupStartError::Worker)?;
@@ -292,6 +331,16 @@ impl Drop for ExecutionTaskGroup {
         // Request every cancellation before any individual task is dropped.
         // This cannot certify shutdown: ExecutionTask::drop can detach a worker.
         self.close();
+    }
+}
+
+struct PreparationUnwindGuard(ExecutionGroupControl);
+
+impl Drop for PreparationUnwindGuard {
+    fn drop(&mut self) {
+        if thread::panicking() {
+            self.0.cancel();
+        }
     }
 }
 

@@ -19,7 +19,9 @@ fn module(source: &str) -> Ir3Module {
     lower_ir0_to_ir3(
         &Ir0Module::from_syntax_tree(tree, "task-group.js"),
         &LoweringContext::new("task-group", "task-group", "task-group"),
-    ).unwrap().ir3
+    )
+    .unwrap()
+    .ir3
 }
 
 fn config(budget: u64) -> InterpreterConfig {
@@ -110,7 +112,8 @@ fn real_native_result_and_prepaid_accounting_are_preserved() {
     let mut group = ExecutionTaskGroup::new(&parent, 256, 2).unwrap();
     let source = module("40 + 2;");
     let expected = InterpreterCore::new(config(128), "group-result")
-        .execute(&source).unwrap();
+        .execute(&source)
+        .unwrap();
     let id = group.spawn(source, config(128), "group-result").unwrap();
     let actual = collect(&mut group, id).unwrap().unwrap();
     assert_eq!(actual.value, expected.value);
@@ -187,17 +190,24 @@ fn closing_cancels_every_worker_before_waiting_and_timeout_retains_ownership() {
         releases.push(release);
         ids.push(id);
     }
-    assert_eq!(group.close_and_join(Duration::ZERO), Err(ExecutionTaskJoinError::TimedOut));
+    assert_eq!(
+        group.close_and_join(Duration::ZERO),
+        Err(ExecutionTaskJoinError::TimedOut)
+    );
     assert!(group.is_closed());
     assert!(controls.iter().all(ExecutionTaskControl::is_cancelled));
     assert_eq!(group.pending(), 2);
     assert_eq!(group.retained(), 2);
     assert_eq!(group.remaining_instructions(), 0);
-    for release in releases { release.send(()).unwrap(); }
+    for release in releases {
+        release.send(()).unwrap();
+    }
     group.close_and_join(WAIT).unwrap();
     assert_eq!(group.pending(), 0);
     assert_eq!(group.retained(), 2, "joining must not discard outcomes");
-    for id in ids { cancelled(group.take_result(id).unwrap()); }
+    for id in ids {
+        cancelled(group.take_result(id).unwrap());
+    }
     assert!(!parent.is_revoked());
     assert_eq!(parent.remaining(), 2048);
     assert!(matches!(
@@ -260,7 +270,10 @@ fn worker_panic_is_collected_without_losing_other_results() {
     wait_for_all(&mut group);
     group.close_and_join(Duration::ZERO).unwrap();
     assert_eq!(group.retained(), 2);
-    assert!(matches!(group.take_result(bad), Some(Err(ExecutionTaskJoinError::Panicked))));
+    assert!(matches!(
+        group.take_result(bad),
+        Some(Err(ExecutionTaskJoinError::Panicked))
+    ));
     group.take_result(good).unwrap().unwrap().unwrap();
     assert_eq!(group.remaining_instructions(), 256);
 }
@@ -370,3 +383,5 @@ fn debug_output_does_not_include_guest_source_or_trace() {
     group.take_result(id).unwrap().unwrap().unwrap();
     group.close_and_join(Duration::ZERO).unwrap();
 }
+
+mod preparation;

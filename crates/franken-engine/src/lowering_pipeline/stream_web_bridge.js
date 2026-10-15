@@ -54,6 +54,7 @@
       rLocked: descriptor(m.ReadableStream.prototype, 'locked').get,
       read: m.ReadableStreamDefaultReader.prototype.read,
       cancel: m.ReadableStreamDefaultReader.prototype.cancel,
+      releaseReader: m.ReadableStreamDefaultReader.prototype.releaseLock,
       rClosed: descriptor(m.ReadableStreamDefaultReader.prototype, 'closed').get,
       getWriter: m.WritableStream.prototype.getWriter,
       wLocked: descriptor(m.WritableStream.prototype, 'locked').get,
@@ -154,6 +155,77 @@
       const e = new Type('Web adapters require Node close notifications');
       e.code = 'ERR_STREAM_WEB_UNSUPPORTED'; throw e;
     }
+  }
+  function duplexFromWeb(pair, settings) {
+    if (pair === null || typeof pair !== 'object') throw fail('pair');
+    const source = pair.readable, destination = pair.writable, a = api();
+    apply(a.rLocked, source, []); apply(a.wLocked, destination, []);
+    const config = nodeOptions(settings, true), input = options(settings);
+    config.decodeStrings = input.decodeStrings;
+    if (config.decodeStrings !== undefined && typeof config.decodeStrings !== 'boolean') throw fail('options.decodeStrings');
+    const halfOpen = input.allowHalfOpen;
+    config.allowHalfOpen = halfOpen === undefined ? false : halfOpen;
+    if (typeof config.allowHalfOpen !== 'boolean') throw fail('options.allowHalfOpen');
+    let node, reader, writer, reading = false, stopping = false;
+    let readEnded = false, writeEnded = false;
+    config.read = function () {
+      if (reading || stopping || readEnded) return;
+      reading = true;
+      then(apply(a.read, reader, []), function (item) {
+        reading = false;
+        if (stopping) return;
+        try {
+          if (item.done) { readEnded = true; apply(push, node, [null]); return; }
+          if (item.value === null) {
+            const error = new Type('A Web null chunk cannot be represented by a Node stream');
+            error.code = 'ERR_STREAM_NULL_VALUES'; throw error;
+          }
+          apply(push, node, [item.value]);
+        } catch (error) { apply(destroyR, node, [error]); }
+      }, function (reason) { reading = false; if (!stopping) apply(destroyR, node, [failure(reason)]); });
+    };
+    config.write = function (chunk, encoding, done) {
+      then(apply(a.write, writer, [chunk]), function () { done(); }, function (reason) { done(failure(reason)); });
+    };
+    config.final = function (done) {
+      then(apply(a.close, writer, []), function () { writeEnded = true; done(); }, function (reason) { done(failure(reason)); });
+    };
+    config.destroy = function (error, done) {
+      stopping = true;
+      // Start BOTH cleanup algorithms before awaiting either. A readable
+      // cancellation can wait for writable abort (or vice versa). Resolving
+      // only one side is not completion, even if that side rejects first.
+      let remaining = 2, readError, writeError;
+      function complete() { if (--remaining === 0) done(error || readError || writeError); }
+      function cancel() {
+        if (reader === undefined || readEnded) { complete(); return; }
+        try {
+          then(apply(a.cancel, reader, [error]), complete, function (reason) { readError = failure(reason); complete(); });
+        } catch (reason) { readError = failure(reason); complete(); }
+      }
+      function abort() {
+        if (writer === undefined || writeEnded) { complete(); return; }
+        try {
+          then(apply(a.abort, writer, [error]), complete, function (reason) { writeError = failure(reason); complete(); });
+        } catch (reason) { writeError = failure(reason); complete(); }
+      }
+      cancel(); abort();
+    };
+    // Node option validation precedes Web ownership. Recheck BOTH endpoint
+    // locks after observable option getters, before acquiring either one.
+    node = new D(config);
+    try {
+      if (apply(a.rLocked, source, []) || apply(a.wLocked, destination, [])) {
+        const error = new Type('Web stream endpoint is locked'); error.code = 'ERR_INVALID_STATE'; throw error;
+      }
+      reader = apply(a.getReader, source, []);
+      try { writer = apply(a.getWriter, destination, []); }
+      catch (error) { apply(a.releaseReader, reader, []); reader = undefined; throw error; }
+    } catch (error) { apply(destroyR, node, []); throw error; }
+    function rejected(reason) { if (!stopping) apply(destroyR, node, [failure(reason)]); }
+    then(apply(a.rClosed, reader, []), undefined, rejected);
+    then(apply(a.wClosed, writer, []), undefined, rejected);
+    return node;
   }
   function completionOptions(readable) {
     const o = create(null); o.readable = readable; o.writable = !readable; return o;
@@ -281,5 +353,12 @@
   }
   property(R, 'fromWeb', readableFromWeb); property(R, 'toWeb', readableToWeb);
   property(W, 'fromWeb', writableFromWeb); property(W, 'toWeb', writableToWeb);
+  function duplexToWeb(node) {
+    if (!(node instanceof D)) throw fail('Duplex');
+    // Refuse an unobservable lifetime before either side installs listeners.
+    observableClose(node._readableState); observableClose(node._writableState);
+    return { readable: readableToWeb(node), writable: writableToWeb(node) };
+  }
+  property(D, 'fromWeb', duplexFromWeb); property(D, 'toWeb', duplexToWeb);
   return stream;
 })

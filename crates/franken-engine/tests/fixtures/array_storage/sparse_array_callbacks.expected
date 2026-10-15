@@ -1,0 +1,18 @@
+forEach-live 0:zero,1:one,50000:middle,65536:later length=131073
+map-species-live C131072,m0,d0,m50000,d50000,m75000,d75000,m100000,d100000 values=10,20,40,30 length=131072 hole=false
+filter-identity 2 true true
+some-short-circuit true 0,70000
+every-short-circuit false 0,70000
+reduce-no-initial 8 100000,120000
+reduceRight-live 6 100000,50000,1000
+indexOf-getter 70000 1
+lastIndexOf-getter 50000 1
+inherited-accessor get,40000:inherited,90000:new
+prototype-replacement 0:1,50000:2,70000:3
+shrink-keeps-captured-length 0:1,80000:2 length=2
+proxy-prototype-is-observable true cb:0,has:1
+frozen-readers 50000:7 50000 50000
+fromIndex-conversion 70000 1
+hole-versus-undefined 90000 90000 true
+nested-cursors 0,75000,100000 inner=0,50000,100000
+abrupt-stops-before-future-read true 0

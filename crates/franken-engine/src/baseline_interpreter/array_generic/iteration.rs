@@ -82,6 +82,51 @@ impl LiveArrayCursor {
 }
 
 impl InterpreterCore {
+    /// Sparse true Arrays need the same live property traversal as array-like
+    /// objects. Callback/species/getter effects can change the unread suffix.
+    /// This only selects an implementation: it does not prove absence, invoke
+    /// guest code, cache the length, or relax any property/IFC/resource check.
+    /// Small and dense arrays keep the existing element-storage dispatch.
+    pub(super) fn sparse_array_iteration_requires_generic(
+        &self,
+        array: ObjectId,
+        kind: BuiltinFunctionKind,
+    ) -> bool {
+        use BuiltinFunctionKind as K;
+        if !matches!(
+            kind,
+            K::ArrayForEach | K::ArrayMap | K::ArrayFilter | K::ArraySome
+                | K::ArrayEvery | K::ArrayReduce | K::ArrayReduceRight
+                | K::ArrayIndexOf | K::ArrayLastIndexOf
+        ) {
+            // In particular, find-family methods and includes(undefined)
+            // observe holes; they must not inherit a skip-holes selection.
+            return false;
+        }
+        let Some(object) = self.heap.get(array.0 as usize) else {
+            return false;
+        };
+        if !object.is_array || object.typed_array.is_some() {
+            return false;
+        }
+        let Some(Value::Int(length)) = object.properties.get("length") else {
+            return false;
+        };
+        let Ok(length) = u32::try_from(*length) else {
+            return false;
+        };
+        // The canonical indexed iterator reports its retained entry count in
+        // O(1) for packed, holey and dictionary storage. Never count by walking
+        // it, or include unrelated named/symbol/exact-string properties. A
+        // future iterator without an upper bound simply keeps normal dispatch.
+        let Some(count) = object.properties.index_values().size_hint().1 else {
+            return false;
+        };
+        let count = u64::try_from(count).unwrap_or(u64::MAX);
+        u64::from(length) >= MIN_SPARSE_INTERVAL
+            && u64::from(length) > count.saturating_mul(8)
+    }
+
     /// Find the nearest currently present property without executing guest
     /// code or allocating a key inventory. Inherited indices and accessors
     /// are candidates too: their actual Get occurs only AFTER this returns.
@@ -124,7 +169,11 @@ impl InterpreterCore {
             let Some(object) = self.heap.get(id.0 as usize) else {
                 return Ok((NextIndex::Probe, inspected));
             };
-            if object.is_array || object.typed_array.is_some() || object.primitive_value.is_some()
+            // Array exotic behavior changes definition/length handling, not
+            // indexed HasProperty/Get. Its own inventory and CURRENT prototype
+            // chain can therefore prove holes just like an ordinary object's.
+            // Typed arrays and primitive wrappers still require exotic reads.
+            if object.typed_array.is_some() || object.primitive_value.is_some()
                 || !object.property_labels.exact_is_empty()
             {
                 return Ok((NextIndex::Probe, inspected));
@@ -200,3 +249,6 @@ fn array_like_index(key: &str) -> Option<u64> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod array_tests;

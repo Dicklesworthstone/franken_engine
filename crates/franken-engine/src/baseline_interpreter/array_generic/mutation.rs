@@ -16,6 +16,12 @@ impl InterpreterCore {
         args: RegRange,
     ) -> Result<bool, InterpreterError> {
         use BuiltinFunctionKind as K;
+        // This guard is shared by true-Array dispatch. Mutations caused by
+        // iteration callbacks/species/getters need the live cursor as well;
+        // do not send a huge sparse receiver back to a logical-length scan.
+        if self.sparse_array_iteration_requires_generic(array, kind) {
+            return Ok(true);
+        }
         if !matches!(
             kind,
             K::ArrayPush | K::ArrayPop | K::ArrayShift | K::ArrayUnshift

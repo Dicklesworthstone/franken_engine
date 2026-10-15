@@ -95,6 +95,7 @@ const STRING_DECODER_MODULE_BINDING: &str = "%string_decoder_module";
 const VM_MODULE_BINDING: &str = "%vm_module";
 const STREAM_MODULE_BINDING: &str = "%stream_module";
 const STREAM_CONSUMERS_BINDING: &str = "%stream_consumers";
+const WEB_STREAMS_BINDING: &str = "%web_streams";
 const BUFFER_MODULE_BINDING: &str = "%buffer_module";
 const QUERYSTRING_MODULE_BINDING: &str = "%querystring_module";
 
@@ -109,6 +110,7 @@ enum PureModule {
     Buffer,
     Querystring,
     StreamConsumers,
+    WebStreams,
     // After Events and StringDecoder: its declaration reads theirs.
     Stream,
 }
@@ -126,6 +128,7 @@ impl PureModule {
             Self::Querystring => QUERYSTRING_MODULE_BINDING,
             Self::Stream => STREAM_MODULE_BINDING,
             Self::StreamConsumers => STREAM_CONSUMERS_BINDING,
+            Self::WebStreams => WEB_STREAMS_BINDING,
         }
     }
 }
@@ -172,6 +175,7 @@ const STREAM_SOURCE: &str = concat!(
     ")",
 );
 const STREAM_CONSUMERS_SOURCE: &str = include_str!("stream_consumers.js");
+const WEB_STREAMS_SOURCE: &str = include_str!("web_stream_module.js");
 const BUFFER_SOURCE: &str = include_str!("buffer_module.js");
 // The factory reads no guest globals and returns the realm's cached module.
 // Its methods are native callable values, not wrappers with separate identities.
@@ -275,6 +279,8 @@ fn builtin_require_member(expression: &Expression) -> Option<(PureModule, Option
         Some((PureModule::Stream, None))
     } else if *specifier == "stream/consumers" || *specifier == "node:stream/consumers" {
         Some((PureModule::StreamConsumers, None))
+    } else if *specifier == "stream/web" || *specifier == "node:stream/web" {
+        Some((PureModule::WebStreams, None))
     } else if *specifier == "stream/promises" || *specifier == "node:stream/promises" {
         Some((PureModule::Stream, Some("promises")))
     } else {
@@ -392,6 +398,10 @@ const STREAM_CONSUMERS_GLOBALS: [&str; 8] = [
     "TextDecoder",
 ];
 
+const WEB_STREAMS_GLOBALS: [&str; 7] = [
+    "Object", "Promise", "RangeError", "Reflect", "Symbol", "TypeError", "WeakMap",
+];
+
 const STREAM_GLOBALS: [&str; 19] = [
     "AbortController",
     "AbortSignal",
@@ -433,6 +443,7 @@ pub(super) fn is_module_declaration(statement: &Statement) -> bool {
                     || name == STRING_DECODER_MODULE_BINDING || name == VM_MODULE_BINDING
                     || name == STREAM_MODULE_BINDING
                     || name == STREAM_CONSUMERS_BINDING
+                    || name == WEB_STREAMS_BINDING
                     || name == BUFFER_MODULE_BINDING
                     || name == QUERYSTRING_MODULE_BINDING
             )
@@ -812,6 +823,8 @@ fn module_syntax_source(module: PureModule) -> &'static NativeModuleSource {
     static STREAM: NativeModuleSource = NativeModuleSource::new("franken:stream", STREAM_SOURCE);
     static CONSUMERS: NativeModuleSource =
         NativeModuleSource::new("franken:stream/consumers", STREAM_CONSUMERS_SOURCE);
+    static WEB_STREAMS: NativeModuleSource =
+        NativeModuleSource::new("franken:stream/web", WEB_STREAMS_SOURCE);
     match module {
         PureModule::Util => &UTIL,
         PureModule::Events => &EVENTS,
@@ -823,6 +836,7 @@ fn module_syntax_source(module: PureModule) -> &'static NativeModuleSource {
         PureModule::Querystring => &QUERYSTRING,
         PureModule::Stream => &STREAM,
         PureModule::StreamConsumers => &CONSUMERS,
+        PureModule::WebStreams => &WEB_STREAMS,
     }
 }
 
@@ -848,6 +862,7 @@ fn module_source(
         PureModule::Querystring => &[],
         PureModule::Stream => &STREAM_GLOBALS,
         PureModule::StreamConsumers => &STREAM_CONSUMERS_GLOBALS,
+        PureModule::WebStreams => &WEB_STREAMS_GLOBALS,
     };
     let mut renamer = ModuleRenamer {
         through_global_object: globals
@@ -1123,6 +1138,7 @@ mod tests {
             (PureModule::Querystring, "franken:querystring", QUERYSTRING_SOURCE),
             (PureModule::Stream, "franken:stream", STREAM_SOURCE),
             (PureModule::StreamConsumers, "franken:stream/consumers", STREAM_CONSUMERS_SOURCE),
+            (PureModule::WebStreams, "franken:stream/web", WEB_STREAMS_SOURCE),
         ] {
             let tree = CanonicalEs2020Parser
                 .parse_with_options(
@@ -1789,5 +1805,60 @@ mod string_decoder_tests {
             &mut module_source(&names, PureModule::StringDecoder).expect("protected decoder"),
         );
         assert_eq!(protected, ["globalThis".to_string()].into_iter().collect());
+    }
+}
+
+#[cfg(test)]
+mod web_stream_tests {
+    use super::*;
+
+    fn parse(source: &str) -> SyntaxTree {
+        CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource { label: "web-streams.js".into(), text: source.into() },
+                ParseGoal::Script,
+                &ParserOptions::default(),
+            )
+            .expect("web stream program parses")
+    }
+
+    #[test]
+    fn web_stream_literals_share_one_deferred_module_without_io_dependencies() {
+        let tree = parse(
+            "const a = require('stream/web'); const b = require('node:stream/web'); \
+             function later() { return require('stream/web'); }",
+        );
+        let rewritten = rewrite_util_requires(&tree).unwrap().expect("web module");
+        assert_eq!(rewritten.body.len(), tree.body.len() + 1);
+        assert!(is_module_declaration(&rewritten.body[0]));
+        assert!(rewrite_util_requires(&rewritten).unwrap().is_none());
+        assert_eq!(intrinsic_capability(WEB_STREAMS_BINDING), None);
+    }
+
+    #[test]
+    fn web_stream_shadowed_and_dynamic_requires_keep_their_loader_authority() {
+        for source in [
+            "function f(require) { return require('stream/web'); }",
+            "{ const require = loader; require('node:stream/web'); }",
+            "for (const require of loaders) require('stream/web');",
+            "with (loader) require('stream/web');",
+            "const name = 'stream/web'; require(name);",
+            "require('stream/web/unknown');",
+        ] {
+            assert!(rewrite_util_requires(&parse(source)).unwrap().is_none(), "{source}");
+        }
+    }
+
+    #[test]
+    fn web_stream_source_has_only_declared_realm_dependencies() {
+        let names: BTreeSet<String> = WEB_STREAMS_GLOBALS.iter().map(|s| (*s).into()).collect();
+        let mut source = parse_module_source(PureModule::WebStreams).expect("native parser");
+        assert_eq!(super::tests::free_names(&mut source), names);
+        let mut protected = module_source(&names, PureModule::WebStreams).unwrap();
+        assert_eq!(
+            super::tests::free_names(&mut protected),
+            BTreeSet::from(["globalThis".to_string()]),
+        );
+        assert_eq!(parse_module_source(PureModule::WebStreams).unwrap(), source);
     }
 }

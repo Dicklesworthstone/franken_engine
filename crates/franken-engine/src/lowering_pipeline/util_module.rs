@@ -404,12 +404,14 @@ const WEB_STREAMS_GLOBALS: [&str; 10] = [
     "RangeError", "Reflect", "Symbol", "TypeError", "WeakMap",
 ];
 
-const STREAM_GLOBALS: [&str; 19] = [
+const STREAM_GLOBALS: [&str; 21] = [
     "AbortController",
     "AbortSignal",
     "AggregateError",
     "Array",
+    "ArrayBuffer",
     "Buffer",
+    "DataView",
     "Error",
     "EventTarget",
     "Function",

@@ -61,6 +61,9 @@ mod native_module_source;
 #[cfg(test)]
 #[path = "readline_module_tests.rs"]
 mod readline_module_tests;
+#[cfg(test)]
+#[path = "diagnostics_channel_module_tests.rs"]
+mod diagnostics_channel_module_tests;
 
 use native_module_source::NativeModuleSource;
 
@@ -102,6 +105,7 @@ const STREAM_CONSUMERS_BINDING: &str = "%stream_consumers";
 const WEB_STREAMS_BINDING: &str = "%web_streams";
 const BUFFER_MODULE_BINDING: &str = "%buffer_module";
 const QUERYSTRING_MODULE_BINDING: &str = "%querystring_module";
+const DIAGNOSTICS_CHANNEL_BINDING: &str = "%diagnostics_channel_module";
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum PureModule {
@@ -114,6 +118,7 @@ enum PureModule {
     Vm,
     Buffer,
     Querystring,
+    DiagnosticsChannel,
     StreamConsumers,
     WebStreams,
     // After Events and StringDecoder: its declaration reads theirs.
@@ -132,6 +137,7 @@ impl PureModule {
             Self::Vm => VM_MODULE_BINDING,
             Self::Buffer => BUFFER_MODULE_BINDING,
             Self::Querystring => QUERYSTRING_MODULE_BINDING,
+            Self::DiagnosticsChannel => DIAGNOSTICS_CHANNEL_BINDING,
             Self::Stream => STREAM_MODULE_BINDING,
             Self::StreamConsumers => STREAM_CONSUMERS_BINDING,
             Self::WebStreams => WEB_STREAMS_BINDING,
@@ -171,6 +177,7 @@ const ASSERT_SOURCE: &str = include_str!("assert_module.js");
 const TIMERS_SOURCE: &str = include_str!("timers_module.js");
 const STRING_DECODER_SOURCE: &str = include_str!("string_decoder_module.js");
 const READLINE_SOURCE: &str = include_str!("readline_module.js");
+const DIAGNOSTICS_CHANNEL_SOURCE: &str = include_str!("diagnostics_channel_module.js");
 // Install collection operators on the same realm-owned constructor returned
 // by the stream factory. Both files remain engine-owned source parsed by the
 // native lowerer; no second module instance or additional host authority.
@@ -300,6 +307,8 @@ fn builtin_require_member(expression: &Expression) -> Option<(PureModule, Option
         Some((PureModule::Buffer, None))
     } else if *specifier == "querystring" || *specifier == "node:querystring" {
         Some((PureModule::Querystring, None))
+    } else if *specifier == "diagnostics_channel" || *specifier == "node:diagnostics_channel" {
+        Some((PureModule::DiagnosticsChannel, None))
     } else if *specifier == "stream" || *specifier == "node:stream" {
         Some((PureModule::Stream, None))
     } else if *specifier == "stream/consumers" || *specifier == "node:stream/consumers" {
@@ -401,6 +410,10 @@ const READLINE_GLOBALS: [&str; 11] = [
     "Reflect", "String", "Symbol", "TypeError", "WeakMap",
 ];
 
+const DIAGNOSTICS_CHANNEL_GLOBALS: [&str; 7] = [
+    "Array", "Map", "Object", "Reflect", "TypeError", "WeakMap", "queueMicrotask",
+];
+
 const VM_GLOBALS: [&str; 2] = ["EvalError", "TypeError"];
 
 const BUFFER_GLOBALS: [&str; 12] = [
@@ -477,6 +490,7 @@ pub(super) fn is_module_declaration(statement: &Statement) -> bool {
                     || name == ASSERT_MODULE_BINDING || name == TIMERS_MODULE_BINDING
                     || name == STRING_DECODER_MODULE_BINDING || name == VM_MODULE_BINDING
                     || name == READLINE_MODULE_BINDING
+                    || name == DIAGNOSTICS_CHANNEL_BINDING
                     || name == STREAM_MODULE_BINDING
                     || name == STREAM_CONSUMERS_BINDING
                     || name == WEB_STREAMS_BINDING
@@ -872,6 +886,8 @@ fn module_syntax_source(module: PureModule) -> &'static NativeModuleSource {
         NativeModuleSource::new("franken:string_decoder", STRING_DECODER_SOURCE);
     static VM: NativeModuleSource = NativeModuleSource::new("franken:vm", VM_SOURCE);
     static READLINE: NativeModuleSource = NativeModuleSource::new("franken:readline", READLINE_SOURCE);
+    static DIAGNOSTICS_CHANNEL: NativeModuleSource =
+        NativeModuleSource::new("franken:diagnostics_channel", DIAGNOSTICS_CHANNEL_SOURCE);
     static BUFFER: NativeModuleSource = NativeModuleSource::new("franken:buffer", BUFFER_SOURCE);
     static QUERYSTRING: NativeModuleSource =
         NativeModuleSource::new("franken:querystring", QUERYSTRING_SOURCE);
@@ -887,6 +903,7 @@ fn module_syntax_source(module: PureModule) -> &'static NativeModuleSource {
         PureModule::Timers => &TIMERS,
         PureModule::StringDecoder => &DECODER,
         PureModule::Readline => &READLINE,
+        PureModule::DiagnosticsChannel => &DIAGNOSTICS_CHANNEL,
         PureModule::Vm => &VM,
         PureModule::Buffer => &BUFFER,
         PureModule::Querystring => &QUERYSTRING,
@@ -914,6 +931,7 @@ fn module_source(
         PureModule::Timers => &TIMERS_GLOBALS,
         PureModule::StringDecoder => &STRING_DECODER_GLOBALS,
         PureModule::Readline => &READLINE_GLOBALS,
+        PureModule::DiagnosticsChannel => &DIAGNOSTICS_CHANNEL_GLOBALS,
         PureModule::Vm => &VM_GLOBALS,
         PureModule::Buffer => &BUFFER_GLOBALS,
         PureModule::Querystring => &[],
@@ -1192,6 +1210,7 @@ mod tests {
             (PureModule::Timers, "franken:timers", TIMERS_SOURCE),
             (PureModule::StringDecoder, "franken:string_decoder", STRING_DECODER_SOURCE),
             (PureModule::Readline, "franken:readline", READLINE_SOURCE),
+            (PureModule::DiagnosticsChannel, "franken:diagnostics_channel", DIAGNOSTICS_CHANNEL_SOURCE),
             (PureModule::Vm, "franken:vm", VM_SOURCE),
             (PureModule::Buffer, "franken:buffer", BUFFER_SOURCE),
             (PureModule::Querystring, "franken:querystring", QUERYSTRING_SOURCE),

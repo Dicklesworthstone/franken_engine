@@ -8,7 +8,9 @@
 
 use super::*;
 
-#[derive(Clone, Copy, Default)]
+mod utf8;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 enum RawState {
     #[default]
     Start,
@@ -205,10 +207,16 @@ impl InterpreterCore {
                 // None proves flat/exact storage or a published flat buffer.
                 // Publication is one-way. This iterator cannot allocate an
                 // unaccounted rope cursor or start an eager flattening.
-                for unit in part.encode_utf16() {
-                    work.tick(self)?;
-                    if !scanner.feed(unit) {
+                if let Some(text) = part.as_str() {
+                    if !scanner.feed_utf8(self, text, &mut work)? {
                         return Ok(false);
+                    }
+                } else {
+                    for unit in part.encode_utf16() {
+                        work.tick(self)?;
+                        if !scanner.feed(unit) {
+                            return Ok(false);
+                        }
                     }
                 }
                 match pending.pop() {

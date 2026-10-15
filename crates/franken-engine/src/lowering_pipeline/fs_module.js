@@ -1000,10 +1000,12 @@
     fileStreamClasses = { ReadStream: ReadStream, WriteStream: WriteStream };
     return fileStreamClasses;
   }
-  async function writeIterablePath(path, data, options, defaultFlag) {
-    // Resolve user-controlled options and iterator getters before acquiring a
-    // descriptor. In particular, invalid data or pre-abort must not truncate
-    // the destination. The iterator factory itself runs only after open.
+  async function writePathContents(path, data, options, defaultFlag) {
+    // Scalar and iterable Promise writes share descriptor ownership, bounded
+    // writeChunk requests, short-write retries, explicit flush and close. The
+    // old scalar hostcall bypassed this protocol, including flush:true.
+    // Resolve options and scalar conversion before open, so invalid data or
+    // pre-abort cannot truncate the destination. An iterator starts after open.
     if (options === undefined || options === null) { options = {}; }
     if (typeof options === 'string') { options = { encoding: options }; }
     var settings = fileOptions(options, 'utf8');
@@ -1014,14 +1016,26 @@
       throw argumentError('options.flush');
     }
     checkAbort(settings.signal);
-    var source = iterableSource(data);
+    var scalar = typeof data === 'string' || isBuffer(data) || isView(data);
+    var source;
+    if (scalar) {
+      // Encode only once, before acquiring the descriptor. Views keep their
+      // byte range; they must not become iterables of numeric elements.
+      data = typeof data === 'string' ? bufferFrom(data, settings.encoding) : byteBuffer(data);
+    } else {
+      source = iterableSource(data);
+    }
     checkAbort(settings.signal);
     var fd = openSync(path, flag === undefined ? defaultFlag : flag, mode);
     var failed = false;
     var failure;
     try {
-      for await (var chunk of source) {
-        writeChunk(fd, chunk, settings);
+      if (scalar) {
+        writeChunk(fd, data, settings);
+      } else {
+        for await (var chunk of source) {
+          writeChunk(fd, chunk, settings);
+        }
       }
       checkAbort(settings.signal);
       if (flush === true) { fsyncSync(fd); }
@@ -1064,29 +1078,17 @@
       });
     },
     writeFile: function writeFile(path, data, options) {
-      return new NativePromise(function (resolve, reject) {
+      return new NativePromise(function (resolve) {
         var operation = handleOperation(path, 'writeFile');
         if (operation !== undefined) { resolve(operation(data, options)); return; }
-        if (typeof data !== 'string' && !isBuffer(data) && !isView(data)) {
-          resolve(writeIterablePath(path, data, options, 'w'));
-          return;
-        }
-        __franken_fs_write('\0fsop:write', path, data, options, function (error) {
-          if (error) { reject(error); } else { resolve(); }
-        });
+        resolve(writePathContents(path, data, options, 'w'));
       });
     },
     appendFile: function appendFile(path, data, options) {
-      return new NativePromise(function (resolve, reject) {
+      return new NativePromise(function (resolve) {
         var operation = handleOperation(path, 'appendFile');
         if (operation !== undefined) { resolve(operation(data, options)); return; }
-        if (typeof data !== 'string' && !isBuffer(data) && !isView(data)) {
-          resolve(writeIterablePath(path, data, options, 'a'));
-          return;
-        }
-        __franken_fs_write('\0fsop:append', path, data, options, function (error) {
-          if (error) { reject(error); } else { resolve(); }
-        });
+        resolve(writePathContents(path, data, options, 'a'));
       });
     }
   };

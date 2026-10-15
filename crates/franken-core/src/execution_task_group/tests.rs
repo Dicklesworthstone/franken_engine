@@ -385,3 +385,5 @@ fn debug_output_does_not_include_guest_source_or_trace() {
 }
 
 mod preparation;
+
+mod drain;

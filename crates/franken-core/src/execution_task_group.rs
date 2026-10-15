@@ -9,9 +9,10 @@
 //! Closing first revokes the entire group, then joins every worker under ONE
 //! deadline. Timeouts retain all handles and all results for a later retry.
 //! Successful joining is not successful guest execution; collect each outcome.
-//! It establishes only native worker/synchronous-hook completion, not external
-//! provider drain, process reaping, or journal finalization. Dropping the group
-//! cancels but may detach workers: hosts must explicitly close and join it.
+//! `close_and_join` establishes only native worker/synchronous-hook completion.
+//! With a configured host-effect scope, `close_and_drain` also waits for admitted
+//! provider calls under the same deadline. Neither proves retained-child reaping
+//! or journal finalization. Drop requests cancellation but may detach workers.
 
 use std::fmt;
 use std::sync::Arc;
@@ -24,7 +25,11 @@ use crate::execution_work_budget::{
     ExecutionTaskStartError,
     ExecutionWorkPool, WorkBudgetError,
 };
+use crate::host_effect_budget::HostEffectWorkPool;
 use crate::ir_contract::Ir3Module;
+
+mod effects;
+pub use effects::ExecutionGroupDrainError;
 
 /// Monotonic identity local to one group. Never reused after result collection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -35,19 +40,28 @@ pub type ExecutionTaskOutcome =
     Result<Result<ExecutionResult, WorkBudgetError>, ExecutionTaskJoinError>;
 
 /// Cancel-only authority. Clones cannot mint work, reset the scope, or revoke
-/// the parent pool or a sibling group. Cancellation alone does not prove join.
+/// the parent instruction pool or a sibling group. A configured effect scope
+/// is also revoked, including its aliases. Supply a dedicated effect partition
+/// when sibling groups need independent cancellation. This does not prove drain.
 #[derive(Clone)]
 pub struct ExecutionGroupControl {
     pool: ExecutionWorkPool,
+    effects: Option<HostEffectWorkPool>,
 }
 
 impl ExecutionGroupControl {
     pub fn cancel(&self) {
+        // Stop new effects before asking workers to leave. Both requests are
+        // irreversible and idempotent, not an atomic multi-resource operation.
+        if let Some(effects) = &self.effects {
+            effects.revoke();
+        }
         self.pool.revoke();
     }
 
     pub fn is_cancelled(&self) -> bool {
         self.pool.is_revoked()
+            || self.effects.as_ref().is_some_and(HostEffectWorkPool::is_revoked)
     }
 }
 
@@ -109,9 +123,10 @@ struct Entry {
 /// byte/CPU bound: per-execution memory limits and provider policies still apply.
 /// Completion readiness depends on host scheduling; IDs/order are not a replay
 /// transcript. An external dispatcher must record its scheduling decisions.
-#[must_use = "retain this owner and close_and_join; Drop only requests cancellation"]
+#[must_use = "retain and explicitly join/drain this owner; Drop only requests cancellation"]
 pub struct ExecutionTaskGroup {
     pool: ExecutionWorkPool,
+    effects: Option<HostEffectWorkPool>,
     capacity: usize,
     next_id: u64,
     entries: Vec<Entry>,
@@ -125,6 +140,7 @@ impl fmt::Debug for ExecutionTaskGroup {
             .field("retained", &self.entries.len())
             .field("pending", &self.pending())
             .field("closed", &self.is_closed())
+            .field("host_effect_scope", &self.effects.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -140,6 +156,7 @@ impl ExecutionTaskGroup {
     ) -> Result<Self, WorkBudgetError> {
         Ok(Self {
             pool: parent.partition(instruction_limit)?,
+            effects: None,
             capacity,
             next_id: 0,
             entries: Vec::new(),
@@ -149,17 +166,20 @@ impl ExecutionTaskGroup {
     pub fn control(&self) -> ExecutionGroupControl {
         ExecutionGroupControl {
             pool: self.pool.clone(),
+            effects: self.effects.clone(),
         }
     }
 
     pub fn is_closed(&self) -> bool {
         self.pool.is_revoked()
+            || self.effects.as_ref().is_some_and(HostEffectWorkPool::is_revoked)
     }
 
     /// Permanently deny new starts and request cancellation of ALL workers
-    /// before any joining begins. Parent and sibling scopes remain untouched.
+    /// before any joining begins. A configured effect scope is also revoked;
+    /// its parent/siblings remain untouched when it is a dedicated partition.
     pub fn close(&self) {
-        self.pool.revoke();
+        self.control().cancel();
     }
 
     pub fn remaining_instructions(&self) -> u64 {
@@ -262,6 +282,12 @@ impl ExecutionTaskGroup {
             prepare(&admission, &mut current_config)
                 .map_err(ExecutionGroupStartError::Preparation)?
         };
+        // Effect-scope revocation is independent of instruction revocation.
+        // A setup callback may have revoked an externally held effect alias.
+        // Close native authority too so spawn's existing refusal path applies.
+        if self.is_closed() {
+            self.close();
+        }
         let task = admission
             .spawn_with_hook(module, current_config, trace_id, current_hook)
             .map_err(ExecutionGroupStartError::Worker)?;
@@ -307,11 +333,19 @@ impl ExecutionTaskGroup {
     /// timeout with this SAME owner; handles, failures and successes are retained.
     /// Ok means every worker was joined, not that every guest succeeded. Collect
     /// each result explicitly. Even an invalid timeout leaves the group closed.
+    /// A configured effect scope is revoked but NOT waited here; use
+    /// `close_and_drain` to wait for both native workers and provider dispatch.
     pub fn close_and_join(&mut self, timeout: Duration) -> Result<(), ExecutionTaskJoinError> {
+        let started = Instant::now();
         self.close();
-        let deadline = Instant::now()
+        let deadline = started
             .checked_add(timeout)
             .ok_or(ExecutionTaskJoinError::InvalidTimeout)?;
+        self.join_until(deadline)
+    }
+
+    // Reuse the exact deadline when a supervisor also has provider work to drain.
+    fn join_until(&mut self, deadline: Instant) -> Result<(), ExecutionTaskJoinError> {
         loop {
             self.poll();
             if self.pending() == 0 {

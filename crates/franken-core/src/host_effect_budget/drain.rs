@@ -84,6 +84,16 @@ impl HostEffectWorkPool {
         let deadline = started
             .checked_add(timeout)
             .ok_or(HostEffectDrainError::InvalidTimeout)?;
+        self.revoke_and_drain_until(deadline)
+    }
+
+    /// Compose with native-worker shutdown without renewing its wait allowance.
+    /// Revokes even when the supplied deadline has already elapsed.
+    pub(crate) fn revoke_and_drain_until(
+        &self,
+        deadline: Instant,
+    ) -> Result<HostEffectSnapshot, HostEffectDrainError> {
+        self.revoke();
         let mut accounting = self
             .state
             .accounting

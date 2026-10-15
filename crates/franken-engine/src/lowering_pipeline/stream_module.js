@@ -68,11 +68,42 @@
       'Expected Iterable, AsyncIterable or Stream to be returned from the "' + name + '" function.'),
   };
 
+  // Node byte-mode streams consume the raw viewed bytes, not typed-array
+  // element values. Use intrinsic accessors so cross-realm views and subclasses
+  // work without reading replaceable .buffer/.byteOffset/.byteLength getters.
+  // All views use one path before entering the existing queues/state machines.
+  const streamIsView = ArrayBuffer.isView;
+  const streamBuffer = Buffer;
+  const streamBufferFrom = Buffer.from;
+  const streamIsBuffer = Buffer.isBuffer;
+  const streamApply = Reflect.apply;
+  const streamTypedPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+  const streamTypedBuffer = Object.getOwnPropertyDescriptor(streamTypedPrototype, 'buffer').get;
+  const streamTypedOffset = Object.getOwnPropertyDescriptor(streamTypedPrototype, 'byteOffset').get;
+  const streamTypedLength = Object.getOwnPropertyDescriptor(streamTypedPrototype, 'byteLength').get;
+  const streamDataBuffer = Object.getOwnPropertyDescriptor(DataView.prototype, 'buffer').get;
+  const streamDataOffset = Object.getOwnPropertyDescriptor(DataView.prototype, 'byteOffset').get;
+  const streamDataLength = Object.getOwnPropertyDescriptor(DataView.prototype, 'byteLength').get;
+
   function isUint8Array(value) {
     return value instanceof Uint8Array;
   }
   function toBuffer(chunk) {
-    return Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+    if (!streamIsView(chunk)) throw errors.invalidChunk(chunk);
+    let buffer;
+    let offset;
+    let length;
+    try {
+      buffer = streamApply(streamTypedBuffer, chunk, []);
+    } catch (error) {
+      buffer = streamApply(streamDataBuffer, chunk, []);
+      offset = streamApply(streamDataOffset, chunk, []);
+      length = streamApply(streamDataLength, chunk, []);
+      return streamApply(streamBufferFrom, streamBuffer, [buffer, offset, length]);
+    }
+    offset = streamApply(streamTypedOffset, chunk, []);
+    length = streamApply(streamTypedLength, chunk, []);
+    return streamApply(streamBufferFrom, streamBuffer, [buffer, offset, length]);
   }
   function getHighWaterMark(state, options, duplexKey, isDuplex) {
     const fromKey = options == null ? null
@@ -616,10 +647,8 @@
             encoding = '';
           }
         }
-      } else if (chunk instanceof Buffer) {
-        encoding = '';
-      } else if (isUint8Array(chunk)) {
-        chunk = toBuffer(chunk);
+      } else if (streamIsView(chunk)) {
+        if (!streamIsBuffer(chunk)) chunk = toBuffer(chunk);
         encoding = '';
       } else if (chunk != null) {
         error = errors.invalidChunk(chunk);
@@ -1467,10 +1496,8 @@
           chunk = Buffer.from(chunk, encoding);
           encoding = 'buffer';
         }
-      } else if (chunk instanceof Buffer) {
-        encoding = 'buffer';
-      } else if (isUint8Array(chunk)) {
-        chunk = toBuffer(chunk);
+      } else if (streamIsView(chunk)) {
+        if (!streamIsBuffer(chunk)) chunk = toBuffer(chunk);
         encoding = 'buffer';
       } else {
         throw errors.invalidChunk(chunk);
@@ -1514,7 +1541,7 @@
     state.length += length;
     const ret = state.length < state.highWaterMark;
     if (!ret) state.needDrain = true;
-    if (state.writing || state.corked || state.errored || !state.constructed) {
+    if (state.writing || state.bufferProcessing || state.corked || state.errored || !state.constructed) {
       state.buffered.push({ chunk: chunk, encoding: encoding, callback: callback });
       if (state.allBuffers && encoding !== 'buffer') state.allBuffers = false;
       if (state.allNoop && callback !== nop) state.allNoop = false;
@@ -1536,7 +1563,7 @@
     if (state.destroyed) {
       state.onwrite(errors.destroyed('write'));
     } else if (writev) {
-      stream._writev(chunk, state.onwrite);
+      streamApply(writev, stream, [chunk, state.onwrite]);
     } else {
       stream._write(chunk, encoding, state.onwrite);
     }
@@ -1601,54 +1628,70 @@
   }
   function errorBuffer(state) {
     if (state.writing) return;
-    for (let n = state.bufferedIndex; n < state.buffered.length; ++n) {
-      const entry = state.buffered[n];
-      const length = state.objectMode ? 1 : entry.chunk.length;
-      state.length -= length;
-      entry.callback(state.errored != null ? state.errored : errors.destroyed('write'));
-    }
+    const buffered = state.buffered;
+    const start = state.bufferedIndex;
     const finishedCallbacks = state[kOnFinished].splice(0);
+    const error = state.errored != null ? state.errored : errors.destroyed('write');
+    resetBuffer(state);
+    for (let n = start; n < buffered.length; ++n) {
+      const entry = buffered[n];
+      state.length -= state.objectMode ? 1 : entry.chunk.length;
+      state.pendingcb--;
+      entry.callback(error);
+    }
     for (let i = 0; i < finishedCallbacks.length; i++) {
       finishedCallbacks[i](state.errored != null ? state.errored : errors.destroyed('end'));
     }
-    resetBuffer(state);
   }
   function clearBuffer(stream, state) {
-    if (state.corked || state.bufferProcessing || state.destroyed || !state.constructed) return;
-    const buffered = state.buffered;
-    const bufferedLength = buffered.length - state.bufferedIndex;
-    if (!bufferedLength) return;
-    let i = state.bufferedIndex;
+    if (state.corked || state.bufferProcessing || state.writing || state.destroyed
+      || state.errored || !state.constructed) return;
     state.bufferProcessing = true;
-    if (bufferedLength > 1 && stream._writev) {
-      state.pendingcb -= bufferedLength - 1;
-      const callback = state.allNoop ? nop : function (error) {
-        for (let n = i; n < buffered.length; ++n) buffered[n].callback(error);
-      };
-      const chunks = state.allNoop && i === 0 ? buffered : buffered.slice(i);
-      chunks.allBuffers = state.allBuffers;
-      doWrite(stream, state, true, state.length, chunks, '', callback);
-      resetBuffer(state);
-    } else {
-      do {
-        const entry = buffered[i];
-        buffered[i++] = null;
-        const length = state.objectMode ? 1 : entry.chunk.length;
-        doWrite(stream, state, false, length, entry.chunk, entry.encoding, entry.callback);
-      } while (i < buffered.length && !state.writing);
-      if (i === buffered.length) {
-        resetBuffer(state);
-      } else if (i > 256 && i >= buffered.length - i) {
-        // Move at most as many live entries as the prefix we just consumed.
-        // A fixed 257-write interval recopied a large backlog quadratically.
-        // Keep the existing in-place array and callback/entry identities.
-        buffered.splice(0, i);
-        state.bufferedIndex = 0;
-      } else {
-        state.bufferedIndex = i;
+    try {
+      while (!state.writing && !state.corked && !state.destroyed && !state.errored) {
+        if (state.bufferedIndex === state.buffered.length) break;
+        const writev = state.buffered.length - state.bufferedIndex > 1 ? stream._writev : null;
+        if (state.corked || state.destroyed || state.errored || state.writing) break;
+        const buffered = state.buffered;
+        let i = state.bufferedIndex;
+        const bufferedLength = buffered.length - i;
+        if (!bufferedLength) break;
+        if (bufferedLength > 1 && writev) {
+          const length = state.length;
+          let callback = nop;
+          if (!state.allNoop) {
+            const callbacks = new Array(bufferedLength);
+            for (let n = 0; n < bufferedLength; n++) callbacks[n] = buffered[i + n].callback;
+            callback = function (error) {
+              for (let n = 0; n < callbacks.length; n++) callbacks[n](error);
+            };
+          }
+          const chunks = state.allNoop && i === 0 ? buffered : buffered.slice(i);
+          chunks.allBuffers = state.allBuffers;
+          resetBuffer(state);
+          state.pendingcb -= bufferedLength - 1;
+          doWrite(stream, state, writev, length, chunks, '', callback);
+        } else {
+          do {
+            const entry = buffered[i];
+            buffered[i++] = null;
+            const length = state.objectMode ? 1 : entry.chunk.length;
+            doWrite(stream, state, null, length, entry.chunk, entry.encoding, entry.callback);
+          } while (i < buffered.length && !state.writing && !state.corked
+            && !state.destroyed && !state.errored);
+          if (i === buffered.length) {
+            resetBuffer(state);
+          } else if (i > 256 && i >= buffered.length - i) {
+            buffered.splice(0, i);
+            state.bufferedIndex = 0;
+          } else {
+            state.bufferedIndex = i;
+          }
+        }
       }
+    } finally {
+      state.bufferProcessing = false;
     }
-    state.bufferProcessing = false;
   }
   Writable.prototype._write = function (chunk, encoding, callback) {
     if (this._writev) {

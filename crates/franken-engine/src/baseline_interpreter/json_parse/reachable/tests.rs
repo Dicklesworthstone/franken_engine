@@ -683,3 +683,215 @@ fn bitmap_walk_keeps_live_json_getters_aliases_and_cycle_errors() {
     assert_eq!(result.value, Value::str("256|1|2|1001|1002|4|1004|true"));
     assert_accounted(&core, 0);
 }
+
+#[test]
+fn pending_alias_run_reuses_one_admitted_slot_but_returns_every_visit() {
+    let mut core = core();
+    let mut pending = ReachablePending::default();
+    let object = ObjectId(u32::MAX);
+    pending.push(&core, object, 0).unwrap();
+    let committed = pending.bytes;
+    core.json_reserve_temporary(committed).unwrap();
+    core.config.max_total_memory_bytes = core.estimated_memory_bytes();
+    for _ in 1..32_768 {
+        pending.push(&core, object, committed).unwrap();
+    }
+    assert_eq!(pending.objects, [object]);
+    assert_eq!(pending.run_count, 1);
+    assert_eq!(pending.bytes, committed);
+    for _ in 0..32_768 {
+        assert_eq!(pending.pop(), Some(object));
+    }
+    assert_eq!(pending.pop(), None);
+    assert_eq!(pending.run_count, 0);
+    assert_accounted(&core, committed);
+    drop(pending);
+    core.json_release_temporary(committed);
+    assert_accounted(&core, 0);
+}
+
+#[test]
+fn pending_inline_run_limit_falls_back_and_reuses_slots_after_draining() {
+    let core = core();
+    let mut pending = ReachablePending::default();
+    let mut reference = Vec::new();
+    for round in 0..3 {
+        for index in 0..MAX_REACHABLE_PENDING_RUNS + 5 {
+            let object = ObjectId((round * 100 + index) as u32);
+            for _ in 0..3 {
+                pending.push(&core, object, 0).unwrap();
+                reference.push(object);
+            }
+        }
+        assert_eq!(pending.run_count, MAX_REACHABLE_PENDING_RUNS);
+        // A full inline table does not allocate a new table, discard a visit,
+        // or refuse an otherwise admissible ordinary frontier slot.
+        assert_eq!(pending.objects.len(), MAX_REACHABLE_PENDING_RUNS + 5 * 3);
+        while let Some(object) = reference.pop() {
+            assert_eq!(pending.pop(), Some(object));
+        }
+        assert_eq!(pending.pop(), None);
+        assert_eq!(pending.run_count, 0);
+        assert_eq!(
+            pending.bytes,
+            (pending.objects.capacity() * std::mem::size_of::<ObjectId>()) as u64
+        );
+    }
+}
+
+#[test]
+fn pending_run_stack_matches_plain_stack_under_interleaved_push_and_pop() {
+    let core = core();
+    for seed in 0..64_u32 {
+        let mut state = seed;
+        let mut pending = ReachablePending::default();
+        let mut reference = Vec::new();
+        for _ in 0..1024 {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            if state % 5 < 2 {
+                assert_eq!(pending.pop(), reference.pop());
+            } else {
+                let object = if state % 7 == 0 {
+                    ObjectId(u32::MAX)
+                } else if state % 3 == 0 {
+                    reference.last().copied().unwrap_or(ObjectId(0))
+                } else {
+                    ObjectId(state % 19)
+                };
+                pending.push(&core, object, 0).unwrap();
+                reference.push(object);
+            }
+        }
+        while let Some(object) = reference.pop() {
+            assert_eq!(pending.pop(), Some(object));
+        }
+        assert_eq!(pending.pop(), None);
+        assert_eq!(pending.run_count, 0);
+    }
+}
+
+#[test]
+fn pending_run_counter_overflow_appends_an_ordinary_slot() {
+    let core = core();
+    let mut pending = ReachablePending::default();
+    let object = ObjectId(7);
+    pending.push(&core, object, 0).unwrap();
+    pending.push(&core, object, 0).unwrap();
+    // Exercise the overflow branch without constructing usize::MAX edges.
+    pending.runs[0].additional = usize::MAX;
+    pending.push(&core, object, 0).unwrap();
+    assert_eq!(pending.objects, [object, object]);
+    assert_eq!(pending.runs[0].additional, usize::MAX);
+    assert_eq!(pending.pop(), Some(object));
+    assert_eq!(pending.runs[0].additional, usize::MAX);
+    assert_eq!(pending.pop(), Some(object));
+    assert_eq!(pending.runs[0].additional, usize::MAX - 1);
+}
+
+fn alias_frontier(core: &mut InterpreterCore, width: usize) -> ObjectId {
+    let root = core.alloc_object_with_prototype(None).unwrap();
+    let child = core.alloc_object_with_prototype(None).unwrap();
+    for index in 0..width {
+        core.set_object_property(root, format!("alias{index:05}"), Value::Object(child))
+            .unwrap();
+    }
+    core.set_object_property(child, "cycle".into(), Value::Object(root))
+        .unwrap();
+    core.join_direct_object_mutation_label(child, &Label::Secret)
+        .unwrap();
+    root
+}
+
+#[test]
+fn compressed_frontier_preserves_reference_labels_and_budget_prefixes() {
+    for edges in [ReachableEdges::Data, ReachableEdges::Inspect] {
+        for budget in [0, 1, 2, 3, 63, 64, 511, 512, 513, 514, 515] {
+            let mut actual = core();
+            let mut expected = core();
+            let a = alias_frontier(&mut actual, 512);
+            let b = alias_frontier(&mut expected, 512);
+            for core in [&mut actual, &mut expected] {
+                core.json_reserve_temporary(777).unwrap();
+                core.config.instruction_budget = core.instructions_executed + budget;
+            }
+            assert_eq!(
+                actual.observe_reachable_value(&Value::Object(a), edges),
+                expected.reference_observe(&Value::Object(b), edges),
+                "edges={edges:?}, budget={budget}"
+            );
+            assert_eq!(actual.instructions_executed, expected.instructions_executed);
+            assert_eq!(
+                actual.active_inline_callback_context_label,
+                expected.active_inline_callback_context_label
+            );
+            for core in [&mut actual, &mut expected] {
+                assert_accounted(core, 777);
+                core.json_release_temporary(777);
+                assert_accounted(core, 0);
+            }
+        }
+    }
+}
+
+#[test]
+fn compressed_frontier_admits_alias_fanout_without_skipping_work() {
+    for edges in [ReachableEdges::Data, ReachableEdges::Inspect] {
+        let mut actual = core();
+        let mut expected = core();
+        let a = alias_frontier(&mut actual, 4096);
+        let b = alias_frontier(&mut expected, 4096);
+        for core in [&mut actual, &mut expected] {
+            core.json_reserve_temporary(777).unwrap();
+            core.config.max_total_memory_bytes = core.estimated_memory_bytes() + 777 + 512;
+        }
+        actual
+            .observe_reachable_value(&Value::Object(a), edges)
+            .unwrap();
+        assert_eq!(actual.active_inline_callback_context_label, Some(Label::Secret));
+        assert!(matches!(
+            expected.reference_observe(&Value::Object(b), edges),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        // Compression must still consume the original per-reference work.
+        actual.config.instruction_budget = actual.instructions_executed + 2048;
+        assert!(matches!(
+            actual.observe_reachable_value(&Value::Object(a), edges),
+            Err(InterpreterError::BudgetExhausted { .. })
+        ));
+        for core in [&mut actual, &mut expected] {
+            assert_accounted(core, 777);
+            core.json_release_temporary(777);
+            assert_accounted(core, 0);
+        }
+    }
+}
+
+#[test]
+fn compressed_frontier_does_not_deduplicate_observable_json_getters() {
+    let source = r#"
+        (function () {
+            var reads = 0;
+            var shared = {};
+            Object.defineProperty(shared, 'n', {
+                enumerable: true,
+                get: function () { return ++reads; }
+            });
+            var aliases = [];
+            for (var i = 0; i < 512; i++) aliases.push(shared);
+            var first = JSON.parse(JSON.stringify(aliases));
+            var second = JSON.parse(JSON.stringify(aliases));
+            return [reads, first[0].n, first[511].n,
+                    second[0].n, second[511].n].join('|');
+        })();
+    "#;
+    let tree = crate::parser_api_stability::parse_script(source).unwrap();
+    let lowered = crate::lowering_pipeline::lower_ir0_to_ir3(
+        &crate::ir_contract::Ir0Module::from_syntax_tree(tree, "reachable-frontier.js"),
+        &crate::lowering_pipeline::LoweringContext::new("reachable", "frontier", "builtin-only"),
+    )
+    .unwrap();
+    let mut core = core();
+    let result = core.execute(&lowered.ir3).unwrap();
+    assert_eq!(result.value, Value::str("1024|1|512|513|1024"));
+    assert_accounted(&core, 0);
+}

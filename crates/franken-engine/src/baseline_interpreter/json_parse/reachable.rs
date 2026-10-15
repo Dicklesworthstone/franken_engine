@@ -6,10 +6,24 @@
 
 use super::*;
 
+// A frontier may contain thousands of references to the same object before
+// visited membership removes them. Keep a bounded number of adjacent runs
+// inline instead of allocating one ObjectId per reference. These are counts
+// of pending visits, not deduplication: pop still returns EVERY queued edge.
+const MAX_REACHABLE_PENDING_RUNS: usize = 16;
+
+#[derive(Clone, Copy, Default)]
+struct ReachablePendingRun {
+    index: usize,
+    additional: usize,
+}
+
 #[derive(Default)]
 struct ReachablePending {
     objects: Vec<ObjectId>,
     bytes: u64,
+    runs: [ReachablePendingRun; MAX_REACHABLE_PENDING_RUNS],
+    run_count: usize,
 }
 
 impl ReachablePending {
@@ -24,6 +38,25 @@ impl ReachablePending {
         object: ObjectId,
         committed: u64,
     ) -> Result<(), InterpreterError> {
+        if self.objects.last() == Some(&object) {
+            let index = self.objects.len() - 1;
+            if self.run_count != 0 && self.runs[self.run_count - 1].index == index {
+                let run = &mut self.runs[self.run_count - 1];
+                if let Some(additional) = run.additional.checked_add(1) {
+                    run.additional = additional;
+                    return Ok(());
+                }
+                // Even an overflowing count keeps the exact sequence: append
+                // an ordinary slot rather than wrapping or dropping an edge.
+            } else if self.run_count < self.runs.len() {
+                self.runs[self.run_count] = ReachablePendingRun {
+                    index,
+                    additional: 1,
+                };
+                self.run_count += 1;
+                return Ok(());
+            }
+        }
         if self.objects.len() == self.objects.capacity() {
             let additional = self.objects.capacity().max(1);
             let error = || core.memory_budget_error(u64::MAX, core.heap_object_count_u32());
@@ -49,6 +82,22 @@ impl ReachablePending {
         }
         self.objects.push(object);
         Ok(())
+    }
+
+    fn pop(&mut self) -> Option<ObjectId> {
+        let index = self.objects.len().checked_sub(1)?;
+        if self.run_count != 0 {
+            let run = &mut self.runs[self.run_count - 1];
+            if run.index == index {
+                let object = self.objects[index];
+                run.additional -= 1;
+                if run.additional == 0 {
+                    self.run_count -= 1;
+                }
+                return Some(object);
+            }
+        }
+        self.objects.pop()
     }
 }
 
@@ -261,7 +310,7 @@ impl InterpreterCore {
             pending.push(self, *root, 0)?;
             self.json_reserve_temporary(pending.bytes)?;
             charged += pending.bytes;
-            while let Some(object) = pending.objects.pop() {
+            while let Some(object) = pending.pop() {
                 // Charge every popped edge, including duplicates, exactly as
                 // before. No deduplication moves work past the budget gate.
                 self.json_charge_work()?;

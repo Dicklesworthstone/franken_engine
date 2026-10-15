@@ -129,6 +129,27 @@ impl InterpreterCore {
         }
         Ok(())
     }
+
+    /// Delete a captured interval without reading its values. Identical
+    /// source/target ranges reuse the live move cursor's absence proof and
+    /// provenance gates. Inherited candidates are harmless conservative work;
+    /// only the actual receiver's [[Delete]] is invoked, never Has or Get.
+    pub(super) fn generic_delete_range(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object: ObjectId,
+        start: u64,
+        count: u64,
+        backwards: bool,
+    ) -> Result<(), InterpreterError> {
+        let mut cursor = MoveCursor::new(start, start, count, backwards);
+        while let Some((index, _)) = cursor.next(self, object)? {
+            self.charge_native_hole_read()?;
+            self.generic_delete(module, object, &Self::generic_index_key(index))?;
+            self.observe_scoped_callback_result()?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

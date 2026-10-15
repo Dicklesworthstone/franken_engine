@@ -461,6 +461,7 @@ impl InterpreterCore {
             }
             K::ArrayShift => {
                 let len = self.generic_length(m, o)?;
+                self.observe_scoped_callback_result()?;
                 if len == 0 {
                     self.generic_set(m, o, &Self::generic_length_key(), Value::Int(0))?;
                     Value::Undefined
@@ -471,7 +472,9 @@ impl InterpreterCore {
                     // Seek both live ranges; a missing source still deletes a
                     // present destination through the ordinary property path.
                     self.generic_move_range(m, o, 1, 0, len - 1, false)?;
+                    self.charge_native_hole_read()?;
                     self.generic_delete(m, o, &Self::generic_index_key(len - 1))?;
+                    self.observe_scoped_callback_result()?;
                     let length = Self::generic_length_value(len - 1);
                     self.generic_set(m, o, &Self::generic_length_key(), length)?;
                     first
@@ -479,6 +482,7 @@ impl InterpreterCore {
             }
             K::ArrayUnshift => {
                 let len = self.generic_length(m, o)?;
+                self.observe_scoped_callback_result()?;
                 let count = u64::from(args.count);
                 if count > 0 {
                     if len + count > MAX_SAFE_LENGTH {
@@ -491,6 +495,7 @@ impl InterpreterCore {
                         self.charge_native_hole_read()?;
                         let item = arg(self, index)?;
                         self.generic_set(m, o, &Self::generic_index_key(u64::from(index)), item)?;
+                        self.observe_scoped_callback_result()?;
                     }
                 }
                 let length = Self::generic_length_value(len + count);
@@ -938,8 +943,10 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let m = Some(module);
         let len = self.generic_length(m, o)?;
+        self.observe_scoped_callback_result()?;
         let start_arg = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         let start = self.generic_relative_index(m, start_arg, len, 0)?;
+        self.observe_scoped_callback_result()?;
         let delete_count = match args.count {
             0 => 0,
             1 => len - start,
@@ -949,44 +956,50 @@ impl InterpreterCore {
                 requested.clamp(0.0, (len - start) as f64) as u64
             }
         };
+        self.observe_scoped_callback_result()?;
         let mut items = Vec::new();
         for index in 2..args.count.max(2) {
             items.push(self.builtin_arg(args, index)?.unwrap_or(Value::Undefined));
         }
         let item_count = items.len() as u64;
-        if len + item_count - delete_count > MAX_SAFE_LENGTH {
+        let new_len = len - delete_count + item_count;
+        if new_len > MAX_SAFE_LENGTH {
             return Err(Self::generic_length_error());
         }
         let removed = self.array_species_result(module, o, delete_count)?;
-        for k in 0..delete_count {
-            // A hole invokes no callback; scanning removed items is work too.
-            self.charge_native_hole_read()?;
-            let key = Self::generic_index_key(start + k);
-            if self.generic_has(m, o, &key)? {
+        self.observe_scoped_callback_result()?;
+        // A species definition can mutate the source, including when it
+        // returns that source itself. Keep only the unread interval, never a
+        // snapshot of its keys. Holes keep their original result positions.
+        let mut indices = LiveArrayCursor::new(start, start + delete_count, false, false);
+        while let Some(index) = indices.next(self, o)? {
+            let key = Self::generic_index_key(index);
+            let present = self.generic_has(m, o, &key)?;
+            self.observe_scoped_callback_result()?;
+            if present {
                 let element = self.generic_get(m, o, &key)?;
-                self.generic_create_data_property(m, removed, k, element)?;
+                self.observe_scoped_callback_result()?;
+                self.generic_create_data_property(m, removed, index - start, element)?;
+                self.observe_scoped_callback_result()?;
             }
         }
         self.generic_species_set_length(m, removed, delete_count)?;
+        self.observe_scoped_callback_result()?;
+        let tail = len - start - delete_count;
         if item_count < delete_count {
-            for k in start..(len - delete_count) {
-                self.generic_move(m, o, k + delete_count, k + item_count)?;
-            }
-            for k in ((len - delete_count + item_count)..len).rev() {
-                self.charge_native_hole_read()?;
-                self.generic_delete(m, o, &Self::generic_index_key(k))?;
-            }
+            self.generic_move_range(m, o, start + delete_count, start + item_count, tail, false)?;
+            // Delete in descending order AFTER all moves, using current own
+            // properties. A preceding setter may have created another tail key.
+            self.generic_delete_range(m, o, new_len, len - new_len, true)?;
         } else if item_count > delete_count {
-            for k in (start..(len - delete_count)).rev() {
-                self.generic_move(m, o, k + delete_count, k + item_count)?;
-            }
+            self.generic_move_range(m, o, start + delete_count, start + item_count, tail, true)?;
         }
         for (offset, item) in items.into_iter().enumerate() {
             self.charge_native_hole_read()?;
             self.generic_set(m, o, &Self::generic_index_key(start + offset as u64), item)?;
+            self.observe_scoped_callback_result()?;
         }
-        let length = Self::generic_length_value(len - delete_count + item_count);
-        self.generic_set(m, o, &Self::generic_length_key(), length)?;
+        self.generic_set(m, o, &Self::generic_length_key(), Self::generic_length_value(new_len))?;
         Ok(Value::Object(removed))
     }
 

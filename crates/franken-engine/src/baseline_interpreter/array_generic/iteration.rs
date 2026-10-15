@@ -98,6 +98,7 @@ impl InterpreterCore {
             K::ArrayForEach | K::ArrayMap | K::ArrayFilter | K::ArraySome
                 | K::ArrayEvery | K::ArrayReduce | K::ArrayReduceRight
                 | K::ArrayIndexOf | K::ArrayLastIndexOf
+                | K::ArraySliceMethod | K::ArrayConcat
         ) {
             // In particular, find-family methods and includes(undefined)
             // observe holes; they must not inherit a skip-holes selection.

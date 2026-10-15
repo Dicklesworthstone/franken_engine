@@ -303,7 +303,12 @@ impl InterpreterCore {
         let mut objects = vec![receiver];
         for index in 0..args.count {
             if let Some(Value::Object(object_id)) = self.builtin_arg(args, index)? {
-                if self.active_proxy_record(object_id)?.is_some() {
+                if self.active_proxy_record(object_id)?.is_some()
+                    || self.sparse_array_iteration_requires_generic(
+                        object_id,
+                        BuiltinFunctionKind::ArrayConcat,
+                    )
+                {
                     return Ok(true);
                 }
                 objects.push(object_id);
@@ -470,17 +475,22 @@ impl InterpreterCore {
                 let len = self.generic_length(m, o)?;
                 let start = self.generic_relative_index(m, arg(self, 0)?, len, 0)?;
                 let end = self.generic_relative_index(m, arg(self, 1)?, len, len)?;
-                let result = self.array_species_result(module, o, end.saturating_sub(start))?;
-                let mut n = 0u64;
-                for k in start..end.max(start) {
+                let count = end.saturating_sub(start);
+                let result = self.array_species_result(module, o, count)?;
+                let mut indices = LiveArrayCursor::new(start, end.max(start), false, false);
+                while let Some(k) = indices.next(self, o)? {
                     let key = Self::generic_index_key(k);
-                    if self.generic_has(m, o, &key)? {
+                    let present = self.generic_has(m, o, &key)?;
+                    self.observe_scoped_callback_result()?;
+                    if present {
                         let element = self.generic_get(m, o, &key)?;
-                        self.generic_create_data_property(m, result, n, element)?;
+                        self.observe_scoped_callback_result()?;
+                        // A skipped hole still occupies its position in the
+                        // result; the count of present properties is not length.
+                        self.generic_create_data_property(m, result, k - start, element)?;
                     }
-                    n += 1;
                 }
-                self.generic_species_set_length(m, result, n)?;
+                self.generic_species_set_length(m, result, count)?;
                 Value::Object(result)
             }
             K::ArrayConcat => {
@@ -509,10 +519,14 @@ impl InterpreterCore {
                     if n + len > MAX_SAFE_LENGTH {
                         return Err(Self::generic_length_error());
                     }
-                    for k in 0..len {
+                    let mut indices = LiveArrayCursor::new(0, len, false, false);
+                    while let Some(k) = indices.next(self, source)? {
                         let key = Self::generic_index_key(k);
-                        if self.generic_has(m, source, &key)? {
+                        let present = self.generic_has(m, source, &key)?;
+                        self.observe_scoped_callback_result()?;
+                        if present {
                             let element = self.generic_get(m, source, &key)?;
+                            self.observe_scoped_callback_result()?;
                             self.generic_create_data_property(m, result, n + k, element)?;
                         }
                     }

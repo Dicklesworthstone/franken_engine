@@ -405,3 +405,281 @@ fn streamed_edges_match_original_for_maps_errors_symbols_and_exact_keys() {
         .unwrap();
     assert_accounted(&core, 0);
 }
+
+#[test]
+fn visited_bitmap_reuses_membership_without_per_object_tree_entries() {
+    let mut core = core();
+    let nodes = chain(&mut core, 4096);
+    core.json_reserve_temporary(777).unwrap();
+    let mut visited = ReachableVisited::default();
+    for &object in &nodes {
+        assert!(visited.insert(&mut core, object).unwrap());
+        assert!(!visited.insert(&mut core, object).unwrap());
+    }
+    assert!(!visited.dense.is_empty());
+    assert!(visited.sparse.is_empty());
+    assert_eq!(visited.bytes, (visited.dense.capacity() * 8) as u64);
+    assert!(visited.bytes < nodes.len() as u64);
+    for &object in nodes.iter().rev() {
+        assert!(!visited.insert(&mut core, object).unwrap());
+    }
+    assert_accounted(&core, 777 + visited.bytes);
+    let bytes = visited.bytes;
+    drop(visited);
+    core.json_release_temporary(bytes);
+    assert_accounted(&core, 777);
+    core.json_release_temporary(777);
+    assert_accounted(&core, 0);
+}
+
+#[test]
+fn visited_bitmap_admission_failure_keeps_membership_and_can_retry() {
+    let mut core = core();
+    let nodes = chain(&mut core, 1024);
+    let baseline = core.estimated_memory_bytes();
+    core.config.max_total_memory_bytes = baseline + 64 * 64;
+    let mut visited = ReachableVisited::default();
+    for &object in &nodes[..64] {
+        assert!(visited.insert(&mut core, object).unwrap());
+    }
+    // The 64th tree entry fits, but the simultaneous bitmap does not.
+    // Refusing that optional allocation must not refuse or lose the walk.
+    assert!(visited.dense.is_empty());
+    assert_eq!(visited.sparse.len(), 64);
+    assert_eq!(visited.bytes, 64 * 64);
+    assert!(matches!(
+        visited.insert(&mut core, nodes[64]),
+        Err(InterpreterError::MemoryBudgetExceeded { .. })
+    ));
+    assert_eq!(visited.sparse.len(), 64);
+    for &object in &nodes[..64] {
+        assert!(!visited.insert(&mut core, object).unwrap());
+    }
+    assert_accounted(&core, visited.bytes);
+    core.config.max_total_memory_bytes = baseline + 64 * 128 + 4096;
+    for &object in &nodes[64..128] {
+        assert!(visited.insert(&mut core, object).unwrap());
+    }
+    assert!(!visited.dense.is_empty());
+    assert!(visited.sparse.is_empty());
+    assert_accounted(&core, visited.bytes);
+    let bytes = visited.bytes;
+    drop(visited);
+    core.json_release_temporary(bytes);
+    assert_accounted(&core, 0);
+}
+
+#[test]
+fn visited_bitmap_window_keeps_lower_upper_and_invalid_ids_distinct() {
+    let mut core = core();
+    let older = chain(&mut core, 1024);
+    let newer = chain(&mut core, 513);
+    let mut visited = ReachableVisited::default();
+    let mut expected = BTreeSet::new();
+    for object in newer
+        .iter()
+        .chain(older.iter())
+        .copied()
+        .chain([ObjectId(u32::MAX), ObjectId(u32::MAX - 64)])
+    {
+        assert_eq!(
+            visited.insert(&mut core, object).unwrap(),
+            expected.insert(object)
+        );
+    }
+    assert!(!visited.dense.is_empty());
+    assert!(visited.first_word > 0);
+    assert!(visited.sparse.contains(&older[0]));
+    assert!(visited.sparse.contains(&ObjectId(u32::MAX)));
+    for &object in expected.iter().rev() {
+        assert!(!visited.insert(&mut core, object).unwrap());
+    }
+    assert_eq!(
+        visited.bytes,
+        (visited.dense.capacity() * 8 + visited.sparse.len() * 64) as u64
+    );
+    assert_accounted(&core, visited.bytes);
+    let bytes = visited.bytes;
+    drop(visited);
+    core.json_release_temporary(bytes);
+    assert_accounted(&core, 0);
+}
+
+#[test]
+fn visited_bitmap_declines_uneconomical_and_oversized_windows() {
+    let mut core = core();
+    let mut visited = ReachableVisited::default();
+    // Synthetic membership IDs exercise the scratch carrier, not heap reads.
+    // A hypothetical large heap must not cause an input-sized initialization.
+    for index in 0..64 {
+        visited.sparse.insert(ObjectId(index));
+    }
+    visited.bytes = 64 * 64;
+    core.json_reserve_temporary(visited.bytes).unwrap();
+    for heap_len in [
+        0,
+        64 * 1024,
+        8 * (MAX_REACHABLE_BITMAP_BYTES + 8),
+        usize::MAX,
+    ] {
+        visited.try_promote(&mut core, heap_len).unwrap();
+        assert!(visited.dense.is_empty(), "heap_len={heap_len}");
+        assert_eq!(visited.sparse.len(), 64);
+        assert_eq!(visited.bytes, 64 * 64);
+        assert_accounted(&core, visited.bytes);
+    }
+    let bytes = visited.bytes;
+    drop(visited);
+    core.json_release_temporary(bytes);
+    assert_accounted(&core, 0);
+}
+
+#[test]
+fn visited_bitmap_migration_preserves_out_of_window_sparse_members() {
+    let mut core = core();
+    let mut visited = ReachableVisited::default();
+    for index in 4096..4160 {
+        visited.sparse.insert(ObjectId(index));
+    }
+    visited.sparse.insert(ObjectId(u32::MAX));
+    visited.bytes = visited.sparse.len() as u64 * 64;
+    core.json_reserve_temporary(visited.bytes).unwrap();
+    visited.try_promote(&mut core, 8192).unwrap();
+    assert!(!visited.dense.is_empty());
+    assert_eq!(visited.first_word, 64);
+    assert_eq!(visited.sparse, BTreeSet::from([ObjectId(u32::MAX)]));
+    for index in 4096..4160 {
+        assert!(!visited.insert(&mut core, ObjectId(index)).unwrap());
+    }
+    assert!(!visited.insert(&mut core, ObjectId(u32::MAX)).unwrap());
+    assert!(visited.insert(&mut core, ObjectId(4095)).unwrap());
+    assert!(visited.insert(&mut core, ObjectId(8192)).unwrap());
+    assert_accounted(&core, visited.bytes);
+    let bytes = visited.bytes;
+    drop(visited);
+    core.json_release_temporary(bytes);
+    assert_accounted(&core, 0);
+}
+
+fn bitmap_graph(core: &mut InterpreterCore, seed: usize) -> ObjectId {
+    let nodes = chain(core, 256);
+    for (index, &object) in nodes.iter().enumerate() {
+        core.set_object_property(
+            object,
+            "alias".into(),
+            Value::Object(nodes[(index * 17 + seed) % nodes.len()]),
+        )
+        .unwrap();
+        if index == 65 || index == 191 {
+            core.join_direct_object_mutation_label(
+                object,
+                &Label::Custom {
+                    name: format!("bitmap-source-{index}"),
+                    level: if index == 65 { 7 } else { 8 },
+                },
+            )
+            .unwrap();
+        }
+    }
+    nodes[0]
+}
+
+#[test]
+fn bitmap_walk_matches_reference_labels_and_each_budget_prefix() {
+    for edges in [ReachableEdges::Data, ReachableEdges::Inspect] {
+        for seed in [0, 7, 127] {
+            for budget in [0, 1, 63, 64, 65, 127, 128, 256, 511, 1024, 2048] {
+                let mut actual = core();
+                let mut expected = core();
+                let a = bitmap_graph(&mut actual, seed);
+                let b = bitmap_graph(&mut expected, seed);
+                for core in [&mut actual, &mut expected] {
+                    core.json_reserve_temporary(777).unwrap();
+                    core.config.instruction_budget = core.instructions_executed + budget;
+                }
+                assert_eq!(
+                    actual.observe_reachable_value(&Value::Object(a), edges),
+                    expected.reference_observe(&Value::Object(b), edges),
+                    "edges={edges:?}, seed={seed}, budget={budget}"
+                );
+                assert_eq!(actual.instructions_executed, expected.instructions_executed);
+                assert_eq!(
+                    actual.active_inline_callback_context_label,
+                    expected.active_inline_callback_context_label
+                );
+                for core in [&mut actual, &mut expected] {
+                    assert_accounted(core, 777);
+                    core.json_release_temporary(777);
+                    assert_accounted(core, 0);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn bitmap_walk_does_not_cache_labels_across_mutation_or_cancellation() {
+    let mut core = core();
+    let nodes = chain(&mut core, 512);
+    core.json_reserve_temporary(777).unwrap();
+    core.json_observe_reachable_value(&Value::Object(nodes[0]))
+        .unwrap();
+    assert!(core.active_inline_callback_context_label.is_none());
+    core.join_direct_object_mutation_label(nodes[511], &Label::Secret)
+        .unwrap();
+    let token = CancellationToken::new();
+    token.cancel();
+    core.config.cancellation_token = Some(token);
+    assert_eq!(
+        core.json_observe_reachable_value(&Value::Object(nodes[0])),
+        Err(InterpreterError::Cancelled)
+    );
+    assert_accounted(&core, 777);
+    core.config.cancellation_token = None;
+    core.json_observe_reachable_value(&Value::Object(nodes[0]))
+        .unwrap();
+    assert_eq!(core.active_inline_callback_context_label, Some(Label::Secret));
+    assert_accounted(&core, 777);
+    core.json_release_temporary(777);
+    assert_accounted(&core, 0);
+}
+
+#[test]
+fn bitmap_walk_keeps_live_json_getters_aliases_and_cycle_errors() {
+    let source = r#"
+        (function () {
+            var leaves = [];
+            for (var i = 0; i < 256; i++) leaves.push({id: i});
+            var reads = 0;
+            Object.defineProperty(leaves[8], 'mutate', {
+                enumerable: true,
+                get: function () {
+                    reads++;
+                    leaves[200].id = 1000 + reads;
+                    return reads;
+                }
+            });
+            var root = {a: leaves, b: leaves};
+            var first = JSON.parse(JSON.stringify(root));
+            var cyclic = {};
+            cyclic.self = cyclic;
+            var rejected = false;
+            try { JSON.stringify(cyclic); }
+            catch (error) { rejected = error instanceof TypeError; }
+            var second = JSON.parse(JSON.stringify(root));
+            return [first.a.length, first.a[8].mutate, first.b[8].mutate,
+                    first.a[200].id, first.b[200].id, reads,
+                    second.b[200].id, rejected].join('|');
+        })();
+    "#;
+    let tree = crate::parser_api_stability::parse_script(source).unwrap();
+    let lowered = crate::lowering_pipeline::lower_ir0_to_ir3(
+        &crate::ir_contract::Ir0Module::from_syntax_tree(tree, "reachable-bitmap.js"),
+        &crate::lowering_pipeline::LoweringContext::new("reachable", "bitmap", "builtin-only"),
+    )
+    .unwrap();
+    let mut core = core();
+    let result = core.execute(&lowered.ir3).unwrap();
+    assert_eq!(result.value, Value::str("256|1|2|1001|1002|4|1004|true"));
+    assert_accounted(&core, 0);
+}

@@ -7,10 +7,12 @@
 use super::{BacktrackError, BacktrackRegExp, Captures, Inst, PreparedInput};
 use super::{is_line_terminator, is_word_char};
 
+mod counted;
 mod literals;
 mod prefix;
 mod repetitions;
 
+use counted::CountedRepeat;
 use literals::LiteralBlocks;
 use prefix::StartPrefix;
 use repetitions::GreedyRepeat;
@@ -251,24 +253,57 @@ impl Run<'_> {
                     body,
                     exit,
                 } => {
-                    let count = self.registers[*counter];
-                    if count < *min {
-                        pc = *body;
-                    } else if max.is_some_and(|max| count >= max) {
-                        pc = *exit;
-                    } else {
-                        let (first, second) = if *greedy {
-                            (*body, *exit)
-                        } else {
-                            (*exit, *body)
-                        };
-                        stack.push(Frame::Alternative {
-                            pc: second,
+                    // Only mandatory iterations have no intervening choice.
+                    // The scanner pays through the next CountedLoop; choose
+                    // its exit/optional body here without charging it twice.
+                    let repeat = (self.registers[*counter] < *min)
+                        .then(|| CountedRepeat::at(regexp, pc))
+                        .flatten();
+                    #[cfg(test)]
+                    let repeat = repeat.filter(|_| !self.repetitions_disabled);
+                    let completed = if let Some(repeat) = repeat {
+                        let old_count = self.registers[repeat.counter];
+                        let old_mark = self.registers[repeat.mark];
+                        let end = repeat.execute_required(
+                            regexp,
+                            chars,
                             position,
-                        });
-                        pc = first;
+                            &mut self.registers,
+                            &mut self.steps_left,
+                        )?;
+                        if let Some(end) = end {
+                            repeat.push_undo(stack, old_count, old_mark);
+                            position = end;
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        true
+                    };
+                    if completed {
+                        let count = self.registers[*counter];
+                        if count < *min {
+                            pc = *body;
+                        } else if max.is_some_and(|max| count >= max) {
+                            pc = *exit;
+                        } else {
+                            let (first, second) = if *greedy {
+                                (*body, *exit)
+                            } else {
+                                (*exit, *body)
+                            };
+                            stack.push(Frame::Alternative {
+                                pc: second,
+                                position,
+                            });
+                            pc = first;
+                        }
+                        continue;
                     }
-                    continue;
+                    // The mandatory body restored its own registers before
+                    // failure. Unwind the enclosing choices normally.
+                    None
                 }
                 Inst::CounterStep { counter, mark, min } => {
                     let count = self.registers[*counter];

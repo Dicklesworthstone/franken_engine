@@ -248,6 +248,81 @@
     }
     releaseLock() { releaseReader(get(readers, this, 'ReadableStreamDefaultReader')); }
   }
+
+  // Default-stream tee shares chunk identities, not a collected copy of the
+  // source. Demand from either branch may advance the single upstream reader;
+  // the other branch retains its own FIFO until read or cancelled. As in the
+  // standard, a slow branch can therefore accumulate data from a fast sibling.
+  // The private reader intentionally keeps the original stream locked even
+  // after completion. No public getReader/read/enqueue override participates.
+  function teeReadable(source) {
+    const s = get(streams, source, 'ReadableStream');
+    const reader = new ReadableStreamDefaultReader(source);
+    const r = get(readers, reader, 'ReadableStreamDefaultReader');
+    const cancellation = deferred(true);
+    let reading = false, readAgain = false, ended = false;
+    let cancelled1 = false, cancelled2 = false;
+    let reason1, reason2, first, second;
+
+    function closeBranch(branch) {
+      if (!canEnqueue(branch)) return;
+      branch.closeRequested = true;
+      if (branch.queue.length === 0) closeReadable(branch);
+    }
+    function closeBranches() {
+      reading = false; ended = true;
+      if (!cancelled1) closeBranch(first);
+      if (!cancelled2) closeBranch(second);
+      // When both cancel, their promise must adopt the source's actual
+      // cleanup result, not this synchronous close of a pending upstream read.
+      if (!cancelled1 || !cancelled2) cancellation.resolve();
+    }
+    function failBranches(error) {
+      reading = false; ended = true;
+      errorReadable(first, error); errorReadable(second, error);
+      if (!cancelled1 || !cancelled2) cancellation.resolve();
+    }
+    function pullBranches() {
+      if (ended || (cancelled1 && cancelled2)) return resolved();
+      if (reading) { readAgain = true; return resolved(); }
+      reading = true;
+      then(read(r, function (item) {
+        if (item.done) { closeBranches(); return; }
+        // Exactly one job separates upstream publication from branch
+        // publication. Observe source errors before delivering a stale chunk;
+        // a queued close, in contrast, must not discard the final chunk.
+        then(resolved(), function () {
+          readAgain = false;
+          if (!cancelled1 && canEnqueue(first)) enqueue(first, item.value);
+          if (!cancelled2 && canEnqueue(second)) enqueue(second, item.value);
+          reading = false;
+          if (readAgain) pullBranches();
+        });
+      }), function () {}, failBranches);
+      return resolved();
+    }
+    function cancelBranch(which, reason) {
+      if (which === 1) { cancelled1 = true; reason1 = reason; }
+      else { cancelled2 = true; reason2 = reason; }
+      if (cancelled1 && cancelled2) {
+        const reasons = [reason1, reason2];
+        reason1 = undefined; reason2 = undefined;
+        ended = true;
+        cancellation.resolve(cancelReadable(s, reasons));
+      }
+      return cancellation.promise;
+    }
+    const source1 = create(null), source2 = create(null);
+    source1.pull = pullBranches; source2.pull = pullBranches;
+    source1.cancel = function (reason) { return cancelBranch(1, reason); };
+    source2.cancel = function (reason) { return cancelBranch(2, reason); };
+    const branch1 = new ReadableStream(source1);
+    const branch2 = new ReadableStream(source2);
+    first = get(streams, branch1, 'ReadableStream');
+    second = get(streams, branch2, 'ReadableStream');
+    then(r.closed.promise, undefined, failBranches);
+    return [branch1, branch2];
+  }
   class ReadableStream {
     constructor(underlyingSource, queuingStrategy) {
       const source = dictionary(underlyingSource, 'underlyingSource');
@@ -282,6 +357,7 @@
         return cancelReadable(s, reason);
       } catch (error) { return rejected(error); }
     }
+    tee() { return teeReadable(this); }
     pipeTo(destination, options) {
       try { return pipe(this, destination, pipeOptions(options)); }
       catch (error) { return rejected(error); }

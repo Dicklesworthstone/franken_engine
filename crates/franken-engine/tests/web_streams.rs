@@ -129,3 +129,81 @@ fn native_cli_esm_imports_use_the_shared_stream_pipeline() {
         .map(|line| line["message"].as_str().unwrap()).collect();
     assert_eq!(lines, ["ESM_PIPE 40,42"]);
 }
+
+#[test]
+fn tee_preserves_chunk_identity_and_independent_branch_queues() {
+    let source = r#"
+const web = require('node:stream/web');
+const Object = 'guest', WeakMap = 'guest';
+const item = { n: 1 };
+const original = new web.ReadableStream({start(c){c.enqueue(item);c.enqueue(42);c.close();}});
+const pair = original.tee();
+(async function () {
+  const a = pair[0].getReader(), b = pair[1].getReader();
+  const first = await a.read(); first.value.n = 7;
+  console.log('TEE_IDENTITY', (await b.read()).value === item, item.n);
+  console.log('TEE_VALUES', (await a.read()).value, (await a.read()).done,
+    (await b.read()).value, (await b.read()).done);
+  a.releaseLock(); b.releaseLock();
+  console.log('TEE_COMPLETE', original.locked, pair[0].locked, pair[1].locked);
+})();
+"#;
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        assert_eq!(run(source, lane), [
+            "TEE_IDENTITY true 7",
+            "TEE_VALUES 42 true 42 true",
+            "TEE_COMPLETE true false false",
+        ]);
+    }
+}
+
+#[test]
+fn tee_cancellation_waits_for_both_branches_and_retains_cleanup_failure() {
+    let source = r#"
+const web = require('stream/web');
+let rejectCleanup, calls = 0;
+const original = new web.ReadableStream({cancel(reasons){
+  calls++; console.log('TEE_REASONS', reasons[0], reasons[1]);
+  return new Promise(function(resolve,reject){rejectCleanup=reject;});
+}});
+const pair = original.tee();
+(async function () {
+  const a = pair[0].getReader(), b = pair[1].getReader();
+  const readA = a.read(), readB = b.read();
+  const stopB = b.cancel('right').then(()=> 'wrong', error=>error===false);
+  console.log('TEE_ONE_CANCEL', calls);
+  const stopA = a.cancel('left').then(()=> 'wrong', error=>error===false);
+  rejectCleanup(false);
+  console.log('TEE_CLEANUP', await stopA, await stopB, calls);
+  console.log('TEE_CLOSED', (await readA).done, (await readB).done, original.locked);
+})();
+"#;
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        assert_eq!(run(source, lane), [
+            "TEE_ONE_CANCEL 0",
+            "TEE_REASONS left right",
+            "TEE_CLEANUP true true 1",
+            "TEE_CLOSED true true true",
+        ]);
+    }
+}
+
+#[test]
+fn tee_composes_with_transforms_and_a_failing_sibling_pipe() {
+    let source = r#"
+const web = require('node:stream/web');
+const output = [], error = { sink: true };
+const original = new web.ReadableStream({start(c){c.enqueue(1);c.enqueue(2);c.enqueue(3);c.close();}});
+const pair = original.tee();
+const failed = pair[0].pipeTo(new web.WritableStream({write(n){if(n===2)throw error;}}))
+  .then(()=>false, reason=>reason===error);
+const complete = pair[1].pipeThrough(new web.TransformStream({transform(n,c){c.enqueue(n*2);}}))
+  .pipeTo(new web.WritableStream({write(n){output.push(n);}}));
+Promise.all([failed,complete]).then(function(values){
+  console.log('TEE_PIPE_COMPLETE', values[0], output.join(','), original.locked);
+});
+"#;
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        assert_eq!(run(source, lane), ["TEE_PIPE_COMPLETE true 2,4,6 true"]);
+    }
+}

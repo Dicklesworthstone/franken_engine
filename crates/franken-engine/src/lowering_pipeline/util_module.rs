@@ -58,6 +58,9 @@ mod stream_operators;
 mod native_module_loader;
 #[path = "native_module_source.rs"]
 mod native_module_source;
+#[cfg(test)]
+#[path = "readline_module_tests.rs"]
+mod readline_module_tests;
 
 use native_module_source::NativeModuleSource;
 
@@ -92,6 +95,7 @@ const EVENTS_MODULE_BINDING: &str = "%events_module";
 const ASSERT_MODULE_BINDING: &str = "%assert_module";
 const TIMERS_MODULE_BINDING: &str = "%timers_module";
 const STRING_DECODER_MODULE_BINDING: &str = "%string_decoder_module";
+const READLINE_MODULE_BINDING: &str = "%readline_module";
 const VM_MODULE_BINDING: &str = "%vm_module";
 const STREAM_MODULE_BINDING: &str = "%stream_module";
 const STREAM_CONSUMERS_BINDING: &str = "%stream_consumers";
@@ -106,6 +110,7 @@ enum PureModule {
     Assert,
     Timers,
     StringDecoder,
+    Readline,
     Vm,
     Buffer,
     Querystring,
@@ -123,6 +128,7 @@ impl PureModule {
             Self::Assert => ASSERT_MODULE_BINDING,
             Self::Timers => TIMERS_MODULE_BINDING,
             Self::StringDecoder => STRING_DECODER_MODULE_BINDING,
+            Self::Readline => READLINE_MODULE_BINDING,
             Self::Vm => VM_MODULE_BINDING,
             Self::Buffer => BUFFER_MODULE_BINDING,
             Self::Querystring => QUERYSTRING_MODULE_BINDING,
@@ -164,6 +170,7 @@ const EVENTS_SOURCE: &str = include_str!("events_module.js");
 const ASSERT_SOURCE: &str = include_str!("assert_module.js");
 const TIMERS_SOURCE: &str = include_str!("timers_module.js");
 const STRING_DECODER_SOURCE: &str = include_str!("string_decoder_module.js");
+const READLINE_SOURCE: &str = include_str!("readline_module.js");
 // Install collection operators on the same realm-owned constructor returned
 // by the stream factory. Both files remain engine-owned source parsed by the
 // native lowerer; no second module instance or additional host authority.
@@ -246,6 +253,12 @@ const STREAM_PLACEHOLDERS: [(&str, &str); 3] = [
     ("__franken_stream_next_tick", "%StreamNextTick"),
 ];
 
+// These are canonical private dependencies, not ambient require or host I/O.
+const READLINE_PLACEHOLDERS: [(&str, &str); 2] = [
+    ("__franken_readline_events", EVENTS_MODULE_BINDING),
+    ("__franken_readline_decoder", STRING_DECODER_MODULE_BINDING),
+];
+
 /// Recognize a literal pure-builtin request before resolving the `require`
 /// binding. The optional member selects util's `types` submodule.
 fn builtin_require_member(expression: &Expression) -> Option<(PureModule, Option<&'static str>)> {
@@ -277,6 +290,10 @@ fn builtin_require_member(expression: &Expression) -> Option<(PureModule, Option
         Some((PureModule::Timers, Some("promises")))
     } else if *specifier == "string_decoder" || *specifier == "node:string_decoder" {
         Some((PureModule::StringDecoder, None))
+    } else if *specifier == "readline" || *specifier == "node:readline" {
+        Some((PureModule::Readline, None))
+    } else if *specifier == "readline/promises" || *specifier == "node:readline/promises" {
+        Some((PureModule::Readline, Some("promises")))
     } else if *specifier == "vm" || *specifier == "node:vm" {
         Some((PureModule::Vm, None))
     } else if *specifier == "buffer" || *specifier == "node:buffer" {
@@ -379,6 +396,11 @@ const ASSERT_GLOBALS: [&str; 10] = [
     "Uint8Array",
 ];
 
+const READLINE_GLOBALS: [&str; 11] = [
+    "AbortController", "AbortSignal", "Date", "Error", "Object", "Promise",
+    "Reflect", "String", "Symbol", "TypeError", "WeakMap",
+];
+
 const VM_GLOBALS: [&str; 2] = ["EvalError", "TypeError"];
 
 const BUFFER_GLOBALS: [&str; 12] = [
@@ -454,6 +476,7 @@ pub(super) fn is_module_declaration(statement: &Statement) -> bool {
                 }] if name == MODULE_BINDING || name == EVENTS_MODULE_BINDING
                     || name == ASSERT_MODULE_BINDING || name == TIMERS_MODULE_BINDING
                     || name == STRING_DECODER_MODULE_BINDING || name == VM_MODULE_BINDING
+                    || name == READLINE_MODULE_BINDING
                     || name == STREAM_MODULE_BINDING
                     || name == STREAM_CONSUMERS_BINDING
                     || name == WEB_STREAMS_BINDING
@@ -531,6 +554,12 @@ fn rewrite_module_objects(
     }
     // And events and string_decoder before stream, which reads both.
     if rewriter.modules.contains(&PureModule::Stream) {
+        rewriter.modules.insert(PureModule::Events);
+        rewriter.modules.insert(PureModule::StringDecoder);
+    }
+    // Readline shares both the native emitter and the streaming text decoder.
+    // Their initialization is deferred by the same final loader pass.
+    if rewriter.modules.contains(&PureModule::Readline) {
         rewriter.modules.insert(PureModule::Events);
         rewriter.modules.insert(PureModule::StringDecoder);
     }
@@ -626,7 +655,19 @@ fn facade_claimed_events_declarators(body: &[Statement]) -> BTreeSet<(usize, usi
 /// `class X extends Readable` would bind it to nothing; counting every
 /// reference leaves such a program to the module instead.
 fn facade_claimed_stream_declarators(body: &[Statement]) -> BTreeSet<(usize, usize)> {
-    if stream_operators::requires_stream_module(body) {
+    // An input passed to readline escapes the finite direct-call stream
+    // facade. Keep real EventEmitter-backed Node streams for that program.
+    // A shadowed literal may conservatively disable this optimization, but
+    // the ordinary scope-aware rewriter still preserves the user's require.
+    const READLINE: Search = Search {
+        statement: |_| false,
+        expression: |expression| {
+            matches!(builtin_require_member(expression), Some((PureModule::Readline, _)))
+        },
+    };
+    if stream_operators::requires_stream_module(body)
+        || body.iter().any(|statement| READLINE.in_statement(statement))
+    {
         return BTreeSet::new();
     }
     let lookup = BTreeMap::new();
@@ -830,6 +871,7 @@ fn module_syntax_source(module: PureModule) -> &'static NativeModuleSource {
     static DECODER: NativeModuleSource =
         NativeModuleSource::new("franken:string_decoder", STRING_DECODER_SOURCE);
     static VM: NativeModuleSource = NativeModuleSource::new("franken:vm", VM_SOURCE);
+    static READLINE: NativeModuleSource = NativeModuleSource::new("franken:readline", READLINE_SOURCE);
     static BUFFER: NativeModuleSource = NativeModuleSource::new("franken:buffer", BUFFER_SOURCE);
     static QUERYSTRING: NativeModuleSource =
         NativeModuleSource::new("franken:querystring", QUERYSTRING_SOURCE);
@@ -844,6 +886,7 @@ fn module_syntax_source(module: PureModule) -> &'static NativeModuleSource {
         PureModule::Assert => &ASSERT,
         PureModule::Timers => &TIMERS,
         PureModule::StringDecoder => &DECODER,
+        PureModule::Readline => &READLINE,
         PureModule::Vm => &VM,
         PureModule::Buffer => &BUFFER,
         PureModule::Querystring => &QUERYSTRING,
@@ -870,6 +913,7 @@ fn module_source(
         PureModule::Assert => &ASSERT_GLOBALS,
         PureModule::Timers => &TIMERS_GLOBALS,
         PureModule::StringDecoder => &STRING_DECODER_GLOBALS,
+        PureModule::Readline => &READLINE_GLOBALS,
         PureModule::Vm => &VM_GLOBALS,
         PureModule::Buffer => &BUFFER_GLOBALS,
         PureModule::Querystring => &[],
@@ -901,6 +945,7 @@ impl Walk for ModuleRenamer {
                 .chain(ASSERT_PLACEHOLDERS.iter())
                 .chain(TIMERS_PLACEHOLDERS.iter())
                 .chain(STREAM_PLACEHOLDERS.iter())
+                .chain(READLINE_PLACEHOLDERS.iter())
                 .chain(QUERYSTRING_PLACEHOLDERS.iter())
                 .find(|(placeholder, _)| placeholder == name)
             {
@@ -1146,6 +1191,7 @@ mod tests {
             (PureModule::Assert, "franken:assert", ASSERT_SOURCE),
             (PureModule::Timers, "franken:timers", TIMERS_SOURCE),
             (PureModule::StringDecoder, "franken:string_decoder", STRING_DECODER_SOURCE),
+            (PureModule::Readline, "franken:readline", READLINE_SOURCE),
             (PureModule::Vm, "franken:vm", VM_SOURCE),
             (PureModule::Buffer, "franken:buffer", BUFFER_SOURCE),
             (PureModule::Querystring, "franken:querystring", QUERYSTRING_SOURCE),
@@ -1244,7 +1290,7 @@ mod tests {
 
     /// BUFFER_SOURCE reads only BUFFER_GLOBALS (bd-305gi.3), and with all
     /// of them declared by the program (`var Buffer = require('buffer')
-    /// .Buffer`) it reads them through `globalThis`: no other ambient name,
+    /// .Buffer`) is read through `globalThis`: no other ambient name,
     /// no intrinsic, no HostCall.
     #[test]
     fn buffer_source_reads_only_its_globals() {

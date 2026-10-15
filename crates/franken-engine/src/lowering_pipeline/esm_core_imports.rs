@@ -57,7 +57,7 @@ use crate::ast::{
 /// Core modules whose `require` aliases lowering recognizes (and path's
 /// module object, `path_module.rs`). Loading one needs no authority;
 /// members with effects carry their own capabilities.
-const FACADE_MODULES: [&str; 16] = [
+const FACADE_MODULES: [&str; 18] = [
     "assert",
     "assert/strict",
     "crypto",
@@ -66,6 +66,8 @@ const FACADE_MODULES: [&str; 16] = [
     "path",
     "path/posix",
     "querystring",
+    "readline",
+    "readline/promises",
     "stream/web",
     "string_decoder",
     "timers",

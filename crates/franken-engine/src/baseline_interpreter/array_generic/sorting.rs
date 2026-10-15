@@ -7,6 +7,7 @@
 
 use super::*;
 
+mod primitive;
 mod sparse;
 
 impl InterpreterCore {
@@ -21,6 +22,13 @@ impl InterpreterCore {
         left: Value,
         right: Value,
     ) -> Result<Ordering, InterpreterError> {
+        // Immutable flat primitives need no new heap-backed sort keys. Rope
+        // traversal and every observable conversion retain the admitted path
+        // below. CompareArrayElements still owns undefined ordering and fuel.
+        if let Some(ordering) = primitive::compare(&left, &right) {
+            self.observe_scoped_callback_result()?;
+            return Ok(ordering);
+        }
         let left = self.sort_string_key_coerced(module, left)?;
         let left_bytes = Self::estimate_value_bytes(&Value::Str(left.clone()));
         self.json_reserve_temporary(left_bytes)?;
@@ -451,7 +459,7 @@ mod tests {
         let order = [2, 4, 1, 0, 3];
         for fail_at in 1..11 {
             let mut values = [0, 1, 2, 3, 4];
-            let mut inverse = [0; 5];
+            let mut inverse = vec![0; 5];
             let mut steps = 0;
             let result = apply_order(&mut values, &order, &mut inverse, &mut || {
                 steps += 1;

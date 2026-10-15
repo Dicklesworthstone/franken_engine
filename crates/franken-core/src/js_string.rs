@@ -94,6 +94,7 @@ use crate::deterministic_serde::CanonicalValue;
 mod access;
 mod rope_compare;
 mod rope_units;
+mod search;
 
 /// Serde map key marking the exact-code-unit payload of a string that
 /// contains lone surrogates. Well-formed strings serialize as plain strings.
@@ -712,10 +713,11 @@ impl JsString {
     /// A position that splits a surrogate pair is a legal starting offset —
     /// never an error — per ES code-unit semantics. (bd-rdnhc)
     ///
-    /// Matching takes O(n + m) work and O(m) scratch for n haystack units
-    /// and m needle units; the haystack is never materialized as a vector.
-    /// Well-formed strings use native byte search without UTF-16 or
-    /// failure-table allocation. Only lone-surrogate inputs need KMP.
+    /// Matching takes O(n + m) work for n haystack units and m needle
+    /// units. Flat well-formed strings use native byte search without
+    /// UTF-16 or failure-table allocation. Unjoined ropes and exact-unit
+    /// inputs stream through KMP with O(m) scratch, plus a traversal
+    /// stack bounded by rope depth. No haystack-sized copy is made.
     pub fn utf16_index_of(&self, needle: &JsString, from: usize) -> Option<usize> {
         let haystack_len = self.utf16_len();
         let from = from.min(haystack_len);
@@ -725,6 +727,12 @@ impl JsString {
         }
         if needle_len > haystack_len - from {
             return None;
+        }
+        if matches!(&self.utf8, Text::Concat(node) if node.joined.get().is_none()) {
+            if self.is_ascii() && !needle.is_ascii() {
+                return None;
+            }
+            return search::index_of(self, needle, from);
         }
         if self.is_ascii() {
             if !needle.is_ascii() {
@@ -753,9 +761,10 @@ impl JsString {
     /// `needle`'s exact unit sequence occurs (ES `String.prototype.lastIndexOf`
     /// grain). An empty needle matches at `min(from, length)`. (bd-rdnhc)
     ///
-    /// Uses native reverse byte search for well-formed strings, or the
-    /// linear-time, needle-sized-scratch matcher for lone-surrogate inputs.
-    /// Both retain overlaps and bound the match's start, not its end, by `from`.
+    /// Uses native reverse byte search for flat well-formed strings.
+    /// Unjoined ropes are searched from the right without publishing a
+    /// flat buffer; lone-surrogate inputs use exact-unit matching. All
+    /// paths retain overlaps and bound the match's start, not its end, by `from`.
     pub fn utf16_last_index_of(&self, needle: &JsString, from: usize) -> Option<usize> {
         let haystack_len = self.utf16_len();
         let needle_len = needle.utf16_len();
@@ -768,6 +777,12 @@ impl JsString {
         let start = from.min(haystack_len - needle_len);
         // start <= haystack_len - needle_len, so this cannot overflow.
         let end = start + needle_len;
+        if matches!(&self.utf8, Text::Concat(node) if node.joined.get().is_none()) {
+            if self.is_ascii() && !needle.is_ascii() {
+                return None;
+            }
+            return search::last_index_of(self, needle, end);
+        }
         if self.is_ascii() {
             if !needle.is_ascii() {
                 return None;

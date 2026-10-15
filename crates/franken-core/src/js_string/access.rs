@@ -60,7 +60,7 @@ fn ascii_middle_boundary(text: &str, length: usize, position: usize) -> Option<u
 /// means the position is between the halves of the astral scalar beginning
 /// at the returned byte. Search from the nearer end; ASCII spans retain a
 /// vectorizable byte check rather than decoding each character.
-fn utf16_boundary(text: &str, length: usize, position: usize) -> (usize, bool) {
+pub(super) fn utf16_boundary(text: &str, length: usize, position: usize) -> (usize, bool) {
     debug_assert!(position <= length);
     if position == 0 {
         return (0, false);

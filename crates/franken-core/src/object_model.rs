@@ -52,6 +52,8 @@ pub struct OrderedStringMap<V> {
     // Canonical array-index keys in numeric order. Dense prefixes use
     // vector offsets; gaps and interior deletion use the ordered dictionary.
     array_entries: IndexedValues<V>,
+    // Historical creation slots. Deleted named keys are tombstoned in the
+    // optional sidecar so repeated deletion does not shift this whole vector.
     string_insertion_order: Vec<String>,
     // Allocated on first use: an ordinary object's properties have none.
     sidecars: Option<Box<Sidecars<V>>>,
@@ -84,6 +86,11 @@ struct Sidecars<V> {
     // their additive wire representation.
     baseline_symbol_properties: BTreeMap<SymbolId, BaselineSymbolProperty<V>>,
     baseline_symbol_key_order: Vec<SymbolId>,
+    // Derived acceleration state for well-formed non-index strings. Neither
+    // field contributes to observable equality or serde. The position index
+    // is built only for larger carriers; tombstones appear only after delete.
+    named_string_positions: Option<BTreeMap<String, usize>>,
+    named_string_tombstones: BTreeSet<usize>,
 }
 
 impl<V> Default for Sidecars<V> {
@@ -95,6 +102,8 @@ impl<V> Default for Sidecars<V> {
             baseline_exact_string_accessors: ExactPropertyMap::new(),
             baseline_symbol_properties: BTreeMap::new(),
             baseline_symbol_key_order: Vec::new(),
+            named_string_positions: None,
+            named_string_tombstones: BTreeSet::new(),
         }
     }
 }
@@ -288,7 +297,7 @@ impl<V: PartialEq> PartialEq for OrderedStringMap<V> {
     fn eq(&self, other: &Self) -> bool {
         self.by_key == other.by_key
             && self.array_entries == other.array_entries
-            && self.string_insertion_order == other.string_insertion_order
+            && self.live_named_string_keys().eq(other.live_named_string_keys())
             && Sidecars::equal(self.sidecars.as_deref(), other.sidecars.as_deref())
     }
 }
@@ -332,7 +341,7 @@ impl<V> OrderedStringMap<V> {
 
     /// Return the number of well-formed entries in the compatibility view.
     pub fn len(&self) -> usize {
-        self.array_entries.len() + self.string_insertion_order.len()
+        self.array_entries.len() + self.by_key.len()
     }
 
     /// Return whether the well-formed compatibility view has no entries.
@@ -521,8 +530,13 @@ impl<V> OrderedStringMap<V> {
             return self.array_entries.insert(index, (key, value));
         }
         if !self.by_key.contains_key(&key) {
+            self.maybe_compact_named_string_order(false);
+            let position = self.string_insertion_order.len();
             self.string_insertion_order.push(key.clone());
             if let Some(sidecars) = self.sidecars.as_deref_mut() {
+                if let Some(positions) = sidecars.named_string_positions.as_mut() {
+                    positions.insert(key.clone(), position);
+                }
                 let exact_key = JsString::from(&key);
                 if let Some(order) = sidecars.exact_string_insertion_order.as_mut() {
                     order.push(exact_key.clone());
@@ -534,7 +548,112 @@ impl<V> OrderedStringMap<V> {
                 }
             }
         }
-        self.by_key.insert(key, value)
+        let previous = self.by_key.insert(key, value);
+        self.maybe_build_named_string_positions();
+        previous
+    }
+
+    /// Live non-index well-formed keys in observable creation order. Deleted
+    /// slots remain in the backing vector until amortized compaction, so a
+    /// delete is not forced to move every later String.
+    fn live_named_string_keys(&self) -> impl Iterator<Item = &String> {
+        let tombstones = self
+            .sidecars()
+            .map(|sidecars| &sidecars.named_string_tombstones);
+        self.string_insertion_order
+            .iter()
+            .enumerate()
+            .filter_map(move |(position, key)| {
+                tombstones
+                    .is_none_or(|deleted| !deleted.contains(&position))
+                    .then_some(key)
+            })
+    }
+
+    fn maybe_build_named_string_positions(&mut self) {
+        const INDEX_THRESHOLD: usize = 32;
+        if self.by_key.len() < INDEX_THRESHOLD
+            || self
+                .sidecars()
+                .is_some_and(|sidecars| sidecars.named_string_positions.is_some())
+        {
+            return;
+        }
+        let tombstones = self
+            .sidecars()
+            .map(|sidecars| &sidecars.named_string_tombstones);
+        let positions = self
+            .string_insertion_order
+            .iter()
+            .enumerate()
+            .filter(|(position, _)| {
+                tombstones.is_none_or(|deleted| !deleted.contains(position))
+            })
+            .map(|(position, key)| (key.clone(), position))
+            .collect();
+        self.sidecars_mut().named_string_positions = Some(positions);
+    }
+
+    fn rebuild_named_string_positions(&mut self) {
+        const INDEX_THRESHOLD: usize = 32;
+        let indexed = self.by_key.len() >= INDEX_THRESHOLD;
+        if let Some(sidecars) = self.sidecars.as_deref_mut() {
+            sidecars.named_string_positions = None;
+        }
+        if indexed {
+            self.maybe_build_named_string_positions();
+        }
+    }
+
+    fn maybe_compact_named_string_order(&mut self, force: bool) {
+        let deleted = self
+            .sidecars()
+            .map_or(0, |sidecars| sidecars.named_string_tombstones.len());
+        if deleted == 0 {
+            return;
+        }
+        let slots = self.string_insertion_order.len();
+        if !force && (slots < 64 || deleted.saturating_mul(2) < slots) {
+            return;
+        }
+        let tombstones = std::mem::take(&mut self.sidecars_mut().named_string_tombstones);
+        let mut position = 0usize;
+        self.string_insertion_order.retain(|_| {
+            let keep = !tombstones.contains(&position);
+            position += 1;
+            keep
+        });
+        self.rebuild_named_string_positions();
+    }
+
+    fn tombstone_named_string(&mut self, key: &str) {
+        let indexed_position = self
+            .sidecars()
+            .and_then(|sidecars| sidecars.named_string_positions.as_ref())
+            .and_then(|positions| positions.get(key))
+            .copied();
+        let position = indexed_position.or_else(|| {
+            let tombstones = self
+                .sidecars()
+                .map(|sidecars| &sidecars.named_string_tombstones);
+            self.string_insertion_order
+                .iter()
+                .enumerate()
+                .find(|(position, candidate)| {
+                    candidate.as_str() == key
+                        && tombstones.is_none_or(|deleted| !deleted.contains(position))
+                })
+                .map(|(position, _)| position)
+        });
+        let Some(position) = position else {
+            return;
+        };
+        let sidecars = self.sidecars_mut();
+        sidecars.named_string_tombstones.insert(position);
+        if let Some(positions) = sidecars.named_string_positions.as_mut() {
+            positions.remove(key);
+        }
+        self.maybe_compact_named_string_order(false);
     }
 
     /// Return the number of exact data entries, including exact-only keys.
@@ -591,8 +710,7 @@ impl<V> OrderedStringMap<V> {
                 .sidecars()
                 .is_none_or(|sidecars| sidecars.exact_string_insertion_order.is_none())
                 .then(|| {
-                    self.string_insertion_order
-                        .iter()
+                    self.live_named_string_keys()
                         .map(JsString::from)
                         .collect::<Vec<_>>()
                 });
@@ -628,8 +746,7 @@ impl<V> OrderedStringMap<V> {
             .exact_string_insertion_order()
             .map_or_else(
                 || {
-                    self.string_insertion_order
-                        .iter()
+                    self.live_named_string_keys()
                         .map(JsString::from)
                         .collect::<Vec<_>>()
                 },
@@ -719,8 +836,7 @@ impl<V> OrderedStringMap<V> {
     /// they return `None` even when present. This is crate-visible for exact
     /// rollback of a temporarily removed baseline data property.
     pub(crate) fn string_insertion_position(&self, key: &str) -> Option<usize> {
-        self.string_insertion_order
-            .iter()
+        self.live_named_string_keys()
             .position(|candidate| candidate == key)
     }
 
@@ -750,14 +866,17 @@ impl<V> OrderedStringMap<V> {
         if self.exact_string_insertion_order().is_none()
             && let Some(text) = key.as_str()
         {
+            self.maybe_compact_named_string_order(true);
             let position = position.min(self.string_insertion_order.len());
             self.string_insertion_order
                 .insert(position, text.to_string());
-            return self.by_key.insert(text.to_string(), value);
+            let previous = self.by_key.insert(text.to_string(), value);
+            self.rebuild_named_string_positions();
+            return previous;
         }
+        self.maybe_compact_named_string_order(true);
         let initial_order = self.exact_string_insertion_order().is_none().then(|| {
-            self.string_insertion_order
-                .iter()
+            self.live_named_string_keys()
                 .map(JsString::from)
                 .collect::<Vec<_>>()
         });
@@ -778,6 +897,14 @@ impl<V> OrderedStringMap<V> {
                 .count();
             self.string_insertion_order
                 .insert(legacy_position, text.to_string());
+            if let Some(positions) = sidecars.named_string_positions.as_mut() {
+                for position in positions.values_mut() {
+                    if *position >= legacy_position {
+                        *position += 1;
+                    }
+                }
+                positions.insert(text.to_string(), legacy_position);
+            }
             self.by_key.insert(text.to_string(), value)
         } else {
             sidecars.exact_only_by_key.insert(key, value)
@@ -805,8 +932,7 @@ impl<V> OrderedStringMap<V> {
         }
         let removed = self.by_key.remove(key);
         if removed.is_some() {
-            self.string_insertion_order
-                .retain(|candidate| candidate != key);
+            self.tombstone_named_string(key);
             if let Some(sidecars) = self.sidecars.as_deref_mut() {
                 if let Some(order) = sidecars.exact_string_insertion_order.as_mut() {
                     let exact_key = JsString::from(key);
@@ -859,6 +985,8 @@ impl<V> OrderedStringMap<V> {
         self.array_entries.clear();
         self.string_insertion_order.clear();
         if let Some(sidecars) = self.sidecars.as_deref_mut() {
+            sidecars.named_string_positions = None;
+            sidecars.named_string_tombstones.clear();
             sidecars.exact_only_by_key = ExactPropertyMap::new();
             sidecars.exact_string_insertion_order = None;
             if let (Some(order), Some(removed_keys)) = (
@@ -877,6 +1005,7 @@ impl<V> OrderedStringMap<V> {
     where
         F: FnMut(&String, &mut V) -> bool,
     {
+        self.maybe_compact_named_string_order(true);
         let old_keys = self
             .by_key
             .keys()
@@ -894,6 +1023,7 @@ impl<V> OrderedStringMap<V> {
         };
         self.string_insertion_order
             .retain(|key| by_key.contains_key(key));
+        self.rebuild_named_string_positions();
         if let Some(sidecars) = self.sidecars.as_deref_mut() {
             let exact_only_by_key = &sidecars.exact_only_by_key;
             if let Some(order) = sidecars.exact_string_insertion_order.as_mut() {
@@ -916,7 +1046,7 @@ impl<V> OrderedStringMap<V> {
         self.array_entries
             .values()
             .map(|(key, _)| key)
-            .chain(self.string_insertion_order.iter())
+            .chain(self.live_named_string_keys())
     }
 
     /// The non-index string key at `position` in insertion order, `None`
@@ -924,14 +1054,13 @@ impl<V> OrderedStringMap<V> {
     /// engine's Map and Set entry storage) this is [`Self::keys`]'s order,
     /// with constant-time access for a live cursor.
     pub fn insertion_key_at(&self, position: usize) -> Option<&String> {
-        self.string_insertion_order.get(position)
+        self.live_named_string_keys().nth(position)
     }
 
     /// The insertion-order position of the non-index string key `key`, as
     /// [`Self::insertion_key_at`] counts it.
     pub fn insertion_key_position(&self, key: &str) -> Option<usize> {
-        self.string_insertion_order
-            .iter()
+        self.live_named_string_keys()
             .position(|candidate| candidate == key)
     }
 
@@ -956,7 +1085,10 @@ impl<V> OrderedStringMap<V> {
     pub fn iter(&self) -> OrderedStringMapIter<'_, V> {
         OrderedStringMapIter {
             indexed: self.array_entries.values(),
-            named: self.string_insertion_order.iter(),
+            named: self.string_insertion_order.iter().enumerate(),
+            named_tombstones: self
+                .sidecars()
+                .map(|sidecars| &sidecars.named_string_tombstones),
             by_key: &self.by_key,
         }
     }
@@ -1194,7 +1326,8 @@ impl<'de, V: Deserialize<'de>> Deserialize<'de> for OrderedStringMap<V> {
 /// Iterator over [`OrderedStringMap`] entries.
 pub struct OrderedStringMapIter<'a, V> {
     indexed: indexed_values::Values<'a, V>,
-    named: std::slice::Iter<'a, String>,
+    named: std::iter::Enumerate<std::slice::Iter<'a, String>>,
+    named_tombstones: Option<&'a BTreeSet<usize>>,
     by_key: &'a KeyedValues<V>,
 }
 
@@ -1205,7 +1338,13 @@ impl<'a, V> Iterator for OrderedStringMapIter<'a, V> {
         if let Some((key, value)) = self.indexed.next() {
             return Some((key, value));
         }
-        for key in self.named.by_ref() {
+        for (position, key) in self.named.by_ref() {
+            if self
+                .named_tombstones
+                .is_some_and(|deleted| deleted.contains(&position))
+            {
+                continue;
+            }
             if let Some(value) = self.by_key.get(key) {
                 return Some((key, value));
             }
@@ -1250,7 +1389,8 @@ impl<V> IntoIterator for OrderedStringMap<V> {
     type Item = (String, V);
     type IntoIter = OrderedStringMapIntoIter<V>;
 
-    fn into_iter(self) -> Self::IntoIter {
+    fn into_iter(mut self) -> Self::IntoIter {
+        self.maybe_compact_named_string_order(true);
         OrderedStringMapIntoIter {
             indexed: self.array_entries.into_values(),
             keys: self.string_insertion_order.into_iter(),
@@ -4125,6 +4265,73 @@ mod tests {
             top.splice_dense_index_values(u32::MAX, u32::MAX, 0, vec![1]),
             Err(vec![1])
         );
+    }
+
+    #[test]
+    fn named_string_deletion_uses_tombstones_and_amortized_compaction() {
+        let mut map = OrderedStringMap::new();
+        for index in 0..256 {
+            map.insert(format!("key-{index}"), index);
+        }
+        assert!(
+            map.sidecars()
+                .and_then(|sidecars| sidecars.named_string_positions.as_ref())
+                .is_some(),
+            "large named carriers build one lookup index"
+        );
+        for index in 0..100 {
+            assert_eq!(map.remove(&format!("key-{index}")), Some(index));
+        }
+        assert_eq!(map.len(), 156);
+        assert_eq!(
+            map.string_insertion_order.len(),
+            256,
+            "individual deletes must not shift every later key"
+        );
+        assert_eq!(
+            map.sidecars()
+                .map(|sidecars| sidecars.named_string_tombstones.len()),
+            Some(100)
+        );
+        assert_eq!(map.keys().next().map(String::as_str), Some("key-100"));
+        map.insert("key-0".to_string(), 999);
+        assert_eq!(map.keys().last().map(String::as_str), Some("key-0"));
+        assert_eq!(map.get("key-0"), Some(&999));
+        assert_eq!(map.keys().filter(|key| key.as_str() == "key-0").count(), 1);
+
+        // Crossing the 50% tombstone threshold compacts once rather than once
+        // per deletion, while keeping the same observable creation order.
+        for index in 100..129 {
+            map.remove(&format!("key-{index}"));
+        }
+        assert!(map.string_insertion_order.len() < 257);
+        assert_eq!(map.keys().next().map(String::as_str), Some("key-129"));
+        assert_eq!(map.keys().last().map(String::as_str), Some("key-0"));
+    }
+
+    #[test]
+    fn named_string_tombstones_preserve_serde_equality_and_retain_order() {
+        let mut tombstoned = OrderedStringMap::new();
+        for key in ["a", "b", "c", "d"] {
+            tombstoned.insert(key.to_string(), key.len());
+        }
+        tombstoned.remove("b");
+        tombstoned.remove("d");
+        let rebuilt = OrderedStringMap::from_iter([
+            ("a".to_string(), 1usize),
+            ("c".to_string(), 1usize),
+        ]);
+        assert_eq!(tombstoned, rebuilt);
+        assert_eq!(
+            serde_json::to_string(&tombstoned).unwrap(),
+            serde_json::to_string(&rebuilt).unwrap()
+        );
+        tombstoned.retain(|key, _| key == "c");
+        assert_eq!(
+            tombstoned.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["c"]
+        );
+        assert_eq!(tombstoned.string_insertion_order, vec!["c".to_string()]);
     }
 
     #[test]

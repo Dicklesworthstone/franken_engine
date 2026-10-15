@@ -1,0 +1,77 @@
+[
+  {
+    "name": "positive_adjacent",
+    "source": "[9007199254740993n>9007199254740992,9007199254740993n==9007199254740992,9007199254740992n==9007199254740992].join(',')",
+    "expected": "true,false,true"
+  },
+  {
+    "name": "negative_adjacent",
+    "source": "[-9007199254740993n < -9007199254740992,-9007199254740993n == -9007199254740992,-9007199254740992n == -9007199254740992].join(',')",
+    "expected": "true,false,true"
+  },
+  {
+    "name": "fractions",
+    "source": "[1n<1.5,2n>1.5,-2n < -1.5,-1n > -1.5,0n == -0].join(',')",
+    "expected": "true,true,true,true,true"
+  },
+  {
+    "name": "subnormals",
+    "source": "[0n<Number.MIN_VALUE,0n > -Number.MIN_VALUE,-1n < -Number.MIN_VALUE,1n>Number.MIN_VALUE].join(',')",
+    "expected": "true,true,true,true"
+  },
+  {
+    "name": "positive128_boundary",
+    "source": "let p=1n<<127n; let n=2**127; [p-1n<n,p==n,p+1n>n].join(',')",
+    "expected": "true,true,true"
+  },
+  {
+    "name": "negative128_boundary",
+    "source": "let p=-(1n<<127n); let n=-(2**127); [p-1n<n,p==n,p+1n>n].join(',')",
+    "expected": "true,true,true"
+  },
+  {
+    "name": "wide_integers_and_infinities",
+    "source": "let x=BigInt('9'.repeat(4096)); [x>Number.MAX_VALUE,-x < -Number.MAX_VALUE,x<Infinity,-x > -Infinity].join(',')",
+    "expected": "true,true,true,true"
+  },
+  {
+    "name": "exact_maximum_finite",
+    "source": "let n=Number.MAX_VALUE; let x=BigInt(n); [x==n,x+1n>n,x-1n<n].join(',')",
+    "expected": "true,true,true"
+  },
+  {
+    "name": "exact_minimum_finite",
+    "source": "let n=-Number.MAX_VALUE; let x=BigInt(n); [x==n,x+1n>n,x-1n<n].join(',')",
+    "expected": "true,true,true"
+  },
+  {
+    "name": "nan_unordered",
+    "source": "[1n<NaN,1n>NaN,1n==NaN,1n<=NaN,1n>=NaN,1n!=NaN].join(',')",
+    "expected": "false,false,false,false,false,true"
+  },
+  {
+    "name": "zeros_booleans_infinities",
+    "source": "[1n<Infinity,1n > -Infinity,0n == -0,0n==0,1n==true,0n==false].join(',')",
+    "expected": "true,true,true,true,true,true"
+  },
+  {
+    "name": "stable_mixed_sort",
+    "source": "[9007199254740993n,9007199254740992,0n,-0,-1.5,-1n].sort((a,b)=>a<b?-1:a>b?1:0).map(x=>typeof x+':'+String(x)).join('|')",
+    "expected": "number:-1.5|bigint:-1|bigint:0|number:0|number:9007199254740992|bigint:9007199254740993"
+  },
+  {
+    "name": "coercion_order",
+    "source": "let log=[]; let a={valueOf(){log.push('left');return 9007199254740993n}}; let b={valueOf(){log.push('right');return 9007199254740992}}; let result=a>b; log.join(',')+':'+result",
+    "expected": "left,right:true"
+  },
+  {
+    "name": "original_throw",
+    "source": "let token={}; let v={valueOf(){throw token}}; let same=false; try{1n<v}catch(e){same=e===token} String(same)",
+    "expected": "true"
+  },
+  {
+    "name": "fractional_operators",
+    "source": "[1n<1.25,1n<=1.25,1n>1.25,1n>=1.25,1n==1.25,1n!=1.25].join(',')",
+    "expected": "true,true,false,false,false,true"
+  }
+]

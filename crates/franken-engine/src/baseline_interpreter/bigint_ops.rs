@@ -11,6 +11,7 @@ use std::cmp::Ordering;
 
 use num_bigint::{BigInt, Sign};
 
+mod number;
 mod width;
 
 /// Largest BigInt magnitude this engine materializes, in bits (about 315,000
@@ -332,24 +333,7 @@ pub(super) fn compare(left: &str, right: &str) -> Ordering {
 /// Order of a BigInt against a Number, exactly (ES2020 7.2.13 steps 3-4 and
 /// 7.2.14); `None` when the Number is NaN.
 pub(super) fn compare_with_number(bigint: &str, number: f64) -> Option<Ordering> {
-    if number.is_nan() {
-        return None;
-    }
-    if number.is_infinite() {
-        return Some(if number > 0.0 {
-            Ordering::Less
-        } else {
-            Ordering::Greater
-        });
-    }
-    let floor = number.floor();
-    // `{:.0}` prints an integral f64's exact decimal expansion.
-    let floor_value = format!("{floor:.0}");
-    match compare(bigint, &floor_value) {
-        // Equal to floor(n): less than n when n has a fraction.
-        Ordering::Equal if number > floor => Some(Ordering::Less),
-        ordering => Some(ordering),
-    }
+    number::compare(bigint, number)
 }
 
 /// StringToBigInt (ES2020 7.1.14): an optionally signed decimal integer, or a

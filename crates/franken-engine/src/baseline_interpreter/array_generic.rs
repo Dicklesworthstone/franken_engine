@@ -27,6 +27,7 @@ use super::*;
 
 use std::cmp::Ordering;
 
+mod flatten;
 mod iteration;
 mod mutation;
 mod sorting;
@@ -148,7 +149,10 @@ impl InterpreterCore {
                     // Species construction and writes to the removed-items
                     // object can run guest code before splice moves elements.
                     // No pre-call storage proof survives those observations.
-                    let generic = kind == K::ArraySplice
+                    // Flattening must also share the observable walker:
+                    // nested arrays, species writes and proxy results cannot
+                    // be handled by a separate direct-storage recursion.
+                    let generic = matches!(kind, K::ArraySplice | K::ArrayFlat | K::ArrayFlatMap)
                         || (kind == K::ArrayConcat
                             && self.concat_spreads_generically(object_id, args)?)
                         || self.converts_object_argument(kind, args)?
@@ -170,6 +174,8 @@ impl InterpreterCore {
                     && matches!(
                         kind,
                         K::ArrayJoin
+                            | K::ArrayFlat
+                            | K::ArrayFlatMap
                             | K::ArrayConcat
                             | K::ArrayFill
                             | K::ArrayCopyWithin
@@ -882,6 +888,7 @@ impl InterpreterCore {
             // (bd-9vouw.354).
             K::ArrayFlat | K::ArrayFlatMap => {
                 let len = self.generic_length(m, o)?;
+                self.observe_scoped_callback_result()?;
                 let (depth, mapper, this_arg) = if kind == K::ArrayFlat {
                     let depth = match arg(self, 0)? {
                         Value::Undefined => 1.0,
@@ -898,7 +905,9 @@ impl InterpreterCore {
                     }
                     (1.0, Some(mapper), arg(self, 1)?)
                 };
+                self.observe_scoped_callback_result()?;
                 let result = self.array_species_result(module, o, 0)?;
+                self.observe_scoped_callback_result()?;
                 let mapper = mapper.as_ref().map(|mapper| (mapper, &this_arg));
                 self.generic_flatten_into(m, result, o, len, depth, mapper)?;
                 Value::Object(result)
@@ -1141,66 +1150,6 @@ impl InterpreterCore {
             return Err(InterpreterError::RangeError {
                 message: "Invalid array length".to_string(),
             });
-        }
-        Ok(())
-    }
-
-    /// FlattenIntoArray (ES2019 22.1.3.10.1) over [[HasProperty]] and
-    /// [[Get]]: each present element of `source` (through `mapper` at the
-    /// top level only) is spread when `depth` remains and IsArray holds,
-    /// else defined at the next target index. Sources wait on an explicit
-    /// stack, so deep nesting cannot exhaust the native stack; an
-    /// `Infinity` depth stays infinite. `mapper` is flatMap's callback and
-    /// its `this`.
-    fn generic_flatten_into(
-        &mut self,
-        m: Option<&Ir3Module>,
-        target: ObjectId,
-        source: ObjectId,
-        source_len: u64,
-        depth: f64,
-        mapper: Option<(&Value, &Value)>,
-    ) -> Result<(), InterpreterError> {
-        let mut target_index = 0u64;
-        // (source, its length, the next index, the depth left, mapped)
-        let mut stack = vec![(source, source_len, 0u64, depth, true)];
-        while let Some(frame) = stack.last_mut() {
-            let (from, len, index, depth_left, mapped) = *frame;
-            if index >= len {
-                stack.pop();
-                continue;
-            }
-            frame.2 += 1;
-            let key = Self::generic_index_key(index);
-            if !self.generic_has(m, from, &key)? {
-                continue;
-            }
-            let mut element = self.generic_get(m, from, &key)?;
-            if mapped && let Some((mapper, this_arg)) = mapper {
-                element = self.invoke_inline_method_call(
-                    m,
-                    mapper.clone(),
-                    this_arg.clone(),
-                    vec![
-                        element,
-                        Self::generic_length_value(index),
-                        self.generic_object_value(from),
-                    ],
-                )?;
-            }
-            if depth_left > 0.0
-                && let Value::Object(inner) = element
-                && self.generic_is_array(inner)?
-            {
-                let inner_len = self.generic_length(m, inner)?;
-                stack.push((inner, inner_len, 0, depth_left - 1.0, false));
-                continue;
-            }
-            if target_index >= MAX_SAFE_LENGTH {
-                return Err(Self::generic_length_error());
-            }
-            self.generic_create_data_property(m, target, target_index, element)?;
-            target_index += 1;
         }
         Ok(())
     }

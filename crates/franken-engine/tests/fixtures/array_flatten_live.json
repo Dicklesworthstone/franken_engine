@@ -1,0 +1,92 @@
+[
+  {
+    "name": "nested_sparse_depth_first",
+    "source": "let a=[];a.length=100000;let b=[];b.length=100000;b[70000]=2;a[3]=[1,b];a[99999]=3;[a.flat(Infinity).join(','),a.flat(0).length,a.length].join('|')",
+    "expected": "1,2,3|2|100000"
+  },
+  {
+    "name": "mapper_only_runs_at_top_level",
+    "source": "let a=[];a.length=100000;a[3]=2;a[90000]=4;let log=[];let b=a.flatMap((v,i)=>{log.push(i);return [v,[v+10]];});[log.join(','),b[0],b[1][0],b[2],b[3][0],b.length].join('|')",
+    "expected": "3,90000|2|12|4|14|4"
+  },
+  {
+    "name": "mapped_proxy_arrays_are_flattened",
+    "source": "[1,2].flatMap(v=>new Proxy([v,v+10],{})).join(',')",
+    "expected": "1,11,2,12"
+  },
+  {
+    "name": "nested_array_proxy_preserves_has_get_order",
+    "source": "let log=[];let p=new Proxy([1,,3],{get(t,k,r){log.push('g:'+k);return Reflect.get(t,k,r);},has(t,k){log.push('h:'+k);return Reflect.has(t,k);}});let result=[p].flat();[result.join(','),log.join(',')].join('|')",
+    "expected": "1,3|g:length,h:0,g:0,h:1,h:2,g:2"
+  },
+  {
+    "name": "typed_array_receivers_use_array_semantics",
+    "source": "let a=new Uint8Array([2,4]);[Array.prototype.flat.call(a).join(','),Array.prototype.flatMap.call(a,v=>[v,v+1]).join(',')].join('|')",
+    "expected": "2,4|2,3,4,5"
+  },
+  {
+    "name": "depth_conversion_captures_length_before_mutation",
+    "source": "let a=[1,2];let log=[];Object.defineProperty(a,'constructor',{get(){log.push('species');return Array;}});let depth={valueOf(){log.push('depth');a.push(3);return 1;}};[a.flat(depth).join(','),log.join(','),a.length].join('|')",
+    "expected": "1,2|depth,species|3"
+  },
+  {
+    "name": "mapper_inserts_unread_source_but_cannot_extend_captured_length",
+    "source": "let a=[];a.length=100000;a[3]=1;let log=[];let b=a.flatMap((v,i)=>{log.push(i);if(i===3){a[50000]=2;a[100000]=3;}return [v];});[b.join(','),log.join(',')].join('|')",
+    "expected": "1,2|3,50000"
+  },
+  {
+    "name": "nested_getter_can_change_parent_unread_keys",
+    "source": "let a=[];a.length=100000;let inner=[];inner.length=100000;Object.defineProperty(inner,'5',{get(){delete a[90000];a[50000]=2;return 1;}});a[3]=inner;a[90000]=9;a.flat(Infinity).join(',')",
+    "expected": "1,2"
+  },
+  {
+    "name": "species_definition_can_extend_unread_child",
+    "source": "let child=[];child.length=100000;child[3]=1;let a=[child];let out={};a.constructor={[Symbol.species]:function(){return new Proxy(out,{defineProperty(t,k,d){if(k==='0')child[70000]=2;return Reflect.defineProperty(t,k,d);}});}};let result=a.flat();[result===out,result[0],result[1],Object.keys(out).join(',')].join('|')",
+    "expected": "false|1|2|0,1"
+  },
+  {
+    "name": "inherited_child_getter_is_observed",
+    "source": "let child=[];child.length=100000;let p=[];Object.defineProperty(p,'70000',{get(){return 7;}});Object.setPrototypeOf(child,p);[child].flat().join(',')",
+    "expected": "7"
+  },
+  {
+    "name": "repeated_shared_array_is_not_a_cycle",
+    "source": "let a=[1,[2]];[a,a].flat(Infinity).join(',')",
+    "expected": "1,2,1,2"
+  },
+  {
+    "name": "negative_nan_and_zero_depth_keep_nested_identity",
+    "source": "let child=[1];let a=[,child,2];[a.flat(-1)[0]===child,a.flat(NaN)[0]===child,a.flat(0)[0]===child,a.flat(0).length].join('|')",
+    "expected": "true|true|true|2"
+  },
+  {
+    "name": "mapper_this_and_source_identity",
+    "source": "let a=[1];let context={n:3};a.flatMap(function(v,i,source){return [v+this.n,i,source===a];},context).join(',')",
+    "expected": "4,0,true"
+  },
+  {
+    "name": "throw_preserves_published_species_prefix",
+    "source": "let output={};let a=[1,2];a.constructor={[Symbol.species]:function(){return output;}};Object.defineProperty(a,'1',{get(){throw 'stop';}});let error;try{a.flat();}catch(e){error=e;}[error,output[0],Object.keys(output).join(',')].join('|')",
+    "expected": "stop|1|0"
+  },
+  {
+    "name": "invalid_mapper_precedes_species_getter",
+    "source": "let a=[];let called=0;Object.defineProperty(a,'constructor',{get(){called++;throw 'species';}});let error;try{a.flatMap(null);}catch(e){error=e instanceof TypeError;}[error,called].join('|')",
+    "expected": "true|0"
+  },
+  {
+    "name": "revoked_nested_proxy_throws_in_is_array",
+    "source": "let pair=Proxy.revocable([1],{});pair.revoke();let result;try{[pair.proxy].flat();}catch(e){result=e instanceof TypeError;}String(result)",
+    "expected": "true"
+  },
+  {
+    "name": "inner_length_is_captured_before_child_getter",
+    "source": "let inner=[1,2];Object.defineProperty(inner,'0',{get(){inner.push(3);return 1;}});[inner].flat().join(',')",
+    "expected": "1,2"
+  },
+  {
+    "name": "flat_ignores_concat_spreadability",
+    "source": "let child=[1,2];child[Symbol.isConcatSpreadable]=false;let ordinary={0:3,length:1,[Symbol.isConcatSpreadable]:true};let out=[child,ordinary].flat();[out[0],out[1],out[2]===ordinary,out.length].join('|')",
+    "expected": "1|2|true|3"
+  }
+]

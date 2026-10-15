@@ -371,6 +371,19 @@
   }
   var parseArgsSlice = Array.prototype.slice;
   var parseArgsApply = Reflect.apply;
+  var parseArgsIncludes = Array.prototype.includes;
+  function mainArgs() {
+    var execArgv = process.execArgv;
+    var start = 2;
+    if (execArgv !== undefined &&
+        (parseArgsApply(parseArgsIncludes, execArgv, ['-e']) ||
+         parseArgsApply(parseArgsIncludes, execArgv, ['--eval']) ||
+         parseArgsApply(parseArgsIncludes, execArgv, ['-p']) ||
+         parseArgsApply(parseArgsIncludes, execArgv, ['--print']))) {
+      start = 1;
+    }
+    return parseArgsApply(parseArgsSlice, process.argv, [start]);
+  }
   function argsToTokens(args, options) {
     var tokens = [];
     var index = -1;
@@ -520,7 +533,7 @@
   function parseArgs(config) {
     if (config === undefined) { config = {}; }
     var args = ownValue(config, 'args');
-    if (args === undefined || args === null) { args = []; }
+    if (args === undefined || args === null) { args = mainArgs(); }
     var strict = ownValue(config, 'strict');
     if (strict === undefined || strict === null) { strict = true; }
     var allowPositionals = ownValue(config, 'allowPositionals');

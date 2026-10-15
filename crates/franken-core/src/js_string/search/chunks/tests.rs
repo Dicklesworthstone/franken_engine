@@ -38,10 +38,11 @@ fn check(haystack: &JsString, needle: &JsString) {
 }
 
 #[test]
-fn eligibility_never_materializes_or_projects_the_needle() {
+fn preparation_does_not_publish_or_project_the_needle() {
     for text in ["a", "é", "日", "😀"] {
         let needle = JsString::from(text);
-        assert_eq!(pattern(&needle), Some(text));
+        assert_eq!(pattern(&needle).as_deref(), Some(text));
+        assert!(matches!(pattern(&needle), Some(Cow::Borrowed(_))));
     }
     assert!(pattern(&JsString::from("")).is_none());
     assert!(pattern(&JsString::from("x".repeat(64))).is_some());
@@ -49,10 +50,12 @@ fn eligibility_never_materializes_or_projects_the_needle() {
     assert!(pattern(&JsString::from_code_units(&[0xd800])).is_none());
     assert!(pattern(&JsString::from("�")).is_some());
     let needle = rope(JsString::from("ab"), JsString::from("cd"));
-    assert!(pattern(&needle).is_none());
+    assert!(matches!(pattern(&needle), Some(Cow::Owned(_))));
+    assert_eq!(pattern(&needle).as_deref(), Some("abcd"));
     unjoined(&needle);
     let _ = needle.as_utf8_projection();
-    assert_eq!(pattern(&needle), Some("abcd"));
+    assert_eq!(pattern(&needle).as_deref(), Some("abcd"));
+    assert!(matches!(pattern(&needle), Some(Cow::Borrowed(_))));
 }
 
 #[test]
@@ -304,4 +307,59 @@ fn lazy_long_crossing_match_still_precedes_a_leaf_local_match() {
     assert!(backwards.in_leaf("z").is_none());
     let leaf = format!("{needle}{}{}", "x".repeat(512), "a".repeat(127));
     assert!(matches!(backwards.in_leaf(&leaf), Some(LeafMatch::Consumed(127))));
+}
+
+#[test]
+fn rope_needles_use_byte_search_without_publishing_either_input() {
+    for unit in ["a", "é", "日", "😀", "a😀日"] {
+        let prefix = unit.repeat(33);
+        let needle = rope(JsString::from(prefix.clone()), JsString::from("z"));
+        let value = rope(
+            JsString::from(format!("😀{prefix}")),
+            JsString::from(format!("z{prefix}z😀")),
+        );
+        assert!(matches!(pattern(&needle), Some(Cow::Owned(_))));
+        check(&value, &needle);
+        unjoined(&needle);
+    }
+}
+
+#[test]
+fn shared_subtree_needles_keep_every_logical_occurrence() {
+    let part = rope(JsString::from("é😀"), JsString::from("日"));
+    let doubled = rope(part.clone(), part.clone());
+    let needle = rope(doubled.clone(), doubled.clone());
+    let spelling = "é😀日".repeat(4);
+    let prepared = pattern(&needle).unwrap();
+    assert_eq!(prepared.as_ref(), spelling);
+    assert!(matches!(&prepared, Cow::Owned(_)));
+    unjoined(&part);
+    unjoined(&doubled);
+    unjoined(&needle);
+    let value = rope(JsString::from(format!("x{spelling}")), JsString::from(spelling));
+    check(&value, &needle);
+    // A published root and children must not invalidate already-owned bytes.
+    let _ = needle.as_utf8_projection();
+    let _ = part.as_utf8_projection();
+    assert_eq!(prepared.as_ref(), "é😀日".repeat(4));
+}
+
+#[test]
+fn rope_needle_early_hits_skip_a_shared_gigabyte_haystack() {
+    let mut huge = JsString::from("x".repeat(1024));
+    for _ in 0..20 {
+        huge = rope(huge.clone(), huge);
+    }
+    let needle = rope(JsString::from("long".repeat(40)), JsString::from("😀needle"));
+    let start = huge.utf16_len();
+    let tail = rope(huge.clone(), needle.clone());
+    let head = rope(needle.clone(), huge.clone());
+    assert_eq!(tail.utf16_index_of(&needle, start), Some(start));
+    assert_eq!(tail.utf16_last_index_of(&needle, usize::MAX), Some(start));
+    assert_eq!(head.utf16_index_of(&needle, 0), Some(0));
+    assert_eq!(head.utf16_last_index_of(&needle, 0), Some(0));
+    unjoined(&tail);
+    unjoined(&head);
+    unjoined(&needle);
+    unjoined(&huge);
 }

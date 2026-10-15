@@ -7,23 +7,34 @@
 //! leaf-local hits need none. Short tables stay on the stack; long patterns
 //! allocate only needle-sized scratch. Exact-only needles keep the unit search.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use super::{JsString, Text, access};
 
 const INLINE_PATTERN_BYTES: usize = 64;
 
-/// Borrow only an already-published, well-formed needle. Do not flatten the
-/// needle merely to decide whether this specialization is applicable.
-pub(super) fn pattern(needle: &JsString) -> Option<&str> {
-    if !needle.is_well_formed() {
+/// Borrow published well-formed bytes, or gather only the needle's leaves into
+/// temporary storage. Never publish a joined buffer into either input. Failed
+/// scratch reservation leaves the existing exact-unit search as the fallback.
+pub(super) fn pattern(needle: &JsString) -> Option<Cow<'_, str>> {
+    if !needle.is_well_formed() || needle.is_empty() {
         return None;
     }
-    let text: &str = match &needle.utf8 {
-        Text::Flat(text) => text,
-        Text::Concat(node) => node.joined.get()?,
-    };
-    (!text.is_empty()).then_some(text)
+    match &needle.utf8 {
+        Text::Flat(text) => Some(Cow::Borrowed(text)),
+        Text::Concat(node) => {
+            if let Some(text) = node.joined.get() {
+                return Some(Cow::Borrowed(text));
+            }
+            let mut text = String::new();
+            text.try_reserve_exact(needle.len()).ok()?;
+            for leaf in Leaves::new(needle, 0, needle.utf16_len(), false) {
+                text.push_str(&leaf.text);
+            }
+            Some(Cow::Owned(text))
+        }
+    }
 }
 
 /// Preserve allocation-free short searches without imposing a performance

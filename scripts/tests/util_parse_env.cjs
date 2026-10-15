@@ -118,20 +118,36 @@ assert.deepStrictEqual(inheritedSetter(implementation.parseEnv), inheritedSetter
 checks++;
 compare(Array.from({ length: 20000 }, (_, i) => 'PACKAGE_' + i + '=version-' + i).reverse().join('\n'),
   'large package environment');
-// Count logical '=' search spans, not wall-clock time or native instructions.
-// The search must stay bounded to each physical line even when most lines are
-// malformed and only the final row contains a separator.
-const malformed = 'not-an-assignment\n'.repeat(50000) + 'VALID=last';
+// Count the logical spans passed to string searches and slices, not timing or
+// native instructions. In particular, empty-key recovery on one physical line
+// must not rescan/copy the suffix once per separator. Patching these methods is
+// instrumentation of this factory, not an assertion about incumbent internals.
 const indexOf = String.prototype.indexOf;
-let separatorSpan = 0;
-String.prototype.indexOf = function (search, from = 0) {
-  if (search === '=') separatorSpan += Math.max(0, this.length - from);
-  return Reflect.apply(indexOf, this, [search, from]);
-};
-try { assert.deepStrictEqual(implementation.parseEnv(malformed), { VALID: 'last' }); }
-finally { String.prototype.indexOf = indexOf; }
-assert.ok(separatorSpan <= malformed.length, 'malformed lines must not rescan the remaining file');
-compare(malformed, 'large malformed environment');
-checks++;
+const slice = String.prototype.slice;
+const scanWork = [];
+for (const size of [1024, 8192, 65536]) {
+  for (const content of ['not-an-assignment\n'.repeat(size) + 'VALID=last',
+    '='.repeat(size) + 'VALID=last', '= \t'.repeat(size) + 'VALID=last']) {
+    let searchSpan = 0;
+    let sliceSpan = 0;
+    String.prototype.indexOf = function (search, from = 0) {
+      const result = Reflect.apply(indexOf, this, [search, from]);
+      searchSpan += Math.max(0, (result < 0 ? this.length : result + search.length) - from);
+      return result;
+    };
+    String.prototype.slice = function (...args) {
+      const result = Reflect.apply(slice, this, args);
+      sliceSpan += result.length;
+      return result;
+    };
+    try { assert.deepStrictEqual(implementation.parseEnv(content), { VALID: 'last' }); }
+    finally { String.prototype.indexOf = indexOf; String.prototype.slice = slice; }
+    assert.ok(searchSpan <= content.length * 3, 'separator recovery must not rescan line suffixes');
+    assert.ok(sliceSpan <= content.length * 3, 'separator recovery must not copy line suffixes');
+    scanWork.push({ input_units: content.length, search_span: searchSpan, slice_span: sliceSpan });
+    compare(content, 'bounded recovery ' + size + ':' + content.length);
+    checks++;
+  }
+}
 console.log(JSON.stringify({ suite: 'engine util.parseEnv host differential', node: process.version,
-  checks, separator_search_span: separatorSpan, native_engine_verified: false, bun_verified: false }));
+  checks, scan_work: scanWork, native_engine_verified: false, bun_verified: false }));

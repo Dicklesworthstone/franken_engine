@@ -227,6 +227,7 @@
     var text = envTrim(content.toWellFormed().replace(/\r/g, ''));
     var entries = Object.create(null);
     var cursor = 0;
+    var lineEnd = -1;
     var untrimmedContinuation = false;
     while (cursor < text.length) {
       var beforeIndent = cursor;
@@ -236,8 +237,13 @@
       }
       var directComment = beforeIndent === cursor;
       if (cursor === text.length) { break; }
-      var lineEnd = text.indexOf('\n', cursor);
-      if (lineEnd === -1) { lineEnd = text.length; }
+      // Empty-key recovery can resume on this same physical line. Retain
+      // its boundary rather than searching the remaining suffix again for
+      // every '=' in an input such as '====KEY=value'.
+      if (cursor > lineEnd) {
+        lineEnd = text.indexOf('\n', cursor);
+        if (lineEnd === -1) { lineEnd = text.length; }
+      }
       // Node 22's comment, quoted-value and empty-value continuations check
       // '#' before stripping the next line's indentation. Preserve that
       // observable permissive-key quirk without changing normal comments.
@@ -247,14 +253,15 @@
         continue;
       }
       untrimmedContinuation = false;
-      // Bound the separator search to this line. Repeated malformed lines
-      // must not rescan the entire remaining file for a distant '='.
-      var line = text.slice(cursor, lineEnd);
-      var equals = line.indexOf('=');
-      if (equals === -1) { cursor = lineEnd + 1; continue; }
-      var key = envTrim(line.slice(0, equals));
+      // Bound the separator search without copying the whole line's tail.
+      // Recovery from an empty key advances over the consumed separator,
+      // so neither malformed lines nor separator runs rescan old input.
+      var equals = cursor;
+      while (equals < lineEnd && text[equals] !== '=') { equals++; }
+      if (equals === lineEnd) { cursor = lineEnd + 1; continue; }
+      var key = envTrim(text.slice(cursor, equals));
       if (key.slice(0, 7) === 'export ') { key = envTrim(key.slice(7)); }
-      var start = cursor + equals + 1;
+      var start = equals + 1;
       cursor = lineEnd + 1;
       var value = '';
       if (start < text.length && text[start] !== '\n') {
@@ -273,8 +280,10 @@
           lineEnd = text.indexOf('\n', close + 1);
           untrimmedContinuation = true;
         } else {
-          lineEnd = text.indexOf('\n', start);
-          if (lineEnd === -1) { lineEnd = text.length; }
+          if (start > lineEnd) {
+            lineEnd = text.indexOf('\n', start);
+            if (lineEnd === -1) { lineEnd = text.length; }
+          }
           value = text.slice(start, lineEnd);
           var comment = value.indexOf('#');
           if (comment !== -1 && quote !== '"' && quote !== "'" && quote !== '`') {

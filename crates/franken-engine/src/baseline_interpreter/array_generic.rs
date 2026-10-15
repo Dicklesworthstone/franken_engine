@@ -466,9 +466,11 @@ impl InterpreterCore {
                     Value::Undefined
                 } else {
                     let first = self.generic_get(m, o, &Self::generic_index_key(0))?;
-                    for k in 1..len {
-                        self.generic_move(m, o, k, k - 1)?;
-                    }
+                    self.observe_scoped_callback_result()?;
+                    // The first getter can change any unread source or target.
+                    // Seek both live ranges; a missing source still deletes a
+                    // present destination through the ordinary property path.
+                    self.generic_move_range(m, o, 1, 0, len - 1, false)?;
                     self.generic_delete(m, o, &Self::generic_index_key(len - 1))?;
                     let length = Self::generic_length_value(len - 1);
                     self.generic_set(m, o, &Self::generic_length_key(), length)?;
@@ -482,9 +484,9 @@ impl InterpreterCore {
                     if len + count > MAX_SAFE_LENGTH {
                         return Err(Self::generic_length_error());
                     }
-                    for k in (1..=len).rev() {
-                        self.generic_move(m, o, k - 1, k + count - 1)?;
-                    }
+                    // Move backwards with the original captured length.
+                    // No key inventory survives a getter or destination setter.
+                    self.generic_move_range(m, o, 0, count, len, true)?;
                     for index in 0..args.count {
                         self.charge_native_hole_read()?;
                         let item = arg(self, index)?;

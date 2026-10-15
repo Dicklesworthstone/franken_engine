@@ -700,6 +700,9 @@ impl JsString {
         if self.is_ascii() && other.is_ascii() {
             return self.utf8.cmp(&other.utf8);
         }
+        if self.is_well_formed() && other.is_well_formed() {
+            return self.utf8.cmp_utf16_streaming(&other.utf8);
+        }
         self.encode_utf16().cmp(other.encode_utf16())
     }
 

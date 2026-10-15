@@ -2,7 +2,8 @@
 //!
 //! Collection order remains UTF-8/projection-first, not ECMAScript UTF-16
 //! relational order. JsString's Shape comparison still breaks projection
-//! ties, including distinct lone-surrogate strings.
+//! ties, including distinct lone-surrogate strings. Well-formed relational
+//! comparisons reuse the frontier but select UTF-16 order at a mismatch.
 
 use std::cmp::Ordering;
 use std::sync::Arc;
@@ -44,6 +45,29 @@ impl Text {
         left.cmp_remaining(&mut right)
     }
 
+    /// Exact UTF-16 order for two well-formed strings. Shared immutable
+    /// subtrees prove equality in either encoding, including non-ASCII DAGs.
+    /// Flat operands decode directly without the CodeUnits dispatch wrapper.
+    /// Callers must keep lone-surrogate strings on their exact-unit path.
+    pub(super) fn cmp_utf16_streaming(&self, other: &Self) -> Ordering {
+        if self.shares_storage(other) {
+            return Ordering::Equal;
+        }
+        if let (Some(left), Some(right)) = (self.available_flat(), other.available_flat()) {
+            return if Arc::ptr_eq(left, right) {
+                Ordering::Equal
+            } else {
+                left.encode_utf16().cmp(right.encode_utf16())
+            };
+        }
+        if self.len() == 0 || other.len() == 0 {
+            return self.len().cmp(&other.len());
+        }
+        let mut left = ByteCursor::new(self);
+        let mut right = ByteCursor::new(other);
+        left.cmp_remaining_in_order::<true>(&mut right)
+    }
+
     pub(super) fn eq_str_streaming(&self, other: &str) -> bool {
         if self.len() != other.len() {
             return false;
@@ -74,8 +98,10 @@ impl Text {
 /// a few shared nodes can represent billions of identical bytes.
 ///
 /// `offset` applies only to the last entry, and can be nonzero only when that
-/// entry has a published flat buffer. Byte comparisons may split a scalar;
-/// offsets index byte slices, never `str` slices. No lock survives expansion.
+/// entry has a published flat buffer. Byte-order callers may start inside a
+/// scalar. UTF-16 callers start on scalar boundaries and advance only over
+/// equal byte prefixes ending at a leaf boundary, which preserves that
+/// invariant on both sides. No lock survives expansion.
 struct ByteCursor {
     pending: Vec<Text>,
     offset: usize,
@@ -150,7 +176,12 @@ impl ByteCursor {
         &text.as_bytes()[self.offset..]
     }
 
+    #[inline]
     fn cmp_remaining(&mut self, other: &mut Self) -> Ordering {
+        self.cmp_remaining_in_order::<false>(other)
+    }
+
+    fn cmp_remaining_in_order<const UTF16: bool>(&mut self, other: &mut Self) -> Ordering {
         loop {
             match (self.discard_consumed(), other.discard_consumed()) {
                 (false, false) => return Ordering::Equal,
@@ -180,6 +211,19 @@ impl ByteCursor {
                         let order = left.as_bytes()[self.offset..self.offset + count]
                             .cmp(&right.as_bytes()[other.offset..other.offset + count]);
                         if order != Ordering::Equal {
+                            if UTF16 {
+                                // Equal UTF-8 prefixes preserve scalar boundaries:
+                                // at least one compared chunk ended a whole leaf.
+                                // A mismatch may itself split a scalar, so decode
+                                // the complete suffixes, not the byte chunks. The
+                                // mismatch precedes either leaf's end; their UTF-16
+                                // comparison therefore decides the whole strings.
+                                debug_assert!(left.is_char_boundary(self.offset));
+                                debug_assert!(right.is_char_boundary(other.offset));
+                                return left[self.offset..]
+                                    .encode_utf16()
+                                    .cmp(right[other.offset..].encode_utf16());
+                            }
                             return order;
                         }
                     }
@@ -484,6 +528,146 @@ mod tests {
                 if matches!(&value.utf8, Text::Concat(_)) {
                     assert_unjoined(value);
                 }
+            }
+        }
+    }
+
+    fn measured_utf16_order(left: &JsString, right: &JsString) -> (Ordering, usize, usize) {
+        let mut left = ByteCursor::new(&left.utf8);
+        let mut right = ByteCursor::new(&right.utf8);
+        let order = left.cmp_remaining_in_order::<true>(&mut right);
+        (
+            order,
+            left.expanded_nodes + right.expanded_nodes,
+            left.compared_bytes + right.compared_bytes,
+        )
+    }
+
+    fn shared_unicode_prefix(text: &str) -> JsString {
+        let mut prefix = JsString::from(text);
+        for _ in 0..28 {
+            prefix = join(prefix.clone(), prefix);
+        }
+        prefix
+    }
+
+    #[test]
+    fn utf16_order_skips_large_shared_unicode_subtrees() {
+        for text in ["\u{e9}", "\u{65e5}", "\u{1f600}"] {
+            // At most 28 allocated nodes, up to a GiB of logical UTF-8.
+            let prefix = shared_unicode_prefix(text);
+            assert_eq!(prefix.len(), text.len() * (1 << 28));
+            assert_eq!(prefix.utf16_len(), text.encode_utf16().count() * (1 << 28));
+            for (a, b) in [
+                ("a", "b"),
+                ("\u{1f600}", "\u{e000}"),
+                ("\u{e000}", "\u{1f600}"),
+                ("", "z"),
+                ("same\u{1f600}", "same\u{1f600}"),
+            ] {
+                let left = join(prefix.clone(), JsString::from(a));
+                let right = join(prefix.clone(), JsString::from(b));
+                let expected = a.encode_utf16().cmp(b.encode_utf16());
+                // The counters measure expansions and bytes submitted to byte
+                // comparison. Any UTF-16 decoding is confined to these tails.
+                assert_eq!(
+                    measured_utf16_order(&left, &right),
+                    (expected, 2, a.len().min(b.len()))
+                );
+                assert_eq!(left.utf16_cmp(&right), expected);
+                assert_eq!(right.utf16_cmp(&left), expected.reverse());
+                assert_eq!(left.cmp(&right), a.cmp(b));
+                assert_unjoined(&prefix);
+                assert_unjoined(&left);
+                assert_unjoined(&right);
+            }
+        }
+    }
+
+    #[test]
+    fn utf16_shared_frontiers_align_after_partitioned_unicode_prefixes() {
+        let shared = shared_unicode_prefix("\u{1f600}");
+        let left = join(
+            join(rope("a", "\u{e9}"), shared.clone()),
+            JsString::from("\u{1f600}"),
+        );
+        let right = join(
+            rope("", "a\u{e9}"),
+            join(shared.clone(), JsString::from("\u{e000}")),
+        );
+        let (order, expanded, bytes) = measured_utf16_order(&left, &right);
+        assert_eq!(order, Ordering::Less);
+        assert!(expanded <= 10, "expanded {expanded} nodes");
+        assert_eq!(bytes, 6);
+        assert_eq!(left.utf16_cmp(&right), Ordering::Less);
+        assert_eq!(left.cmp(&right), Ordering::Greater);
+        assert_unjoined(&shared);
+        assert_unjoined(&left);
+        assert_unjoined(&right);
+    }
+
+    #[test]
+    fn utf16_mismatch_order_matches_flat_units_at_every_scalar_partition() {
+        let scalars = [
+            '\0', 'a', '\u{7ff}', '\u{800}', '\u{d7ff}', '\u{e000}',
+            '\u{fffd}', '\u{ffff}', '\u{10000}', '\u{103ff}', '\u{10400}', '\u{10ffff}',
+        ];
+        for a in scalars {
+            for b in scalars {
+                let left_text = format!("\u{e9}{a}\u{1f600}");
+                let right_text = format!("\u{e9}{b}\u{1f600}");
+                let expected = left_text.encode_utf16().cmp(right_text.encode_utf16());
+                for i in (0..=left_text.len()).filter(|i| left_text.is_char_boundary(*i)) {
+                    for j in (0..=right_text.len()).filter(|j| right_text.is_char_boundary(*j)) {
+                        let left = rope(&left_text[..i], &left_text[i..]);
+                        let right = rope(&right_text[..j], &right_text[j..]);
+                        assert_eq!(left.utf16_cmp(&right), expected);
+                        assert_eq!(measured_utf16_order(&left, &right).0, expected);
+                        assert_eq!(left.cmp(&right), left_text.cmp(&right_text));
+                        assert_unjoined(&left);
+                        assert_unjoined(&right);
+                        // Settling only one operand must not settle the other.
+                        assert_eq!(left.as_str(), Some(left_text.as_str()));
+                        assert_eq!(left.utf16_cmp(&right), expected);
+                        assert_unjoined(&right);
+                        assert_eq!(right.as_str(), Some(right_text.as_str()));
+                        assert_eq!(left.utf16_cmp(&right), expected);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn utf16_shared_flat_storage_requires_equal_scalar_offsets() {
+        let backing = JsString::from("\u{e9}\u{1f600}\u{e000}\u{1f600}");
+        let text = backing.as_str().unwrap();
+        let boundaries: Vec<_> = (0..=text.len()).filter(|i| text.is_char_boundary(*i)).collect();
+        for &a in &boundaries {
+            for &b in &boundaries {
+                let mut left = ByteCursor::new(&backing.utf8);
+                let mut right = ByteCursor::new(&backing.utf8);
+                left.offset = a;
+                right.offset = b;
+                assert_eq!(
+                    left.cmp_remaining_in_order::<true>(&mut right),
+                    text[a..].encode_utf16().cmp(text[b..].encode_utf16())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn utf16_rope_comparisons_keep_lone_surrogates_on_the_exact_path() {
+        let ropes = [rope("\u{e9}", "\u{1f600}"), rope("a", "\u{e000}"), rope("", "\u{fffd}")];
+        for units in [vec![0xd800], vec![0xdbff], vec![0xdc00], vec![0xdfff], vec![0x61, 0xd800]] {
+            let exact = JsString::from_code_units(&units);
+            assert!(!exact.is_well_formed());
+            for value in &ropes {
+                let expected = value.code_units_vec().cmp(&units);
+                assert_eq!(value.utf16_cmp(&exact), expected);
+                assert_eq!(exact.utf16_cmp(value), expected.reverse());
+                assert_unjoined(value);
             }
         }
     }

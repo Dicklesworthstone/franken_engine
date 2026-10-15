@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use super::admission_limit::AdmissionSlot;
 use super::{ExecutionWorkPool, WorkBudgetError};
 use crate::baseline_interpreter::{
     ExecutionResult, InterpreterConfig, InterpreterCore, InterpreterHook,
@@ -21,8 +22,16 @@ impl ExecutionWorkPool {
     /// Moving it through a queue does not re-charge the pool; dropping it,
     /// including cancellation before dispatch, permanently discards the quota.
     /// An admission is only a work allowance, never a capability grant.
+    /// It also holds one root-family slot while queued, preparing or executing.
+    /// A full slot ceiling refuses before instruction debit or thread creation;
+    /// moving/dispatching an admission neither releases nor reacquires its slot.
+    /// Cancellation alone does not release capacity: the owner must finish/drop.
     pub fn reserve(&self, instructions: u64) -> Result<ExecutionAdmission, WorkBudgetError> {
         self.ensure_active()?;
+        if instructions == 0 {
+            return Err(WorkBudgetError::ZeroInstructionBudget);
+        }
+        let slot = AdmissionSlot::acquire(&self.state.admission_slots)?;
         // Bind the scope before the irreversible debit. A job retains this
         // live signal even after it leaves the queue or its pool is dropped.
         let scope = self.state.cancellation.child_token();
@@ -30,6 +39,7 @@ impl ExecutionWorkPool {
         Ok(ExecutionAdmission {
             instruction_limit: instructions,
             scope,
+            _slot: slot,
         })
     }
 }
@@ -51,6 +61,9 @@ impl ExecutionWorkPool {
 pub struct ExecutionAdmission {
     instruction_limit: u64,
     scope: CancellationToken,
+    // Drop cancels the admission scope before Rust drops this slot. Escaped
+    // cancellation controls own no slot and cannot release or renew capacity.
+    _slot: AdmissionSlot,
 }
 
 impl ExecutionAdmission {

@@ -25,6 +25,7 @@ use crate::baseline_interpreter::{
 use crate::checkpoint::CancellationToken;
 use crate::ir_contract::Ir3Module;
 
+mod admission_limit;
 mod revocation;
 mod scheduling;
 pub use revocation::{MAX_WORK_POOL_DEPTH, WorkScopeRevocation};
@@ -39,6 +40,7 @@ struct WorkPoolState {
     remaining: AtomicU64,
     cancellation: CancellationToken,
     depth: usize,
+    admission_slots: Arc<admission_limit::AdmissionSlots>,
 }
 
 /// A shared, non-renewable allowance for native instruction reservations.
@@ -51,16 +53,10 @@ pub struct ExecutionWorkPool {
 }
 
 impl ExecutionWorkPool {
-    /// Establish a new allowance at a trusted scheduling boundary.
+    /// Establish a new allowance without an additional outstanding-admission cap.
+    /// Use `with_admission_limit` to bound concurrent work across this family.
     pub fn new(instruction_limit: u64) -> Self {
-        Self {
-            state: Arc::new(WorkPoolState {
-                limit: instruction_limit,
-                remaining: AtomicU64::new(instruction_limit),
-                cancellation: CancellationToken::new(),
-                depth: 0,
-            }),
-        }
+        Self::with_admission_limit(instruction_limit, usize::MAX)
     }
 
     pub fn limit(&self) -> u64 {
@@ -101,6 +97,11 @@ impl ExecutionWorkPool {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkBudgetError {
     ZeroInstructionBudget,
+    /// The root family's outstanding-admission ceiling is occupied. No
+    /// instruction credits were spent by this rejected reservation.
+    AdmissionLimit {
+        limit: usize,
+    },
     /// This work scope or one of its ancestors has been permanently revoked.
     Revoked,
     /// Bound the cost of retaining and polling inherited scope signals.
@@ -121,6 +122,9 @@ impl fmt::Display for WorkBudgetError {
         match self {
             Self::ZeroInstructionBudget => f.write_str("instruction reservation must be nonzero"),
             Self::Revoked => f.write_str("execution work scope has been revoked"),
+            Self::AdmissionLimit { limit } => {
+                write!(f, "shared execution admission limit reached: {limit}")
+            }
             Self::HierarchyDepthExceeded { max_depth } => {
                 write!(
                     f,
@@ -225,7 +229,11 @@ impl BudgetedInterpreter {
         if self.interrupted {
             return Err(WorkBudgetError::Interrupted);
         }
-        self.pool.charge(self.config.instruction_budget)?;
+        // The same owned admission used by scheduled work holds a family slot
+        // through initialization and native execution. Neither an idle reusable
+        // VM nor a refused attempt occupies capacity; an unwind releases the
+        // slot without refunding the prepaid instructions.
+        let _admission = self.pool.reserve(self.config.instruction_budget)?;
         // Set this before initialization as well as execution: any unwinding
         // path consumes admission and permanently invalidates this owner.
         self.interrupted = true;

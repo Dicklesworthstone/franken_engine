@@ -93,6 +93,9 @@ impl ExecutionWorkPool {
                 remaining: AtomicU64::new(instruction_limit),
                 cancellation: self.state.cancellation.child_token(),
                 depth: self.state.depth + 1,
+                // Delegating instruction credits must not multiply the root's
+                // concurrent admission capacity, even for nested/sibling pools.
+                admission_slots: Arc::clone(&self.state.admission_slots),
             }),
         };
         if instruction_limit != 0 {

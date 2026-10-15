@@ -216,13 +216,7 @@ impl StringifyState {
         text: &JsString,
     ) -> Result<(), InterpreterError> {
         self.push(core, u16::from(b'"'))?;
-        if text.is_ascii() {
-            // JsString caches ASCII classification; no input-sized scan here.
-            let bytes = text.as_str().expect("ASCII has an exact str view").as_bytes();
-            self.quote_ascii(core, bytes)?;
-            return self.push(core, u16::from(b'"'));
-        }
-        self.units(core, output::QuotedUnits::new(text.encode_utf16()))?;
+        self.quote_contents(core, text)?;
         self.push(core, u16::from(b'"'))
     }
 
@@ -813,6 +807,7 @@ impl InterpreterCore {
 mod tests {
     use super::*;
 
+    mod rope_output;
     mod unicode_batches;
 
     fn core() -> InterpreterCore {

@@ -11,6 +11,117 @@ use std::iter::{Fuse, FusedIterator, Peekable};
 use super::{InterpreterCore, InterpreterError, StringifyState};
 
 impl StringifyState {
+    pub(super) fn quote_contents(
+        &mut self,
+        core: &mut InterpreterCore,
+        text: &super::JsString,
+    ) -> Result<(), InterpreterError> {
+        if let Some(parts) = text.unjoined_concat_children() {
+            self.quote_rope(core, parts)
+        } else {
+            self.quote_leaf(core, text)
+        }
+    }
+
+    /// Emit the contents of one flat/published leaf, without adding quotes.
+    /// Exact-only strings are flat; unresolved concatenations are handled by
+    /// quote_rope so the ASCII fast path cannot eagerly join an entire input.
+    fn quote_leaf(
+        &mut self,
+        core: &mut InterpreterCore,
+        text: &super::JsString,
+    ) -> Result<(), InterpreterError> {
+        if text.is_ascii() {
+            self.quote_ascii(
+                core,
+                text.as_str().expect("ASCII has an exact str view").as_bytes(),
+            )
+        } else {
+            self.units(core, QuotedUnits::new(text.encode_utf16()))
+        }
+    }
+
+    /// Traverse unresolved strings by leaf instead of materializing their
+    /// complete UTF-8 text or dispatching the rope cursor for every code unit.
+    /// Only outstanding right children occupy the admitted frontier. No guest
+    /// callback runs, and all existing output work/size/allocation gates remain
+    /// in the leaf writer. Additional checkpoints bound structural traversal,
+    /// including a deep left spine before any leaf has produced output.
+    fn quote_rope(
+        &mut self,
+        core: &mut InterpreterCore,
+        parts: [super::JsString; 2],
+    ) -> Result<(), InterpreterError> {
+        let mut pending = Vec::new();
+        let mut scratch = 0;
+        let [left, right] = parts;
+        let outcome = (|| {
+            core.json_charge_work()?;
+            self.push_quote_part(core, &mut pending, right, &mut scratch)?;
+            let mut current = left;
+            let mut remaining = 256;
+            loop {
+                if remaining == 0 {
+                    core.json_charge_work()?;
+                    remaining = 256;
+                }
+                remaining -= 1;
+                if let Some([left, right]) = current.unjoined_concat_children() {
+                    self.push_quote_part(core, &mut pending, right, &mut scratch)?;
+                    current = left;
+                    continue;
+                }
+                // A concurrent publisher may replace children with a flat
+                // buffer, but never the reverse. This view cannot start a join.
+                self.quote_leaf(core, &current)?;
+                let Some(next) = pending.pop() else {
+                    return Ok(());
+                };
+                current = next;
+            }
+        })();
+        // Drop all references/capacity before releasing this walk's charge.
+        // The output, enclosing frames and any inherited scratch stay charged.
+        drop(pending);
+        self.release(core, scratch);
+        outcome
+    }
+
+    fn push_quote_part(
+        &mut self,
+        core: &mut InterpreterCore,
+        pending: &mut Vec<super::JsString>,
+        part: super::JsString,
+        scratch: &mut u64,
+    ) -> Result<(), InterpreterError> {
+        if pending.len() == pending.capacity() {
+            let previous = pending.capacity();
+            let additional = previous.max(4);
+            let slot = std::mem::size_of::<super::JsString>() as u64;
+            let growth = u64::try_from(additional)
+                .ok()
+                .and_then(|count| count.checked_mul(slot))
+                .ok_or_else(|| core.memory_budget_error(u64::MAX, core.heap_object_count_u32()))?;
+            self.reserve(core, growth)?;
+            *scratch += growth;
+            pending.try_reserve_exact(additional).map_err(|_| {
+                core.memory_budget_error(u64::MAX, core.heap_object_count_u32())
+            })?;
+            let retained = u64::try_from(pending.capacity() - previous)
+                .ok()
+                .and_then(|count| count.checked_mul(slot))
+                .ok_or_else(|| core.memory_budget_error(u64::MAX, core.heap_object_count_u32()))?;
+            if retained > growth {
+                // Allocators may expose more capacity than requested. Admit
+                // that difference too before the next traversal/output step.
+                self.reserve(core, retained - growth)?;
+                *scratch += retained - growth;
+            }
+        }
+        pending.push(part);
+        Ok(())
+    }
+
     pub(super) fn units(
         &mut self,
         core: &mut InterpreterCore,

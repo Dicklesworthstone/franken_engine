@@ -8,6 +8,25 @@ use std::sync::Arc;
 
 use super::{JsString, Text};
 
+impl JsString {
+    /// Borrow the structure of an unresolved concatenation without joining it.
+    /// The returned strings share their existing immutable backing; this call
+    /// never copies their text or allocates traversal storage. Both children
+    /// are well formed, so a UTF-16 surrogate pair cannot straddle the split.
+    ///
+    /// `None` means this value already has flat backing (possibly the lossy
+    /// projection of exact units), or another reader has published its joined
+    /// buffer. It is then safe to request the usual string/unit view without
+    /// causing a join. Children returned before publication remain valid.
+    /// Callers walking a tree must bound/charge their own traversal storage.
+    pub fn unjoined_concat_children(&self) -> Option<[Self; 2]> {
+        match &self.utf8 {
+            Text::Concat(node) if node.joined.get().is_none() => node.parts(),
+            _ => None,
+        }
+    }
+}
+
 /// Allocation-free until the first unit is requested. In particular,
 /// constructing a CodeUnits iterator and asking for its count/length must
 /// not allocate traversal state or join the root.
@@ -261,6 +280,90 @@ mod tests {
         } else {
             panic!("test requires a rope");
         }
+    }
+
+    #[test]
+    fn unjoined_children_preserve_exact_leaf_content_without_publication() {
+        let parts = ["", "a", "é", "日", "😀", "\"\\\n"];
+        for left in parts {
+            for right in parts {
+                let value = rope(left, right);
+                let [a, b] = value.unjoined_concat_children().expect("unjoined root");
+                assert_eq!(a.as_str(), Some(left));
+                assert_eq!(b.as_str(), Some(right));
+                assert!(a.is_well_formed() && b.is_well_formed());
+                assert_eq!(a.utf16_len() + b.utf16_len(), value.utf16_len());
+                assert_unjoined(&value);
+            }
+        }
+        for flat in [
+            JsString::empty(),
+            JsString::from("flat😀"),
+            JsString::from_code_units(&[0xd800, 0x61, 0xdc00]),
+        ] {
+            assert!(flat.unjoined_concat_children().is_none());
+        }
+    }
+
+    #[test]
+    fn unjoined_children_share_a_large_logical_dag_without_copying_it() {
+        let mut value = rope(&"x".repeat(1024), &"y".repeat(1024));
+        for _ in 0..16 {
+            let shape = value.joined_shape(&value);
+            value = JsString::joined(value.clone(), value, shape);
+        }
+        let [left, right] = value.unjoined_concat_children().unwrap();
+        assert_eq!(value.len(), 128 * 1024 * 1024);
+        assert_eq!(left.len(), 64 * 1024 * 1024);
+        assert_eq!(left.utf16_len(), right.utf16_len());
+        let (Text::Concat(left_node), Text::Concat(right_node)) = (&left.utf8, &right.utf8) else {
+            panic!("children must retain their shared concatenation backing");
+        };
+        assert!(Arc::ptr_eq(left_node, right_node));
+        assert_unjoined(&left);
+        assert_unjoined(&right);
+        assert_unjoined(&value);
+    }
+
+    #[test]
+    fn returned_children_survive_parent_publication() {
+        let value = rope("firsté", "second😀");
+        let [left, right] = value.unjoined_concat_children().unwrap();
+        assert_eq!(value.as_str(), Some("firstésecond😀"));
+        assert!(value.unjoined_concat_children().is_none());
+        assert_eq!(left.as_str(), Some("firsté"));
+        assert_eq!(right.as_str(), Some("second😀"));
+        assert_eq!(value.utf16_len(), left.utf16_len() + right.utf16_len());
+    }
+
+    #[test]
+    fn unjoined_children_race_with_join_publication_without_missing_text() {
+        let value = rope(&"aé".repeat(1024), &"😀z".repeat(1024));
+        let expected = format!("{}{}", "aé".repeat(1024), "😀z".repeat(1024));
+        let barrier = std::sync::Barrier::new(8);
+        std::thread::scope(|scope| {
+            for index in 0..8 {
+                let value = &value;
+                let expected = &expected;
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    barrier.wait();
+                    if index % 2 == 0 {
+                        assert_eq!(value.as_str(), Some(expected.as_str()));
+                    } else {
+                        for _ in 0..64 {
+                            let text = if let Some([left, right]) = value.unjoined_concat_children() {
+                                format!("{}{}", left.as_str().unwrap(), right.as_str().unwrap())
+                            } else {
+                                value.as_str().unwrap().to_string()
+                            };
+                            assert_eq!(&text, expected);
+                        }
+                    }
+                });
+            }
+        });
+        assert!(value.unjoined_concat_children().is_none());
     }
 
     #[test]

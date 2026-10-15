@@ -8,11 +8,13 @@ use super::{BacktrackError, BacktrackRegExp, Captures, Inst, PreparedInput};
 use super::{is_line_terminator, is_word_char};
 
 mod counted;
+mod lazy;
 mod literals;
 mod prefix;
 mod repetitions;
 
 use counted::CountedRepeat;
+use lazy::LazyRepeat;
 use literals::LiteralBlocks;
 use prefix::StartPrefix;
 use repetitions::GreedyRepeat;
@@ -45,6 +47,13 @@ enum Frame {
         pc: usize,
         position: usize,
         start: usize,
+    },
+    /// The next lazy exit, plus the original mark for complete failure.
+    /// Earlier exits have already failed and need no individual undo frame.
+    LazyRepeat {
+        pc: usize,
+        position: usize,
+        old: usize,
     },
     Slot {
         slot: usize,
@@ -200,6 +209,18 @@ impl Run<'_> {
                         repeat.push_choices(stack, position, end, old);
                         position = end;
                         pc = repeat.exit;
+                        continue;
+                    }
+                    let lazy = LazyRepeat::at(regexp, pc);
+                    #[cfg(test)]
+                    let lazy = lazy.filter(|_| !self.repetitions_disabled);
+                    if let Some(lazy) = lazy {
+                        stack.push(Frame::LazyRepeat {
+                            pc,
+                            position,
+                            old: self.registers[lazy.register],
+                        });
+                        pc = lazy.exit;
                         continue;
                     }
                     stack.push(Frame::Alternative {
@@ -390,6 +411,12 @@ impl Run<'_> {
                         Some(frame @ Frame::CountedGreedy { .. }) => {
                             (pc, position) = self.resume_counted_greedy(frame, stack);
                             break;
+                        }
+                        Some(frame @ Frame::LazyRepeat { .. }) => {
+                            if let Some(next) = self.resume_lazy_repeat(frame, stack)? {
+                                (pc, position) = next;
+                                break;
+                            }
                         }
                         Some(Frame::Alternative {
                             pc: resume,

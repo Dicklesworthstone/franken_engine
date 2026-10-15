@@ -175,7 +175,15 @@ const STREAM_SOURCE: &str = concat!(
     ")",
 );
 const STREAM_CONSUMERS_SOURCE: &str = include_str!("stream_consumers.js");
-const WEB_STREAMS_SOURCE: &str = include_str!("web_stream_module.js");
+// Text transforms reuse both the native codec objects and these exact stream
+// constructors. The installer adds exports without creating another module.
+const WEB_STREAMS_SOURCE: &str = concat!(
+    "(",
+    include_str!("web_text_stream_module.js"),
+    ")(",
+    include_str!("web_stream_module.js"),
+    ")",
+);
 const BUFFER_SOURCE: &str = include_str!("buffer_module.js");
 // The factory reads no guest globals and returns the realm's cached module.
 // Its methods are native callable values, not wrappers with separate identities.
@@ -399,9 +407,10 @@ const STREAM_CONSUMERS_GLOBALS: [&str; 8] = [
     "TextDecoder",
 ];
 
-const WEB_STREAMS_GLOBALS: [&str; 10] = [
+const WEB_STREAMS_GLOBALS: [&str; 13] = [
     "AbortController", "AbortSignal", "EventTarget", "Object", "Promise",
-    "RangeError", "Reflect", "Symbol", "TypeError", "WeakMap",
+    "RangeError", "Reflect", "String", "Symbol", "TextDecoder", "TextEncoder",
+    "TypeError", "WeakMap",
 ];
 
 const STREAM_GLOBALS: [&str; 21] = [

@@ -22,8 +22,10 @@
 //! directory) to builtin:PathNormalize / builtin:PathResolve. The calls the
 //! facade claims keep their HostCall lowering unchanged.
 //!
-//! Not covered: `path.win32` (the facade's win32 forms still work on an
-//! alias).
+//! POSIX and Windows namespace values share this module object. Windows
+//! normalization/basename/absolute tests reuse the existing Win32 HostCalls;
+//! Windows composition uses the same logical cwd as PathResolve. No native
+//! Windows filesystem, per-drive environment authority or I/O is introduced.
 
 use std::collections::BTreeSet;
 
@@ -31,10 +33,10 @@ use super::LoweringPipelineError;
 use super::util_module::scoped_walk;
 use super::with_statement::{
     FunctionBody, FunctionParts, Outcome, Search, Walk, lexical_names, var_names, walk_expression,
-    walk_function, walk_switch_cases,
+    walk_class, walk_function, walk_statement, walk_switch_cases,
 };
 use crate::ast::{
-    BindingPattern, CatchClause, Expression, ParseGoal, SourceSpan, Statement, SwitchCase,
+    BindingPattern, CatchClause, Expression, MethodDefinition, ParseGoal, SourceSpan, Statement, SwitchCase,
     SyntaxTree, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
 };
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
@@ -44,7 +46,7 @@ const MODULE_BINDING: &str = "%path_module";
 
 /// PATH_SOURCE spells the facade's HostCalls with these names, which the
 /// parser accepts, and the rewrite renames them to their `%` forms.
-const INTRINSICS: [(&str, &str, &str); 9] = [
+const INTRINSICS: [(&str, &str, &str); 12] = [
     (
         "__franken_path_normalize",
         "%PathNormalize",
@@ -82,6 +84,9 @@ const INTRINSICS: [(&str, &str, &str); 9] = [
     ),
     ("__franken_path_parse", "%PathParse", "builtin:PathParse"),
     ("__franken_path_format", "%PathFormat", "builtin:PathFormat"),
+    ("__franken_path_win32_join", "%PathWin32Join", "builtin:PathWin32Join"),
+    ("__franken_path_win32_basename", "%PathWin32Basename", "builtin:PathWin32Basename"),
+    ("__franken_path_win32_is_absolute", "%PathWin32IsAbsolute", "builtin:PathWin32IsAbsolute"),
 ];
 
 pub(super) fn intrinsic_capability(name: &str) -> Option<&'static str> {
@@ -94,99 +99,7 @@ pub(super) fn intrinsic_capability(name: &str) -> Option<&'static str> {
 /// The module object, built once per program. Node's posix `join` and
 /// `resolve` with normalization delegated; the rest call the HostCall the
 /// facade lowers the same member call to.
-const PATH_SOURCE: &str = r#"(function () {
-  'use strict';
-  function join() {
-    var joined = '';
-    for (var i = 0; i < arguments.length; i++) {
-      var segment = arguments[i];
-      if (typeof segment !== 'string') {
-        __franken_path_normalize(segment);
-      }
-      if (segment.length > 0) {
-        joined = joined.length === 0 ? segment : joined + '/' + segment;
-      }
-    }
-    return joined.length === 0 ? '.' : __franken_path_normalize(joined);
-  }
-  // The HostCall scans from the last argument and names a bad one by its
-  // position, so the argument goes where it was, after empty paths that do
-  // not end the scan.
-  function invalidResolveArgument(index, value) {
-    switch (index) {
-      case 0: return __franken_path_resolve(value);
-      case 1: return __franken_path_resolve('', value);
-      case 2: return __franken_path_resolve('', '', value);
-      case 3: return __franken_path_resolve('', '', '', value);
-      case 4: return __franken_path_resolve('', '', '', '', value);
-      case 5: return __franken_path_resolve('', '', '', '', '', value);
-      case 6: return __franken_path_resolve('', '', '', '', '', '', value);
-      default: return __franken_path_resolve('', '', '', '', '', '', '', value);
-    }
-  }
-  function resolve() {
-    var resolved = '';
-    for (var i = arguments.length - 1; i >= 0; i--) {
-      var segment = arguments[i];
-      if (typeof segment !== 'string') {
-        invalidResolveArgument(i, segment);
-      }
-      if (segment.length === 0) {
-        continue;
-      }
-      resolved = resolved.length === 0 ? segment : segment + '/' + resolved;
-      if (segment.charCodeAt(0) === 47) {
-        break;
-      }
-    }
-    return __franken_path_resolve(resolved);
-  }
-  function normalize(path) {
-    return __franken_path_normalize(path);
-  }
-  function isAbsolute(path) {
-    return __franken_path_is_absolute(path);
-  }
-  function relative(from, to) {
-    return __franken_path_relative(from, to);
-  }
-  function toNamespacedPath(path) {
-    return path;
-  }
-  function dirname(path) {
-    return __franken_path_dirname(path);
-  }
-  function basename(path, suffix) {
-    return __franken_path_basename(path, suffix);
-  }
-  function extname(path) {
-    return __franken_path_extname(path);
-  }
-  function format(pathObject) {
-    return __franken_path_format(pathObject);
-  }
-  function parse(path) {
-    return __franken_path_parse(path);
-  }
-  var path = {
-    resolve: resolve,
-    normalize: normalize,
-    isAbsolute: isAbsolute,
-    join: join,
-    relative: relative,
-    toNamespacedPath: toNamespacedPath,
-    dirname: dirname,
-    basename: basename,
-    extname: extname,
-    format: format,
-    parse: parse,
-    sep: '/',
-    delimiter: ':',
-    posix: undefined
-  };
-  path.posix = path;
-  return path;
-})()"#;
+const PATH_SOURCE: &str = include_str!("path_module.js");
 
 /// For `require(specifier)` with one of `specifiers`, whatever `require`
 /// names.
@@ -205,7 +118,7 @@ fn is_require_call_of(expression: &Expression, specifiers: &[&str]) -> bool {
 fn is_path_require_call(expression: &Expression) -> bool {
     is_require_call_of(
         expression,
-        &["path", "node:path", "path/posix", "node:path/posix"],
+        &["path", "node:path", "path/posix", "node:path/posix", "path/win32", "node:path/win32"],
     )
 }
 
@@ -217,10 +130,18 @@ fn is_facade_require_call(expression: &Expression) -> bool {
 /// The facade's inline forms: a recognized method call or constant read on
 /// `require('path')` or its `posix` / `win32` namespace.
 fn is_facade_inline_use(expression: &Expression) -> bool {
+    is_facade_use(expression, &is_facade_require_call)
+}
+
+fn is_facade_alias_use(expression: &Expression, aliases: &BTreeSet<String>) -> bool {
+    is_facade_use(expression, &|value| matches!(value, Expression::Identifier(name) if aliases.contains(name)))
+}
+
+fn is_facade_use(expression: &Expression, receiver: &impl Fn(&Expression) -> bool) -> bool {
     match expression {
         Expression::Call { callee, .. } => matches!(callee.as_ref(),
         Expression::Member { object, property, computed: false, .. }
-            if super::path_receiver_namespace_with(object, &is_facade_require_call)
+            if super::path_receiver_namespace_with(object, receiver)
                 .zip(super::well_formed_static_name(property))
                 .is_some_and(|(namespace, method)| {
                     super::path_method_capability(namespace, method).is_some()
@@ -230,7 +151,7 @@ fn is_facade_inline_use(expression: &Expression) -> bool {
             property,
             computed,
             ..
-        } => super::path_receiver_namespace_with(object, &is_facade_require_call)
+        } => super::path_receiver_namespace_with(object, receiver)
             .zip(if *computed {
                 super::well_formed_string_literal(property)
             } else {
@@ -279,17 +200,31 @@ pub(super) fn rewrite_path_requires(
     let mut root = BTreeSet::new();
     var_names(&tree.body, &mut root);
     lexical_names(&tree.body, &mut root);
+    for statement in &tree.body {
+        if let Statement::Import(import) = statement {
+            root.extend(import.clause.binding_names().into_iter().map(str::to_string));
+        }
+    }
     let mut rewritten = tree.clone();
     let mut rewriter = PathRewriter {
-        scopes: vec![root],
+        scopes: vec![root.clone()],
         replaced: 0,
         function_aliases: aliases_read_in_functions(&tree.body)?,
+        materialize_all: false,
     };
     for statement in &mut rewritten.body {
         rewriter.program_statement(statement)?;
     }
     if rewriter.replaced == 0 {
         return Ok(None);
+    }
+    // Once any path namespace/function escapes, ALL requests in this program
+    // must observe that same mutable object. Otherwise a direct inline call
+    // would silently ignore a mutation through the first-class namespace.
+    rewritten = tree.clone();
+    rewriter.materialize_all = true;
+    for statement in &mut rewritten.body {
+        rewriter.program_statement(statement)?;
     }
     let span = rewritten.body.first().map_or_else(
         || SourceSpan::new(0, 0, 1, 1, 1, 1),
@@ -301,7 +236,7 @@ pub(super) fn rewrite_path_requires(
             kind: VariableDeclarationKind::Const,
             declarations: vec![VariableDeclarator {
                 pattern: BindingPattern::Identifier(MODULE_BINDING.to_string()),
-                initializer: Some(module_source()?),
+                initializer: Some(module_source(&root)?),
                 span,
             }],
             span,
@@ -330,9 +265,9 @@ fn parse_module_source() -> Result<Expression, LoweringPipelineError> {
     Ok(statement.expression.clone())
 }
 
-/// PATH_SOURCE parsed, with its intrinsics renamed. It reads no global.
-fn module_source() -> Result<Expression, LoweringPipelineError> {
-    struct Renamer;
+/// Rename only engine intrinsics and protect the factory's Array binding.
+fn module_source(program_names: &BTreeSet<String>) -> Result<Expression, LoweringPipelineError> {
+    struct Renamer { protect_array: bool }
 
     impl Walk for Renamer {
         fn expression(&mut self, expression: &mut Expression) -> Outcome {
@@ -342,6 +277,13 @@ fn module_source() -> Result<Expression, LoweringPipelineError> {
                     .find(|(placeholder, _, _)| placeholder == name)
                 {
                     *name = (*intrinsic).to_string();
+                } else if self.protect_array && name == "Array" {
+                    *expression = Expression::Member {
+                        object: Box::new(Expression::Identifier("globalThis".into())),
+                        property: Box::new(Expression::Identifier("Array".into())),
+                        computed: false,
+                        span: None,
+                    };
                 }
                 return Ok(());
             }
@@ -350,7 +292,7 @@ fn module_source() -> Result<Expression, LoweringPipelineError> {
     }
 
     let mut expression = parse_module_source()?;
-    Renamer.expression(&mut expression)?;
+    Renamer { protect_array: program_names.contains("Array") }.expression(&mut expression)?;
     Ok(expression)
 }
 
@@ -359,8 +301,9 @@ fn module_source() -> Result<Expression, LoweringPipelineError> {
 /// alias's uses in the program body only: a function's `path.basename(x)`
 /// read an unbound `path` (or, with no use in the program body, the alias
 /// stayed a runtime `require('path')`, which finds no module), bd-9vouw.300.
-/// A local of the same name in the function counts too; the rewrite it
-/// causes is correct either way.
+/// An alias used as a value, mutated, or read through an unsupported member
+/// also escapes the call facade. Shadowing may conservatively materialize the
+/// outer module, but never replaces the user's local binding.
 fn aliases_read_in_functions(
     body: &[Statement],
 ) -> Result<BTreeSet<String>, LoweringPipelineError> {
@@ -379,8 +322,13 @@ fn aliases_read_in_functions(
         }
 
         fn expression(&mut self, expression: &mut Expression) -> Outcome {
-            if self.depth > 0
-                && let Expression::Identifier(name) = expression
+            if self.depth == 0 && is_facade_alias_use(expression, self.aliases) {
+                if let Expression::Call { arguments, .. } = expression {
+                    for argument in arguments { self.expression(argument)?; }
+                }
+                return Ok(());
+            }
+            if let Expression::Identifier(name) = expression
                 && self.aliases.contains(name)
             {
                 self.read.insert(name.clone());
@@ -418,8 +366,9 @@ struct PathRewriter {
     /// Names declared in each enclosing scope, innermost last.
     scopes: Vec<BTreeSet<String>>,
     replaced: usize,
-    /// Facade aliases a function reads: they get the module instead.
+    /// Facade aliases with escaping/observable reads: they get the module.
     function_aliases: BTreeSet<String>,
+    materialize_all: bool,
 }
 
 impl PathRewriter {
@@ -453,7 +402,8 @@ impl PathRewriter {
             self.pattern(&mut declarator.pattern)?;
             match &mut declarator.initializer {
                 Some(initializer)
-                    if matches!(&declarator.pattern, BindingPattern::Identifier(name)
+                    if !self.materialize_all
+                        && matches!(&declarator.pattern, BindingPattern::Identifier(name)
                         if !self.function_aliases.contains(name))
                         && is_facade_require_call(initializer) => {}
                 Some(initializer) => self.expression(initializer)?,
@@ -467,8 +417,39 @@ impl PathRewriter {
 impl Walk for PathRewriter {
     scoped_walk!();
 
+    fn statement(&mut self, statement: &mut Statement) -> Outcome {
+        let mut names = BTreeSet::new();
+        match &*statement {
+            Statement::For(loop_statement) => {
+                if let Some(initializer) = &loop_statement.init {
+                    let initializer: &Statement = initializer;
+                    lexical_names(std::slice::from_ref(initializer), &mut names);
+                }
+            }
+            Statement::ForIn(loop_statement) if loop_statement.binding_kind.is_some() => {
+                names.extend(loop_statement.binding.binding_names().into_iter().map(str::to_string));
+            }
+            Statement::ForOf(loop_statement) if loop_statement.binding_kind.is_some() => {
+                names.extend(loop_statement.binding.binding_names().into_iter().map(str::to_string));
+            }
+            Statement::With(_) => { names.insert("require".into()); }
+            _ => {}
+        }
+        self.scoped(names, |walker| walk_statement(walker, statement))
+    }
+
+    fn class(
+        &mut self,
+        name: Option<&str>,
+        super_class: Option<&mut Expression>,
+        body: &mut [MethodDefinition],
+    ) -> Outcome {
+        let names = name.map(str::to_string).into_iter().collect();
+        self.scoped(names, |walker| walk_class(walker, super_class, body))
+    }
+
     fn expression(&mut self, expression: &mut Expression) -> Outcome {
-        if is_facade_inline_use(expression) {
+        if !self.materialize_all && is_facade_inline_use(expression) {
             if let Expression::Call { arguments, .. } = expression {
                 for argument in arguments {
                     self.expression(argument)?;
@@ -477,7 +458,15 @@ impl Walk for PathRewriter {
             return Ok(());
         }
         if self.is_free_path_require(expression) {
-            *expression = Expression::Identifier(MODULE_BINDING.to_string());
+            let module = Expression::Identifier(MODULE_BINDING.to_string());
+            *expression = if is_require_call_of(expression, &["path/win32", "node:path/win32"]) {
+                Expression::Member {
+                    object: Box::new(module),
+                    property: Box::new(Expression::Identifier("win32".into())),
+                    computed: false,
+                    span: None,
+                }
+            } else { module };
             self.replaced += 1;
             return Ok(());
         }
@@ -493,11 +482,108 @@ mod tests {
     /// lowering turns into a HostCall.
     #[test]
     fn module_source_calls_only_intrinsics() {
-        let source = format!("{:?}", module_source().expect("builds"));
+        let source = format!("{:?}", module_source(&BTreeSet::new()).expect("builds"));
         assert!(!source.contains("__franken_path"), "{source}");
         for (_, intrinsic, capability) in INTRINSICS {
             assert!(source.contains(intrinsic), "{intrinsic}");
             assert_eq!(intrinsic_capability(intrinsic), Some(capability));
         }
+    }
+}
+
+#[cfg(test)]
+mod win32_tests {
+    use super::*;
+
+    fn parse(source: &str, goal: ParseGoal) -> SyntaxTree {
+        CanonicalEs2020Parser.parse_with_options(
+            ParserSource { label: "path-namespace-values.js".into(), text: source.into() },
+            goal, &ParserOptions::default(),
+        ).expect("fixture parses")
+    }
+
+    #[test]
+    fn namespace_values_materialize_all_related_requests_once() {
+        for source in [
+            "const p=require('path/win32'); p.join('C:/', 'a');",
+            "const {join}=require('node:path/win32'); join('C:/', 'a');",
+            "const p=require('path'); const w=p.win32; w.join=f; require('path').win32.join('a');",
+            "const p=require('path'); const f=p.join; f('a','b'); p.join('c','d');",
+            "const p=require('path/posix'); const q=require('path'); p===q;",
+        ] {
+            let tree = parse(source, ParseGoal::Script);
+            let rewritten = rewrite_path_requires(&tree).unwrap().expect("namespace materialized");
+            assert_eq!(rewritten.body.len(), tree.body.len() + 1, "{source}");
+            assert_eq!(rewritten.body.iter().filter(|s| is_module_declaration(s)).count(), 1);
+            assert!(!rewritten.body.iter().any(|s| PATH_REQUIRE_SEARCH.in_statement(s)), "no direct call bypass: {source}");
+            assert!(rewrite_path_requires(&rewritten).unwrap().is_none());
+            assert_eq!(tree, parse(source, ParseGoal::Script), "input is immutable");
+        }
+    }
+
+    #[test]
+    fn direct_only_calls_keep_the_existing_native_fast_path() {
+        for source in [
+            "const p=require('path'); p.join('a','b'); p.sep;",
+            "require('path').basename('/a/b');",
+            "const p=require('path'); p.win32.join('C:/', 'a');",
+        ] {
+            assert!(rewrite_path_requires(&parse(source, ParseGoal::Script)).unwrap().is_none(), "{source}");
+        }
+    }
+
+    #[test]
+    fn namespace_rewrite_preserves_user_loaders_and_import_bindings() {
+        for source in [
+            "function f(require){return require('path/win32');}",
+            "{const require=loader; require('node:path/win32');}",
+            "for(const require of loaders) require('path/win32');",
+            "for(const require in loaders) require('path/win32');",
+            "for(let require=loader;test;update) require('path/win32');",
+            "with(scope) require('path/win32');",
+            "const C=class require { method(){return require('path/win32');} };",
+            "const name='path/win32'; require(name);",
+            "require('./path/win32');",
+        ] {
+            assert!(rewrite_path_requires(&parse(source, ParseGoal::Script)).unwrap().is_none(), "{source}");
+        }
+        let imported = parse("import require from './loader.mjs'; require('path/win32');", ParseGoal::Module);
+        assert!(rewrite_path_requires(&imported).unwrap().is_none());
+    }
+
+    #[test]
+    fn esm_windows_imports_and_reexports_use_the_existing_path_module() {
+        for source in [
+            "import w from 'node:path/win32'; w.join('C:/', 'a');",
+            "import {join as build} from 'path/win32'; build('C:/', 'a');",
+            "import * as w from 'path/win32'; w.parse('C:/a.txt');",
+            "export {join as build, win32, posix} from 'node:path/win32';",
+            "export * as windows from 'path/win32';",
+        ] {
+            let tree = parse(source, ParseGoal::Module);
+            let expanded = super::super::esm_core_imports::rewrite_core_module_imports(&tree)
+                .expect("Windows core imports are recognized");
+            let lowered = rewrite_path_requires(&expanded).unwrap()
+                .expect("imported values use the canonical namespace pair");
+            assert_eq!(lowered.body.iter().filter(|s| is_module_declaration(s)).count(), 1);
+            assert!(!lowered.body.iter().any(|s| PATH_REQUIRE_SEARCH.in_statement(s)));
+            assert!(rewrite_path_requires(&lowered).unwrap().is_none());
+            assert_eq!(tree, parse(source, ParseGoal::Module), "source AST is unchanged");
+        }
+        let shadowed = parse(
+            "import require from './loader.mjs'; import w from 'path/win32'; w.join('a');",
+            ParseGoal::Module,
+        );
+        assert!(super::super::esm_core_imports::rewrite_core_module_imports(&shadowed).is_none());
+    }
+
+    #[test]
+    fn format_helper_protects_a_shadowed_array_binding() {
+        let unprotected = module_source(&BTreeSet::new()).unwrap();
+        let protected = module_source(&BTreeSet::from(["Array".into()])).unwrap();
+        assert_ne!(unprotected, protected);
+        assert!(format!("{protected:?}").contains("globalThis"));
+        assert_eq!(intrinsic_capability("%PathWin32Join"), Some("builtin:PathWin32Join"));
+        assert_eq!(intrinsic_capability("__franken_path_win32_join"), None);
     }
 }

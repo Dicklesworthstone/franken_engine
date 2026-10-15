@@ -148,6 +148,54 @@ impl Text {
     }
 }
 
+/// Most comparisons visit only a root and a few children. Keep those owned
+/// references inline rather than allocating a Vec for each operand. Deeper
+/// frontiers spill without changing traversal order or imposing a depth cap.
+/// Overflow entries are always newer than every occupied inline entry.
+struct TextFrontier {
+    inline: [Option<Text>; 4],
+    len: usize,
+    overflow: Vec<Text>,
+}
+
+impl TextFrontier {
+    fn new(text: &Text) -> Self {
+        Self {
+            inline: [Some(text.clone()), None, None, None],
+            len: 1,
+            overflow: Vec::new(),
+        }
+    }
+
+    fn last(&self) -> Option<&Text> {
+        self.overflow.last().or_else(|| {
+            self.len
+                .checked_sub(1)
+                .and_then(|index| self.inline[index].as_ref())
+        })
+    }
+
+    fn push(&mut self, text: Text) {
+        if self.len < self.inline.len() {
+            debug_assert!(self.overflow.is_empty());
+            self.inline[self.len] = Some(text);
+            self.len += 1;
+        } else {
+            self.overflow.push(text);
+        }
+    }
+
+    fn pop(&mut self) -> Option<Text> {
+        if let Some(text) = self.overflow.pop() {
+            return Some(text);
+        }
+        self.len = self.len.checked_sub(1)?;
+        // Vacate the slot immediately: consumed ancestors must not keep a
+        // rope alive until the whole comparison finishes.
+        self.inline[self.len].take()
+    }
+}
+
 /// Keep whole subtrees at the frontier until comparison needs their contents.
 /// Eagerly filling two leaf cursors loses the chance to skip a shared DAG:
 /// a few shared nodes can represent billions of identical bytes.
@@ -158,7 +206,7 @@ impl Text {
 /// equal byte prefixes ending at a leaf boundary, which preserves that
 /// invariant on both sides. No lock survives expansion.
 struct ByteCursor {
-    pending: Vec<Text>,
+    pending: TextFrontier,
     offset: usize,
     #[cfg(test)]
     expanded_nodes: usize,
@@ -169,7 +217,7 @@ struct ByteCursor {
 impl ByteCursor {
     fn new(text: &Text) -> Self {
         Self {
-            pending: vec![text.clone()],
+            pending: TextFrontier::new(text),
             offset: 0,
             #[cfg(test)]
             expanded_nodes: 0,
@@ -778,5 +826,76 @@ mod tests {
             assert_unjoined(&left);
             assert_unjoined(&right);
         }
+    }
+
+    #[test]
+    fn frontier_preserves_lifo_across_spill_drain_and_refill() {
+        let root = Text::Flat(Arc::from("root"));
+        let mut frontier = TextFrontier::new(&root);
+        let mut expected = vec![root];
+        assert_eq!(frontier.overflow.capacity(), 0);
+        for round in 0..8 {
+            for index in 0..33 {
+                let value = Text::Flat(Arc::from(format!("{round}:{index}")));
+                expected.push(value.clone());
+                frontier.push(value);
+                assert_eq!(frontier.last(), expected.last());
+            }
+            while expected.len() > 2 {
+                assert_eq!(frontier.pop(), expected.pop());
+                assert_eq!(frontier.last(), expected.last());
+            }
+            assert!(frontier.overflow.is_empty());
+            assert!(frontier.inline[frontier.len..].iter().all(Option::is_none));
+        }
+        while !expected.is_empty() {
+            assert_eq!(frontier.pop(), expected.pop());
+        }
+        assert!(frontier.pop().is_none());
+        assert!(frontier.last().is_none());
+        assert_eq!(frontier.len, 0);
+        assert!(frontier.inline.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn shallow_comparisons_never_allocate_frontier_storage() {
+        let left = rope("\u{e9}", "tail\u{1f600}");
+        let right = rope("\u{e9}", "tail\u{e000}");
+        let mut a = ByteCursor::new(&left.utf8);
+        let mut b = ByteCursor::new(&right.utf8);
+        assert_eq!(a.pending.overflow.capacity(), 0);
+        assert_eq!(b.pending.overflow.capacity(), 0);
+        assert_eq!(a.cmp_remaining_in_order::<true>(&mut b), Ordering::Less);
+        assert_eq!(a.pending.overflow.capacity(), 0);
+        assert_eq!(b.pending.overflow.capacity(), 0);
+        let mut a = ByteCursor::new(&left.utf8);
+        let mut b = ByteCursor::new(&right.utf8);
+        assert_eq!(a.cmp_remaining(&mut b), Ordering::Greater);
+        assert_eq!(a.pending.overflow.capacity(), 0);
+        assert_eq!(b.pending.overflow.capacity(), 0);
+        assert!(left.eq("\u{e9}tail\u{1f600}"));
+        assert_unjoined(&left);
+        assert_unjoined(&right);
+    }
+
+    #[test]
+    fn deep_comparison_frontiers_spill_without_flattening_or_changing_order() {
+        let mut left = JsString::from("\u{e9}");
+        let mut right = JsString::from("\u{e9}");
+        for _ in 0..128 {
+            left = join(left, JsString::from("\u{e9}"));
+            right = join(right, JsString::from("\u{e9}"));
+        }
+        let left = join(left, JsString::from("\u{1f600}"));
+        let right = join(right, JsString::from("\u{e000}"));
+        let mut a = ByteCursor::new(&left.utf8);
+        let mut b = ByteCursor::new(&right.utf8);
+        assert_eq!(a.cmp_remaining_in_order::<true>(&mut b), Ordering::Less);
+        assert!(a.pending.overflow.capacity() > 0);
+        assert!(b.pending.overflow.capacity() > 0);
+        assert_eq!(left.utf16_cmp(&right), Ordering::Less);
+        assert_eq!(left.cmp(&right), Ordering::Greater);
+        assert_unjoined(&left);
+        assert_unjoined(&right);
     }
 }

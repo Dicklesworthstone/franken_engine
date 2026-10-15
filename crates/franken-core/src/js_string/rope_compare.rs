@@ -10,6 +10,61 @@ use std::sync::Arc;
 
 use super::Text;
 
+/// Compare the common byte extent of two well-formed strings in UTF-16 order.
+/// Equal UTF-8 prefixes need no decoding. At the first different byte, both
+/// strings are in the same scalar position; retreating at most three bytes
+/// finds its start in both operands. Only those two scalars can decide the
+/// order. In particular, astral scalars must sort before BMP U+E000..U+FFFF,
+/// even though their UTF-8 bytes sort after them.
+///
+/// An equal result means the shorter byte extent matched. Flat callers must
+/// then compare lengths; rope callers advance to their next frontier. Byte
+/// blocks may split scalars, but string slicing happens only after restoring
+/// a scalar boundary. No temporary strings, UTF-16 vectors, or joined rope
+/// buffers are created.
+fn cmp_utf16_common_prefix(left: &str, right: &str) -> Ordering {
+    const BLOCK_BYTES: usize = 64;
+    let left_bytes = left.as_bytes();
+    let right_bytes = right.as_bytes();
+    let limit = left.len().min(right.len());
+    let mut offset = 0;
+    while limit - offset >= BLOCK_BYTES {
+        if left_bytes[offset..offset + BLOCK_BYTES]
+            != right_bytes[offset..offset + BLOCK_BYTES]
+        {
+            break;
+        }
+        offset += BLOCK_BYTES;
+    }
+    // Inspect only the first differing block, or the final short tail.
+    let end = offset + (limit - offset).min(BLOCK_BYTES);
+    let Some(mismatch) = left_bytes[offset..end]
+        .iter()
+        .zip(&right_bytes[offset..end])
+        .position(|(left, right)| left != right)
+    else {
+        return Ordering::Equal;
+    };
+    let mut scalar_start = offset + mismatch;
+    while !left.is_char_boundary(scalar_start) {
+        scalar_start -= 1;
+    }
+    debug_assert!(right.is_char_boundary(scalar_start));
+    let left_scalar = left[scalar_start..]
+        .chars()
+        .next()
+        .expect("a differing byte belongs to a scalar");
+    let right_scalar = right[scalar_start..]
+        .chars()
+        .next()
+        .expect("a differing byte belongs to a scalar");
+    let mut left_units = [0; 2];
+    let mut right_units = [0; 2];
+    let left_len = left_scalar.encode_utf16(&mut left_units).len();
+    let right_len = right_scalar.encode_utf16(&mut right_units).len();
+    left_units[..left_len].cmp(&right_units[..right_len])
+}
+
 impl Text {
     pub(super) fn shares_storage(&self, other: &Self) -> bool {
         match (self, other) {
@@ -47,7 +102,7 @@ impl Text {
 
     /// Exact UTF-16 order for two well-formed strings. Shared immutable
     /// subtrees prove equality in either encoding, including non-ASCII DAGs.
-    /// Flat operands decode directly without the CodeUnits dispatch wrapper.
+    /// Equal byte prefixes are skipped without decoding their code units.
     /// Callers must keep lone-surrogate strings on their exact-unit path.
     pub(super) fn cmp_utf16_streaming(&self, other: &Self) -> Ordering {
         if self.shares_storage(other) {
@@ -57,7 +112,7 @@ impl Text {
             return if Arc::ptr_eq(left, right) {
                 Ordering::Equal
             } else {
-                left.encode_utf16().cmp(right.encode_utf16())
+                cmp_utf16_common_prefix(left, right).then_with(|| left.len().cmp(&right.len()))
             };
         }
         if self.len() == 0 || other.len() == 0 {
@@ -208,22 +263,18 @@ impl ByteCursor {
                         {
                             self.compared_bytes += count;
                         }
-                        let order = left.as_bytes()[self.offset..self.offset + count]
-                            .cmp(&right.as_bytes()[other.offset..other.offset + count]);
+                        let order = if UTF16 {
+                            // Equal prefixes end at a whole leaf boundary on
+                            // at least one side, so both frontier offsets stay
+                            // scalar-aligned. Decode only at the first mismatch.
+                            debug_assert!(left.is_char_boundary(self.offset));
+                            debug_assert!(right.is_char_boundary(other.offset));
+                            cmp_utf16_common_prefix(&left[self.offset..], &right[other.offset..])
+                        } else {
+                            left.as_bytes()[self.offset..self.offset + count]
+                                .cmp(&right.as_bytes()[other.offset..other.offset + count])
+                        };
                         if order != Ordering::Equal {
-                            if UTF16 {
-                                // Equal UTF-8 prefixes preserve scalar boundaries:
-                                // at least one compared chunk ended a whole leaf.
-                                // A mismatch may itself split a scalar, so decode
-                                // the complete suffixes, not the byte chunks. The
-                                // mismatch precedes either leaf's end; their UTF-16
-                                // comparison therefore decides the whole strings.
-                                debug_assert!(left.is_char_boundary(self.offset));
-                                debug_assert!(right.is_char_boundary(other.offset));
-                                return left[self.offset..]
-                                    .encode_utf16()
-                                    .cmp(right[other.offset..].encode_utf16());
-                            }
                             return order;
                         }
                     }
@@ -669,6 +720,63 @@ mod tests {
                 assert_eq!(exact.utf16_cmp(value), expected.reverse());
                 assert_unjoined(value);
             }
+        }
+    }
+
+    #[test]
+    fn utf16_byte_blocks_restore_scalars_at_every_alignment() {
+        let scalars = [
+            '\0', '\u{7f}', '\u{80}', '\u{7ff}', '\u{800}', '\u{d7ff}',
+            '\u{e000}', '\u{ffff}', '\u{10000}', '\u{103ff}', '\u{10400}',
+            '\u{1f600}', '\u{1f601}', '\u{10ffff}',
+        ];
+        for padding in 0..132 {
+            let prefix = format!("{}\u{e9}\u{1f600}", "x".repeat(padding));
+            for a in scalars {
+                for b in scalars {
+                    let left = format!("{prefix}{a}tail");
+                    let right = format!("{prefix}{b}tail");
+                    let expected = left.encode_utf16().cmp(right.encode_utf16());
+                    let actual = cmp_utf16_common_prefix(&left, &right)
+                        .then_with(|| left.len().cmp(&right.len()));
+                    assert_eq!(actual, expected, "padding={padding}, a={a:?}, b={b:?}");
+                    assert_eq!(
+                        JsString::from(left.as_str()).utf16_cmp(&JsString::from(right.as_str())),
+                        expected
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn utf16_long_unshared_prefixes_keep_flat_and_rope_semantics() {
+        let prefix = "\u{e9}\u{1f600}\u{65e5}".repeat(32768);
+        for (a, b) in [
+            ("", ""),
+            ("", "z"),
+            ("z", ""),
+            ("\u{1f600}", "\u{e000}"),
+            ("\u{e000}", "\u{1f600}"),
+            ("\u{10000}", "\u{103ff}"),
+            ("\u{103ff}", "\u{10400}"),
+        ] {
+            let left_text = format!("{prefix}{a}");
+            let right_text = format!("{prefix}{b}");
+            let expected = left_text.encode_utf16().cmp(right_text.encode_utf16());
+            let left = JsString::from(left_text.as_str());
+            let right = JsString::from(right_text.as_str());
+            assert_eq!(left.utf16_cmp(&right), expected);
+            assert_eq!(right.utf16_cmp(&left), expected.reverse());
+            // Different leaf boundaries exercise the same byte-prefix helper
+            // without publishing concatenation buffers or sharing the prefix.
+            let left = rope(&left_text[..2], &left_text[2..]);
+            let right = rope(&right_text[..6], &right_text[6..]);
+            assert_eq!(left.utf16_cmp(&right), expected);
+            assert_eq!(right.utf16_cmp(&left), expected.reverse());
+            assert_eq!(left.cmp(&right), left_text.cmp(&right_text));
+            assert_unjoined(&left);
+            assert_unjoined(&right);
         }
     }
 }

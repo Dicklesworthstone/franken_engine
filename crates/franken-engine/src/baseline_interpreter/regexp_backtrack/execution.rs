@@ -7,6 +7,9 @@
 use super::{BacktrackError, BacktrackRegExp, Captures, Inst, PreparedInput};
 use super::{is_line_terminator, is_word_char};
 
+mod prefix;
+use prefix::StartPrefix;
+
 /// Bound idle capacity between candidate starts and global matches. Large
 /// active searches still use the original step bound, then release their peak.
 const MAX_RETAINED_FRAMES: usize = 4096;
@@ -37,6 +40,8 @@ pub(super) struct Run<'a> {
     // Allocated once, and only if an assertion actually writes captures.
     // A compaction touches and clears only the slots present in its suffix.
     capture_seen: Vec<bool>,
+    #[cfg(test)]
+    candidate_executions: usize,
 }
 
 impl Run<'_> {
@@ -405,6 +410,8 @@ impl<'a> Run<'a> {
             steps_left,
             stack: Vec::new(),
             capture_seen: Vec::new(),
+            #[cfg(test)]
+            candidate_executions: 0,
         }
     }
 
@@ -437,6 +444,12 @@ impl<'a> Run<'a> {
         let input = self.input;
         let length = input.chars.len();
         let literal = self.required_start_literal(sticky);
+        // Keep the existing cheap scan for bare literals. A richer prefix
+        // also rejects later mismatches and handles captures/classes/anchors.
+        let prefix = (!sticky)
+            .then(|| StartPrefix::new(self.regexp))
+            .flatten()
+            .filter(|prefix| literal.is_none() || prefix.has_multiple_checks());
         let mut at = start;
         if at <= length {
             // A failed execute restores every capture to its entry value.
@@ -453,6 +466,17 @@ impl<'a> Run<'a> {
                     at += missed;
                     continue;
                 }
+            }
+            if let Some(prefix) = &prefix {
+                let missed = self.skip_prefix_misses(at, prefix);
+                if missed != 0 {
+                    at += missed;
+                    continue;
+                }
+            }
+            #[cfg(test)]
+            {
+                self.candidate_executions += 1;
             }
             let matched = self.execute(0, at, stack);
             // Reuse common workspaces, but do not retain an adversarial peak

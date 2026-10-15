@@ -23,11 +23,12 @@ use crate::ast::{
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
 const MODULE_BINDING: &str = "%fs_module";
-// Compose directory iteration and copying with the same filesystem object.
-// Both adapters retain the existing private host calls and admission boundary.
+// Compose callbacks, directory iteration and copying on one filesystem object.
+// All adapters retain the same private host calls and admission boundary.
 const SOURCE: &str = concat!(
+    "(", include_str!("fs_callbacks.js"), ")(",
     "(", include_str!("fs_directory.js"), ")((",
-    include_str!("fs_copy.js"), ")(", include_str!("fs_module.js"), "))",
+    include_str!("fs_copy.js"), ")(", include_str!("fs_module.js"), ")))",
 );
 // One immutable parser template shared by fs and fs/promises. Every program
 // still receives a clone before renaming and dependency/loader rewriting.
@@ -36,7 +37,7 @@ const PLACEHOLDERS: [(&str, &str); 2] = [
     ("__franken_fs_read", "%FsRead"),
     ("__franken_fs_write", "%FsWrite"),
 ];
-const GLOBALS: [&str; 13] = [
+const GLOBALS: [&str; 18] = [
     "Promise",
     "Reflect",
     "TypeError",
@@ -50,6 +51,11 @@ const GLOBALS: [&str; 13] = [
     "AggregateError",
     "Object",
     "String",
+    "Uint8Array",
+    "DataView",
+    "queueMicrotask",
+    "URL",
+    "Date",
 ];
 
 pub(super) fn intrinsic_capability(name: &str) -> Option<&'static str> {
@@ -670,6 +676,23 @@ mod tests {
     fn native_module_source_parses_with_protected_globals() {
         let names = GLOBALS.iter().map(|name| (*name).to_string()).collect();
         module_source(&names).expect("the shipped source parses and renames");
+    }
+
+    #[test]
+    fn callbacks_keep_the_shared_object_and_never_take_the_sync_fast_path() {
+        for source in [
+            "const fs = require('fs'); fs.open('x', 'r', callback);",
+            "const { read, write, stat } = require('node:fs'); read(fd, buffer, callback);",
+            "require('fs').cp('src', 'dst', {recursive: true}, callback);",
+        ] {
+            let tree = parse(source);
+            assert!(direct_fs_calls(&tree).unwrap().is_none(), "{source}");
+            let rewritten = rewrite_fs_requires(&tree).unwrap().expect("callback module");
+            assert_eq!(rewritten.body.iter().filter(|s| is_module_declaration(s)).count(), 1);
+            assert!(rewrite_fs_requires(&rewritten).unwrap().is_none());
+        }
+        let tree = parse("function f(require) { return require('fs').open('x', callback); }");
+        assert!(rewrite_fs_requires(&tree).unwrap().is_none());
     }
 
     #[test]

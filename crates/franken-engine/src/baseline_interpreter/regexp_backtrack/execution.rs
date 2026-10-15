@@ -9,9 +9,11 @@ use super::{is_line_terminator, is_word_char};
 
 mod literals;
 mod prefix;
+mod repetitions;
 
 use literals::LiteralBlocks;
 use prefix::StartPrefix;
+use repetitions::GreedyRepeat;
 
 /// Bound idle capacity between candidate starts and global matches. Large
 /// active searches still use the original step bound, then release their peak.
@@ -22,6 +24,18 @@ enum Frame {
     Alternative {
         pc: usize,
         position: usize,
+    },
+    /// A range is paired with the Register frame immediately below it.
+    /// Distinct directions keep each payload within the existing frame width.
+    RepeatForward {
+        pc: usize,
+        position: usize,
+        start: usize,
+    },
+    RepeatBackward {
+        pc: usize,
+        position: usize,
+        start: usize,
     },
     Slot {
         slot: usize,
@@ -48,6 +62,10 @@ pub(super) struct Run<'a> {
     candidate_executions: usize,
     #[cfg(test)]
     literal_dispatches: usize,
+    #[cfg(test)]
+    repetitions_disabled: bool,
+    #[cfg(test)]
+    repeat_dispatches: usize,
 }
 
 impl Run<'_> {
@@ -154,6 +172,27 @@ impl Run<'_> {
                     ((before != after) != *negated).then_some(position)
                 }
                 Inst::Split { first, second } => {
+                    let repeat = GreedyRepeat::at(regexp, pc);
+                    #[cfg(test)]
+                    let repeat = repeat.filter(|_| !self.repetitions_disabled);
+                    if let Some(repeat) = repeat {
+                        #[cfg(test)]
+                        {
+                            self.repeat_dispatches += 1;
+                        }
+                        let old = self.registers[repeat.register];
+                        let end = repeat.execute_after_split(
+                            regexp,
+                            chars,
+                            position,
+                            &mut self.registers[repeat.register],
+                            &mut self.steps_left,
+                        )?;
+                        repeat.push_choices(stack, position, end, old);
+                        position = end;
+                        pc = repeat.exit;
+                        continue;
+                    }
                     stack.push(Frame::Alternative {
                         pc: *second,
                         position,
@@ -298,6 +337,10 @@ impl Run<'_> {
                         Some(Frame::Slot { slot, old }) => self.slots[slot] = old,
                         Some(Frame::Register { register, old }) => {
                             self.registers[register] = old;
+                        }
+                        Some(frame @ (Frame::RepeatForward { .. } | Frame::RepeatBackward { .. })) => {
+                            (pc, position) = self.resume_repeat(frame, stack);
+                            break;
                         }
                         Some(Frame::Alternative {
                             pc: resume,
@@ -448,6 +491,10 @@ impl<'a> Run<'a> {
             candidate_executions: 0,
             #[cfg(test)]
             literal_dispatches: 0,
+            #[cfg(test)]
+            repetitions_disabled: false,
+            #[cfg(test)]
+            repeat_dispatches: 0,
         }
     }
 

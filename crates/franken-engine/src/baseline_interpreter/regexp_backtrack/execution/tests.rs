@@ -193,6 +193,9 @@ impl Run<'_> {
                         Some(Frame::Register { register, old }) => {
                             self.registers[register] = old;
                         }
+                        Some(Frame::RepeatForward { .. } | Frame::RepeatBackward { .. }) => {
+                            unreachable!("the independent scalar executor never creates repetition ranges");
+                        }
                         Some(Frame::Alternative {
                             pc: resume,
                             position: at,
@@ -355,15 +358,19 @@ fn small_searches_reuse_work_buffers_after_success_failure_and_nested_assertions
 
 #[test]
 fn search_releases_an_oversized_stack_instead_of_retaining_an_adversarial_peak() {
-    let regexp = BacktrackRegExp::new("a*", "").unwrap();
+    // Captures inside the repeated atom deliberately keep the scalar path:
+    // plain a* now compresses its choices instead of creating an oversized stack.
+    let regexp = BacktrackRegExp::new("(a)*", "").unwrap();
     let text = "a".repeat(MAX_RETAINED_FRAMES * 2);
     let input = PreparedInput::new(&text);
     let mut run = Run::new(&regexp, &input, 1_000_000);
-    assert_eq!(run.search(0, true).unwrap(), Some(vec![Some((0, text.len()))]));
+    assert_eq!(run.search(0, true).unwrap(), Some(vec![
+        Some((0, text.len())), Some((text.len() - 1, text.len())),
+    ]));
     assert_eq!(run.stack.capacity(), 0);
     assert_eq!(
         run.search(input.char_len(), true).unwrap(),
-        Some(vec![Some((text.len(), text.len()))])
+        Some(vec![Some((text.len(), text.len())), None])
     );
     assert!(run.stack.capacity() <= MAX_RETAINED_FRAMES);
 }

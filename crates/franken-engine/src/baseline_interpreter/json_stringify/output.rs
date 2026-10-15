@@ -92,10 +92,52 @@ impl StringifyState {
                 self.ascii(core, bytes)
             }
         } else if QUOTED {
-            self.units(core, QuotedUnits::new(text.encode_utf16()))
+            if let Some(text) = text.as_str() {
+                self.quote_utf8(core, text)
+            } else {
+                self.units(core, QuotedUnits::new(text.encode_utf16()))
+            }
         } else {
             self.units(core, text.encode_utf16())
         }
+    }
+
+    /// In well-formed UTF-8, every JSON escape starts with an ASCII byte.
+    /// Pass clean spans directly to the existing output writers instead of
+    /// testing each decoded unit for escapes and surrogate pairing. Bound
+    /// each probe to 256 bytes, and round its end back to a scalar boundary;
+    /// neither a pair nor a UTF-8 scalar can be split between spans.
+    /// Exact-only strings keep QuotedUnits so lone surrogates stay distinct.
+    fn quote_utf8(
+        &mut self,
+        core: &mut InterpreterCore,
+        mut text: &str,
+    ) -> Result<(), InterpreterError> {
+        while !text.is_empty() {
+            let window = text.len().min(256);
+            let mut plain = text.as_bytes()[..window]
+                .iter()
+                .position(|&byte| byte < 0x20 || byte == b'"' || byte == b'\\')
+                .unwrap_or(window);
+            while !text.is_char_boundary(plain) {
+                plain -= 1;
+            }
+            if plain != 0 {
+                let span = &text[..plain];
+                if span.is_ascii() {
+                    self.ascii(core, span.as_bytes())?;
+                } else {
+                    self.units(core, span.encode_utf16())?;
+                }
+                text = &text[plain..];
+            } else {
+                // A zero-length plain span can only mean an ASCII escape.
+                // Reuse its original spelling and scalar admission path.
+                self.quote_ascii(core, &text.as_bytes()[..1])?;
+                text = &text[1..];
+            }
+        }
+        Ok(())
     }
 
     /// Traverse unresolved strings by leaf instead of materializing their
@@ -579,5 +621,194 @@ mod frontier_tests {
             release(&mut core, state);
             assert!(text.unjoined_concat_children().is_some());
         }
+    }
+
+    fn compare_utf8(
+        text: &str,
+        prefix: &[u16],
+        limit: usize,
+        work: u64,
+        memory: Option<u64>,
+        cancel: bool,
+    ) {
+        let mut actual_core = core();
+        let mut expected_core = core();
+        let mut actual = StringifyState::default();
+        let mut expected = StringifyState::default();
+        for &unit in prefix {
+            actual.push(&mut actual_core, unit).unwrap();
+            expected.push(&mut expected_core, unit).unwrap();
+        }
+        for core in [&mut actual_core, &mut expected_core] {
+            core.config.max_string_size = limit;
+            core.config.instruction_budget = core.instructions_executed + work;
+            if let Some(bytes) = memory {
+                core.config.max_total_memory_bytes = core.estimated_memory_bytes() + bytes;
+            }
+            if cancel {
+                let token = super::super::CancellationToken::new();
+                token.cancel();
+                core.config.cancellation_token = Some(token);
+            }
+        }
+        let got = actual.quote_utf8(&mut actual_core, text);
+        // Keep the previous per-unit codec as an independent oracle, not the
+        // new leaf dispatch. This also exercises pair/escape batch boundaries.
+        let want = expected.units(&mut expected_core, QuotedUnits::new(text.encode_utf16()));
+        assert_eq!(got, want, "text={text:?}, limit={limit}, work={work}");
+        assert_eq!(actual.output, expected.output);
+        assert_eq!(actual.projection_bytes, expected.projection_bytes);
+        assert_eq!(actual.output.capacity(), expected.output.capacity());
+        assert_eq!(actual.charged, expected.charged);
+        assert_eq!(
+            actual_core.instructions_executed,
+            expected_core.instructions_executed
+        );
+        assert_eq!(
+            actual_core.json_parse_temporary_bytes,
+            expected_core.json_parse_temporary_bytes
+        );
+        assert!(actual_core.pending_exception.is_none());
+        release(&mut actual_core, actual);
+        release(&mut expected_core, expected);
+    }
+
+    #[test]
+    fn utf8_spans_keep_every_escape_and_scalar_at_window_boundaries() {
+        for position in [0, 1, 63, 64, 252, 253, 254, 255, 256, 257, 511] {
+            for scalar in ['é', '日', '😀', '\u{10ffff}'] {
+                let text = format!(
+                    "{}{scalar}\"\\\0\x08\x0c\n\r\t\u{2028}\u{2029}{}",
+                    "a".repeat(position),
+                    "é日😀".repeat(90)
+                );
+                compare_utf8(&text, &[], 8192, 100_000, None, false);
+                for limit in [position, position + 1, position + 3, position + 4, 1024] {
+                    compare_utf8(&text, &[0xd800], limit, 100_000, None, false);
+                }
+            }
+        }
+        for byte in 0u8..=127 {
+            for position in [252, 253, 254, 255, 256] {
+                let text = format!("{}😀{}é", "a".repeat(position), char::from(byte));
+                compare_utf8(&text, &[], 8192, 100_000, None, false);
+            }
+        }
+    }
+
+    #[test]
+    fn utf8_spans_keep_work_memory_and_cancellation_refusal_prefixes() {
+        let inputs = [
+            format!("é{}😀", "a".repeat(2048)),
+            "é日😀\"\\\n\0".repeat(128),
+            "😀\u{2028}\u{2029}".repeat(256),
+        ];
+        for prefix in [vec![], vec![0xd800], vec![0x61; 255], vec![0x61; 256]] {
+            for input in &inputs {
+                for limit in [0, 1, 2, 3, 63, 64, 65, 255, 256, 257, 511, 4096] {
+                    compare_utf8(input, &prefix, limit, 100_000, None, false);
+                }
+                for work in [0, 1, 2, 8] {
+                    compare_utf8(input, &prefix, 16384, work, None, false);
+                }
+                for bytes in [0, 1, 127, 128, 129, 255, 256, 257, 1024] {
+                    compare_utf8(input, &prefix, 16384, 100_000, Some(bytes), false);
+                }
+                compare_utf8(input, &prefix, 16384, 100_000, None, true);
+            }
+        }
+    }
+
+    #[test]
+    fn utf8_spans_need_no_scratch_and_exact_only_leaves_keep_the_old_codec() {
+        let inputs = [
+            JsString::from(format!("é{}😀", "a".repeat(2048))),
+            JsString::from("é日😀\"\\\n".repeat(128)),
+            JsString::from_code_units(&[0xd800, 0x22, 0xdc00, 0xd83d, 0xde00]),
+        ];
+        for input in inputs {
+            let mut actual_core = core();
+            let mut expected_core = core();
+            let mut actual = StringifyState::default();
+            let mut expected = StringifyState::default();
+            for _ in 0..4096 {
+                actual.push(&mut actual_core, 0x61).unwrap();
+            }
+            actual.output.clear();
+            actual.projection_bytes = 0;
+            let charged = actual.charged;
+            let pointer = actual.output.as_ptr();
+            let capacity = actual.output.capacity();
+            actual_core.config.max_total_memory_bytes = actual_core.estimated_memory_bytes();
+            actual.quote(&mut actual_core, &input).unwrap();
+            expected.push(&mut expected_core, 0x22).unwrap();
+            expected
+                .units(&mut expected_core, QuotedUnits::new(input.encode_utf16()))
+                .unwrap();
+            expected.push(&mut expected_core, 0x22).unwrap();
+            assert_eq!(actual.output, expected.output);
+            assert_eq!(actual.projection_bytes, expected.projection_bytes);
+            assert_eq!(actual.output.as_ptr(), pointer);
+            assert_eq!(actual.output.capacity(), capacity);
+            assert_eq!(actual.charged, charged);
+            release(&mut actual_core, actual);
+            release(&mut expected_core, expected);
+        }
+    }
+
+    #[test]
+    fn utf8_spans_match_the_old_codec_on_shared_and_published_rope_leaves() {
+        let leaf = JsString::from(format!("é{}😀\"\\\n", "a".repeat(1024)));
+        let mut text = leaf.concat(&leaf);
+        for _ in 0..3 {
+            text = text.concat(&text);
+        }
+        for published in [false, true] {
+            if published {
+                let _ = text.as_str().unwrap();
+            }
+            let mut actual_core = core();
+            let mut expected_core = core();
+            let mut actual = StringifyState::default();
+            let mut expected = StringifyState::default();
+            actual.quote(&mut actual_core, &text).unwrap();
+            expected.push(&mut expected_core, 0x22).unwrap();
+            expected
+                .units(&mut expected_core, QuotedUnits::new(text.encode_utf16()))
+                .unwrap();
+            expected.push(&mut expected_core, 0x22).unwrap();
+            assert_eq!(actual.output, expected.output);
+            assert_eq!(actual.projection_bytes, expected.projection_bytes);
+            assert_eq!(actual.charged, expected.charged);
+            assert_eq!(text.unjoined_concat_children().is_none(), published);
+            release(&mut actual_core, actual);
+            release(&mut expected_core, expected);
+        }
+    }
+
+    #[test]
+    fn mixed_unicode_builtin_keeps_result_provenance_and_exact_output() {
+        use super::super::{Label, RegRange, Value};
+
+        let mut core = core();
+        let payload = format!("é{}😀日", "a".repeat(4096));
+        core.seed_register(0, Value::str(payload.clone())).unwrap();
+        core.set_register_label(0, Label::Secret).unwrap();
+        let result = core
+            .dispatch_builtin_hostcall(
+                "builtin:JsonStringify",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .unwrap();
+        assert_eq!(result, Value::str(format!("\"{payload}\"")));
+        assert_eq!(core.pending_hostcall_result_label, Some(Label::Secret));
+        assert!(core.active_inline_callback_context_label.is_none());
+        assert!(core.pending_exception.is_none());
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 }

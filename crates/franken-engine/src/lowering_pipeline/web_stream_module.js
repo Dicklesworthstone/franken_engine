@@ -18,10 +18,24 @@
   const iteratorKey = Symbol.iterator;
   const asyncIteratorKey = Symbol.asyncIterator;
   const tagKey = Symbol.toStringTag;
+  const Abort = AbortController;
+  const abortController = AbortController.prototype.abort;
+  const controllerSignal = Object.getOwnPropertyDescriptor(AbortController.prototype, 'signal').get;
+  const signalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'aborted').get;
+  const signalReason = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'reason').get;
+  const Signals = AbortSignal;
+  const anySignal = AbortSignal.any;
+  const listen = EventTarget.prototype.addEventListener;
+  const unlisten = EventTarget.prototype.removeEventListener;
   const streams = new Weak();
   const readers = new Weak();
   const controllers = new Weak();
   const strategies = new Weak();
+  const sinks = new Weak();
+  const writers = new Weak();
+  const writeControllers = new Weak();
+  const transforms = new Weak();
+  const transformControllers = new Weak();
   const token = {};
 
   function invalid(message) { return new NativeTypeError(message); }
@@ -153,18 +167,31 @@
     clear(s.queue); closeReadable(s);
     return then(promised(algorithm, source, [reason]), function () {});
   }
-  function read(r) {
+  function read(r, receive) {
     if (r.stream === undefined) return rejected(invalid('Reader lock is released'));
     const s = get(streams, r.stream, 'stream');
     s.disturbed = true;
-    if (s.state === 'closed') return resolved(result(undefined, true));
+    if (s.state === 'closed') {
+      const item = result(undefined, true);
+      if (receive !== undefined) receive(item);
+      return resolved(item);
+    }
     if (s.state === 'errored') return rejected(s.error);
     if (s.queue.length !== 0) {
       const value = shift(s.queue);
+      const item = result(value, false);
+      if (receive !== undefined) receive(item);
       if (s.closeRequested && s.queue.length === 0) closeReadable(s); else pull(s);
-      return resolved(result(value, false));
+      return resolved(item);
     }
     const request = deferred(false);
+    if (receive !== undefined) {
+      const publish = request.resolve;
+      request.resolve = function (item) {
+        if (request.pending) receive(item);
+        publish(item);
+      };
+    }
     push(r.requests, request, 0); pull(s);
     return request.promise;
   }
@@ -255,6 +282,17 @@
         return cancelReadable(s, reason);
       } catch (error) { return rejected(error); }
     }
+    pipeTo(destination, options) {
+      try { return pipe(this, destination, pipeOptions(options)); }
+      catch (error) { return rejected(error); }
+    }
+    pipeThrough(transform, options) {
+      const pair = dictionary(transform, 'transform');
+      const readable = pair.readable, writable = pair.writable;
+      get(streams, readable, 'ReadableStream');
+      handled(pipe(this, writable, pipeOptions(options)));
+      return readable;
+    }
     values(options) {
       get(streams, this, 'ReadableStream');
       const preventCancel = !!dictionary(options, 'options').preventCancel;
@@ -321,6 +359,459 @@
   }
   const readableValues = ReadableStream.prototype.values;
   property(ReadableStream.prototype, asyncIteratorKey, readableValues);
+
+  // A queued write remains counted while its sink callback is in flight.
+  // Only one callback is active; erroring waits for it (and start) before
+  // rejecting later writes. Releasing a writer does not revoke accepted work.
+  function writerState(s) { return s.writer === undefined ? undefined : get(writers, s.writer, 'writer'); }
+  function rejectLifecycle(w, name, reason) {
+    if (!w[name].pending) w[name] = deferred(true);
+    w[name].reject(reason);
+  }
+  function sinkPressure(s) {
+    const pressured = s.highWaterMark - s.queue.total <= 0;
+    if (s.state !== 'writable' || s.closing || pressured === s.backpressure) return;
+    s.backpressure = pressured;
+    const w = writerState(s);
+    if (w !== undefined) {
+      if (pressured) w.ready = deferred(true); else w.ready.resolve();
+    }
+  }
+  function releaseSink(s) { s.sink = undefined; s.write = undefined; s.close = undefined; s.abort = undefined; s.size = undefined; }
+  function rejectSinkClosure(s) {
+    if (s.closeRequest !== undefined) { s.closeRequest.reject(s.error); s.closeRequest = undefined; }
+    const w = writerState(s);
+    if (w !== undefined) w.closed.reject(s.error);
+  }
+  function finishErroring(s) {
+    if (s.state !== 'erroring' || !s.started || s.inflight !== undefined) return;
+    s.state = 'errored';
+    while (s.queue.length !== 0) {
+      const request = shift(s.queue);
+      if (!request.close) request.done.reject(s.error);
+    }
+    const abort = s.pendingAbort;
+    s.pendingAbort = undefined;
+    if (abort === undefined || abort.alreadyErroring) {
+      if (abort !== undefined) abort.done.reject(s.error);
+      releaseSink(s); rejectSinkClosure(s); return;
+    }
+    const completion = promised(s.abort, s.sink, [abort.reason]);
+    releaseSink(s);
+    then(completion, function () { abort.done.resolve(); rejectSinkClosure(s); },
+      function (error) { abort.done.reject(error); rejectSinkClosure(s); });
+  }
+  function errorSink(s, reason) {
+    if (s.state === 'writable') {
+      s.state = 'erroring'; s.error = reason;
+      const w = writerState(s);
+      if (w !== undefined) rejectLifecycle(w, 'ready', reason);
+    }
+    finishErroring(s);
+  }
+  function controllerErrorSink(s, reason) {
+    if (s.state !== 'writable') return;
+    releaseSink(s); errorSink(s, reason);
+  }
+  function advanceSink(s) {
+    if (!s.started || s.inflight !== undefined) return;
+    if (s.state === 'erroring') { finishErroring(s); return; }
+    if (s.state !== 'writable' || s.queue.length === 0) return;
+    const request = s.queue.head.value;
+    s.inflight = request;
+    if (request.close) {
+      s.closeRequest = undefined;
+      const completion = promised(s.close, s.sink, []);
+      releaseSink(s);
+      then(completion, function () {
+        shift(s.queue); s.inflight = undefined;
+        // A successful in-flight close wins a concurrent abort/error request.
+        s.state = 'closed'; s.error = undefined;
+        request.done.resolve();
+        if (s.pendingAbort !== undefined) { s.pendingAbort.done.resolve(); s.pendingAbort = undefined; }
+        const w = writerState(s);
+        if (w !== undefined) w.closed.resolve();
+      }, function (error) {
+        shift(s.queue); s.inflight = undefined; request.done.reject(error);
+        if (s.pendingAbort !== undefined) { s.pendingAbort.done.reject(error); s.pendingAbort = undefined; }
+        errorSink(s, error);
+      });
+    } else {
+      then(promised(s.write, s.sink, [request.chunk, s.controller]), function () {
+        shift(s.queue); s.inflight = undefined; request.done.resolve();
+        sinkPressure(s); advanceSink(s);
+      }, function (error) {
+        shift(s.queue); s.inflight = undefined; request.done.reject(error);
+        if (s.state === 'writable') releaseSink(s);
+        errorSink(s, error);
+      });
+    }
+  }
+  function write(w, chunk) {
+    const stream = w.stream;
+    if (stream === undefined) return rejected(invalid('Writer lock is released'));
+    const s = get(sinks, stream, 'WritableStream');
+    let size;
+    try { size = chunkSize(s.size, chunk); }
+    catch (error) { controllerErrorSink(s, error); size = 1; }
+    // Size is user code: it can release the lock, close, abort or error.
+    if (w.stream !== stream) return rejected(invalid('Writer lock is released'));
+    if (s.state === 'erroring' || s.state === 'errored') return rejected(s.error);
+    if (s.state === 'closed' || s.closing) return rejected(invalid('WritableStream is closed or closing'));
+    const done = deferred(false);
+    push(s.queue, { chunk: chunk, done: done, close: false }, size);
+    sinkPressure(s); advanceSink(s);
+    return done.promise;
+  }
+  function closeSink(s) {
+    if (s.state === 'closed' || s.state === 'errored' || s.closing) return rejected(invalid('WritableStream is closed or closing'));
+    const done = deferred(false);
+    s.closing = true; s.closeRequest = done;
+    const w = writerState(s);
+    if (w !== undefined && s.state === 'writable') w.ready.resolve();
+    push(s.queue, { close: true, done: done }, 0); advanceSink(s);
+    return done.promise;
+  }
+  function abortSink(s, reason) {
+    if (s.state === 'closed' || s.state === 'errored') return resolved();
+    apply(abortController, s.abortController, [reason]);
+    // Signal listeners can reenter abort/error/close before this request exists.
+    if (s.state === 'closed' || s.state === 'errored') return resolved();
+    if (s.pendingAbort !== undefined) return s.pendingAbort.done.promise;
+    const done = deferred(false);
+    const alreadyErroring = s.state === 'erroring';
+    s.pendingAbort = { done: done, reason: alreadyErroring ? undefined : reason, alreadyErroring: alreadyErroring };
+    if (!alreadyErroring) errorSink(s, reason);
+    return done.promise;
+  }
+  function releaseWriter(w) {
+    if (w.stream === undefined) return;
+    const s = get(sinks, w.stream, 'WritableStream');
+    const reason = invalid('Writer lock is released');
+    rejectLifecycle(w, 'ready', reason); rejectLifecycle(w, 'closed', reason);
+    s.writer = undefined; w.stream = undefined;
+  }
+  class WritableStreamDefaultController {
+    constructor(key, state) {
+      if (key !== token) throw invalid('Illegal constructor');
+      set(writeControllers, this, state);
+    }
+    get signal() { return apply(controllerSignal, get(writeControllers, this, 'WritableStreamDefaultController').abortController, []); }
+    error(reason) {
+      const s = get(writeControllers, this, 'WritableStreamDefaultController');
+      controllerErrorSink(s, reason);
+    }
+  }
+  class WritableStreamDefaultWriter {
+    constructor(stream) {
+      const s = get(sinks, stream, 'WritableStream');
+      if (s.writer !== undefined) throw invalid('WritableStream is locked');
+      const w = { stream: stream, ready: deferred(true), closed: deferred(true) };
+      set(writers, this, w); s.writer = this;
+      if (s.state === 'errored' || s.state === 'erroring') w.ready.reject(s.error);
+      else if (s.state === 'closed' || s.closing || !s.backpressure) w.ready.resolve();
+      if (s.state === 'closed') w.closed.resolve();
+      else if (s.state === 'errored') w.closed.reject(s.error);
+    }
+    get closed() { try { return get(writers, this, 'WritableStreamDefaultWriter').closed.promise; } catch (error) { return rejected(error); } }
+    get ready() { try { return get(writers, this, 'WritableStreamDefaultWriter').ready.promise; } catch (error) { return rejected(error); } }
+    get desiredSize() {
+      const w = get(writers, this, 'WritableStreamDefaultWriter');
+      if (w.stream === undefined) throw invalid('Writer lock is released');
+      const s = get(sinks, w.stream, 'WritableStream');
+      return s.state === 'errored' || s.state === 'erroring' ? null : s.state === 'closed' ? 0 : s.highWaterMark - s.queue.total;
+    }
+    write(chunk) { try { return write(get(writers, this, 'WritableStreamDefaultWriter'), chunk); } catch (error) { return rejected(error); } }
+    close() {
+      try {
+        const w = get(writers, this, 'WritableStreamDefaultWriter');
+        if (w.stream === undefined) throw invalid('Writer lock is released');
+        return closeSink(get(sinks, w.stream, 'WritableStream'));
+      } catch (error) { return rejected(error); }
+    }
+    abort(reason) {
+      try {
+        const w = get(writers, this, 'WritableStreamDefaultWriter');
+        if (w.stream === undefined) throw invalid('Writer lock is released');
+        return abortSink(get(sinks, w.stream, 'WritableStream'), reason);
+      } catch (error) { return rejected(error); }
+    }
+    releaseLock() { releaseWriter(get(writers, this, 'WritableStreamDefaultWriter')); }
+  }
+  class WritableStream {
+    constructor(underlyingSink, queuingStrategy) {
+      const sink = dictionary(underlyingSink, 'underlyingSink');
+      const abort = method(sink, 'abort'), close = method(sink, 'close');
+      const start = method(sink, 'start'), writeAlgorithm = method(sink, 'write');
+      if (sink.type !== undefined) throw new NativeRangeError('Typed writable sinks are not supported');
+      const config = strategy(queuingStrategy, 1);
+      const s = { state: 'writable', error: undefined, writer: undefined, started: false,
+        queue: queue(), inflight: undefined, closing: false, closeRequest: undefined,
+        pendingAbort: undefined, sink: sink, write: writeAlgorithm, close: close, abort: abort,
+        size: config.size, highWaterMark: config.highWaterMark, backpressure: config.highWaterMark === 0,
+        abortController: new Abort(), controller: undefined };
+      s.controller = new WritableStreamDefaultController(token, s);
+      set(sinks, this, s);
+      const started = invoke(start, sink, [s.controller]);
+      then(resolved(started), function () { s.started = true; advanceSink(s); },
+        function (error) { s.started = true; errorSink(s, error); });
+    }
+    get locked() { return get(sinks, this, 'WritableStream').writer !== undefined; }
+    getWriter() { return new WritableStreamDefaultWriter(this); }
+    abort(reason) {
+      try {
+        const s = get(sinks, this, 'WritableStream');
+        if (s.writer !== undefined) throw invalid('WritableStream is locked');
+        return abortSink(s, reason);
+      } catch (error) { return rejected(error); }
+    }
+    close() {
+      try {
+        const s = get(sinks, this, 'WritableStream');
+        if (s.writer !== undefined) throw invalid('WritableStream is locked');
+        return closeSink(s);
+      } catch (error) { return rejected(error); }
+    }
+  }
+
+  function pipeOptions(value) {
+    const options = dictionary(value, 'options');
+    const preventAbort = !!options.preventAbort;
+    const preventCancel = !!options.preventCancel;
+    const preventClose = !!options.preventClose;
+    const signal = options.signal;
+    if (signal !== undefined) apply(signalAborted, signal, []);
+    return { preventAbort: preventAbort, preventCancel: preventCancel, preventClose: preventClose, signal: signal };
+  }
+
+  // TransformStream uses these same reader/writer state machines. A change
+  // promise hands demand from the readable side to a blocked write; it does
+  // not pre-collect input, run callbacks concurrently or spin microtasks.
+  function transformPressure(t, value) {
+    if (t.backpressure === value) return;
+    t.changed.resolve(); t.changed = deferred(true); t.backpressure = value;
+  }
+  function clearTransform(t) { t.receiver = undefined; t.transform = undefined; t.flush = undefined; t.cancel = undefined; }
+  function errorTransform(t, reason) {
+    errorReadable(t.readState, reason); controllerErrorSink(t.writeState, reason);
+    clearTransform(t); transformPressure(t, false);
+  }
+  function enqueueTransform(t, value) {
+    try { enqueue(t.readState, value); }
+    catch (error) { errorTransform(t, error); throw error; }
+    if (!needsPull(t.readState)) transformPressure(t, true);
+  }
+  function performTransform(t, value) {
+    if (t.writeState.state !== 'writable') return rejected(t.writeState.error);
+    let promise;
+    if (t.transform === undefined) {
+      try { enqueueTransform(t, value); promise = resolved(); }
+      catch (error) { promise = rejected(error); }
+    } else promise = promised(t.transform, t.receiver, [value, t.controller]);
+    return then(promise, undefined, function (error) { errorTransform(t, error); throw error; });
+  }
+  function finishTransform(t, kind, reason) {
+    if (t.finish !== undefined) return t.finish.promise;
+    const finish = deferred(false);
+    t.finish = finish;
+    const promise = kind === 'close' ? promised(t.flush, t.receiver, [t.controller]) :
+      promised(t.cancel, t.receiver, [reason]);
+    clearTransform(t);
+    then(promise, function () {
+      if (kind === 'cancel') {
+        if (t.writeState.state === 'errored') { finish.reject(t.writeState.error); return; }
+        controllerErrorSink(t.writeState, reason); transformPressure(t, false); finish.resolve();
+      } else {
+        if (t.readState.state === 'errored') { finish.reject(t.readState.error); return; }
+        if (kind === 'close') {
+          if (canEnqueue(t.readState)) {
+            t.readState.closeRequested = true;
+            if (t.readState.queue.length === 0) closeReadable(t.readState);
+          }
+        } else errorReadable(t.readState, reason);
+        finish.resolve();
+      }
+    }, function (error) {
+      if (kind === 'cancel') { controllerErrorSink(t.writeState, error); transformPressure(t, false); }
+      else errorReadable(t.readState, error);
+      finish.reject(error);
+    });
+    return finish.promise;
+  }
+  class TransformStreamDefaultController {
+    constructor(key, state) {
+      if (key !== token) throw invalid('Illegal constructor');
+      set(transformControllers, this, state);
+    }
+    get desiredSize() {
+      const t = get(transformControllers, this, 'TransformStreamDefaultController');
+      const s = t.readState;
+      return s.state === 'errored' ? null : s.state === 'closed' ? 0 : s.highWaterMark - s.queue.total;
+    }
+    enqueue(value) { enqueueTransform(get(transformControllers, this, 'TransformStreamDefaultController'), value); }
+    error(reason) { errorTransform(get(transformControllers, this, 'TransformStreamDefaultController'), reason); }
+    terminate() {
+      const t = get(transformControllers, this, 'TransformStreamDefaultController');
+      if (canEnqueue(t.readState)) {
+        t.readState.closeRequested = true;
+        if (t.readState.queue.length === 0) closeReadable(t.readState);
+      }
+      controllerErrorSink(t.writeState, invalid('TransformStream is terminated'));
+      clearTransform(t); transformPressure(t, false);
+    }
+  }
+  class TransformStream {
+    constructor(transformer, writableStrategy, readableStrategy) {
+      const receiver = dictionary(transformer, 'transformer');
+      const cancel = method(receiver, 'cancel'), flush = method(receiver, 'flush');
+      const start = method(receiver, 'start'), transform = method(receiver, 'transform');
+      if (receiver.readableType !== undefined || receiver.writableType !== undefined) throw new NativeRangeError('Typed transform streams are not supported');
+      const writable = strategy(writableStrategy, 1), readable = strategy(readableStrategy, 0);
+      const started = deferred(true);
+      const t = { receiver: receiver, transform: transform, flush: flush, cancel: cancel,
+        readable: undefined, writable: undefined, readState: undefined, writeState: undefined,
+        controller: undefined, backpressure: true, changed: deferred(true), finish: undefined };
+      const sink = create(null), source = create(null);
+      sink.start = function () { return started.promise; };
+      sink.write = function (value) {
+        return t.backpressure ? then(t.changed.promise, function () { return performTransform(t, value); }) : performTransform(t, value);
+      };
+      sink.close = function () { return finishTransform(t, 'close'); };
+      sink.abort = function (reason) { return finishTransform(t, 'abort', reason); };
+      source.start = function () { return started.promise; };
+      source.pull = function () { transformPressure(t, false); return t.changed.promise; };
+      source.cancel = function (reason) { return finishTransform(t, 'cancel', reason); };
+      t.writable = new WritableStream(sink, writable);
+      t.writeState = get(sinks, t.writable, 'WritableStream');
+      t.readable = new ReadableStream(source, readable);
+      t.readState = get(streams, t.readable, 'ReadableStream');
+      t.controller = new TransformStreamDefaultController(token, t);
+      set(transforms, this, t);
+      started.resolve(invoke(start, receiver, [t.controller]));
+    }
+    get readable() { return get(transforms, this, 'TransformStream').readable; }
+    get writable() { return get(transforms, this, 'TransformStream').writable; }
+  }
+  function pipe(source, destination, config) {
+    const s = get(streams, source, 'ReadableStream');
+    const d = get(sinks, destination, 'WritableStream');
+    if (s.reader !== undefined || d.writer !== undefined) throw invalid('Pipe endpoint is locked');
+    const reader = new ReadableStreamDefaultReader(source);
+    const writer = new WritableStreamDefaultWriter(destination);
+    const r = get(readers, reader, 'reader'), w = get(writers, writer, 'writer');
+    const completion = deferred(false);
+    let stopping = false, reading = false, sourceEnded = false;
+    let lastWrite = resolved();
+    let pendingItem;
+    let tracked, ownAbort;
+    s.disturbed = true;
+    function finish(failed, reason) {
+      if (tracked !== undefined) {
+        apply(unlisten, tracked, ['abort', onAbort]);
+        apply(abortController, ownAbort, []);
+      }
+      pendingItem = undefined;
+      releaseReader(r); releaseWriter(w);
+      if (failed) completion.reject(reason); else completion.resolve();
+    }
+    function bothActions(first, second) {
+      // Start both cleanup operations before awaiting either. Observe both
+      // rejections even when the first fails; never leave a rejected sibling.
+      return new P(function (resolve, reject) {
+        let remaining = 2;
+        function success() { if (--remaining === 0) resolve(); }
+        then(first, success, reject); then(second, success, reject);
+      });
+    }
+    function shutdown(kind, reason) {
+      if (stopping) return;
+      stopping = true;
+      // A read can publish synchronously, then source.error/abort can run
+      // before its Promise reaction. Shutdown must write that admitted chunk
+      // once before cleanup, without waiting on a still-unfulfilled read.
+      if (pendingItem !== undefined && !pendingItem.done && d.state === 'writable' && !d.closing) {
+        const item = pendingItem; pendingItem = undefined;
+        lastWrite = write(w, item.value);
+      }
+      // Accepted writes finish before normal close/source-error cleanup. An
+      // already-erroring sink owns its own in-flight drain and must not block
+      // cancelling a source whose next read will never arrive.
+      const pending = d.state === 'writable' && !d.closing ? lastWrite : resolved();
+      const wait = then(pending, function () {}, function () {});
+      then(wait, function () {
+        let action;
+        if (kind === 'end') action = config.preventClose || d.state === 'closed' || d.closing ? resolved() :
+          d.state === 'errored' ? rejected(d.error) : closeSink(d);
+        else if (kind === 'source') action = config.preventAbort || d.state !== 'writable' ? resolved() : abortSink(d, reason);
+        else if (kind === 'destination') action = config.preventCancel ? resolved() : cancelReadable(s, reason);
+        else action = bothActions(
+          config.preventAbort || d.state !== 'writable' ? resolved() : abortSink(d, reason),
+          config.preventCancel || s.state !== 'readable' ? resolved() : cancelReadable(s, reason));
+        then(action, function () { finish(kind !== 'end', reason); }, function (error) { finish(true, error); });
+      });
+    }
+    function onAbort() {
+      if (apply(signalAborted, tracked, [])) shutdown('abort', apply(signalReason, config.signal, []));
+    }
+    function stopForState() {
+      if (stopping) return true;
+      if (tracked !== undefined && apply(signalAborted, tracked, [])) onAbort();
+      else if (s.state === 'errored') shutdown('source', s.error);
+      else if (d.state === 'errored' || d.state === 'erroring') shutdown('destination', d.error);
+      else if (s.state === 'closed') shutdown('end');
+      else if (d.state === 'closed' || d.closing) shutdown('destination', invalid('Destination is closed or closing'));
+      return stopping;
+    }
+    function pump() {
+      if (stopForState()) return;
+      then(w.ready.promise, function () {
+        if (stopForState()) return;
+        reading = true;
+        then(read(r, function (item) { pendingItem = item; }), function (item) {
+          reading = false;
+          if (stopping) return;
+          pendingItem = undefined;
+          if (item.done) { shutdown('end'); return; }
+          lastWrite = write(w, item.value);
+          then(lastWrite, undefined, function (error) { shutdown('destination', error); });
+          if (sourceEnded) shutdown('end'); else pump();
+        }, function (error) { reading = false; shutdown('source', error); });
+      }, function (error) { shutdown('destination', error); });
+    }
+    if (config.signal !== undefined) {
+      // A private dependent signal cannot be silenced by an earlier public
+      // listener's stopImmediatePropagation or consumed by a synthetic event.
+      ownAbort = new Abort();
+      const own = apply(controllerSignal, ownAbort, []);
+      const dependencies = [config.signal, own];
+      property(dependencies, iteratorKey, function () {
+        let index = 0;
+        return { next: function () {
+          if (index++ === 0) return result(config.signal, false);
+          if (index === 2) return result(own, false);
+          return result(undefined, true);
+        } };
+      });
+      tracked = apply(anySignal, Signals, [dependencies]);
+      apply(listen, tracked, ['abort', onAbort]);
+      if (apply(signalAborted, tracked, [])) onAbort();
+    }
+    then(r.closed.promise, function () {
+      sourceEnded = true;
+      // close can settle before the read returning the final queued chunk.
+      // Let that read publish its value before initiating close on the sink.
+      if (!reading) shutdown('end');
+    }, function (error) { shutdown('source', error); });
+    then(w.closed.promise, function () {
+      shutdown('destination', invalid('Destination closed before the source'));
+    }, function (error) { shutdown('destination', error); });
+    if (s.state === 'errored') shutdown('source', s.error);
+    else if (d.state === 'errored') shutdown('destination', d.error);
+    else if (s.state === 'closed') shutdown('end');
+    else if (d.state === 'closed' || d.closing) shutdown('destination', invalid('Destination is closed or closing'));
+    pump();
+    return completion.promise;
+  }
   class CountQueuingStrategy {
     constructor(init) {
       const value = dictionary(init, 'init').highWaterMark;
@@ -346,7 +837,15 @@
   property(ReadableStreamDefaultController.prototype, tagKey, 'ReadableStreamDefaultController');
   property(CountQueuingStrategy.prototype, tagKey, 'CountQueuingStrategy');
   property(ByteLengthQueuingStrategy.prototype, tagKey, 'ByteLengthQueuingStrategy');
+  property(WritableStream.prototype, tagKey, 'WritableStream');
+  property(WritableStreamDefaultWriter.prototype, tagKey, 'WritableStreamDefaultWriter');
+  property(WritableStreamDefaultController.prototype, tagKey, 'WritableStreamDefaultController');
+  property(TransformStream.prototype, tagKey, 'TransformStream');
+  property(TransformStreamDefaultController.prototype, tagKey, 'TransformStreamDefaultController');
   return { ReadableStream: ReadableStream, ReadableStreamDefaultReader: ReadableStreamDefaultReader,
     ReadableStreamDefaultController: ReadableStreamDefaultController,
+    WritableStream: WritableStream, WritableStreamDefaultWriter: WritableStreamDefaultWriter,
+    WritableStreamDefaultController: WritableStreamDefaultController,
+    TransformStream: TransformStream, TransformStreamDefaultController: TransformStreamDefaultController,
     CountQueuingStrategy: CountQueuingStrategy, ByteLengthQueuingStrategy: ByteLengthQueuingStrategy };
 })()

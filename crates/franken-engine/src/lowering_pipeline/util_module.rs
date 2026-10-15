@@ -398,8 +398,9 @@ const STREAM_CONSUMERS_GLOBALS: [&str; 8] = [
     "TextDecoder",
 ];
 
-const WEB_STREAMS_GLOBALS: [&str; 7] = [
-    "Object", "Promise", "RangeError", "Reflect", "Symbol", "TypeError", "WeakMap",
+const WEB_STREAMS_GLOBALS: [&str; 10] = [
+    "AbortController", "AbortSignal", "EventTarget", "Object", "Promise",
+    "RangeError", "Reflect", "Symbol", "TypeError", "WeakMap",
 ];
 
 const STREAM_GLOBALS: [&str; 19] = [

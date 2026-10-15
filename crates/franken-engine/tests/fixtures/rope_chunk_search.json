@@ -1,0 +1,12 @@
+[
+ {"name":"crossing_and_leaf_local_matches","source":"(function(){let s='x'.repeat(128)+'ab';s+='c'+'x'.repeat(128)+'abc';return JSON.stringify([s.indexOf('abc'),s.lastIndexOf('abc')]);})()","expected":"[128,259]"},
+ {"name":"unicode_offsets_and_split_bounds","source":"(function(){let s='é'.repeat(64);s+='😀';s+='日needle';return JSON.stringify([s.indexOf('😀'),s.indexOf('😀',65),s.lastIndexOf('😀',65),s.indexOf('日'),s.indexOf('needle')]);})()","expected":"[64,-1,64,66,67]"},
+ {"name":"many_small_leaves_and_overlaps","source":"(function(){let s='';for(let i=0;i<64;i++)s+='ab';s+='aba';return JSON.stringify([s.indexOf('ababa'),s.lastIndexOf('ababa'),s.indexOf('ababa',1),s.lastIndexOf('ababa',125)]);})()","expected":"[0,126,2,124]"},
+ {"name":"pattern_size_boundary","source":"(function(){let s='a'.repeat(128);s+='b';let a='a'.repeat(63)+'b',b='a'.repeat(64)+'b';return JSON.stringify([s.indexOf(a),s.lastIndexOf(a),s.indexOf(b),s.lastIndexOf(b)]);})()","expected":"[65,65,64,64]"},
+ {"name":"exact_surrogates_are_not_replacement_characters","source":"(function(){let s='x'.repeat(128);s+='😀y\ud800';return JSON.stringify([s.indexOf('\ud83d'),s.indexOf('\ude00'),s.indexOf('\ud800'),s.indexOf('�')]);})()","expected":"[128,129,131,-1]"},
+ {"name":"reverse_bound_limits_start_not_end","source":"(function(){let s='a'.repeat(100);s+='😀';s+='needle😀';return JSON.stringify([s.indexOf('😀',101),s.lastIndexOf('😀',101),s.lastIndexOf('needle',102),s.indexOf('needle',101)]);})()","expected":"[108,100,102,102]"},
+ {"name":"empty_needle_and_exhaustion","source":"(function(){let s='a'.repeat(128);s+='😀';return JSON.stringify([s.indexOf(''),s.indexOf('',Infinity),s.lastIndexOf('',3),s.indexOf('a',Infinity)]);})()","expected":"[0,130,3,-1]"},
+ {"name":"large_leaf_misses","source":"(function(){let s='ab'.repeat(4096);s+='ab'.repeat(4096);return JSON.stringify([s.indexOf('ababac'),s.lastIndexOf('ababac'),s.indexOf('z')]);})()","expected":"[-1,-1,-1]"},
+ {"name":"multibyte_cross_leaf_match","source":"(function(){let s='z'.repeat(128)+'é😀';s+='日'+'z'.repeat(128);return JSON.stringify([s.indexOf('é😀日'),s.indexOf('é😀日',129),s.lastIndexOf('é😀日',128)]);})()","expected":"[128,-1,128]"},
+ {"name":"three_byte_pattern_at_limit","source":"(function(){let s='';for(let i=0;i<40;i++)s+='日';let n='日'.repeat(21);return JSON.stringify([s.indexOf(n),s.lastIndexOf(n)]);})()","expected":"[0,19]"}
+]

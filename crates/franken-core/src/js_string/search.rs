@@ -8,7 +8,12 @@ use std::sync::Arc;
 
 use super::{JsString, Text, access, search_utf16_units};
 
+mod chunks;
+
 pub(super) fn index_of(haystack: &JsString, needle: &JsString, from: usize) -> Option<usize> {
+    if haystack.is_well_formed() && let Some(pattern) = chunks::pattern(needle) {
+        return chunks::search(haystack, pattern, needle.utf16_len(), from, haystack.utf16_len(), false);
+    }
     let needle = needle.code_units_vec();
     search_utf16_units(haystack.encode_utf16().skip(from), &needle, false)
         .map(|index| from + index)
@@ -21,6 +26,9 @@ pub(super) fn last_index_of(
     needle: &JsString,
     end: usize,
 ) -> Option<usize> {
+    if haystack.is_well_formed() && let Some(pattern) = chunks::pattern(needle) {
+        return chunks::search(haystack, pattern, needle.utf16_len(), 0, end, true);
+    }
     let mut needle = needle.code_units_vec();
     needle.reverse();
     let units = ReverseUnits::new(haystack).skip(haystack.utf16_len() - end);

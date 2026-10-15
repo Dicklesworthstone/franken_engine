@@ -221,3 +221,255 @@ fn live_json_rope_keys_and_values_preserve_reentrant_callback_order() {
     assert_eq!(result.value, Value::str("2|true|true|true|true"));
     assert_accounted(&core);
 }
+
+#[test]
+fn raw_rope_emission_preserves_number_and_string_lexemes_without_escaping() {
+    let inputs = [
+        (format!("1{}", "0".repeat(1023)), ".000e+0002".to_string()),
+        (
+            format!("\"{}", "a".repeat(1024)),
+            r#"\u0061\"\\\/é日😀""#.to_string(),
+        ),
+        (
+            format!("\"{}", "é日😀".repeat(180)),
+            r#"\uD800\u0061\uDC00""#.to_string(),
+        ),
+    ];
+    for (left, right) in inputs {
+        let text = rope(&[&left, &right]);
+        let expected: Vec<u16> = format!("{left}{right}").encode_utf16().collect();
+        let mut actual_core = core();
+        let mut reference_core = core();
+        let mut actual = StringifyState::default();
+        let mut reference = StringifyState::default();
+        actual.raw_text(&mut actual_core, &text).unwrap();
+        for &unit in &expected {
+            reference.push(&mut reference_core, unit).unwrap();
+        }
+        assert_eq!(actual.output, expected);
+        assert_eq!(actual.projection_bytes, reference.projection_bytes);
+        assert_eq!(actual.output.capacity(), reference.output.capacity());
+        assert_eq!(actual.charged, reference.charged);
+        assert_eq!(
+            actual_core.instructions_executed,
+            reference_core.instructions_executed + 1
+        );
+        assert!(text.unjoined_concat_children().is_some());
+        assert_walk_released(&actual_core, &actual, 0);
+        release_test_state(&mut actual_core, actual);
+        release_test_state(&mut reference_core, reference);
+    }
+}
+
+#[test]
+fn raw_rope_string_limits_preserve_exact_partial_output_and_release_frontier() {
+    let text = rope(&[&format!("\"{}", "a".repeat(1024)), "é😀\\u0061\""]);
+    let expected = text.code_units_vec();
+    for prefix in [vec![], vec![0xd800], vec![0x61; 255]] {
+        for limit in [
+            0, 1, 2, 63, 64, 255, 256, 1024, 1025, 1026, 1027, 1028, 1030, 4096,
+        ] {
+            let mut actual_core = core();
+            let mut reference_core = core();
+            let mut actual = StringifyState::default();
+            let mut reference = StringifyState::default();
+            for &unit in &prefix {
+                actual.push(&mut actual_core, unit).unwrap();
+                reference.push(&mut reference_core, unit).unwrap();
+            }
+            actual_core.config.max_string_size = limit;
+            reference_core.config.max_string_size = limit;
+            let got = actual.raw_text(&mut actual_core, &text);
+            let want = expected
+                .iter()
+                .try_for_each(|&unit| reference.push(&mut reference_core, unit));
+            assert_eq!(got, want);
+            assert_eq!(actual.output, reference.output);
+            assert_eq!(actual.projection_bytes, reference.projection_bytes);
+            assert_eq!(actual.output.capacity(), reference.output.capacity());
+            assert_eq!(actual.charged, reference.charged);
+            assert!(text.unjoined_concat_children().is_some());
+            assert_walk_released(&actual_core, &actual, 0);
+            release_test_state(&mut actual_core, actual);
+            release_test_state(&mut reference_core, reference);
+        }
+    }
+}
+
+#[test]
+fn raw_flat_output_keeps_exact_units_and_original_work_refusals() {
+    let published = rope(&[&"a".repeat(1024), &"😀".repeat(300)]);
+    let _ = published.as_str().unwrap();
+    // Test the output primitive separately from rawJSON syntax validation:
+    // it must preserve exact units, not replace or re-escape lone surrogates.
+    let inputs = [
+        JsString::empty(),
+        JsString::from("-0.000e+00"),
+        JsString::from_code_units(&[0xdc00, 0xd800, 0x61, 0x22, 0x5c]),
+        published,
+    ];
+    for text in &inputs {
+        for work in [0, 1, 2, 16] {
+            let mut actual_core = core();
+            let mut reference_core = core();
+            let mut actual = StringifyState::default();
+            let mut reference = StringifyState::default();
+            actual.push(&mut actual_core, 0xd800).unwrap();
+            reference.push(&mut reference_core, 0xd800).unwrap();
+            actual_core.config.instruction_budget = actual_core.instructions_executed + work;
+            reference_core.config.instruction_budget = reference_core.instructions_executed + work;
+            let got = actual.raw_text(&mut actual_core, text);
+            let want = text
+                .encode_utf16()
+                .try_for_each(|unit| reference.push(&mut reference_core, unit));
+            assert_eq!(got, want);
+            assert_eq!(actual.output, reference.output);
+            assert_eq!(actual.projection_bytes, reference.projection_bytes);
+            assert_eq!(
+                actual_core.instructions_executed,
+                reference_core.instructions_executed
+            );
+            assert_eq!(actual.charged, reference.charged);
+            release_test_state(&mut actual_core, actual);
+            release_test_state(&mut reference_core, reference);
+        }
+    }
+}
+
+#[test]
+fn raw_rope_refusals_preserve_inherited_scratch_and_unpublished_input() {
+    let piece = "1".repeat(1024);
+    let mut text = JsString::from(piece.clone());
+    for _ in 0..512 {
+        text = text.concat(&JsString::from(piece.clone()));
+    }
+    for headroom in [0, 64, 128, 255, 256, 512, 1024] {
+        let mut core = core();
+        let mut state = StringifyState::default();
+        core.json_reserve_temporary(77).unwrap();
+        core.config.max_total_memory_bytes = core.estimated_memory_bytes() + headroom;
+        assert!(matches!(
+            state.raw_text(&mut core, &text),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(state.output.is_empty());
+        assert_walk_released(&core, &state, 77);
+        core.json_release_temporary(77);
+        release_test_state(&mut core, state);
+    }
+    let mut core = core();
+    let mut state = StringifyState::default();
+    core.config.instruction_budget = core.instructions_executed + 1;
+    assert!(matches!(
+        state.raw_text(&mut core, &text),
+        Err(InterpreterError::BudgetExhausted { .. })
+    ));
+    assert!(state.output.is_empty());
+    assert_walk_released(&core, &state, 0);
+    let token = CancellationToken::new();
+    token.cancel();
+    core.config.cancellation_token = Some(token);
+    assert_eq!(
+        state.raw_text(&mut core, &text),
+        Err(InterpreterError::Cancelled)
+    );
+    assert_eq!(state.charged, 0);
+    assert!(text.unjoined_concat_children().is_some());
+    release_test_state(&mut core, state);
+}
+
+#[test]
+fn raw_shared_dag_refuses_small_output_without_materializing_logical_input() {
+    let mut text = rope(&[&"1".repeat(1024), &"2".repeat(1024)]);
+    for _ in 0..16 {
+        text = text.concat(&text);
+    }
+    assert_eq!(text.len(), 128 * 1024 * 1024);
+    let mut core = core();
+    let mut state = StringifyState::default();
+    core.config.max_string_size = 32;
+    assert!(matches!(
+        state.raw_text(&mut core, &text),
+        Err(InterpreterError::StringLimitExceeded {
+            length: 33,
+            max: 32
+        })
+    ));
+    assert_eq!(state.output, vec![u16::from(b'1'); 32]);
+    assert!(text.unjoined_concat_children().is_some());
+    assert_walk_released(&core, &state, 0);
+    release_test_state(&mut core, state);
+}
+
+#[test]
+fn raw_json_builtin_keeps_original_rope_lexeme_and_secret_provenance() {
+    for (left, right) in [
+        (format!("1{}", "0".repeat(1023)), ".000e+0002".to_string()),
+        (format!("\"{}", "é😀".repeat(350)), r#"\u0061""#.to_string()),
+    ] {
+        let text = rope(&[&left, &right]);
+        let mut core = core();
+        core.seed_register(0, Value::Str(text.clone())).unwrap();
+        core.set_register_label(0, Label::Secret).unwrap();
+        let raw = core
+            .json_raw_json_builtin(None, RegRange { start: 0, count: 1 })
+            .unwrap();
+        let Value::Object(object) = raw else {
+            panic!("raw JSON object expected");
+        };
+        assert!(core.is_raw_json_object(object));
+        assert!(text.unjoined_concat_children().is_some());
+        core.seed_register(0, Value::Object(object)).unwrap();
+        core.set_register_label(0, Label::Public).unwrap();
+        core.replace_pending_hostcall_result_label(None).unwrap();
+        assert_eq!(stringify(&mut core).unwrap(), Value::Str(text.clone()));
+        // A public handle must not clear the raw value's stored provenance.
+        assert_eq!(core.pending_hostcall_result_label, Some(Label::Secret));
+        assert!(text.unjoined_concat_children().is_some());
+        assert!(core.active_inline_callback_context_label.is_none());
+        assert_accounted(&core);
+    }
+}
+
+#[test]
+fn live_raw_json_ropes_preserve_callbacks_validation_and_literal_spelling() {
+    let source = r#"
+        var number = '9'.repeat(1100) + '.000e+00';
+        var text = '"' + 'é😀'.repeat(350) + '\\u0061"';
+        var raw = JSON.rawJSON(number);
+        var quoted = JSON.rawJSON(text);
+        var calls = 0;
+        var object = {
+            get amount() {
+                calls++;
+                return {toJSON: function () { calls++; return raw; }};
+            },
+            text: quoted
+        };
+        var encoded = JSON.stringify(object, function (key, value) {
+            if (key === 'amount') {
+                calls++;
+                if (JSON.stringify([quoted, raw]) !== '[' + text + ',' + number + ']')
+                    throw 'nested raw stringify';
+            }
+            return value;
+        });
+        var invalid = 0;
+        ['', ' 1', '1 ', '{}', '[]', '01', '1e+', 'true false'].forEach(function (s) {
+            try { JSON.rawJSON(s); } catch (e) { if (e.name === 'SyntaxError') invalid++; }
+        });
+        [calls, encoded === '{"amount":' + number + ',"text":' + text + '}',
+         JSON.stringify(raw) === number, JSON.stringify(quoted) === text,
+         Object.isFrozen(raw), Object.getPrototypeOf(raw) === null, invalid].join('|');
+    "#;
+    let tree = crate::parser_api_stability::parse_script(source).unwrap();
+    let lowered = crate::lowering_pipeline::lower_ir0_to_ir3(
+        &crate::ir_contract::Ir0Module::from_syntax_tree(tree, "raw-rope-json.js"),
+        &crate::lowering_pipeline::LoweringContext::new("raw-rope-json", "callbacks", "builtin-only"),
+    )
+    .unwrap();
+    let mut core = core();
+    let result = core.execute(&lowered.ir3).unwrap();
+    assert_eq!(result.value, Value::str("3|true|true|true|true|true|8"));
+    assert_accounted(&core);
+}

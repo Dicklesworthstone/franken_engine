@@ -16,28 +16,51 @@ impl StringifyState {
         core: &mut InterpreterCore,
         text: &super::JsString,
     ) -> Result<(), InterpreterError> {
+        self.emit_string::<true>(core, text)
+    }
+
+    /// Emit an already-validated raw JSON lexeme, without quoting, escaping or
+    /// converting its number spelling. Validation stays with JSON.rawJSON;
+    /// this output path shares the quoted writer's admitted rope traversal.
+    pub(super) fn raw_text(
+        &mut self,
+        core: &mut InterpreterCore,
+        text: &super::JsString,
+    ) -> Result<(), InterpreterError> {
+        self.emit_string::<false>(core, text)
+    }
+
+    fn emit_string<const QUOTED: bool>(
+        &mut self,
+        core: &mut InterpreterCore,
+        text: &super::JsString,
+    ) -> Result<(), InterpreterError> {
         if let Some(parts) = text.unjoined_concat_children() {
-            self.quote_rope(core, parts)
+            self.emit_rope::<QUOTED>(core, parts)
         } else {
-            self.quote_leaf(core, text)
+            self.emit_leaf::<QUOTED>(core, text)
         }
     }
 
     /// Emit the contents of one flat/published leaf, without adding quotes.
     /// Exact-only strings are flat; unresolved concatenations are handled by
-    /// quote_rope so the ASCII fast path cannot eagerly join an entire input.
-    fn quote_leaf(
+    /// emit_rope so the ASCII fast path cannot eagerly join an entire input.
+    fn emit_leaf<const QUOTED: bool>(
         &mut self,
         core: &mut InterpreterCore,
         text: &super::JsString,
     ) -> Result<(), InterpreterError> {
         if text.is_ascii() {
-            self.quote_ascii(
-                core,
-                text.as_str().expect("ASCII has an exact str view").as_bytes(),
-            )
-        } else {
+            let bytes = text.as_str().expect("ASCII has an exact str view").as_bytes();
+            if QUOTED {
+                self.quote_ascii(core, bytes)
+            } else {
+                self.ascii(core, bytes)
+            }
+        } else if QUOTED {
             self.units(core, QuotedUnits::new(text.encode_utf16()))
+        } else {
+            self.units(core, text.encode_utf16())
         }
     }
 
@@ -47,7 +70,7 @@ impl StringifyState {
     /// callback runs, and all existing output work/size/allocation gates remain
     /// in the leaf writer. Additional checkpoints bound structural traversal,
     /// including a deep left spine before any leaf has produced output.
-    fn quote_rope(
+    fn emit_rope<const QUOTED: bool>(
         &mut self,
         core: &mut InterpreterCore,
         parts: [super::JsString; 2],
@@ -57,7 +80,7 @@ impl StringifyState {
         let [left, right] = parts;
         let outcome = (|| {
             core.json_charge_work()?;
-            self.push_quote_part(core, &mut pending, right, &mut scratch)?;
+            self.push_string_part(core, &mut pending, right, &mut scratch)?;
             let mut current = left;
             let mut remaining = 256;
             loop {
@@ -67,13 +90,13 @@ impl StringifyState {
                 }
                 remaining -= 1;
                 if let Some([left, right]) = current.unjoined_concat_children() {
-                    self.push_quote_part(core, &mut pending, right, &mut scratch)?;
+                    self.push_string_part(core, &mut pending, right, &mut scratch)?;
                     current = left;
                     continue;
                 }
                 // A concurrent publisher may replace children with a flat
                 // buffer, but never the reverse. This view cannot start a join.
-                self.quote_leaf(core, &current)?;
+                self.emit_leaf::<QUOTED>(core, &current)?;
                 let Some(next) = pending.pop() else {
                     return Ok(());
                 };
@@ -87,7 +110,7 @@ impl StringifyState {
         outcome
     }
 
-    fn push_quote_part(
+    fn push_string_part(
         &mut self,
         core: &mut InterpreterCore,
         pending: &mut Vec<super::JsString>,

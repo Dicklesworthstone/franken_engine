@@ -651,11 +651,7 @@ impl InterpreterCore {
                                         });
                                     }
                                 };
-                                if raw.is_ascii() {
-                                    state.ascii(self, raw.as_bytes())?;
-                                } else {
-                                    state.units(self, raw.encode_utf16())?;
-                                }
+                                state.raw_text(self, &raw)?;
                             }
                             value if value.is_object_like() => {
                                 let backing =

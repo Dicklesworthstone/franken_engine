@@ -9,7 +9,9 @@ const events = require('node:events');
 const decoder = require('node:string_decoder');
 const { PassThrough, Readable, Writable } = require('node:stream');
 const reference = require('node:readline');
-const text = fs.readFileSync(path.join(__dirname, '../../crates/franken-engine/src/lowering_pipeline/readline_module.js'), 'utf8');
+const sourcePath = process.env.READLINE_TEST_SOURCE || path.join(__dirname,
+  '../../crates/franken-engine/src/lowering_pipeline/readline_module.js');
+const text = fs.readFileSync(sourcePath, 'utf8');
 function candidate(overrides = {}) {
   const names = Object.keys(overrides);
   return Function('__franken_readline_events', '__franken_readline_decoder', ...names,
@@ -336,4 +338,226 @@ test('replaced public decoder methods cannot intercept an initialized readline f
   const api = Function('__franken_readline_events', '__franken_readline_decoder', 'return ' + text)(events, { StringDecoder: LocalDecoder });
   LocalDecoder.prototype.write = function () { throw Error('replacement'); };
   assert.deepEqual(linesFor(api, [Buffer.from([0xc3]),Buffer.from([0xa9,10])]).out, ['é']);
+});
+
+// Compose the actual engine-owned dependencies as well as readline. Only
+// the emitter's primitive constructor and the Buffer/language primitives
+// remain Node-hosted. Do not mutate Node's exported EventEmitter statics or
+// let an inherited Node events.on accidentally supply a missing algorithm.
+function sharedCandidate() {
+  function HostEmitter(options) { events.EventEmitter.call(this, options); }
+  Object.setPrototypeOf(HostEmitter.prototype, events.EventEmitter.prototype);
+  const base = path.join(__dirname, '../../crates/franken-engine/src/lowering_pipeline');
+  const sharedEvents = Function('__franken_events_constructor', '__franken_events_once',
+    'return ' + fs.readFileSync(path.join(base, 'events_module.js'), 'utf8'))(
+      () => HostEmitter, events.once);
+  const sharedDecoder = Function('return ' + fs.readFileSync(
+    path.join(base, 'string_decoder_module.js'), 'utf8'))();
+  assert.notEqual(sharedEvents.on, events.on);
+  assert.notEqual(sharedEvents.addAbortListener, events.addAbortListener);
+  assert.notEqual(sharedDecoder.StringDecoder, decoder.StringDecoder);
+  assert.equal(Object.hasOwn(sharedEvents, 'on'), true);
+  const api = Function('__franken_readline_events', '__franken_readline_decoder',
+    'return ' + text)(sharedEvents, sharedDecoder);
+  return { api, sharedEvents, sharedDecoder };
+}
+
+test('canonical events and decoder compose with readline over 512 byte partitions', testOptions, () => {
+  const { api, sharedEvents } = sharedCandidate();
+  let seed = 0x7e21395;
+  function random(max) {
+    seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5;
+    return (seed >>> 0) % max;
+  }
+  for (let trial = 0; trial < 512; trial++) {
+    const bytes = Buffer.from(Array.from({ length: random(80) }, () => random(256)));
+    const chunks = [];
+    for (let at = 0; at < bytes.length;) {
+      const end = at + 1 + random(8);
+      chunks.push(bytes.subarray(at, end)); at = end;
+    }
+    assert.deepEqual(linesFor(api, chunks), linesFor(reference, chunks), 'raw byte partition ' + trial);
+  }
+  const rl = api.createInterface({ input: input(), terminal: false });
+  assert.equal(rl instanceof sharedEvents, true);
+  rl.close();
+});
+
+test('canonical event queue resumes a slow line consumer without loss or duplicate delivery', testOptions, async () => {
+  const { api } = sharedCandidate();
+  const source = new PassThrough({ highWaterMark: 8 });
+  const rl = api.createInterface({ input: source, crlfDelay: Infinity });
+  const iterator = rl[Symbol.asyncIterator]();
+  const waiting = [iterator.next(), iterator.next()];
+  source.write(Array.from({ length: 2200 }, (_, i) => i + '\n').join(''));
+  await tick();
+  assert.equal(rl.paused, true);
+  assert.deepEqual(await Promise.all(waiting), [
+    { value: '0', done: false }, { value: '1', done: false },
+  ]);
+  for (let i = 2; i < 2200; i++) {
+    assert.deepEqual(await iterator.next(), { value: String(i), done: false });
+  }
+  assert.equal(rl.paused, false);
+  const eof = iterator.next(); source.end();
+  assert.deepEqual(await eof, { value: undefined, done: true });
+  assert.equal(rl.closed, true);
+  for (const name of ['data', 'end', 'error']) assert.equal(source.listenerCount(name), 0);
+});
+
+test('canonical abort dependencies keep answers and cancellations isolated across repeated questions', testOptions, async () => {
+  const { api } = sharedCandidate();
+  const source = new PassThrough();
+  const rl = api.promises.createInterface({ input: source, terminal: false });
+  for (let i = 0; i < 32; i++) {
+    const c = new AbortController(), reason = { round: i };
+    c.signal.addEventListener('abort', event => event.stopImmediatePropagation());
+    const pending = rl.question('?', { signal: c.signal });
+    c.signal.dispatchEvent(new Event('abort'));
+    if (i % 2 === 0) {
+      c.abort(reason);
+      await assert.rejects(pending, error => error.code === 'ABORT_ERR' && error.cause === reason);
+    } else {
+      source.write('answer-' + i + '\n');
+      assert.equal(await pending, 'answer-' + i);
+      c.abort('after-answer');
+    }
+    const next = rl.question('?'); source.write('next\n');
+    assert.equal(await next, 'next');
+  }
+  rl.close();
+  assert.equal(source.destroyed, false);
+  assert.equal(source.listenerCount('data'), 0);
+  assert.equal(source.listenerCount('error'), 0);
+  source.destroy();
+});
+
+test('canonical readline captures its dependencies while preserving caller-owned byte views', testOptions, async () => {
+  const { api, sharedEvents, sharedDecoder } = sharedCandidate();
+  sharedEvents.on = sharedEvents.addAbortListener = function () { throw Error('public replacement'); };
+  sharedDecoder.StringDecoder.prototype.write = function () { throw Error('decoder replacement'); };
+  const source = new PassThrough(), control = new AbortController();
+  const rl = api.promises.createInterface({ input: source, terminal: false });
+  const answer = rl.question('?', { signal: control.signal });
+  const bytes = Buffer.from([99, 0xc3, 0xa9, 10, 88]);
+  source.write(bytes.subarray(1, 2)); source.write(bytes.subarray(2, 4));
+  assert.equal(await answer, 'é');
+  const it = rl[Symbol.asyncIterator](), first = it.next();
+  source.write('tail\n');
+  assert.deepEqual(await first, { value: 'tail', done: false });
+  await it.return();
+  assert.deepEqual(await it.next(), { value: undefined, done: true });
+  assert.deepEqual(Array.from(bytes), [99, 0xc3, 0xa9, 10, 88]);
+  assert.equal(rl.closed, true); assert.equal(source.destroyed, false);
+  assert.equal(source.listenerCount('data'), 0); source.destroy();
+});
+
+test('canonical line iterator drains buffered lines before an original source error', testOptions, async () => {
+  const { api } = sharedCandidate();
+  const source = input(), rl = api.createInterface({ input: source, terminal: false });
+  const it = rl[Symbol.asyncIterator](), reason = new Error('source failed');
+  source.emit('data', Buffer.from('first\nsecond\n'));
+  source.emit('error', reason);
+  assert.deepEqual(await it.next(), { value: 'first', done: false });
+  assert.deepEqual(await it.next(), { value: 'second', done: false });
+  await assert.rejects(it.next(), error => error === reason);
+  // Explicitly release caller-owned input after a source error. These are
+  // readline's chosen error semantics, not Node input-error parity claims.
+  await it.return();
+  assert.equal(rl.closed, true);
+  assert.equal(source.listenerCount('data'), 0);
+  assert.equal(source.listenerCount('error'), 0);
+});
+
+const { promisify } = require('node:util');
+
+test('promisified questions resolve single-argument answers through the canonical custom hook', testOptions, async () => {
+  for (const api of [reference, candidate(), sharedCandidate().api]) {
+    const source = new PassThrough(), output = [];
+    const rl = api.createInterface({ input: source, output: { write(s) { output.push(s); } }, terminal: false });
+    const custom = rl.question[promisify.custom];
+    assert.equal(typeof custom, 'function');
+    assert.equal(promisify(rl.question), custom);
+    const ask = promisify(rl.question).bind(rl);
+    for (const answer of ['42', '', 'false', 'é🚀']) {
+      const pending = ask('value? '); source.write(answer + '\n');
+      assert.equal(await pending, answer);
+    }
+    assert.deepEqual(output, ['value? ', 'value? ', 'value? ', 'value? ']);
+    rl.close(); assert.equal(source.listenerCount('data'), 0); source.destroy();
+  }
+});
+
+test('promisified questions abort with exact causes and free the answer slot', testOptions, async () => {
+  for (const api of [reference, candidate(), sharedCandidate().api]) {
+    for (const reason of [false, null, 0, '', { original: true }]) {
+      const source = new PassThrough(), controller = new AbortController();
+      const rl = api.createInterface({ input: source, terminal: false });
+      assert.equal(typeof rl.question[promisify.custom], 'function');
+      const ask = promisify(rl.question).bind(rl);
+      const pending = ask('?', { signal: controller.signal }); controller.abort(reason);
+      await assert.rejects(pending, error => error.code === 'ABORT_ERR' && error.cause === reason);
+      const next = ask('?'); source.write('next\n'); assert.equal(await next, 'next');
+      rl.close(); source.destroy();
+    }
+  }
+});
+
+test('promisification honors public question overrides and first settlement without brand forgery', testOptions, async () => {
+  for (const api of [reference, candidate(), sharedCandidate().api]) {
+    const custom = api.Interface.prototype.question[promisify.custom];
+    assert.equal(typeof custom, 'function');
+    const opts = { marker: true }, reason = { original: true };
+    const receiver = { question(query, options, callback) {
+      assert.equal(this, receiver); assert.equal(query, 'question'); assert.equal(options, opts);
+      callback('first'); callback('second'); throw reason;
+    } };
+    assert.equal(await custom.call(receiver, 'question', opts), 'first');
+    await assert.rejects(custom.call({ question() { throw reason; } }, 'question'), error => error === reason);
+    // The borrowed wrapper uses a public callback API, not readline's private
+    // brand or state: ordinary Interface methods still validate the receiver.
+  }
+});
+
+test('promisified closed and already-aborted questions reject without output or new listeners', testOptions, async () => {
+  for (const api of [reference, candidate(), sharedCandidate().api]) {
+    const source = new PassThrough(), out = [], control = new AbortController();
+    const rl = api.createInterface({ input: source, output: { write(s) { out.push(s); } }, terminal: false });
+    assert.equal(typeof rl.question[promisify.custom], 'function');
+    const ask = promisify(rl.question).bind(rl); control.abort('before');
+    await assert.rejects(ask('not printed', { signal: control.signal }), error => error.cause === 'before');
+    rl.close(); await assert.rejects(ask('closed'), { code: 'ERR_USE_AFTER_CLOSE' });
+    assert.deepEqual(out, []); assert.equal(source.listenerCount('data'), 0); source.destroy();
+  }
+});
+
+test('question option normalization matches the reference for callback, promise and custom APIs', testOptions, async () => {
+  for (const api of [reference, candidate(), sharedCandidate().api]) {
+    for (const options of [undefined, null, false, 4, 'ignored', [], { signal: null }, { signal: false }]) {
+      const source = new PassThrough();
+      const rl = api.createInterface({ input: source, terminal: false });
+      const answer = new Promise(resolve => rl.question('?', options, resolve));
+      source.write('callback\n'); assert.equal(await answer, 'callback');
+      const custom = promisify(rl.question).call(rl, '?', options);
+      source.write('custom\n'); assert.equal(await custom, 'custom'); rl.close();
+      const promiseInterface = api.promises.createInterface({ input: source, terminal: false });
+      const promise = promiseInterface.question('?', options);
+      source.write('promise\n'); assert.equal(await promise, 'promise'); promiseInterface.close(); source.destroy();
+    }
+  }
+});
+
+test('promisified questions use private cancellation even with a synchronous callback override', testOptions, async () => {
+  const { api } = sharedCandidate();
+  const custom = api.Interface.prototype.question[promisify.custom];
+  const control = new AbortController(), reason = { real: true };
+  control.signal.addEventListener('abort', event => event.stopImmediatePropagation());
+  const receiver = { question(query, options, callback) {
+    control.signal.dispatchEvent(new Event('abort'));
+    control.abort(reason); callback('must not win');
+  } };
+  await assert.rejects(custom.call(receiver, '?', { signal: control.signal }),
+    error => error.code === 'ABORT_ERR' && error.cause === reason);
+  // This cancellation authority check is intentionally separate from Node
+  // 22's synthetic-event behavior; it is not a claim of Node parity.
 });

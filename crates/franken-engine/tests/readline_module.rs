@@ -107,3 +107,34 @@ fn native_cli_esm_readline_imports_use_the_canonical_module_factory() {
         .map(|line| line["message"].as_str().unwrap()).collect();
     assert_eq!(lines, ["ESM_READLINE_COMPLETE a|b true"]);
 }
+
+#[test]
+fn native_util_promisify_preserves_readline_answers_abort_and_followup_questions() {
+    let source = r#"
+const {PassThrough}=require('node:stream');
+const {promisify}=require('node:util');
+const rl=require('readline').createInterface({input:new PassThrough(),terminal:false});
+const ask=promisify(rl.question).bind(rl);
+(async function(){
+  const first=ask('first?');rl.input.write('42\n');
+  console.log('PROMISIFIED_ANSWER',await first);
+  const control=new AbortController();
+  const pending=ask('cancel?',{signal:control.signal});control.abort(false);
+  try{await pending;}catch(error){console.log('PROMISIFIED_ABORT',error.code,error.cause===false);}
+  const next=ask('next?');rl.input.write('\n');
+  console.log('PROMISIFIED_EMPTY',(await next)==='');
+  rl.close();
+  try{await ask('closed?');}catch(error){console.log('PROMISIFIED_CLOSED',error.code);}
+  console.log('PROMISIFIED_COMPLETE',rl.input.listenerCount('data'),rl.input.destroyed);
+})();
+"#;
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        assert_eq!(run(source, lane), [
+            "PROMISIFIED_ANSWER 42",
+            "PROMISIFIED_ABORT ABORT_ERR true",
+            "PROMISIFIED_EMPTY true",
+            "PROMISIFIED_CLOSED ERR_USE_AFTER_CLOSE",
+            "PROMISIFIED_COMPLETE 0 false",
+        ]);
+    }
+}

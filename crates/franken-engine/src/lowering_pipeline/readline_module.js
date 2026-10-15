@@ -290,9 +290,9 @@
     const s = state(rl);
     if (s.closed) throw closedError();
     if (typeof query !== 'string') throw invalid('query');
-    if (opts === undefined || opts === null) opts = create(null);
-    if (typeof opts !== 'object') throw invalid('options');
-    const sourceSignal = signal(opts.signal);
+    if (opts === null || typeof opts !== 'object') opts = create(null);
+    const requestedSignal = opts.signal;
+    const sourceSignal = requestedSignal ? signal(requestedSignal) : undefined;
     if (isAborted(sourceSignal)) {
       if (reject !== undefined) reject(abortError(sourceSignal));
       return;
@@ -318,6 +318,34 @@
     if (typeof callback !== 'function') return;
     ask(this, query, opts, callback, undefined);
   });
+  // A readline callback has ONE answer argument, not an error-first pair.
+  // The canonical util.promisify hook must not reject with a successful
+  // answer or strand a cancelled question. Dispatch through the public
+  // method so existing subclasses and wrappers retain their behavior.
+  property(Interface.prototype.question, Symbol.for('nodejs.util.promisify.custom'),
+    function question(query, opts) {
+      const rl = this;
+      return new P(function (resolveAnswer, rejectAnswer) {
+        if (opts === null || typeof opts !== 'object') opts = create(null);
+        const requestedSignal = opts.signal;
+        const sourceSignal = requestedSignal ? signal(requestedSignal) : undefined;
+        let completed = false, dispose = function () {};
+        function finish(value, failed) {
+          if (completed) return;
+          completed = true;
+          if (!failed && isAborted(sourceSignal)) { value = abortError(sourceSignal); failed = true; }
+          try { dispose(); } catch (e) { value = e; failed = true; }
+          if (failed) rejectAnswer(value); else resolveAnswer(value);
+        }
+        if (isAborted(sourceSignal)) { finish(abortError(sourceSignal), true); return; }
+        try {
+          dispose = watch(sourceSignal, function () { finish(abortError(sourceSignal), true); });
+          if (completed) { dispose(); return; }
+          if (isAborted(sourceSignal)) { finish(abortError(sourceSignal), true); return; }
+          rl.question(query, opts, function (answer) { finish(answer, false); });
+        } catch (e) { finish(e, true); }
+      });
+    });
   property(Interface.prototype, asyncKey, function () {
     const rl = this, s = state(rl);
     if (s.iterator !== undefined) return s.iterator;

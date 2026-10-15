@@ -3,11 +3,182 @@
 //! Eligibility depends on object marks, but a value may first enqueue a
 //! closure, promise, carrier, iterator or generator. Always drain every
 //! work queue before deciding whether the object-mark fixpoint was reached.
+//! The fast path indexes unresolved owner/key dependencies, so a reverse
+//! chain does not rescan all entries once for every newly reachable key.
 
 use super::*;
 
+// Optional, collection-local scratch, never a guest-visible cache. Under
+// pressure or allocation failure use the allocation-free fixpoint below.
+const MAX_EPHEMERON_SCRATCH_BYTES: usize = 8 * 1024 * 1024;
+
+#[derive(Clone, Copy)]
+enum EdgeTarget<'a> {
+    Value(&'a Value),
+    Object(ObjectId),
+}
+
+struct ConditionalEdge<'a> {
+    owner: u32,
+    key: Option<u32>,
+    target: EdgeTarget<'a>,
+    fired: bool,
+}
+
+/// Sorted dependencies avoid a hash table and one allocation per key. An
+/// edge is examined once initially and at most once per unresolved gate.
+/// Targets borrow interpreter state; building the index clones no Values.
+struct ConditionalIndex<'a> {
+    edges: Vec<ConditionalEdge<'a>>,
+    watchers: Vec<(u32, usize)>,
+    #[cfg(test)]
+    checks: usize,
+}
+
+impl<'a> ConditionalIndex<'a> {
+    fn scratch_bytes(edges: usize, watchers: usize) -> Option<usize> {
+        edges
+            .checked_mul(std::mem::size_of::<ConditionalEdge<'a>>())?
+            .checked_add(watchers.checked_mul(std::mem::size_of::<(u32, usize)>())?)
+    }
+
+    fn try_new(count: usize, limit: usize) -> Option<Self> {
+        let watchers = count.checked_mul(2)?;
+        if Self::scratch_bytes(count, watchers)? > limit {
+            return None;
+        }
+        let mut index = Self {
+            edges: Vec::new(),
+            watchers: Vec::new(),
+            #[cfg(test)]
+            checks: 0,
+        };
+        index.edges.try_reserve_exact(count).ok()?;
+        index.watchers.try_reserve_exact(watchers).ok()?;
+        // Check the actual capacities too; no marks have changed yet.
+        if Self::scratch_bytes(index.edges.capacity(), index.watchers.capacity())? > limit {
+            return None;
+        }
+        Some(index)
+    }
+
+    fn fire_if_ready(&mut self, index: usize, marker: &mut GcMarker) -> bool {
+        #[cfg(test)]
+        {
+            self.checks += 1;
+        }
+        let edge = &mut self.edges[index];
+        if edge.fired {
+            return true;
+        }
+        if !marker.is_marked(edge.owner) || edge.key.is_some_and(|key| !marker.is_marked(key)) {
+            return false;
+        }
+        edge.fired = true;
+        match edge.target {
+            EdgeTarget::Value(value) => marker.value(value),
+            EdgeTarget::Object(id) => marker.object(id),
+        }
+        true
+    }
+
+    fn add(
+        &mut self,
+        marker: &mut GcMarker,
+        owner: u32,
+        key: Option<u32>,
+        target: EdgeTarget<'a>,
+    ) {
+        let index = self.edges.len();
+        self.edges.push(ConditionalEdge {
+            owner,
+            key,
+            target,
+            fired: false,
+        });
+        if self.fire_if_ready(index, marker) {
+            return;
+        }
+        if !marker.is_marked(owner) {
+            self.watchers.push((owner, index));
+        }
+        if let Some(key) = key
+            && key != owner
+            && !marker.is_marked(key)
+        {
+            self.watchers.push((key, index));
+        }
+    }
+
+    fn observe(&mut self, marker: &mut GcMarker, object: u32) {
+        let start = self.watchers.partition_point(|(id, _)| *id < object);
+        let end = self.watchers.partition_point(|(id, _)| *id <= object);
+        for position in start..end {
+            self.fire_if_ready(self.watchers[position].1, marker);
+        }
+    }
+}
+
 impl InterpreterCore {
     pub(super) fn gc_mark_ephemerons(&self, marker: &mut GcMarker) {
+        let headroom = self
+            .config
+            .max_total_memory_bytes
+            .saturating_sub(self.estimated_memory_bytes);
+        let limit = usize::try_from(headroom)
+            .unwrap_or(usize::MAX)
+            .min(MAX_EPHEMERON_SCRATCH_BYTES);
+        self.gc_mark_ephemerons_with_limit(marker, limit);
+    }
+
+    fn gc_mark_ephemerons_with_limit(&self, marker: &mut GcMarker, limit: usize) {
+        match self.gc_ephemeron_index(marker, limit) {
+            Some(mut index) => {
+                self.gc_drain_with_objects(marker, |marker, object| index.observe(marker, object));
+            }
+            None => self.gc_mark_ephemerons_scanning(marker),
+        }
+    }
+
+    fn gc_ephemeron_index(
+        &self,
+        marker: &mut GcMarker,
+        limit: usize,
+    ) -> Option<ConditionalIndex<'_>> {
+        let mut count = self
+            .url_objects
+            .len()
+            .checked_add(self.url_search_params.len())?;
+        for storage in self.weakmap_storage.values() {
+            count = count
+                .checked_add(storage.entries.len())?
+                .checked_add(storage.symbol_entries.len())?;
+        }
+        // All fallible reservations precede marking. add() never grows
+        // beyond these capacities, and sort_unstable allocates no scratch.
+        let mut index = ConditionalIndex::try_new(count, limit)?;
+        for (owner, storage) in &self.weakmap_storage {
+            for (key, value) in &storage.entries {
+                index.add(marker, owner.0, Some(*key), EdgeTarget::Value(value));
+            }
+            for value in storage.symbol_entries.values() {
+                index.add(marker, owner.0, None, EdgeTarget::Value(value));
+            }
+        }
+        for (url, state) in &self.url_objects {
+            index.add(marker, url.0, None, EdgeTarget::Object(state.search_params));
+        }
+        for (params, state) in &self.url_search_params {
+            if let Some(owner) = state.owner_url {
+                index.add(marker, params.0, None, EdgeTarget::Object(owner));
+            }
+        }
+        index.watchers.sort_unstable();
+        Some(index)
+    }
+
+    /// Allocation-free fallback and independently structured test oracle.
+    fn gc_mark_ephemerons_scanning(&self, marker: &mut GcMarker) {
         loop {
             for (map_id, storage) in &self.weakmap_storage {
                 if !marker.is_marked(map_id.0) {
@@ -216,6 +387,136 @@ mod tests {
                 "unreachable object {} survived",
                 id.0
             );
+        }
+    }
+
+    fn assert_same_marks(core: &InterpreterCore, left: &GcMarker, right: &GcMarker) {
+        for id in 0..core.heap.len() {
+            assert_eq!(
+                left.objects.is_marked(id),
+                right.objects.is_marked(id),
+                "object {id}"
+            );
+        }
+        for id in 0..core.closures.len() {
+            assert_eq!(
+                left.closures.is_marked(id),
+                right.closures.is_marked(id),
+                "closure {id}"
+            );
+        }
+    }
+
+    #[test]
+    fn reverse_chains_examine_each_dependency_a_bounded_number_of_times() {
+        for length in [32, 512, 4096] {
+            let mut core = core();
+            let map = object(&mut core);
+            let keys: Vec<_> = (0..=length).map(|_| object(&mut core)).collect();
+            for index in 1..=length {
+                store(&mut core, map, keys[index], Value::Object(keys[index - 1]));
+            }
+            let mut marker = roots(&core, &[map, keys[length]]);
+            let mut index = core
+                .gc_ephemeron_index(&mut marker, MAX_EPHEMERON_SCRATCH_BYTES)
+                .expect("bounded fixture fits");
+            core.gc_drain_with_objects(&mut marker, |marker, id| index.observe(marker, id));
+            assert!(keys.iter().all(|key| marker.is_marked(key.0)));
+            assert_eq!(index.edges.len(), length);
+            assert!(
+                index.checks <= 2 * length,
+                "{} checks for {length} edges",
+                index.checks
+            );
+            assert!(index.edges.iter().all(|edge| edge.fired));
+        }
+    }
+
+    #[test]
+    fn scratch_limits_fall_back_before_mutating_marks() {
+        let mut core = core();
+        let map = object(&mut core);
+        let key = object(&mut core);
+        let payload = object(&mut core);
+        let closure = captured(&mut core, payload);
+        store(&mut core, map, key, Value::Closure(closure));
+        let mut rejected = roots(&core, &[map, key]);
+        assert!(core.gc_ephemeron_index(&mut rejected, 0).is_none());
+        assert!(!rejected.closures.is_marked(closure as usize));
+        assert!(!rejected.is_marked(payload.0));
+        assert!(ConditionalIndex::try_new(usize::MAX, usize::MAX).is_none());
+        assert!(ConditionalIndex::try_new(1, 0).is_none());
+        let mut indexed = roots(&core, &[map, key]);
+        core.gc_mark_ephemerons_with_limit(&mut indexed, MAX_EPHEMERON_SCRATCH_BYTES);
+        core.gc_mark_ephemerons_with_limit(&mut rejected, 0);
+        assert_same_marks(&core, &indexed, &rejected);
+        assert!(rejected.is_marked(payload.0));
+        assert!(rejected.closure_stack.is_empty());
+    }
+
+    #[test]
+    fn indexing_matches_full_rescans_on_generated_cyclic_graphs() {
+        let mut state = 0xd3b4_9287_56ac_01efu64;
+        let mut next = || {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            (state >> 32) as usize
+        };
+        for _ in 0..128 {
+            let mut core = core();
+            let nodes: Vec<_> = (0..48).map(|_| object(&mut core)).collect();
+            for _ in 0..192 {
+                let owner = nodes[next() % nodes.len()];
+                let key = nodes[next() % nodes.len()];
+                let payload = nodes[next() % nodes.len()];
+                let value = if next().is_multiple_of(4) {
+                    Value::Closure(captured(&mut core, payload))
+                } else {
+                    Value::Object(payload)
+                };
+                if next().is_multiple_of(8) {
+                    core.weakmap_storage
+                        .entry(owner)
+                        .or_default()
+                        .set_symbol((next() % 4) as u32, value);
+                } else {
+                    store(&mut core, owner, key, value);
+                }
+            }
+            let mut expected = roots(&core, &nodes[..8]);
+            core.gc_mark_ephemerons_scanning(&mut expected);
+            let mut actual = roots(&core, &nodes[..8]);
+            let mut index = core
+                .gc_ephemeron_index(&mut actual, MAX_EPHEMERON_SCRATCH_BYTES)
+                .expect("bounded fixture fits");
+            core.gc_drain_with_objects(&mut actual, |marker, id| index.observe(marker, id));
+            assert_same_marks(&core, &actual, &expected);
+            assert!(index.checks <= 3 * index.edges.len());
+            assert!(actual.stack.is_empty() && actual.closure_stack.is_empty());
+        }
+    }
+
+    #[test]
+    fn notifications_require_both_owner_and_key_and_deduplicate_self_keys() {
+        for key_first in [false, true] {
+            let mut marker = GcMarker::new(8, 0, 0, 0, 0, 0, 0);
+            let value = Value::Object(ObjectId(3));
+            let mut index =
+                ConditionalIndex::try_new(2, MAX_EPHEMERON_SCRATCH_BYTES).unwrap();
+            index.add(&mut marker, 1, Some(2), EdgeTarget::Value(&value));
+            index.add(&mut marker, 4, Some(4), EdgeTarget::Object(ObjectId(5)));
+            index.watchers.sort_unstable();
+            assert_eq!(index.watchers.len(), 3, "self key has one watcher");
+            let [first, second] = if key_first { [2, 1] } else { [1, 2] };
+            marker.object(ObjectId(first));
+            index.observe(&mut marker, first);
+            assert!(!marker.is_marked(3));
+            marker.object(ObjectId(second));
+            index.observe(&mut marker, second);
+            assert!(marker.is_marked(3));
+            marker.object(ObjectId(4));
+            index.observe(&mut marker, 4);
+            assert!(marker.is_marked(5));
+            assert!(index.edges.iter().all(|edge| edge.fired));
         }
     }
 }

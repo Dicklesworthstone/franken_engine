@@ -7,7 +7,10 @@
 use super::{BacktrackError, BacktrackRegExp, Captures, Inst, PreparedInput};
 use super::{is_line_terminator, is_word_char};
 
+mod literals;
 mod prefix;
+
+use literals::LiteralBlocks;
 use prefix::StartPrefix;
 
 /// Bound idle capacity between candidate starts and global matches. Large
@@ -40,8 +43,11 @@ pub(super) struct Run<'a> {
     // Allocated once, and only if an assertion actually writes captures.
     // A compaction touches and clears only the slots present in its suffix.
     capture_seen: Vec<bool>,
+    literal_blocks: LiteralBlocks,
     #[cfg(test)]
     candidate_executions: usize,
+    #[cfg(test)]
+    literal_dispatches: usize,
 }
 
 impl Run<'_> {
@@ -93,13 +99,40 @@ impl Run<'_> {
             }
             self.steps_left -= 1;
             let advanced = match &regexp.program[pc] {
-                Inst::Char { c, backward } => self.step(position, *backward, |input| {
-                    if regexp.ignore_case {
-                        regexp.canonicalize(input) == regexp.canonicalize(*c)
-                    } else {
-                        input == *c
+                Inst::Char { c, backward } => {
+                    #[cfg(test)]
+                    {
+                        self.literal_dispatches += 1;
                     }
-                }),
+                    // A one-character atom avoids cache construction. Longer
+                    // straight runs use bounded blocks, including lookbehind;
+                    // their first instruction was paid by the dispatch above.
+                    if matches!(
+                        regexp.program.get(pc + 1),
+                        Some(Inst::Char { backward: next, .. }) if next == backward
+                    ) && let Some(block) = self.literal_blocks.at(regexp, pc)
+                    {
+                        let advanced = block.execute_after_dispatch(
+                            regexp,
+                            chars,
+                            position,
+                            &mut self.steps_left,
+                        )?;
+                        // Success falls through to the usual pc increment.
+                        // Failure ignores this pc and uses the existing undo
+                        // stack, including alternatives inside assertions.
+                        pc += block.len - 1;
+                        advanced
+                    } else {
+                        self.step(position, *backward, |input| {
+                            if regexp.ignore_case {
+                                regexp.canonicalize(input) == regexp.canonicalize(*c)
+                            } else {
+                                input == *c
+                            }
+                        })
+                    }
+                }
                 Inst::Any { backward } => self.step(position, *backward, |input| {
                     regexp.dot_all || !is_line_terminator(input)
                 }),
@@ -410,8 +443,11 @@ impl<'a> Run<'a> {
             steps_left,
             stack: Vec::new(),
             capture_seen: Vec::new(),
+            literal_blocks: LiteralBlocks::default(),
             #[cfg(test)]
             candidate_executions: 0,
+            #[cfg(test)]
+            literal_dispatches: 0,
         }
     }
 

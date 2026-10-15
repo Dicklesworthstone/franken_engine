@@ -120,7 +120,7 @@ impl<'a> ConditionalIndex<'a> {
 }
 
 impl InterpreterCore {
-    pub(super) fn gc_mark_ephemerons(&self, marker: &mut GcMarker) {
+    pub(super) fn gc_mark_ephemerons(&mut self, marker: &mut GcMarker) {
         let headroom = self
             .config
             .max_total_memory_bytes
@@ -129,6 +129,41 @@ impl InterpreterCore {
             .unwrap_or(usize::MAX)
             .min(MAX_EPHEMERON_SCRATCH_BYTES);
         self.gc_mark_ephemerons_with_limit(marker, limit);
+        self.gc_purge_weakmap_storage(marker);
+    }
+
+    /// The reachability fixpoint is complete, so dead keys and dead owners
+    /// can no longer be resurrected by another conditional edge. Dropping
+    /// them here releases inline strings as well as obsolete object handles.
+    fn gc_purge_weakmap_storage(&mut self, marker: &GcMarker) {
+        let has_dead_entries = self.weakmap_storage.iter().any(|(owner, storage)| {
+            !marker.is_marked(owner.0)
+                || storage.entries.keys().any(|key| !marker.is_marked(*key))
+        });
+        if !has_dead_entries {
+            return;
+        }
+        // The heap sweep also materializes outstanding execution seeds.
+        // Do that before side-table mutation, not after it.
+        self.before_seed_surface_write();
+        let before = self.weakmap_storage_memory_bytes();
+        self.weakmap_storage.retain(|owner, storage| {
+            if !marker.is_marked(owner.0) {
+                return false;
+            }
+            storage.entries.retain(|key, _| marker.is_marked(*key));
+            storage
+                .weak_key_objects
+                .retain(|key| marker.is_marked(*key));
+            // This runtime's symbols are immortal. Keep their entries while
+            // the map lives, even when no object-keyed entries survive.
+            true
+        });
+        // Reuse the canonical estimator, including the owning-map charge,
+        // rather than introduce a second formula for entry/value sizes.
+        let released = before.saturating_sub(self.weakmap_storage_memory_bytes());
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released);
+        self.gc.stats.reclaimed_bytes = self.gc.stats.reclaimed_bytes.saturating_add(released);
     }
 
     fn gc_mark_ephemerons_with_limit(&self, marker: &mut GcMarker, limit: usize) {
@@ -518,5 +553,184 @@ mod tests {
             assert!(marker.is_marked(5));
             assert!(index.edges.iter().all(|edge| edge.fired));
         }
+    }
+
+    /// Account synthetic fixture changes through the same component used
+    /// by production WeakMap insertion. Heap allocations account themselves.
+    fn accounted_entries(core: &mut InterpreterCore, change: impl FnOnce(&mut InterpreterCore)) {
+        let before = core.weakmap_storage_memory_bytes();
+        change(core);
+        let after = core.weakmap_storage_memory_bytes();
+        core.apply_memory_component_delta(before, after)
+            .expect("fixture fits");
+    }
+
+    #[test]
+    fn collection_purges_dead_weak_entries_and_releases_their_exact_charge() {
+        let mut core = core();
+        let map = object(&mut core);
+        let dead_map = object(&mut core);
+        let key = object(&mut core);
+        let dead_key = object(&mut core);
+        let payload = object(&mut core);
+        let symbol_payload = object(&mut core);
+        let unreachable = object(&mut core);
+        accounted_entries(&mut core, |core| {
+            store(core, map, key, Value::Object(payload));
+            store(core, map, dead_key, Value::str("dead".repeat(4096)));
+            store(core, dead_map, key, Value::Object(unreachable));
+            core.weakmap_storage
+                .get_mut(&map)
+                .unwrap()
+                .set_symbol(7, Value::Object(symbol_payload));
+            core.weakmap_storage
+                .get_mut(&dead_map)
+                .unwrap()
+                .set_symbol(8, Value::str("orphan".repeat(4096)));
+        });
+        core.seed_register(0, Value::Object(map)).expect("seed root");
+        core.seed_register(1, Value::Object(key)).expect("seed root");
+        let before = core.estimated_memory_bytes;
+        let weak_before = core.weakmap_storage_memory_bytes();
+        core.collect_garbage().expect("collect");
+        let weak_after = core.weakmap_storage_memory_bytes();
+        let storage = &core.weakmap_storage[&map];
+        assert_eq!(storage.get(key.0), Some(&Value::Object(payload)));
+        assert_eq!(storage.get_symbol(7), Some(&Value::Object(symbol_payload)));
+        assert!(!storage.has(dead_key.0));
+        assert_eq!(storage.get_weak_key_objects(), &BTreeSet::from([key.0]));
+        assert!(!core.weakmap_storage.contains_key(&dead_map));
+        for id in [map, key, payload, symbol_payload] {
+            assert!(core.heap.get(id.0 as usize).is_some());
+        }
+        for id in [dead_map, dead_key, unreachable] {
+            assert!(core.heap.is_reclaimed(id.0 as usize));
+        }
+        assert!(weak_after < weak_before);
+        assert!(before - core.estimated_memory_bytes >= weak_before - weak_after);
+        assert_eq!(
+            core.estimated_memory_bytes,
+            core.recompute_base_estimated_memory_bytes()
+        );
+        assert_eq!(
+            core.gc_stats().reclaimed_bytes,
+            before - core.estimated_memory_bytes
+        );
+        let retained = core.estimated_memory_bytes;
+        let reclaimed = core.gc_stats().reclaimed_bytes;
+        core.collect_garbage().expect("collect again");
+        assert_eq!(core.estimated_memory_bytes, retained);
+        assert_eq!(core.gc_stats().reclaimed_bytes, reclaimed);
+    }
+
+    #[test]
+    fn weakmap_churn_stays_bounded_across_repeated_collections() {
+        let mut core = core();
+        core.config.max_total_memory_bytes = 2 * 1024 * 1024;
+        let map = object(&mut core);
+        let key = object(&mut core);
+        accounted_entries(&mut core, |core| store(core, map, key, Value::Int(42)));
+        core.seed_register(0, Value::Object(map)).expect("seed root");
+        core.seed_register(1, Value::Object(key)).expect("seed root");
+        let retained_table_bytes = core.weakmap_storage_memory_bytes();
+        // 32 MiB of historical payload under a 2 MiB budget. No register
+        // roots the temporary keys; only the persistent entry may survive.
+        for _ in 0..128 {
+            accounted_entries(&mut core, |core| {
+                for _ in 0..64 {
+                    let temporary = object(core);
+                    store(core, map, temporary, Value::str("x".repeat(4096)));
+                }
+            });
+            core.collect_garbage().expect("collect churn");
+            assert_eq!(core.weakmap_storage_memory_bytes(), retained_table_bytes);
+            assert_eq!(core.weakmap_storage[&map].entries.len(), 1);
+            assert_eq!(core.weakmap_storage[&map].weak_key_objects.len(), 1);
+            assert_eq!(
+                core.estimated_memory_bytes,
+                core.recompute_base_estimated_memory_bytes()
+            );
+        }
+        assert!(core.gc_stats().reclaimed_bytes >= 32 * 1024 * 1024);
+    }
+
+    #[test]
+    fn pruning_waits_for_the_complete_cross_map_fixpoint() {
+        let mut core = core();
+        let first = object(&mut core);
+        let later = object(&mut core);
+        let root_key = object(&mut core);
+        let later_key = object(&mut core);
+        let payload = object(&mut core);
+        accounted_entries(&mut core, |core| {
+            store(core, later, later_key, Value::Object(payload));
+            store(core, first, root_key, Value::Object(later_key));
+            // The owner is initially unmarked too; a symbol value makes it
+            // live only after first becomes reachable.
+            core.weakmap_storage
+                .get_mut(&first)
+                .unwrap()
+                .set_symbol(9, Value::Object(later));
+        });
+        core.seed_register(0, Value::Object(first))
+            .expect("seed root");
+        core.seed_register(1, Value::Object(root_key))
+            .expect("seed root");
+        core.collect_garbage().expect("collect");
+        assert_eq!(
+            core.weakmap_storage[&later].get(later_key.0),
+            Some(&Value::Object(payload))
+        );
+        assert!(core.heap.get(payload.0 as usize).is_some());
+        assert_eq!(
+            core.estimated_memory_bytes,
+            core.recompute_base_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn javascript_weakmap_churn_completes_under_a_bounded_memory_budget() {
+        use crate::ast::ParseGoal;
+        use crate::ir_contract::Ir0Module;
+        use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+        use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
+
+        let source = "var cache = new WeakMap(); var persistent = {}; \
+            cache.set(persistent, 'kept'); \
+            for (let i = 0; i < 1024; i++) { \
+                const key = {}; cache.set(key, 'x'.repeat(8192)); \
+            } cache.get(persistent)";
+        let tree = CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: "weakmap-churn.js".into(),
+                    text: source.into(),
+                },
+                ParseGoal::Script,
+                &ParserOptions::default(),
+            )
+            .expect("parse");
+        let module = lower_ir0_to_ir3(
+            &Ir0Module::from_syntax_tree(tree, "weakmap-churn.js"),
+            &LoweringContext::new("gc-trace", "gc-decision", "gc-policy"),
+        )
+        .expect("lower")
+        .ir3;
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.max_total_memory_bytes = 2 * 1024 * 1024;
+        config.instruction_budget = 1_000_000_000;
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]
+        .into_iter()
+        .collect();
+        let mut core = InterpreterCore::new(config, "weakmap-churn");
+        core.set_gc_stress_interval(Some(8));
+        let result = core.execute(&module).expect("bounded churn completes");
+        assert_eq!(result.value, Value::str("kept"));
+        assert!(core.gc_stats().collections > 4);
+        assert!(core.gc_stats().reclaimed_bytes > 2 * 1024 * 1024);
     }
 }

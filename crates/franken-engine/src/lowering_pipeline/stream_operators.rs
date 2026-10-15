@@ -62,9 +62,11 @@ impl Walk for OperatorUse {
         // A consumer drives its source through async iteration rather than a
         // constructor-specific HostCall. Keep sources passed into it on the
         // full stream state machine path, even without an operator member.
+        // Web stages likewise require the shared pipeline/adapter state machines;
+        // a constructor-only facade cannot consume a ReadableStream or writer.
         if matches!(
             builtin_require_member(expression),
-            Some((PureModule::StreamConsumers, None))
+            Some((PureModule::StreamConsumers | PureModule::WebStreams, None))
         ) {
             self.found = true;
             return Ok(());
@@ -264,5 +266,25 @@ mod tests {
             free_names(&mut module_source(&expected, PureModule::StreamConsumers).expect("protected source")),
             BTreeSet::from(["globalThis".to_string()])
         );
+    }
+
+    #[test]
+    fn web_stages_keep_named_pipeline_and_node_constructors_on_the_shared_module() {
+        for source in [
+            "const { pipeline } = require('stream'); const web = require('stream/web'); pipeline(source, new web.WritableStream(), done);",
+            "const { promises: p, Readable: R } = require('node:stream'); const web = require('node:stream/web'); p.pipeline(R.from([1]), new web.WritableStream());",
+        ] {
+            let tree = parse(source);
+            assert!(requires_stream_module(&tree.body));
+            let rewritten = rewrite_util_requires(&tree)
+                .expect("pipeline lowering")
+                .expect("complete stream and Web module");
+            assert_eq!(
+                rewritten.body.iter().filter(|s| is_module_declaration(s)).count(),
+                4,
+                "one events, decoder, Web and Node stream factory: {source}"
+            );
+            assert!(rewrite_util_requires(&rewritten).expect("idempotent").is_none());
+        }
     }
 }

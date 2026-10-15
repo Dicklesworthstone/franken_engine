@@ -15,9 +15,9 @@ use super::super::{
 use super::super::super::with_statement::{Outcome, Walk, lexical_names, var_names};
 use crate::ast::{BindingPattern, Expression, Statement, SyntaxTree};
 
-const GLOBALS: [&str; 9] = [
-    "AbortSignal", "Buffer", "Error", "EventTarget", "Object", "Promise",
-    "Reflect", "TypeError", "Uint8Array",
+const GLOBALS: [&str; 11] = [
+    "AbortSignal", "Array", "Buffer", "Error", "EventTarget", "Object", "Promise",
+    "Reflect", "Symbol", "TypeError", "Uint8Array",
 ];
 const SOURCE: &str = include_str!("stream_web_bridge.js");
 static INSTALLER: NativeModuleSource = NativeModuleSource::new("franken:stream/web-bridge", SOURCE);

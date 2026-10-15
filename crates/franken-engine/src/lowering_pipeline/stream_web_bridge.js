@@ -82,7 +82,8 @@
     }
     return out;
   }
-  function readableFromWeb(source, settings) {
+  function readableFromWeb(source, settings) { return makeReadableFromWeb(source, settings); }
+  function makeReadableFromWeb(source, settings, owner) {
     const a = api(); apply(a.rLocked, source, []); // brand check before taking ownership
     const config = nodeOptions(settings, true);
     let reader, node, reading = false, stopping = false, ended = false;
@@ -120,11 +121,13 @@
     then(apply(a.rClosed, reader, []), undefined, function (reason) {
       if (!stopping) apply(destroyR, node, [failure(reason)]);
     });
+    if (owner !== undefined) owner.own(node, function () { stopping = true; apply(a.releaseReader, reader, []); });
     // Like Node's adapters, ownership of the Web lock is permanent. It is
     // not returned to a second consumer after EOF or destroy.
     return node;
   }
-  function writableFromWeb(destination, settings) {
+  function writableFromWeb(destination, settings) { return makeWritableFromWeb(destination, settings); }
+  function makeWritableFromWeb(destination, settings, owner) {
     const a = api(); apply(a.wLocked, destination, []);
     const config = nodeOptions(settings, false);
     let writer, node, stopping = false, ended = false;
@@ -145,6 +148,7 @@
     then(apply(a.wClosed, writer, []), undefined, function (reason) {
       if (!stopping) apply(destroyW, node, [failure(reason)]);
     });
+    if (owner !== undefined) owner.own(node, function () { stopping = true; });
     return node;
   }
   function observableClose(state) {
@@ -156,7 +160,8 @@
       e.code = 'ERR_STREAM_WEB_UNSUPPORTED'; throw e;
     }
   }
-  function duplexFromWeb(pair, settings) {
+  function duplexFromWeb(pair, settings) { return makeDuplexFromWeb(pair, settings); }
+  function makeDuplexFromWeb(pair, settings, owner) {
     if (pair === null || typeof pair !== 'object') throw fail('pair');
     const source = pair.readable, destination = pair.writable, a = api();
     apply(a.rLocked, source, []); apply(a.wLocked, destination, []);
@@ -225,6 +230,7 @@
     function rejected(reason) { if (!stopping) apply(destroyR, node, [failure(reason)]); }
     then(apply(a.rClosed, reader, []), undefined, rejected);
     then(apply(a.wClosed, writer, []), undefined, rejected);
+    if (owner !== undefined) owner.own(node, function () { stopping = true; apply(a.releaseReader, reader, []); });
     return node;
   }
   function completionOptions(readable) {
@@ -360,5 +366,188 @@
     return { readable: readableToWeb(node), writable: writableToWeb(node) };
   }
   property(D, 'fromWeb', duplexFromWeb); property(D, 'toWeb', duplexToWeb);
+  // Pipeline still owns scheduling, cancellation, function stages and Node
+  // teardown. This boundary only normalizes explicit Web stages to its
+  // existing adapters; it does not build another pump or collect input.
+  // As at the explicit Node/Web boundary, null readable chunks are refused,
+  // not interpreted as EOF. The writer lock has Node's retained ownership.
+  const pipelineSlice = Array.prototype.slice;
+  const pipelineIsArray = Array.isArray;
+  const pipelineIterator = Symbol.iterator;
+  const pipelineAsyncIterator = Symbol.asyncIterator;
+  const callbackPipeline = stream.pipeline;
+  const pipelinePromises = stream.promises;
+  const promisePipeline = pipelinePromises && pipelinePromises.pipeline;
+  function nodeStage(value) {
+    return value != null && typeof value.on === 'function' &&
+      (typeof value.pipe === 'function' || typeof value.write === 'function');
+  }
+  function iterableStage(value) {
+    return value != null && (typeof value[pipelineIterator] === 'function' ||
+      typeof value[pipelineAsyncIterator] === 'function');
+  }
+  function lockedEndpoint() {
+    const error = new Type('Web stream endpoint is locked or used twice');
+    error.code = 'ERR_INVALID_STATE'; return error;
+  }
+  function webStage(value, index, count) {
+    if (value === null || typeof value !== 'object' || nodeStage(value) || pipelineIsArray(value)) return undefined;
+    // Hints do not grant a brand. They avoid loading the Web module for an
+    // ordinary Node-only pipeline, iterable, or options dictionary. An own
+    // replacement of getReader/getWriter is never invoked or trusted.
+    if (!('getReader' in value) && !('getWriter' in value) &&
+        !('readable' in value && 'writable' in value)) return undefined;
+    const a = api();
+    let readable = false, writable = false;
+    try { apply(a.rLocked, value, []); readable = true; } catch (error) {}
+    try { apply(a.wLocked, value, []); writable = true; } catch (error) {}
+    let source, destination;
+    if (readable) source = value;
+    else if (writable) destination = value;
+    else {
+      source = value.readable; destination = value.writable;
+      apply(a.rLocked, source, []); apply(a.wLocked, destination, []);
+    }
+    const reading = index < count - 1, writing = index > 0;
+    if ((reading && source === undefined) || (writing && destination === undefined)) throw fail('pipeline stage');
+    if (!reading) source = undefined;
+    if (!writing) destination = undefined;
+    if ((source !== undefined && apply(a.rLocked, source, [])) ||
+        (destination !== undefined && apply(a.wLocked, destination, []))) throw lockedEndpoint();
+    return { source: source, destination: destination };
+  }
+  function pipelineOwner() {
+    const records = [];
+    let finished = false;
+    return {
+      own: function (node, release) {
+        const record = { node: node, release: release, closed: false, waiters: [] };
+        record.error = function () {}; // Teardown may precede core registration.
+        record.close = function () {
+          record.closed = true;
+          const waiting = record.waiters; record.waiters = [];
+          for (let i = 0; i < waiting.length; i++) waiting[i]();
+        };
+        apply(on, node, ['error', record.error]);
+        apply(on, node, ['close', record.close]);
+        records[records.length] = record;
+      },
+      finish: function (error, done) {
+        if (finished) return;
+        finished = true;
+        let pending = 1;
+        function complete() {
+          if (--pending !== 0) return;
+          for (let i = 0; i < records.length; i++) {
+            const record = records[i];
+            record.release();
+            apply(remove, record.node, ['error', record.error]);
+            apply(remove, record.node, ['close', record.close]);
+          }
+          done();
+        }
+        if (error) {
+          // Every adopted stage belongs to this invocation, even if a later
+          // factory throws before the original pipeline registers that stage.
+          // Start all destruction before waiting for any close notification.
+          for (let i = 0; i < records.length; i++) {
+            const record = records[i];
+            if (!record.closed) {
+              pending++;
+              record.waiters[record.waiters.length] = complete;
+              apply(destroyR, record.node, [error]);
+            }
+          }
+        }
+        complete();
+      }
+    };
+  }
+  function adaptPipelineStage(value, shape, owner) {
+    if (shape === undefined) return value;
+    const config = create(null);
+    config.objectMode = true; config.highWaterMark = 1;
+    config.decodeStrings = false; config.allowHalfOpen = true;
+    if (shape.source === undefined) return makeWritableFromWeb(shape.destination, config, owner);
+    if (shape.destination === undefined) return makeReadableFromWeb(shape.source, config, owner);
+    const pair = create(null); pair.readable = shape.source; pair.writable = shape.destination;
+    return makeDuplexFromWeb(pair, config, owner);
+  }
+  function preparePipeline(values, owner) {
+    const stages = values.length === 1 && pipelineIsArray(values[0]) ? apply(pipelineSlice, values[0], []) : values;
+    const count = stages.length, shapes = [], endpoints = [];
+    if (count < 2) return { stages: stages, destination: undefined, webDestination: false };
+    // Read all pair properties, check all brands/roles and detect duplicate
+    // ownership before any adapter takes a lock or subscribes to a source.
+    for (let i = 0; i < count; i++) {
+      const shape = webStage(stages[i], i, count); shapes[i] = shape;
+      if (shape === undefined) continue;
+      for (let side = 0; side < 2; side++) {
+        const endpoint = side === 0 ? shape.source : shape.destination;
+        if (endpoint === undefined) continue;
+        for (let j = 0; j < endpoints.length; j++) if (endpoints[j] === endpoint) throw lockedEndpoint();
+        endpoints[endpoints.length] = endpoint;
+      }
+    }
+    const normalized = [];
+    for (let i = 0; i < count; i++) {
+      const value = stages[i];
+      if (typeof value === 'function' && i === 0) {
+        // Source factories run only when the core invokes them. Keep the
+        // core-provided signal and return-value validation, including throws.
+        normalized[i] = function (options) {
+          const result = value(options);
+          return adaptPipelineStage(result, webStage(result, 0, count), owner);
+        };
+      } else normalized[i] = adaptPipelineStage(value, shapes[i], owner);
+    }
+    return { stages: normalized, destination: count ? stages[count - 1] : undefined,
+      webDestination: count ? shapes[count - 1] !== undefined : false };
+  }
+  function pipeline(...values) {
+    const args = apply(pipelineSlice, values, []);
+    const callback = args[args.length - 1];
+    // Preserve the core's synchronous argument errors before taking ownership.
+    if (typeof callback !== 'function') return apply(callbackPipeline, stream, args);
+    args.length--;
+    const owner = pipelineOwner();
+    try {
+      const plan = preparePipeline(args, owner);
+      plan.stages[plan.stages.length] = function (error, value) {
+        owner.finish(error, function () { callback(error, value); });
+      };
+      const returned = apply(callbackPipeline, stream, plan.stages);
+      return plan.webDestination ? plan.destination : returned;
+    } catch (error) { owner.finish(failure(error), function () {}); throw error; }
+  }
+  function pipelinePromise(...values) {
+    const args = apply(pipelineSlice, values, []);
+    const owner = pipelineOwner();
+    return new P(function (resolvePipeline, rejectPipeline) {
+      try {
+        const last = args[args.length - 1];
+        let config;
+        // A Web destination is not an options dictionary. Snapshot options
+        // and validate the signal before adopting any endpoint.
+        if (last && typeof last === 'object' && !nodeStage(last) && !iterableStage(last) &&
+            !('getReader' in last) && !('getWriter' in last) && !('readable' in last && 'writable' in last)) {
+          args.length--; config = create(null); config.end = last.end; config.signal = last.signal;
+          if (config.signal !== undefined) apply(aborted, config.signal, []);
+        }
+        const plan = preparePipeline(args, owner);
+        if (config !== undefined) plan.stages[plan.stages.length] = config;
+        then(apply(promisePipeline, pipelinePromises, plan.stages), function (value) {
+          owner.finish(undefined, function () { resolvePipeline(value); });
+        }, function (error) {
+          owner.finish(failure(error), function () { rejectPipeline(error); });
+        });
+      } catch (error) { owner.finish(failure(error), function () { rejectPipeline(error); }); }
+    });
+  }
+  if (typeof callbackPipeline === 'function' && typeof promisePipeline === 'function') {
+    property(stream, 'pipeline', pipeline);
+    property(pipelinePromises, 'pipeline', pipelinePromise);
+    property(pipeline, Symbol.for('nodejs.util.promisify.custom'), pipelinePromise);
+  }
   return stream;
 })

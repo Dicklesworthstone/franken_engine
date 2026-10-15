@@ -345,3 +345,5 @@ fn group_timeout_keeps_worker_and_effect_permit_until_native_callback_returns() 
     assert_eq!(effects.snapshot().unwrap().in_flight, 0);
     assert_eq!(effects.snapshot().unwrap().remaining_operations, 1);
 }
+
+mod owned_effects;

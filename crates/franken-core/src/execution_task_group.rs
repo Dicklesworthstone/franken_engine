@@ -29,7 +29,7 @@ use crate::host_effect_budget::HostEffectWorkPool;
 use crate::ir_contract::Ir3Module;
 
 mod effects;
-pub use effects::ExecutionGroupDrainError;
+pub use effects::{ExecutionGroupDrainError, ExecutionHostBindings};
 
 /// Monotonic identity local to one group. Never reused after result collection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -76,6 +76,7 @@ impl fmt::Debug for ExecutionGroupControl {
 #[derive(Debug)]
 pub enum ExecutionGroupStartError {
     Closed,
+    HostEffectsUnconfigured,
     Capacity {
         limit: usize,
     },
@@ -90,6 +91,7 @@ impl fmt::Display for ExecutionGroupStartError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Closed => f.write_str("native execution group is closed"),
+            Self::HostEffectsUnconfigured => f.write_str("native group has no host-effect scope"),
             Self::Capacity { limit } => write!(f, "native execution group task capacity is {limit}"),
             Self::Allocation => f.write_str("native execution group could not reserve task storage"),
             Self::IdentityExhausted => f.write_str("native execution group task identities exhausted"),

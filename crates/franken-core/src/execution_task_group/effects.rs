@@ -1,12 +1,50 @@
 //! Join native workers and drain their configured provider-call scope.
 
 use std::fmt;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::{ExecutionTaskGroup, ExecutionTaskJoinError, ExecutionWorkPool, WorkBudgetError};
-use crate::host_effect_budget::{
-    HostEffectDrainError, HostEffectSnapshot, HostEffectWorkPool,
+use super::{
+    ExecutionAdmission, ExecutionGroupStartError, ExecutionTaskGroup, ExecutionTaskId,
+    ExecutionTaskJoinError, ExecutionWorkPool, InterpreterConfig, InterpreterHook, Ir3Module,
+    WorkBudgetError,
 };
+use crate::host_effect_budget::{
+    BudgetedHostIo, BudgetedProcessSpawn, HostEffectDrainError, HostEffectSnapshot, HostEffectWorkPool,
+};
+
+use frankenengine_extension_host::host_io::HostIoProvider;
+use frankenengine_extension_host::process_spawn::ProcessSpawnProvider;
+
+/// Borrowed preparation context for this group's exact prepaid job and effect
+/// frontier. Neither raw pool authority nor an owned admission can escape it.
+/// Decorators may be retained, but their job-local scope closes when the admission
+/// completes, is refused, is cancelled, or unwinds. Binding grants no capability.
+pub struct ExecutionHostBindings<'a> {
+    admission: &'a ExecutionAdmission,
+    effects: &'a HostEffectWorkPool,
+}
+
+impl fmt::Debug for ExecutionHostBindings<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExecutionHostBindings").finish_non_exhaustive()
+    }
+}
+
+impl ExecutionHostBindings<'_> {
+    /// Preserve the configured provider's policy while sharing this group's
+    /// operation credits, in-flight frontier and the job's cancellation lifetime.
+    pub fn bind_host_io(&self, provider: Arc<dyn HostIoProvider>) -> BudgetedHostIo {
+        self.effects.bind_host_io_for_admission(provider, self.admission)
+    }
+
+    /// Process dispatch shares the SAME credits and in-flight ceiling as I/O.
+    /// Preserve spawned handles, native typed failures and trusted cleanup. Only
+    /// admitted dispatch is drained; cleanup/reaping/journaling remain external.
+    pub fn bind_process_spawn(&self, provider: Arc<dyn ProcessSpawnProvider>) -> BudgetedProcessSpawn {
+        self.effects.bind_process_spawn_for_admission(provider, self.admission)
+    }
+}
 
 /// A failed group drain never certifies provider or native-worker completion.
 /// The group stays closed and retains every task/result for a retry.
@@ -41,6 +79,38 @@ impl std::error::Error for ExecutionGroupDrainError {
 }
 
 impl ExecutionTaskGroup {
+    /// Prepare provider decorators against the same effect scope that
+    /// `close_and_drain` waits on and the exact admission consumed by the worker.
+    /// Install them in the trusted host's current configuration or returned hook.
+    /// The callback receives neither an owned admission nor a raw effect pool,
+    /// preventing accidental binding to a different frontier through this API.
+    /// Arbitrary providers already hidden in custom hooks are not auto-wrapped.
+    ///
+    /// All ordinary capacity, quota, capability and cancellation checks remain
+    /// on `spawn_with_preparation`. Missing effect configuration refuses before
+    /// debit or callback entry. Setup refusal closes the job without refund;
+    /// setup unwind cancels BOTH group scopes and keeps existing task handles.
+    /// Preparation is trusted synchronous host code, never a guest callback.
+    pub fn spawn_with_effect_preparation(
+        &mut self,
+        module: Ir3Module,
+        current_config: InterpreterConfig,
+        trace_id: impl Into<String>,
+        prepare: impl FnOnce(
+            &ExecutionHostBindings<'_>,
+            &mut InterpreterConfig,
+        ) -> Result<Option<Arc<dyn InterpreterHook>>, WorkBudgetError>,
+    ) -> Result<ExecutionTaskId, ExecutionGroupStartError> {
+        if self.is_closed() {
+            return Err(ExecutionGroupStartError::Closed);
+        }
+        let effects = self.effects.clone()
+            .ok_or(ExecutionGroupStartError::HostEffectsUnconfigured)?;
+        self.spawn_with_preparation(module, current_config, trace_id, |admission, config| {
+            prepare(&ExecutionHostBindings { admission, effects: &effects }, config)
+        })
+    }
+
     /// Own an existing host-designated effect scope along with a new private
     /// instruction partition. No effect credits are created or delegated here.
     /// Existing aliases intentionally share revocation and the drain frontier.

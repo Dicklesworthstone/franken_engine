@@ -223,18 +223,17 @@ fn long_unicode_needles_preserve_every_utf16_start_boundary() {
 fn long_pattern_failure_storage_is_needle_sized() {
     for width in [1, 64, 65, 1024, 4097] {
         let text = "a".repeat(width);
-        let matcher = Matcher::new(&text, false);
-        match &matcher.failure {
-            FailureTable::Inline(entries) => {
-                assert!(width <= INLINE_PATTERN_BYTES);
-                assert_eq!(entries.len(), INLINE_PATTERN_BYTES);
-            }
-            FailureTable::Heap(entries) => {
-                assert!(width > INLINE_PATTERN_BYTES);
-                assert_eq!(entries.len(), width);
-            }
+        let mut matcher = Matcher::new(&text, false);
+        assert!(matcher.failure.is_none());
+        matcher.prepare_failure();
+        let failure = matcher.failure.as_ref().unwrap();
+        if width <= INLINE_PATTERN_BYTES {
+            assert!(failure.overflow.is_empty());
+            assert_eq!(failure.as_slice().len(), INLINE_PATTERN_BYTES);
+        } else {
+            assert_eq!(failure.overflow.len(), width);
         }
-        assert_eq!(matcher.failure.as_slice()[width - 1], width - 1);
+        assert_eq!(failure.as_slice()[width - 1], width - 1);
     }
 }
 
@@ -252,4 +251,57 @@ fn long_patterns_keep_large_leaf_matching_out_of_the_scalar_loop() {
             }
         }
     }
+}
+
+#[test]
+fn leaf_local_hits_do_not_build_any_failure_table() {
+    for width in [1, 64, 65, 1024, 4097] {
+        let needle = format!("{}z", "a".repeat(width - 1));
+        let leaf = format!("{}{}{}", "x".repeat(width), needle, "x".repeat(width));
+        for backwards in [false, true] {
+            let mut matcher = Matcher::new(&needle, backwards);
+            assert!(matches!(matcher.in_leaf(&leaf), Some(LeafMatch::Local(index)) if index == width));
+            assert!(matcher.failure.is_none(), "a local hit must not prepare a table");
+            assert_eq!(matcher.fed_bytes, 0);
+        }
+    }
+}
+
+#[test]
+fn empty_leaves_and_one_byte_bulk_misses_do_not_prepare_tables() {
+    for backwards in [false, true] {
+        let mut matcher = Matcher::new("z", backwards);
+        assert!(matcher.in_leaf("").is_none());
+        assert!(matcher.in_leaf(&"a".repeat(65_536)).is_none());
+        assert!(matcher.failure.is_none());
+        assert_eq!(matcher.fed_bytes, 0);
+    }
+}
+
+#[test]
+fn lazily_prepared_table_is_reused_across_small_leaves() {
+    let needle = format!("{}z", "a".repeat(127));
+    for backwards in [false, true] {
+        let mut matcher = Matcher::new(&needle, backwards);
+        assert!(matcher.in_leaf("x").is_none());
+        let table = matcher.failure.as_ref().unwrap().overflow.as_ptr();
+        for _ in 0..32 {
+            assert!(matcher.in_leaf("a").is_none());
+            assert_eq!(matcher.failure.as_ref().unwrap().overflow.as_ptr(), table);
+        }
+    }
+}
+
+#[test]
+fn lazy_long_crossing_match_still_precedes_a_leaf_local_match() {
+    let needle = format!("{}z", "a".repeat(127));
+    let mut forward = Matcher::new(&needle, false);
+    assert!(forward.in_leaf(&"a".repeat(127)).is_none());
+    let leaf = format!("z{}{needle}", "x".repeat(512));
+    assert!(matches!(forward.in_leaf(&leaf), Some(LeafMatch::Consumed(1))));
+
+    let mut backwards = Matcher::new(&needle, true);
+    assert!(backwards.in_leaf("z").is_none());
+    let leaf = format!("{needle}{}{}", "x".repeat(512), "a".repeat(127));
+    assert!(matches!(backwards.in_leaf(&leaf), Some(LeafMatch::Consumed(127))));
 }

@@ -3,8 +3,9 @@
 //! Large leaves use the standard library's substring search. A byte KMP state
 //! carries matches across leaves; small leaves feed that state directly, so a
 //! pattern split over many leaves does not rescan a growing boundary window.
-//! Short patterns keep their failure table on the stack; long patterns allocate
-//! only needle-sized scratch. Exact-only needles keep the unit search.
+//! Failure tables are built only when streaming across a boundary is needed:
+//! leaf-local hits need none. Short tables stay on the stack; long patterns
+//! allocate only needle-sized scratch. Exact-only needles keep the unit search.
 
 use std::sync::Arc;
 
@@ -28,38 +29,43 @@ pub(super) fn pattern(needle: &JsString) -> Option<&str> {
 /// Preserve allocation-free short searches without imposing a performance
 /// cliff on longer needles. Scratch is proportional to the needle, never to
 /// the haystack, including when a rope shares very large subtrees.
-enum FailureTable {
-    Inline([usize; INLINE_PATTERN_BYTES]),
-    Heap(Vec<usize>),
+struct FailureTable {
+    inline: [usize; INLINE_PATTERN_BYTES],
+    overflow: Vec<usize>,
 }
 
 impl FailureTable {
     fn new(width: usize) -> Self {
-        if width <= INLINE_PATTERN_BYTES {
-            Self::Inline([0; INLINE_PATTERN_BYTES])
-        } else {
-            Self::Heap(vec![0; width])
+        Self {
+            inline: [0; INLINE_PATTERN_BYTES],
+            overflow: if width > INLINE_PATTERN_BYTES {
+                vec![0; width]
+            } else {
+                Vec::new()
+            },
         }
     }
 
     fn as_slice(&self) -> &[usize] {
-        match self {
-            Self::Inline(entries) => entries,
-            Self::Heap(entries) => entries,
+        if self.overflow.is_empty() {
+            &self.inline
+        } else {
+            &self.overflow
         }
     }
 
     fn as_mut_slice(&mut self) -> &mut [usize] {
-        match self {
-            Self::Inline(entries) => entries,
-            Self::Heap(entries) => entries,
+        if self.overflow.is_empty() {
+            &mut self.inline
+        } else {
+            &mut self.overflow
         }
     }
 }
 
 struct Matcher<'a> {
     text: &'a str,
-    failure: FailureTable,
+    failure: Option<FailureTable>,
     matched: usize,
     backwards: bool,
     #[cfg(test)]
@@ -69,26 +75,36 @@ struct Matcher<'a> {
 impl<'a> Matcher<'a> {
     fn new(text: &'a str, backwards: bool) -> Self {
         debug_assert!(!text.is_empty());
-        let mut matcher = Self {
+        Self {
             text,
-            failure: FailureTable::new(text.len()),
+            failure: None,
             matched: 0,
             backwards,
             #[cfg(test)]
             fed_bytes: 0,
-        };
+        }
+    }
+
+    /// A leaf-local hit needs neither O(m) preprocessing nor an allocation.
+    /// Prepare at most once, only before a nonempty streaming scan. In
+    /// particular, empty leaves and single-byte bulk misses leave this absent.
+    fn prepare_failure(&mut self) {
+        if self.failure.is_some() {
+            return;
+        }
+        let mut failure = FailureTable::new(self.text.len());
         let mut prefix = 0;
-        for index in 1..text.len() {
-            let byte = matcher.byte(index);
-            while prefix > 0 && byte != matcher.byte(prefix) {
-                prefix = matcher.failure.as_slice()[prefix - 1];
+        for index in 1..self.text.len() {
+            let byte = self.byte(index);
+            while prefix > 0 && byte != self.byte(prefix) {
+                prefix = failure.as_slice()[prefix - 1];
             }
-            if byte == matcher.byte(prefix) {
+            if byte == self.byte(prefix) {
                 prefix += 1;
             }
-            matcher.failure.as_mut_slice()[index] = prefix;
+            failure.as_mut_slice()[index] = prefix;
         }
-        matcher
+        self.failure = Some(failure);
     }
 
     fn byte(&self, index: usize) -> u8 {
@@ -100,39 +116,55 @@ impl<'a> Matcher<'a> {
         }]
     }
 
-    fn feed(&mut self, byte: u8) -> bool {
-        #[cfg(test)]
-        {
-            self.fed_bytes += 1;
-        }
-        while self.matched > 0 && byte != self.byte(self.matched) {
-            self.matched = self.failure.as_slice()[self.matched - 1];
-        }
-        if byte == self.byte(self.matched) {
-            self.matched += 1;
-        }
-        if self.matched == self.text.len() {
-            self.matched = self.failure.as_slice()[self.matched - 1];
-            true
-        } else {
-            false
-        }
-    }
-
     /// Return the number of directional bytes consumed at the first match.
     fn scan(&mut self, bytes: &[u8]) -> Option<usize> {
-        if self.backwards {
-            bytes
-                .iter()
-                .rev()
-                .position(|&byte| self.feed(byte))
-                .map(|i| i + 1)
-        } else {
-            bytes
-                .iter()
-                .position(|&byte| self.feed(byte))
-                .map(|i| i + 1)
+        if bytes.is_empty() {
+            return None;
         }
+        self.prepare_failure();
+        // Resolve the optional table and its inline/heap storage once per
+        // span, not on every byte or every prefix fallback in the hot loop.
+        let failure = self
+            .failure
+            .as_ref()
+            .expect("streaming scan prepares its failure table")
+            .as_slice();
+        let pattern = self.text.as_bytes();
+        let backwards = self.backwards;
+        let matched = &mut self.matched;
+        #[cfg(test)]
+        let fed_bytes = &mut self.fed_bytes;
+        let pattern_byte = |index: usize| {
+            pattern[if backwards {
+                pattern.len() - 1 - index
+            } else {
+                index
+            }]
+        };
+        let mut feed = |&byte: &u8| {
+            #[cfg(test)]
+            {
+                *fed_bytes += 1;
+            }
+            while *matched > 0 && byte != pattern_byte(*matched) {
+                *matched = failure[*matched - 1];
+            }
+            if byte == pattern_byte(*matched) {
+                *matched += 1;
+            }
+            if *matched == pattern.len() {
+                *matched = failure[*matched - 1];
+                true
+            } else {
+                false
+            }
+        };
+        let found = if backwards {
+            bytes.iter().rev().position(&mut feed)
+        } else {
+            bytes.iter().position(&mut feed)
+        };
+        found.map(|i| i + 1)
     }
 
     /// First match in traversal order, expressed as a forward byte start.

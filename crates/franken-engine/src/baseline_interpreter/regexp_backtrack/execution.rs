@@ -39,6 +39,13 @@ enum Frame {
         position: usize,
         start: usize,
     },
+    /// Optional counted-loop exits, paired with mark/counter undo frames.
+    /// `pc` names the immutable loop head, so direction needs no extra word.
+    CountedGreedy {
+        pc: usize,
+        position: usize,
+        start: usize,
+    },
     Slot {
         slot: usize,
         old: Option<usize>,
@@ -253,15 +260,13 @@ impl Run<'_> {
                     body,
                     exit,
                 } => {
-                    // Only mandatory iterations have no intervening choice.
-                    // The scanner pays through the next CountedLoop; choose
-                    // its exit/optional body here without charging it twice.
-                    let repeat = (self.registers[*counter] < *min)
-                        .then(|| CountedRepeat::at(regexp, pc))
-                        .flatten();
+                    // Both scanners pay through the next CountedLoop. The
+                    // optional scanner retains every earlier greedy exit in
+                    // a compact range; neither grants a fresh allowance.
+                    let repeat = CountedRepeat::at(regexp, pc);
                     #[cfg(test)]
                     let repeat = repeat.filter(|_| !self.repetitions_disabled);
-                    let completed = if let Some(repeat) = repeat {
+                    let completed = if let Some(repeat) = &repeat {
                         let old_count = self.registers[repeat.counter];
                         let old_mark = self.registers[repeat.mark];
                         let end = repeat.execute_required(
@@ -286,6 +291,11 @@ impl Run<'_> {
                         if count < *min {
                             pc = *body;
                         } else if max.is_some_and(|max| count >= max) {
+                            pc = *exit;
+                        } else if *greedy && let Some(repeat) = &repeat {
+                            position = self.execute_counted_greedy(
+                                repeat, pc, position, *max, stack,
+                            )?;
                             pc = *exit;
                         } else {
                             let (first, second) = if *greedy {
@@ -375,6 +385,10 @@ impl Run<'_> {
                         }
                         Some(frame @ (Frame::RepeatForward { .. } | Frame::RepeatBackward { .. })) => {
                             (pc, position) = self.resume_repeat(frame, stack);
+                            break;
+                        }
+                        Some(frame @ Frame::CountedGreedy { .. }) => {
+                            (pc, position) = self.resume_counted_greedy(frame, stack);
                             break;
                         }
                         Some(Frame::Alternative {

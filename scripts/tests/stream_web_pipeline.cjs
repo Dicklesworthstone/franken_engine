@@ -25,13 +25,14 @@ function guard(args, callback) {
     }
   }
 }
-function candidate(restricted=true, load=()=>web) {
+function candidate(restricted=true, load=()=>web, genericFrom) {
   function R(config) { return Reflect.construct(node.Readable,[config],new.target); }
   function W(config) { return Reflect.construct(node.Writable,[config],new.target); }
   function D(config) { return Reflect.construct(node.Duplex,[config],new.target); }
   for (const [a,b] of [[R,node.Readable],[W,node.Writable],[D,node.Duplex]]) {
     a.prototype=b.prototype;Object.setPrototypeOf(a,b);
   }
+  if (genericFrom !== undefined) Object.defineProperty(D,'from',{value:genericFrom,configurable:true,writable:true});
   return install({Readable:R,Writable:W,Duplex:D,finished:node.finished,
     pipeline: restricted ? function (...args) {guard(args,true);return nativePipeline(...args);} : nativePipeline,
     promises:{pipeline: restricted ? function (...args) {guard(args,false);return nativePromise(...args);} : nativePromise}},load);
@@ -193,4 +194,92 @@ group('Web pair getters are snapshotted once before adaptation',async()=>{
   const pair={get readable(){reads++;return t.readable;},get writable(){writes++;return t.writable;}};
   await s.promises.pipeline(readable([1,2]),pair,new web.WritableStream({write(x){out.push(x);}}));
   assert.equal(reads,1);assert.equal(writes,1);assert.deepEqual(out,[1,2]);
+});
+
+// The actual pre-bridge generic converter cannot handle Web writable streams
+// or transform pairs. Hide Node's built-in Web conversion from this test lane.
+const originalDuplexFrom = node.Duplex.from;
+function restrictedDuplexFrom(body) {
+  if (body instanceof web.ReadableStream || body instanceof web.WritableStream || body instanceof web.TransformStream) {
+    throw new TypeError('unadapted Web value reached generic Duplex conversion');
+  }
+  return originalDuplexFrom(body);
+}
+function genericCandidate(load=()=>web, convert=restrictedDuplexFrom) { return candidate(true,load,convert); }
+async function genericCompare(fn) { const expected=await fn(node);assert.deepEqual(await fn(genericCandidate()),expected);return expected; }
+async function collectBytes(input) { const chunks=[];for await(const chunk of input)chunks.push(chunk);return Buffer.concat(chunks).toString('hex'); }
+
+group('generic Duplex conversion adopts a Web readable in byte mode with a disabled writer',async()=>{
+  await genericCompare(async s=>{const source=readable([new Uint8Array([99,65,66,88]).subarray(1,3),Buffer.from('C')]);
+    const d=s.Duplex.from(source);const flags=[d instanceof s.Duplex,d.readable,d.writable,d.readableObjectMode,d.allowHalfOpen];
+    return [flags,await collectBytes(d),source.locked];});
+});
+group('generic Duplex conversion rejects object chunks instead of treating Web readables as object iterables',async()=>{
+  await genericCompare(async s=>{const d=s.Duplex.from(readable([{value:42}]));
+    return collectBytes(d).then(()=>{throw Error('object chunk accepted');},e=>[e.code,d.destroyed]);});
+});
+group('generic Web writable conversion disables reads and waits for asynchronous close',async()=>{
+  await genericCompare(async s=>{const gate=defer(),closing=defer(),events=[];
+    const target=new web.WritableStream({async write(chunk){events.push(Buffer.from(chunk).toString());await gate.promise;},close(){events.push('close');return closing.promise;}});
+    const d=s.Duplex.from(target);const flags=[d.readable,d.writable,d.writableObjectMode,d.allowHalfOpen];
+    let completed=false;const done=node.promises.finished(d).then(()=>completed=true);d.write('a');d.end('b');
+    await tick();assert.equal(completed,false);assert.deepEqual(events,['a']);gate.resolve();await tick();
+    assert.deepEqual(events,['a','b','close']);assert.equal(completed,false);closing.resolve();await done;
+    return [flags,events,target.locked,d.writableFinished];});
+});
+group('generic TransformStream conversion streams bytes through an actual Node pipeline',async()=>{
+  await genericCompare(async s=>{const target=new web.TransformStream({async transform(chunk,c){await Promise.resolve();c.enqueue(Buffer.from(chunk).toString().toUpperCase());}});
+    const d=s.Duplex.from(target),out=[];const flags=[d.readableObjectMode,d.writableObjectMode,d.allowHalfOpen];
+    await node.promises.pipeline(node.Readable.from(['ab','cd']),d,new node.Writable({write(chunk,encoding,done){out.push(chunk);done();}}));
+    return [flags,Buffer.concat(out).toString(),target.readable.locked,target.writable.locked];});
+});
+group('generic Web conversion rejects locked endpoints without adopting the other transform half',async()=>{
+  const s=genericCandidate();const source=readable(['a']),r=source.getReader();assert.throws(()=>s.Duplex.from(source));r.releaseLock();
+  const target=new web.WritableStream(),w=target.getWriter();assert.throws(()=>s.Duplex.from(target));w.releaseLock();
+  const t=new web.TransformStream(),writer=t.writable.getWriter();assert.throws(()=>s.Duplex.from(t),{code:'ERR_INVALID_STATE'});
+  assert.equal(t.readable.locked,false);assert.equal(t.writable.locked,true);writer.releaseLock();
+});
+group('generic converter preserves ordinary inputs and leaves the Web dependency lazy',async()=>{
+  let loads=0;const s=genericCandidate(()=>{loads++;return web;});
+  async function values(input){const output=[];for await(const value of input)output.push(value);return output;}
+  for(const body of ['ab',Buffer.from('cd'),[Buffer.from('ef')],Promise.resolve(Buffer.from('gh'))]) {
+    const expected=await values(node.Duplex.from(body));assert.deepEqual(await values(s.Duplex.from(body)),expected);
+  }
+  const d=new node.PassThrough();assert.equal(s.Duplex.from(d),d);d.destroy();assert.equal(loads,0);
+});
+group('generic conversion keeps source failures and exclusive Web ownership',async()=>{
+  await genericCompare(async s=>{const reason=Error('source failed');let c;
+    const source=new web.ReadableStream({start(x){c=x;}},{highWaterMark:0});const d=s.Duplex.from(source);
+    const done=node.promises.finished(d).catch(e=>e===reason);c.error(reason);return [await done,d.destroyed,source.locked];});
+});
+group('generic writable failure reports the original error and does not call normal close',async()=>{
+  await genericCompare(async s=>{const reason=Error('write failed'),events=[];const target=new web.WritableStream({write(){throw reason;},close(){events.push('closed');}});
+    const d=s.Duplex.from(target);const done=node.promises.finished(d).catch(e=>e===reason);d.end('x');return [await done,events,d.destroyed];});
+});
+group('generic native-brand dispatch ignores replaced public Web methods and transform accessors',async()=>{
+  const s=genericCandidate();const source=readable([Buffer.from('a')]);source.getReader=()=>{throw Error('replaced reader');};
+  assert.equal(await collectBytes(s.Duplex.from(source)),'61');
+  const t=new web.TransformStream(),read=t.readable,write=t.writable;let calls=0;
+  for(const key of ['readable','writable'])Object.defineProperty(t,key,{get(){calls++;throw Error('replaced endpoint');}});
+  const d=s.Duplex.from(t),out=[];await node.promises.pipeline(node.Readable.from(['b']),d,new node.Writable({write(c,e,cb){out.push(c);cb();}}));
+  assert.equal(Buffer.concat(out).toString(),'b');assert.equal(calls,0);assert(read.locked&&write.locked);
+});
+group('generic constructor failure destroys only the newly created intermediate',async()=>{
+  const reason=Error('converter failed'),events=[];const s=genericCandidate(()=>web,()=>{throw reason;});
+  const source=new web.ReadableStream({cancel(error){events.push(error);}},{highWaterMark:0});
+  assert.throws(()=>s.Duplex.from(source),e=>e===reason);await tick();assert.deepEqual(events,[reason]);
+});
+group('generic ordinary pairs retain the original object and observable getter sequence',async()=>{
+  async function run(s){const events=[],out=[];const r=node.Readable.from(['a']),w=new node.Writable({objectMode:true,write(x,e,cb){out.push(x);cb();}});
+    const body={get readable(){events.push('readable');return r;},get writable(){events.push('writable');return w;}};
+    const d=s.Duplex.from(body);const reading=(async()=>{const values=[];for await(const x of d)values.push(x);return values;})();d.end('b');
+    const values=await reading;await node.promises.finished(d);return [events,values,out];}
+  await genericCompare(run);
+});
+group('generic from is installed on the canonical constructor rather than inherited reference code',async()=>{
+  const s=genericCandidate();assert.notEqual(s.Duplex.from,restrictedDuplexFrom);assert(Object.hasOwn(s.Duplex,'from'));
+  assert.equal(s.Duplex.from.length,1);assert.equal(s.Duplex.from.name,'from');
+  let loads=0;const same=genericCandidate(()=>{loads++;return web;});
+  for(let i=0;i<3;i++)assert.equal(await collectBytes(same.Duplex.from(readable([Buffer.from('x')]))),'78');
+  assert.equal(loads,1);
 });

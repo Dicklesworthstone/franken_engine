@@ -67,6 +67,8 @@
       errorR: m.ReadableStreamDefaultController.prototype.error,
       desired: descriptor(m.ReadableStreamDefaultController.prototype, 'desiredSize').get,
       errorW: m.WritableStreamDefaultController.prototype.error,
+      transformReadable: descriptor(m.TransformStream.prototype, 'readable').get,
+      transformWritable: descriptor(m.TransformStream.prototype, 'writable').get,
       signal: descriptor(m.WritableStreamDefaultController.prototype, 'signal').get };
     return web;
   }
@@ -366,6 +368,45 @@
     return { readable: readableToWeb(node), writable: writableToWeb(node) };
   }
   property(D, 'fromWeb', duplexFromWeb); property(D, 'toWeb', duplexToWeb);
+  const genericDuplexFrom = D.from;
+  function from(body) {
+    // Keep the canonical generic converter for Node streams, iterables,
+    // functions, promises and user-defined pairs. Only native Web brands
+    // select these adapters; properties on a lookalike are not authority.
+    if (body === null || typeof body !== 'object' || body instanceof R || body instanceof W ||
+        (!('getReader' in body) && !('getWriter' in body) &&
+         !('readable' in body && 'writable' in body))) {
+      return apply(genericDuplexFrom, D, [body]);
+    }
+    const a = api();
+    let kind = 0;
+    try { apply(a.rLocked, body, []); kind = 1; } catch (error) {}
+    if (kind === 0) {
+      try { apply(a.wLocked, body, []); kind = 2; } catch (error) {}
+    }
+    if (kind === 0) {
+      let source, destination;
+      try {
+        source = apply(a.transformReadable, body, []);
+        destination = apply(a.transformWritable, body, []);
+      } catch (error) { return apply(genericDuplexFrom, D, [body]); }
+      const pair = create(null); pair.readable = source; pair.writable = destination;
+      return duplexFromWeb(pair);
+    }
+    // The existing generic converter supplies the disabled half and Duplex
+    // lifecycle; the Web adapter supplies byte-mode validation, serialized
+    // demand, exclusive ownership and asynchronous cancellation/finalization.
+    // Do not classify a Web readable as an object-mode generic iterable.
+    const endpoint = kind === 1 ? readableFromWeb(body) : writableFromWeb(body);
+    try { return apply(genericDuplexFrom, D, [endpoint]); }
+    catch (error) {
+      // Only the conversion-created intermediate is ours on setup failure.
+      apply(on, endpoint, ['error', function () {}]);
+      apply(kind === 1 ? destroyR : destroyW, endpoint, [failure(error)]);
+      throw error;
+    }
+  }
+  if (typeof genericDuplexFrom === 'function') property(D, 'from', from);
   // Pipeline still owns scheduling, cancellation, function stages and Node
   // teardown. This boundary only normalizes explicit Web stages to its
   // existing adapters; it does not build another pump or collect input.

@@ -125,3 +125,47 @@ fn esm_named_imports_share_the_native_promise_pipeline() {
         .collect();
     assert_eq!(lines, ["ESM_PIPELINE 40,44"]);
 }
+
+#[test]
+fn generic_duplex_from_adopts_a_web_transform_on_the_shared_pipeline() {
+    let source = r#"
+const s = require('node:stream'), web = require('stream/web');
+const t = new web.TransformStream({transform(chunk, c) { c.enqueue(chunk); }});
+const d = s.Duplex.from(t), chunks = [];
+s.promises.pipeline(s.Readable.from(['ab', 'cd']), d,
+  new s.Writable({write(chunk, encoding, done) { chunks.push(chunk.toString()); done(); }}))
+  .then(function () {
+    console.log('GENERIC_TRANSFORM', chunks.join(''), d.readableObjectMode,
+      d.writableObjectMode, t.readable.locked, t.writable.locked);
+  });
+"#;
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        assert_eq!(
+            run(source, lane),
+            ["GENERIC_TRANSFORM abcd false false true true"]
+        );
+    }
+}
+
+#[test]
+fn generic_duplex_from_adopts_a_web_writer_and_waits_for_its_close() {
+    let source = r#"
+const s = require('stream'), web = require('node:stream/web'), events = [];
+const sink = new web.WritableStream({
+  write(chunk) { events.push(chunk.toString('hex')); },
+  async close() { await Promise.resolve(); events.push('closed'); }
+});
+const d = s.Duplex.from(sink);
+const done = s.promises.finished(d);
+d.write('A'); d.end('B');
+done.then(function () {
+  console.log('GENERIC_WRITER', events.join(','), d.readable, d.writableObjectMode, sink.locked);
+});
+"#;
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        assert_eq!(
+            run(source, lane),
+            ["GENERIC_WRITER 41,42,closed false false true"]
+        );
+    }
+}

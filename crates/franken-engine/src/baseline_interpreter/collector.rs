@@ -66,6 +66,8 @@ use super::*;
 use crate::object_model::JsValue;
 use crate::promise_model::PromiseEdge;
 
+mod ephemerons;
+
 /// Collection totals over one interpreter's lifetime.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GcStats {
@@ -1505,6 +1507,17 @@ impl InterpreterCore {
     }
 
     fn gc_drain(&self, marker: &mut GcMarker) {
+        self.gc_drain_with_objects(marker, |_, _| {});
+    }
+
+    /// Visit each newly marked object as every kind of value queue drains.
+    /// Conditional edges may enqueue more work; no recursion is needed.
+    /// The ordinary root walk specializes this with a no-op visitor.
+    fn gc_drain_with_objects(
+        &self,
+        marker: &mut GcMarker,
+        mut visit_object: impl FnMut(&mut GcMarker, u32),
+    ) {
         loop {
             if let Some(closure) = marker.closure_stack.pop() {
                 self.gc_trace_closure(marker, closure);
@@ -1550,6 +1563,7 @@ impl InterpreterCore {
             let Some(index) = marker.stack.pop() else {
                 break;
             };
+            visit_object(marker, index);
             let Some(object) = self.heap.get(index as usize) else {
                 continue;
             };
@@ -1652,52 +1666,6 @@ impl InterpreterCore {
         }
         if let Some((value, _)) = self.arrow_lexical_this.get(&closure) {
             marker.value(value);
-        }
-    }
-
-    /// WeakMap side-table entries keep their value only while both the map
-    /// and the key are reachable. Iterate to a fixpoint.
-    fn gc_mark_ephemerons(&self, marker: &mut GcMarker) {
-        loop {
-            let before = marker.stack.len();
-            let mut added = false;
-            for (map_id, storage) in &self.weakmap_storage {
-                if !marker.is_marked(map_id.0) {
-                    continue;
-                }
-                for (key, value) in &storage.entries {
-                    if marker.is_marked(*key) {
-                        marker.value(value);
-                    }
-                }
-                // Symbol keys are never reclaimed: a reachable map keeps
-                // their values.
-                for value in storage.symbol_entries.values() {
-                    marker.value(value);
-                }
-            }
-            // A reachable URL keeps its searchParams object, and a reachable
-            // URLSearchParams the URL it updates (bd-9vouw.163). Their state
-            // holds no other heap reference.
-            for (url, state) in &self.url_objects {
-                if marker.is_marked(url.0) {
-                    marker.object(state.search_params);
-                }
-            }
-            for (params, state) in &self.url_search_params {
-                if marker.is_marked(params.0)
-                    && let Some(owner) = state.owner_url
-                {
-                    marker.object(owner);
-                }
-            }
-            if marker.stack.len() > before {
-                added = true;
-                self.gc_drain(marker);
-            }
-            if !added {
-                break;
-            }
         }
     }
 

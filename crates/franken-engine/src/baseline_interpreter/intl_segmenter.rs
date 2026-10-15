@@ -464,6 +464,35 @@ fn dictionary_script(c: char) -> Option<&'static str> {
 mod tests {
     use super::*;
 
+    fn test_config() -> InterpreterConfig {
+        // These tests call the native helpers directly, outside an execution
+        // package. Keep the real deterministic profile's budgets and grant
+        // only the allocation needed to create their heap fixtures.
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::HeapAllocate);
+        config
+    }
+
+    fn collect_at_safe_point(core: &mut InterpreterCore, context: &str) {
+        // There is no active run loop here. The test explicitly roots the
+        // public object in a register; do not pin its private state separately
+        // or the bound-method root-coverage assertions would become vacuous.
+        let before = core.gc_stats();
+        core.set_gc_stress_interval(Some(1));
+        core.gc_arm_event_loop(None);
+        core.gc_event_loop_safe_point();
+        core.gc_disarm_event_loop();
+        core.set_gc_stress_interval(None);
+        let after = core.gc_stats();
+        assert_eq!(after.collections, before.collections + 1, "{context}");
+        assert_eq!(
+            after.skipped_collections, before.skipped_collections,
+            "{context}"
+        );
+    }
+
     fn string_property<'a>(core: &'a InterpreterCore, object: ObjectId, key: &str) -> &'a JsString {
         match core.heap[object.0 as usize].properties.get(key) {
             Some(Value::Str(text)) => text,
@@ -507,7 +536,7 @@ mod tests {
     #[test]
     fn segmentation_records_share_input_backing_for_every_granularity() {
         for granularity in ["grapheme", "word", "sentence"] {
-            let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-sharing");
+            let mut core = InterpreterCore::new(test_config(), "segment-sharing");
             let input = "A\u{1f44d}\u{1f3fd} e\u{301}. Next!\r\n".repeat(32);
             let (segments, storage) = fixture(&mut core, &input, granularity);
             assert_ne!(segments, storage);
@@ -535,7 +564,7 @@ mod tests {
 
     #[test]
     fn shared_input_does_not_alias_mutable_record_properties() {
-        let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-identity");
+        let mut core = InterpreterCore::new(test_config(), "segment-identity");
         let input = JsString::from("x".repeat(1024));
         let segment = (JsString::from("x".repeat(512)), 0, None);
         let first = core.segment_record(&segment, &input).expect("first record");
@@ -574,7 +603,7 @@ mod tests {
             ("\r\n", 9, false),
         ];
         for word_granularity in [false, true] {
-            let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-stream");
+            let mut core = InterpreterCore::new(test_config(), "segment-stream");
             let storage = core.alloc_object_with_prototype(None).unwrap();
             let count = if word_granularity {
                 core.segment_store_pieces(storage, text.split_word_bounds(), true)
@@ -594,7 +623,7 @@ mod tests {
                 assert_eq!(properties.get("isWordLike"), flag.as_ref());
             }
         }
-        let mut core = InterpreterCore::new(InterpreterConfig::default(), "sentence-stream");
+        let mut core = InterpreterCore::new(test_config(), "sentence-stream");
         let storage = core.alloc_object_with_prototype(None).unwrap();
         let count = core
             .segment_store_pieces(storage, text.split_sentence_bounds(), false)
@@ -610,7 +639,7 @@ mod tests {
 
     #[test]
     fn empty_segment_stream_does_not_allocate_records() {
-        let mut core = InterpreterCore::new(InterpreterConfig::default(), "empty-segments");
+        let mut core = InterpreterCore::new(test_config(), "empty-segments");
         let storage = core.alloc_object_with_prototype(None).unwrap();
         let before = core.heap.len();
         let before_bytes = core.estimated_memory_bytes;
@@ -628,7 +657,7 @@ mod tests {
     #[test]
     fn native_iterators_are_independent_and_never_deliver_canonical_records() {
         for granularity in ["grapheme", "word", "sentence"] {
-            let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-cursors");
+            let mut core = InterpreterCore::new(test_config(), "segment-cursors");
             let (_, storage) = fixture(&mut core, "A\u{1f44d}\u{1f3fd}. Next!", granularity);
             let (input, count) = core.segment_storage_info(storage).expect("storage");
             let first = object(core.segment_iterator(storage).expect("first iterator"));
@@ -666,7 +695,7 @@ mod tests {
 
     #[test]
     fn iterator_creation_and_one_step_do_not_copy_the_collection() {
-        let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-lazy-delivery");
+        let mut core = InterpreterCore::new(test_config(), "segment-lazy-delivery");
         let (_, storage) = fixture(&mut core, &"x".repeat(256), "grapheme");
         let before = core.heap.len();
         let iterator = object(core.segment_iterator(storage).expect("iterator"));
@@ -679,7 +708,7 @@ mod tests {
 
     #[test]
     fn empty_iterator_results_are_fresh_and_exhaustion_is_sticky() {
-        let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-empty-iterator");
+        let mut core = InterpreterCore::new(test_config(), "segment-empty-iterator");
         let (_, storage) = fixture(&mut core, "", "grapheme");
         let iterator = object(core.segment_iterator(storage).unwrap());
         let state = bound(&core, iterator, "next");
@@ -693,31 +722,33 @@ mod tests {
 
     #[test]
     fn private_segment_state_survives_collection_through_native_methods() {
-        let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-gc");
+        let mut core = InterpreterCore::new(test_config(), "segment-gc");
         let (segments, storage) = fixture(&mut core, "a\u{1f44d}\u{1f3fd}b", "grapheme");
-        core.set_reg(0, Value::Object(segments));
-        core.collect_garbage().expect("collect with Segments root");
+        core.seed_register(0, Value::Object(segments))
+            .expect("root Segments");
+        collect_at_safe_point(&mut core, "collect with Segments root");
         let (input, count) = core.segment_storage_info(storage).expect("storage retained");
         assert_eq!(count, 3);
         assert_eq!(input.utf16_len(), 6);
         let iterator = object(core.segment_iterator(storage).unwrap());
         let state = bound(&core, iterator, "next");
-        core.set_reg(0, Value::Object(iterator));
-        core.collect_garbage().expect("collect with only iterator root");
+        core.seed_register(0, Value::Object(iterator))
+            .expect("root iterator only");
+        collect_at_safe_point(&mut core, "collect with only iterator root");
         assert!(core.heap.get(segments.0 as usize).is_none());
         let first = delivered(&mut core, state).expect("first segment");
         assert_eq!(string_property(&core, first, "segment").as_str(), Some("a"));
         assert!(delivered(&mut core, state).is_some());
         assert!(delivered(&mut core, state).is_some());
         assert_eq!(delivered(&mut core, state), None);
-        core.collect_garbage().expect("collect exhausted iterator");
+        collect_at_safe_point(&mut core, "collect exhausted iterator");
         assert!(core.heap.get(storage.0 as usize).is_none());
         assert_eq!(delivered(&mut core, state), None);
     }
 
     #[test]
     fn exhausted_work_budget_does_not_advance_or_allocate_an_iterator_result() {
-        let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-budget");
+        let mut core = InterpreterCore::new(test_config(), "segment-budget");
         let (_, storage) = fixture(&mut core, "abc", "grapheme");
         let iterator = object(core.segment_iterator(storage).unwrap());
         let state = bound(&core, iterator, "next");
@@ -772,7 +803,7 @@ console.log([...detached].map(x => x.index + ':' + x.segment).join('|'));
     #[test]
     fn containing_checks_every_utf16_position_with_logarithmic_record_probes() {
         for granularity in ["grapheme", "word", "sentence"] {
-            let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-search");
+            let mut core = InterpreterCore::new(test_config(), "segment-search");
             let text = "A\u{1f44d}\u{1f3fd} e\u{301}. Next!\r\n".repeat(32);
             let (_, storage) = fixture(&mut core, &text, granularity);
             let (input, count) = core.segment_storage_info(storage).unwrap();
@@ -817,7 +848,7 @@ console.log([...detached].map(x => x.index + ':' + x.segment).join('|'));
     #[test]
     fn containing_empty_and_single_segment_boundaries() {
         for text in ["", "\u{1f44d}\u{1f3fd}"] {
-            let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-search-boundary");
+            let mut core = InterpreterCore::new(test_config(), "segment-search-boundary");
             let (_, storage) = fixture(&mut core, text, "grapheme");
             let (input, count) = core.segment_storage_info(storage).unwrap();
             assert_eq!(count, usize::from(!text.is_empty()));
@@ -839,7 +870,7 @@ console.log([...detached].map(x => x.index + ':' + x.segment).join('|'));
 
     #[test]
     fn containing_budget_refusal_precedes_record_read_and_allocation() {
-        let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-search-budget");
+        let mut core = InterpreterCore::new(test_config(), "segment-search-budget");
         let (_, storage) = fixture(&mut core, "abc", "grapheme");
         let (input, count) = core.segment_storage_info(storage).unwrap();
         core.config.instruction_budget = 0;
@@ -882,7 +913,7 @@ console.log(s.containing(3).segment, [...s].map(v => v.segment).join('|'));
     fn canonical_segment_memory_grows_linearly_and_long_input_fits_default_budget() {
         let mut charges = Vec::new();
         for length in [4096, 8192] {
-            let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-linear-memory");
+            let mut core = InterpreterCore::new(test_config(), "segment-linear-memory");
             let before = core.estimated_memory_bytes;
             let (_, storage) = fixture(&mut core, &"x".repeat(length), "grapheme");
             let (input, count) = core.segment_storage_info(storage).expect("storage");
@@ -904,7 +935,7 @@ console.log(s.containing(3).segment, [...s].map(v => v.segment).join('|'));
 
     #[test]
     fn segment_input_preflight_still_refuses_before_allocating_records() {
-        let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-admission");
+        let mut core = InterpreterCore::new(test_config(), "segment-admission");
         let resolved = core.alloc_object_with_properties(&[
             ("granularity", Value::str("grapheme")),
         ]).unwrap();
@@ -953,7 +984,7 @@ console.log(Object.keys(words.containing(2)).join(','), words.containing(2).isWo
             ("word", "x ".repeat(4096)),
             ("sentence", "Next! ".repeat(2048)),
         ] {
-            let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-flat-table");
+            let mut core = InterpreterCore::new(test_config(), "segment-flat-table");
             let resolved = core.alloc_object_with_properties(&[
                 ("granularity", Value::str(granularity)),
             ]).unwrap();
@@ -977,7 +1008,7 @@ console.log(Object.keys(words.containing(2)).join(','), words.containing(2).isWo
 
     #[test]
     fn segment_construction_work_refusal_precedes_private_state_allocation() {
-        let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-construction-budget");
+        let mut core = InterpreterCore::new(test_config(), "segment-construction-budget");
         let resolved = core.alloc_object_with_prototype(None).unwrap();
         core.config.instruction_budget = 0;
         let before_heap = core.heap.len();
@@ -989,7 +1020,7 @@ console.log(Object.keys(words.containing(2)).join(','), words.containing(2).isWo
 
     #[test]
     fn segment_store_polls_before_advancing_the_unicode_iterator() {
-        let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-stream-budget");
+        let mut core = InterpreterCore::new(test_config(), "segment-stream-budget");
         let storage = core.alloc_object_with_prototype(None).unwrap();
         core.config.instruction_budget = 0;
         let pulled = std::cell::Cell::new(0usize);
@@ -1008,7 +1039,7 @@ console.log(Object.keys(words.containing(2)).join(','), words.containing(2).isWo
 
     #[test]
     fn segment_row_memory_refusal_releases_its_temporary_reservation() {
-        let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-row-memory");
+        let mut core = InterpreterCore::new(test_config(), "segment-row-memory");
         let storage = core.alloc_object_with_prototype(None).unwrap();
         let piece = "x".repeat(128);
         let temporary = InterpreterCore::estimate_string_bytes(&piece);
@@ -1032,7 +1063,7 @@ console.log(Object.keys(words.containing(2)).join(','), words.containing(2).isWo
             (1, Value::Int(-1)),
             (2, Value::str("not a word flag")),
         ] {
-            let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-row-shape");
+            let mut core = InterpreterCore::new(test_config(), "segment-row-shape");
             let (_, storage) = fixture(&mut core, "abc", "grapheme");
             let slots = InterpreterCore::segment_row_slots(0).unwrap();
             core.set_object_property(storage, slots[column].to_string(), replacement).unwrap();
@@ -1041,7 +1072,7 @@ console.log(Object.keys(words.containing(2)).join(','), words.containing(2).isWo
             assert!(core.segment_data_at(storage, usize::MAX).is_err());
         }
         assert!(InterpreterCore::segment_row_slots(usize::MAX).is_err());
-        let mut core = InterpreterCore::new(InterpreterConfig::default(), "segment-count-shape");
+        let mut core = InterpreterCore::new(test_config(), "segment-count-shape");
         let (_, storage) = fixture(&mut core, "abc", "grapheme");
         core.set_object_property(storage, "__count".to_string(), Value::Int(-1)).unwrap();
         assert!(core.segment_storage_info(storage).is_err());

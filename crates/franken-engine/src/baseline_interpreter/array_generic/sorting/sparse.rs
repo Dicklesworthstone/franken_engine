@@ -154,6 +154,16 @@ fn numeric_inventory(
 mod tests {
     use super::*;
 
+    fn test_config() -> InterpreterConfig {
+        // Direct native tests still need allocation authority. Use the real
+        // deterministic profile without changing its memory or work limits.
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::HeapAllocate);
+        config
+    }
+
     fn sparse_array(core: &mut InterpreterCore) -> ObjectId {
         let array = core.alloc_array_from_values(&[]).expect("array");
         for (key, value) in [("7", 3), ("40000", 2), ("4294967294", 1)] {
@@ -164,7 +174,7 @@ mod tests {
 
     #[test]
     fn plans_hold_present_indices_not_the_logical_array_length() {
-        let mut core = InterpreterCore::new(InterpreterConfig::default(), "sparse-sort-plan");
+        let mut core = InterpreterCore::new(test_config(), "sparse-sort-plan");
         let array = sparse_array(&mut core);
         core.set_object_property(array, "01".into(), Value::Int(90)).unwrap();
         core.set_object_property(array, "4294967295".into(), Value::Int(91)).unwrap();
@@ -182,7 +192,7 @@ mod tests {
 
     #[test]
     fn non_public_receiver_and_prototype_metadata_keep_the_full_path() {
-        let mut core = InterpreterCore::new(InterpreterConfig::default(), "sparse-sort-labels");
+        let mut core = InterpreterCore::new(test_config(), "sparse-sort-labels");
         let array = sparse_array(&mut core);
         core.join_direct_object_mutation_label(array, &Label::Secret).unwrap();
         let mut retained = 0;
@@ -201,7 +211,7 @@ mod tests {
 
     #[test]
     fn delete_inventory_is_fresh_and_excludes_prefix_and_non_index_names() {
-        let mut core = InterpreterCore::new(InterpreterConfig::default(), "sparse-sort-delete");
+        let mut core = InterpreterCore::new(test_config(), "sparse-sort-delete");
         let array = sparse_array(&mut core);
         let mut retained = 0;
         let before = core.sparse_sort_indices(array, 0, 100_000, true, &mut retained)
@@ -219,7 +229,7 @@ mod tests {
 
     #[test]
     fn capture_growth_and_failed_reservations_release_their_exact_charge() {
-        let mut core = InterpreterCore::new(InterpreterConfig::default(), "sort-capture-growth");
+        let mut core = InterpreterCore::new(test_config(), "sort-capture-growth");
         let before = core.estimated_memory_bytes();
         let mut values = Vec::<u32>::new();
         let mut retained = 0;

@@ -43,7 +43,7 @@ impl Walk for OperatorUse {
                     && properties.iter().any(|property| {
                         matches!(
                             super::super::well_formed_static_name(&property.key),
-                            Some("Duplex" | "duplexPair" | "addAbortSignal")
+                            Some("Duplex" | "duplexPair" | "addAbortSignal" | "compose")
                         )
                     })
                 {
@@ -89,7 +89,7 @@ impl Walk for OperatorUse {
                 name,
                 Some(
                     "map" | "filter" | "flatMap" | "toArray" | "forEach"
-                        | "some" | "every" | "find" | "reduce" | "take" | "drop" | "Duplex" | "duplexPair" | "addAbortSignal"
+                        | "some" | "every" | "find" | "reduce" | "take" | "drop" | "Duplex" | "duplexPair" | "addAbortSignal" | "compose"
                 )
             );
             if self.found {
@@ -283,6 +283,28 @@ mod tests {
                 rewritten.body.iter().filter(|s| is_module_declaration(s)).count(),
                 4,
                 "one events, decoder, Web and Node stream factory: {source}"
+            );
+            assert!(rewrite_util_requires(&rewritten).expect("idempotent").is_none());
+        }
+    }
+
+    #[test]
+    fn composition_materializes_separately_imported_and_returned_stream_values() {
+        for source in [
+            "const { Readable: R } = require('stream'); R.from(['a']).compose(stage);",
+            "const { Readable } = require('stream'); const s = Readable.from(['a']); s['compose'](stage);",
+            "const { compose: chain } = require('node:stream'); const { Transform } = require('stream'); chain(new Transform({}), stage);",
+            "const chain = require('stream').compose; const { PassThrough } = require('node:stream'); chain(new PassThrough(), stage);",
+        ] {
+            let tree = parse(source);
+            assert!(requires_stream_module(&tree.body), "{source}");
+            let rewritten = rewrite_util_requires(&tree)
+                .expect("composition lowering")
+                .expect("complete stream module");
+            assert_eq!(
+                rewritten.body.iter().filter(|s| is_module_declaration(s)).count(),
+                3,
+                "one events, decoder and stream module: {source}"
             );
             assert!(rewrite_util_requires(&rewritten).expect("idempotent").is_none());
         }

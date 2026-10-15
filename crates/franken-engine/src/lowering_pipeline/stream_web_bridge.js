@@ -163,11 +163,18 @@
     }
   }
   function duplexFromWeb(pair, settings) { return makeDuplexFromWeb(pair, settings); }
-  function makeDuplexFromWeb(pair, settings, owner) {
+  function makeDuplexFromWeb(pair, settings, owner, modes) {
     if (pair === null || typeof pair !== 'object') throw fail('pair');
     const source = pair.readable, destination = pair.writable, a = api();
     apply(a.rLocked, source, []); apply(a.wLocked, destination, []);
     const config = nodeOptions(settings, true), input = options(settings);
+    // Composition exposes only its outer two sides to Node byte mode. Web
+    // stages inside the chain may exchange arbitrary non-null objects.
+    if (modes !== undefined) {
+      config.objectMode = false;
+      config.readableObjectMode = modes.readable;
+      config.writableObjectMode = modes.writable;
+    }
     config.decodeStrings = input.decodeStrings;
     if (config.decodeStrings !== undefined && typeof config.decodeStrings !== 'boolean') throw fail('options.decodeStrings');
     const halfOpen = input.allowHalfOpen;
@@ -431,7 +438,7 @@
     const error = new Type('Web stream endpoint is locked or used twice');
     error.code = 'ERR_INVALID_STATE'; return error;
   }
-  function webStage(value, index, count) {
+  function webStage(value, index, count, openEnds) {
     if (value === null || typeof value !== 'object' || nodeStage(value) || pipelineIsArray(value)) return undefined;
     // Hints do not grant a brand. They avoid loading the Web module for an
     // ordinary Node-only pipeline, iterable, or options dictionary. An own
@@ -451,8 +458,10 @@
     }
     const reading = index < count - 1, writing = index > 0;
     if ((reading && source === undefined) || (writing && destination === undefined)) throw fail('pipeline stage');
-    if (!reading) source = undefined;
-    if (!writing) destination = undefined;
+    if (!openEnds) {
+      if (!reading) source = undefined;
+      if (!writing) destination = undefined;
+    }
     if ((source !== undefined && apply(a.rLocked, source, [])) ||
         (destination !== undefined && apply(a.wLocked, destination, []))) throw lockedEndpoint();
     return { source: source, destination: destination };
@@ -504,15 +513,21 @@
       }
     };
   }
-  function adaptPipelineStage(value, shape, owner) {
+  function adaptPipelineStage(value, shape, owner, modes) {
     if (shape === undefined) return value;
     const config = create(null);
     config.objectMode = true; config.highWaterMark = 1;
     config.decodeStrings = false; config.allowHalfOpen = true;
-    if (shape.source === undefined) return makeWritableFromWeb(shape.destination, config, owner);
-    if (shape.destination === undefined) return makeReadableFromWeb(shape.source, config, owner);
+    if (shape.source === undefined) {
+      if (modes !== undefined) config.objectMode = modes.writable;
+      return makeWritableFromWeb(shape.destination, config, owner);
+    }
+    if (shape.destination === undefined) {
+      if (modes !== undefined) config.objectMode = modes.readable;
+      return makeReadableFromWeb(shape.source, config, owner);
+    }
     const pair = create(null); pair.readable = shape.source; pair.writable = shape.destination;
-    return makeDuplexFromWeb(pair, config, owner);
+    return makeDuplexFromWeb(pair, config, owner, modes);
   }
   function preparePipeline(values, owner) {
     const stages = values.length === 1 && pipelineIsArray(values[0]) ? apply(pipelineSlice, values[0], []) : values;
@@ -589,6 +604,85 @@
     property(stream, 'pipeline', pipeline);
     property(pipelinePromises, 'pipeline', pipelinePromise);
     property(pipeline, Symbol.for('nodejs.util.promisify.custom'), pipelinePromise);
+  }
+  // Reusable composition keeps the head's writable and tail's readable
+  // endpoints. The existing composition owner still runs all data movement,
+  // function transforms, backpressure and teardown; this only adopts Web
+  // stages before entering it. Node-only chains do not load the Web module.
+  const coreCompose = stream.compose;
+  const coreReadableCompose = R.prototype.compose;
+  function composeOwned(values, receiver, config) {
+    const shapes = [], endpoints = [];
+    let hasWeb = false;
+    for (let i = 0; i < values.length; i++) {
+      const shape = webStage(values[i], i, values.length, true);
+      shapes[i] = shape;
+      if (shape === undefined) continue;
+      hasWeb = true;
+      for (let side = 0; side < 2; side++) {
+        const endpoint = side === 0 ? shape.source : shape.destination;
+        if (endpoint === undefined) continue;
+        for (let j = 0; j < endpoints.length; j++) if (endpoints[j] === endpoint) throw lockedEndpoint();
+        endpoints[endpoints.length] = endpoint;
+      }
+    }
+    if (!hasWeb) {
+      return receiver === undefined ? apply(coreCompose, stream, values) :
+        apply(coreReadableCompose, receiver, [values[1], config]);
+    }
+    // Single Web streams use the same generic Duplex adoption, including
+    // disabled halves and byte-mode boundaries, rather than a new wrapper.
+    if (values.length === 1) return from(values[0]);
+    const owner = pipelineOwner();
+    try {
+      const stages = [];
+      for (let i = 0; i < values.length; i++) {
+        stages[i] = adaptPipelineStage(values[i], shapes[i], owner, {
+          readable: i < values.length - 1, writable: i > 0
+        });
+      }
+      const output = receiver === undefined ? apply(coreCompose, stream, stages) :
+        apply(coreReadableCompose, receiver, [stages[1], config]);
+      // Core composition's destructor drains its own pipeline first. Delay
+      // its callback until any adopted-but-unregistered endpoint is closed
+      // and the internal reader locks have been released. Never wait for the
+      // outer stream's close from inside its own destructor.
+      const originalDestroy = output._destroy;
+      const onClose = function () {
+        apply(remove, output, ['close', onClose]);
+        owner.finish(output.errored, function () {});
+      };
+      if (output.closed) onClose();
+      else {
+        apply(on, output, ['close', onClose]);
+        property(output, '_destroy', function (error, callback) {
+          let called = false;
+          function done(reason) {
+            if (called) return;
+            called = true;
+            apply(remove, output, ['close', onClose]);
+            owner.finish(reason, function () { callback(reason); });
+          }
+          try { apply(originalDestroy, this, [error, done]); }
+          catch (reason) { done(failure(reason)); }
+        });
+      }
+      return output;
+    } catch (error) { owner.finish(failure(error), function () {}); throw error; }
+  }
+  function compose(...stages) { return composeOwned(stages, undefined, undefined); }
+  function readableCompose(stage, settings) {
+    // Read the signal exactly once and validate it before adopting a Web
+    // endpoint. The core keeps ownership of abort propagation and its cause.
+    const input = options(settings), config = create(null);
+    config.signal = input.signal;
+    if (config.signal !== undefined) apply(aborted, config.signal, []);
+    return composeOwned([this, stage], this, config);
+  }
+  if (typeof coreCompose === 'function' && typeof coreReadableCompose === 'function') {
+    property(stream, 'compose', compose);
+    const d = create(null); d.value = readableCompose; d.writable = true; d.configurable = true;
+    define(R.prototype, 'compose', d);
   }
   return stream;
 })

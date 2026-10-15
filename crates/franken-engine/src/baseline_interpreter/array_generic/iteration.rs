@@ -8,7 +8,7 @@
 
 use super::*;
 
-const MIN_SPARSE_INTERVAL: u64 = 1 << 16;
+pub(super) const MIN_SPARSE_INTERVAL: u64 = 1 << 16;
 
 /// Both ends refer to the original LengthOfArrayLike, never a later length.
 /// A debt of ordinary probes amortizes an inventory over its inspected keys:
@@ -22,7 +22,7 @@ pub(super) struct LiveArrayCursor {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum NextIndex {
+pub(super) enum NextIndex {
     Present(u64),
     Exhausted,
     Probe,
@@ -132,7 +132,7 @@ impl InterpreterCore {
     /// code or allocating a key inventory. Inherited indices and accessors
     /// are candidates too: their actual Get occurs only AFTER this returns.
     /// No proof or key survives the subsequent observable operation.
-    fn live_array_like_index(
+    pub(super) fn live_array_like_index(
         &mut self,
         receiver: ObjectId,
         front: u64,

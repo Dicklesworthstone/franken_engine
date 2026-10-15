@@ -29,6 +29,7 @@ use std::cmp::Ordering;
 
 mod flatten;
 mod iteration;
+mod movement;
 mod mutation;
 mod sorting;
 use iteration::LiveArrayCursor;
@@ -708,27 +709,7 @@ impl InterpreterCore {
                 let end = self.generic_relative_index(m, arg(self, 2)?, len, len)?;
                 let count = end.saturating_sub(from).min(len - to);
                 let backwards = from < to && to < from + count;
-                for step in 0..count {
-                    // A hole or a plain data element runs no guest code, so
-                    // each step is metered here, as the native path metered
-                    // holes before copyWithin moved to this generic loop
-                    // (bd-9vouw.112): `a.length = 2 ** 32 - 1; a.copyWithin(0, 1)`
-                    // otherwise ran ~4e9 uncharged steps.
-                    self.charge_native_hole_read()?;
-                    let (source, target) = if backwards {
-                        (from + count - 1 - step, to + count - 1 - step)
-                    } else {
-                        (from + step, to + step)
-                    };
-                    let source_key = Self::generic_index_key(source);
-                    let target_key = Self::generic_index_key(target);
-                    if self.generic_has(m, o, &source_key)? {
-                        let value = self.generic_get(m, o, &source_key)?;
-                        self.generic_set(m, o, &target_key, value)?;
-                    } else {
-                        self.generic_delete(m, o, &target_key)?;
-                    }
-                }
+                self.generic_move_range(m, o, from, to, count, backwards)?;
                 self.generic_object_value(o)
             }
             K::ArrayFill => {
@@ -1413,12 +1394,17 @@ impl InterpreterCore {
         // generic path cannot turn a sparse shift/unshift into unbounded work.
         self.charge_native_hole_read()?;
         let (from_key, to_key) = (Self::generic_index_key(from), Self::generic_index_key(to));
-        if self.generic_has(m, o, &from_key)? {
+        let present = self.generic_has(m, o, &from_key)?;
+        self.observe_scoped_callback_result()?;
+        if present {
             let value = self.generic_get(m, o, &from_key)?;
-            self.generic_set(m, o, &to_key, value)
+            self.observe_scoped_callback_result()?;
+            self.generic_set(m, o, &to_key, value)?;
         } else {
-            self.generic_delete(m, o, &to_key)
+            self.generic_delete(m, o, &to_key)?;
         }
+        self.observe_scoped_callback_result()?;
+        Ok(())
     }
 
     /// LengthOfArrayLike: ToLength(Get(O, "length")).

@@ -1,0 +1,285 @@
+(function installStreamWebBridge(stream, loadWeb) {
+  'use strict';
+  // Adapt existing Node/Web queues and lifetimes. No I/O backend, chunk
+  // collection, external runtime, or authority grant is introduced here.
+  const apply = Reflect.apply;
+  const define = Object.defineProperty;
+  const descriptor = Object.getOwnPropertyDescriptor;
+  const create = Object.create;
+  const P = Promise;
+  const resolve = Promise.resolve;
+  const promiseThen = Promise.prototype.then;
+  const Bytes = Uint8Array;
+  const isBuffer = Buffer.isBuffer;
+  const Type = TypeError;
+  const ErrorClass = Error;
+  const R = stream.Readable, W = stream.Writable, D = stream.Duplex;
+  const push = R.prototype.push, pause = R.prototype.pause, resume = R.prototype.resume;
+  const destroyR = R.prototype.destroy, destroyW = W.prototype.destroy;
+  const write = W.prototype.write, end = W.prototype.end;
+  const on = R.prototype.on, remove = R.prototype.removeListener;
+  const finished = stream.finished;
+  const listen = EventTarget.prototype.addEventListener;
+  const unlisten = EventTarget.prototype.removeEventListener;
+  const aborted = descriptor(AbortSignal.prototype, 'aborted').get;
+  const abortReason = descriptor(AbortSignal.prototype, 'reason').get;
+  let web;
+
+  function fail(name) { const e = new Type('Invalid ' + name); e.code = 'ERR_INVALID_ARG_TYPE'; return e; }
+  function premature() { const e = new ErrorClass('Premature close'); e.code = 'ERR_STREAM_PREMATURE_CLOSE'; return e; }
+  function failure(reason) {
+    // Node's destroy callback treats falsy values as success. Never turn a
+    // rejected Web operation into EOF: keep that value as an explicit cause.
+    if (reason) return reason;
+    const e = new ErrorClass('Web stream operation failed');
+    e.code = 'ERR_STREAM_WEB'; e.cause = reason; return e;
+  }
+  function then(p, yes, no) { return apply(promiseThen, p, [yes, no]); }
+  function resolved(value) { return apply(resolve, P, [value]); }
+  function options(value) {
+    if (value === undefined) return create(null);
+    if (value === null || typeof value !== 'object') throw fail('options');
+    return value;
+  }
+  function property(object, name, value) {
+    const d = create(null); d.value = value; d.writable = true; d.configurable = true; d.enumerable = true;
+    define(object, name, d);
+  }
+  function api() {
+    if (web !== undefined) return web;
+    const m = loadWeb();
+    // Retain canonical methods, not guest replacements on individual streams.
+    web = { R: m.ReadableStream, W: m.WritableStream,
+      getReader: m.ReadableStream.prototype.getReader,
+      rLocked: descriptor(m.ReadableStream.prototype, 'locked').get,
+      read: m.ReadableStreamDefaultReader.prototype.read,
+      cancel: m.ReadableStreamDefaultReader.prototype.cancel,
+      rClosed: descriptor(m.ReadableStreamDefaultReader.prototype, 'closed').get,
+      getWriter: m.WritableStream.prototype.getWriter,
+      wLocked: descriptor(m.WritableStream.prototype, 'locked').get,
+      write: m.WritableStreamDefaultWriter.prototype.write,
+      close: m.WritableStreamDefaultWriter.prototype.close,
+      abort: m.WritableStreamDefaultWriter.prototype.abort,
+      wClosed: descriptor(m.WritableStreamDefaultWriter.prototype, 'closed').get,
+      enqueue: m.ReadableStreamDefaultController.prototype.enqueue,
+      closeR: m.ReadableStreamDefaultController.prototype.close,
+      errorR: m.ReadableStreamDefaultController.prototype.error,
+      desired: descriptor(m.ReadableStreamDefaultController.prototype, 'desiredSize').get,
+      errorW: m.WritableStreamDefaultController.prototype.error,
+      signal: descriptor(m.WritableStreamDefaultController.prototype, 'signal').get };
+    return web;
+  }
+  function nodeOptions(value, readable) {
+    const input = options(value), out = create(null);
+    out.highWaterMark = input.highWaterMark; out.objectMode = input.objectMode;
+    out.signal = input.signal;
+    if (out.objectMode !== undefined && typeof out.objectMode !== 'boolean') throw fail('options.objectMode');
+    if (readable) out.encoding = input.encoding;
+    else {
+      out.decodeStrings = input.decodeStrings;
+      if (out.decodeStrings !== undefined && typeof out.decodeStrings !== 'boolean') throw fail('options.decodeStrings');
+    }
+    return out;
+  }
+  function readableFromWeb(source, settings) {
+    const a = api(); apply(a.rLocked, source, []); // brand check before taking ownership
+    const config = nodeOptions(settings, true);
+    let reader, node, reading = false, stopping = false, ended = false;
+    config.read = function () {
+      if (reading || stopping || ended) return;
+      reading = true;
+      then(apply(a.read, reader, []), function (item) {
+        reading = false;
+        if (stopping) return;
+        try {
+          if (item.done) { ended = true; apply(push, node, [null]); }
+          else {
+            // null is Node EOF, not an object-mode value. Refuse explicitly
+            // instead of silently truncating the remaining Web stream.
+            if (item.value === null) {
+              const e = new Type('A Web null chunk cannot be represented by a Node stream');
+              e.code = 'ERR_STREAM_NULL_VALUES'; apply(destroyR, node, [e]); return;
+            }
+            apply(push, node, [item.value]);
+          }
+        } catch (error) { apply(destroyR, node, [error]); }
+      }, function (reason) { reading = false; if (!stopping) apply(destroyR, node, [failure(reason)]); });
+    };
+    config.destroy = function (error, done) {
+      stopping = true;
+      if (reader === undefined || ended) { done(error); return; }
+      then(apply(a.cancel, reader, [error]), function () { done(error); },
+        function (reason) { done(error || failure(reason)); });
+    };
+    // Validate Node settings before acquiring the Web lock. The private Node
+    // constructor does not start reading until a consumer asks for data.
+    node = new R(config);
+    try { reader = apply(a.getReader, source, []); }
+    catch (error) { apply(destroyR, node, []); throw error; }
+    then(apply(a.rClosed, reader, []), undefined, function (reason) {
+      if (!stopping) apply(destroyR, node, [failure(reason)]);
+    });
+    // Like Node's adapters, ownership of the Web lock is permanent. It is
+    // not returned to a second consumer after EOF or destroy.
+    return node;
+  }
+  function writableFromWeb(destination, settings) {
+    const a = api(); apply(a.wLocked, destination, []);
+    const config = nodeOptions(settings, false);
+    let writer, node, stopping = false, ended = false;
+    config.write = function (chunk, encoding, done) {
+      then(apply(a.write, writer, [chunk]), function () { done(); }, function (reason) { done(failure(reason)); });
+    };
+    config.final = function (done) {
+      then(apply(a.close, writer, []), function () { ended = true; done(); }, function (reason) { done(failure(reason)); });
+    };
+    config.destroy = function (error, done) {
+      stopping = true;
+      if (writer === undefined || ended) { done(error); return; }
+      then(apply(a.abort, writer, [error]), function () { done(error); }, function (reason) { done(error || failure(reason)); });
+    };
+    node = new W(config);
+    try { writer = apply(a.getWriter, destination, []); }
+    catch (error) { apply(destroyW, node, []); throw error; }
+    then(apply(a.wClosed, writer, []), undefined, function (reason) {
+      if (!stopping) apply(destroyW, node, [failure(reason)]);
+    });
+    return node;
+  }
+  function observableClose(state) {
+    // Without close notifications there is no public completion signal for
+    // an asynchronous _destroy(null, callback). Do not poll, detach early, or
+    // claim that cancellation completed before its resource was released.
+    if (state && state.emitClose === false) {
+      const e = new Type('Web adapters require Node close notifications');
+      e.code = 'ERR_STREAM_WEB_UNSUPPORTED'; throw e;
+    }
+  }
+  function completionOptions(readable) {
+    const o = create(null); o.readable = readable; o.writable = !readable; return o;
+  }
+  function readableToWeb(node, settings) {
+    if (!(node instanceof R)) throw fail('Readable');
+    observableClose(node._readableState);
+    const a = api(), input = options(settings);
+    const requestedStrategy = input.strategy;
+    const strategy = requestedStrategy === undefined ? create(null) : requestedStrategy;
+    if (requestedStrategy === undefined) strategy.highWaterMark = node.readableHighWaterMark;
+    let controller, cleanup, complete = false, cancelling = false, stopped = false;
+    let cancelResolve;
+    const objectMode = node.readableObjectMode;
+    function detach() {
+      apply(remove, node, ['data', data]);
+      if (cleanup !== undefined) { const fn = cleanup; cleanup = undefined; fn(); }
+    }
+    function settled(error) {
+      complete = true; stopped = true; detach();
+      if (cancelling) { if (cancelResolve !== undefined) cancelResolve(); return; }
+      if (error) apply(a.errorR, controller, [error]); else apply(a.closeR, controller, []);
+    }
+    function data(chunk) {
+      if (stopped) return;
+      try {
+        // Node.toWeb copies Buffer chunks in byte mode, but keeps values and
+        // byte views identical in object mode. No backing Buffer is leaked.
+        const value = !objectMode && isBuffer(chunk) ? new Bytes(chunk) : chunk;
+        apply(a.enqueue, controller, [value]);
+        if (apply(a.desired, controller, []) <= 0) apply(pause, node, []);
+      } catch (error) { stopped = true; apply(destroyR, node, [error]); }
+    }
+    const source = create(null);
+    source.start = function (c) {
+        controller = c;
+        if (node.destroyed || node.readableEnded) {
+          complete = true; stopped = true;
+          if (node.errored) apply(a.errorR, c, [node.errored]); else apply(a.closeR, c, []);
+          return;
+        }
+        apply(pause, node, []);
+        cleanup = finished(node, completionOptions(true), settled);
+        if (complete) { detach(); return; }
+        apply(on, node, ['data', data]);
+      };
+    source.pull = function () { if (!stopped) apply(resume, node, []); };
+    source.cancel = function (reason) {
+        if (complete) return;
+        cancelling = true; stopped = true;
+        apply(pause, node, []);
+        return new P(function (resolveCancel) {
+          cancelResolve = resolveCancel;
+          apply(destroyR, node, [reason]);
+        });
+      };
+    return new a.R(source, strategy);
+  }
+  function writableToWeb(node) {
+    if (!(node instanceof W) && !(node instanceof D)) throw fail('Writable');
+    observableClose(node._writableState);
+    const a = api();
+    let controller, signal, cleanup, complete = false, terminalError;
+    let closing = false, aborting = false, active, finishResolve, finishReject;
+    function detach() {
+      if (signal !== undefined) { apply(unlisten, signal, ['abort', abortNow]); signal = undefined; }
+      if (cleanup !== undefined) { const fn = cleanup; cleanup = undefined; fn(); }
+    }
+    function abortNow() {
+      if (signal !== undefined && apply(aborted, signal, [])) {
+        aborting = true;
+        apply(destroyW, node, [apply(abortReason, signal, [])]);
+      }
+    }
+    function settled(error) {
+      complete = true; terminalError = error; detach();
+      if (active !== undefined) active(error || premature());
+      if (finishResolve !== undefined) {
+        if (aborting || !error) finishResolve(); else finishReject(error);
+      }
+      if (!closing && !aborting) apply(a.errorW, controller, [error || premature()]);
+    }
+    function finish(abort, reason) {
+      if (abort) aborting = true; else closing = true;
+      if (complete) {
+        return !abort && terminalError ? new P(function (_, reject) { reject(terminalError); }) : resolved();
+      }
+      return new P(function (resolveFinish, rejectFinish) {
+        finishResolve = resolveFinish; finishReject = rejectFinish;
+        if (abort) apply(destroyW, node, [reason]); else apply(end, node, []);
+      });
+    }
+    const sink = create(null);
+    sink.start = function (c) {
+        controller = c;
+        signal = apply(a.signal, c, []);
+        apply(listen, signal, ['abort', abortNow]);
+        cleanup = finished(node, completionOptions(false), settled);
+        if (complete) detach();
+      };
+    sink.write = function (chunk) {
+        return new P(function (resolveWrite, rejectWrite) {
+          if (complete) { rejectWrite(terminalError || premature()); return; }
+          let returned = false, callbackDone = false, accepted = false, drained = false, done = false;
+          function finishWrite(error) {
+            if (done) return;
+            if (!error && (!returned || !callbackDone || (!accepted && !drained))) return;
+            done = true; active = undefined;
+            apply(remove, node, ['drain', drain]);
+            if (error) rejectWrite(error); else resolveWrite();
+          }
+          function drain() { drained = true; finishWrite(); }
+          active = finishWrite;
+          apply(on, node, ['drain', drain]);
+          try {
+            accepted = apply(write, node, [chunk, function (error) { callbackDone = true; finishWrite(error); }]);
+            returned = true; finishWrite();
+          } catch (error) { finishWrite(error); }
+        });
+      };
+    sink.close = function () { return finish(false); };
+    sink.abort = function (reason) { return finish(true, reason); };
+    const strategy = create(null); strategy.highWaterMark = node.writableHighWaterMark;
+    return new a.W(sink, strategy);
+  }
+  property(R, 'fromWeb', readableFromWeb); property(R, 'toWeb', readableToWeb);
+  property(W, 'fromWeb', writableFromWeb); property(W, 'toWeb', writableToWeb);
+  return stream;
+})

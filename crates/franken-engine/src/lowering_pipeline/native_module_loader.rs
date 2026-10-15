@@ -14,6 +14,9 @@ use crate::ast::{
 };
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
+#[path = "stream_web_bridge.rs"]
+mod stream_web_bridge;
+
 const SOURCE: &str = include_str!("native_module_loader.js");
 const INITIALIZER: &str = "__franken_native_module_initializer";
 
@@ -57,6 +60,7 @@ pub(super) fn defer_modules(tree: &mut SyntaxTree) -> Outcome {
         // Direct native calls introduce no module object or loader overhead.
         return Ok(());
     }
+    stream_web_bridge::compose(tree, &bindings)?;
     ModuleReferences(&bindings).statements(&mut tree.body)?;
     for index in declarations {
         let Statement::VariableDeclaration(declaration) = &mut tree.body[index] else {

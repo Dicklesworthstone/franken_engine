@@ -6,6 +6,9 @@
 
 use std::cmp::Ordering;
 
+mod gallop;
+use gallop::{AFTER_WINS, winning_span};
+
 #[derive(Clone, Copy, Default)]
 struct Run {
     start: usize,
@@ -113,28 +116,87 @@ fn merge<E>(
     if middle <= right_len {
         scratch[..middle].copy_from_slice(&order[..middle]);
         let (mut left, mut right, mut output) = (0, middle, 0);
+        let (mut left_wins, mut right_wins) = (0, 0);
         while left < middle && right < order.len() {
             if compare(scratch[left], order[right])? == Ordering::Greater {
                 order[output] = order[right];
                 right += 1;
+                right_wins += 1;
+                left_wins = 0;
             } else {
                 order[output] = scratch[left];
                 left += 1;
+                left_wins += 1;
+                right_wins = 0;
             }
             output += 1;
+            if left == middle || right == order.len() {
+                break;
+            }
+            if left_wins >= AFTER_WINS {
+                // Forward ties take the original left run. Search only its
+                // <= prefix; the other run's pivot is not moved by this span.
+                let pivot = order[right];
+                let span = winning_span(middle - left, |offset| {
+                    compare(scratch[left + offset], pivot).map(|order| order != Ordering::Greater)
+                })?;
+                order[output..output + span].copy_from_slice(&scratch[left..left + span]);
+                left += span;
+                output += span;
+                left_wins = 0;
+            } else if right_wins >= AFTER_WINS {
+                let pivot = scratch[left];
+                let span = winning_span(order.len() - right, |offset| {
+                    compare(pivot, order[right + offset]).map(|order| order == Ordering::Greater)
+                })?;
+                // Source/destination may overlap; no allocation or key clone.
+                order.copy_within(right..right + span, output);
+                right += span;
+                output += span;
+                right_wins = 0;
+            }
         }
         order[output..right].copy_from_slice(&scratch[left..middle]);
     } else {
         scratch[..right_len].copy_from_slice(&order[middle..]);
         let (mut left, mut right, mut output) = (middle, right_len, order.len());
+        let (mut left_wins, mut right_wins) = (0, 0);
         while left != 0 && right != 0 {
             output -= 1;
             if compare(order[left - 1], scratch[right - 1])? == Ordering::Greater {
                 left -= 1;
                 order[output] = order[left];
+                left_wins += 1;
+                right_wins = 0;
             } else {
                 right -= 1;
                 order[output] = scratch[right];
+                right_wins += 1;
+                left_wins = 0;
+            }
+            if left == 0 || right == 0 {
+                break;
+            }
+            if left_wins >= AFTER_WINS {
+                let pivot = scratch[right - 1];
+                let span = winning_span(left, |offset| {
+                    compare(order[left - 1 - offset], pivot).map(|order| order == Ordering::Greater)
+                })?;
+                order.copy_within(left - span..left, output - span);
+                left -= span;
+                output -= span;
+                left_wins = 0;
+            } else if right_wins >= AFTER_WINS {
+                // Backward ties take the original right run so they occupy
+                // higher output positions. Its winning suffix is >= pivot.
+                let pivot = order[left - 1];
+                let span = winning_span(right, |offset| {
+                    compare(pivot, scratch[right - 1 - offset]).map(|order| order != Ordering::Greater)
+                })?;
+                order[output - span..output].copy_from_slice(&scratch[right - span..right]);
+                right -= span;
+                output -= span;
+                right_wins = 0;
             }
         }
         order[left..output].copy_from_slice(&scratch[..right]);

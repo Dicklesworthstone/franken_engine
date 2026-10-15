@@ -55,7 +55,7 @@ fn unequal_adjacent_runs_use_only_the_smaller_scratch_in_both_directions() {
 
 #[test]
 fn generated_runs_and_skewed_length_classes_match_the_stable_oracle() {
-    let mut seed = 0x521a_d2026_u64;
+    let mut seed = 0x0000_0005_21ad_2026_u64;
     for length in (0..128).chain([255, 256, 257, 1023, 1024, 2049]) {
         for _ in 0..8 {
             let values: Vec<_> = (0..length).map(|_| {
@@ -71,7 +71,7 @@ fn generated_runs_and_skewed_length_classes_match_the_stable_oracle() {
         let mut values = Vec::new();
         for power in (1..16).rev().chain(1..16) {
             let length = (1 << power) + delta;
-            values.extend((0..length).map(|index| index as i32));
+            values.extend(0..length);
         }
         ordered(&values);
     }
@@ -163,6 +163,76 @@ fn native_refusal_during_a_merge_never_publishes_partial_sorting() {
             let before = core.native_hole_reads.get();
             core.config.instruction_budget = core.instructions_executed + before
                 + items.len() as u64 + compared as u64;
+            assert!(matches!(core.sort_captured_values(None, &mut items, &Value::Undefined),
+                Err(InterpreterError::BudgetExhausted { .. })));
+            assert_eq!(items, original);
+            assert_eq!(core.json_parse_temporary_bytes, 0);
+            assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        }
+    }
+}
+
+#[test]
+fn galloping_merges_preserve_ties_and_bound_scratch_on_long_runs() {
+    for left in [7, 8, 9, 31, 255, 256, 257, 511, 1024] {
+        for right in [7, 8, 9, 31, 255, 256, 257, 511, 1024] {
+            for pattern in 0..4 {
+                let values: Vec<i32> = match pattern {
+                    0 => (0..left).map(|i| i as i32)
+                        .chain((0..right).map(|i| i as i32 - right as i32)).collect(),
+                    1 => (0..left).map(|i| (i / 8) as i32)
+                        .chain((0..right).map(|i| (i / 8) as i32 - 1)).collect(),
+                    2 => (0..left).map(|i| (2 * i) as i32)
+                        .chain((0..right).map(|i| (2 * i + 1) as i32)).collect(),
+                    _ => std::iter::repeat_n(0, left - 1).chain([2, -1])
+                        .chain(std::iter::repeat_n(0, right - 1)).collect(),
+                };
+                let mut order: Vec<_> = (0..values.len()).collect();
+                let mut scratch = vec![usize::MAX; left.min(right) + 2];
+                merge(&mut order, left, &mut scratch[1..1 + left.min(right)], &mut |a, b| {
+                    Ok::<_, ()>(values[a].cmp(&values[b]))
+                }).unwrap();
+                let mut expected: Vec<_> = (0..values.len()).collect();
+                expected.sort_by_key(|index| values[*index]);
+                assert_eq!(order, expected, "{left}/{right}/{pattern}");
+                assert_eq!(scratch[0], usize::MAX);
+                assert_eq!(*scratch.last().unwrap(), usize::MAX);
+            }
+        }
+    }
+}
+
+#[test]
+fn disjoint_run_blocks_need_fewer_comparisons_than_scalar_merging() {
+    for left in [1, 1024, 4096, 8191] {
+        let right = 8192 - left;
+        let values: Vec<i32> = (right as i32..8192).chain(0..right as i32).collect();
+        let mut order: Vec<_> = (0..values.len()).collect();
+        let mut calls = 0;
+        merge(&mut order, left, &mut vec![0; left.min(right)], &mut |a, b| {
+            calls += 1;
+            Ok::<_, ()>(values[a].cmp(&values[b]))
+        }).unwrap();
+        assert_eq!(order, (left..8192).chain(0..left).collect::<Vec<_>>());
+        // Both move directions still copy the same indices. Galloping saves
+        // expensive key comparisons; it does not claim sublinear byte moves.
+        assert!(calls < 1 + left.max(right) / 8, "{calls} calls for {left}/{right}");
+    }
+}
+
+#[test]
+fn native_budget_refusal_inside_bulk_merge_releases_all_sort_scratch() {
+    let values: Vec<i32> = (1001..1513).chain([1000]).collect();
+    let comparisons = ordered(&values).1;
+    for config in [InterpreterConfig::quickjs_defaults(), InterpreterConfig::v8_defaults()] {
+        // The first n-1 comparisons discover the runs. Exercise every
+        // subsequent comparison, including exponential and binary probes.
+        for compared in values.len() - 1..comparisons {
+            let mut core = core(config.clone());
+            let original: Vec<_> = values.iter().map(|value| Value::Int(i64::from(*value))).collect();
+            let mut items = original.clone();
+            core.config.instruction_budget = core.instructions_executed
+                + core.native_hole_reads.get() + items.len() as u64 + compared as u64;
             assert!(matches!(core.sort_captured_values(None, &mut items, &Value::Undefined),
                 Err(InterpreterError::BudgetExhausted { .. })));
             assert_eq!(items, original);

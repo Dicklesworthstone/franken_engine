@@ -31,6 +31,7 @@
 
 use super::*;
 
+mod buffer_copy;
 mod transfer;
 
 /// Node's DOMException code for DataCloneError.
@@ -478,31 +479,7 @@ impl InterpreterCore {
             return Ok(None);
         }
         if array_buffer {
-            let length = self.with_array_buffer_bytes(id, <[u8]>::len)?;
-            let charged = length as u64;
-            state.reserve(self, charged)?;
-            let outcome = (|| -> Result<ObjectId, InterpreterError> {
-                let mut bytes = Vec::new();
-                bytes.try_reserve_exact(length).map_err(|_| {
-                    self.memory_budget_error(u64::MAX, self.heap_object_count_u32())
-                })?;
-                self.with_array_buffer_bytes(id, |source| bytes.extend_from_slice(source))?;
-                let label = self.binary_storage_label(id);
-                let clone = self.alloc_array_buffer_object(length)?;
-                self.mutate_heap(|heap| {
-                    if let Some(backing) = heap
-                        .get_mut(clone.0 as usize)
-                        .and_then(|object| object.array_buffer.as_deref_mut())
-                    {
-                        backing.max_byte_length = max_byte_length;
-                    }
-                });
-                self.with_array_buffer_bytes_mut(clone, |target| target.copy_from_slice(&bytes))?;
-                self.join_binary_storage_label(clone, &label)?;
-                Ok(clone)
-            })();
-            state.release(self, charged);
-            let clone = outcome?;
+            let clone = self.structured_clone_array_buffer(id, max_byte_length)?;
             state.memory.insert(id, clone);
             return Ok(Some(Value::Object(clone)));
         }

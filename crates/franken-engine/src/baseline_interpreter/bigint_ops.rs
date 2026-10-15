@@ -11,6 +11,8 @@ use std::cmp::Ordering;
 
 use num_bigint::{BigInt, Sign};
 
+mod width;
+
 /// Largest BigInt magnitude this engine materializes, in bits (about 315,000
 /// decimal digits). Node allows 2^30 bits; this bound keeps every single
 /// operation, including the decimal conversion, within a bounded time.
@@ -443,35 +445,17 @@ pub(super) fn to_string_radix(text: &str, radix: u32) -> String {
     parse(text).to_str_radix(radix)
 }
 
-/// Width conversion without allocating a magnitude for machine-sized input.
-/// The shifts here deliberately discard bits: unlike BigInt <<, asIntN and
-/// asUintN are specified as modular truncations, not unbounded arithmetic.
+/// Narrow machine widths directly from decimal text; for wider results,
+/// retain the native-integer shortcut only when its input already fits.
 fn small_width(bits: u64, text: &str, signed: bool) -> Option<String> {
+    if bits <= 128 {
+        return width::narrow(bits, text, signed);
+    }
     if text.len() > 40 {
         return None;
     }
     let value = text.parse::<i128>().ok()?;
-    if bits == 0 {
-        return Some("0".to_string());
-    }
-    if signed {
-        if bits >= 128 {
-            return Some(value.to_string());
-        }
-        let shift = (128 - bits) as u32;
-        return Some(((value << shift) >> shift).to_string());
-    }
-    if bits > 128 {
-        return (value >= 0).then(|| value.to_string());
-    }
-    // Casting to u128 supplies exactly the modulo-2^128 representation.
-    let unsigned = value as u128;
-    let narrowed = if bits == 128 {
-        unsigned
-    } else {
-        unsigned & ((1u128 << bits) - 1)
-    };
-    Some(narrowed.to_string())
+    (signed || value >= 0).then(|| value.to_string())
 }
 
 /// BigInt.asUintN(bits, value): `value` modulo 2^bits.

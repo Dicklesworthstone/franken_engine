@@ -1,0 +1,77 @@
+[
+  {
+    "name": "long_unsigned64",
+    "source": "String(BigInt.asUintN(64, BigInt('9'.repeat(8192))))",
+    "expected": "18446744073709551615"
+  },
+  {
+    "name": "long_signed64",
+    "source": "String(BigInt.asIntN(64, BigInt('9'.repeat(8192))))",
+    "expected": "-1"
+  },
+  {
+    "name": "long_negative64",
+    "source": "String(BigInt.asIntN(64, -BigInt('9'.repeat(8192))))",
+    "expected": "1"
+  },
+  {
+    "name": "long_unsigned128",
+    "source": "String(BigInt.asUintN(128, BigInt('9'.repeat(8192))))",
+    "expected": "340282366920938463463374607431768211455"
+  },
+  {
+    "name": "signed_minimum128",
+    "source": "String(BigInt.asIntN(128, 1n << 127n))",
+    "expected": "-170141183460469231731687303715884105728"
+  },
+  {
+    "name": "wider_fallback",
+    "source": "String(BigInt.asUintN(129, -1n))",
+    "expected": "680564733841876926926749214863536422911"
+  },
+  {
+    "name": "bigint64array",
+    "source": "let x=BigInt('9'.repeat(8192)); let a=new BigInt64Array(2); a[0]=x; a[1]=-x; String(a[0])+','+String(a[1])",
+    "expected": "-1,1"
+  },
+  {
+    "name": "biguint64array",
+    "source": "let x=BigInt('9'.repeat(8192)); let a=new BigUint64Array([x,-x]); String(a[0])+','+String(a[1])",
+    "expected": "18446744073709551615,1"
+  },
+  {
+    "name": "dataview_modular",
+    "source": "let x=BigInt('9'.repeat(2048)); let d=new DataView(new ArrayBuffer(16)); d.setBigInt64(0,x,true); d.setBigUint64(8,-x,false); String(d.getBigInt64(0,true))+','+String(d.getBigUint64(8,false))",
+    "expected": "-1,1"
+  },
+  {
+    "name": "coercion_order",
+    "source": "let log=[]; let b={valueOf(){log.push('bits');return 64}}; let v={valueOf(){log.push('value');return BigInt('9'.repeat(512))}}; let n=BigInt.asIntN(b,v); log.join(',')+':'+n",
+    "expected": "bits,value:-1"
+  },
+  {
+    "name": "zero_still_coerces",
+    "source": "let n=0; let v={valueOf(){n++;return 123456789n}}; String(BigInt.asIntN(0,v))+':'+n",
+    "expected": "0:1"
+  },
+  {
+    "name": "zero_number_rejected",
+    "source": "let out='none'; try { BigInt.asUintN(0,1) } catch(e) { out=e.name } out",
+    "expected": "TypeError"
+  },
+  {
+    "name": "width_refusal_precedes_value",
+    "source": "let n=0; let v={valueOf(){n++;return 1n}}; let out='none'; try { BigInt.asUintN(-1,v) } catch(e) { out=e.name } out+':'+n",
+    "expected": "RangeError:0"
+  },
+  {
+    "name": "leading_zeroes",
+    "source": "String(BigInt.asIntN(8,BigInt('-'+ '0'.repeat(4096)+'129')))",
+    "expected": "127"
+  },
+  {
+    "name": "widths_and_signs",
+    "source": "[0,1,7,8,31,32,63,64,127,128].map(b=>String(BigInt.asIntN(b,-((1n<<129n)+1n)))).join(',')",
+    "expected": "0,-1,-1,-1,-1,-1,-1,-1,-1,-1"
+  }
+]

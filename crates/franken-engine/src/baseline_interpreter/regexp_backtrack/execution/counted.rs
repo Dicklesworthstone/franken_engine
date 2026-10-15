@@ -3,7 +3,8 @@
 //! Recognize the compiler's exact CountedLoop/Mark/atom/CounterStep/Jump
 //! shape. Two register undo frames retain the mandatory prefix. Optional
 //! greedy iterations keep every earlier exit in one range paired with two
-//! register frames. Capturing/nullable bodies and lazy choices remain scalar.
+//! register frames. Lazy iterations retain just the next extension with two
+//! original-register undos. Capturing and nullable bodies remain scalar.
 //! Assertion floors, partial refusal state and instruction charges are kept;
 //! compact choices neither widen ordinary frames nor renew the allowance.
 
@@ -202,6 +203,54 @@ impl Run<'_> {
         Ok(position)
     }
 
+    /// CountedLoop was paid, its minimum satisfied and maximum not reached.
+    /// Keep only the next extension: all earlier lazy exits have already
+    /// failed. The two undos summarize the entire optional prefix, separate
+    /// from the required prefix's existing history. No atom executes yet.
+    pub(super) fn push_counted_lazy(
+        &self,
+        repeat: &CountedRepeat,
+        pc: usize,
+        position: usize,
+        stack: &mut Vec<Frame>,
+    ) {
+        stack.push(Frame::Register {
+            register: repeat.mark,
+            old: self.registers[repeat.mark],
+        });
+        stack.push(Frame::Register {
+            register: repeat.counter,
+            old: self.registers[repeat.counter],
+        });
+        stack.push(Frame::CountedLazy { pc, position });
+    }
+
+    /// Grow a failed lazy exit by one atom with the same helper as the greedy
+    /// path. Failure leaves paired undos for ordinary unwinding; refusal keeps
+    /// partial writes. At the maximum, remove only the extension choice: the
+    /// original registers must still be restored if that final exit fails.
+    pub(super) fn resume_counted_lazy(
+        &mut self,
+        frame: Frame,
+        stack: &mut Vec<Frame>,
+    ) -> Result<Option<(usize, usize)>, BacktrackError> {
+        let Frame::CountedLazy { pc, position } = frame else {
+            unreachable!("only a counted lazy continuation resumes here");
+        };
+        let repeat = CountedRepeat::at(self.regexp, pc)
+            .expect("the immutable counted loop was proved before saving its continuation");
+        let Some(position) = self.advance_counted_atom(&repeat, position)? else {
+            return Ok(None);
+        };
+        let Inst::CountedLoop { max, greedy: false, .. } = &self.regexp.program[pc] else {
+            unreachable!("a counted lazy continuation belongs to a lazy loop");
+        };
+        if max.is_none_or(|maximum| self.registers[repeat.counter] < maximum) {
+            stack.push(Frame::CountedLazy { pc, position });
+        }
+        Ok(Some((pc + 5, position)))
+    }
+
     /// Tail writes have already unwound when this range is popped. Rebuild
     /// exactly one earlier exit and its counter/mark state; do not reexecute
     /// an atom or charge another loop head. The last exit consumes both
@@ -250,3 +299,6 @@ mod tests;
 
 #[cfg(test)]
 mod optional_tests;
+
+#[cfg(test)]
+mod lazy_tests;

@@ -55,6 +55,11 @@ enum Frame {
         position: usize,
         old: usize,
     },
+    /// One pending counted lazy extension, paired with two register undos.
+    CountedLazy {
+        pc: usize,
+        position: usize,
+    },
     Slot {
         slot: usize,
         old: Option<usize>,
@@ -318,6 +323,9 @@ impl Run<'_> {
                                 repeat, pc, position, *max, stack,
                             )?;
                             pc = *exit;
+                        } else if let Some(repeat) = &repeat {
+                            self.push_counted_lazy(repeat, pc, position, stack);
+                            pc = *exit;
                         } else {
                             let (first, second) = if *greedy {
                                 (*body, *exit)
@@ -414,6 +422,12 @@ impl Run<'_> {
                         }
                         Some(frame @ Frame::LazyRepeat { .. }) => {
                             if let Some(next) = self.resume_lazy_repeat(frame, stack)? {
+                                (pc, position) = next;
+                                break;
+                            }
+                        }
+                        Some(frame @ Frame::CountedLazy { .. }) => {
+                            if let Some(next) = self.resume_counted_lazy(frame, stack)? {
                                 (pc, position) = next;
                                 break;
                             }

@@ -39,6 +39,125 @@ fn measure(
     );
 }
 
+/// Repeated comparisons of fixed operands, not cold first-read measurements.
+/// Clones are prepared before timing; distinct left/right storage is supplied
+/// by each caller so pointer identity cannot accidentally replace byte work.
+fn measure_utf16_repeated(
+    name: &str,
+    left: &JsString,
+    right: &JsString,
+    expected: u64,
+    rounds: usize,
+) {
+    let inputs = (0..rounds)
+        .map(|_| (left.clone(), right.clone()))
+        .collect();
+    measure(name, inputs, expected, |left, right| {
+        order_code(left.utf16_cmp(right))
+    });
+}
+
+fn comparison_profiles(rounds: usize) {
+    // Different flat allocations with a long common Unicode prefix. Neither
+    // rope identity nor an all-ASCII shortcut may hide the decoding cost.
+    let prefix = "\u{e9}\u{1f600}\u{65e5}".repeat(32768);
+    let equal_left = JsString::from(prefix.as_str());
+    let equal_right = JsString::from(prefix.as_str());
+    let late_left = JsString::from(format!("{prefix}\u{1f600}"));
+    let late_right = JsString::from(format!("{prefix}\u{e000}"));
+    measure_utf16_repeated(
+        "utf16_flat_equal_unshared",
+        &equal_left,
+        &equal_right,
+        1,
+        rounds,
+    );
+    measure_utf16_repeated(
+        "utf16_flat_late_mismatch_unshared",
+        &late_left,
+        &late_right,
+        0,
+        rounds,
+    );
+    measure_utf16_repeated(
+        "utf16_flat_shorter_prefix",
+        &equal_left,
+        &late_right,
+        0,
+        rounds,
+    );
+
+    // Countermetrics: common-prefix acceleration must not conceal the cost
+    // of a short comparison or a mismatch before a large unrelated suffix.
+    // More iterations amortize clock granularity for these short operations.
+    let short_rounds = rounds * 1024;
+    let early_left = JsString::from(format!("\u{1f600}{prefix}"));
+    let early_right = JsString::from(format!("\u{e000}{prefix}"));
+    measure_utf16_repeated(
+        "utf16_flat_early_mismatch_control",
+        &early_left,
+        &early_right,
+        0,
+        short_rounds,
+    );
+    measure_utf16_repeated(
+        "utf16_flat_short_control",
+        &JsString::from("\u{e9}\u{1f600}"),
+        &JsString::from("\u{e9}\u{e000}"),
+        0,
+        short_rounds,
+    );
+
+    // Each concatenation exceeds the copy threshold. One shallow case has
+    // an unshared first leaf; the other skips an identical immutable prefix.
+    // Neither reads the string through as_str(), which would join the rope.
+    let first_left = JsString::from("\u{1f600}".repeat(512));
+    let first_right = JsString::from("\u{e000}".repeat(512));
+    let shallow_left = first_left.concat(&equal_left);
+    let shallow_right = first_right.concat(&equal_right);
+    measure_utf16_repeated(
+        "utf16_shallow_rope_early_mismatch",
+        &shallow_left,
+        &shallow_right,
+        0,
+        short_rounds,
+    );
+    let shared_left = equal_left.concat(&JsString::from("\u{1f600}"));
+    let shared_right = equal_left.concat(&JsString::from("\u{e000}"));
+    measure_utf16_repeated(
+        "utf16_shallow_rope_shared_prefix",
+        &shared_left,
+        &shared_right,
+        0,
+        short_rounds,
+    );
+
+    // Countermetric for inline frontier storage: deep, independently built
+    // append chains must spill. Equal repeated operands also expose the
+    // existing tradeoff against implementations that flatten once and reuse.
+    let mut deep_left = JsString::empty();
+    let mut deep_right = JsString::empty();
+    for index in 0..128 {
+        let piece = format!("{index:04}:{}", "\u{e9}".repeat(1024));
+        deep_left = deep_left.concat(&JsString::from(piece.as_str()));
+        deep_right = deep_right.concat(&JsString::from(piece));
+    }
+    measure_utf16_repeated(
+        "utf16_deep_rope_equal_unshared_control",
+        &deep_left,
+        &deep_right,
+        1,
+        rounds,
+    );
+    measure_utf16_repeated(
+        "utf16_deep_rope_late_mismatch_control",
+        &deep_left.concat(&JsString::from("\u{1f600}")),
+        &deep_right.concat(&JsString::from("\u{e000}")),
+        0,
+        rounds,
+    );
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rounds = std::env::args()
         .nth(1)
@@ -122,5 +241,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         1,
         |left, right| order_code(left.cmp(right)),
     );
+    comparison_profiles(rounds);
     Ok(())
 }

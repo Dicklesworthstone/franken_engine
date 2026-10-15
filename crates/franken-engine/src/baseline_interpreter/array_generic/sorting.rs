@@ -214,7 +214,11 @@ impl InterpreterCore {
         if items.len() < 2 {
             return Ok(());
         }
-        let mut reserved = buffer_bytes::<usize>(items.len()).saturating_mul(2);
+        // Keep only the left half of a merge out of place. The destination
+        // permutation is consumed directly, so it needs no inverse buffer.
+        let scratch_len = items.len() / 2;
+        let mut reserved = buffer_bytes::<usize>(items.len())
+            .saturating_add(buffer_bytes::<usize>(scratch_len));
         self.json_reserve_temporary(reserved)?;
         let mut order = Vec::new();
         let mut scratch = Vec::new();
@@ -222,7 +226,7 @@ impl InterpreterCore {
             order.try_reserve_exact(items.len()).map_err(|_| {
                 self.memory_budget_error(u64::MAX, self.heap_object_count_u32())
             })?;
-            scratch.try_reserve_exact(items.len()).map_err(|_| {
+            scratch.try_reserve_exact(scratch_len).map_err(|_| {
                 self.memory_budget_error(u64::MAX, self.heap_object_count_u32())
             })?;
             let actual = buffer_bytes::<usize>(order.capacity())
@@ -234,7 +238,9 @@ impl InterpreterCore {
             for index in 0..items.len() {
                 self.charge_native_hole_read()?;
                 order.push(index);
-                scratch.push(0);
+                if index < scratch_len {
+                    scratch.push(0);
+                }
             }
             stable_order(&mut order, &mut scratch, &mut |left, right| {
                 let ordering = self.generic_sort_compare(
@@ -243,7 +249,7 @@ impl InterpreterCore {
                 self.observe_scoped_callback_result()?;
                 Ok::<_, InterpreterError>(ordering)
             })?;
-            apply_order(items, &order, &mut scratch, &mut || self.charge_native_hole_read())?;
+            apply_order(items, &mut order, &mut || self.charge_native_hole_read())?;
             Ok(())
         })();
         drop(order);
@@ -253,25 +259,30 @@ impl InterpreterCore {
     }
 }
 
-/// Apply destination->source order using cycle swaps, without cloning payloads.
-/// On a resource failure each completed swap still preserves the permutation;
-/// the caller has not published any of this captured buffer to the receiver.
+/// Consume destination->source order by following each cycle, without an
+/// inverse allocation or payload clones. Every finished cycle becomes the
+/// identity permutation. Charge once per destination and once per swap, as
+/// before; completed swaps conserve all payloads even if the next tick fails.
+/// The caller has not published this private capture buffer to the receiver.
 fn apply_order<T, E>(
     items: &mut [T],
-    order: &[usize],
-    inverse: &mut [usize],
+    order: &mut [usize],
     tick: &mut impl FnMut() -> Result<(), E>,
 ) -> Result<(), E> {
-    for (destination, &source) in order.iter().enumerate() {
-        tick()?;
-        inverse[source] = destination;
-    }
+    debug_assert_eq!(items.len(), order.len());
     for start in 0..items.len() {
-        while inverse[start] != start {
+        tick()?;
+        let mut current = start;
+        loop {
+            let source = order[current];
+            if source == start {
+                order[current] = current;
+                break;
+            }
             tick()?;
-            let target = inverse[start];
-            items.swap(start, target);
-            inverse.swap(start, target);
+            items.swap(current, source);
+            order[current] = current;
+            current = source;
         }
     }
     Ok(())
@@ -283,9 +294,16 @@ fn buffer_bytes<T>(capacity: usize) -> u64 {
         .saturating_mul(std::mem::size_of::<T>() as u64)
 }
 
-/// No allocation or Value movement occurs in the recursion. Balanced merges
-/// copy at most a constant multiple of the compared indices; each comparison
-/// is metered by generic_sort_compare. Depth is bounded by usize's bit width.
+/// Stable top-down merges using at most floor(order.len() / 2) scratch
+/// indices. Save only the left run: while it has unread entries, output is
+/// strictly before the unread right cursor, so copying right entries forward
+/// cannot overwrite them. Once the left run is exhausted the remaining right
+/// suffix is already in place. Both recursive children reuse the same scratch.
+///
+/// Split points, comparison operands, equality handling and throw points are
+/// unchanged, even for stateful or inconsistent guest comparators. No Value
+/// moves during comparisons. Each comparison is metered by the caller, and
+/// recursion depth is bounded by usize's bit width.
 fn stable_order<E>(
     order: &mut [usize],
     scratch: &mut [usize],
@@ -295,15 +313,16 @@ fn stable_order<E>(
         return Ok(());
     }
     let middle = order.len() / 2;
+    debug_assert!(scratch.len() >= middle);
     let (left, right) = order.split_at_mut(middle);
-    let (left_scratch, right_scratch) = scratch.split_at_mut(middle);
-    stable_order(left, left_scratch, compare)?;
-    stable_order(right, right_scratch, compare)?;
-    scratch.copy_from_slice(order);
+    stable_order(left, scratch, compare)?;
+    stable_order(right, scratch, compare)?;
+    scratch[..middle].copy_from_slice(&order[..middle]);
     let (mut left, mut right, mut output) = (0, middle, 0);
-    while left < middle && right < scratch.len() {
-        if compare(scratch[left], scratch[right])? == Ordering::Greater {
-            order[output] = scratch[right];
+    while left < middle && right < order.len() {
+        debug_assert!(output < right);
+        if compare(scratch[left], order[right])? == Ordering::Greater {
+            order[output] = order[right];
             right += 1;
         } else {
             order[output] = scratch[left];
@@ -311,11 +330,9 @@ fn stable_order<E>(
         }
         output += 1;
     }
-    if left < middle {
-        order[output..].copy_from_slice(&scratch[left..middle]);
-    } else {
-        order[output..].copy_from_slice(&scratch[right..]);
-    }
+    // If left is exhausted, output == right and this copy is empty. Otherwise
+    // right reached the end and only the saved left suffix needs restoring.
+    order[output..right].copy_from_slice(&scratch[left..middle]);
     Ok(())
 }
 
@@ -365,7 +382,7 @@ mod tests {
                     Ok::<_, ()>(values[a].cmp(&values[b]))
                 }).unwrap();
                 let mut actual: Vec<_> = (0..length).collect();
-                let mut scratch = vec![0; length];
+                let mut scratch = vec![0; length / 2];
                 let mut trace = Vec::new();
                 stable_order(&mut actual, &mut scratch, &mut |a, b| {
                     trace.push((a, b));
@@ -393,7 +410,7 @@ mod tests {
                 else { Ok(values[a].cmp(&values[b])) }
             });
             let mut order: Vec<_> = (0..values.len()).collect();
-            let mut scratch = vec![0; values.len()];
+            let mut scratch = vec![0; values.len() / 2];
             let mut trace = Vec::new();
             let result = stable_order(&mut order, &mut scratch, &mut |a, b| {
                 trace.push((a, b));
@@ -411,21 +428,43 @@ mod tests {
         for length in 2..65 {
             for modulus in 2..9 {
                 let mut old_calls = 0;
+                let mut old_trace = Vec::new();
                 let expected = allocating_reference((0..length).collect(), &mut |a, b| {
                     old_calls += 1;
+                    old_trace.push((a, b));
                     Ok::<_, ()>(((a + old_calls) % modulus).cmp(&(b % modulus)))
                 }).unwrap();
                 let mut order: Vec<_> = (0..length).collect();
-                let mut scratch = vec![0; length];
+                let mut scratch = vec![0; length / 2];
                 let mut calls = 0;
+                let mut trace = Vec::new();
                 stable_order(&mut order, &mut scratch, &mut |a, b| {
                     calls += 1;
+                    trace.push((a, b));
                     Ok::<_, ()>(((a + calls) % modulus).cmp(&(b % modulus)))
                 }).unwrap();
                 assert_eq!(order, expected);
                 assert_eq!(calls, old_calls);
+                assert_eq!(trace, old_trace);
             }
         }
+    }
+
+    fn reference_permutation_steps(order: &[usize]) -> usize {
+        let mut inverse = vec![0; order.len()];
+        let mut steps = 0;
+        for (destination, &source) in order.iter().enumerate() {
+            steps += 1;
+            inverse[source] = destination;
+        }
+        for start in 0..order.len() {
+            while inverse[start] != start {
+                steps += 1;
+                let target = inverse[start];
+                inverse.swap(start, target);
+            }
+        }
+        steps
     }
 
     #[test]
@@ -442,13 +481,15 @@ mod tests {
             }
             struct Payload(usize); // Intentionally no Clone or Copy.
             let mut items: Vec<_> = (0..order.len()).map(Payload).collect();
-            let mut inverse = vec![0; order.len()];
+            let mut remaining = order.to_vec();
             let mut steps = 0;
-            apply_order(&mut items, order, &mut inverse, &mut || {
+            apply_order(&mut items, &mut remaining, &mut || {
                 steps += 1;
                 Ok::<_, ()>(())
             }).unwrap();
             assert_eq!(items.iter().map(|item| item.0).collect::<Vec<_>>(), order.to_vec());
+            assert_eq!(remaining, (0..order.len()).collect::<Vec<_>>());
+            assert_eq!(steps, reference_permutation_steps(order));
             assert!(steps <= items.len() + items.len().saturating_sub(1));
         }
         for length in 0..8 { check(&mut (0..length).collect::<Vec<_>>(), 0); }
@@ -459,9 +500,9 @@ mod tests {
         let order = [2, 4, 1, 0, 3];
         for fail_at in 1..11 {
             let mut values = [0, 1, 2, 3, 4];
-            let mut inverse = vec![0; 5];
+            let mut remaining = order;
             let mut steps = 0;
-            let result = apply_order(&mut values, &order, &mut inverse, &mut || {
+            let result = apply_order(&mut values, &mut remaining, &mut || {
                 steps += 1;
                 if steps == fail_at { Err(fail_at) } else { Ok(()) }
             });
@@ -469,6 +510,68 @@ mod tests {
             else { assert_eq!(steps, fail_at); }
             values.sort_unstable();
             assert_eq!(values, [0, 1, 2, 3, 4]);
+        }
+    }
+
+    #[test]
+    fn merges_touch_only_the_left_half_scratch_at_power_of_two_boundaries() {
+        for length in [2, 3, 4, 5, 15, 16, 17, 63, 64, 65, 255, 256, 257, 1023] {
+            for pattern in 0..4 {
+                let values: Vec<_> = (0..length).map(|index| match pattern {
+                    0 => index,
+                    1 => length - index,
+                    2 => index % 3,
+                    _ => (index * 17) % 31,
+                }).collect();
+                let mut order: Vec<_> = (0..length).collect();
+                let mut storage = vec![usize::MAX; length / 2 + 2];
+                let (canary, rest) = storage.split_at_mut(1);
+                let (scratch, tail) = rest.split_at_mut(length / 2);
+                stable_order(&mut order, scratch, &mut |a, b| {
+                    Ok::<_, ()>(values[a].cmp(&values[b]))
+                }).unwrap();
+                assert_eq!(canary, &[usize::MAX]);
+                assert_eq!(tail, &[usize::MAX]);
+                let mut expected: Vec<_> = (0..length).collect();
+                expected.sort_by_key(|index| values[*index]);
+                assert_eq!(order, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn permutation_refusal_preserves_nonclone_payload_ownership() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        struct Payload(usize, Rc<Cell<usize>>);
+        impl Drop for Payload {
+            fn drop(&mut self) {
+                self.1.set(self.1.get() + 1);
+            }
+        }
+        let original = [3, 0, 5, 1, 2, 4];
+        let total = reference_permutation_steps(&original);
+        for fail_at in 1..=total + 1 {
+            let drops: Vec<_> = (0..original.len()).map(|_| Rc::new(Cell::new(0))).collect();
+            let mut items: Vec<_> = drops.iter().enumerate()
+                .map(|(index, count)| Payload(index, Rc::clone(count))).collect();
+            let mut order = original;
+            let mut steps = 0;
+            let result = apply_order(&mut items, &mut order, &mut || {
+                steps += 1;
+                if steps == fail_at { Err(()) } else { Ok(()) }
+            });
+            assert_eq!(result.is_ok(), fail_at > total);
+            assert!(drops.iter().all(|count| count.get() == 0));
+            if result.is_ok() {
+                assert_eq!(items.iter().map(|item| item.0).collect::<Vec<_>>(), original);
+            }
+            let mut identities: Vec<_> = items.iter().map(|item| item.0).collect();
+            identities.sort_unstable();
+            assert_eq!(identities, (0..original.len()).collect::<Vec<_>>());
+            drop(items);
+            assert!(drops.iter().all(|count| count.get() == 1));
         }
     }
 

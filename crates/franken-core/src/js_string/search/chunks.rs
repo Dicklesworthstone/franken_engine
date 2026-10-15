@@ -1,15 +1,16 @@
-//! Short-pattern search over immutable UTF-8 leaves, without joining a rope.
+//! Search immutable UTF-8 leaves without joining a rope.
 //!
-//! Large leaves use the standard library's substring search. A stack-resident
-//! byte KMP state carries matches across leaves; small leaves feed that state
-//! directly, so a pattern split over many leaves does not rescan a growing
-//! boundary window. Long or exact-only needles keep the existing unit search.
+//! Large leaves use the standard library's substring search. A byte KMP state
+//! carries matches across leaves; small leaves feed that state directly, so a
+//! pattern split over many leaves does not rescan a growing boundary window.
+//! Short patterns keep their failure table on the stack; long patterns allocate
+//! only needle-sized scratch. Exact-only needles keep the unit search.
 
 use std::sync::Arc;
 
 use super::{JsString, Text, access};
 
-const MAX_PATTERN_BYTES: usize = 64;
+const INLINE_PATTERN_BYTES: usize = 64;
 
 /// Borrow only an already-published, well-formed needle. Do not flatten the
 /// needle merely to decide whether this specialization is applicable.
@@ -21,12 +22,44 @@ pub(super) fn pattern(needle: &JsString) -> Option<&str> {
         Text::Flat(text) => text,
         Text::Concat(node) => node.joined.get()?,
     };
-    (!text.is_empty() && text.len() <= MAX_PATTERN_BYTES).then_some(text)
+    (!text.is_empty()).then_some(text)
+}
+
+/// Preserve allocation-free short searches without imposing a performance
+/// cliff on longer needles. Scratch is proportional to the needle, never to
+/// the haystack, including when a rope shares very large subtrees.
+enum FailureTable {
+    Inline([usize; INLINE_PATTERN_BYTES]),
+    Heap(Vec<usize>),
+}
+
+impl FailureTable {
+    fn new(width: usize) -> Self {
+        if width <= INLINE_PATTERN_BYTES {
+            Self::Inline([0; INLINE_PATTERN_BYTES])
+        } else {
+            Self::Heap(vec![0; width])
+        }
+    }
+
+    fn as_slice(&self) -> &[usize] {
+        match self {
+            Self::Inline(entries) => entries,
+            Self::Heap(entries) => entries,
+        }
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [usize] {
+        match self {
+            Self::Inline(entries) => entries,
+            Self::Heap(entries) => entries,
+        }
+    }
 }
 
 struct Matcher<'a> {
     text: &'a str,
-    failure: [usize; MAX_PATTERN_BYTES],
+    failure: FailureTable,
     matched: usize,
     backwards: bool,
     #[cfg(test)]
@@ -35,10 +68,10 @@ struct Matcher<'a> {
 
 impl<'a> Matcher<'a> {
     fn new(text: &'a str, backwards: bool) -> Self {
-        debug_assert!(!text.is_empty() && text.len() <= MAX_PATTERN_BYTES);
+        debug_assert!(!text.is_empty());
         let mut matcher = Self {
             text,
-            failure: [0; MAX_PATTERN_BYTES],
+            failure: FailureTable::new(text.len()),
             matched: 0,
             backwards,
             #[cfg(test)]
@@ -48,32 +81,38 @@ impl<'a> Matcher<'a> {
         for index in 1..text.len() {
             let byte = matcher.byte(index);
             while prefix > 0 && byte != matcher.byte(prefix) {
-                prefix = matcher.failure[prefix - 1];
+                prefix = matcher.failure.as_slice()[prefix - 1];
             }
             if byte == matcher.byte(prefix) {
                 prefix += 1;
             }
-            matcher.failure[index] = prefix;
+            matcher.failure.as_mut_slice()[index] = prefix;
         }
         matcher
     }
 
     fn byte(&self, index: usize) -> u8 {
         let bytes = self.text.as_bytes();
-        bytes[if self.backwards { bytes.len() - 1 - index } else { index }]
+        bytes[if self.backwards {
+            bytes.len() - 1 - index
+        } else {
+            index
+        }]
     }
 
     fn feed(&mut self, byte: u8) -> bool {
         #[cfg(test)]
-        { self.fed_bytes += 1; }
+        {
+            self.fed_bytes += 1;
+        }
         while self.matched > 0 && byte != self.byte(self.matched) {
-            self.matched = self.failure[self.matched - 1];
+            self.matched = self.failure.as_slice()[self.matched - 1];
         }
         if byte == self.byte(self.matched) {
             self.matched += 1;
         }
         if self.matched == self.text.len() {
-            self.matched = self.failure[self.matched - 1];
+            self.matched = self.failure.as_slice()[self.matched - 1];
             true
         } else {
             false
@@ -83,9 +122,16 @@ impl<'a> Matcher<'a> {
     /// Return the number of directional bytes consumed at the first match.
     fn scan(&mut self, bytes: &[u8]) -> Option<usize> {
         if self.backwards {
-            bytes.iter().rev().position(|&byte| self.feed(byte)).map(|i| i + 1)
+            bytes
+                .iter()
+                .rev()
+                .position(|&byte| self.feed(byte))
+                .map(|i| i + 1)
         } else {
-            bytes.iter().position(|&byte| self.feed(byte)).map(|i| i + 1)
+            bytes
+                .iter()
+                .position(|&byte| self.feed(byte))
+                .map(|i| i + 1)
         }
     }
 
@@ -95,7 +141,8 @@ impl<'a> Matcher<'a> {
     fn in_leaf(&mut self, text: &str) -> Option<LeafMatch> {
         let bytes = text.as_bytes();
         let width = self.text.len();
-        if bytes.len() < 2 * width {
+        // Division avoids overflow for an arbitrarily long borrowed pattern.
+        if bytes.len() / 2 < width {
             return self.scan(bytes).map(LeafMatch::Consumed);
         }
         // Only the first m-1 directional bytes can finish an incoming match.
@@ -112,7 +159,11 @@ impl<'a> Matcher<'a> {
                 return Some(LeafMatch::Consumed(consumed));
             }
         }
-        let local = if self.backwards { text.rfind(self.text) } else { text.find(self.text) };
+        let local = if self.backwards {
+            text.rfind(self.text)
+        } else {
+            text.find(self.text)
+        };
         if let Some(index) = local {
             return Some(LeafMatch::Local(index));
         }
@@ -120,7 +171,11 @@ impl<'a> Matcher<'a> {
         // possible matches continuing in the next leaf. Keep only KMP state,
         // not a copied suffix and not any reference to a previous leaf.
         self.matched = 0;
-        let suffix = if self.backwards { &bytes[..boundary] } else { &bytes[bytes.len() - boundary..] };
+        let suffix = if self.backwards {
+            &bytes[..boundary]
+        } else {
+            &bytes[bytes.len() - boundary..]
+        };
         let found = self.scan(suffix);
         debug_assert!(found.is_none());
         None
@@ -173,7 +228,9 @@ impl Iterator for Leaves {
                 continue;
             }
             #[cfg(test)]
-            { self.visited += 1; }
+            {
+                self.visited += 1;
+            }
             let text = match part.utf8 {
                 Text::Flat(text) => text,
                 Text::Concat(node) => {
@@ -196,7 +253,11 @@ impl Iterator for Leaves {
                     }
                 }
             };
-            return Some(Leaf { text, unit_start, units });
+            return Some(Leaf {
+                text,
+                unit_start,
+                units,
+            });
         }
         None
     }
@@ -234,7 +295,11 @@ pub(super) fn search(
         // a high surrogate. Round inward only for this specialized search;
         // exact-only needles still use the unmodified code-unit path.
         if split_begin {
-            begin += leaf.text[begin..].chars().next().expect("split scalar").len_utf8();
+            begin += leaf.text[begin..]
+                .chars()
+                .next()
+                .expect("split scalar")
+                .len_utf8();
         }
         if begin >= end {
             continue;

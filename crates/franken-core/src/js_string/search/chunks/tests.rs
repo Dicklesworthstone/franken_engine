@@ -45,7 +45,7 @@ fn eligibility_never_materializes_or_projects_the_needle() {
     }
     assert!(pattern(&JsString::from("")).is_none());
     assert!(pattern(&JsString::from("x".repeat(64))).is_some());
-    assert!(pattern(&JsString::from("x".repeat(65))).is_none());
+    assert!(pattern(&JsString::from("x".repeat(65))).is_some());
     assert!(pattern(&JsString::from_code_units(&[0xd800])).is_none());
     assert!(pattern(&JsString::from("�")).is_some());
     let needle = rope(JsString::from("ab"), JsString::from("cd"));
@@ -138,7 +138,7 @@ fn bounds_and_early_hits_skip_shared_gigabyte_subtrees() {
 
 #[test]
 fn directional_matcher_agrees_for_every_pattern_width() {
-    for width in 1..=MAX_PATTERN_BYTES {
+    for width in (1..=INLINE_PATTERN_BYTES).chain([65, 80, 127, 128, 255, 256, 1024, 4097]) {
         let needle = format!("{}b", "a".repeat(width - 1));
         let haystack = format!("{}{}{}{}", "a".repeat(129), needle, "a".repeat(131), needle);
         for chunk in [1, 2, 7, 63, 64, 65, 129, 1024] {
@@ -170,7 +170,7 @@ fn directional_matcher_agrees_for_every_pattern_width() {
 }
 
 #[test]
-fn needle_limit_and_unjoined_needle_retain_streaming_fallback() {
+fn long_needles_and_unjoined_needles_preserve_streaming_semantics() {
     let value = rope(JsString::from("a".repeat(96)), JsString::from("b".repeat(96)));
     for width in [63, 64, 65, 80] {
         check(&value, &JsString::from(format!("{}b", "a".repeat(width - 1))));
@@ -196,5 +196,60 @@ fn leaf_references_survive_publication_with_pending_children() {
         collected.sort_by_key(|(start, _)| *start);
         let text: String = collected.iter().map(|(_, text)| &**text).collect();
         assert_eq!(text, "é😀日needle");
+    }
+}
+
+#[test]
+fn long_unicode_needles_preserve_every_utf16_start_boundary() {
+    for repeated in ["é", "日", "😀", "a😀日"] {
+        let spelling = format!("{}b", repeated.repeat(33));
+        let needle = JsString::from(spelling.clone());
+        assert!(pattern(&needle).is_some());
+        for split in spelling
+            .char_indices()
+            .map(|(byte, _)| byte)
+            .step_by(11)
+        {
+            let value = rope(
+                JsString::from(format!("😀{}", &spelling[..split])),
+                JsString::from(format!("{}😀{spelling}", &spelling[split..])),
+            );
+            check(&value, &needle);
+        }
+    }
+}
+
+#[test]
+fn long_pattern_failure_storage_is_needle_sized() {
+    for width in [1, 64, 65, 1024, 4097] {
+        let text = "a".repeat(width);
+        let matcher = Matcher::new(&text, false);
+        match &matcher.failure {
+            FailureTable::Inline(entries) => {
+                assert!(width <= INLINE_PATTERN_BYTES);
+                assert_eq!(entries.len(), INLINE_PATTERN_BYTES);
+            }
+            FailureTable::Heap(entries) => {
+                assert!(width > INLINE_PATTERN_BYTES);
+                assert_eq!(entries.len(), width);
+            }
+        }
+        assert_eq!(matcher.failure.as_slice()[width - 1], width - 1);
+    }
+}
+
+#[test]
+fn long_patterns_keep_large_leaf_matching_out_of_the_scalar_loop() {
+    let text = "ab".repeat(524_288);
+    for width in [65, 128, 1024] {
+        let needle = format!("{}z", "a".repeat(width - 1));
+        for backwards in [false, true] {
+            let mut matcher = Matcher::new(&needle, backwards);
+            for _ in 0..2 {
+                let before = matcher.fed_bytes;
+                assert!(matcher.in_leaf(&text).is_none());
+                assert!(matcher.fed_bytes - before < 2 * width);
+            }
+        }
     }
 }

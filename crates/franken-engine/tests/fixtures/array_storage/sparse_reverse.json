@@ -1,0 +1,112 @@
+[
+  {
+    "name": "odd_sparse_identity_and_midpoint",
+    "source": "(()=>{const n=131073,a=[];a.length=n; const x={},y={},z={};a[1]=x;a[n-1]=y;a[65536]=z;const r=a.reverse();return [r===a,a[0]===y,a[n-2]===x,a[65536]===z,a.length,Object.keys(a).join(',')].join('|');})()",
+    "expected": "true|true|true|true|131073|0,65536,131071"
+  },
+  {
+    "name": "upper_only_is_not_ignored",
+    "source": "(()=>{const a=[];a.length=131072;a[90000]=7;a.reverse();return [a[41071],90000 in a,41070 in a,Object.keys(a).join(',')].join('|');})()",
+    "expected": "7|false|false|41071"
+  },
+  {
+    "name": "holes_are_not_undefined",
+    "source": "(()=>{const a=[];a.length=131072;a[17]=undefined;a.reverse();return [17 in a,131054 in a,a[131054]===undefined,Object.keys(a).join(',')].join('|');})()",
+    "expected": "false|true|true|131054"
+  },
+  {
+    "name": "midpoint_getter_is_untouched",
+    "source": "(()=>{let gets=0;const a=[];a.length=131073;Object.defineProperty(a,'65536',{get(){gets++;throw 1}});a.reverse();return gets+'|'+a.length;})()",
+    "expected": "0|131073"
+  },
+  {
+    "name": "lower_getter_adds_future_pair",
+    "source": "(()=>{const a=[];a.length=131072;const seen=[];Object.defineProperty(a,'0',{configurable:true,get(){seen.push('g0');a[50000]=8;return 7}});a.reverse();return [seen.join(','),a[131071],a[81071],0 in a,50000 in a].join('|');})()",
+    "expected": "g0|7|8|false|false"
+  },
+  {
+    "name": "upper_getter_creates_lower_before_write",
+    "source": "(()=>{const a=[];a.length=131072;const seen=[];Object.defineProperty(a,'131071',{configurable:true,get(){seen.push('gu');a[0]=99;return 7}});a.reverse();return [seen.join(','),a[0],131071 in a].join('|');})()",
+    "expected": "gu|7|false"
+  },
+  {
+    "name": "both_values_read_before_first_setter",
+    "source": "(()=>{const a=[];a.length=131072;const seen=[];let high=8;Object.defineProperty(a,'0',{get(){seen.push('gl');return 7},set(v){seen.push('sl'+v);high=99}});Object.defineProperty(a,'131071',{get(){seen.push('gu');return high},set(v){seen.push('su'+v)}});a.reverse();return seen.join(',');})()",
+    "expected": "gl,gu,sl8,su7"
+  },
+  {
+    "name": "setter_adds_unvisited_pairs",
+    "source": "(()=>{const a=[];a.length=131072;a[0]=7;const seen=[];const p=Object.create(Array.prototype);Object.defineProperty(p,'131071',{set(v){seen.push(v);a[60000]=9},configurable:true});Object.setPrototypeOf(a,p);a.reverse();return [seen.join(','),a[71071],60000 in a,0 in a].join('|');})()",
+    "expected": "7|9|false|true"
+  },
+  {
+    "name": "prototype_replaced_between_pairs",
+    "source": "(()=>{const a=[];a.length=131072;const p=Object.create(Array.prototype);p[100000]=9;Object.defineProperty(a,'0',{configurable:true,get(){Object.setPrototypeOf(a,p);return 7}});a.reverse();return [a[131071],a[31071],Object.hasOwn(a,100000),a[100000]].join('|');})()",
+    "expected": "7|9|false|9"
+  },
+  {
+    "name": "captured_length_survives_shrink",
+    "source": "(()=>{const a=[];a.length=131072;Object.defineProperty(a,'0',{configurable:true,get(){a.length=1;return 7}});a.reverse();return [a.length,a[131071],0 in a].join('|');})()",
+    "expected": "131072|7|false"
+  },
+  {
+    "name": "nonconfigurable_upper_keeps_prior_write",
+    "source": "(()=>{const a=[];a.length=131072;Object.defineProperty(a,'131071',{value:8,configurable:false});let error='';try{a.reverse()}catch(e){error=e.name}return [error,a[0],a[131071],a.length].join('|');})()",
+    "expected": "TypeError|8|8|131072"
+  },
+  {
+    "name": "nonconfigurable_lower_refuses_before_set",
+    "source": "(()=>{const a=[];a.length=131072;Object.defineProperty(a,'0',{value:8,configurable:false});let error='';try{a.reverse()}catch(e){error=e.name}return [error,a[0],131071 in a].join('|');})()",
+    "expected": "TypeError|8|false"
+  },
+  {
+    "name": "readonly_upper_refuses_after_lower_set",
+    "source": "(()=>{const a=[];a.length=131072;a[0]=7;Object.defineProperty(a,'131071',{value:8,writable:false,configurable:true});let error='';try{a.reverse()}catch(e){error=e.name}return [error,a[0],a[131071]].join('|');})()",
+    "expected": "TypeError|8|8"
+  },
+  {
+    "name": "inherited_readonly_destination_keeps_source",
+    "source": "(()=>{const a=[];a.length=131072;a[0]=7;const p=Object.create(Array.prototype);Object.defineProperty(p,'131071',{value:8,writable:false});Object.setPrototypeOf(a,p);let error='';try{a.reverse()}catch(e){error=e.name}return [error,a[0],a[131071],Object.hasOwn(a,131071)].join('|');})()",
+    "expected": "TypeError|8|8|false"
+  },
+  {
+    "name": "proxy_order_uses_has_and_not_ownkeys",
+    "source": "(()=>{const a=[1,,3,4],seen=[];const p=new Proxy(a,{get(t,k,r){seen.push('g'+k);return Reflect.get(t,k,r)},has(t,k){seen.push('h'+k);return Reflect.has(t,k)},set(t,k,v){seen.push('s'+k+':'+v);return Reflect.set(t,k,v)},deleteProperty(t,k){seen.push('d'+k);return Reflect.deleteProperty(t,k)},ownKeys(){throw 'unexpected ownKeys'}});Array.prototype.reverse.call(p);return seen.join(',')+'|'+a.join(',');})()",
+    "expected": "glength,h0,g0,h3,g3,s0:4,s3:1,h1,h2,g2,s1:3,d2|4,3,,1"
+  },
+  {
+    "name": "throwing_proxy_prototype_not_skipped",
+    "source": "(()=>{const a=[];a.length=131072;const token={};const seen=[];Object.setPrototypeOf(a,new Proxy(Array.prototype,{has(t,k){seen.push(k);throw token}}));let same=false;try{Array.prototype.reverse.call(a)}catch(e){same=e===token}return same+'|'+seen.join(',');})()",
+    "expected": "true|0"
+  },
+  {
+    "name": "getter_exception_stops_before_upper",
+    "source": "(()=>{const a=[];a.length=131072;const token={};let upper=0;Object.defineProperty(a,'0',{get(){throw token}});Object.defineProperty(a,'131071',{get(){upper++;return 3}});let same=false;try{a.reverse()}catch(e){same=e===token}return same+'|'+upper;})()",
+    "expected": "true|0"
+  },
+  {
+    "name": "zero_and_one_do_not_probe_indices",
+    "source": "(()=>{let calls=0;for(const length of [0,1]){const p=new Proxy({length},{has(){calls++;throw 1}});Array.prototype.reverse.call(p)}return String(calls);})()",
+    "expected": "0"
+  },
+  {
+    "name": "length_coercion_once_before_first_pair",
+    "source": "(()=>{const seen=[];const a={0:'a',2:'c',get length(){seen.push('l');return {valueOf(){seen.push('v');a[1]='b';return 3}}}};Array.prototype.reverse.call(a);return seen.join(',')+'|'+[a[0],a[1],a[2]].join(',');})()",
+    "expected": "l,v|c,b,a"
+  },
+  {
+    "name": "typed_array_borrowed_reverse",
+    "source": "(()=>{const a=new Uint16Array([1,2,3]);const r=Array.prototype.reverse.call(a);return (r===a)+'|'+a.join(',');})()",
+    "expected": "true|3,2,1"
+  },
+  {
+    "name": "nonnumeric_names_stay_in_place",
+    "source": "(()=>{const a=[];a.length=131072;a[2]=3;a['01']='x';a['4294967295']='y';const sym=Symbol();a[sym]='z';a.reverse();return [a[131069],a['01'],a['4294967295'],a[sym]].join('|');})()",
+    "expected": "3|x|y|z"
+  },
+  {
+    "name": "nested_reverse_keeps_outer_captured_values",
+    "source": "(()=>{const a=[];a.length=131072;const seen=[];let enter=false;Object.defineProperty(a,'0',{configurable:true,get(){seen.push('g');if(!enter){enter=true;Object.defineProperty(a,'0',{value:1,writable:true,configurable:true});a[50000]=2;a.reverse()}return 7}});a.reverse();return [seen.join(','),a[0],a[131071],a[50000],81071 in a].join('|');})()",
+    "expected": "g|1|7|2|false"
+  }
+]

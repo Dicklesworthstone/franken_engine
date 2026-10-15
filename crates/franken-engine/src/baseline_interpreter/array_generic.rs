@@ -667,42 +667,8 @@ impl InterpreterCore {
             }
             K::ArrayReverse => {
                 let len = self.generic_length(m, o)?;
-                let middle = len / 2;
-                for lower in 0..middle {
-                    self.charge_native_hole_read()?;
-                    let upper = len - lower - 1;
-                    let (lower_key, upper_key) = (
-                        Self::generic_index_key(lower),
-                        Self::generic_index_key(upper),
-                    );
-                    let lower_exists = self.generic_has(m, o, &lower_key)?;
-                    let lower_value = if lower_exists {
-                        self.generic_get(m, o, &lower_key)?
-                    } else {
-                        Value::Undefined
-                    };
-                    let upper_exists = self.generic_has(m, o, &upper_key)?;
-                    let upper_value = if upper_exists {
-                        self.generic_get(m, o, &upper_key)?
-                    } else {
-                        Value::Undefined
-                    };
-                    match (lower_exists, upper_exists) {
-                        (true, true) => {
-                            self.generic_set(m, o, &lower_key, upper_value)?;
-                            self.generic_set(m, o, &upper_key, lower_value)?;
-                        }
-                        (false, true) => {
-                            self.generic_set(m, o, &lower_key, upper_value)?;
-                            self.generic_delete(m, o, &upper_key)?;
-                        }
-                        (true, false) => {
-                            self.generic_delete(m, o, &lower_key)?;
-                            self.generic_set(m, o, &upper_key, lower_value)?;
-                        }
-                        (false, false) => {}
-                    }
-                }
+                self.observe_scoped_callback_result()?;
+                self.generic_reverse_properties(m, o, len)?;
                 self.generic_object_value(o)
             }
             // ES2020 23.1.3.3: the indices convert in order, then each element

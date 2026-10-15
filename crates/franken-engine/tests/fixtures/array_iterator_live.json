@@ -1,0 +1,97 @@
+[
+  {
+    "name": "values_creation_has_no_observable_reads",
+    "source": "let log=[]; let p=new Proxy([10,20], {get(t,k,r){log.push(String(k));return Reflect.get(t,k,r);}}); let it=Array.prototype.values.call(p); let before=log.join(','); let a=it.next().value; let b=it.next().value; let done=it.next().done; [before,a,b,done,log.join(',')].join('|')",
+    "expected": "|10|20|true|length,0,length,1,length"
+  },
+  {
+    "name": "huge_proxy_only_reads_requested_prefix",
+    "source": "let log=[]; let p=new Proxy({length:9007199254740991,0:7,1:8}, {get(t,k,r){log.push(String(k));return Reflect.get(t,k,r);}}); let it=Array.prototype.values.call(p); [log.length,it.next().value,it.next().value,log.join(',')].join('|')",
+    "expected": "0|7|8|length,0,length,1"
+  },
+  {
+    "name": "keys_do_not_read_elements",
+    "source": "let log=[]; let p=new Proxy({length:3}, {get(t,k,r){log.push(String(k));if(k!=='length')throw 'element';return 3;}}); let it=Array.prototype.keys.call(p); [it.next().value,it.next().value,it.next().value,it.next().done,log.join(',')].join('|')",
+    "expected": "0|1|2|true|length,length,length,length"
+  },
+  {
+    "name": "entries_are_fresh_and_values_are_live",
+    "source": "let a=[1,2];let p=new Proxy(a,{});let it=Array.prototype.entries.call(p);a[0]=7;let x=it.next().value;x[0]=99;x[1]=90;a[1]=8;let y=it.next().value;[a.join(','),x.join(','),y.join(','),x!==y,it.next().done].join('|')",
+    "expected": "7,8|99,90|1,8|true|true"
+  },
+  {
+    "name": "growth_is_seen_by_next",
+    "source": "let a=[1];let it=Array.prototype.values.call(new Proxy(a,{}));let x=it.next().value;a.push(2,3);[x,it.next().value,it.next().value,it.next().done].join('|')",
+    "expected": "1|2|3|true"
+  },
+  {
+    "name": "done_is_permanent_after_shrink",
+    "source": "let log=[];let a=[1,2,3];let it=Array.prototype.values.call(new Proxy(a,{get(t,k,r){log.push(String(k));return Reflect.get(t,k,r);}}));let x=it.next().value;a.length=0;let done=it.next().done;a.push(9,10,11);[x,done,it.next().done,log.join(',')].join('|')",
+    "expected": "1|true|true|length,0,length"
+  },
+  {
+    "name": "element_throw_advances_before_get",
+    "source": "let log=[];let p=new Proxy({length:2,1:9},{get(t,k,r){log.push(String(k));if(k==='0')throw 'zero';return Reflect.get(t,k,r);}});let it=Array.prototype.values.call(p);let error='';try{it.next();}catch(e){error=e;}[error,it.next().value,it.next().done,log.join(',')].join('|')",
+    "expected": "zero|9|true|length,0,length,1,length"
+  },
+  {
+    "name": "length_throw_does_not_advance",
+    "source": "let log=[];let fail=true;let p=new Proxy({length:1,0:9},{get(t,k,r){log.push(String(k));if(k==='length'&&fail){fail=false;throw 'length';}return Reflect.get(t,k,r);}});let it=Array.prototype.values.call(p);let error='';try{it.next();}catch(e){error=e;}[error,it.next().value,it.next().done,log.join(',')].join('|')",
+    "expected": "length|9|true|length,length,0,length"
+  },
+  {
+    "name": "revoked_proxy_creation_defers_failure",
+    "source": "let r=Proxy.revocable([1],{});r.revoke();let result=[];for(let method of ['keys','values','entries']){let it;try{it=Array.prototype[method].call(r.proxy);result.push('created');}catch(e){result.push('creation:'+e.name);}if(it){try{it.next();}catch(e){result.push(e.name);}}}result.join('|')",
+    "expected": "created|TypeError|created|TypeError|created|TypeError"
+  },
+  {
+    "name": "revocation_after_first_next_is_seen",
+    "source": "let r=Proxy.revocable([1,2],{});let it=Array.prototype.values.call(r.proxy);let first=it.next().value;r.revoke();let error='';try{it.next();}catch(e){error=e.name;}[first,error].join('|')",
+    "expected": "1|TypeError"
+  },
+  {
+    "name": "holes_use_get_not_has",
+    "source": "let log=[];let p=new Proxy([,4],{get(t,k,r){log.push('g:'+String(k));return Reflect.get(t,k,r);},has(){throw 'has';}});let it=Array.prototype.values.call(p);[it.next().value===undefined,it.next().value,it.next().done,log.join(',')].join('|')",
+    "expected": "true|4|true|g:length,g:0,g:length,g:1,g:length"
+  },
+  {
+    "name": "prototype_changes_are_live",
+    "source": "let a={length:2};let p=new Proxy(a,{});let it=Array.prototype.values.call(p);Object.setPrototypeOf(a,{0:7});let x=it.next().value;Object.setPrototypeOf(a,{1:8});[x,it.next().value,it.next().done].join('|')",
+    "expected": "7|8|true"
+  },
+  {
+    "name": "partial_consumption_does_not_touch_suffix",
+    "source": "let log=[];let p=new Proxy({length:1000000000,0:7},{get(t,k,r){log.push(String(k));if(k==='1')throw 'suffix';return Reflect.get(t,k,r);}});let it=Array.prototype.values.call(p);let first;for(let x of it){first=x;break;}[first,log.join(',')].join('|')",
+    "expected": "7|length,0"
+  },
+  {
+    "name": "independent_iterators_share_live_source",
+    "source": "let a=[1,2];let p=new Proxy(a,{});let x=Array.prototype.values.call(p);let y=Array.prototype.values.call(p);let first=x.next().value;a[0]=9;a[1]=8;[first,y.next().value,x.next().value,y.next().value].join('|')",
+    "expected": "1|9|8|8"
+  },
+  {
+    "name": "borrowed_string_values_iterate_utf16_units",
+    "source": "let it=Array.prototype.values.call('A\ud83d\ude00\\ud800');let out=[];for(let x of it)out.push(x.charCodeAt(0));out.join(',')",
+    "expected": "65,55357,56832,55296"
+  },
+  {
+    "name": "borrowed_string_keys_and_entries",
+    "source": "let keys=Array.prototype.keys.call('ab');let entries=Array.prototype.entries.call('ab');[Array.from(keys).join(','),Array.from(entries).map(x=>x.join(':')).join(',')].join('|')",
+    "expected": "0,1|0:a,1:b"
+  },
+  {
+    "name": "boxed_non_string_primitives_have_empty_iteration",
+    "source": "let out=[];for(let x of [true,3,4n,Symbol('s')])out.push(Array.prototype.values.call(x).next().done);out.join('|')",
+    "expected": "true|true|true|true"
+  },
+  {
+    "name": "nullish_receivers_still_throw",
+    "source": "let out=[];for(let x of [null,undefined])for(let k of ['keys','values','entries'])try{Array.prototype[k].call(x);}catch(e){out.push(e.name);}out.join('|')",
+    "expected": "TypeError|TypeError|TypeError|TypeError|TypeError|TypeError"
+  },
+  {
+    "name": "iterator_helper_take_is_lazy_over_large_proxy",
+    "source": "let log=[];let p=new Proxy({length:1000000000,0:3,1:4},{get(t,k,r){log.push(String(k));if(k==='2')throw 'suffix';return Reflect.get(t,k,r);}});let out=Array.prototype.values.call(p).take(2).toArray();[out.join(','),log.join(',')].join('|')",
+    "expected": "3,4|length,0,length,1"
+  }
+]

@@ -15,11 +15,11 @@
 //! Callbacks and traps run without a nested collection request, so the
 //! arrays and values held here stay reachable while guest code runs.
 //!
-//! No-claim: on a proxy `values`/`keys`/`entries` (and so for-of) read the
-//! elements when the iterator is created, not lazily (an array-like keeps the
-//! ordinary lazy iterator); typed arrays used as array-likes keep their
-//! ordinary paths for the methods that only read, and run here for the
-//! ones that write and for concat (bd-9vouw.360). A function `this` runs
+//! Proxy `values`/`keys`/`entries` use the same source-retaining iterator as
+//! ordinary arrays: construction reads neither length nor elements. Typed
+//! arrays used as array-likes keep their ordinary paths for the methods that
+//! only read, and run here for the ones that write and for concat
+//! (bd-9vouw.360). A function `this` runs
 //! here over its own properties (bd-9vouw.285). `flat`, `flatMap` and
 //! `toSpliced` run here too (bd-9vouw.354).
 
@@ -105,6 +105,24 @@ impl InterpreterCore {
     ) -> Result<Option<ObjectId>, InterpreterError> {
         use BuiltinFunctionKind as K;
         let iterator = matches!(kind, K::ArrayKeys | K::ArrayValues | K::ArrayEntries);
+        if iterator && !typed_array_method {
+            match receiver {
+                // CreateArrayIterator performs ToObject only. Even a revoked
+                // Proxy is a valid receiver until next() reads its length.
+                // Inspect the record without the eager revocation check below.
+                Some(Value::Object(id)) if self.proxy_record(*id)?.is_some() => {
+                    return Ok(Some(*id));
+                }
+                // The intrinsic iterator retains this box. In particular,
+                // borrowed Array iteration of a string visits UTF-16 units,
+                // not the code points of String.prototype's own iterator.
+                Some(primitive @ (Value::Bool(_) | Value::Int(_) | Value::Float(_)
+                    | Value::Str(_) | Value::BigInt(_) | Value::Symbol(_))) => {
+                    return Ok(Some(self.alloc_primitive_wrapper(primitive.clone())?));
+                }
+                _ => {}
+            }
+        }
         match receiver {
             Some(function) if function.is_callable() && !iterator => {
                 if let Value::BuiltinFunction(builtin) = function
@@ -913,38 +931,15 @@ impl InterpreterCore {
                 Value::Object(result)
             }
             K::ArrayKeys | K::ArrayValues | K::ArrayEntries => {
-                let len = self.generic_length(m, o)?;
-                let mut items = self.generic_buffer(len)?;
-                for k in 0..len {
-                    let index = Self::generic_length_value(k);
-                    items.push(match kind {
-                        K::ArrayKeys => index,
-                        K::ArrayValues => self.generic_get(m, o, &Self::generic_index_key(k))?,
-                        _ => {
-                            let element = self.generic_get(m, o, &Self::generic_index_key(k))?;
-                            Value::Object(self.alloc_array_from_values(&[index, element])?)
-                        }
-                    });
-                }
-                let trace_index = self.start_iteration_trace(IterationKind::ForOf, || {
-                    format!("array_iterator:proxy|{}", o.0)
-                });
-                let handle =
-                    self.alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
-                        values: items,
-                        next_index: 0,
-                        array: None,
-                        typed_array: None,
-                        collection: None,
-                        iterator_receiver: None,
-                        next_method: None,
-                        timers_interval: None,
-                        done: false,
-                        closed: false,
-                        return_called: false,
-                        trace_index,
-                    }))?;
-                Value::Iterator(handle)
+                let projection = match kind {
+                    K::ArrayKeys => "keys",
+                    K::ArrayValues => "values",
+                    _ => "entries",
+                };
+                // Reuse the native iterator's live length/Get, advancement,
+                // tracing, GC roots and memory accounting. Never snapshot the
+                // source or allocate entry pairs until a next() requests them.
+                self.array_prototype_iterator_for_receiver(Value::Object(o), projection)?
             }
             _ => return Ok(None),
         };
@@ -1584,3 +1579,6 @@ impl InterpreterCore {
         Self::strict_eq_values(a, b) || (is_nan(a) && is_nan(b))
     }
 }
+
+#[cfg(test)]
+mod iterator_tests;

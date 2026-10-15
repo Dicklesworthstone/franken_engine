@@ -109,11 +109,13 @@ impl<V> IndexedValues<V> {
         *self = Self::Holey(Box::new(HoleyValues { slots, live }));
     }
 
+    /// Resume after an already-visited packed prefix, or at zero for a
+    /// previously holey carrier. The caller has applied any first rejection.
     pub(super) fn retain_holey(
         &mut self,
+        mut cursor: usize,
         keep: &mut impl FnMut(&u32, &mut (String, V)) -> bool,
     ) {
-        let mut cursor = 0usize;
         while let Self::Holey(entries) = self {
             if cursor >= entries.slots.len() {
                 break;

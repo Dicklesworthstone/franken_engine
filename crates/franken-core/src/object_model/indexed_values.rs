@@ -158,9 +158,10 @@ impl<V> IndexedValues<V> {
     }
 
     /// Visit every entry once in numeric order. An all-keep pass leaves packed
-    /// storage (and its allocation) alone. Only the first actual hole requires
-    /// promotion: subsequent callbacks can panic without reindexing the live
-    /// suffix. Successful filtering can recover a dense prefix; ordinary
+    /// storage (and its allocation) alone. The first interior rejection moves
+    /// to bounded holey slots, preserving direct indexing unless genuinely
+    /// sparse. Callbacks can panic without reindexing the unvisited suffix.
+    /// Successful filtering can recover a dense prefix; ordinary
     /// insertion/deletion still never oscillates between storage forms.
     pub(super) fn retain(&mut self, mut keep: impl FnMut(&u32, &mut (String, V)) -> bool) {
         if self.is_empty() {
@@ -168,7 +169,7 @@ impl<V> IndexedValues<V> {
             return;
         }
         if matches!(self, Self::Holey(_)) {
-            self.retain_holey(&mut keep);
+            self.retain_holey(0, &mut keep);
         } else if let Self::Packed(entries) = self {
             let first_removed = entries.iter_mut().enumerate().find_map(|(index, entry)| {
                 let index = index as u32;
@@ -181,14 +182,15 @@ impl<V> IndexedValues<V> {
                 drop(self.remove(&first_removed));
                 return;
             }
-            self.promote();
+            self.make_holey();
             // Apply the already-evaluated rejection before another callback.
             // Rechecking it would duplicate side effects, and delaying it
             // would leave the wrong partial map if the next callback panics.
             drop(self.remove(&first_removed));
-            if let Self::Dictionary(entries) = self {
-                entries.retain(|index, entry| *index < first_removed || keep(index, entry));
-            }
+            // The rejected index is interior, so the successor cannot overflow.
+            // Resume after the visited prefix instead of invoking it twice or
+            // building a dictionary for a single hole in a dense array.
+            self.retain_holey(first_removed as usize + 1, &mut keep);
         } else if let Self::Dictionary(entries) = self {
             entries.retain(keep);
         }
@@ -691,7 +693,7 @@ mod tests {
             });
         }));
         assert!(outcome.is_err());
-        assert!(matches!(values, IndexedValues::Dictionary(_)));
+        assert!(matches!(values, IndexedValues::Holey(_)));
         assert_eq!(values.get(&1), None);
         for index in [0, 2, 3, 4, 5, 6, 7] {
             assert_eq!(values.get(&index).map(|entry| entry.1), Some(u64::from(index)));
@@ -1055,5 +1057,179 @@ mod tests {
         let names: Vec<_> = map.exact_keys().into_iter()
             .filter(|key| key.as_str().and_then(canonical_array_index).is_none()).collect();
         assert_eq!(names, [JsString::from("z"), lone, JsString::from("a")]);
+    }
+
+    #[test]
+    fn retain_interior_rejections_keep_direct_storage_and_key_allocations() {
+        for len in [8_u32, 63, 4096] {
+            for rejected in [0, len / 2, len - 2] {
+                let mut values = dense(len);
+                let addresses: Vec<_> = values.values().map(|entry| entry.0.as_ptr()).collect();
+                let mut visits = Vec::new();
+                values.retain(|index, (_, value)| {
+                    visits.push(*index);
+                    *value += 100;
+                    *index != rejected
+                });
+                assert_eq!(visits, (0..len).collect::<Vec<_>>());
+                let IndexedValues::Holey(entries) = &values else {
+                    panic!("one interior rejection must not build a dictionary");
+                };
+                assert_eq!(entries.live, len as usize - 1);
+                assert_eq!(entries.slots.len(), len as usize);
+                assert!(entries.slots.capacity() <= 2 * entries.live);
+                for index in 0..len {
+                    if index == rejected {
+                        assert!(values.get(&index).is_none());
+                    } else {
+                        let (key, value) = values.get(&index).unwrap();
+                        assert_eq!(key.as_ptr(), addresses[index as usize]);
+                        assert_eq!(*value, u64::from(index) + 100);
+                    }
+                }
+                // Repair/deletion cycles must not repeatedly migrate storage.
+                let slots = entries.slots.as_ptr();
+                for _ in 0..8 {
+                    values.insert(rejected, (rejected.to_string(), 1));
+                    values.retain(|index, _| *index != rejected);
+                    let IndexedValues::Holey(entries) = &values else {
+                        panic!("retain must preserve economical holey storage");
+                    };
+                    assert_eq!(entries.slots.as_ptr(), slots);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn retain_migrates_only_when_live_occupancy_requires_it() {
+        for rejected_prefix in [1_u32, 63, 64, 65, 127, 128] {
+            let mut values = dense(128);
+            let mut visits = Vec::new();
+            values.retain(|index, (_, value)| {
+                visits.push(*index);
+                *value += 1;
+                *index >= rejected_prefix
+            });
+            assert_eq!(visits, (0..128).collect::<Vec<_>>());
+            assert_eq!(values.len(), (128 - rejected_prefix) as usize);
+            match &values {
+                IndexedValues::Holey(entries) => {
+                    assert!(rejected_prefix <= 64);
+                    assert!(entries.is_bounded());
+                    assert!(entries.slots.capacity() <= 2 * entries.live);
+                }
+                IndexedValues::Dictionary(_) => assert!((65..128).contains(&rejected_prefix)),
+                IndexedValues::Packed(entries) => {
+                    assert_eq!(rejected_prefix, 128);
+                    assert_eq!(entries.capacity(), 0);
+                }
+            }
+            for index in 0..128 {
+                assert_eq!(
+                    values.get(&index).map(|entry| entry.1),
+                    (index >= rejected_prefix).then_some(u64::from(index) + 1)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn retain_drop_panics_match_btree_before_and_after_sparse_migration() {
+        use std::cell::RefCell;
+
+        struct Owned {
+            index: u32,
+            panic_at: u32,
+            drops: Rc<RefCell<Vec<u32>>>,
+        }
+        impl Drop for Owned {
+            fn drop(&mut self) {
+                self.drops.borrow_mut().push(self.index);
+                assert_ne!(self.index, self.panic_at, "deliberate destructor panic");
+            }
+        }
+        for panic_at in [1_u32, 31, 42, 43, 63] {
+            let actual_drops = Rc::new(RefCell::new(Vec::new()));
+            let expected_drops = Rc::new(RefCell::new(Vec::new()));
+            let mut actual = IndexedValues::new();
+            let mut expected = BTreeMap::new();
+            for index in 0..64_u32 {
+                actual.insert(index, (index.to_string(), Owned {
+                    index, panic_at, drops: Rc::clone(&actual_drops),
+                }));
+                expected.insert(index, (index.to_string(), Owned {
+                    index, panic_at, drops: Rc::clone(&expected_drops),
+                }));
+            }
+            let mut actual_visits = Vec::new();
+            let mut expected_visits = Vec::new();
+            assert!(catch_unwind(AssertUnwindSafe(|| {
+                actual.retain(|index, _| {
+                    actual_visits.push(*index);
+                    index % 4 == 0
+                });
+            })).is_err());
+            assert!(catch_unwind(AssertUnwindSafe(|| {
+                expected.retain(|index, _| {
+                    expected_visits.push(*index);
+                    index % 4 == 0
+                });
+            })).is_err());
+            assert_eq!(actual_visits, expected_visits);
+            assert_eq!(*actual_drops.borrow(), *expected_drops.borrow());
+            assert_eq!(actual.len(), expected.len());
+            for index in 0..64 {
+                assert_eq!(actual.contains_key(&index), expected.contains_key(&index));
+            }
+            if panic_at < 43 {
+                let IndexedValues::Holey(entries) = &actual else {
+                    panic!("the partial map is still at least half occupied");
+                };
+                assert!(entries.is_bounded());
+                assert!(entries.slots.capacity() <= 2 * entries.live);
+            } else {
+                assert!(matches!(actual, IndexedValues::Dictionary(_)));
+            }
+            drop(actual);
+            drop(expected);
+            assert_eq!(*actual_drops.borrow(), *expected_drops.borrow());
+            assert_eq!(actual_drops.borrow().len(), 64);
+        }
+    }
+
+    #[test]
+    fn retained_holes_preserve_parent_exact_order_and_wire_bytes() {
+        use super::super::{OrderedStringMap, canonical_array_index};
+        use crate::js_string::JsString;
+
+        let mut actual = OrderedStringMap::new();
+        let lone = JsString::from_code_units(&[0xd800]);
+        actual.insert("z".into(), 900_i64);
+        actual.insert_exact(lone.clone(), 901);
+        actual.insert("a".into(), 902);
+        for index in 0..128 {
+            actual.insert(index.to_string(), i64::from(index));
+        }
+        let mut expected = actual.clone();
+        expected.array_entries.promote();
+        for map in [&mut actual, &mut expected] {
+            map.retain(|key, value| {
+                *value += 10;
+                canonical_array_index(key).is_none_or(|index| index % 2 == 0)
+            });
+        }
+        assert!(matches!(actual.array_entries, IndexedValues::Holey(_)));
+        assert_eq!(actual, expected);
+        assert_eq!(actual.exact_keys(), expected.exact_keys());
+        // The String-key retain API does not visit exact-only sidecar keys.
+        assert_eq!(actual.get_exact(&lone), Some(&901));
+        assert_eq!(
+            serde_json::to_string(&actual).unwrap(),
+            serde_json::to_string(&expected).unwrap()
+        );
+        let wire = serde_json::to_string(&actual).unwrap();
+        let decoded: OrderedStringMap<i64> = serde_json::from_str(&wire).unwrap();
+        assert_eq!(decoded, actual);
     }
 }

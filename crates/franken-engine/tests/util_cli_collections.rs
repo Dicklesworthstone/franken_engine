@@ -133,3 +133,53 @@ console.log('assert-shared-util');
         assert_eq!(run_util_program(preamble, goal, body), expected);
     }
 }
+
+#[test]
+fn native_parse_env_is_shared_by_cjs_esm_and_shadowed_global_programs() {
+    let body = r#"
+const Object = 'guest shadow';
+const String = 'guest shadow';
+const parsed = parse('export PORT = 3000\nMESSAGE="first\\nsecond # literal"\nPORT=4000\nEMPTY=\nLITERAL=${HOME}');
+console.log(parsed.PORT + ':' + typeof parsed.PORT);
+console.log(JSON.stringify(parsed.MESSAGE));
+console.log(JSON.stringify(parsed.EMPTY));
+console.log(parsed.LITERAL);
+console.log(globalThis.Object.keys(parsed).join(','));
+const special = parse('__proto__=safe\nconstructor=ordinary\nZ=last\nA=first');
+console.log(globalThis.Object.getPrototypeOf(special) === globalThis.Object.prototype);
+console.log(globalThis.Object.prototype.hasOwnProperty.call(special, '__proto__'));
+console.log(special.constructor);
+console.log(globalThis.Object.keys(special).join(','));
+console.log(JSON.stringify(parse('A="unclosed # literal\nB=next')));
+console.log(JSON.stringify(parse('A="one\r\ntwo"\r\nB=three')));
+console.log(globalThis.Object.keys(parse('\uE000=bmp\n\u{10000}=astral')).join(':'));
+try { parse(7); } catch (error) { console.log(error.name + ':' + error.code); }
+console.log(JSON.stringify(parse('FRESH=one')));
+console.log(JSON.stringify(parse('FRESH=two')));
+"#;
+    let expected = vec![
+        "4000:string",
+        r#""first\nsecond # literal""#,
+        r#""""#,
+        "${HOME}",
+        "EMPTY,LITERAL,MESSAGE,PORT",
+        "true",
+        "false",
+        "ordinary",
+        "A,Z,constructor",
+        r#"{"A":"\"unclosed # literal","B":"next"}"#,
+        r#"{"A":"one\ntwo","B":"three"}"#,
+        "\u{E000}:\u{10000}",
+        "TypeError:ERR_INVALID_ARG_TYPE",
+        r#"{"FRESH":"one"}"#,
+        r#"{"FRESH":"two"}"#,
+    ];
+    for (preamble, goal) in [
+        ("const { parseEnv: parse } = require('util');", "script"),
+        ("const { parseEnv: parse } = require('node:util');", "script"),
+        ("import { parseEnv as parse } from 'node:util';", "module"),
+        ("import util from 'util'; const parse = util.parseEnv;", "module"),
+    ] {
+        assert_eq!(run_util_program(preamble, goal, body), expected);
+    }
+}

@@ -190,6 +190,114 @@
   function toUSVString(input) {
     return String(input).toWellFormed();
   }
+  // util.parseEnv is a content parser, not process.loadEnvFile: it must not
+  // read files, mutate process.env, expand variables or execute shell text.
+  // The scanner follows Node's .env grammar and the Node 22 compatibility
+  // oracle (including permissive keys and recovery from an unclosed quote).
+  function envWhitespace(character) {
+    return character === ' ' || character === '\t' || character === '\n';
+  }
+  function envTrim(text) {
+    var start = 0;
+    var end = text.length;
+    while (start < end && envWhitespace(text[start])) { start++; }
+    while (end > start && envWhitespace(text[end - 1])) { end--; }
+    return text.slice(start, end);
+  }
+  function envKeyOrder(a, b) {
+    // Node returns keys in UTF-8 lexical order, i.e. scalar order for
+    // well-formed strings, not UTF-16 order across the BMP boundary.
+    var ai = 0;
+    var bi = 0;
+    while (ai < a.length && bi < b.length) {
+      var ac = a.codePointAt(ai);
+      var bc = b.codePointAt(bi);
+      if (ac !== bc) { return ac < bc ? -1 : 1; }
+      ai += ac > 65535 ? 2 : 1;
+      bi += bc > 65535 ? 2 : 1;
+    }
+    return (ai < a.length ? 1 : 0) - (bi < b.length ? 1 : 0);
+  }
+  function parseEnv(content) {
+    if (typeof content !== 'string') {
+      throw invalidArgType('content', 'string', content);
+    }
+    // The reference parses UTF-8 and removes CR bytes, including inside
+    // quotes. Repair unpaired surrogates just as that UTF-8 boundary does.
+    var text = envTrim(content.toWellFormed().replace(/\r/g, ''));
+    var entries = Object.create(null);
+    var cursor = 0;
+    var untrimmedContinuation = false;
+    while (cursor < text.length) {
+      var beforeIndent = cursor;
+      while (cursor < text.length && envWhitespace(text[cursor])) {
+        if (text[cursor] === '\n') { beforeIndent = cursor + 1; }
+        cursor++;
+      }
+      var directComment = beforeIndent === cursor;
+      if (cursor === text.length) { break; }
+      var lineEnd = text.indexOf('\n', cursor);
+      if (lineEnd === -1) { lineEnd = text.length; }
+      // Node 22's comment, quoted-value and empty-value continuations check
+      // '#' before stripping the next line's indentation. Preserve that
+      // observable permissive-key quirk without changing normal comments.
+      if (text[cursor] === '#' && (!untrimmedContinuation || directComment)) {
+        cursor = lineEnd + 1;
+        untrimmedContinuation = true;
+        continue;
+      }
+      untrimmedContinuation = false;
+      // Bound the separator search to this line. Repeated malformed lines
+      // must not rescan the entire remaining file for a distant '='.
+      var line = text.slice(cursor, lineEnd);
+      var equals = line.indexOf('=');
+      if (equals === -1) { cursor = lineEnd + 1; continue; }
+      var key = envTrim(line.slice(0, equals));
+      if (key.slice(0, 7) === 'export ') { key = envTrim(key.slice(7)); }
+      var start = cursor + equals + 1;
+      cursor = lineEnd + 1;
+      var value = '';
+      if (start < text.length && text[start] !== '\n') {
+        // An immediately empty value stays empty. Otherwise the reference
+        // also skips newlines following leading spaces/tabs after the '='.
+        while (start < text.length && envWhitespace(text[start])) { start++; }
+        if (key === '' && start < text.length) { cursor = start; continue; }
+        var quote = text[start];
+        var close = -1;
+        if (quote === '"' || quote === "'" || quote === '`') {
+          close = text.indexOf(quote, start + 1);
+        }
+        if (close !== -1) {
+          value = text.slice(start + 1, close);
+          if (quote === '"') { value = value.replace(/\\n/g, '\n'); }
+          lineEnd = text.indexOf('\n', close + 1);
+          untrimmedContinuation = true;
+        } else {
+          lineEnd = text.indexOf('\n', start);
+          if (lineEnd === -1) { lineEnd = text.length; }
+          value = text.slice(start, lineEnd);
+          var comment = value.indexOf('#');
+          if (comment !== -1 && quote !== '"' && quote !== "'" && quote !== '`') {
+            value = value.slice(0, comment);
+          }
+          if (quote !== '"' && quote !== "'" && quote !== '`') { value = envTrim(value); }
+        }
+        cursor = lineEnd === -1 ? text.length : lineEnd + 1;
+      } else {
+        untrimmedContinuation = true;
+      }
+      entries[key] = value;
+    }
+    var result = {};
+    var keys = Object.keys(entries).sort(envKeyOrder);
+    for (var i = 0; i < keys.length; i++) {
+      // Ordinary property assignment is intentional: Node's returned object
+      // has Object.prototype and observes inherited setters. The private
+      // collection above never does, and all published values are strings.
+      result[keys[i]] = entries[keys[i]];
+    }
+    return result;
+  }
   // util.parseArgs (bd-9vouw.441): Node v22's lib/internal/util/parse_args
   // algorithm. Without `args` it parses no arguments: frankenctl passes the
   // program none (Node would read process.argv).
@@ -831,6 +939,7 @@
     debug: debuglog,
     isDeepStrictEqual: isDeepStrictEqual,
     parseArgs: parseArgs,
+    parseEnv: parseEnv,
     styleText: styleText,
     stripVTControlCharacters: stripVTControlCharacters,
     toUSVString: toUSVString,

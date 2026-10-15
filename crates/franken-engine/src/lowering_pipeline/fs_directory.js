@@ -10,6 +10,7 @@
   const lstat = fs.lstatSync;
   const PromiseClass = Promise;
   const promiseThen = Promise.prototype.then;
+  const dispatch = queueMicrotask;
   const apply = Reflect.apply;
   const define = Object.defineProperty;
   const create = Object.create;
@@ -31,7 +32,18 @@
   function closed() { return error('ERR_DIR_CLOSED', 'Directory handle was closed'); }
   function concurrent() { return error('ERR_DIR_CONCURRENT_OPERATION', 'A directory operation is already pending'); }
   function limit() { return error('ERR_FS_DIR_LIMIT', 'Directory traversal resource limit exceeded'); }
-  function unsupported() { return error('ERR_FS_DIR_UNSUPPORTED', 'Directory snapshots support UTF-8 string paths, default buffering, and sync or Promise operations'); }
+  function unsupported() { return error('ERR_FS_DIR_UNSUPPORTED', 'Directory snapshots support UTF-8 string paths and default buffering'); }
+  function callbackArgument(callback) {
+    if (typeof callback !== 'function') throw invalid('callback');
+  }
+  function callbackFailure(failure) {
+    // Error-first completion cannot represent a falsy thrown value as failure.
+    // Preserve that value without accidentally publishing successful EOF.
+    if (failure) return failure;
+    const wrapped = error('EIO', 'Directory operation failed');
+    property(wrapped, 'cause', failure);
+    return wrapped;
+  }
   function owner(value) {
     const state = owners === undefined ? undefined : apply(weakGet, owners, [value]);
     if (state === undefined) throw invalid('Dir receiver');
@@ -138,42 +150,78 @@
     }
   }
   function schedule(state) {
-    // One reaction drives one accepted request, not an accumulating chain of
-    // promises retaining every earlier result. Queued reads/close are FIFO.
-    apply(promiseThen, new PromiseClass(function (resolve) { resolve(); }), [function () {
+    // One native job drives one accepted request across BOTH public APIs.
+    // Callback reads allocate no Promise, and no completed prefix is retained.
+    // The busy request stays counted through callback delivery. Reentrant
+    // asynchronous reads can queue; synchronous reads/closes must not race it.
+    dispatch(function () {
       const request = state.head;
       state.head = request.next;
       if (state.head === undefined) state.tail = undefined;
+      let value;
+      let failed = false;
+      let failure;
       try {
         if (request.close) {
           if (state.closed) throw closed();
-          release(state); request.resolve();
-        } else request.resolve(nextEntry(state));
-      } catch (failure) { request.reject(failure); }
-      state.pending--;
-      if (state.head !== undefined) schedule(state);
-    }]);
-  }
-  function enqueue(state, closing) {
-    if (!closing && state.pending >= MAX_PENDING) throw limit();
-    if (closing) state.closing = true;
-    return new PromiseClass(function (resolve, reject) {
-      const request = { close: closing, resolve: resolve, reject: reject, next: undefined };
-      if (state.tail === undefined) state.head = request; else state.tail.next = request;
-      state.tail = request;
-      if (state.pending++ === 0) schedule(state);
+          release(state);
+        } else value = nextEntry(state);
+      } catch (thrown) { failed = true; failure = thrown; }
+      // Guest callbacks run outside the provider catch. Throwing must not
+      // invoke a callback twice or strand already accepted work in the queue.
+      try {
+        if (request.resolve !== undefined) {
+          if (failed) request.reject(failure); else request.resolve(value);
+        }
+        if (request.callback !== undefined) {
+          apply(request.callback, undefined, failed ? [callbackFailure(failure)] :
+            request.close ? [null] : [null, value]);
+        }
+      } finally {
+        state.pending--;
+        if (state.head !== undefined) schedule(state);
+      }
     });
   }
-  function read(state) {
-    if (state.closed || state.closing) throw closed();
-    return enqueue(state, false);
+  function enqueue(state, closing, callback) {
+    if (!closing && state.pending >= MAX_PENDING) throw limit();
+    const request = { close: closing, callback: callback, resolve: undefined,
+      reject: undefined, next: undefined };
+    let promise;
+    if (callback === undefined || closing) {
+      promise = new PromiseClass(function (resolve, reject) {
+        request.resolve = resolve; request.reject = reject;
+      });
+    }
+    if (closing) {
+      state.closing = true;
+      // An iterator finishing concurrently joins the very same close even
+      // when the caller selected callback completion. Observe its rejection
+      // internally; the callback still receives the original failure.
+      state.closePromise = promise;
+      if (callback !== undefined) apply(promiseThen, promise, [undefined, function () {}]);
+    }
+    if (state.tail === undefined) state.head = request; else state.tail.next = request;
+    state.tail = request;
+    if (state.pending++ === 0) schedule(state);
+    return callback === undefined ? promise : undefined;
   }
-  function close(state) {
+  function read(state, callback) {
+    if (state.closed || state.closing) throw closed();
+    if (callback !== undefined) callbackArgument(callback);
+    return enqueue(state, false, callback);
+  }
+  function close(state, callback) {
+    if (callback !== undefined) callbackArgument(callback);
     // Node read() throws for a closed Dir; close() instead rejects its Promise.
-    if (state.closed || state.closing) return new PromiseClass(function (resolve, reject) { reject(closed()); });
-    const promise = enqueue(state, true);
-    state.closePromise = promise;
-    return promise;
+    if (state.closed || state.closing) {
+      if (callback !== undefined) {
+        dispatch(function () { apply(callback, undefined, [closed()]); });
+        return;
+      }
+      return new PromiseClass(function (resolve, reject) { reject(closed()); });
+    }
+    return enqueue(state, true, callback);
   }
   class Dir {
     constructor(key, state) {
@@ -194,8 +242,8 @@
       if (state.closed) throw closed();
       release(state);
     }
-    read() { if (arguments.length !== 0) throw unsupported(); return read(owner(this)); }
-    close() { if (arguments.length !== 0) throw unsupported(); return close(owner(this)); }
+    read(callback) { return read(owner(this), callback); }
+    close(callback) { return close(owner(this), callback); }
     [asyncIterator]() {
       const state = owner(this);
       let done = false;
@@ -238,6 +286,9 @@
   function opendirSync(input, settings) {
     input = path(input);
     const recursive = options(settings);
+    return openDirectory(input, recursive);
+  }
+  function openDirectory(input, recursive) {
     const physical = path(realpath(input));
     const state = { path: input, recursive: recursive, closed: false, closing: false,
       failed: false, failure: undefined, frame: undefined, descend: undefined,
@@ -247,6 +298,22 @@
   }
   function opendir(input, settings) {
     return new PromiseClass(function (resolve) { resolve(opendirSync(input, settings)); });
+  }
+  function opendirCallback(input, settings, callback) {
+    if (typeof settings === 'function') { callback = settings; settings = undefined; }
+    callbackArgument(callback);
+    input = path(input);
+    const recursive = options(settings);
+    // Validate and capture before scheduling, but acquire no snapshot before
+    // the job runs. Replacing public fs methods cannot redirect this request.
+    dispatch(function () {
+      let dir;
+      let failed = false;
+      let failure;
+      try { dir = openDirectory(input, recursive); }
+      catch (thrown) { failed = true; failure = thrown; }
+      apply(callback, undefined, failed ? [callbackFailure(failure)] : [null, dir]);
+    });
   }
 
   // File discovery uses the same captured directory records and host effects
@@ -632,6 +699,7 @@
   }
   property(fs, 'Dir', Dir);
   property(fs, 'opendirSync', opendirSync);
+  property(fs, 'opendir', opendirCallback);
   property(fs.promises, 'opendir', opendir);
   property(fs, 'globSync', globSync);
   property(fs, 'glob', globCallback);

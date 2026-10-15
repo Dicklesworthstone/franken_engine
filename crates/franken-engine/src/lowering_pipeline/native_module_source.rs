@@ -43,6 +43,12 @@ impl NativeModuleSource {
             })
     }
 
+    /// Test-only observation of this exact source's production parse path.
+    #[cfg(test)]
+    pub(super) fn parse_attempt_count(&self) -> usize {
+        self.parse_attempts.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     fn parse(&self) -> Result<Expression, ()> {
         #[cfg(test)]
         self.parse_attempts

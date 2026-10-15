@@ -7,17 +7,25 @@
 use std::collections::BTreeSet;
 
 use super::super::with_statement::{Outcome, Walk, walk_expression};
-use super::LoweringPipelineError;
+use super::{LoweringPipelineError, NativeModuleSource};
 use crate::ast::{
-    BindingPattern, Expression, ParseGoal, SourceSpan, Statement, SyntaxTree,
+    BindingPattern, Expression, SourceSpan, Statement, SyntaxTree,
     VariableDeclarationKind,
 };
+#[cfg(test)]
+use crate::ast::ParseGoal;
+#[cfg(test)]
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
 #[path = "stream_web_bridge.rs"]
 mod stream_web_bridge;
 
 const SOURCE: &str = include_str!("native_module_loader.js");
+// One immutable template for every builtin wrapper, including bridge-private
+// dependencies. Cache syntax BEFORE inserting a program's initializer; each
+// request still receives private syntax and creates private execution state.
+static LOADER_SOURCE: NativeModuleSource =
+    NativeModuleSource::new("franken:native-module-loader", SOURCE);
 const INITIALIZER: &str = "__franken_native_module_initializer";
 
 fn invalid() -> LoweringPipelineError {
@@ -90,20 +98,7 @@ impl Walk for ModuleReferences<'_> {
 /// not stringify the expression: reserved names, spans and intrinsic identity
 /// must survive the transform. The source template is never guest-controlled.
 pub(super) fn deferred(initializer: Expression) -> Result<Expression, LoweringPipelineError> {
-    let tree = CanonicalEs2020Parser
-        .parse_with_options(
-            ParserSource {
-                label: "franken:native-module-loader".into(),
-                text: SOURCE.into(),
-            },
-            ParseGoal::Script,
-            &ParserOptions::default(),
-        )
-        .map_err(|_| invalid())?;
-    let [Statement::Expression(statement)] = tree.body.as_slice() else {
-        return Err(invalid());
-    };
-    let mut expression = statement.expression.clone();
+    let mut expression = LOADER_SOURCE.expression().map_err(|_| invalid())?;
     let mut replacement = InitializerReplacement(Some(initializer));
     replacement.expression(&mut expression)?;
     if replacement.0.is_some() {
@@ -343,5 +338,105 @@ mod rewrite_tests {
             ModuleReferences(&bindings).expression(&mut value).unwrap();
             assert_eq!(value, Expression::Identifier(intrinsic.into()));
         }
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    use std::sync::Barrier;
+
+    fn fresh_template() -> Expression {
+        let tree = CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: "franken:native-module-loader".into(),
+                    text: SOURCE.into(),
+                },
+                ParseGoal::Script,
+                &ParserOptions::default(),
+            )
+            .expect("independent template parse");
+        let [Statement::Expression(statement)] = tree.body.as_slice() else {
+            panic!("one template expression");
+        };
+        statement.expression.clone()
+    }
+
+    fn fresh_deferred(initializer: Expression) -> Expression {
+        let mut expression = fresh_template();
+        let mut replacement = InitializerReplacement(Some(initializer));
+        replacement.expression(&mut expression).unwrap();
+        assert!(replacement.0.is_none());
+        expression
+    }
+
+    #[test]
+    fn cached_wrappers_match_fresh_parses_without_caching_initializers() {
+        let pristine = fresh_template();
+        for index in 0..32 {
+            let initializer = Expression::Call {
+                callee: Box::new(Expression::Identifier(format!("%probe_{index}"))),
+                arguments: vec![
+                    Expression::StringLiteral(format!("payload-{index}").into()),
+                    // A placeholder inside supplied syntax remains opaque.
+                    Expression::Identifier(INITIALIZER.into()),
+                ],
+                span: Some(SourceSpan::new(10, 20, 2, 1, 2, 11)),
+            };
+            assert_eq!(
+                deferred(initializer.clone()).unwrap(),
+                fresh_deferred(initializer),
+            );
+            assert_eq!(LOADER_SOURCE.expression().unwrap(), pristine);
+        }
+        // Count actual parser attempts on the production template, not calls
+        // to a model or a second test-only cache. Parallel tests may use it.
+        assert_eq!(LOADER_SOURCE.parse_attempt_count(), 1);
+    }
+
+    #[test]
+    fn parallel_wrappers_keep_distinct_payloads_with_one_template_parse() {
+        let barrier = Barrier::new(8);
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..8)
+                .map(|worker| {
+                    let barrier = &barrier;
+                    scope.spawn(move || {
+                        barrier.wait();
+                        for index in 0..8 {
+                            let initializer = Expression::StringLiteral(
+                                format!("worker-{worker}-module-{index}").into(),
+                            );
+                            assert_eq!(
+                                deferred(initializer.clone()).unwrap(),
+                                fresh_deferred(initializer),
+                            );
+                        }
+                    })
+                })
+                .collect();
+            for handle in handles {
+                handle.join().expect("parallel module lowering");
+            }
+        });
+        assert_eq!(LOADER_SOURCE.parse_attempt_count(), 1);
+        assert_eq!(LOADER_SOURCE.expression().unwrap(), fresh_template());
+    }
+
+    #[test]
+    fn mutating_a_wrapper_does_not_change_later_or_nested_wrappers() {
+        let initializer = Expression::Identifier("%private_dependency".into());
+        let expected = fresh_deferred(initializer.clone());
+        let mut changed = deferred(initializer.clone()).unwrap();
+        let Expression::Call { arguments, .. } = &mut changed else {
+            panic!("module wrapper call");
+        };
+        arguments.push(Expression::StringLiteral("caller-local".into()));
+        assert_ne!(changed, expected);
+        assert_eq!(deferred(initializer).unwrap(), expected);
+        assert_eq!(deferred(changed.clone()).unwrap(), fresh_deferred(changed));
+        assert_eq!(LOADER_SOURCE.expression().unwrap(), fresh_template());
+        assert_eq!(LOADER_SOURCE.parse_attempt_count(), 1);
     }
 }

@@ -6,6 +6,7 @@
 
 use super::*;
 
+mod raw_validation;
 mod reachable;
 
 /// Which edges a reachable-label walk follows.
@@ -379,17 +380,22 @@ impl InterpreterCore {
             }
         };
         self.check_string_limit(text.len())?;
-        let units = text.code_units_vec();
-        let padded =
-            |unit: Option<&u16>| unit.is_none_or(|unit| matches!(unit, 0x09 | 0x0A | 0x0D | 0x20));
-        if padded(units.first())
-            || padded(units.last())
-            || matches!(units.first(), Some(0x7B | 0x5B))
-        {
-            return self.json_syntax_error(0);
+        if !self.json_raw_text_is_valid(&text)? {
+            // Retain the established parser's exact SyntaxError diagnostic for
+            // rejected text. Valid primitives never allocate an input-sized
+            // UTF-16 buffer or a decoded value merely to discard it.
+            let units = text.code_units_vec();
+            let padded =
+                |unit: Option<&u16>| unit.is_none_or(|unit| matches!(unit, 0x09 | 0x0A | 0x0D | 0x20));
+            if padded(units.first())
+                || padded(units.last())
+                || matches!(units.first(), Some(0x7B | 0x5B))
+            {
+                return self.json_syntax_error(0);
+            }
+            self.json_parse_document(&units)?;
+            drop(units);
         }
-        self.json_parse_document(&units)?;
-        drop(units);
         let label = self.clone_dominant_label_with_temporary_budget(
             &self.join_arg_range_label(args)?,
             &self.json_parse_context_label()?,

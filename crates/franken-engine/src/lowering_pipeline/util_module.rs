@@ -442,10 +442,12 @@ const STREAM_CONSUMERS_GLOBALS: [&str; 8] = [
     "TextDecoder",
 ];
 
-const WEB_STREAMS_GLOBALS: [&str; 13] = [
-    "AbortController", "AbortSignal", "EventTarget", "Object", "Promise",
-    "RangeError", "Reflect", "String", "Symbol", "TextDecoder", "TextEncoder",
-    "TypeError", "WeakMap",
+const WEB_STREAMS_GLOBALS: [&str; 26] = [
+    "AbortController", "AbortSignal", "ArrayBuffer", "BigInt64Array", "BigUint64Array",
+    "DataView", "EventTarget", "Float32Array", "Float64Array", "Int8Array", "Int16Array",
+    "Int32Array", "Object", "Promise", "RangeError", "Reflect", "String", "Symbol",
+    "TextDecoder", "TextEncoder", "TypeError", "Uint8Array", "Uint8ClampedArray",
+    "Uint16Array", "Uint32Array", "WeakMap",
 ];
 
 const STREAM_GLOBALS: [&str; 21] = [

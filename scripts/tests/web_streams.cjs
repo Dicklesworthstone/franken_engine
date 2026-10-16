@@ -160,9 +160,17 @@ test('record Node 22 callback-coercion and mutable-sync-next differences, not pa
   await assert.rejects(collect(mutable(reference)),/replacement/);
   assert.deepEqual(await collect(mutable(api)),[1]);
 });
-test('candidate refuses byte/BYOB contracts instead of pretending default semantics', () => {
-  const api=candidate();assert.throws(()=>new api.ReadableStream({type:'bytes'}),RangeError);
-  assert.throws(()=>new api.ReadableStream().getReader({mode:'byob'}),RangeError);
+test('byte streams transfer queued bytes while default streams reject BYOB readers', async () => {
+  await both(async api => {
+    const input=new Uint8Array([40,42]);
+    const s=new api.ReadableStream({type:'bytes',start(c){c.enqueue(input);c.close();}});
+    assert.equal(input.byteLength,0);
+    const r=s.getReader({mode:'byob'}),item=await r.read(new Uint8Array(4));
+    assert.equal(item.done,false);assert.deepEqual(Array.from(item.value),[40,42]);
+    assert.equal((await r.read(new Uint8Array(1))).done,true);r.releaseLock();
+    assert.throws(()=>new api.ReadableStream().getReader({mode:'byob'}),TypeError);
+    return s.locked;
+  });
 });
 test('long pull/read workload retains only live queue entries', async () => {
   await both(async api => {

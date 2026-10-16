@@ -1,9 +1,10 @@
 (function () {
   'use strict';
-  // Default-mode WHATWG streams, executed by the native interpreter. Queues,
+  // WHATWG streams, executed by the native interpreter. Queues,
   // callbacks and promise jobs use its ordinary heap/work accounting. There
   // is no host stream implementation, I/O permission or external evaluator.
-  // Byte/BYOB streams and transferable streams are deliberately unsupported.
+  // Transferable stream objects remain unsupported; byte buffers are moved
+  // through the same native ArrayBuffer transfer primitive as guest buffers.
   const P = Promise;
   const resolvePromise = Promise.resolve;
   const promiseThen = Promise.prototype.then;
@@ -37,6 +38,35 @@
   const transforms = new Weak();
   const transformControllers = new Weak();
   const token = {};
+  const byteControllers = new Weak();
+  const byobRequests = new Weak();
+  const Bytes = Uint8Array;
+  const Buffers = ArrayBuffer;
+  const isView = ArrayBuffer.isView;
+  const transferBuffer = ArrayBuffer.prototype.transfer;
+  const bufferLength = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'byteLength').get;
+  const typedPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+  const typedBuffer = Object.getOwnPropertyDescriptor(typedPrototype, 'buffer').get;
+  const typedOffset = Object.getOwnPropertyDescriptor(typedPrototype, 'byteOffset').get;
+  const typedLength = Object.getOwnPropertyDescriptor(typedPrototype, 'byteLength').get;
+  const typedName = Object.getOwnPropertyDescriptor(typedPrototype, tagKey).get;
+  const dataBuffer = Object.getOwnPropertyDescriptor(DataView.prototype, 'buffer').get;
+  const dataOffset = Object.getOwnPropertyDescriptor(DataView.prototype, 'byteOffset').get;
+  const dataLength = Object.getOwnPropertyDescriptor(DataView.prototype, 'byteLength').get;
+  const copyBytes = Uint8Array.prototype.set;
+  const viewKinds = create(null);
+  viewKinds.Int8Array = { ctor: Int8Array, element: 1 };
+  viewKinds.Uint8Array = { ctor: Bytes, element: 1 };
+  viewKinds.Uint8ClampedArray = { ctor: Uint8ClampedArray, element: 1 };
+  viewKinds.Int16Array = { ctor: Int16Array, element: 2 };
+  viewKinds.Uint16Array = { ctor: Uint16Array, element: 2 };
+  viewKinds.Int32Array = { ctor: Int32Array, element: 4 };
+  viewKinds.Uint32Array = { ctor: Uint32Array, element: 4 };
+  viewKinds.Float32Array = { ctor: Float32Array, element: 4 };
+  viewKinds.Float64Array = { ctor: Float64Array, element: 8 };
+  viewKinds.BigInt64Array = { ctor: BigInt64Array, element: 8 };
+  viewKinds.BigUint64Array = { ctor: BigUint64Array, element: 8 };
+  viewKinds.DataView = { ctor: DataView, element: 1 };
 
   function invalid(message) { return new NativeTypeError(message); }
   function resolved(value) { return apply(resolvePromise, P, [value]); }
@@ -116,13 +146,13 @@
     if (s.reader !== undefined) {
       const r = get(readers, s.reader, 'reader');
       r.closed.resolve();
-      while (r.requests.length !== 0) shift(r.requests).resolve(result(undefined, true));
+      if (!r.byob) while (r.requests.length !== 0) shift(r.requests).resolve(result(undefined, true));
     }
   }
   function errorReadable(s, error) {
     if (s.state !== 'readable') return;
     s.state = 'errored'; s.error = error;
-    clear(s.queue); releaseSource(s);
+    clear(s.queue); clearPullIntos(s); releaseSource(s);
     if (s.reader !== undefined) {
       const r = get(readers, s.reader, 'reader');
       r.closed.reject(error);
@@ -145,6 +175,7 @@
     }, function (error) { s.pulling = false; errorReadable(s, error); });
   }
   function enqueue(s, value) {
+    if (s.byte) { enqueueByte(s, value); return; }
     if (!canEnqueue(s)) throw invalid('Stream is closed or closing');
     if (s.reader !== undefined && get(readers, s.reader, 'reader').requests.length !== 0) {
       shift(get(readers, s.reader, 'reader').requests).resolve(result(value, false));
@@ -164,7 +195,11 @@
     if (s.state === 'closed') return resolved();
     if (s.state === 'errored') return rejected(s.error);
     const algorithm = s.cancel, source = s.source;
-    clear(s.queue); closeReadable(s);
+    clear(s.queue); closeReadable(s); clearPullIntos(s);
+    if (s.reader !== undefined) {
+      const r = get(readers, s.reader, 'reader');
+      while (r.requests.length !== 0) shift(r.requests).resolve(result(undefined, true));
+    }
     return then(promised(algorithm, source, [reason]), function () {});
   }
   function read(r, receive) {
@@ -178,10 +213,12 @@
     }
     if (s.state === 'errored') return rejected(s.error);
     if (s.queue.length !== 0) {
-      const value = shift(s.queue);
+      const entry = shift(s.queue);
+      const value = s.byte ? byteValue(entry) : entry;
       const item = result(value, false);
       if (receive !== undefined) receive(item);
-      if (s.closeRequested && s.queue.length === 0) closeReadable(s); else pull(s);
+      if (s.byte) byteDrain(s);
+      else if (s.closeRequested && s.queue.length === 0) closeReadable(s); else pull(s);
       return resolved(item);
     }
     const request = deferred(false);
@@ -192,6 +229,13 @@
         publish(item);
       };
     }
+    if (s.byte && s.autoAllocate !== undefined) {
+      try {
+        const buffer = new Buffers(s.autoAllocate);
+        push(s.pullIntos, { buffer: buffer, capacity: s.autoAllocate, offset: 0,
+          length: s.autoAllocate, filled: 0, minimum: 1, ctor: Bytes, element: 1, kind: 'default' }, 0);
+      } catch (error) { return rejected(error); }
+    }
     push(r.requests, request, 0); pull(s);
     return request.promise;
   }
@@ -201,9 +245,288 @@
     const error = invalid('Reader lock is released');
     if (!r.closed.pending) r.closed = deferred(true);
     r.closed.reject(error);
+    if (s.byte && s.pullIntos.length !== 0) {
+      // A source may still own the first request's exposed view. Preserve that
+      // descriptor as an orphan until it responds/enqueues; reject all old
+      // reader promises now without donating their buffers to a new reader.
+      const head = s.pullIntos.head;
+      head.value.kind = 'none'; head.next = undefined;
+      s.pullIntos.tail = head; s.pullIntos.length = 1; s.pullIntos.total = 0;
+    }
     s.reader = undefined; r.stream = undefined;
     while (r.requests.length !== 0) shift(r.requests).reject(error);
   }
+  // Byte streams share the ordinary stream/reader lifecycle and linked FIFO.
+  // Only queue entries and pending pull-into descriptors are specialized. All
+  // buffers, copies and transfers use the interpreter's existing intrinsics.
+  function viewInfo(view) {
+    if (!isView(view)) throw invalid('Expected an ArrayBuffer view');
+    let buffer, offset, length, name;
+    try {
+      buffer = apply(typedBuffer, view, []);
+      offset = apply(typedOffset, view, []);
+      length = apply(typedLength, view, []);
+      name = apply(typedName, view, []);
+    } catch (error) {
+      buffer = apply(dataBuffer, view, []);
+      offset = apply(dataOffset, view, []);
+      length = apply(dataLength, view, []);
+      name = 'DataView';
+    }
+    // Reject shared/detached allocations and out-of-bounds views. Never read
+    // replaceable .buffer/.byteOffset/.byteLength/.constructor properties.
+    const capacity = apply(bufferLength, buffer, []);
+    new Bytes(buffer, offset, length);
+    const kind = viewKinds[name];
+    if (kind === undefined) throw invalid('Unsupported byte view');
+    return { buffer: buffer, offset: offset, length: length, capacity: capacity,
+      ctor: kind.ctor, element: kind.element };
+  }
+  function moved(buffer) { return apply(transferBuffer, buffer, []); }
+  function byteRecord(buffer, offset, length) { return { buffer: buffer, offset: offset, length: length }; }
+  function byteValue(entry) { return new Bytes(entry.buffer, entry.offset, entry.length); }
+  function cloneBytes(buffer, offset, length) {
+    const copy = new Bytes(length);
+    apply(copyBytes, copy, [new Bytes(buffer, offset, length)]);
+    return byteRecord(apply(typedBuffer, copy, []), 0, length);
+  }
+  function invalidateRequest(s) {
+    if (s.byobRequest !== undefined) {
+      const request = get(byobRequests, s.byobRequest, 'ReadableStreamBYOBRequest');
+      request.stream = undefined; request.view = null; s.byobRequest = undefined;
+    }
+  }
+  function clearPullIntos(s) {
+    if (!s.byte) return;
+    invalidateRequest(s); clear(s.pullIntos);
+  }
+  function closeByte(s) {
+    if (s.queue.total !== 0) { s.closeRequested = true; return; }
+    if (s.pullIntos.length !== 0) {
+      const d = s.pullIntos.head.value;
+      if (d.filled % d.element !== 0) {
+        const error = invalid('Byte stream closed with an incomplete element');
+        errorReadable(s, error); throw error;
+      }
+    }
+    closeReadable(s);
+  }
+  function byteDrain(s) {
+    if (s.queue.total === 0 && s.closeRequested) closeByte(s); else pull(s);
+  }
+  function commitPullInto(s, d, done) {
+    const ctor = d.ctor;
+    const value = new ctor(moved(d.buffer), d.offset, d.filled / d.element);
+    if (s.reader !== undefined) {
+      const r = get(readers, s.reader, 'reader');
+      if (r.requests.length !== 0) shift(r.requests).resolve(result(value, done));
+    }
+  }
+  function fillPullInto(s, d) {
+    let amount = s.queue.total;
+    if (amount > d.length - d.filled) amount = d.length - d.filled;
+    const available = d.filled + amount;
+    const aligned = available - available % d.element;
+    const ready = aligned >= d.minimum;
+    if (ready) amount = aligned - d.filled;
+    while (amount !== 0) {
+      const node = s.queue.head, entry = node.value;
+      const count = amount < entry.length ? amount : entry.length;
+      apply(copyBytes, new Bytes(d.buffer, d.offset + d.filled, count),
+        [new Bytes(entry.buffer, entry.offset, count)]);
+      if (count === entry.length) shift(s.queue);
+      else { entry.offset += count; entry.length -= count; node.size -= count; s.queue.total -= count; }
+      d.filled += count; amount -= count;
+    }
+    return ready;
+  }
+  function processPullIntos(s) {
+    while (s.pullIntos.length !== 0 && s.queue.total !== 0) {
+      const d = s.pullIntos.head.value;
+      if (d.kind === 'none' || !fillPullInto(s, d)) break;
+      shift(s.pullIntos); commitPullInto(s, d, false);
+    }
+  }
+  function enqueueByte(s, chunk) {
+    const info = viewInfo(chunk);
+    if (info.length === 0 || info.capacity === 0) throw invalid('Cannot enqueue an empty byte view');
+    if (!canEnqueue(s)) throw invalid('Stream is closed or closing');
+    const entry = byteRecord(moved(info.buffer), info.offset, info.length);
+    if (s.pullIntos.length !== 0) {
+      const d = s.pullIntos.head.value;
+      d.buffer = moved(d.buffer);
+      invalidateRequest(s);
+      if (d.kind === 'none') {
+        if (d.filled !== 0) push(s.queue, cloneBytes(d.buffer, d.offset, d.filled), d.filled);
+        shift(s.pullIntos);
+      }
+    }
+    const r = s.reader === undefined ? undefined : get(readers, s.reader, 'reader');
+    if (r !== undefined && !r.byob) {
+      while (r.requests.length !== 0 && s.queue.total !== 0) {
+        shift(r.requests).resolve(result(byteValue(shift(s.queue)), false));
+      }
+      if (r.requests.length !== 0) {
+        if (s.pullIntos.length !== 0) shift(s.pullIntos);
+        shift(r.requests).resolve(result(byteValue(entry), false));
+      } else push(s.queue, entry, entry.length);
+    } else {
+      push(s.queue, entry, entry.length);
+      if (r !== undefined) processPullIntos(s);
+    }
+    pull(s);
+  }
+  function unsigned(value, name) {
+    const number = +value;
+    if (!(number >= 0) || number > 9007199254740991) throw new NativeRangeError('Invalid ' + name);
+    return number - number % 1;
+  }
+  function descriptor(info, minimum, kind) {
+    return { buffer: moved(info.buffer), capacity: info.capacity, offset: info.offset,
+      length: info.length, filled: 0, minimum: minimum * info.element,
+      ctor: info.ctor, element: info.element, kind: kind };
+  }
+  function readInto(r, view, options) {
+    const info = viewInfo(view);
+    if (info.length === 0 || info.capacity === 0) throw invalid('Cannot read into an empty byte view');
+    const minimum = dictionary(options, 'options').min;
+    // Node's BYOB extension accepts a positive integer number, not a coerced
+    // dictionary value. Reading the option may still reenter/release below.
+    const min = minimum === undefined ? 1 : minimum;
+    if (typeof min !== 'number' || !(min > 0) || min % 1 !== 0) throw invalid('Invalid min');
+    if (min > info.length / info.element) throw new NativeRangeError('Invalid min');
+    if (r.stream === undefined) throw invalid('Reader lock is released');
+    const s = get(streams, r.stream, 'ReadableStream');
+    s.disturbed = true;
+    if (s.state === 'errored') return rejected(s.error);
+    const d = descriptor(info, min, 'byob');
+    if (s.pullIntos.length === 0 && s.state === 'closed') {
+      const ctor = d.ctor;
+      return resolved(result(new ctor(d.buffer, d.offset, 0), true));
+    }
+    const request = deferred(false);
+    if (s.pullIntos.length === 0 && s.queue.total !== 0) {
+      if (fillPullInto(s, d)) {
+        const ctor = d.ctor;
+        const value = new ctor(moved(d.buffer), d.offset, d.filled / d.element);
+        byteDrain(s); request.resolve(result(value, false)); return request.promise;
+      }
+      if (s.closeRequested) {
+        const error = invalid('Byte stream ended before the minimum read');
+        errorReadable(s, error); request.reject(error); return request.promise;
+      }
+    }
+    push(s.pullIntos, d, 0); push(r.requests, request, 0); pull(s);
+    return request.promise;
+  }
+  function respondBytes(s, count) {
+    const d = s.pullIntos.head.value;
+    invalidateRequest(s);
+    if (s.state === 'closed') {
+      if (d.kind === 'none') shift(s.pullIntos);
+      if (s.reader !== undefined && get(readers, s.reader, 'reader').byob) {
+        while (s.pullIntos.length !== 0) commitPullInto(s, shift(s.pullIntos), true);
+      } else clear(s.pullIntos);
+      return;
+    }
+    d.filled += count;
+    if (d.kind === 'none') {
+      if (d.filled !== 0) push(s.queue, cloneBytes(d.buffer, d.offset, d.filled), d.filled);
+      shift(s.pullIntos); processPullIntos(s);
+    } else if (d.filled >= d.minimum) {
+      shift(s.pullIntos);
+      const remainder = d.filled % d.element;
+      if (remainder !== 0) {
+        push(s.queue, cloneBytes(d.buffer, d.offset + d.filled - remainder, remainder), remainder);
+        d.filled -= remainder;
+      }
+      commitPullInto(s, d, false); processPullIntos(s);
+    }
+    pull(s);
+  }
+  function byobState(value) {
+    const r = get(readers, value, 'ReadableStreamBYOBReader');
+    if (!r.byob) throw invalid('Invalid ReadableStreamBYOBReader receiver');
+    return r;
+  }
+  class ReadableStreamBYOBRequest {
+    constructor(key, state) {
+      if (key !== token) throw invalid('Illegal constructor');
+      set(byobRequests, this, state);
+    }
+    get view() { return get(byobRequests, this, 'ReadableStreamBYOBRequest').view; }
+    respond(bytesWritten) {
+      const request = get(byobRequests, this, 'ReadableStreamBYOBRequest');
+      const count = unsigned(bytesWritten, 'bytesWritten');
+      const s = request.stream;
+      if (s === undefined) throw invalid('BYOB request is no longer active');
+      const d = s.pullIntos.head.value;
+      if (s.state === 'closed' ? count !== 0 : count === 0) throw invalid('Invalid byte count for stream state');
+      if (count > d.length - d.filled) throw new NativeRangeError('Byte count exceeds request');
+      d.buffer = moved(d.buffer); respondBytes(s, count);
+    }
+    respondWithNewView(view) {
+      const request = get(byobRequests, this, 'ReadableStreamBYOBRequest');
+      const info = viewInfo(view), s = request.stream;
+      if (s === undefined) throw invalid('BYOB request is no longer active');
+      const d = s.pullIntos.head.value;
+      if (s.state === 'closed' ? info.length !== 0 : info.length === 0) throw invalid('Invalid view length for stream state');
+      if (info.offset !== d.offset + d.filled || info.capacity !== d.capacity || info.length > d.length - d.filled) {
+        throw new NativeRangeError('View does not match pending byte request');
+      }
+      d.buffer = moved(info.buffer); respondBytes(s, info.length);
+    }
+  }
+  class ReadableByteStreamController {
+    constructor(key, state) {
+      if (key !== token) throw invalid('Illegal constructor');
+      set(byteControllers, this, state);
+    }
+    get desiredSize() {
+      const s = get(byteControllers, this, 'ReadableByteStreamController');
+      return s.state === 'errored' ? null : s.state === 'closed' ? 0 : s.highWaterMark - s.queue.total;
+    }
+    get byobRequest() {
+      const s = get(byteControllers, this, 'ReadableByteStreamController');
+      if (s.byobRequest === undefined && s.pullIntos.length !== 0) {
+        const d = s.pullIntos.head.value;
+        s.byobRequest = new ReadableStreamBYOBRequest(token,
+          { stream: s, view: new Bytes(d.buffer, d.offset + d.filled, d.length - d.filled) });
+      }
+      return s.byobRequest === undefined ? null : s.byobRequest;
+    }
+    close() {
+      const s = get(byteControllers, this, 'ReadableByteStreamController');
+      if (!canEnqueue(s)) throw invalid('Stream is closed or closing');
+      closeByte(s);
+    }
+    enqueue(chunk) { enqueueByte(get(byteControllers, this, 'ReadableByteStreamController'), chunk); }
+    error(reason) { errorReadable(get(byteControllers, this, 'ReadableByteStreamController'), reason); }
+  }
+  class ReadableStreamBYOBReader {
+    constructor(stream) {
+      const s = get(streams, stream, 'ReadableStream');
+      if (!s.byte) throw invalid('BYOB requires a byte stream');
+      if (s.reader !== undefined) throw invalid('ReadableStream is locked');
+      const r = { stream: stream, byob: true, requests: queue(), closed: deferred(true) };
+      set(readers, this, r); s.reader = this;
+      if (s.state === 'closed') r.closed.resolve();
+      else if (s.state === 'errored') r.closed.reject(s.error);
+    }
+    get closed() { try { return byobState(this).closed.promise; } catch (error) { return rejected(error); } }
+    read(view, options) {
+      try { return readInto(byobState(this), view, options); } catch (error) { return rejected(error); }
+    }
+    cancel(reason) {
+      try {
+        const r = byobState(this);
+        if (r.stream === undefined) throw invalid('Reader lock is released');
+        return cancelReadable(get(streams, r.stream, 'ReadableStream'), reason);
+      } catch (error) { return rejected(error); }
+    }
+    releaseLock() { releaseReader(byobState(this)); }
+  }
+
   class ReadableStreamDefaultController {
     constructor(key, state) {
       if (key !== token) throw invalid('Illegal constructor');
@@ -222,31 +545,36 @@
     enqueue(chunk) { enqueue(get(controllers, this, 'ReadableStreamDefaultController'), chunk); }
     error(reason) { errorReadable(get(controllers, this, 'ReadableStreamDefaultController'), reason); }
   }
+  function defaultReaderState(value) {
+    const r = get(readers, value, 'ReadableStreamDefaultReader');
+    if (r.byob) throw invalid('Invalid ReadableStreamDefaultReader receiver');
+    return r;
+  }
   class ReadableStreamDefaultReader {
     constructor(stream) {
       const s = get(streams, stream, 'ReadableStream');
       if (s.reader !== undefined) throw invalid('ReadableStream is locked');
-      const r = { stream: stream, requests: queue(), closed: deferred(true) };
+      const r = { stream: stream, byob: false, requests: queue(), closed: deferred(true) };
       set(readers, this, r); s.reader = this;
       if (s.state === 'closed') r.closed.resolve();
       else if (s.state === 'errored') r.closed.reject(s.error);
     }
     get closed() {
-      try { return get(readers, this, 'ReadableStreamDefaultReader').closed.promise; }
+      try { return defaultReaderState(this).closed.promise; }
       catch (error) { return rejected(error); }
     }
     read() {
-      try { return read(get(readers, this, 'ReadableStreamDefaultReader')); }
+      try { return read(defaultReaderState(this)); }
       catch (error) { return rejected(error); }
     }
     cancel(reason) {
       try {
-        const r = get(readers, this, 'ReadableStreamDefaultReader');
+        const r = defaultReaderState(this);
         if (r.stream === undefined) throw invalid('Reader lock is released');
         return cancelReadable(get(streams, r.stream, 'ReadableStream'), reason);
       } catch (error) { return rejected(error); }
     }
-    releaseLock() { releaseReader(get(readers, this, 'ReadableStreamDefaultReader')); }
+    releaseLock() { releaseReader(defaultReaderState(this)); }
   }
 
   // Default-stream tee shares chunk identities, not a collected copy of the
@@ -257,6 +585,7 @@
   // after completion. No public getReader/read/enqueue override participates.
   function teeReadable(source) {
     const s = get(streams, source, 'ReadableStream');
+    if (s.byte) throw invalid('Byte-stream tee is not yet supported');
     const reader = new ReadableStreamDefaultReader(source);
     const r = get(readers, reader, 'ReadableStreamDefaultReader');
     const cancellation = deferred(true);
@@ -329,14 +658,26 @@
       const cancel = method(source, 'cancel');
       const pullAlgorithm = method(source, 'pull');
       const start = method(source, 'start');
-      if (source.type !== undefined) throw new NativeRangeError('Byte streams are not supported');
-      const config = strategy(queuingStrategy, 1);
+      const type = source.type;
+      const byte = type !== undefined;
+      if (byte && `${type}` !== 'bytes') throw invalid('Invalid stream type');
+      const config = strategy(queuingStrategy, byte ? 0 : 1);
+      if (byte && config.size !== undefined) throw new NativeRangeError('Byte streams cannot use a size callback');
+      let autoAllocate;
+      if (byte) {
+        const size = source.autoAllocateChunkSize;
+        if (size !== undefined) {
+          autoAllocate = unsigned(size, 'autoAllocateChunkSize');
+          if (autoAllocate === 0) throw invalid('autoAllocateChunkSize must be positive');
+        }
+      }
       const s = { state: 'readable', error: undefined, reader: undefined,
         queue: queue(), closeRequested: false, started: false, pulling: false,
         pullAgain: false, disturbed: false, source: source, cancel: cancel,
         pull: pullAlgorithm, size: config.size, highWaterMark: config.highWaterMark,
-        controller: undefined };
-      s.controller = new ReadableStreamDefaultController(token, s);
+        controller: undefined, byte: byte, autoAllocate: autoAllocate,
+        pullIntos: byte ? queue() : undefined, byobRequest: undefined };
+      s.controller = byte ? new ReadableByteStreamController(token, s) : new ReadableStreamDefaultController(token, s);
       set(streams, this, s);
       // start is synchronous and a synchronous exception escapes construction.
       const started = invoke(start, source, [s.controller]);
@@ -347,7 +688,10 @@
     getReader(options) {
       get(streams, this, 'ReadableStream');
       const mode = dictionary(options, 'options').mode;
-      if (mode !== undefined) throw new NativeRangeError('BYOB readers are not supported');
+      if (mode !== undefined) {
+        if (`${mode}` !== 'byob') throw invalid('Invalid reader mode');
+        return new ReadableStreamBYOBReader(this);
+      }
       return new ReadableStreamDefaultReader(this);
     }
     cancel(reason) {
@@ -908,6 +1252,9 @@
   }
   function countSize() { return 1; }
   function byteSize(chunk) { return chunk.byteLength; }
+  property(ReadableByteStreamController.prototype, tagKey, 'ReadableByteStreamController');
+  property(ReadableStreamBYOBReader.prototype, tagKey, 'ReadableStreamBYOBReader');
+  property(ReadableStreamBYOBRequest.prototype, tagKey, 'ReadableStreamBYOBRequest');
   property(ReadableStream.prototype, tagKey, 'ReadableStream');
   property(ReadableStreamDefaultReader.prototype, tagKey, 'ReadableStreamDefaultReader');
   property(ReadableStreamDefaultController.prototype, tagKey, 'ReadableStreamDefaultController');
@@ -920,6 +1267,8 @@
   property(TransformStreamDefaultController.prototype, tagKey, 'TransformStreamDefaultController');
   return { ReadableStream: ReadableStream, ReadableStreamDefaultReader: ReadableStreamDefaultReader,
     ReadableStreamDefaultController: ReadableStreamDefaultController,
+    ReadableByteStreamController: ReadableByteStreamController,
+    ReadableStreamBYOBReader: ReadableStreamBYOBReader, ReadableStreamBYOBRequest: ReadableStreamBYOBRequest,
     WritableStream: WritableStream, WritableStreamDefaultWriter: WritableStreamDefaultWriter,
     WritableStreamDefaultController: WritableStreamDefaultController,
     TransformStream: TransformStream, TransformStreamDefaultController: TransformStreamDefaultController,

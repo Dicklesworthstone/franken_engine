@@ -9,12 +9,14 @@ use super::{is_line_terminator, is_word_char};
 
 mod counted;
 mod lazy;
+mod literal_repeat;
 mod literals;
 mod prefix;
 mod repetitions;
 
 use counted::CountedRepeat;
 use lazy::LazyRepeat;
+use literal_repeat::LiteralRepeat;
 use literals::LiteralBlocks;
 use prefix::StartPrefix;
 use repetitions::GreedyRepeat;
@@ -59,6 +61,18 @@ enum Frame {
     CountedLazy {
         pc: usize,
         position: usize,
+    },
+    /// One pending whole-body lazy extension, retaining the original mark.
+    LiteralLazy {
+        pc: usize,
+        position: usize,
+        old: usize,
+    },
+    /// Whole-body greedy exits, paired with the original mark below them.
+    LiteralGreedy {
+        pc: usize,
+        position: usize,
+        start: usize,
     },
     Slot {
         slot: usize,
@@ -226,6 +240,22 @@ impl Run<'_> {
                             old: self.registers[lazy.register],
                         });
                         pc = lazy.exit;
+                        continue;
+                    }
+                    let literal = LiteralRepeat::at(regexp, pc, &mut self.literal_blocks);
+                    #[cfg(test)]
+                    let literal = literal.filter(|_| !self.repetitions_disabled);
+                    if let Some(literal) = literal {
+                        #[cfg(test)]
+                        {
+                            self.repeat_dispatches += 1;
+                        }
+                        if literal.greedy {
+                            position = self.execute_literal_greedy(&literal, pc, position, stack)?;
+                        } else {
+                            self.push_literal_lazy(&literal, pc, position, stack);
+                        }
+                        pc = literal.exit;
                         continue;
                     }
                     stack.push(Frame::Alternative {
@@ -431,6 +461,16 @@ impl Run<'_> {
                                 (pc, position) = next;
                                 break;
                             }
+                        }
+                        Some(frame @ Frame::LiteralLazy { .. }) => {
+                            if let Some(next) = self.resume_literal_lazy(frame, stack)? {
+                                (pc, position) = next;
+                                break;
+                            }
+                        }
+                        Some(frame @ Frame::LiteralGreedy { .. }) => {
+                            (pc, position) = self.resume_literal_greedy(frame, stack);
+                            break;
                         }
                         Some(Frame::Alternative {
                             pc: resume,

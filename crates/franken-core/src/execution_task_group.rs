@@ -13,6 +13,8 @@
 //! With a configured host-effect scope, `close_and_drain` also waits for admitted
 //! provider calls under the same deadline. Neither proves retained-child reaping
 //! or journal finalization. Drop requests cancellation but may detach workers.
+//! A healthy batch can instead seal admission and finish without revoking its
+//! workers; a graceful wait timeout does not silently become cancellation.
 
 use std::fmt;
 use std::sync::Arc;
@@ -132,6 +134,9 @@ pub struct ExecutionTaskGroup {
     capacity: usize,
     next_id: u64,
     entries: Vec<Entry>,
+    // Admission closure is distinct from cancellation of already admitted work.
+    // Only the group owner seals; cancel-only controls retain their old meaning.
+    sealed: bool,
 }
 
 impl fmt::Debug for ExecutionTaskGroup {
@@ -142,6 +147,7 @@ impl fmt::Debug for ExecutionTaskGroup {
             .field("retained", &self.entries.len())
             .field("pending", &self.pending())
             .field("closed", &self.is_closed())
+            .field("cancelled", &self.is_cancelled())
             .field("host_effect_scope", &self.effects.is_some())
             .finish_non_exhaustive()
     }
@@ -162,6 +168,7 @@ impl ExecutionTaskGroup {
             capacity,
             next_id: 0,
             entries: Vec::new(),
+            sealed: false,
         })
     }
 
@@ -172,9 +179,24 @@ impl ExecutionTaskGroup {
         }
     }
 
+    /// Whether new starts are refused, either by sealing or by cancellation.
     pub fn is_closed(&self) -> bool {
+        self.sealed || self.is_cancelled()
+    }
+
+    /// Live cancellation/expiry of the group's instruction or effect scope.
+    /// Sealing alone does not request cancellation of admitted work.
+    pub fn is_cancelled(&self) -> bool {
         self.pool.is_revoked()
             || self.effects.as_ref().is_some_and(HostEffectWorkPool::is_revoked)
+    }
+
+    /// Permanently stop new starts while allowing admitted jobs to finish.
+    /// Sealing neither refunds credits nor releases task/result capacity. It
+    /// leaves native checkpoints and provider controls live. Call `close` to
+    /// escalate to cancellation, including after a graceful wait times out.
+    pub fn seal(&mut self) {
+        self.sealed = true;
     }
 
     /// Permanently deny new starts and request cancellation of ALL workers
@@ -383,6 +405,24 @@ impl ExecutionTaskGroup {
         let index = self.entries.iter().position(|entry| entry.id == id)?;
         self.entries[index].outcome.as_ref()?;
         self.entries.remove(index).outcome
+    }
+
+    /// Seal new starts and join the admitted batch WITHOUT cancelling it.
+    /// Native failures and panics are retained for individual collection; Ok
+    /// means every worker was joined, not that every guest succeeded. Results
+    /// continue occupying local capacity until collected.
+    ///
+    /// A timeout or invalid duration leaves the group sealed and retains all
+    /// handles/results without requesting cancellation or renewing job deadlines.
+    /// Retry with the same owner, or explicitly escalate via `close_and_join`.
+    /// This does not drain provider calls; use `finish_and_drain` for that phase.
+    pub fn finish_and_join(&mut self, timeout: Duration) -> Result<(), ExecutionTaskJoinError> {
+        let started = Instant::now();
+        self.seal();
+        let deadline = started
+            .checked_add(timeout)
+            .ok_or(ExecutionTaskJoinError::InvalidTimeout)?;
+        self.join_until(deadline)
     }
 
     /// Revoke all workers, then join under a single monotonic deadline. Retry on

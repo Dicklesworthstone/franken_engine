@@ -32,8 +32,8 @@ impl fmt::Debug for ExecutionHostBindings<'_> {
 }
 
 impl ExecutionHostBindings<'_> {
-    /// Effective absolute job deadline, already attenuated by ancestor scopes.
-    /// Native execution and both provider decorators observe this SAME deadline.
+    /// Admission deadline after ancestor attenuation. Both provider decorators
+    /// inherit it; native caller cancellation may impose an earlier deadline.
     pub fn deadline(&self) -> Option<Instant> {
         self.admission.deadline()
     }
@@ -169,6 +169,45 @@ impl ExecutionTaskGroup {
         let mut group = Self::new(parent, instruction_limit, capacity)?;
         group.effects = Some(effects);
         Ok(group)
+    }
+
+    /// Finish a healthy batch before revoking and draining its provider scope.
+    /// Seal new starts, join the native workers without cancelling them, then
+    /// close both scopes and drain admitted provider calls under the SAME
+    /// absolute deadline. Workers can still perform authorized I/O while the
+    /// native phase runs. Individual job deadlines/cancellation stay effective.
+    ///
+    /// A native wait timeout retains ownership and leaves both scopes live;
+    /// retry this method or escalate explicitly with `close_and_drain`. After
+    /// native joining succeeds, provider drain failures leave both scopes
+    /// revoked, just like `close_and_drain`. Invalid timeouts and missing effect
+    /// configuration seal admission but do not cancel currently running work.
+    /// Results, errors and spent credits are never discarded or refunded.
+    ///
+    /// Only the configured admitted-dispatch frontier is drained. This does
+    /// not certify detached work, retained-child reaping or journal finalization.
+    /// Call from the supervising host, not from a callback in the joined batch.
+    pub fn finish_and_drain(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<HostEffectSnapshot, ExecutionGroupDrainError> {
+        let started = Instant::now();
+        self.seal();
+        let deadline = started
+            .checked_add(timeout)
+            .ok_or(ExecutionGroupDrainError::InvalidTimeout)?;
+        let effects = self
+            .effects
+            .clone()
+            .ok_or(ExecutionGroupDrainError::HostEffectsUnconfigured)?;
+        self.join_until(deadline)
+            .map_err(ExecutionGroupDrainError::Tasks)?;
+        // Successful native join is the transition point, never a guessed
+        // timeout or a cancellation request observed before the worker exits.
+        self.close();
+        effects
+            .revoke_and_drain_until(deadline)
+            .map_err(ExecutionGroupDrainError::Effects)
     }
 
     /// Revoke BOTH scopes, join every worker, then drain admitted provider calls

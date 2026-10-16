@@ -146,10 +146,17 @@
     return {
       isEmitter: nativeEmitter,
       close: close,
-      event: function (name, listener) {
+      event: function (name, listener, oneShot) {
         register(function () {
-          if (nativeEmitter) { emitter.on(name, listener); }
-          else { emitter.addEventListener(name, listener); }
+          // once() must use the public one-shot API: newListener observes the
+          // registration, rawListeners exposes the wrapper, and dispatch removes
+          // it before calling guest code. Iterators keep persistent listeners.
+          if (nativeEmitter) {
+            if (oneShot) { emitter.once(name, listener); }
+            else { emitter.on(name, listener); }
+          } else if (oneShot) {
+            emitter.addEventListener(name, listener, { once: true });
+          } else { emitter.addEventListener(name, listener); }
         }, function () {
           if (nativeEmitter) { emitter.removeListener(name, listener); }
           else { emitter.removeEventListener(name, listener); }
@@ -166,20 +173,14 @@
     };
   }
 
-  function once(emitter, eventName, options = {}) {
-    var signal;
-    try {
-      signal = abortSignal(optionsObject(options).signal);
-      if (signal !== undefined && isAborted(signal)) { throw aborted(signal); }
-      // Preserve the native Promise/IFC path and its reaction ordering when
-      // there is no cancellation obligation to attach.
-      var isEventTarget = emitter !== null && emitter !== undefined &&
-        typeof emitter.on !== 'function' && typeof emitter.addEventListener === 'function';
-      if (signal === undefined && !isEventTarget) { return __franken_events_once(emitter, eventName); }
-    } catch (error) { return Promise.reject(error); }
-    // Node's once awaits its internal event Promise before settling the
-    // returned Promise. Preserve that reaction boundary for the adapter path
-    // too (the native no-signal path above already owns its Promise contract).
+  async function once(emitter, eventName, options = {}) {
+    var signal = abortSignal(optionsObject(options).signal);
+    if (signal !== undefined && isAborted(signal)) { throw aborted(signal); }
+    // Use one observable registration path with or without cancellation. A
+    // direct native wait skipped newListener and overridden once methods.
+    // Native emitter dispatch still owns listener storage and argument labels.
+    // The async return adopts the event Promise as Node does; a single then()
+    // forwards synchronous emissions one microtask too early.
     return new Promise(function (resolve, reject) {
       var links = subscriptions(emitter);
       var settled = false;
@@ -196,13 +197,13 @@
         if (failed) { reject(error); } else { resolve(values); }
       }
       try {
-        links.event(eventName, function (...values) { finish(undefined, values, false); });
+        links.event(eventName, function (...values) { finish(undefined, values, false); }, true);
         if (eventName !== 'error' && links.isEmitter) {
-          links.event('error', function (error) { finish(error, undefined, true); });
+          links.event('error', function (error) { finish(error, undefined, true); }, true);
         }
         links.abort(signal, function () { finish(aborted(signal), undefined, true); });
       } catch (error) { finish(error, undefined, true); }
-    }).then();
+    });
   }
 
   // Linked FIFOs release dequeued nodes without array shifting or retaining

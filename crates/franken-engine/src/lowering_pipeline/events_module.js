@@ -346,12 +346,28 @@
   EventEmitter.EventEmitter = EventEmitter;
   EventEmitter.once = once;
   EventEmitter.on = on;
-  // Node's constant statics (bd-9vouw.210): a native emitter's default
-  // maximum is 10. errorMonitor is the key Node gives listeners that see
-  // 'error' first; the native emitter does not dispatch to it yet.
+  // Keep the monitor key private as well as exported: replacing the public
+  // property does not retarget already-registered monitors. Ordinary events
+  // still dispatch directly through the native emitter and its IFC boundary.
   EventEmitter.defaultMaxListeners = 10;
-  EventEmitter.errorMonitor = Symbol('events.errorMonitor');
+  var errorMonitor = Symbol('events.errorMonitor');
+  EventEmitter.errorMonitor = errorMonitor;
   EventEmitter.captureRejections = false;
+  var nativeEmit = EventEmitter.prototype.emit;
+  var nativeListenerCount = EventEmitter.prototype.listenerCount;
+  EventEmitter.prototype.emit = function emit(type) {
+    if (type === 'error' && apply(nativeListenerCount, this, [errorMonitor]) > 0) {
+      // As in Node, monitor delivery re-enters the receiver's public emit.
+      // The strict arguments object is private and unmapped; reusing it avoids
+      // guest-replaceable Array iterators while preserving every argument.
+      arguments[0] = errorMonitor;
+      try { apply(this.emit, this, arguments); }
+      finally { arguments[0] = type; }
+    }
+    // A monitor never handles the error: the native path must still deliver
+    // ordinary error listeners or throw the original unhandled error.
+    return apply(nativeEmit, this, arguments);
+  };
 
   // Node's static helpers (bd-9vouw.438). This runtime prints no leak
   // warning, so an EventTarget's maximum is only kept for getMaxListeners.

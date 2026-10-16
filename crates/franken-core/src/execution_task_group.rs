@@ -24,8 +24,7 @@ use std::time::{Duration, Instant};
 use crate::baseline_interpreter::{ExecutionResult, InterpreterConfig, InterpreterHook};
 use crate::execution_work_budget::{
     ExecutionAdmission, ExecutionTask, ExecutionTaskControl, ExecutionTaskJoinError,
-    ExecutionTaskStartError,
-    ExecutionWorkPool, WorkBudgetError,
+    ExecutionTaskStartError, ExecutionWorkPool, WorkBudgetError,
 };
 use crate::host_effect_budget::HostEffectWorkPool;
 use crate::ir_contract::Ir3Module;
@@ -63,7 +62,10 @@ impl ExecutionGroupControl {
 
     pub fn is_cancelled(&self) -> bool {
         self.pool.is_revoked()
-            || self.effects.as_ref().is_some_and(HostEffectWorkPool::is_revoked)
+            || self
+                .effects
+                .as_ref()
+                .is_some_and(HostEffectWorkPool::is_revoked)
     }
 }
 
@@ -79,9 +81,7 @@ impl fmt::Debug for ExecutionGroupControl {
 pub enum ExecutionGroupStartError {
     Closed,
     HostEffectsUnconfigured,
-    Capacity {
-        limit: usize,
-    },
+    Capacity { limit: usize },
     Allocation,
     IdentityExhausted,
     Admission(WorkBudgetError),
@@ -94,9 +94,15 @@ impl fmt::Display for ExecutionGroupStartError {
         match self {
             Self::Closed => f.write_str("native execution group is closed"),
             Self::HostEffectsUnconfigured => f.write_str("native group has no host-effect scope"),
-            Self::Capacity { limit } => write!(f, "native execution group task capacity is {limit}"),
-            Self::Allocation => f.write_str("native execution group could not reserve task storage"),
-            Self::IdentityExhausted => f.write_str("native execution group task identities exhausted"),
+            Self::Capacity { limit } => {
+                write!(f, "native execution group task capacity is {limit}")
+            }
+            Self::Allocation => {
+                f.write_str("native execution group could not reserve task storage")
+            }
+            Self::IdentityExhausted => {
+                f.write_str("native execution group task identities exhausted")
+            }
             Self::Admission(error) => write!(f, "native execution group admission: {error}"),
             Self::Preparation(error) => write!(f, "native execution group preparation: {error}"),
             Self::Worker(error) => write!(f, "native execution group worker: {error}"),
@@ -188,7 +194,10 @@ impl ExecutionTaskGroup {
     /// Sealing alone does not request cancellation of admitted work.
     pub fn is_cancelled(&self) -> bool {
         self.pool.is_revoked()
-            || self.effects.as_ref().is_some_and(HostEffectWorkPool::is_revoked)
+            || self
+                .effects
+                .as_ref()
+                .is_some_and(HostEffectWorkPool::is_revoked)
     }
 
     /// Permanently stop new starts while allowing admitted jobs to finish.
@@ -329,7 +338,9 @@ impl ExecutionTaskGroup {
             return Err(ExecutionGroupStartError::Closed);
         }
         if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            return Err(ExecutionGroupStartError::Admission(WorkBudgetError::Revoked));
+            return Err(ExecutionGroupStartError::Admission(
+                WorkBudgetError::Revoked,
+            ));
         }
         if self.entries.len() >= self.capacity {
             return Err(ExecutionGroupStartError::Capacity {
@@ -346,12 +357,16 @@ impl ExecutionTaskGroup {
             .map_err(|_| ExecutionGroupStartError::Allocation)?;
         let trace_id = trace_id.into();
         let admission = match deadline {
-            Some(deadline) => self.pool.reserve_until(current_config.instruction_budget, deadline),
+            Some(deadline) => self
+                .pool
+                .reserve_until(current_config.instruction_budget, deadline),
             None => self.pool.reserve(current_config.instruction_budget),
         }
         .map_err(ExecutionGroupStartError::Admission)?;
         if admission.task_control().is_cancelled() {
-            return Err(ExecutionGroupStartError::Admission(WorkBudgetError::Revoked));
+            return Err(ExecutionGroupStartError::Admission(
+                WorkBudgetError::Revoked,
+            ));
         }
         let current_hook = {
             // A caught setup panic must not leave sibling work running against
@@ -405,6 +420,57 @@ impl ExecutionTaskGroup {
         let index = self.entries.iter().position(|entry| entry.id == id)?;
         self.entries[index].outcome.as_ref()?;
         self.entries.remove(index).outcome
+    }
+
+    /// Collect a ready outcome without blocking on an older, unfinished task.
+    ///
+    /// Readiness is observed by the existing native join path. If several
+    /// results are ready, their admission order breaks the tie; this is not a
+    /// claim about wall-clock completion order. Successes, execution failures
+    /// and worker panics are each delivered exactly once with their original ID.
+    /// Only collection frees task/result capacity, never instruction credits.
+    /// This leaves admission open, so a bounded dispatcher can replenish work.
+    pub fn take_next_result(&mut self) -> Option<(ExecutionTaskId, ExecutionTaskOutcome)> {
+        self.poll();
+        let index = self
+            .entries
+            .iter()
+            .position(|entry| entry.outcome.is_some())?;
+        let entry = self.entries.remove(index);
+        Some((entry.id, entry.outcome.expect("selected a joined outcome")))
+    }
+
+    /// Wait for and collect any completed task under one monotonic deadline.
+    ///
+    /// `Ok(None)` means the group has no retained tasks, not that it is sealed.
+    /// A worker panic or execution failure is returned INSIDE `Ok(Some(...))`;
+    /// the outer error describes waiting, not execution. A slow first task
+    /// cannot hide a completed later task or prevent reusing its capacity.
+    ///
+    /// Timeout preserves every handle/result and does not seal, cancel, renew
+    /// job deadlines or refund work. Zero duration performs a nonblocking poll.
+    /// An unrepresentable timeout is rejected before collecting any outcome.
+    /// Call from the supervising host, never from a callback in this group.
+    pub fn join_next(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<Option<(ExecutionTaskId, ExecutionTaskOutcome)>, ExecutionTaskJoinError> {
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .ok_or(ExecutionTaskJoinError::InvalidTimeout)?;
+        loop {
+            if let Some(completed) = self.take_next_result() {
+                return Ok(Some(completed));
+            }
+            if self.entries.is_empty() {
+                return Ok(None);
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(ExecutionTaskJoinError::TimedOut);
+            }
+            thread::sleep(remaining.min(Duration::from_millis(1)));
+        }
     }
 
     /// Seal new starts and join the admitted batch WITHOUT cancelling it.

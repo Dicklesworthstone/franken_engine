@@ -31,6 +31,8 @@ use crate::ir_contract::Ir3Module;
 
 mod effects;
 pub use effects::{ExecutionGroupDrainError, ExecutionHostBindings};
+mod supervision;
+pub use supervision::{ExecutionBatchDrainError, ExecutionBatchError};
 
 /// Monotonic identity local to one group. Never reused after result collection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -143,6 +145,9 @@ pub struct ExecutionTaskGroup {
     // Admission closure is distinct from cancellation of already admitted work.
     // Only the group owner seals; cancel-only controls retain their old meaning.
     sealed: bool,
+    // A collected failure must not disappear from a later batch verdict.
+    // Observation alone never opts ordinary polling into sibling cancellation.
+    first_failure: Option<ExecutionTaskId>,
 }
 
 impl fmt::Debug for ExecutionTaskGroup {
@@ -175,6 +180,7 @@ impl ExecutionTaskGroup {
             next_id: 0,
             entries: Vec::new(),
             sealed: false,
+            first_failure: None,
         })
     }
 
@@ -404,6 +410,9 @@ impl ExecutionTaskGroup {
                 match entry.task.join_timeout(Duration::ZERO) {
                     Err(ExecutionTaskJoinError::TimedOut) => {}
                     outcome => {
+                        if supervision::outcome_failed(&outcome) {
+                            self.first_failure.get_or_insert(entry.id);
+                        }
                         entry.outcome = Some(outcome);
                         joined += 1;
                     }

@@ -316,3 +316,6 @@ fn rolling_dispatch_never_exceeds_capacity_or_refunds_prepaid_work() {
     assert_eq!(pool.remaining(), 0);
     assert_eq!(group.retained(), 0);
 }
+
+#[path = "execution_group_supervision/fail_fast.rs"]
+mod fail_fast;

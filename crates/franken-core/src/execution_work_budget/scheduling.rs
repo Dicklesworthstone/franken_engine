@@ -1,6 +1,7 @@
 //! Irreversible tenant delegation and single-use scheduler admissions.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use super::admission_limit::AdmissionSlot;
 use super::{ExecutionWorkPool, WorkBudgetError};
@@ -27,15 +28,57 @@ impl ExecutionWorkPool {
     /// moving/dispatching an admission neither releases nor reacquires its slot.
     /// Cancellation alone does not release capacity: the owner must finish/drop.
     pub fn reserve(&self, instructions: u64) -> Result<ExecutionAdmission, WorkBudgetError> {
+        self.reserve_with_deadline(instructions, None)
+    }
+
+    /// Prepay one job with an absolute deadline no later than its pool's.
+    /// Queue residence, native startup and host preparation all consume the
+    /// same time window. Expiring this job does not revoke its pool or peers.
+    /// The existing job controls, native checkpoints and admission-bound I/O
+    /// and process decorators observe the deadline without a timer thread.
+    ///
+    /// An already elapsed deadline refuses before capacity acquisition or fuel
+    /// debit. Expiry racing a successful debit can consume fuel and return
+    /// `Revoked`; quota is never refunded. Once returned, the admission retains
+    /// its slot even after expiry until the owner finishes or is dropped.
+    /// This is cooperative cancellation, not hard preemption or completed drain.
+    pub fn reserve_until(
+        &self,
+        instructions: u64,
+        deadline: Instant,
+    ) -> Result<ExecutionAdmission, WorkBudgetError> {
+        self.reserve_with_deadline(instructions, Some(deadline))
+    }
+
+    fn reserve_with_deadline(
+        &self,
+        instructions: u64,
+        deadline: Option<Instant>,
+    ) -> Result<ExecutionAdmission, WorkBudgetError> {
         self.ensure_active()?;
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            return Err(WorkBudgetError::Revoked);
+        }
         if instructions == 0 {
             return Err(WorkBudgetError::ZeroInstructionBudget);
         }
         let slot = AdmissionSlot::acquire(&self.state.admission_slots)?;
         // Bind the scope before the irreversible debit. A job retains this
         // live signal even after it leaves the queue or its pool is dropped.
-        let scope = self.state.cancellation.child_token();
+        let scope = match deadline {
+            Some(deadline) => self.state.cancellation.with_deadline(deadline),
+            None => self.state.cancellation.child_token(),
+        };
+        if scope.is_cancelled() {
+            return Err(WorkBudgetError::Revoked);
+        }
         self.charge(instructions)?;
+        // The pool can remain live when only the job deadline elapses. Check
+        // this source too before publishing a newly paid admission. A racing
+        // expiry discards the reservation, releases its slot, and never refunds.
+        if scope.is_cancelled() {
+            return Err(WorkBudgetError::Revoked);
+        }
         Ok(ExecutionAdmission {
             instruction_limit: instructions,
             scope,
@@ -69,6 +112,11 @@ pub struct ExecutionAdmission {
 impl ExecutionAdmission {
     pub fn instruction_limit(&self) -> u64 {
         self.instruction_limit
+    }
+
+    /// Earliest absolute deadline inherited by this admission and its controls.
+    pub fn deadline(&self) -> Option<Instant> {
+        self.scope.deadline()
     }
 
     /// Bind this admitted scope to a host-owned native dispatch boundary.

@@ -314,3 +314,352 @@ fn ordinary_orchestration_preserves_cell_cleanup_after_deadline_refusal() {
         assert_eq!(orchestrator.execution_count(), 0);
     }
 }
+
+mod admitted_job_deadlines {
+    use super::*;
+    use frankenengine_core::execution_work_budget::ExecutionTaskStartError;
+    use frankenengine_core::host_effect_budget::{
+        HostEffectDrainError, HostEffectLimits, HostEffectWorkPool,
+    };
+    use frankenengine_extension_host::host_io::{
+        HostIoCapability, HostIoControl, HostIoError, HostIoOutcome, HostIoProvider,
+        HostIoRequest, HostIoResponse,
+    };
+    use frankenengine_extension_host::process_spawn::{
+        ProcessExit, ProcessLaunch, ProcessSpawnCapability, ProcessSpawnControl, ProcessSpawnError,
+        ProcessSpawnOutcome, ProcessSpawnProvider, ProcessSpawnRequest, ProcessSpawnResponse,
+        ProcessStdio,
+    };
+    use std::sync::{Mutex, mpsc};
+
+    const WAIT: Duration = Duration::from_secs(5);
+    const IO: &[HostIoCapability] = &[HostIoCapability::FsRead];
+    const PROCESS: &[ProcessSpawnCapability] = &[ProcessSpawnCapability::Spawn];
+
+    fn effects() -> HostEffectWorkPool {
+        HostEffectWorkPool::new(HostEffectLimits { operations: 8, max_in_flight: 1 })
+    }
+
+    fn read() -> HostIoRequest {
+        HostIoRequest::FsRead { path: "deadline-input".into() }
+    }
+
+    fn launch() -> ProcessLaunch {
+        ProcessLaunch {
+            executable: "deadline-probe".into(),
+            argv: Vec::new(),
+            env: BTreeMap::new(),
+            cwd: None,
+            shell: false,
+            stdio: ProcessStdio::default(),
+        }
+    }
+
+    fn run() -> ProcessSpawnRequest {
+        ProcessSpawnRequest::Run { launch: launch(), stdin: Vec::new(), timeout_millis: None }
+    }
+
+    #[test]
+    fn job_deadlines_attenuate_without_changing_pool_or_peer_authority() {
+        let early = future();
+        let parent_end = early.checked_add(Duration::from_secs(60)).unwrap();
+        let later = parent_end.checked_add(Duration::from_secs(60)).unwrap();
+        let root = ExecutionWorkPool::with_deadline(512, 3, parent_end);
+        let job = root.reserve_until(64, early).unwrap();
+        let clamped = root.reserve_until(64, later).unwrap();
+        let ordinary = root.reserve(64).unwrap();
+        assert_eq!(job.deadline(), Some(early));
+        assert_eq!(job.execution_cancellation().unwrap().deadline(), Some(early));
+        assert_eq!(clamped.deadline(), Some(parent_end));
+        assert_eq!(ordinary.deadline(), Some(parent_end));
+        assert_eq!(root.deadline(), Some(parent_end));
+        assert_eq!(root.remaining(), 320);
+        assert_eq!(root.outstanding_admissions(), 3);
+        job.task_control().cancel();
+        assert!(!clamped.task_control().is_cancelled());
+        assert!(!ordinary.task_control().is_cancelled());
+        assert!(!root.is_revoked());
+        let plain = ExecutionWorkPool::new(64).reserve(32).unwrap();
+        assert_eq!(plain.deadline(), None);
+    }
+
+    #[test]
+    fn expired_job_refusal_precedes_capacity_and_spending_on_a_live_pool() {
+        for capacity in [0, 1] {
+            let root = ExecutionWorkPool::with_admission_limit(128, capacity);
+            for fuel in [0, 1, 256] {
+                assert!(matches!(
+                    root.reserve_until(fuel, Instant::now()),
+                    Err(WorkBudgetError::Revoked)
+                ));
+            }
+            assert!(!root.is_revoked());
+            assert_eq!(root.remaining(), 128);
+            assert_eq!(root.outstanding_admissions(), 0);
+        }
+        let root = ExecutionWorkPool::with_admission_limit(128, 1);
+        assert!(matches!(root.reserve_until(0, future()), Err(WorkBudgetError::ZeroInstructionBudget)));
+        assert!(matches!(root.reserve_until(129, future()), Err(WorkBudgetError::Exhausted { .. })));
+        assert_eq!(root.outstanding_admissions(), 0);
+        assert_eq!(root.remaining(), 128);
+    }
+
+    struct CountTrace(Arc<AtomicUsize>);
+    impl From<CountTrace> for String {
+        fn from(value: CountTrace) -> Self {
+            value.0.fetch_add(1, Ordering::SeqCst);
+            "deadline-dispatch".into()
+        }
+    }
+
+    #[test]
+    fn expired_queued_job_keeps_capacity_until_refused_dispatch_without_harming_peer() {
+        let source = module("42;");
+        let root = ExecutionWorkPool::with_admission_limit(256, 2);
+        let end = Instant::now().checked_add(Duration::from_secs(1)).unwrap();
+        let job = root.reserve_until(128, end).unwrap();
+        let peer = root.reserve(128).unwrap();
+        let control = job.task_control();
+        let signal = job.execution_cancellation().unwrap();
+        let mut queue = std::collections::VecDeque::from([job]);
+        let job = queue.pop_front().unwrap();
+        queue.push_back(job);
+        wait_until(end);
+        signal.reset();
+        assert!(control.is_cancelled() && signal.is_cancelled());
+        assert!(!peer.task_control().is_cancelled());
+        assert!(!root.is_revoked());
+        assert_eq!(root.outstanding_admissions(), 2);
+        let conversions = Arc::new(AtomicUsize::new(0));
+        assert!(matches!(
+            queue.pop_front().unwrap().spawn(
+                source.clone(), config(false, 128), CountTrace(conversions.clone())
+            ),
+            Err(ExecutionTaskStartError::Admission(WorkBudgetError::Revoked))
+        ));
+        assert_eq!(conversions.load(Ordering::SeqCst), 0);
+        assert_eq!(root.outstanding_admissions(), 1);
+        let result = peer.execute(&source, config(false, 128), "peer").unwrap();
+        assert_eq!(result.value.to_string(), "42");
+        assert_eq!(root.outstanding_admissions(), 0);
+        assert_eq!(root.remaining(), 0);
+    }
+
+    #[test]
+    fn native_worker_deadline_uses_existing_checkpoints_without_expiring_the_pool() {
+        let source = module("let object = {}; while (true) {}");
+        for throughput in [false, true] {
+            let root = ExecutionWorkPool::with_admission_limit(256, 1);
+            let end = Instant::now().checked_add(Duration::from_secs(2)).unwrap();
+            let job = root.reserve_until(128, end).unwrap();
+            let hook = Arc::new(ExpireAtAllocation { deadline: end, calls: AtomicUsize::new(0) });
+            let mut task = job.spawn_with_hook(
+                source.clone(), config(throughput, 128), "timed-worker", Some(hook.clone())
+            ).unwrap();
+            assert!(matches!(
+                task.join_timeout(WAIT).unwrap(),
+                Err(WorkBudgetError::Interpreter(InterpreterError::Cancelled))
+            ));
+            assert!(hook.calls.load(Ordering::SeqCst) > 0);
+            assert!(!root.is_revoked());
+            assert_eq!(root.outstanding_admissions(), 0);
+            let result = root.reserve(128).unwrap()
+                .execute(&module("42;"), config(throughput, 128), "untimed-peer").unwrap();
+            assert_eq!(result.value.to_string(), "42");
+            assert_eq!(root.remaining(), 0);
+        }
+    }
+
+    // Controlled provider seams, not native filesystem/process isolation proof.
+    #[derive(Default)]
+    struct Provider {
+        until: Option<Instant>,
+        fail_process: bool,
+        io_control: Mutex<Option<Arc<dyn HostIoControl>>>,
+        process_control: Mutex<Option<Arc<dyn ProcessSpawnControl>>>,
+        calls: AtomicUsize,
+        cleanups: AtomicUsize,
+    }
+
+    impl std::fmt::Debug for Provider {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("DeadlineProvider").finish_non_exhaustive()
+        }
+    }
+
+    impl HostIoProvider for Provider {
+        fn name(&self) -> &str { "deadline-io" }
+        fn perform(&self, _: &HostIoRequest, _: &[HostIoCapability]) -> HostIoOutcome {
+            panic!("the live control must be forwarded")
+        }
+        fn perform_controlled(
+            &self, _: &HostIoRequest, _: &[HostIoCapability], control: Arc<dyn HostIoControl>,
+        ) -> HostIoOutcome {
+            control.checkpoint()?;
+            *self.io_control.lock().unwrap() = Some(control);
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if let Some(end) = self.until { wait_until(end); }
+            Ok(HostIoResponse::FsRead { bytes: vec![42] })
+        }
+    }
+
+    impl ProcessSpawnProvider for Provider {
+        fn name(&self) -> &str { "deadline-process" }
+        fn perform(&self, _: &ProcessSpawnRequest, _: &[ProcessSpawnCapability]) -> ProcessSpawnOutcome {
+            panic!("the live control must be forwarded")
+        }
+        fn perform_controlled(
+            &self, request: &ProcessSpawnRequest, _: &[ProcessSpawnCapability],
+            control: Arc<dyn ProcessSpawnControl>,
+        ) -> ProcessSpawnOutcome {
+            control.checkpoint()?;
+            *self.process_control.lock().unwrap() = Some(control);
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if let Some(end) = self.until { wait_until(end); }
+            if self.fail_process {
+                return Err(ProcessSpawnError::TimedOut { runtime_millis: 7 });
+            }
+            if matches!(request, ProcessSpawnRequest::Spawn { .. }) {
+                Ok(ProcessSpawnResponse::Spawned { handle: "owned-deadline-child".into() })
+            } else {
+                Ok(ProcessSpawnResponse::Run {
+                    exit: ProcessExit { success: true, code: Some(0), signal: None },
+                    stdout: vec![42], stderr: Vec::new(),
+                })
+            }
+        }
+        fn cleanup_handle(&self, _: &str) -> ProcessSpawnOutcome {
+            self.cleanups.fetch_add(1, Ordering::SeqCst);
+            Ok(ProcessSpawnResponse::Cleaned { was_present: true })
+        }
+    }
+
+    #[test]
+    fn job_expiry_reaches_retained_provider_controls_without_stealing_peer_authority() {
+        let root = ExecutionWorkPool::with_admission_limit(128, 1);
+        let end = Instant::now().checked_add(Duration::from_secs(1)).unwrap();
+        let job = root.reserve_until(8, end).unwrap();
+        let effects = effects();
+        let inner = Arc::new(Provider::default());
+        let io = effects.bind_host_io_for_admission(inner.clone(), &job);
+        let process = effects.bind_process_spawn_for_admission(inner.clone(), &job);
+        io.perform(&read(), IO).unwrap();
+        process.perform(&run(), PROCESS).unwrap();
+        wait_until(end);
+        assert!(inner.io_control.lock().unwrap().as_ref().unwrap().checkpoint().is_err());
+        assert!(inner.process_control.lock().unwrap().as_ref().unwrap().checkpoint().is_err());
+        assert!(matches!(io.perform(&read(), IO), Err(HostIoError::Denied { .. })));
+        assert!(matches!(process.perform(&run(), PROCESS), Err(ProcessSpawnError::Denied { .. })));
+        assert_eq!(inner.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(effects.snapshot().unwrap().committed_operations, 2);
+        assert_eq!(root.outstanding_admissions(), 1);
+        assert!(!root.is_revoked());
+        assert!(!effects.is_revoked());
+        drop(job);
+        let peer = root.reserve(8).unwrap();
+        effects.bind_host_io_for_admission(inner.clone(), &peer).perform(&read(), IO).unwrap();
+        assert_eq!(inner.calls.load(Ordering::SeqCst), 3);
+        assert_eq!(root.remaining(), 112);
+    }
+
+    #[test]
+    fn late_spawn_handles_and_typed_failures_survive_expiry_for_journal_and_cleanup() {
+        for fail_process in [false, true] {
+            let root = ExecutionWorkPool::with_admission_limit(16, 1);
+            let end = Instant::now().checked_add(Duration::from_secs(1)).unwrap();
+            let job = root.reserve_until(8, end).unwrap();
+            let effects = effects();
+            let inner = Arc::new(Provider { until: Some(end), fail_process, ..Provider::default() });
+            let process = effects.bind_process_spawn_for_admission(inner.clone(), &job);
+            let outcome = process.perform(&ProcessSpawnRequest::Spawn { launch: launch() }, PROCESS);
+            assert!(job.task_control().is_cancelled());
+            if fail_process {
+                assert_eq!(outcome, Err(ProcessSpawnError::TimedOut { runtime_millis: 7 }));
+            } else {
+                assert_eq!(outcome, Ok(ProcessSpawnResponse::Spawned { handle: "owned-deadline-child".into() }));
+                assert_eq!(process.cleanup_handle("owned-deadline-child"),
+                    Ok(ProcessSpawnResponse::Cleaned { was_present: true }));
+                assert_eq!(inner.cleanups.load(Ordering::SeqCst), 1);
+            }
+            assert_eq!(effects.snapshot().unwrap().in_flight, 0);
+            assert_eq!(effects.snapshot().unwrap().committed_operations, 1);
+            assert!(!root.is_revoked());
+            assert_eq!(root.remaining(), 8);
+        }
+    }
+
+    #[test]
+    fn late_io_and_non_resource_process_successes_are_not_published_after_expiry() {
+        for process_call in [false, true] {
+            let root = ExecutionWorkPool::with_admission_limit(16, 1);
+            let end = Instant::now().checked_add(Duration::from_secs(1)).unwrap();
+            let job = root.reserve_until(8, end).unwrap();
+            let effects = effects();
+            let inner = Arc::new(Provider { until: Some(end), ..Provider::default() });
+            if process_call {
+                let process = effects.bind_process_spawn_for_admission(inner.clone(), &job);
+                assert!(matches!(process.perform(&run(), PROCESS), Err(ProcessSpawnError::Denied { .. })));
+            } else {
+                let io = effects.bind_host_io_for_admission(inner.clone(), &job);
+                assert!(matches!(io.perform(&read(), IO), Err(HostIoError::Denied { .. })));
+            }
+            assert_eq!(inner.calls.load(Ordering::SeqCst), 1);
+            assert_eq!(effects.snapshot().unwrap().committed_operations, 1);
+            assert_eq!(effects.snapshot().unwrap().in_flight, 0);
+            assert_eq!(root.outstanding_admissions(), 1);
+        }
+    }
+
+    #[derive(Debug)]
+    struct ParkedProvider {
+        entered: mpsc::Sender<()>,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
+    impl HostIoProvider for ParkedProvider {
+        fn name(&self) -> &str { "parked-deadline-io" }
+        fn perform(&self, _: &HostIoRequest, _: &[HostIoCapability]) -> HostIoOutcome { unreachable!() }
+        fn perform_controlled(
+            &self, _: &HostIoRequest, _: &[HostIoCapability], control: Arc<dyn HostIoControl>,
+        ) -> HostIoOutcome {
+            control.checkpoint()?;
+            self.entered.send(()).unwrap();
+            self.release.lock().unwrap().recv_timeout(WAIT).unwrap();
+            control.checkpoint()?;
+            Ok(HostIoResponse::FsRead { bytes: vec![42] })
+        }
+    }
+
+    #[test]
+    fn expiry_does_not_certify_drain_or_release_capacity_held_by_blocked_provider_work() {
+        let root = ExecutionWorkPool::with_admission_limit(32, 1);
+        let end = Instant::now().checked_add(Duration::from_secs(1)).unwrap();
+        let job = root.reserve_until(8, end).unwrap();
+        let effects = effects();
+        let (entered_tx, entered) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel();
+        let io = effects.bind_host_io_for_admission(Arc::new(ParkedProvider {
+            entered: entered_tx, release: Mutex::new(release_rx),
+        }), &job);
+        let worker = std::thread::spawn(move || io.perform(&read(), IO));
+        entered.recv_timeout(WAIT).unwrap();
+        wait_until(end);
+        assert!(job.task_control().is_cancelled());
+        assert_eq!(root.outstanding_admissions(), 1);
+        assert_eq!(effects.snapshot().unwrap().in_flight, 1);
+        assert!(matches!(root.reserve(8), Err(WorkBudgetError::AdmissionLimit { limit: 1 })));
+        let drained = effects.revoke_and_drain(Duration::ZERO);
+        // Release and join before reporting the assertion to avoid stranding the
+        // controlled worker if the drain implementation regresses.
+        release.send(()).unwrap();
+        let outcome = worker.join().unwrap();
+        assert_eq!(drained, Err(HostEffectDrainError::TimedOut { in_flight: 1 }));
+        assert!(matches!(outcome, Err(HostIoError::Denied { .. })));
+        assert_eq!(effects.revoke_and_drain(WAIT).unwrap().in_flight, 0);
+        assert_eq!(root.outstanding_admissions(), 1);
+        drop(job);
+        assert_eq!(root.outstanding_admissions(), 0);
+        assert!(!root.is_revoked());
+        let _peer = root.reserve(8).unwrap();
+        assert_eq!(root.remaining(), 16);
+    }
+}

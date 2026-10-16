@@ -1023,7 +1023,6 @@ impl<V> OrderedStringMap<V> {
         };
         self.string_insertion_order
             .retain(|key| by_key.contains_key(key));
-        self.rebuild_named_string_positions();
         if let Some(sidecars) = self.sidecars.as_deref_mut() {
             let exact_only_by_key = &sidecars.exact_only_by_key;
             if let Some(order) = sidecars.exact_string_insertion_order.as_mut() {
@@ -1039,6 +1038,7 @@ impl<V> OrderedStringMap<V> {
                 });
             }
         }
+        self.rebuild_named_string_positions();
     }
 
     /// Iterate keys in ES own-property string-key order.
@@ -1830,7 +1830,7 @@ impl OrderedProperties {
         self.by_key.get(key)
     }
 
-    /// Return a mutable descriptor for `key` without changing its position.
+    /// Return a mutable descriptor for `key`.
     pub fn get_mut(&mut self, key: &PropertyKey) -> Option<&mut PropertyDescriptor> {
         self.by_key.get_mut(key)
     }
@@ -6415,7 +6415,7 @@ mod tests {
             .define_own_property(
                 str_key("x"),
                 PropertyDescriptor::Accessor {
-                    get: None,
+                    get: Some(ObjectHandle(1)),
                     set: None,
                     enumerable: true,
                     configurable: false,

@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::time::Instant;
 
 use super::{ExecutionWorkPool, WorkBudgetError, WorkPoolState};
 use crate::checkpoint::CancellationToken;
@@ -68,11 +69,46 @@ impl ExecutionWorkPool {
     /// still bound uncollected result counts. Retain admissions for the full
     /// lifetime of custom dispatch. Pool creation remains trusted host authority.
     pub fn with_admission_limit(instruction_limit: u64, max_admissions: usize) -> Self {
+        Self::with_cancellation(instruction_limit, max_admissions, CancellationToken::new())
+    }
+
+    /// Create a live host work scope bounded by fuel, outstanding admissions
+    /// and one absolute deadline. All clones, partitions, queued admissions,
+    /// native checkpoints and bound provider controls inherit the deadline.
+    /// Time spent queued or in preparation does not renew the allowance.
+    ///
+    /// Expiry uses the existing revocation/cancellation errors. It neither
+    /// refunds fuel nor releases capacity held by unfinished work. Cancellation
+    /// is cooperative, not a hard thread kill, provider drain or OS isolation.
+    /// Plain `new`/`with_admission_limit` remain deadline-free. These live host
+    /// limits are not a deterministic replay clock or serialized authority.
+    pub fn with_deadline(
+        instruction_limit: u64,
+        max_admissions: usize,
+        deadline: Instant,
+    ) -> Self {
+        Self::with_cancellation(
+            instruction_limit,
+            max_admissions,
+            CancellationToken::new().with_deadline(deadline),
+        )
+    }
+
+    /// The inherited absolute deadline, never a newly started duration.
+    pub fn deadline(&self) -> Option<Instant> {
+        self.state.cancellation.deadline()
+    }
+
+    fn with_cancellation(
+        instruction_limit: u64,
+        max_admissions: usize,
+        cancellation: CancellationToken,
+    ) -> Self {
         Self {
             state: Arc::new(WorkPoolState {
                 limit: instruction_limit,
                 remaining: AtomicU64::new(instruction_limit),
-                cancellation: CancellationToken::new(),
+                cancellation,
                 depth: 0,
                 admission_slots: Arc::new(AdmissionSlots {
                     limit: max_admissions,

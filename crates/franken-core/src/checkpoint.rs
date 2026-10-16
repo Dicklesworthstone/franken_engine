@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
@@ -169,6 +170,10 @@ pub struct CancellationToken {
     /// token graph. Cloning a token does not copy its ancestor list.
     #[serde(skip)]
     parents: Arc<[Arc<AtomicBool>]>,
+    /// Earliest inherited host deadline. This is process-local live authority,
+    /// not a serializable duration that can restart when a job is dispatched.
+    #[serde(skip)]
+    deadline: Option<Instant>,
 }
 
 impl CancellationToken {
@@ -177,6 +182,7 @@ impl CancellationToken {
         Self {
             cancelled: Arc::new(AtomicBool::new(false)),
             parents: Arc::default(),
+            deadline: None,
         }
     }
 
@@ -193,6 +199,7 @@ impl CancellationToken {
         Self {
             cancelled: Arc::new(AtomicBool::new(false)),
             parents: parents.into(),
+            deadline: self.deadline,
         }
     }
 
@@ -219,7 +226,34 @@ impl CancellationToken {
         Self {
             cancelled: Arc::new(AtomicBool::new(false)),
             parents: parents.into(),
+            deadline: match (self.deadline, other.deadline) {
+                (Some(left), Some(right)) => Some(left.min(right)),
+                (left, right) => left.or(right),
+            },
         }
+    }
+
+    /// Derive a child cancelled at the earlier of this deadline and any
+    /// inherited deadline. The parent, existing clones and siblings are not
+    /// changed. Cloning, linking and deriving children preserve the absolute
+    /// deadline; neither `reset` nor requesting a later deadline renews it.
+    ///
+    /// Expiry is observed cooperatively by `is_cancelled`, without a timer
+    /// thread. It cannot interrupt a callback that never checks its control or
+    /// certify that drain/finalize completed. No clock is read for tokens with
+    /// no deadline. Use this only for live host supervision: deterministic
+    /// replay must supply recorded cancellation instead of a wall-clock limit.
+    /// Like live cancellation bindings, deadlines are not serialized; a
+    /// deserialized token is not a replacement for the original authority.
+    pub fn with_deadline(&self, deadline: Instant) -> Self {
+        let mut child = self.child_token();
+        child.deadline = Some(self.deadline.map_or(deadline, |parent| parent.min(deadline)));
+        child
+    }
+
+    /// Earliest process-local deadline, including inherited constraints.
+    pub fn deadline(&self) -> Option<Instant> {
+        self.deadline
     }
 
     /// Signal cancellation.
@@ -234,10 +268,12 @@ impl CancellationToken {
                 .parents
                 .iter()
                 .any(|signal| signal.load(Ordering::Acquire))
+            || self.deadline.is_some_and(|deadline| Instant::now() >= deadline)
     }
 
     /// Reset this token's local signal (for reuse after drain/finalize).
     /// Inherited cancellation remains pending until its own source is reset.
+    /// An elapsed deadline cannot be reset or extended.
     pub fn reset(&self) {
         self.cancelled.store(false, Ordering::Release);
     }

@@ -400,6 +400,8 @@
     var closePromise;
     var resolveClose;
     var rejectClose;
+    var webStreamUsed = false;
+    var closeWebStream;
     function finishClose() {
       if (!closing || active !== 0 || descriptor < 0) { return; }
       var fd = descriptor;
@@ -468,8 +470,102 @@
           resolveClose = resolve;
           rejectClose = reject;
         });
+        // Terminate the readable side before releasing its descriptor. A
+        // locked Web stream cannot be cancelled through its public cancel().
+        // The private controller also retires a pending BYOB read at EOF.
+        if (closeWebStream !== undefined) { closeWebStream(); }
         finishClose();
         return closePromise;
+      },
+      readableWebStream: function (options) {
+        function unavailable() {
+          var error = new Error('Invalid state: The FileHandle is ' +
+            (closing ? 'closed or closing' : 'locked'));
+          error.code = 'ERR_INVALID_STATE';
+          return error;
+        }
+        if (closing || webStreamUsed) { throw unavailable(); }
+        if (options === undefined) { options = {}; }
+        if (options === null || typeof options !== 'object' || arrayIsArray(options)) {
+          throw argumentError('options');
+        }
+        var autoClose = options.autoClose;
+        if (autoClose !== undefined && typeof autoClose !== 'boolean') {
+          throw argumentError('options.autoClose');
+        }
+        var methods = fileWebStreamMethods();
+        // The options getter can close this handle or create its one stream.
+        if (closing || webStreamUsed) { throw unavailable(); }
+        webStreamUsed = true;
+        var stopped = false;
+        var controller;
+        var read = handleOperation(handle, 'read');
+        var close = handleOperation(handle, 'close');
+        function retire() { stopped = true; closeWebStream = undefined; }
+        function endReadable() {
+          var request = apply(methods.request, controller, []);
+          apply(methods.close, controller, []);
+          // Closing a byte controller alone leaves a pending BYOB read open.
+          // respond(0) finishes its empty or aligned final view after close.
+          if (request !== null) { apply(methods.respond, request, [0]); }
+        }
+        try {
+          return new methods.ReadableStream({
+            type: 'bytes', autoAllocateChunkSize: 16384,
+            start: function (value) {
+              controller = value;
+              closeWebStream = function () {
+                if (stopped) { return; }
+                retire();
+                try { endReadable(); }
+                catch (error) { apply(methods.error, controller, [error]); }
+              };
+            },
+            pull: async function () {
+              if (stopped) { return; }
+              try {
+                var request = apply(methods.request, controller, []);
+                if (request === null) { return; }
+                var view = apply(methods.view, request, []);
+                // The shared byte-stream controller owns transfer, minimum
+                // fill, alignment and default-reader allocation. Fill its
+                // actual request in place; do not collect or copy the file.
+                var length = apply(typedLength, view, []);
+                if (length > 16384) { length = 16384; }
+                var result = await read(view, 0, length, null);
+                // Cancellation/manual close may win during Promise delivery.
+                // Its controller owns the retired request; never respond twice.
+                if (stopped) { return; }
+                if (result.bytesRead !== 0) {
+                  apply(methods.respond, request, [result.bytesRead]);
+                  return;
+                }
+                retire();
+                if (autoClose === true) { await close(); }
+                endReadable();
+              } catch (error) {
+                if (stopped) { throw error; }
+                retire();
+                if (autoClose === true) {
+                  try { await close(); }
+                  catch (closeError) {
+                    throw new NativeAggregateError([error, closeError],
+                      'File stream read and descriptor close both failed');
+                  }
+                }
+                throw error;
+              }
+            },
+            cancel: function () {
+              retire();
+              if (autoClose === true) { return close(); }
+            }
+          }, { highWaterMark: 0, size: undefined });
+        } catch (error) {
+          retire();
+          webStreamUsed = false;
+          throw error;
+        }
       },
       sync: function () {
         return perform('fsync', function (fd) { fsyncSync(fd); });
@@ -585,6 +681,26 @@
   // the stream dependency with the full fs facade; no path is opened merely
   // by loading either module. Class/owner registries initialize on first use.
   var fileStreamClasses;
+  var fileWebMethods;
+  function fileWebStreamMethods() {
+    if (fileWebMethods !== undefined) { return fileWebMethods; }
+    // Literal dependency goes through the canonical shared module loader.
+    // Loading fs does not create a stream or start descriptor reads. Capture
+    // branded methods once rather than consult mutable public methods per pull.
+    var web = require('stream/web');
+    var bytes = web.ReadableByteStreamController.prototype;
+    var request = web.ReadableStreamBYOBRequest.prototype;
+    var descriptor = Object.getOwnPropertyDescriptor;
+    fileWebMethods = {
+      ReadableStream: web.ReadableStream,
+      request: descriptor(bytes, 'byobRequest').get,
+      view: descriptor(request, 'view').get,
+      respond: request.respond,
+      close: bytes.close,
+      error: bytes.error
+    };
+    return fileWebMethods;
+  }
   function streamClasses() {
     if (fileStreamClasses !== undefined) { return fileStreamClasses; }
     var streams = require('stream');

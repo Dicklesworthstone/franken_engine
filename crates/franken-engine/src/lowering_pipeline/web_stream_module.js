@@ -386,7 +386,7 @@
       length: info.length, filled: 0, minimum: minimum * info.element,
       ctor: info.ctor, element: info.element, kind: kind };
   }
-  function readInto(r, view, options) {
+  function readInto(r, view, options, receive) {
     const info = viewInfo(view);
     if (info.length === 0 || info.capacity === 0) throw invalid('Cannot read into an empty byte view');
     const minimum = dictionary(options, 'options').min;
@@ -402,9 +402,18 @@
     const d = descriptor(info, min, 'byob');
     if (s.pullIntos.length === 0 && s.state === 'closed') {
       const ctor = d.ctor;
-      return resolved(result(new ctor(d.buffer, d.offset, 0), true));
+      const item = result(new ctor(d.buffer, d.offset, 0), true);
+      if (receive !== undefined) receive(item);
+      return resolved(item);
     }
     const request = deferred(false);
+    if (receive !== undefined) {
+      const publish = request.resolve;
+      request.resolve = function (item) {
+        if (request.pending) receive(item);
+        publish(item);
+      };
+    }
     if (s.pullIntos.length === 0 && s.queue.total !== 0) {
       if (fillPullInto(s, d)) {
         const ctor = d.ctor;
@@ -577,6 +586,131 @@
     releaseLock() { releaseReader(defaultReaderState(this)); }
   }
 
+  // Both byte branches use the canonical byte controller and pull-into queue.
+  // Only one upstream reader exists; switch its mode between completed reads
+  // to forward consumer storage without allocating an intermediate default
+  // buffer. A live sibling receives a copy before either branch can mutate it.
+  // As with default tee, an unread sibling can accumulate queued data.
+  function teeBytes(source, s) {
+    let reader = new ReadableStreamDefaultReader(source);
+    let r = get(readers, reader, 'reader');
+    let reading = false, again1 = false, again2 = false, ended = false;
+    let cancelled1 = false, cancelled2 = false, reason1, reason2, first, second;
+    const cancellation = deferred(true);
+    function fail(error, cancelSource) {
+      ended = true; reading = false;
+      errorReadable(first, error); errorReadable(second, error);
+      if (cancelSource) cancellation.resolve(cancelReadable(s, error));
+      else if (!cancelled1 || !cancelled2) cancellation.resolve();
+    }
+    function watch() {
+      const observed = r;
+      then(r.closed.promise, undefined, function (error) {
+        // A normal mode switch rejects the released reader's closed promise.
+        // Only the current reader can report a source failure to the branches.
+        if (r === observed && !ended) fail(error, false);
+      });
+    }
+    function acceptView(branch, value) {
+      const info = viewInfo(value), d = branch.pullIntos.head.value;
+      // This view came from the internal upstream BYOB read of this exact
+      // descriptor. Its old backing store is detached; adopt the returned one.
+      d.buffer = moved(info.buffer); respondBytes(branch, info.length);
+    }
+    function closeBranch(branch, value) {
+      if (branch.state !== 'readable') return;
+      closeByte(branch);
+      if (branch.pullIntos.length !== 0) {
+        if (value !== undefined) acceptView(branch, value);
+        else {
+          const d = branch.pullIntos.head.value;
+          d.buffer = moved(d.buffer); respondBytes(branch, 0);
+        }
+      }
+    }
+    function cancelBranch(which, reason) {
+      if (which === 1) { cancelled1 = true; reason1 = reason; }
+      else { cancelled2 = true; reason2 = reason; }
+      if (cancelled1 && cancelled2) {
+        ended = true;
+        const reasons = [reason1, reason2]; reason1 = undefined; reason2 = undefined;
+        // Synchronous closure of pending reads is not completion of cleanup.
+        // Both branch cancellations adopt the real upstream cancellation.
+        cancellation.resolve(cancelReadable(s, reasons));
+      }
+      return cancellation.promise;
+    }
+    function pullBranches(which) {
+      if (ended) return resolved();
+      if (reading) {
+        if (which === 1) again1 = true; else again2 = true;
+        return resolved();
+      }
+      reading = true;
+      const branch = which === 1 ? first : second;
+      const into = branch.pullIntos.length !== 0;
+      try {
+        if (r.byob !== into) {
+          releaseReader(r);
+          reader = into ? new ReadableStreamBYOBReader(source) : new ReadableStreamDefaultReader(source);
+          r = get(readers, reader, 'reader'); watch();
+        }
+        const d = into ? branch.pullIntos.head.value : undefined;
+        function receive(item) {
+          if (ended) return;
+          // EOF closes branches at the read's close step, before the next
+          // consumer reaction. Delaying this changes queued min-read results.
+          if (item.done) {
+            ended = true; reading = false;
+            try {
+              if (!cancelled1) closeBranch(first, into && which === 1 ? item.value : undefined);
+              if (!cancelled2) closeBranch(second, into && which === 2 ? item.value : undefined);
+              if (!cancelled1 || !cancelled2) cancellation.resolve();
+            } catch (error) { fail(error, true); }
+            return;
+          }
+          // Queue at admission, not after read() returns: a synchronous source
+          // can respond and then error before the caller attaches a reaction.
+          // Preserve that ordering using the existing internal read callback.
+          then(resolved(), function () {
+            if (ended) return;
+            try {
+              again1 = false; again2 = false;
+              const info = viewInfo(item.value);
+              if (!into) {
+                const other = !cancelled1 && !cancelled2 ?
+                  byteValue(cloneBytes(info.buffer, info.offset, info.length)) : item.value;
+                if (!cancelled1) enqueueByte(first, item.value);
+                if (!cancelled2) enqueueByte(second, other);
+              } else {
+                const other = which === 1 ? second : first;
+                const ownCancelled = which === 1 ? cancelled1 : cancelled2;
+                const otherCancelled = which === 1 ? cancelled2 : cancelled1;
+                const copy = otherCancelled ? undefined : byteValue(cloneBytes(info.buffer, info.offset, info.length));
+                if (!ownCancelled) acceptView(branch, item.value);
+                if (!otherCancelled) enqueueByte(other, copy);
+              }
+              reading = false;
+              if (again1) pullBranches(1); else if (again2) pullBranches(2);
+            } catch (error) { fail(error, true); }
+          });
+        }
+        const pending = into ? readInto(r, new Bytes(d.buffer, d.offset + d.filled, d.length - d.filled), undefined, receive) : read(r, receive);
+        then(pending, undefined, function (error) { if (!ended) fail(error, false); });
+      } catch (error) { fail(error, true); }
+      return resolved();
+    }
+    const left = create(null), right = create(null);
+    left.type = 'bytes'; right.type = 'bytes';
+    left.pull = function () { return pullBranches(1); };
+    right.pull = function () { return pullBranches(2); };
+    left.cancel = function (reason) { return cancelBranch(1, reason); };
+    right.cancel = function (reason) { return cancelBranch(2, reason); };
+    const one = new ReadableStream(left), two = new ReadableStream(right);
+    first = get(streams, one, 'ReadableStream'); second = get(streams, two, 'ReadableStream');
+    watch(); return [one, two];
+  }
+
   // Default-stream tee shares chunk identities, not a collected copy of the
   // source. Demand from either branch may advance the single upstream reader;
   // the other branch retains its own FIFO until read or cancelled. As in the
@@ -585,7 +719,7 @@
   // after completion. No public getReader/read/enqueue override participates.
   function teeReadable(source) {
     const s = get(streams, source, 'ReadableStream');
-    if (s.byte) throw invalid('Byte-stream tee is not yet supported');
+    if (s.byte) return teeBytes(source, s);
     const reader = new ReadableStreamDefaultReader(source);
     const r = get(readers, reader, 'ReadableStreamDefaultReader');
     const cancellation = deferred(true);

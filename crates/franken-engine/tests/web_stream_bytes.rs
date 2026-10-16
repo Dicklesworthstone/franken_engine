@@ -126,3 +126,81 @@ fn released_reader_requests_and_joined_cancellation_preserve_ownership() {
 fn incomplete_typed_elements_error_both_reader_promises() {
     check(TRUNCATED, &["TRUNCATED true true true true true"]);
 }
+
+const TEE_VIEWS: &str = r#"
+const web=require('node:stream/web'),alias=require('stream/web');
+const Uint8Array='guest',ArrayBuffer='guest',Uint16Array='guest';
+(async function(){
+ let n=0;const s=new web.ReadableStream({type:'bytes',pull(c){const q=c.byobRequest;
+  if(n===8){c.close();if(q)q.respond(0);}else if(q){q.view[0]=++n;q.respond(1);}
+  else{c.enqueue(new globalThis.Uint8Array([++n]));}}});
+ const pair=s.tee(),a=pair[0].getReader({mode:'byob'}),b=new alias.ReadableStreamBYOBReader(pair[1]);
+ const pa=a.read(new globalThis.Uint16Array(4),{min:3}),pb=b.read(new globalThis.Uint8Array(8),{min:8});
+ const x=await pa,bytes=new globalThis.Uint8Array(x.value.buffer),first=Array.from(bytes.slice(0,x.value.byteLength)).join(',');
+ bytes[0]=255;const y=await pb,tail=await a.read(new globalThis.Uint8Array(8));
+ const ends=await Promise.all([a.read(new globalThis.Uint8Array(2)),b.read(new globalThis.Uint8Array(2))]);
+ a.releaseLock();b.releaseLock();
+ console.log('TEE_VIEWS',first,Array.from(y.value).join(','),Array.from(tail.value).join(','),
+  ends[0].done,ends[1].done,s.locked,pair[0].locked,pair[1].locked);
+})();
+"#;
+
+const TEE_CANCEL: &str = r#"
+const {ReadableStream}=require('stream/web');
+(async function(){
+ let release,reason,calls=0,finished=false;const ready=new Promise(done=>release=done);
+ const s=new ReadableStream({type:'bytes',cancel(value){reason=value;calls++;return ready.then(()=>{finished=true;});}});
+ const pair=s.tee(),a=pair[0].getReader({mode:'byob'}),b=pair[1].getReader();
+ const pending=[a.read(new Uint8Array(8)),b.read()];const cb=b.cancel(false),ca=a.cancel('first');
+ const before=finished,values=await Promise.all(pending);release();await Promise.all([ca,cb]);a.releaseLock();b.releaseLock();
+ console.log('TEE_CANCEL',before,finished,calls,reason[0],reason[1]===false,values[0].done,
+  values[0].value===undefined,values[1].done,s.locked,pair[0].locked,pair[1].locked);
+})();
+"#;
+
+const TEE_ERRORS: &str = r#"
+const {ReadableStream}=require('node:stream/web');
+(async function(){
+ const failure={code:'source'};const s=new ReadableStream({type:'bytes',pull(c){const q=c.byobRequest;
+  if(q){q.view[0]=7;q.respond(1);}else c.enqueue(new Uint8Array([7]));c.error(failure);}});
+ const pair=s.tee(),a=pair[0].getReader({mode:'byob'}),b=pair[1].getReader();
+ const closed=[a.closed.catch(e=>e===failure),b.closed.catch(e=>e===failure)];
+ const values=await Promise.all([a.read(new Uint8Array(8)),b.read()]);
+ const failed=await Promise.all(closed);a.releaseLock();b.releaseLock();
+ console.log('TEE_ERRORS',values[0].value[0],values[1].value[0],failed[0],failed[1]);
+})();
+"#;
+
+const TEE_NESTED: &str = r#"
+const {ReadableStream}=require('stream/web');
+(async function(){
+ let at=0;const s=new ReadableStream({type:'bytes',autoAllocateChunkSize:8,async pull(c){
+  await Promise.resolve();const q=c.byobRequest;if(at===32){c.close();q.respond(0);}else{q.view[0]=++at;q.respond(1);}}});
+ const pair=s.tee(),nested=pair[0].tee();
+ async function consume(stream){const r=stream.getReader({mode:'byob'});let buffer=new ArrayBuffer(16),sum=0,count=0;
+  for(;;){const x=await r.read(new Uint8Array(buffer,4,8),{min:8});buffer=x.value.buffer;
+   for(const byte of x.value){sum+=byte;count++;}x.value.fill(255);if(x.done)break;}r.releaseLock();return count+':'+sum;}
+ const results=await Promise.all([consume(nested[0]),consume(nested[1]),consume(pair[1])]);
+ console.log('TEE_NESTED',results.join(','),s.locked,pair[0].locked);
+})();
+"#;
+
+#[test]
+fn byte_tee_preserves_typed_views_and_isolates_sibling_writes() {
+    check(TEE_VIEWS, &["TEE_VIEWS 1,2,3,4,5,6 1,2,3,4,5,6,7,8 7,8 true true true false false"]);
+}
+
+#[test]
+fn byte_tee_cancellations_join_one_upstream_cleanup_in_branch_order() {
+    check(TEE_CANCEL, &["TEE_CANCEL false true 1 first true true true true true false false"]);
+}
+
+#[test]
+fn byte_tee_keeps_admitted_chunks_before_later_source_errors() {
+    check(TEE_ERRORS, &["TEE_ERRORS 7 7 true true"]);
+}
+
+#[test]
+fn nested_byte_tees_serialize_the_source_and_preserve_all_consumers() {
+    check(TEE_NESTED, &["TEE_NESTED 32:528,32:528,32:528 true true"]);
+}

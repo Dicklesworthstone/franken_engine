@@ -20,14 +20,23 @@ enum ReachableEdges {
 }
 
 /// A JSON Parse Record (JSON.parse source text access, bd-9vouw.380): the
-/// value one parse node produced, a primitive's source text, and the
+/// value one parse node produced, a primitive's source span, and the
 /// records of an array's elements or an object's entries, each taken once
 /// as the reviver walk reaches it.
 struct JsonParseRecord {
     value: Value,
-    source: Option<JsString>,
+    // Offsets into the operation's immutable UTF-16 input. Materialize only
+    // when a still-matching primitive reaches its reviver callback.
+    source: Option<std::ops::Range<usize>>,
     elements: Vec<Option<JsonParseRecord>>,
     entries: Vec<JsonParseRecordEntry>,
+}
+
+/// One reviver operation owns the record tree and borrows the input buffer
+/// whose temporary charge remains with json_parse_builtin_inner.
+struct JsonReviverInput<'a> {
+    record: JsonParseRecord,
+    units: &'a [u16],
 }
 
 /// Source order is retained only to select the final textual duplicate.
@@ -39,6 +48,11 @@ struct JsonParseRecordEntry {
 }
 
 impl JsonParseRecord {
+    fn source_units<'a>(&self, input: &'a [u16]) -> Option<&'a [u16]> {
+        let span = self.source.as_ref()?;
+        Some(&input[span.clone()])
+    }
+
     /// Index once, without allocating sorting scratch. Sorting by the unique
     /// textual ordinal makes last-duplicate selection independent of sort
     /// stability. Building and consuming a wide record now takes O(n log n)
@@ -218,8 +232,6 @@ impl InterpreterCore {
             }
             _ => None,
         };
-        drop(units);
-        self.json_release_temporary(unit_bytes);
         let outcome = (|| {
             let value = outcome?;
             let Some(record) = record else {
@@ -239,10 +251,18 @@ impl InterpreterCore {
                 JsString::from(""),
                 &reviver,
                 0,
-                Some(record),
+                JsonReviverInput {
+                    record,
+                    units: &units,
+                },
             )
         })();
         self.json_release_temporary(record_bytes);
+        // Reviver records borrow spans, not strings. Keep the original input
+        // admitted across every callback and nested parse; no repeated UTF-8
+        // offset scan or copied per-primitive source buffer is needed.
+        drop(units);
+        self.json_release_temporary(unit_bytes);
         outcome
     }
 
@@ -327,11 +347,7 @@ impl InterpreterCore {
             }
             _ => {
                 *pos = json_primitive_source_end(units, start);
-                let source = JsString::from_code_units(&units[start.min(*pos)..*pos]);
-                let bytes = Self::estimate_js_string_bytes(&source);
-                self.json_reserve_temporary(bytes)?;
-                *charged += bytes;
-                record.source = Some(source);
+                record.source = Some(start.min(*pos)..*pos);
             }
         }
         Ok(record)
@@ -596,7 +612,7 @@ impl InterpreterCore {
         name: JsString,
         reviver: &Value,
         depth: usize,
-        record: Option<JsonParseRecord>,
+        input: JsonReviverInput<'_>,
     ) -> Result<Value, InterpreterError> {
         // Guest mutations can introduce cycles after lexical parsing. Use an
         // explicit work stack: a Rust-recursive walk can overflow the native
@@ -624,7 +640,8 @@ impl InterpreterCore {
             record: Option<JsonParseRecord>,
         }
         let mut frames = Vec::<Frame>::new();
-        let mut next = Some((holder, name, record));
+        let source_units = input.units;
+        let mut next = Some((holder, name, Some(input.record)));
         let mut retained = 0_u64;
         let outcome = (|| {
             loop {
@@ -754,13 +771,12 @@ impl InterpreterCore {
                     let prototype = self.ensure_builtin_prototype("Object")?;
                     let object = self.alloc_object_with_prototype(Some(prototype))?;
                     if !frame.value.is_object_like()
-                        && let Some(source) = frame.record.as_ref().and_then(|r| r.source.clone())
+                        && let Some(source) = frame
+                            .record
+                            .as_ref()
+                            .and_then(|record| record.source_units(source_units))
                     {
-                        self.json_store_parsed_property(
-                            object,
-                            JsString::from("source"),
-                            Value::Str(source),
-                        )?;
+                        self.json_store_reviver_source(object, source)?;
                     }
                     Value::Object(object)
                 };
@@ -785,6 +801,30 @@ impl InterpreterCore {
         })();
         drop(frames);
         self.json_release_temporary(retained);
+        outcome
+    }
+
+    /// The context object must own its source even if the callback retains it.
+    /// Admit normalization and the returned backing before allocating, using
+    /// the serializer's bound: four bytes per exact unit plus two copies of
+    /// the at-most-three-byte projection. The fixed allowance covers backing
+    /// headers and the property name. No guest callback runs during this copy.
+    fn json_store_reviver_source(
+        &mut self,
+        object: ObjectId,
+        units: &[u16],
+    ) -> Result<(), InterpreterError> {
+        let bytes = u64::try_from(units.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(10)
+            .saturating_add(128);
+        self.json_reserve_temporary(bytes)?;
+        let outcome = self.json_store_parsed_property(
+            object,
+            JsString::from("source"),
+            Value::Str(JsString::from_code_units(units)),
+        );
+        self.json_release_temporary(bytes);
         outcome
     }
 
@@ -900,6 +940,8 @@ impl InterpreterCore {
 mod tests {
     use super::*;
 
+    mod source_spans;
+
     fn core() -> InterpreterCore {
         let mut config = InterpreterConfig::quickjs_defaults();
         config.granted_capabilities = [
@@ -917,7 +959,7 @@ mod tests {
         core.dispatch_builtin_hostcall("builtin:JsonParse", RegRange { start: 0, count: 1 }, None)
     }
 
-    fn parse_record(core: &mut InterpreterCore, text: &str) -> (JsonParseRecord, u64) {
+    fn parse_record(core: &mut InterpreterCore, text: &str) -> (JsonParseRecord, u64, Vec<u16>) {
         let units: Vec<u16> = text.encode_utf16().collect();
         let value = core.json_parse_document(&units).unwrap();
         let mut charged = 0;
@@ -926,21 +968,21 @@ mod tests {
             .json_parse_record(&units, &mut pos, value, &mut charged)
             .unwrap();
         assert_eq!(pos, units.len());
-        (record, charged)
+        (record, charged, units)
     }
 
     #[test]
     fn source_record_index_keeps_final_duplicate_and_consumes_once() {
         let mut core = core();
-        let (mut record, charged) =
+        let (mut record, charged, units) =
             parse_record(&mut core, r#"{"z":0,"a":1.00,"middle":3,"a":2e0,"z":-0}"#);
         assert_eq!(record.entries.len(), 3);
         for (key, source) in [("z", "-0"), ("middle", "3"), ("a", "2e0")] {
             let key = JsString::from(key);
             let child = record.take_entry(&key).expect("parsed key");
             assert_eq!(
-                child.source.as_ref().and_then(JsString::as_str),
-                Some(source)
+                child.source_units(&units).map(JsString::from_code_units),
+                Some(JsString::from(source))
             );
             assert!(record.take_entry(&key).is_none());
         }
@@ -964,7 +1006,7 @@ mod tests {
     #[test]
     fn source_record_index_distinguishes_exact_surrogate_keys() {
         let mut core = core();
-        let (mut record, charged) = parse_record(
+        let (mut record, charged, units) = parse_record(
             &mut core,
             r#"{"\ud800":1,"\ud801":2,"\ufffd":3,"\ud800":4.00}"#,
         );
@@ -974,8 +1016,8 @@ mod tests {
                 .take_entry(&JsString::from_code_units(&[unit]))
                 .expect("distinct exact key");
             assert_eq!(
-                child.source.as_ref().and_then(JsString::as_str),
-                Some(source)
+                child.source_units(&units).map(JsString::from_code_units),
+                Some(JsString::from(source))
             );
         }
         drop(record);
@@ -992,7 +1034,7 @@ mod tests {
             .map(|index| format!("\"k{index:04}\":{index}"))
             .collect();
         let text = format!("{{{}}}", entries.join(","));
-        let (mut record, charged) = parse_record(&mut core, &text);
+        let (mut record, charged, units) = parse_record(&mut core, &text);
         assert_eq!(record.entries.len(), width);
         assert!(
             record
@@ -1006,7 +1048,10 @@ mod tests {
                 .take_entry(&JsString::from(format!("k{index:04}")))
                 .expect("indexed key");
             assert_eq!(child.value, Value::Int(index as i64));
-            assert_eq!(child.source, Some(JsString::from(index.to_string())));
+            assert_eq!(
+                child.source_units(&units).map(JsString::from_code_units),
+                Some(JsString::from(index.to_string()))
+            );
         }
         assert!(record.entries.iter().all(|entry| entry.record.is_none()));
         drop(record);
@@ -1081,7 +1126,11 @@ mod tests {
             .json_parse_record(&units[..6], &mut pos, parsed, &mut charged)
             .unwrap();
         assert_eq!(pos, 6);
-        assert_eq!(record.source, Some(text));
+        assert_eq!(record.source, Some(0..6));
+        assert_eq!(
+            record.source_units(&units).map(JsString::from_code_units),
+            Some(text)
+        );
         drop(record);
         core.json_release_temporary(charged);
         assert_eq!(core.json_parse_temporary_bytes, 0);

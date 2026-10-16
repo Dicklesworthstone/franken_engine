@@ -24,6 +24,7 @@
 
 use super::*;
 
+mod registry;
 mod transfer;
 
 /// The largest `maxByteLength` accepted: Node v22.2.0 accepts 2^45 and
@@ -282,27 +283,26 @@ impl InterpreterCore {
     /// was detached, and drop collected views from its registry.
     fn refresh_buffer_views(&mut self, buffer: ObjectId) -> Result<(), InterpreterError> {
         let backing = self.buffer_backing(buffer)?;
-        let registered = backing.max_byte_length.is_some();
-        let candidates: Vec<ObjectId> = if registered {
-            backing.views.clone()
-        } else {
-            // A fixed-length buffer registers no views; only detaching one
-            // gets here, so the heap walk is rare.
-            self.heap
-                .iter_live()
-                .filter(|(_, object)| {
-                    object
-                        .typed_array
+        if backing.max_byte_length.is_some() {
+            return self.refresh_registered_buffer_views(buffer);
+        }
+        // Fixed-length buffers still need complete discovery: registration is
+        // guaranteed only for resizable/growable buffers. Keep that fallback.
+        let candidates: Vec<ObjectId> = self
+            .heap
+            .iter_live()
+            .filter(|(_, object)| {
+                object
+                    .typed_array
+                    .as_ref()
+                    .is_some_and(|view| view.buffer == buffer)
+                    || object
+                        .data_view
                         .as_ref()
                         .is_some_and(|view| view.buffer == buffer)
-                        || object
-                            .data_view
-                            .as_ref()
-                            .is_some_and(|view| view.buffer == buffer)
-                })
-                .filter_map(|(index, _)| u32::try_from(index).ok().map(ObjectId))
-                .collect()
-        };
+            })
+            .filter_map(|(index, _)| u32::try_from(index).ok().map(ObjectId))
+            .collect();
         self.refresh_buffer_view_candidates(buffer, candidates.into_iter())
     }
 

@@ -32,6 +32,12 @@ impl fmt::Debug for ExecutionHostBindings<'_> {
 }
 
 impl ExecutionHostBindings<'_> {
+    /// Effective absolute job deadline, already attenuated by ancestor scopes.
+    /// Native execution and both provider decorators observe this SAME deadline.
+    pub fn deadline(&self) -> Option<Instant> {
+        self.admission.deadline()
+    }
+
     /// Preserve the configured provider's policy while sharing this group's
     /// operation credits, in-flight frontier and the job's cancellation lifetime.
     pub fn bind_host_io(&self, provider: Arc<dyn HostIoProvider>) -> BudgetedHostIo {
@@ -101,12 +107,45 @@ impl ExecutionTaskGroup {
             &mut InterpreterConfig,
         ) -> Result<Option<Arc<dyn InterpreterHook>>, WorkBudgetError>,
     ) -> Result<ExecutionTaskId, ExecutionGroupStartError> {
+        self.spawn_effect_prepared(module, current_config, trace_id, None, prepare)
+    }
+
+    /// Deadline-aware dispatch using the exact job and effect scope supervised
+    /// by this group. The deadline includes trusted preparation and reaches all
+    /// derived provider controls; no fresh timeout begins at worker creation.
+    /// Neither expiry nor setup failure may hide an already-admitted provider
+    /// call from the existing drain frontier. Sibling jobs remain independent.
+    pub fn spawn_with_effect_preparation_until(
+        &mut self,
+        module: Ir3Module,
+        current_config: InterpreterConfig,
+        trace_id: impl Into<String>,
+        deadline: Instant,
+        prepare: impl FnOnce(
+            &ExecutionHostBindings<'_>,
+            &mut InterpreterConfig,
+        ) -> Result<Option<Arc<dyn InterpreterHook>>, WorkBudgetError>,
+    ) -> Result<ExecutionTaskId, ExecutionGroupStartError> {
+        self.spawn_effect_prepared(module, current_config, trace_id, Some(deadline), prepare)
+    }
+
+    fn spawn_effect_prepared(
+        &mut self,
+        module: Ir3Module,
+        current_config: InterpreterConfig,
+        trace_id: impl Into<String>,
+        deadline: Option<Instant>,
+        prepare: impl FnOnce(
+            &ExecutionHostBindings<'_>,
+            &mut InterpreterConfig,
+        ) -> Result<Option<Arc<dyn InterpreterHook>>, WorkBudgetError>,
+    ) -> Result<ExecutionTaskId, ExecutionGroupStartError> {
         if self.is_closed() {
             return Err(ExecutionGroupStartError::Closed);
         }
         let effects = self.effects.clone()
             .ok_or(ExecutionGroupStartError::HostEffectsUnconfigured)?;
-        self.spawn_with_preparation(module, current_config, trace_id, |admission, config| {
+        self.spawn_prepared(module, current_config, trace_id, deadline, |admission, config| {
             prepare(&ExecutionHostBindings { admission, effects: &effects }, config)
         })
     }

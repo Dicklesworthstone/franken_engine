@@ -217,6 +217,22 @@ impl ExecutionTaskGroup {
         self.spawn_with_hook(module, current_config, trace_id, None)
     }
 
+    /// Start one job with an absolute deadline, without expiring sibling jobs.
+    /// Time spent in setup counts against the same deadline as native execution.
+    /// The earlier of this deadline and the inherited pool deadline applies.
+    /// Expiry is cooperative cancellation; it does not free an unfinished slot.
+    pub fn spawn_until(
+        &mut self,
+        module: Ir3Module,
+        current_config: InterpreterConfig,
+        trace_id: impl Into<String>,
+        deadline: Instant,
+    ) -> Result<ExecutionTaskId, ExecutionGroupStartError> {
+        self.spawn_with_preparation_until(module, current_config, trace_id, deadline, |_, _| {
+            Ok(None)
+        })
+    }
+
     /// Configuration and policy hooks are supplied at dispatch, not cached from
     /// enqueue time. Capacity/storage failures precede debit and VM creation.
     /// Once admitted, startup failures and panics never refund instruction work.
@@ -246,8 +262,42 @@ impl ExecutionTaskGroup {
     pub fn spawn_with_preparation(
         &mut self,
         module: Ir3Module,
+        current_config: InterpreterConfig,
+        trace_id: impl Into<String>,
+        prepare: impl FnOnce(
+            &ExecutionAdmission,
+            &mut InterpreterConfig,
+        ) -> Result<Option<Arc<dyn InterpreterHook>>, WorkBudgetError>,
+    ) -> Result<ExecutionTaskId, ExecutionGroupStartError> {
+        self.spawn_prepared(module, current_config, trace_id, None, prepare)
+    }
+
+    /// Prepare and start a deadline-bound job through the same checked path as
+    /// ordinary dispatch. Preparation borrows the exact deadline-bound admission;
+    /// its I/O/process controls retain that deadline even if they escape setup.
+    /// Elapsed deadlines refuse before trace conversion or setup. Expiry during
+    /// setup consumes the reservation but cannot start a knowingly expired job.
+    /// A timeout never rolls back external work already performed by setup.
+    pub fn spawn_with_preparation_until(
+        &mut self,
+        module: Ir3Module,
+        current_config: InterpreterConfig,
+        trace_id: impl Into<String>,
+        deadline: Instant,
+        prepare: impl FnOnce(
+            &ExecutionAdmission,
+            &mut InterpreterConfig,
+        ) -> Result<Option<Arc<dyn InterpreterHook>>, WorkBudgetError>,
+    ) -> Result<ExecutionTaskId, ExecutionGroupStartError> {
+        self.spawn_prepared(module, current_config, trace_id, Some(deadline), prepare)
+    }
+
+    fn spawn_prepared(
+        &mut self,
+        module: Ir3Module,
         mut current_config: InterpreterConfig,
         trace_id: impl Into<String>,
+        deadline: Option<Instant>,
         prepare: impl FnOnce(
             &ExecutionAdmission,
             &mut InterpreterConfig,
@@ -255,6 +305,9 @@ impl ExecutionTaskGroup {
     ) -> Result<ExecutionTaskId, ExecutionGroupStartError> {
         if self.is_closed() {
             return Err(ExecutionGroupStartError::Closed);
+        }
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            return Err(ExecutionGroupStartError::Admission(WorkBudgetError::Revoked));
         }
         if self.entries.len() >= self.capacity {
             return Err(ExecutionGroupStartError::Capacity {
@@ -270,10 +323,11 @@ impl ExecutionTaskGroup {
             .try_reserve(1)
             .map_err(|_| ExecutionGroupStartError::Allocation)?;
         let trace_id = trace_id.into();
-        let admission = self
-            .pool
-            .reserve(current_config.instruction_budget)
-            .map_err(ExecutionGroupStartError::Admission)?;
+        let admission = match deadline {
+            Some(deadline) => self.pool.reserve_until(current_config.instruction_budget, deadline),
+            None => self.pool.reserve(current_config.instruction_budget),
+        }
+        .map_err(ExecutionGroupStartError::Admission)?;
         if admission.task_control().is_cancelled() {
             return Err(ExecutionGroupStartError::Admission(WorkBudgetError::Revoked));
         }

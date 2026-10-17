@@ -490,9 +490,13 @@ impl InterpreterCore {
                 return Ok(index);
             };
             self.observe_scoped_callback_result()?;
-            if let Err(error) =
-                self.array_from_append(module, mapper, this_arg, target, index, element)
-            {
+            // The iterator and destination live only in native locals here.
+            // Pin them while the mapper executes so a long mapper may collect
+            // without reclaiming either side of the ongoing Array.from.
+            if let Err(error) = self.with_gc_nested_request(
+                vec![iterator.clone(), Value::Object(target.id)],
+                |core| core.array_from_append(module, mapper, this_arg, target, index, element),
+            ) {
                 return self.array_from_close_after_error(module, iterator, error);
             }
             index += 1;
@@ -583,7 +587,12 @@ impl InterpreterCore {
             let element =
                 self.iterator_protocol_property(module, backing, &key, receiver.clone())?;
             self.observe_scoped_callback_result()?;
-            self.array_from_append(module, mapper, this_arg, target, index, element)?;
+            // The source receiver and destination are live across the
+            // mapper even when no JavaScript register holds the target yet.
+            self.with_gc_nested_request(
+                vec![receiver.clone(), Value::Object(target.id)],
+                |core| core.array_from_append(module, mapper, this_arg, target, index, element),
+            )?;
         }
         Ok((target, length))
     }
@@ -618,7 +627,10 @@ impl InterpreterCore {
             // A single code point has a bounded constructor/Arc footprint.
             self.json_reserve_temporary(256)?;
             let element = Value::Str(JsString::from_code_units(&pair[..length]));
-            let outcome = self.array_from_append(module, mapper, this_arg, target, index, element);
+            let outcome = self.with_gc_nested_request(
+                vec![Value::Object(target.id)],
+                |core| core.array_from_append(module, mapper, this_arg, target, index, element),
+            );
             self.json_release_temporary(256);
             outcome?;
             index += 1;

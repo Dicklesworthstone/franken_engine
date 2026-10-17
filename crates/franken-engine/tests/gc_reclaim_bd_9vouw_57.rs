@@ -589,6 +589,23 @@ const TASK_CHURN_CASES: &[(&str, &str)] = &[
          console.log(result.sum, result.total, result.previous.sum);",
         "6 225000 5",
     ),
+    // Array.from mappers must be able to collect in the middle of the
+    // initial construction, retaining earlier elements and their source.
+    (
+        "const input = { 0: 1, 1: 2, 2: 3, length: 3 }; \
+         const result = Array.from(input, (x, k) => { let n = 0; \
+           for (let i = 0; i < 150000; i++) { const g = { i }; n += g.i & 1; } \
+           return { value: x + ':' + k + ':' + n }; }); \
+         console.log(result.map(x => x.value).join(','), input[0]);",
+        "1:0:75000,2:1:75000,3:2:75000 1",
+    ),
+    (
+        "const input = [1, 2, 3]; const result = Array.from(input, (x, k) => { \
+           let n = 0; for (let i = 0; i < 150000; i++) { const g = { i }; n += g.i & 1; } \
+           return { value: x + ':' + k + ':' + n }; }); \
+         console.log(result.map(x => x.value).join(','), input.join());",
+        "1:0:75000,2:1:75000,3:2:75000 1,2,3",
+    ),
     // One temporary per callback: collection runs between callbacks.
     (
         "let n = 0; const zs = Array.from({ length: 150000 }, (_, i) => i); \

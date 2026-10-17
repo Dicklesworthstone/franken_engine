@@ -4009,7 +4009,7 @@ mod tests {
         assert_eq!(second.macrotask.unwrap().handler, ClosureHandle(2));
         assert_eq!(event_loop.clock.now_ms(), u64::MAX);
         assert_eq!(
-            event_loop.witness.events().last(),
+            event_loop.witness.last(),
             Some(&WitnessEvent::MacrotaskExecuted {
                 source: MacrotaskSource::Timer,
                 registration_seq: 1,

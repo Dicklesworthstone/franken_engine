@@ -771,16 +771,25 @@ impl InterpreterCore {
                     if present {
                         let element = self.generic_get(m, o, &key)?;
                         self.observe_scoped_callback_result()?;
-                        accumulator = self.invoke_inline_method_call(
-                            m,
-                            callback.clone(),
-                            Value::Undefined,
-                            vec![
-                                accumulator,
-                                element,
-                                Self::generic_length_value(k),
-                                self.generic_object_value(o),
-                            ],
+                        // The receiver and the accumulator chain must remain
+                        // rooted while a callback's nested run loop collects.
+                        // Passing the accumulator as an argument roots it in
+                        // the callee; explicitly pin the enclosing receiver.
+                        accumulator = self.with_gc_nested_request(
+                            vec![Value::Object(o)],
+                            |core| {
+                                core.invoke_inline_method_call(
+                                    m,
+                                    callback.clone(),
+                                    Value::Undefined,
+                                    vec![
+                                        accumulator,
+                                        element,
+                                        Self::generic_length_value(k),
+                                        core.generic_object_value(o),
+                                    ],
+                                )
+                            },
                         )?;
                         self.observe_scoped_callback_result()?;
                     }

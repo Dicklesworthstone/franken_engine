@@ -569,6 +569,26 @@ const TASK_CHURN_CASES: &[(&str, &str)] = &[
          return [{ x }, { x: x * 10 }]; }).map(o => o.x).join());",
         "1,10,2,20",
     ),
+    // Generic reduce/reduceRight callbacks must collect repeatedly inside
+    // each callback, while preserving the receiver and accumulator chain.
+    (
+        "const xs = { 0: 1, 1: 2, 2: 3, length: 3 }; \
+         const result = Array.prototype.reduce.call(xs, (acc, x) => { \
+           let n = 0; for (let i = 0; i < 150000; i++) { const g = { i }; n += g.i & 1; } \
+           return { sum: acc.sum + x, total: acc.total + n, previous: acc }; \
+         }, { sum: 0, total: 0, previous: null }); \
+         console.log(result.sum, result.total, result.previous.sum);",
+        "6 225000 3",
+    ),
+    (
+        "const xs = { 0: 1, 1: 2, 2: 3, length: 3 }; \
+         const result = Array.prototype.reduceRight.call(xs, (acc, x) => { \
+           let n = 0; for (let i = 0; i < 150000; i++) { const g = { i }; n += g.i & 1; } \
+           return { sum: acc.sum + x, total: acc.total + n, previous: acc }; \
+         }, { sum: 0, total: 0, previous: null }); \
+         console.log(result.sum, result.total, result.previous.sum);",
+        "6 225000 5",
+    ),
     // One temporary per callback: collection runs between callbacks.
     (
         "let n = 0; const zs = Array.from({ length: 150000 }, (_, i) => i); \

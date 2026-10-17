@@ -2600,7 +2600,11 @@ impl EventLoop {
 
     /// Schedule a timer macrotask. Returns the registration sequence.
     pub fn set_timeout(&mut self, handler: ClosureHandle, delay_ms: u64, label: Label) -> u64 {
-        let fire_at = self.clock.now_ms() + delay_ms;
+        // Atomics.wait can advance the deterministic virtual clock to u64::MAX.
+        // Wrapping here makes a later timer execute *before* its requested
+        // deadline (and panics in debug builds). Saturation preserves the
+        // monotone clock invariant even at the representable boundary.
+        let fire_at = self.clock.now_ms().saturating_add(delay_ms);
         self.macrotasks
             .schedule(MacrotaskSource::Timer, handler, fire_at, label)
     }
@@ -3964,6 +3968,53 @@ mod tests {
         assert!(result.clock_advanced);
         assert!(result.macrotask.is_some());
         assert_eq!(event_loop.clock.now_ms(), 100);
+    }
+
+    #[test]
+    fn event_loop_timer_deadlines_saturate_after_extreme_virtual_wait() {
+        let mut event_loop = EventLoop::new();
+        event_loop.clock.advance_to(u64::MAX - 5);
+        let sequence = event_loop.set_timeout(ClosureHandle(7), 10, Label::Public);
+        let pending = event_loop.macrotasks.iter_pending().next().unwrap();
+        assert_eq!(pending.registration_seq, sequence);
+        assert_eq!(pending.scheduled_at, u64::MAX);
+        assert_eq!(event_loop.clock.now_ms(), u64::MAX - 5);
+
+        let result = event_loop.turn();
+        assert!(result.clock_advanced);
+        assert_eq!(result.macrotask.unwrap().handler, ClosureHandle(7));
+        assert_eq!(event_loop.clock.now_ms(), u64::MAX);
+
+        // A subsequent timer must not wrap to the start of the clock.
+        let sequence = event_loop.set_timeout(ClosureHandle(8), 100, Label::Secret);
+        let pending = event_loop.macrotasks.iter_pending().next().unwrap();
+        assert_eq!(pending.registration_seq, sequence);
+        assert_eq!(pending.scheduled_at, u64::MAX);
+        let result = event_loop.turn();
+        assert!(!result.clock_advanced);
+        assert_eq!(result.macrotask.unwrap().handler, ClosureHandle(8));
+        assert_eq!(event_loop.clock.now_ms(), u64::MAX);
+    }
+
+    #[test]
+    fn virtual_timer_deadlines_remain_monotone_near_u64_limit() {
+        let mut event_loop = EventLoop::new();
+        event_loop.clock.advance_to(u64::MAX - 20);
+        event_loop.set_timeout(ClosureHandle(1), 5, Label::Public);
+        event_loop.set_timeout(ClosureHandle(2), 100, Label::Public);
+        let first = event_loop.turn();
+        assert_eq!(first.macrotask.unwrap().handler, ClosureHandle(1));
+        assert_eq!(event_loop.clock.now_ms(), u64::MAX - 15);
+        let second = event_loop.turn();
+        assert_eq!(second.macrotask.unwrap().handler, ClosureHandle(2));
+        assert_eq!(event_loop.clock.now_ms(), u64::MAX);
+        assert_eq!(
+            event_loop.witness.events().last(),
+            Some(&WitnessEvent::MacrotaskExecuted {
+                source: MacrotaskSource::Timer,
+                registration_seq: 1,
+            })
+        );
     }
 
     #[test]

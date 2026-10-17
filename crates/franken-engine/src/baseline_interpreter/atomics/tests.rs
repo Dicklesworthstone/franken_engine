@@ -201,3 +201,45 @@ fn zero_count_never_settles_a_live_waiter() {
     pending(&core, promise);
     accounted(&core);
 }
+
+
+#[test]
+fn enormous_finite_wait_timeout_cannot_saturate_the_virtual_clock() {
+    // JS accepts huge finite timeouts, even those beyond the range of u64.
+    // waitAsync already bounds them to 2^53 ms; the synchronous path must
+    // obey the same bound so later timers remain representable.
+    for throughput in [false, true] {
+        let tree = crate::parser_api_stability::parse_script(
+            "const a = new Int32Array(new SharedArrayBuffer(4)); \
+             Atomics.wait(a, 0, 0, 1e300);",
+        )
+        .expect("wait program parses");
+        let module = lower_ir0_to_ir3(
+            &Ir0Module::from_syntax_tree(tree, "atomics-large-wait.js"),
+            &LoweringContext::new("atomics-large-wait", "bounded-timeout", "builtin-only"),
+        )
+        .expect("wait program lowers")
+        .ir3;
+        let mut config = if throughput {
+            InterpreterConfig::v8_defaults()
+        } else {
+            InterpreterConfig::quickjs_defaults()
+        };
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]
+        .into_iter()
+        .collect();
+        let mut core = InterpreterCore::new(config, "atomics-large-wait");
+        let result = core.execute(&module).expect("finite wait completes");
+        assert_eq!(result.value, Value::str("timed-out"));
+        let now = core.event_loop.clock.now_ms();
+        assert!(
+            (ATOMICS_MAX_TIMEOUT_MS..ATOMICS_MAX_TIMEOUT_MS + 1000).contains(&now),
+            "large finite wait advanced virtual time to {now}"
+        );
+        accounted(&core);
+    }
+}

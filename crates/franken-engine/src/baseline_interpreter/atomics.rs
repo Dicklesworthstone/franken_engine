@@ -217,9 +217,14 @@ impl InterpreterCore {
                 // timeout pass on it.
                 self.virtual_wall_clock_ms();
                 let now = self.event_loop.clock.now_ms();
+                // A finite JS Number can be far larger than u64::MAX.
+                // Bound synchronous waits the same way as waitAsync: otherwise
+                // ToInteger's saturating cast jumps the virtual clock to
+                // u64::MAX, breaking subsequent deadline arithmetic.
+                let delay_ms = (timeout.ceil() as u64).min(ATOMICS_MAX_TIMEOUT_MS);
                 self.event_loop
                     .clock
-                    .advance_to(now.saturating_add(timeout.ceil() as u64));
+                    .advance_to(now.saturating_add(delay_ms));
                 Ok(Value::str("timed-out"))
             }
             "waitAsync" => {

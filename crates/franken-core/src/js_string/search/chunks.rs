@@ -3,9 +3,10 @@
 //! Large leaves use the standard library's substring search. A byte KMP state
 //! carries matches across leaves; small leaves feed that state directly, so a
 //! pattern split over many leaves does not rescan a growing boundary window.
-//! Failure tables are built only when streaming across a boundary is needed:
-//! leaf-local hits need none. Short tables stay on the stack; long patterns
-//! allocate only needle-sized scratch. Exact-only needles keep the unit search.
+//! Failure tables are built only when a matched prefix needs a fallback:
+//! straight cross-leaf and leaf-local hits need none. Short tables stay on the
+//! stack; long patterns allocate needle-sized scratch only when needed.
+//! Exact-only needles keep the unit search.
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -97,8 +98,8 @@ impl<'a> Matcher<'a> {
     }
 
     /// A leaf-local hit needs neither O(m) preprocessing nor an allocation.
-    /// Prepare at most once, only before a nonempty streaming scan. In
-    /// particular, empty leaves and single-byte bulk misses leave this absent.
+    /// Prepare at most once, only when a prefix fallback is required. Empty
+    /// leaves, leading misses and straight cross-leaf matches need no table.
     fn prepare_failure(&mut self) {
         if self.failure.is_some() {
             return;
@@ -127,22 +128,67 @@ impl<'a> Matcher<'a> {
         }]
     }
 
-    /// Return the number of directional bytes consumed at the first match.
+    /// Stream without a failure table until a nonempty prefix mismatches.
+    /// Straight matches across arbitrarily many leaves need no preprocessing;
+    /// leading misses need no scratch, regardless of the needle's length.
+    /// A completed match is retained as a sentinel until another nonempty
+    /// scan asks to continue, preserving overlapping matches without paying
+    /// for a table when the caller returns its first search result.
     fn scan(&mut self, bytes: &[u8]) -> Option<usize> {
         if bytes.is_empty() {
             return None;
         }
-        self.prepare_failure();
-        // Resolve the optional table and its inline/heap storage once per
-        // span, not on every byte or every prefix fallback in the hot loop.
+        if self.failure.is_some() {
+            return self.scan_prepared(bytes);
+        }
+        let width = self.text.len();
+        let mut consumed = 0;
+        while consumed < bytes.len() {
+            let byte = bytes[if self.backwards {
+                bytes.len() - 1 - consumed
+            } else {
+                consumed
+            }];
+            if self.matched == width
+                || (self.matched != 0 && byte != self.byte(self.matched))
+            {
+                self.prepare_failure();
+                let remaining = if self.backwards {
+                    &bytes[..bytes.len() - consumed]
+                } else {
+                    &bytes[consumed..]
+                };
+                return self.scan_prepared(remaining).map(|count| consumed + count);
+            }
+            #[cfg(test)]
+            {
+                self.fed_bytes += 1;
+            }
+            if byte == self.byte(self.matched) {
+                self.matched += 1;
+            }
+            consumed += 1;
+            if self.matched == width {
+                return Some(consumed);
+            }
+        }
+        None
+    }
+
+    /// Keep the existing resolved-table hot loop after the first fallback.
+    /// The byte that required preprocessing is processed here exactly once.
+    fn scan_prepared(&mut self, bytes: &[u8]) -> Option<usize> {
         let failure = self
             .failure
             .as_ref()
-            .expect("streaming scan prepares its failure table")
+            .expect("prefix fallback prepares its failure table")
             .as_slice();
         let pattern = self.text.as_bytes();
         let backwards = self.backwards;
         let matched = &mut self.matched;
+        if *matched == pattern.len() {
+            *matched = failure[*matched - 1];
+        }
         #[cfg(test)]
         let fed_bytes = &mut self.fed_bytes;
         let pattern_byte = |index: usize| {
@@ -367,3 +413,6 @@ pub(super) fn search(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod deferred_tests;

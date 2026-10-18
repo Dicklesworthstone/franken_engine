@@ -287,6 +287,10 @@ fn lazily_prepared_table_is_reused_across_small_leaves() {
     for backwards in [false, true] {
         let mut matcher = Matcher::new(&needle, backwards);
         assert!(matcher.in_leaf("x").is_none());
+        assert!(matcher.failure.is_none(), "leading misses need no table");
+        let prefix = if backwards { "z" } else { "a" };
+        assert!(matcher.in_leaf(prefix).is_none());
+        assert!(matcher.in_leaf("x").is_none());
         let table = matcher.failure.as_ref().unwrap().overflow.as_ptr();
         for _ in 0..32 {
             assert!(matcher.in_leaf("a").is_none());

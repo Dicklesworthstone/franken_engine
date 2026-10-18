@@ -1051,15 +1051,41 @@ impl<V> OrderedStringMap<V> {
 
     /// The non-index string key at `position` in insertion order, `None`
     /// past its end. For a map whose keys are never array indices (an
-    /// engine's Map and Set entry storage) this is [`Self::keys`]'s order,
-    /// with constant-time access for a live cursor.
+    /// engine's Map and Set entry storage) this is [`Self::keys`]'s order.
+    ///
+    /// The common deletion-free cursor is one direct vector lookup. With
+    /// tombstones, walk only deleted physical slots before the requested live
+    /// position; do not rescan every preceding live key on each iterator step.
     pub fn insertion_key_at(&self, position: usize) -> Option<&String> {
-        self.live_named_string_keys().nth(position)
+        let tombstones = self
+            .sidecars()
+            .map(|sidecars| &sidecars.named_string_tombstones);
+        let Some(tombstones) = tombstones.filter(|deleted| !deleted.is_empty()) else {
+            return self.string_insertion_order.get(position);
+        };
+        let mut physical = position;
+        for &deleted in tombstones {
+            if deleted > physical {
+                break;
+            }
+            physical = physical.checked_add(1)?;
+        }
+        self.string_insertion_order.get(physical)
     }
 
     /// The insertion-order position of the non-index string key `key`, as
     /// [`Self::insertion_key_at`] counts it.
     pub fn insertion_key_position(&self, key: &str) -> Option<usize> {
+        if let Some(sidecars) = self.sidecars()
+            && let Some(positions) = sidecars.named_string_positions.as_ref()
+            && let Some(&physical) = positions.get(key)
+        {
+            let deleted_before = sidecars
+                .named_string_tombstones
+                .range(..physical)
+                .count();
+            return physical.checked_sub(deleted_before);
+        }
         self.live_named_string_keys()
             .position(|candidate| candidate == key)
     }
@@ -4307,6 +4333,32 @@ mod tests {
         assert!(map.string_insertion_order.len() < 257);
         assert_eq!(map.keys().next().map(String::as_str), Some("key-129"));
         assert_eq!(map.keys().last().map(String::as_str), Some("key-0"));
+    }
+
+    #[test]
+    fn insertion_cursor_uses_live_order_across_tombstones_and_readds() {
+        let mut map = OrderedStringMap::new();
+        for index in 0..96 {
+            map.insert(format!("key-{index}"), index);
+        }
+        for index in [0, 1, 3, 8, 13, 21, 34, 55] {
+            assert_eq!(map.remove(&format!("key-{index}")), Some(index));
+        }
+
+        let expected = map.keys().cloned().collect::<Vec<_>>();
+        for (position, key) in expected.iter().enumerate() {
+            assert_eq!(map.insertion_key_at(position), Some(key));
+            assert_eq!(map.insertion_key_position(key), Some(position));
+        }
+        assert_eq!(map.insertion_key_at(expected.len()), None);
+        assert_eq!(map.insertion_key_position("missing"), None);
+
+        // Re-adding a tombstoned key appends it and updates both directions.
+        map.insert("key-3".to_string(), 999);
+        let last = map.len() - 1;
+        assert_eq!(map.insertion_key_at(last).map(String::as_str), Some("key-3"));
+        assert_eq!(map.insertion_key_position("key-3"), Some(last));
+        assert_eq!(map.get("key-3"), Some(&999));
     }
 
     #[test]

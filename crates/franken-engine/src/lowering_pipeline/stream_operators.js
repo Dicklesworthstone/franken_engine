@@ -82,6 +82,55 @@
     if (typeof fn !== 'function') throw failure('ERR_INVALID_ARG_TYPE', 'The "fn" argument must be a function');
   }
 
+  function iteratorObject(value) {
+    return value !== null && (typeof value === 'object' || typeof value === 'function');
+  }
+  function sourceIterator(source) {
+    const iterator = apply(source[asyncIteratorKey], source, []);
+    if (!iteratorObject(iterator)) throw new TypeError('An async iterator must be an object');
+    // GetIteratorFromMethod captures next once. Reading it for each chunk can
+    // change the producer halfway through an operation, or repeat a getter.
+    return { iterator: iterator, next: iterator.next, done: false };
+  }
+  function nextSource(record) {
+    try { return apply(record.next, record.iterator, []); }
+    catch (error) { record.done = true; throw error; }
+  }
+  function sourceDone(record, step) {
+    try {
+      if (!iteratorObject(step)) throw new TypeError('An iterator result must be an object');
+      const done = !!step.done;
+      if (done) record.done = true;
+      return done;
+    } catch (error) { record.done = true; throw error; }
+  }
+  function sourceValue(record, step) {
+    try { return step.value; }
+    catch (error) { record.done = true; throw error; }
+  }
+  async function closeSource(source, record, abrupt) {
+    if (record === undefined || record.done) return;
+    record.done = true;
+    // A native Readable's pending next must be interrupted before return is
+    // awaited. Still attempt iterator cleanup if a user destructor throws.
+    let failed = false;
+    let reason;
+    try {
+      const destroy = source == null ? undefined : source.destroy;
+      if (typeof destroy === 'function' && !source.destroyed) apply(destroy, source, []);
+    } catch (error) { failed = true; reason = error; }
+    try {
+      const method = record.iterator.return;
+      if (method != null) {
+        const result = await apply(method, record.iterator, []);
+        if (!iteratorObject(result)) throw new TypeError('An iterator return result must be an object');
+      }
+    } catch (error) { if (!failed) { failed = true; reason = error; } }
+    // A throw completion wins over cleanup failure, including falsy reasons.
+    // Normal early termination still observes a broken return method/result.
+    if (failed && !abrupt) throw reason;
+  }
+
   // Do not let a replaced Array iterator change private abort dependencies.
   function signalSources(external, internal) {
     const sources = [external, internal];
@@ -130,7 +179,7 @@
     // native aborted flag is set. release() removes this private listener.
     apply(addEvent, signal, ['abort', onAbort]);
     function check() { if (isAborted()) throw reason(); }
-    function race(promise) {
+    function race(promise, iterator) {
       return new PromiseClass(function (resolve, reject) {
         // next()/a callback may synchronously abort and then return a rejected
         // promise. Always observe that promise, including an already-stopped
@@ -141,6 +190,9 @@
           try { check(); resolve(value); } catch (error) { reject(error); }
         }, function (error) {
           apply(setDelete, pending, [reject]);
+          // Only an actual next rejection completes its iterator record.
+          // Cancellation of this race must still close a pending producer.
+          if (iterator !== undefined) iterator.done = true;
           reject(error);
         });
         try { check(); } catch (error) {
@@ -184,9 +236,9 @@
       let done = false;
       let stopped = false;
       let failed = false;
+      let abrupt = false;
       let changed;
       let upstream;
-      let upstreamDone = false;
       let inner;
       let innerIterator;
       function wake() { const resolve = changed; changed = undefined; if (resolve) resolve(); }
@@ -214,7 +266,7 @@
       async function pump() {
         try {
           scope.check();
-          upstream = source[asyncIteratorKey]();
+          upstream = sourceIterator(source);
           while (!stopped && !failed) {
             // This loop's wait is independent of the consumer's wait: one
             // notification wakes both without accumulating promise reactions.
@@ -223,14 +275,15 @@
             }
             if (stopped || failed) break;
             scope.check();
-            const step = await scope.race(upstream.next());
-            if (step.done) { upstreamDone = true; break; }
+            const step = await scope.race(nextSource(upstream), upstream);
+            if (sourceDone(upstream, step)) break;
+            const input = sourceValue(upstream, step);
             scope.check();
             if (stopped || failed) break;
-            const slot = push(step.value);
+            const slot = push(input);
             active++;
             try {
-              const value = fn(step.value, { signal: scope.signal });
+              const value = fn(input, { signal: scope.signal });
               then(resolved(value), function (value) { settle(slot, value, undefined, false); capacityWake(); },
                 function (error) { settle(slot, undefined, error, true); capacityWake(); });
             } catch (error) { settle(slot, undefined, error, true); }
@@ -277,6 +330,7 @@
             // No array/Buffer materialization: pull an inner value on demand.
             innerIterator = (async function* () { yield* inner; })();
             let innerDone = false;
+            let innerAbrupt = false;
             try {
               while (true) {
                 const step = await scope.race(innerIterator.next());
@@ -284,21 +338,20 @@
                 scope.check();
                 yield step.value;
               }
-            } finally {
+            } catch (error) { innerAbrupt = true; throw error; }
+            finally {
               // Interrupt native Readable reads before waiting for return().
               // Arbitrary async iterators must still cooperate with close.
-              if (!innerDone) {
-                if (typeof (inner && inner.destroy) === 'function' && !inner.destroyed) inner.destroy();
-                await innerIterator.return();
-              }
-              innerIterator = undefined;
-              inner = undefined;
+              try {
+                if (!innerDone) await closeSource(inner, { iterator: innerIterator, done: false }, innerAbrupt);
+              } finally { innerIterator = undefined; inner = undefined; }
             }
           } else {
             yield slot.value;
           }
         }
-      } finally {
+      } catch (error) { abrupt = true; throw error; }
+      finally {
         stopped = true;
         operation.cancel = undefined;
         scope.abort();
@@ -308,13 +361,10 @@
         tail = undefined;
         queued = 0;
         try {
-          if (upstream !== undefined && !upstreamDone) {
-            // A pending Readable.next() must be unblocked before awaiting its
-            // generator return(). Otherwise an idle input strands destroy().
-            if (typeof source.destroy === 'function' && !source.destroyed) source.destroy();
-            if (typeof upstream.return === 'function') await upstream.return();
+          try {
+            if (upstream !== undefined && !upstream.done) await closeSource(source, upstream, abrupt);
           }
-          await pumping;
+          finally { await pumping; }
         } finally { scope.release(); }
       }
     })();
@@ -353,42 +403,38 @@
     const iterator = (async function* () {
       const scope = scopeFor(config.signal, function () {});
       let upstream;
-      let done = false;
+      let abrupt = false;
       let count = remaining;
       operation.cancel = function () { scope.abort(); };
       try {
         scope.check();
-        upstream = source[asyncIteratorKey]();
+        upstream = sourceIterator(source);
         // Pull on demand rather than implementing slicing as filter/map:
         // no callback, worker queue, or counter retained for every chunk.
         // Even take(0) admits one read, as the Node stream operator does.
         while (true) {
-          const step = await scope.race(upstream.next());
-          if (step.done) { done = true; return; }
+          const step = await scope.race(nextSource(upstream), upstream);
+          if (sourceDone(upstream, step)) return;
+          const value = sourceValue(upstream, step);
           scope.check();
           if (taking) {
             if (count > 0) {
               count--;
-              yield step.value;
+              yield value;
             }
             if (!(count > 0)) return;
           } else if (count > 0) {
             count--;
           } else {
-            yield step.value;
+            yield value;
           }
         }
-      } finally {
+      } catch (error) { abrupt = true; throw error; }
+      finally {
         operation.cancel = undefined;
         scope.abort();
         try {
-          if (upstream !== undefined && !done) {
-            // Release the source on a satisfied take, early break, or abort.
-            // Destroy first to wake a native Readable.next() before closing
-            // the iterator; arbitrary async iterators must cooperate.
-            if (typeof source.destroy === 'function' && !source.destroyed) source.destroy();
-            if (typeof upstream.return === 'function') await upstream.return();
-          }
+          if (upstream !== undefined && !upstream.done) await closeSource(source, upstream, abrupt);
         } finally { scope.release(); }
       }
     })();
@@ -403,24 +449,23 @@
     // visitor is asynchronous, one abortable callback are live at a time.
     const scope = scopeFor(config.signal, function () {});
     let iterator;
-    let done = false;
+    let abrupt = false;
     try {
       scope.check();
-      iterator = source[asyncIteratorKey]();
+      iterator = sourceIterator(source);
       while (true) {
-        const step = await scope.race(iterator.next());
-        if (step.done) { done = true; break; }
+        const step = await scope.race(nextSource(iterator), iterator);
+        if (sourceDone(iterator, step)) break;
+        const value = sourceValue(iterator, step);
         scope.check();
-        const pending = visit(step.value, { signal: scope.signal });
+        const pending = visit(value, { signal: scope.signal });
         if (pending !== undefined) await scope.race(pending);
       }
-    } finally {
+    } catch (error) { abrupt = true; throw error; }
+    finally {
       scope.abort();
       try {
-        if (iterator !== undefined && !done) {
-          if (typeof source.destroy === 'function' && !source.destroyed) source.destroy();
-          if (typeof iterator.return === 'function') await iterator.return();
-        }
+        if (iterator !== undefined && !iterator.done) await closeSource(source, iterator, abrupt);
       } finally { scope.release(); }
     }
   }

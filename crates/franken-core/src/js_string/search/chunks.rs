@@ -357,6 +357,12 @@ impl Iterator for Leaves {
 fn units_before(text: &str, byte: usize, units: usize) -> usize {
     if text.len() == units {
         byte
+    } else if units.checked_mul(3) == Some(text.len()) {
+        // Three UTF-8 bytes per UTF-16 unit is the maximum possible ratio.
+        // Equality proves every scalar is three-byte BMP. Unlike a two-byte
+        // average, mixed ASCII/astral text cannot satisfy this proof. Repeated
+        // successful searches then need no prefix/suffix decoding for offsets.
+        byte / 3
     } else if byte <= text.len() - byte {
         text[..byte].encode_utf16().count()
     } else {
@@ -416,3 +422,6 @@ mod tests;
 
 #[cfg(test)]
 mod deferred_tests;
+
+#[cfg(test)]
+mod offset_tests;

@@ -69,7 +69,9 @@ use crate::lowering_pipeline::{
     AmbientAuthorityGrant, Ir2FlowProofArtifact, LoweringContext, LoweringEvent,
     LoweringPipelineError, LoweringPipelineOutput, PassWitness, lower_ir0_to_ir3,
 };
-use crate::module_resolver::{ModuleSyntax, ResolutionOutcome};
+use crate::module_resolver::{
+    ExecutionModuleResolver, ModuleSyntax, ResolutionContext, ResolutionOutcome,
+};
 use crate::optimal_stopping::{
     EscalationPolicy, Observation as StoppingObservation, OptimalStoppingCertificate,
     STOPPING_SCHEMA_VERSION, StoppingDecision,
@@ -1922,6 +1924,8 @@ pub struct ExecutionOrchestrator {
     last_failed_console_output: FailedConsoleSink,
     /// `process.argv` the host launched the program with (bd-my9hk).
     process_argv: Vec<String>,
+    /// Closed-world source delivery, installed only for one resolved-entry run.
+    module_resolver: Option<(ExecutionModuleResolver, ContentHash)>,
     /// Optional per-run cancellation signal supplied by the product supervisor.
     cancellation_token: Option<CancellationToken>,
     /// Optional data-contract IFC ingress binding (bd-fqlfw.8.2): the labeled
@@ -2203,6 +2207,7 @@ impl ExecutionOrchestrator {
             last_failed_trace_id: None,
             last_failed_console_output: Arc::default(),
             process_argv: Vec::new(),
+            module_resolver: None,
             cancellation_token: None,
             data_contract_ingress: None,
             data_contract_flow_events: Vec::new(),
@@ -2537,15 +2542,25 @@ impl ExecutionOrchestrator {
     /// successful `ResolutionOutcome`, and the engine consumes its exact
     /// source and stable record id instead of reopening a path. Runtime
     /// parsing, lowering, execution, IFC, evidence and containment remain
-    /// unchanged. Dependency-bearing records fail closed here rather than
-    /// silently falling back to ambient filesystem/package resolution.
+    /// unchanged. Dependency-bearing records need
+    /// [`Self::execute_resolved_entry_with_resolver`] so their runtime loads
+    /// use the same source-delivery contract.
     pub fn execute_resolved_entry(
         &mut self,
         package: &ExtensionPackage,
         resolved: &ResolutionOutcome,
     ) -> Result<OrchestratorResult, OrchestratorError> {
         let record = &resolved.module.record;
-        if !record.dependencies.is_empty() {
+        if record.id.is_empty()
+            || resolved.module.canonical_specifier.is_empty()
+            || resolved.module.content_hash != record.canonical_hash()
+        {
+            return Err(OrchestratorError::ResolvedEntryRejected {
+                detail: "resolved entry identity or canonical content hash is inconsistent"
+                    .to_string(),
+            });
+        }
+        if self.module_resolver.is_none() && !record.dependencies.is_empty() {
             return Err(OrchestratorError::ResolvedEntryRejected {
                 detail: format!(
                     "module '{}' declares {} dependency edge(s); runtime resolver injection is required for graph execution",
@@ -2608,6 +2623,37 @@ impl ExecutionOrchestrator {
         // opaque resolver id as a filesystem containment root.
         delivered.module_root = None;
         self.execute(&delivered)
+    }
+
+    /// Execute the exact authorized source graph through the ordinary runtime.
+    ///
+    /// Every runtime load goes back through the installed resolver and its
+    /// policy, including cache hits and cycle edges. Opaque module identities
+    /// never become filesystem paths. The installation lasts for this call;
+    /// a later ordinary `execute` retains its existing filesystem behavior.
+    pub fn execute_resolved_entry_with_resolver(
+        &mut self,
+        package: &ExtensionPackage,
+        resolved: &ResolutionOutcome,
+        resolver: ExecutionModuleResolver,
+    ) -> Result<OrchestratorResult, OrchestratorError> {
+        if resolver.entry_referrer() != resolved.module.record.id {
+            return Err(OrchestratorError::ResolvedEntryRejected {
+                detail: "runtime resolver entry identity does not match the resolved entry"
+                    .to_string(),
+            });
+        }
+        let previous = self
+            .module_resolver
+            .replace((resolver, resolved.module.content_hash));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.execute_resolved_entry(package, resolved)
+        }));
+        self.module_resolver = previous;
+        match result {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
     }
 
     /// Execute an extension package through the full pipeline.
@@ -2786,6 +2832,7 @@ impl ExecutionOrchestrator {
                     adaptive_routing_context.ir3_content_hash,
                     &entry_flow_label_ceiling,
                     &trace_id,
+                    &decision_id,
                     &adaptive_routing_decision,
                     CellExecutionDispatch {
                         cancellation_token: permit.cancellation_token(),
@@ -3501,15 +3548,32 @@ impl ExecutionOrchestrator {
     ) -> Result<PreparedLoweringOutput, OrchestratorError> {
         let source_label = format!("ext:{}", package.extension_id);
         let effective_source_label = package.source_file.as_deref().unwrap_or(&source_label);
-        let prepared = prepare_source_entry_for_public_entrypoints(
-            &package.source,
-            effective_source_label,
-            trace_id,
-            decision_id,
-            &self.config.policy_id,
-        )?;
-        let source_ingestion = prepared.source_ingestion.clone();
-        let parse_source = prepared.prepared_source;
+        let (source_ingestion, parse_source) = if self.module_resolver.is_some() {
+            // Resolver records already carry prepared JavaScript. Their ids
+            // are identities, even if one ends in `.ts`; never normalize
+            // authenticated delivered bytes again based on that label.
+            let source_hash = format!(
+                "sha256:{}",
+                ContentHash::compute(package.source.as_bytes()).to_hex()
+            );
+            (
+                SourceIngestionSummary {
+                    original_source_hash: source_hash.clone(),
+                    normalized_source_hash: source_hash,
+                    ..SourceIngestionSummary::default()
+                },
+                package.source.clone(),
+            )
+        } else {
+            let prepared = prepare_source_entry_for_public_entrypoints(
+                &package.source,
+                effective_source_label,
+                trace_id,
+                decision_id,
+                &self.config.policy_id,
+            )?;
+            (prepared.source_ingestion, prepared.prepared_source)
+        };
         let parser_source = ParserSource {
             label: effective_source_label.to_string(),
             text: parse_source,
@@ -3686,7 +3750,13 @@ impl ExecutionOrchestrator {
         // (bd-lduxz); the raw interpreter without this grant still fails closed.
         let granted_capabilities = Self::execution_capabilities(package);
 
-        let module_root = Self::module_root_for_execution(package)?;
+        let module_root = if self.module_resolver.is_some() {
+            // A delivered entry's source label is an opaque identity. Do not
+            // canonicalize even its parent as a diagnostic filesystem root.
+            None
+        } else {
+            Self::module_root_for_execution(package)?
+        };
 
         let mut quickjs_config =
             InterpreterConfig::deterministic_from_config(&self.runtime_config.execution);
@@ -3821,6 +3891,7 @@ impl ExecutionOrchestrator {
         ir3_hash: ContentHash,
         entry_flow_label_ceiling: &Label,
         trace_id: &str,
+        decision_id: &str,
         adaptive_routing_decision: &AdaptiveRoutingDecision,
         dispatch: CellExecutionDispatch<'_>,
     ) -> Result<(RoutedResult, Option<GuardplaneHookReport>), OrchestratorError> {
@@ -3865,6 +3936,13 @@ impl ExecutionOrchestrator {
         lane_router.set_timer_effect_authority(timer_effect_authority);
         lane_router.set_failed_console_output_sink(Arc::clone(&self.last_failed_console_output));
         lane_router.set_entry_flow_label_ceiling(entry_flow_label_ceiling.clone());
+        if let Some((resolver, entry_hash)) = &self.module_resolver {
+            lane_router.set_module_resolver(
+                resolver.clone(),
+                *entry_hash,
+                ResolutionContext::new(trace_id, decision_id, &self.config.policy_id),
+            );
+        }
         let compact_tier1 = CompactTier1Program::compile_with_source_hash(ir3, ir3_hash);
         let routed = lane_router
             .execute_with_hook_and_compact_tier1(

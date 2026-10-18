@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -1139,6 +1140,17 @@ pub struct ExecutionModuleResolver {
     entry_referrer: String,
     resolver: Arc<dyn ModuleResolver + Send + Sync>,
     policy: Arc<dyn ModulePolicyHook + Send + Sync>,
+    source_locations: Arc<BTreeMap<String, ModuleSourceLocation>>,
+}
+
+/// Guest-visible origin metadata supplied by the trusted source-capture host.
+///
+/// These values never authorize an I/O operation or serve as resolver keys.
+/// The URL may distinguish separate ESM query/fragment instances of one file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleSourceLocation {
+    pub filename: PathBuf,
+    pub url: String,
 }
 
 impl ExecutionModuleResolver {
@@ -1151,7 +1163,22 @@ impl ExecutionModuleResolver {
             entry_referrer: entry_referrer.into(),
             resolver,
             policy,
+            source_locations: Arc::default(),
         }
+    }
+
+    /// Bind capture-derived metadata to opaque module identities. This does
+    /// not enable filesystem resolution or read the named files.
+    pub fn with_source_locations(
+        mut self,
+        locations: BTreeMap<String, ModuleSourceLocation>,
+    ) -> Self {
+        self.source_locations = Arc::new(locations);
+        self
+    }
+
+    pub fn source_location(&self, id: &str) -> Option<&ModuleSourceLocation> {
+        self.source_locations.get(id)
     }
 
     pub fn entry_referrer(&self) -> &str {
@@ -1163,7 +1190,8 @@ impl ExecutionModuleResolver {
         request: &ModuleRequest,
         context: &ResolutionContext,
     ) -> ResolutionResult<ResolutionOutcome> {
-        self.resolver.resolve(request, context, self.policy.as_ref())
+        self.resolver
+            .resolve(request, context, self.policy.as_ref())
     }
 }
 

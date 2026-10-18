@@ -172,6 +172,11 @@ use crate::iterator_protocol::{
 };
 use crate::js_string::JsString;
 use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+use crate::module_compatibility_matrix::CompatibilityMode;
+use crate::module_resolver::{
+    ExecutionModuleResolver, ImportStyle, ModuleRequest, ModuleSyntax, ResolutionContext,
+    ResolutionOutcome,
+};
 use crate::object_model::{SymbolId, WellKnownSymbol};
 use crate::parser::{
     CanonicalEs2020Parser, ParseError, ParseErrorCode, ParserOptions, ParserSource,
@@ -9848,6 +9853,9 @@ struct ModuleRuntimeRecord {
     /// The module's static flow label ceiling once it is lowered: every value
     /// it can produce is at most this label (bd-j8f7q import contracts).
     flow_label_ceiling: Option<Label>,
+    /// Canonical source record pinned before evaluation by an installed
+    /// resolver. Repeated loads must authenticate this same record.
+    resolved_source_hash: Option<ContentHash>,
     /// Importers' binding cells for each export name (bd-1lsy.4.10.1). Every
     /// publication of the export writes them, so an import is a live view of
     /// the exporting module's binding; a cell whose importer is gone drops
@@ -9867,6 +9875,13 @@ struct ModuleRuntimeRecord {
     /// Owned activation parked while an imported module is asynchronously
     /// evaluating. Entry-module execution remains installed in the core.
     async_execution: Option<ModuleExecutionSnapshot>,
+}
+
+#[derive(Clone)]
+struct InstalledModuleResolver {
+    resolver: ExecutionModuleResolver,
+    entry_hash: ContentHash,
+    context: ResolutionContext,
 }
 
 /// Realm-persistent dynamic-code artifacts owned by one immutable module
@@ -15920,6 +15935,8 @@ pub struct InterpreterCore {
     next_promise_combinator_id: u64,
     /// Module registry/cache for ImportModule execution.
     module_state: ModuleState,
+    /// Trusted source delivery for this run; never an ambient-path fallback.
+    module_resolver: Option<InstalledModuleResolver>,
     /// One-shot result side channel from the synchronous import dispatcher to
     /// the `ImportModule` instruction. When populated, the namespace is
     /// available but the importer must park behind this dependency's module
@@ -16956,6 +16973,7 @@ impl InterpreterCore {
             array_join_stack: BTreeSet::new(),
             next_promise_combinator_id: 0,
             module_state: ModuleState::new(),
+            module_resolver: None,
             pending_async_module_import: None,
             active_cjs_context: None,
             current_module_specifier: None,
@@ -37067,7 +37085,21 @@ impl InterpreterCore {
         }
         // perf: hot path - avoid double clone of source_label
         let entry_specifier = module.header.source_label.clone();
+        if let Some(installed) = &self.module_resolver
+            && installed.resolver.entry_referrer() != entry_specifier
+        {
+            return Err(InterpreterError::ModuleLoweringFailed {
+                specifier: entry_specifier,
+                error: "runtime resolver entry identity does not match executable module"
+                    .to_string(),
+            });
+        }
         self.ensure_module_record(module, &entry_specifier)?;
+        if let Some(installed) = &self.module_resolver
+            && let Some(record) = self.module_state.modules.get_mut(&entry_specifier)
+        {
+            record.resolved_source_hash = Some(installed.entry_hash);
+        }
         if let Some(ceiling) = self.entry_flow_label_ceiling.clone()
             && let Some(record) = self.module_state.modules.get_mut(&entry_specifier)
         {
@@ -38853,11 +38885,22 @@ impl InterpreterCore {
             return (Value::Undefined, Value::Undefined);
         };
         let dirname = self.cjs_dirname_view(specifier);
-        (Value::str(specifier), Value::str(dirname))
+        (
+            Value::str(self.module_filename_view(specifier)),
+            Value::str(dirname),
+        )
+    }
+
+    fn module_filename_view<'a>(&'a self, specifier: &'a str) -> &'a str {
+        self.module_resolver
+            .as_ref()
+            .and_then(|installed| installed.resolver.source_location(specifier))
+            .and_then(|location| location.filename.to_str())
+            .unwrap_or(specifier)
     }
 
     fn cjs_dirname_view<'a>(&'a self, specifier: &'a str) -> &'a str {
-        Path::new(specifier)
+        Path::new(self.module_filename_view(specifier))
             .parent()
             .filter(|path| !path.as_os_str().is_empty())
             .and_then(Path::to_str)
@@ -38871,9 +38914,9 @@ impl InterpreterCore {
         require_specifier: &str,
     ) -> u64 {
         let path_payload_bytes = filename_specifier.map_or(0, |specifier| {
-            Self::estimate_string_bytes(specifier).saturating_add(Self::estimate_string_bytes(
-                self.cjs_dirname_view(specifier),
-            ))
+            Self::estimate_string_bytes(self.module_filename_view(specifier)).saturating_add(
+                Self::estimate_string_bytes(self.cjs_dirname_view(specifier)),
+            )
         });
         let require_payload_bytes = if require_specifier.is_empty() {
             0
@@ -39153,6 +39196,82 @@ impl InterpreterCore {
         Ok(self.module_key_for_canonical_path(&canonical))
     }
 
+    /// Authorize an exact captured route before consulting the evaluation
+    /// cache. A policy refusal or unknown route never reaches path lookup.
+    fn resolve_installed_module(
+        &self,
+        specifier: &str,
+        style: ImportStyle,
+    ) -> Result<ResolutionOutcome, InterpreterError> {
+        let installed =
+            self.module_resolver
+                .as_ref()
+                .ok_or_else(|| InterpreterError::InternalError {
+                    details: "closed-world module resolution has no installed resolver".to_string(),
+                })?;
+        if !self
+            .config
+            .granted_capabilities
+            .contains(&RuntimeCapability::ModuleLoad)
+        {
+            return Err(InterpreterError::CapabilityDenied {
+                capability: RuntimeCapability::ModuleLoad.to_string(),
+            });
+        }
+        let request = ModuleRequest::new(specifier, style)
+            .with_referrer(
+                self.current_module_specifier
+                    .as_deref()
+                    .unwrap_or_else(|| installed.resolver.entry_referrer()),
+            )
+            .with_compatibility_mode(CompatibilityMode::NodeCompat);
+        let resolved = installed
+            .resolver
+            .resolve(&request, &installed.context)
+            .map_err(|error| InterpreterError::ModuleLoweringFailed {
+                specifier: specifier.to_string(),
+                error: format!("closed-world module resolution refused: {error}"),
+            })?;
+        let record = &resolved.module.record;
+        if u64::try_from(record.source.len()).unwrap_or(u64::MAX)
+            > self.config.module_parser_options.budget.max_source_bytes
+        {
+            return Err(InterpreterError::ModuleParseFailed {
+                specifier: specifier.to_string(),
+                error: "resolved module exceeds the configured parser source-byte budget"
+                    .to_string(),
+            });
+        }
+        self.check_temporary_memory_budget(Self::estimate_string_bytes(&record.source))?;
+        if record.id.is_empty()
+            || resolved.module.request_specifier != specifier
+            || resolved.module.canonical_specifier.is_empty()
+            || resolved.module.content_hash != record.canonical_hash()
+        {
+            return Err(InterpreterError::ModuleLoweringFailed {
+                specifier: specifier.to_string(),
+                error: "resolved module identity or canonical content hash is inconsistent"
+                    .to_string(),
+            });
+        }
+        if record.syntax == ModuleSyntax::Wasm {
+            return Err(InterpreterError::ModuleLoweringFailed {
+                specifier: specifier.to_string(),
+                error: "Wasm source requires a separately admitted runtime provider".to_string(),
+            });
+        }
+        if let Some(missing) = record
+            .required_capabilities
+            .difference(&self.config.granted_capabilities)
+            .next()
+        {
+            return Err(InterpreterError::CapabilityDenied {
+                capability: missing.to_string(),
+            });
+        }
+        Ok(resolved)
+    }
+
     /// The module-map key of a resolved module file: the entry module's own
     /// specifier when the file is the entry's (bd-9vouw.411). The entry is
     /// recorded under its source label, the path as the caller gave it
@@ -39350,6 +39469,7 @@ impl InterpreterCore {
                 exports: BTreeMap::new(),
                 star_exports: BTreeMap::new(),
                 flow_label_ceiling: None,
+                resolved_source_hash: None,
                 import_bindings: BTreeMap::new(),
                 star_reexporters: BTreeSet::new(),
                 cjs_module_object: None,
@@ -39509,9 +39629,10 @@ impl InterpreterCore {
             Value::Object(exports_object),
         )?;
         self.check_temporary_memory_budget(
-            Self::estimate_string_bytes(module_specifier).saturating_add(
-                Self::estimate_string_bytes(self.cjs_dirname_view(module_specifier)),
-            ),
+            Self::estimate_string_bytes(self.module_filename_view(module_specifier))
+                .saturating_add(Self::estimate_string_bytes(
+                    self.cjs_dirname_view(module_specifier),
+                )),
         )?;
         let (filename_value, dirname_value) = self.cjs_filename_dirname(Some(module_specifier));
         self.set_object_property(module_object, "id".to_string(), filename_value.clone())?;
@@ -39581,8 +39702,22 @@ impl InterpreterCore {
         resolved: &str,
         is_cjs: bool,
         import_bound: Option<&Label>,
+        delivered: Option<ResolutionOutcome>,
     ) -> Result<Value, InterpreterError> {
+        if self.module_resolver.is_some() && delivered.is_none() {
+            return Err(InterpreterError::ModuleLoweringFailed {
+                specifier: resolved.to_string(),
+                error: "installed resolver cannot fall back to filesystem source".to_string(),
+            });
+        }
+        let source_hash = delivered.as_ref().map(|source| source.module.content_hash);
         if let Some(record) = self.module_state.modules.get(resolved) {
+            if source_hash.is_some() && record.resolved_source_hash != source_hash {
+                return Err(InterpreterError::ModuleLoweringFailed {
+                    specifier: resolved.to_string(),
+                    error: "resolved module changed after its first authorized load".to_string(),
+                });
+            }
             match &record.flow_label_ceiling {
                 Some(ceiling) => Self::check_import_flow_bound(resolved, ceiling, import_bound)?,
                 // Still being lowered (a cycle reached it first): its bound is
@@ -39633,15 +39768,30 @@ impl InterpreterCore {
         }
 
         let namespace_object = self.ensure_module_record(module, resolved)?;
+        if let Some(record) = self.module_state.modules.get_mut(resolved) {
+            record.resolved_source_hash = source_hash;
+        }
 
-        let source =
-            fs::read_to_string(resolved).map_err(|error| InterpreterError::ModuleReadFailed {
-                specifier: resolved.to_string(),
-                error: error.to_string(),
-            })?;
-        let is_json = Path::new(resolved)
-            .extension()
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("json"));
+        let source_is_delivered = delivered.is_some();
+        let source = match delivered {
+            Some(delivered) => delivered.module.record.source,
+            None if self.module_resolver.is_some() => {
+                return Err(InterpreterError::ModuleLoweringFailed {
+                    specifier: resolved.to_string(),
+                    error: "installed resolver cannot fall back to filesystem source".to_string(),
+                });
+            }
+            None => fs::read_to_string(resolved).map_err(|error| {
+                InterpreterError::ModuleReadFailed {
+                    specifier: resolved.to_string(),
+                    error: error.to_string(),
+                }
+            })?,
+        };
+        let is_json = !source_is_delivered
+            && Path::new(resolved)
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("json"));
         let source = match (is_json, is_cjs) {
             (true, true) => Self::json_module_source(&source)?,
             // An ES module import of a `.json` file (`with { type: 'json' }`,
@@ -39655,7 +39805,8 @@ impl InterpreterCore {
         // unsupported syntax (bd-9vouw.430). A file of declarations only
         // is empty once its types are erased: a module with no code and no
         // exports.
-        let source = if !is_json
+        let source = if !source_is_delivered
+            && !is_json
             && crate::ts_normalization::source_label_has_typescript_extension(resolved)
         {
             match crate::ts_normalization::prepare_source_entry_for_public_entrypoints(
@@ -39836,6 +39987,21 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let specifier = Self::utf8_module_specifier(specifier)?;
         self.run_pre_import_hook(module, specifier)?;
+        if self.module_resolver.is_some() {
+            let delivered = self.resolve_installed_module(specifier, ImportStyle::Import)?;
+            let resolved = delivered.module.record.id.clone();
+            let is_cjs = delivered.module.record.syntax == ModuleSyntax::CommonJs;
+            let import_bound = (crate::lowering_pipeline::is_bounded_import_specifier(specifier)
+                && Self::unit_declares_bounded_imports(module))
+            .then_some(crate::lowering_pipeline::IFC_BOUNDED_IMPORT_LABEL);
+            return self.load_module_resolved(
+                module,
+                &resolved,
+                is_cjs,
+                import_bound.as_ref(),
+                Some(delivered),
+            );
+        }
         let resolved = self.resolve_module_specifier(specifier)?;
         let extension = Path::new(&resolved)
             .extension()
@@ -39856,7 +40022,7 @@ impl InterpreterCore {
         let import_bound = (crate::lowering_pipeline::is_bounded_import_specifier(specifier)
             && Self::unit_declares_bounded_imports(module))
         .then_some(crate::lowering_pipeline::IFC_BOUNDED_IMPORT_LABEL);
-        self.load_module_resolved(module, &resolved, is_cjs, import_bound.as_ref())
+        self.load_module_resolved(module, &resolved, is_cjs, import_bound.as_ref(), None)
     }
 
     /// Mark a module whose load failed before evaluation, so a later import
@@ -40167,38 +40333,50 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let specifier = Self::utf8_module_specifier(specifier)?;
         self.run_pre_import_hook(module, specifier)?;
-        if matches!(specifier, "buffer" | "node:buffer") {
+        if self.module_resolver.is_none() && matches!(specifier, "buffer" | "node:buffer") {
             return self.buffer_core_module();
         }
-        if matches!(specifier, "os" | "node:os") {
+        if self.module_resolver.is_none() && matches!(specifier, "os" | "node:os") {
             return self.os_core_module();
         }
-        if matches!(specifier, "querystring" | "node:querystring") {
+        if self.module_resolver.is_none() && matches!(specifier, "querystring" | "node:querystring")
+        {
             return self.querystring_core_module();
         }
-        if matches!(specifier, "events" | "node:events") {
+        if self.module_resolver.is_none() && matches!(specifier, "events" | "node:events") {
             return self.events_core_module(module);
         }
-        if matches!(specifier, "url" | "node:url") {
+        if self.module_resolver.is_none() && matches!(specifier, "url" | "node:url") {
             return self.url_core_module();
         }
-        if matches!(specifier, "timers" | "node:timers") {
+        if self.module_resolver.is_none() && matches!(specifier, "timers" | "node:timers") {
             return self.timers_core_module();
         }
-        if matches!(specifier, "perf_hooks" | "node:perf_hooks") {
+        if self.module_resolver.is_none() && matches!(specifier, "perf_hooks" | "node:perf_hooks") {
             return self.perf_hooks_core_module();
         }
-        let resolved = self.resolve_require_specifier(specifier)?;
-        let is_cjs = match Path::new(&resolved)
-            .extension()
-            .and_then(|ext| ext.to_str())
-        {
-            Some(ext) if ext.eq_ignore_ascii_case("cjs") => true,
-            Some(ext) if ext.eq_ignore_ascii_case("mjs") => false,
-            Some(ext) if ext.eq_ignore_ascii_case("js") => !self.required_js_is_esm(&resolved),
-            _ => true,
+        let delivered = self
+            .module_resolver
+            .as_ref()
+            .map(|_| self.resolve_installed_module(specifier, ImportStyle::Require))
+            .transpose()?;
+        let resolved = match &delivered {
+            Some(source) => source.module.record.id.clone(),
+            None => self.resolve_require_specifier(specifier)?,
         };
-        let namespace = self.load_module_resolved(module, &resolved, is_cjs, None)?;
+        let is_cjs = match &delivered {
+            Some(source) => source.module.record.syntax == ModuleSyntax::CommonJs,
+            None => match Path::new(&resolved)
+                .extension()
+                .and_then(|ext| ext.to_str())
+            {
+                Some(ext) if ext.eq_ignore_ascii_case("cjs") => true,
+                Some(ext) if ext.eq_ignore_ascii_case("mjs") => false,
+                Some(ext) if ext.eq_ignore_ascii_case("js") => !self.required_js_is_esm(&resolved),
+                _ => true,
+            },
+        };
+        let namespace = self.load_module_resolved(module, &resolved, is_cjs, None, delivered)?;
         if !is_cjs {
             return Ok(namespace);
         }
@@ -66308,7 +66486,7 @@ impl InterpreterCore {
                     got: key.diagnostic(),
                 });
             };
-            return self.import_meta_property_value(key);
+            return self.import_meta_property_value(object_id, key);
         }
         let Some((target, handler)) = self.active_proxy_record(object_id)? else {
             if self.active_inline_callback_context_label.is_some() {
@@ -68359,14 +68537,8 @@ impl InterpreterCore {
             return if matches!(prototype, Value::Null) {
                 Ok(Some(Value::Undefined))
             } else {
-                self.get_v_with_receiver(
-                    module,
-                    &prototype,
-                    key,
-                    receiver,
-                    depth.saturating_add(1),
-                )
-                .map(Some)
+                self.get_v_with_receiver(module, &prototype, key, receiver, depth.saturating_add(1))
+                    .map(Some)
             };
         }
         let name_or_length = matches!(key.as_str(), Some("name" | "length"));
@@ -70281,6 +70453,12 @@ impl InterpreterCore {
             });
         };
         let specifier = Self::utf8_module_specifier(&request)?;
+        if self.module_resolver.is_some() {
+            let resolved = self.resolve_installed_module(specifier, ImportStyle::Require)?;
+            return Ok(Value::str(
+                self.module_filename_view(&resolved.module.record.id),
+            ));
+        }
         if is_node_core_module_specifier(specifier) {
             return Ok(Value::Str(request));
         }
@@ -70464,6 +70642,18 @@ impl InterpreterCore {
         // runs; a core module has no code to check and is not loaded.
         let import_bound = Self::unit_declares_bounded_imports(module)
             .then_some(crate::lowering_pipeline::IFC_BOUNDED_IMPORT_LABEL);
+        if self.module_resolver.is_some() {
+            let delivered = self.resolve_installed_module(specifier, ImportStyle::Import)?;
+            let resolved = delivered.module.record.id.clone();
+            let is_cjs = delivered.module.record.syntax == ModuleSyntax::CommonJs;
+            return self.load_module_resolved(
+                module,
+                &resolved,
+                is_cjs,
+                import_bound.as_ref(),
+                Some(delivered),
+            );
+        }
         if import_bound.is_some()
             && !crate::lowering_pipeline::is_bounded_import_specifier(specifier)
         {
@@ -70484,7 +70674,7 @@ impl InterpreterCore {
             Some("cjs" | "json") => true,
             _ => !self.required_js_is_esm(&resolved),
         };
-        self.load_module_resolved(module, &resolved, is_cjs, import_bound.as_ref())
+        self.load_module_resolved(module, &resolved, is_cjs, import_bound.as_ref(), None)
     }
 
     /// The rejection reason of a failed ImportCall: the value a guest throw
@@ -78479,8 +78669,7 @@ impl InterpreterCore {
                 continue;
             };
             let element_key = JsString::from(i.to_string());
-            if let Some(element_label) =
-                self.array_string_property_label_ref(src_id, &element_key)
+            if let Some(element_label) = self.array_string_property_label_ref(src_id, &element_key)
             {
                 prefix_label =
                     self.join_owned_label_with_temporary_budget(prefix_label, element_label)?;
@@ -91998,10 +92187,21 @@ impl InterpreterCore {
     }
 
     fn alloc_import_meta_object(&mut self) -> Result<Value, InterpreterError> {
-        let object_id = self.alloc_object_with_properties(&[
-            ("url", Value::str(IMPORT_META_URL_VALUE)),
-            ("dirname", Value::str(IMPORT_META_DIRNAME_VALUE)),
-        ])?;
+        let location = self.module_resolver.as_ref().and_then(|installed| {
+            self.current_module_specifier
+                .as_deref()
+                .and_then(|id| installed.resolver.source_location(id))
+        });
+        let url = location.map_or(IMPORT_META_URL_VALUE, |location| location.url.as_str());
+        let dirname = location
+            .and_then(|location| location.filename.parent())
+            .and_then(Path::to_str)
+            .unwrap_or(IMPORT_META_DIRNAME_VALUE);
+        // Capture the origin on this object: an importing module may retain
+        // and later read another module's import.meta.
+        let url = Value::str(url);
+        let dirname = Value::str(dirname);
+        let object_id = self.alloc_object_with_properties(&[("url", url), ("dirname", dirname)])?;
         let index = object_id.0 as usize;
         self.mutate_heap(|heap| {
             if let Some(object) = heap.get_mut(index) {
@@ -92034,15 +92234,28 @@ impl InterpreterCore {
         });
     }
 
-    fn import_meta_property_value(&mut self, key: &str) -> Result<Value, InterpreterError> {
+    fn import_meta_property_value(
+        &mut self,
+        object_id: ObjectId,
+        key: &str,
+    ) -> Result<Value, InterpreterError> {
         match key {
-            "url" => {
+            "url" | "dirname" => {
                 self.record_import_meta_contract_access(key, true);
-                Ok(Value::str(IMPORT_META_URL_VALUE))
-            }
-            "dirname" => {
-                self.record_import_meta_contract_access(key, true);
-                Ok(Value::str(IMPORT_META_DIRNAME_VALUE))
+                if self.module_resolver.is_none() {
+                    return Ok(Value::str(if key == "url" {
+                        IMPORT_META_URL_VALUE
+                    } else {
+                        IMPORT_META_DIRNAME_VALUE
+                    }));
+                }
+                self.heap
+                    .get(object_id.0 as usize)
+                    .and_then(|object| object.properties.get(key))
+                    .cloned()
+                    .ok_or_else(|| InterpreterError::InternalError {
+                        details: "import.meta object lost its captured source metadata".to_string(),
+                    })
             }
             _ => {
                 self.record_import_meta_contract_access(key, false);
@@ -114669,6 +114882,7 @@ pub struct QuickJsLane {
     timer_effect_authority: Option<Arc<dyn TimerEffectAuthority>>,
     failed_console_output: Option<FailedConsoleSink>,
     entry_flow_label_ceiling: Option<Label>,
+    module_resolver: Option<InstalledModuleResolver>,
 }
 
 impl Default for QuickJsLane {
@@ -114682,6 +114896,7 @@ impl Default for QuickJsLane {
             timer_effect_authority: None,
             failed_console_output: None,
             entry_flow_label_ceiling: None,
+            module_resolver: None,
         }
     }
 }
@@ -114701,6 +114916,7 @@ impl QuickJsLane {
             timer_effect_authority: None,
             failed_console_output: None,
             entry_flow_label_ceiling: None,
+            module_resolver: None,
         }
     }
 
@@ -114785,6 +115001,7 @@ impl QuickJsLane {
             self.timer_effect_authority.clone(),
             self.failed_console_output.clone(),
             self.entry_flow_label_ceiling.clone(),
+            self.module_resolver.clone(),
             module,
             trace_id,
             hook,
@@ -114824,6 +115041,7 @@ pub struct V8Lane {
     timer_effect_authority: Option<Arc<dyn TimerEffectAuthority>>,
     failed_console_output: Option<FailedConsoleSink>,
     entry_flow_label_ceiling: Option<Label>,
+    module_resolver: Option<InstalledModuleResolver>,
 }
 
 impl Default for V8Lane {
@@ -114837,6 +115055,7 @@ impl Default for V8Lane {
             timer_effect_authority: None,
             failed_console_output: None,
             entry_flow_label_ceiling: None,
+            module_resolver: None,
         }
     }
 }
@@ -114872,6 +115091,7 @@ fn execute_lane_with_provisioned_stack(
     timer_effect_authority: Option<Arc<dyn TimerEffectAuthority>>,
     failed_console_output: Option<FailedConsoleSink>,
     entry_flow_label_ceiling: Option<Label>,
+    module_resolver: Option<InstalledModuleResolver>,
     module: &Ir3Module,
     trace_id: &str,
     hook: Option<Arc<dyn InterpreterHook>>,
@@ -114885,6 +115105,7 @@ fn execute_lane_with_provisioned_stack(
             .stack_size(stack_bytes)
             .spawn_scoped(scope, move || {
                 let mut core = InterpreterCore::new(config, trace_id);
+                core.module_resolver = module_resolver;
                 if let Some(hook) = hook {
                     core.set_hook(hook);
                 }
@@ -114962,6 +115183,7 @@ impl V8Lane {
             timer_effect_authority: None,
             failed_console_output: None,
             entry_flow_label_ceiling: None,
+            module_resolver: None,
         }
     }
 
@@ -115036,6 +115258,7 @@ impl V8Lane {
             self.timer_effect_authority.clone(),
             self.failed_console_output.clone(),
             self.entry_flow_label_ceiling.clone(),
+            self.module_resolver.clone(),
             module,
             trace_id,
             hook,
@@ -115476,6 +115699,22 @@ impl LaneRouter {
             quickjs: QuickJsLane::with_config(quickjs_config),
             v8: V8Lane::with_config(v8_config),
         }
+    }
+
+    /// Install one closed-world source authority on both execution lanes.
+    pub fn set_module_resolver(
+        &mut self,
+        resolver: ExecutionModuleResolver,
+        entry_hash: ContentHash,
+        context: ResolutionContext,
+    ) {
+        let installed = InstalledModuleResolver {
+            resolver,
+            entry_hash,
+            context,
+        };
+        self.quickjs.module_resolver = Some(installed.clone());
+        self.v8.module_resolver = Some(installed);
     }
 
     /// Install a sandboxed host-I/O provider (+ optional recorder) on both lanes so
@@ -129873,6 +130112,7 @@ mod async_runtime_tests_current {
                     exports: BTreeMap::new(),
                     star_exports: BTreeMap::new(),
                     flow_label_ceiling: None,
+                    resolved_source_hash: None,
                     import_bindings: BTreeMap::new(),
                     star_reexporters: BTreeSet::new(),
                     cjs_module_object: None,
@@ -141179,14 +141419,10 @@ mod async_runtime_tests_current {
         );
     }
 
-
     #[test]
     fn array_mapping_preserves_callback_element_and_aggregate_labels_bd_9vouw_110() {
         let module = test_module_with_functions(
-            vec![
-                Ir3Instruction::Halt,
-                Ir3Instruction::Return { value: 0 },
-            ],
+            vec![Ir3Instruction::Halt, Ir3Instruction::Return { value: 0 }],
             vec![Ir3FunctionDesc {
                 entry: 1,
                 arity: 3,
@@ -141318,8 +141554,12 @@ mod async_runtime_tests_current {
             Value::Function(1),
         )
         .expect("species constructor");
-        core.set_object_property(source, "constructor".to_string(), Value::Object(constructor))
-            .expect("source constructor");
+        core.set_object_property(
+            source,
+            "constructor".to_string(),
+            Value::Object(constructor),
+        )
+        .expect("source constructor");
         result
     }
 
@@ -141417,7 +141657,9 @@ mod async_runtime_tests_current {
             for use_mutation_label in [false, true] {
                 for append_public in [false, true] {
                     let mut core = test_interpreter();
-                    let empty = core.alloc_array_from_values(&[]).expect("empty mapped array");
+                    let empty = core
+                        .alloc_array_from_values(&[])
+                        .expect("empty mapped array");
                     if use_mutation_label {
                         core.join_object_mutation_label(empty, &source_label)
                             .expect("empty source mutation label");
@@ -141429,7 +141671,9 @@ mod async_runtime_tests_current {
                     if append_public {
                         elements.push(Value::str("last"));
                     }
-                    let source = core.alloc_array_from_values(&elements).expect("source array");
+                    let source = core
+                        .alloc_array_from_values(&elements)
+                        .expect("source array");
                     let result = install_array_shape_species(&mut core, source);
                     core.write_reg_with_label(0, Value::Function(0), Label::Public)
                         .expect("callback register");
@@ -141520,10 +141764,7 @@ mod async_runtime_tests_current {
     #[test]
     fn flat_map_preserves_labels_stored_in_callback_returned_arrays_bd_9vouw_110() {
         let module = test_module_with_functions(
-            vec![
-                Ir3Instruction::Halt,
-                Ir3Instruction::Return { value: 0 },
-            ],
+            vec![Ir3Instruction::Halt, Ir3Instruction::Return { value: 0 }],
             vec![Ir3FunctionDesc {
                 entry: 1,
                 arity: 3,
@@ -141621,7 +141862,10 @@ mod async_runtime_tests_current {
                 )
                 .expect_err("a frozen species result must reject replacement");
             if tightly_budgeted {
-                assert!(matches!(error, InterpreterError::MemoryBudgetExceeded { .. }));
+                assert!(matches!(
+                    error,
+                    InterpreterError::MemoryBudgetExceeded { .. }
+                ));
             } else {
                 assert!(matches!(error, InterpreterError::TypeError { .. }));
             }
@@ -141664,7 +141908,10 @@ mod async_runtime_tests_current {
                 &Label::Public,
             )
             .expect_err("oversized replacement must be refused");
-        assert!(matches!(error, InterpreterError::MemoryBudgetExceeded { .. }));
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
         assert_eq!(
             core.heap[array.0 as usize].properties.get("0"),
             Some(&Value::str("classified"))
@@ -169711,6 +169958,7 @@ mod tests {
                 exports: BTreeMap::new(),
                 star_exports: BTreeMap::new(),
                 flow_label_ceiling: None,
+                resolved_source_hash: None,
                 import_bindings: BTreeMap::new(),
                 star_reexporters: BTreeSet::new(),
                 cjs_module_object: Some(module_object),

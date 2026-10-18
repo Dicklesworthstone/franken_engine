@@ -7,11 +7,14 @@ on:
       - 'crates/franken-core/**'
       - 'crates/franken-engine/src/checkpoint.rs'
       - 'crates/franken-engine/src/execution_orchestrator.rs'
+      - 'crates/franken-engine/src/module_resolver.rs'
       - 'crates/franken-engine/src/guardplane_adapter.rs'
       - 'crates/franken-engine/src/ir_contract.rs'
       - 'crates/franken-engine/src/bin/franken_shipped_path_parity.rs'
       - 'crates/franken-engine/tests/orchestrator_execution_budgets.rs'
       - 'crates/franken-engine/tests/execution_orchestrator.rs'
+      - 'crates/franken-engine/tests/execution_resolved_entry.rs'
+      - 'crates/franken-engine/tests/runtime_module_resolver_execution.rs'
       - 'crates/franken-engine/tests/guardplane_adapter_integration.rs'
       - 'crates/franken-engine/tests/ir_contract_integration.rs'
       - 'crates/franken-engine/tests/orchestrator_live_revocation.rs'
@@ -61,6 +64,12 @@ jobs:
           persist-credentials: false
       - name: Install pinned Rust
         run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+      - name: Execute delivered module graph regressions
+        run: |
+          set -o pipefail
+          cargo test --locked --no-fail-fast -p frankenengine-engine --no-default-features \
+            --test runtime_module_resolver_execution --test execution_resolved_entry \
+            -- --nocapture --test-threads=1 2>&1 | tee boundary-module-resolver-tests.log
       - name: Execute querystring and OS regressions
         run: |
           set -o pipefail

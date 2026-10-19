@@ -263,6 +263,90 @@ impl ModuleRecord {
     }
 }
 
+/// Native CommonJS objects implemented by the interpreter itself.
+///
+/// This is deliberately narrower than Node's builtin name inventory. A
+/// resolver may deliver one of these source-free descriptors only for a
+/// captured require route. The interpreter rechecks the complete descriptor
+/// before dispatching the real realm object; no source text or filesystem
+/// fallback is used to manufacture a builtin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeBuiltinModule {
+    Buffer,
+    Events,
+    Os,
+    Querystring,
+    Url,
+    Timers,
+    PerfHooks,
+}
+
+impl NativeBuiltinModule {
+    pub fn from_specifier(specifier: &str) -> Option<Self> {
+        match specifier {
+            "buffer" | "node:buffer" => Some(Self::Buffer),
+            "events" | "node:events" => Some(Self::Events),
+            "os" | "node:os" => Some(Self::Os),
+            "querystring" | "node:querystring" => Some(Self::Querystring),
+            "url" | "node:url" => Some(Self::Url),
+            "timers" | "node:timers" => Some(Self::Timers),
+            "perf_hooks" | "node:perf_hooks" => Some(Self::PerfHooks),
+            _ => None,
+        }
+    }
+
+    pub fn canonical_specifier(self) -> &'static str {
+        match self {
+            Self::Buffer => "node:buffer",
+            Self::Events => "node:events",
+            Self::Os => "node:os",
+            Self::Querystring => "node:querystring",
+            Self::Url => "node:url",
+            Self::Timers => "node:timers",
+            Self::PerfHooks => "node:perf_hooks",
+        }
+    }
+
+    /// Engine-owned identity and capability contract for a native provider.
+    /// The caller supplies its graph-scoped module id, never executable text.
+    pub fn record(self, id: impl Into<String>) -> ModuleRecord {
+        let mut required_capabilities =
+            BTreeSet::from([RuntimeCapability::ModuleLoad, RuntimeCapability::Builtin]);
+        if self == Self::Timers {
+            required_capabilities.insert(RuntimeCapability::Timer);
+        }
+        ModuleRecord {
+            id: id.into(),
+            syntax: ModuleSyntax::CommonJs,
+            source: String::new(),
+            dependencies: Vec::new(),
+            required_capabilities,
+            provenance: ModuleProvenance {
+                kind: ModuleSourceKind::BuiltIn,
+                origin: format!(
+                    "franken-engine/native-builtin/v1:{}",
+                    self.canonical_specifier()
+                ),
+            },
+        }
+    }
+
+    /// Reject forged source, dependencies, format, provenance or capability
+    /// reductions before invoking a native provider. A BuiltIn tag alone is
+    /// not authority to bypass ordinary source evaluation.
+    pub fn from_record(record: &ModuleRecord) -> Option<Self> {
+        if record.id.is_empty() {
+            return None;
+        }
+        let name = record
+            .provenance
+            .origin
+            .strip_prefix("franken-engine/native-builtin/v1:")?;
+        let builtin = Self::from_specifier(name)?;
+        (record == &builtin.record(record.id.clone())).then_some(builtin)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModuleRequest {
     pub specifier: String,
@@ -2367,6 +2451,64 @@ mod tests {
 
     fn context() -> ResolutionContext {
         ResolutionContext::new("trace-1", "decision-1", "policy-1")
+    }
+
+    #[test]
+    fn native_builtin_descriptors_bind_exact_provider_and_capabilities() {
+        for name in ["buffer", "events", "os", "querystring", "url", "timers", "perf_hooks"] {
+            let builtin = NativeBuiltinModule::from_specifier(name).unwrap();
+            assert_eq!(
+                NativeBuiltinModule::from_specifier(&format!("node:{name}")),
+                Some(builtin)
+            );
+            let record = builtin.record("captured:graph:terminal");
+            assert_eq!(NativeBuiltinModule::from_record(&record), Some(builtin));
+            assert!(record.source.is_empty());
+            assert!(record.dependencies.is_empty());
+            assert_eq!(record.provenance.kind, ModuleSourceKind::BuiltIn);
+            assert!(record.required_capabilities.contains(&RuntimeCapability::ModuleLoad));
+            assert!(record.required_capabilities.contains(&RuntimeCapability::Builtin));
+            assert_eq!(
+                record.required_capabilities.contains(&RuntimeCapability::Timer),
+                name == "timers"
+            );
+            let request = ModuleRequest::new(name, ImportStyle::Require);
+            let denied = CapabilityPolicyHook::new(BTreeSet::from([
+                RuntimeCapability::ModuleLoad,
+            ]));
+            assert!(denied.authorize(&request, &record, &context()).is_err());
+            let allowed = CapabilityPolicyHook::new(record.required_capabilities.clone());
+            assert!(allowed.authorize(&request, &record, &context()).is_ok());
+        }
+        for name in ["fs", "path", "node:unknown", "node:node:buffer", "./buffer", "Buffer"] {
+            assert!(NativeBuiltinModule::from_specifier(name).is_none(), "{name}");
+        }
+    }
+
+    #[test]
+    fn native_builtin_descriptor_cannot_smuggle_source_or_reduce_authority() {
+        let original = NativeBuiltinModule::Buffer.record("captured:graph:buffer");
+        let mut forged = original.clone();
+        forged.source = "module.exports = require('fs');".into();
+        assert!(NativeBuiltinModule::from_record(&forged).is_none());
+        forged = original.clone();
+        forged.dependencies.push(ModuleDependency::new("fs", ImportStyle::Require));
+        assert!(NativeBuiltinModule::from_record(&forged).is_none());
+        forged = original.clone();
+        forged.required_capabilities.remove(&RuntimeCapability::Builtin);
+        assert!(NativeBuiltinModule::from_record(&forged).is_none());
+        forged = original.clone();
+        forged.provenance.kind = ModuleSourceKind::Workspace;
+        assert!(NativeBuiltinModule::from_record(&forged).is_none());
+        forged = original.clone();
+        forged.provenance.origin = "franken-engine/native-builtin/v1:buffer".into();
+        assert!(NativeBuiltinModule::from_record(&forged).is_none());
+        forged = original.clone();
+        forged.syntax = ModuleSyntax::EsModule;
+        assert!(NativeBuiltinModule::from_record(&forged).is_none());
+        forged = original;
+        forged.id.clear();
+        assert!(NativeBuiltinModule::from_record(&forged).is_none());
     }
 
     #[test]

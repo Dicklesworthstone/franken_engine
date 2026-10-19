@@ -100,6 +100,10 @@ const AUTHENTICATED_COMMONJS_RUNTIME_BINDINGS: [&str; 5] =
 /// prefix so fresh function bodies inherit it with the other lexical markers;
 /// the NUL-led name can never be a source identifier.
 const CANONICAL_COMMONJS_REQUIRE_SENTINEL: &str = "\0lexical\0\0canonical-commonjs-require";
+/// Inherited with lexical markers so deferred functions retain the installed
+/// resolver boundary instead of rewriting their loads into builtin facades.
+const PRESERVE_RUNTIME_MODULE_LOADS_SENTINEL: &str =
+    "\0lexical\0\0preserve-runtime-module-loads";
 
 /// Maximum number of IR1 ops to preallocate based on AST size (prevents pathological growth).
 const MAX_PREALLOC_OPS: usize = 1_000_000; // 1M ops max
@@ -340,7 +344,7 @@ fn is_lexically_shadowed(binding_lookup: &BTreeMap<String, BindingId>, name: &st
 /// Only the recognizers use this; a plain `require(...)` call on the wrapper
 /// binding still lowers to a call of the runtime loader.
 fn is_builtin_require_callee(binding_lookup: &BTreeMap<String, BindingId>, name: &str) -> bool {
-    if name != "require" {
+    if name != "require" || binding_lookup.contains_key(PRESERVE_RUNTIME_MODULE_LOADS_SENTINEL) {
         return false;
     }
     if !is_lexically_shadowed(binding_lookup, name) {
@@ -437,6 +441,12 @@ pub struct LoweringContext {
     /// in explicitly so arbitrary scripts retain deny-all ambient authority.
     #[serde(default)]
     pub authenticated_commonjs_runtime_bindings: bool,
+    /// Keep every source import and require on the runtime module boundary.
+    /// An installed resolver must authorize these requests before a native
+    /// builtin provider or cached module can be used. This does not grant
+    /// CommonJS bindings, module authority, or any builtin capability.
+    #[serde(default)]
+    pub preserve_runtime_module_loads: bool,
 }
 
 impl LoweringContext {
@@ -452,6 +462,7 @@ impl LoweringContext {
             ambient_authority_grant: AmbientAuthorityGrant::DenyAll,
             host_io_exception_provenance: HostIoExceptionProvenance::Unknown,
             authenticated_commonjs_runtime_bindings: false,
+            preserve_runtime_module_loads: false,
         }
     }
 
@@ -477,6 +488,13 @@ impl LoweringContext {
     /// the module loader constructs before executing the resulting IR.
     pub fn with_authenticated_commonjs_runtime_bindings(mut self) -> Self {
         self.authenticated_commonjs_runtime_bindings = true;
+        self
+    }
+
+    /// Preserve source load sites for the runtime resolver. Builtin rewrites
+    /// cannot replace these requests with lowering-time facade authority.
+    pub fn with_preserved_runtime_module_loads(mut self) -> Self {
+        self.preserve_runtime_module_loads = true;
         self
     }
 }
@@ -824,6 +842,7 @@ fn lower_ir0_to_ir3_unit(
         context.ambient_authority_grant,
         context.authenticated_commonjs_runtime_bindings,
         bounded_imports,
+        context.preserve_runtime_module_loads,
     ) {
         Ok(result) => {
             events.push(success_event(context, "ir0_to_ir1_lowered"));
@@ -1143,7 +1162,7 @@ fn lower_ir0_to_ir1_with_ambient_grant(
     ir0: &Ir0Module,
     ambient_grant: AmbientAuthorityGrant,
 ) -> Result<LoweringPassResult<Ir1Module>, LoweringPipelineError> {
-    lower_ir0_to_ir1_with_authenticated_runtime_bindings(ir0, ambient_grant, false, false)
+    lower_ir0_to_ir1_with_authenticated_runtime_bindings(ir0, ambient_grant, false, false, false)
 }
 
 /// Native stack for IR0 -> IR1 lowering, which recurses over the syntax tree
@@ -1162,6 +1181,7 @@ fn lower_ir0_to_ir1_with_authenticated_runtime_bindings(
     ambient_grant: AmbientAuthorityGrant,
     authenticated_commonjs_runtime_bindings: bool,
     bounded_imports: bool,
+    preserve_runtime_module_loads: bool,
 ) -> Result<LoweringPassResult<Ir1Module>, LoweringPipelineError> {
     crate::parser::run_with_provisioned_stack(
         "franken-engine-lower",
@@ -1174,6 +1194,7 @@ fn lower_ir0_to_ir1_with_authenticated_runtime_bindings(
                 ambient_grant,
                 authenticated_commonjs_runtime_bindings,
                 bounded_imports,
+                preserve_runtime_module_loads,
             )
         },
     )
@@ -1184,6 +1205,7 @@ fn lower_ir0_to_ir1_on_current_stack(
     ambient_grant: AmbientAuthorityGrant,
     authenticated_commonjs_runtime_bindings: bool,
     bounded_imports: bool,
+    preserve_runtime_module_loads: bool,
 ) -> Result<LoweringPassResult<Ir1Module>, LoweringPipelineError> {
     if ir0.tree.body.is_empty() {
         return Err(LoweringPipelineError::EmptyIr0Body);
@@ -1209,7 +1231,11 @@ fn lower_ir0_to_ir1_on_current_stack(
     // An import of a core module with a `require` facade becomes that
     // `require` (before the util rewrite, which builds `require('util')`).
     let imports_rewritten;
-    let ir0 = match esm_core_imports::rewrite_core_module_imports(&ir0.tree) {
+    let ir0 = match if preserve_runtime_module_loads {
+        None
+    } else {
+        esm_core_imports::rewrite_core_module_imports(&ir0.tree)
+    } {
         Some(tree) => {
             imports_rewritten = Ir0Module {
                 header: ir0.header.clone(),
@@ -1222,7 +1248,11 @@ fn lower_ir0_to_ir1_on_current_stack(
     // A free `require('path')` the path facade cannot claim builds the
     // engine's path module.
     let path_rewritten;
-    let ir0 = match path_module::rewrite_path_requires(&ir0.tree)? {
+    let ir0 = match if preserve_runtime_module_loads {
+        None
+    } else {
+        path_module::rewrite_path_requires(&ir0.tree)?
+    } {
         Some(tree) => {
             path_rewritten = Ir0Module {
                 header: ir0.header.clone(),
@@ -1234,7 +1264,11 @@ fn lower_ir0_to_ir1_on_current_stack(
     };
     // A free `require('util')` builds the engine's util module.
     let util_rewritten;
-    let ir0 = match util_module::rewrite_util_requires(&ir0.tree)? {
+    let ir0 = match if preserve_runtime_module_loads {
+        None
+    } else {
+        util_module::rewrite_util_requires(&ir0.tree)?
+    } {
         Some(tree) => {
             util_rewritten = Ir0Module {
                 header: ir0.header.clone(),
@@ -1277,6 +1311,16 @@ fn lower_ir0_to_ir1_on_current_stack(
     }
     let mut bindings = Vec::<ResolvedBinding>::with_capacity(estimated_bindings);
     let mut binding_lookup = BTreeMap::<String, BindingId>::new();
+    if preserve_runtime_module_loads {
+        binding_lookup.insert(PRESERVE_RUNTIME_MODULE_LOADS_SENTINEL.to_string(), 0);
+    }
+    // ESM alias recognizers have no require callee on which to check the
+    // sentinel. Keep their source declarations as runtime imports too.
+    let builtin_facade_body: &[Statement] = if preserve_runtime_module_loads {
+        &[]
+    } else {
+        &ir0.tree.body
+    };
     // bd-xewby: record the trusted-eval process-shape grant as a NUL-sentinel so
     // the ambient-authority gate (`ambient_authority_profile_for_scope`) can widen
     // the root profile to `ProcessShapeRead` for a trusted top-level eval. Absent
@@ -1360,16 +1404,16 @@ fn lower_ir0_to_ir1_on_current_stack(
     // consumed by `http_named_import_call_capability`. Both are usage-gated,
     // leaving bare/unused http imports at their current (runtime module-load)
     // behavior — the fail-closed analogue of the require-binding usage-gating.
-    for alias in confirmed_http_namespace_import_aliases(&ir0.tree.body) {
+    for alias in confirmed_http_namespace_import_aliases(builtin_facade_body) {
         binding_lookup.insert(http_module_alias_sentinel(&alias), 0);
     }
-    for alias in confirmed_https_namespace_import_aliases(&ir0.tree.body) {
+    for alias in confirmed_https_namespace_import_aliases(builtin_facade_body) {
         binding_lookup.insert(https_module_alias_sentinel(&alias), 0);
     }
-    for (local, capability) in confirmed_http_named_imports(&ir0.tree.body) {
+    for (local, capability) in confirmed_http_named_imports(builtin_facade_body) {
         binding_lookup.insert(http_named_import_sentinel(&local, capability), 0);
     }
-    for (local, capability) in confirmed_https_named_imports(&ir0.tree.body) {
+    for (local, capability) in confirmed_https_named_imports(builtin_facade_body) {
         binding_lookup.insert(http_named_import_sentinel(&local, capability), 0);
     }
     // bd-1xl17.b: ESM fs imports. Namespace/default fs imports used as
@@ -1378,10 +1422,10 @@ fn lower_ir0_to_ir1_on_current_stack(
     // unchanged; named fs imports used as direct calls get a capability-encoding
     // sentinel consumed by `fs_named_import_call_capability`. Both are
     // usage-gated, leaving bare/unused fs imports at their current behavior.
-    for alias in confirmed_fs_namespace_import_aliases(&ir0.tree.body) {
+    for alias in confirmed_fs_namespace_import_aliases(builtin_facade_body) {
         binding_lookup.insert(fs_module_alias_sentinel(&alias), 0);
     }
-    for (local, capability) in confirmed_fs_named_imports(&ir0.tree.body) {
+    for (local, capability) in confirmed_fs_named_imports(builtin_facade_body) {
         binding_lookup.insert(fs_named_import_sentinel(&local, capability), 0);
     }
     // bd-rmaze: destructured CJS sync-fs requires
@@ -1400,7 +1444,7 @@ fn lower_ir0_to_ir1_on_current_stack(
     // sentinel consumed by `fs_promises_named_import_call_capability`, which lowers
     // the call to the underlying fs: HostCall plus a `promise:resolve` wrap so the
     // call evaluates to a Promise. Usage-gated like the synchronous forms.
-    for (local, capability) in confirmed_fs_promises_named_imports(&ir0.tree.body) {
+    for (local, capability) in confirmed_fs_promises_named_imports(builtin_facade_body) {
         binding_lookup.insert(fs_promises_named_import_sentinel(&local, capability), 0);
     }
     // bd-1xl17.c: fs/promises require-binding aliases (`const fsp =
@@ -1434,7 +1478,7 @@ fn lower_ir0_to_ir1_on_current_stack(
     // 'node:fs/promises'`) used as `fsp.readFile/...` reuse the SAME module-alias
     // sentinel + member-call recognizer as the require-binding form; the import
     // clause binds the local to undefined and elides the module load. Usage-gated.
-    for alias in confirmed_fs_promises_namespace_import_aliases(&ir0.tree.body) {
+    for alias in confirmed_fs_promises_namespace_import_aliases(builtin_facade_body) {
         binding_lookup.insert(fs_promises_module_alias_sentinel(&alias), 0);
     }
     // bd-tu0c3: record path-module binding aliases (`const path = require('path')`
@@ -1554,7 +1598,7 @@ fn lower_ir0_to_ir1_on_current_stack(
     for local in confirmed_events_once_destructured_requires(&ir0.tree.body, &binding_lookup) {
         binding_lookup.insert(events_once_binding_sentinel(&local), 0);
     }
-    for local in confirmed_events_once_named_imports(&ir0.tree.body) {
+    for local in confirmed_events_once_named_imports(builtin_facade_body) {
         binding_lookup.insert(events_once_binding_sentinel(&local), 0);
     }
     for alias in confirmed_events_module_aliases(&ir0.tree.body, &binding_lookup) {
@@ -1600,22 +1644,22 @@ fn lower_ir0_to_ir1_on_current_stack(
     for local in confirmed_stream_promises_destructured_requires(&ir0.tree.body, &binding_lookup) {
         binding_lookup.insert(pending_stream_promises_binding_sentinel(&local), 0);
     }
-    for local in confirmed_stream_readable_named_imports(&ir0.tree.body) {
+    for local in confirmed_stream_readable_named_imports(builtin_facade_body) {
         binding_lookup.insert(stream_readable_binding_sentinel(&local), 0);
     }
-    for local in confirmed_stream_writable_named_imports(&ir0.tree.body) {
+    for local in confirmed_stream_writable_named_imports(builtin_facade_body) {
         binding_lookup.insert(stream_writable_binding_sentinel(&local), 0);
     }
-    for local in confirmed_stream_passthrough_named_imports(&ir0.tree.body) {
+    for local in confirmed_stream_passthrough_named_imports(builtin_facade_body) {
         binding_lookup.insert(stream_passthrough_binding_sentinel(&local), 0);
     }
-    for local in confirmed_stream_transform_named_imports(&ir0.tree.body) {
+    for local in confirmed_stream_transform_named_imports(builtin_facade_body) {
         binding_lookup.insert(stream_transform_binding_sentinel(&local), 0);
     }
-    for local in confirmed_stream_pipeline_named_imports(&ir0.tree.body) {
+    for local in confirmed_stream_pipeline_named_imports(builtin_facade_body) {
         binding_lookup.insert(stream_pipeline_binding_sentinel(&local), 0);
     }
-    for local in confirmed_stream_promises_pipeline_named_imports(&ir0.tree.body) {
+    for local in confirmed_stream_promises_pipeline_named_imports(builtin_facade_body) {
         binding_lookup.insert(stream_promises_pipeline_binding_sentinel(&local), 0);
     }
     let mut synthetic_export_index = 0u32;
@@ -29582,6 +29626,9 @@ fn fs_callback_builtin_call_capability(
     callee: &Expression,
     binding_lookup: &BTreeMap<String, BindingId>,
 ) -> Option<&'static str> {
+    if binding_lookup.contains_key(PRESERVE_RUNTIME_MODULE_LOADS_SENTINEL) {
+        return None;
+    }
     let Expression::Member {
         object,
         property,
@@ -30081,6 +30128,9 @@ fn fs_promises_builtin_call_capability(
     callee: &Expression,
     binding_lookup: &BTreeMap<String, BindingId>,
 ) -> Option<FsBuiltinCall> {
+    if binding_lookup.contains_key(PRESERVE_RUNTIME_MODULE_LOADS_SENTINEL) {
+        return None;
+    }
     let Expression::Member {
         object,
         property,
@@ -49938,6 +49988,146 @@ mod tests {
         assert!(!ops.iter().any(|op| matches!(op, Ir1Op::LoadName { .. })));
     }
 
+    fn lower_preserving_runtime_loads(source: &str, commonjs: bool) -> LoweringPipelineOutput {
+        let tree = if commonjs {
+            crate::parser_api_stability::parse_script(source)
+        } else {
+            crate::parser_api_stability::parse_module(source)
+        }
+        .expect("parse source module");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "delivered:module");
+        let mut context = LoweringContext::new("trace", "decision", "policy")
+            .with_preserved_runtime_module_loads();
+        if commonjs {
+            context = context.with_authenticated_commonjs_runtime_bindings();
+        }
+        lower_ir0_to_ir3(&ir0, &context).expect("lower through the real runtime load boundary")
+    }
+
+    #[test]
+    fn preserved_commonjs_builtin_loads_reach_the_runtime_callee() {
+        for name in [
+            "buffer",
+            "events",
+            "os",
+            "querystring",
+            "url",
+            "timers",
+            "perf_hooks",
+            "fs",
+            "fs/promises",
+            "path",
+            "util",
+        ] {
+            for prefix in ["", "node:"] {
+                let specifier = format!("{prefix}{name}");
+                let source =
+                    format!("const value = require('{specifier}'); console.log(typeof value);");
+                let output = lower_preserving_runtime_loads(&source, true);
+                let ops = &output.ir1.ops;
+                assert_eq!(
+                    count_ops_deep(ops, &|op| matches!(op, Ir1Op::Call { arg_count: 1 })),
+                    1,
+                    "{specifier} must remain one call of the authenticated require binding"
+                );
+                assert_eq!(
+                    count_ops_deep(ops, &|op| matches!(op,
+                        Ir1Op::LoadLiteral { value: Ir1Literal::String(value) }
+                        if value.as_str() == Some(specifier.as_str()))),
+                    1,
+                    "the runtime policy must see the original alias spelling"
+                );
+                assert_eq!(
+                    count_ops_deep(ops, &|op| matches!(op,
+                        Ir1Op::DeclareFunction { .. } | Ir1Op::CreateFunction { .. })),
+                    0,
+                    "a source require must not become a hidden builtin loader"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn preserved_loads_survive_nested_destructured_and_inline_facades() {
+        let output = lower_preserving_runtime_loads(
+            "const { EventEmitter } = require('node:events');\n\
+             const fs = require('fs');\n\
+             fs.readFileSync('input');\n\
+             require('fs').readFile('input', function () {});\n\
+             require('fs/promises').readFile('input');\n\
+             function deferred() { return require('node:buffer'); }\n",
+            true,
+        );
+        let ops = &output.ir1.ops;
+        assert_eq!(
+            count_ops_deep(ops, &|op| matches!(op, Ir1Op::Call { arg_count: 1 })),
+            5,
+            "each source load remains a runtime call, including the deferred body"
+        );
+        assert_eq!(count_hostcall_deep(ops, "fs:read"), 0);
+        assert_eq!(
+            count_hostcall_deep(ops, "builtin:EventEmitterConstructorRef"),
+            0
+        );
+        assert_eq!(
+            count_ops_deep(ops, &|op| matches!(op,
+                Ir1Op::DeclareFunction { .. } | Ir1Op::CreateFunction { .. })),
+            2,
+            "only the two source functions may be introduced"
+        );
+        assert!(!ops.iter().any(|op| matches!(op,
+            Ir1Op::LoadLiteral { value: Ir1Literal::String(value) }
+            if value.as_str() == Some("node:buffer"))));
+        assert_eq!(
+            count_ops_deep(ops, &|op| matches!(op,
+                Ir1Op::LoadLiteral { value: Ir1Literal::String(value) }
+                if value.as_str() == Some("node:buffer"))),
+            1,
+            "a deferred load must not move into the entry prelude"
+        );
+    }
+
+    #[test]
+    fn preserved_esm_builtin_imports_cannot_bypass_runtime_refusal() {
+        let output = lower_preserving_runtime_loads(
+            "import 'node:path';\n\
+             import { Buffer as B } from 'node:buffer';\n\
+             import { readFileSync } from 'node:fs';\n\
+             import * as http from 'node:http';\n\
+             readFileSync('input');\n\
+             http.get('https://example.invalid/');\n",
+            false,
+        );
+        let imports = output
+            .ir1
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Ir1Op::ImportModule { specifier } => specifier.as_str(),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(imports, ["node:path", "node:buffer", "node:fs", "node:http"]);
+        assert_eq!(count_hostcall_deep(&output.ir1.ops, "fs:read"), 0);
+        assert_eq!(count_hostcall_deep(&output.ir1.ops, "builtin:HttpGet"), 0);
+        assert_eq!(count_hostcall_deep(&output.ir1.ops, "net:request"), 0);
+    }
+
+    #[test]
+    fn preserved_load_context_does_not_grant_ambient_require() {
+        let tree = crate::parser_api_stability::parse_script("require('buffer');")
+            .expect("parse raw script");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "untrusted.cjs");
+        let context = LoweringContext::new("trace", "decision", "policy");
+        assert!(!context.preserve_runtime_module_loads);
+        let error = lower_ir0_to_ir3(&ir0, &context.with_preserved_runtime_module_loads())
+            .expect_err("preserving loads cannot manufacture a CommonJS binding");
+        assert!(matches!(
+            error,
+            LoweringPipelineError::AmbientAuthorityViolation { .. }
+        ));
+    }
+
     #[test]
     fn module_and_commonjs_bindings_shadow_immutable_global_names() {
         for name in ["undefined", "NaN", "Infinity"] {
@@ -49951,6 +50141,7 @@ mod tests {
                 &ir0,
                 AmbientAuthorityGrant::DenyAll,
                 true,
+                false,
                 false,
             )
             .expect("lower authenticated CommonJS");

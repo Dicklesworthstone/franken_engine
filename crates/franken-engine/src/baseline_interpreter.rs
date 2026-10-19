@@ -174,8 +174,8 @@ use crate::js_string::JsString;
 use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use crate::module_compatibility_matrix::CompatibilityMode;
 use crate::module_resolver::{
-    ExecutionModuleResolver, ImportStyle, ModuleRequest, ModuleSyntax, ResolutionContext,
-    ResolutionOutcome,
+    ExecutionModuleResolver, ImportStyle, ModuleRequest, ModuleSyntax, NativeBuiltinModule,
+    ResolutionContext, ResolutionOutcome,
 };
 use crate::object_model::{SymbolId, WellKnownSymbol};
 use crate::parser::{
@@ -39278,6 +39278,22 @@ impl InterpreterCore {
                 capability: missing.to_string(),
             });
         }
+        if record.provenance.origin.starts_with("franken-engine/native-builtin/") {
+            if NativeBuiltinModule::from_record(record).is_none() {
+                return Err(InterpreterError::ModuleLoweringFailed {
+                    specifier: specifier.to_string(),
+                    error: "resolved built-in is not an authenticated native provider descriptor"
+                        .to_string(),
+                });
+            }
+            if style != ImportStyle::Require {
+                return Err(InterpreterError::ModuleLoweringFailed {
+                    specifier: specifier.to_string(),
+                    error: "native built-in providers currently require a CommonJS require edge"
+                        .to_string(),
+                });
+            }
+        }
         Ok(resolved)
     }
 
@@ -39950,6 +39966,11 @@ impl InterpreterCore {
         } else {
             lowering_ctx
         };
+        let lowering_ctx = if self.module_resolver.is_some() {
+            lowering_ctx.with_preserved_runtime_module_loads()
+        } else {
+            lowering_ctx
+        };
         // bd-j8f7q: a module a bounded importer loads bounds its own imports
         // too, so the bound holds transitively and is checked at each edge.
         let lowered = if import_bound.is_some() {
@@ -40367,27 +40388,10 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let specifier = Self::utf8_module_specifier(specifier)?;
         self.run_pre_import_hook(module, specifier)?;
-        if self.module_resolver.is_none() && matches!(specifier, "buffer" | "node:buffer") {
-            return self.buffer_core_module();
-        }
-        if self.module_resolver.is_none() && matches!(specifier, "os" | "node:os") {
-            return self.os_core_module();
-        }
-        if self.module_resolver.is_none() && matches!(specifier, "querystring" | "node:querystring")
+        if self.module_resolver.is_none()
+            && let Some(native) = NativeBuiltinModule::from_specifier(specifier)
         {
-            return self.querystring_core_module();
-        }
-        if self.module_resolver.is_none() && matches!(specifier, "events" | "node:events") {
-            return self.events_core_module(module);
-        }
-        if self.module_resolver.is_none() && matches!(specifier, "url" | "node:url") {
-            return self.url_core_module();
-        }
-        if self.module_resolver.is_none() && matches!(specifier, "timers" | "node:timers") {
-            return self.timers_core_module();
-        }
-        if self.module_resolver.is_none() && matches!(specifier, "perf_hooks" | "node:perf_hooks") {
-            return self.perf_hooks_core_module();
+            return self.native_builtin_module(module, native);
         }
         let delivered = self
             .module_resolver
@@ -40398,6 +40402,11 @@ impl InterpreterCore {
             Some(source) => source.module.record.id.clone(),
             None => self.resolve_require_specifier(specifier)?,
         };
+        if let Some(source) = delivered.as_ref()
+            && let Some(native) = NativeBuiltinModule::from_record(&source.module.record)
+        {
+            return self.load_native_builtin_resolved(module, source, native);
+        }
         let is_json = delivered.is_none()
             && Path::new(&resolved)
                 .extension()
@@ -40432,6 +40441,52 @@ impl InterpreterCore {
         };
         let default_value = self.prototype_chain_get(namespace_object, "default")?;
         Ok(default_value)
+    }
+
+    /// Built-ins share the ordinary module identity map. Pin the descriptor
+    /// before returning its realm-owned value so a resolver cannot change the
+    /// provider behind a cached opaque id, or alias a source module's id.
+    fn load_native_builtin_resolved(
+        &mut self,
+        module: &Ir3Module,
+        source: &ResolutionOutcome,
+        native: NativeBuiltinModule,
+    ) -> Result<Value, InterpreterError> {
+        let resolved = &source.module.record.id;
+        if let Some(record) = self.module_state.modules.get(resolved)
+            && record.resolved_source_hash != Some(source.module.content_hash)
+        {
+            return Err(InterpreterError::ModuleLoweringFailed {
+                specifier: resolved.clone(),
+                error: "resolved module changed after its first authorized load".to_string(),
+            });
+        }
+        let value = self.native_builtin_module(module, native)?;
+        self.ensure_module_record(module, resolved)?;
+        if let Some(record) = self.module_state.modules.get_mut(resolved) {
+            record.resolved_source_hash = Some(source.module.content_hash);
+            record.status = ModuleRuntimeStatus::Evaluated;
+        }
+        Ok(value)
+    }
+
+    /// Return the engine-owned object for a supported CommonJS core module.
+    /// Installed resolvers must authorize and authenticate the descriptor
+    /// before reaching this cache, including on repeated and alias lookups.
+    fn native_builtin_module(
+        &mut self,
+        module: &Ir3Module,
+        native: NativeBuiltinModule,
+    ) -> Result<Value, InterpreterError> {
+        match native {
+            NativeBuiltinModule::Buffer => self.buffer_core_module(),
+            NativeBuiltinModule::Events => self.events_core_module(module),
+            NativeBuiltinModule::Os => self.os_core_module(),
+            NativeBuiltinModule::Querystring => self.querystring_core_module(),
+            NativeBuiltinModule::Url => self.url_core_module(),
+            NativeBuiltinModule::Timers => self.timers_core_module(),
+            NativeBuiltinModule::PerfHooks => self.perf_hooks_core_module(),
+        }
     }
 
     /// Read a dependency once and charge its raw bytes before decoding or
@@ -41103,6 +41158,11 @@ impl InterpreterCore {
                 "function-constructor",
                 "baseline_interpreter",
             );
+            let lowering_ctx = if self.module_resolver.is_some() {
+                lowering_ctx.with_preserved_runtime_module_loads()
+            } else {
+                lowering_ctx
+            };
             let lowering_output = match lower_ir0_to_ir3(&ir0, &lowering_ctx) {
                 Ok(lowering_output) => lowering_output,
                 Err(crate::lowering_pipeline::LoweringPipelineError::SemanticViolation(error)) => {
@@ -70490,6 +70550,14 @@ impl InterpreterCore {
         let specifier = Self::utf8_module_specifier(&request)?;
         if self.module_resolver.is_some() {
             let resolved = self.resolve_installed_module(specifier, ImportStyle::Require)?;
+            if let Some(native) = NativeBuiltinModule::from_record(&resolved.module.record) {
+                let name = if NativeBuiltinModule::from_specifier(specifier) == Some(native) {
+                    specifier
+                } else {
+                    native.canonical_specifier()
+                };
+                return Ok(Value::str(name));
+            }
             return Ok(Value::str(
                 self.module_filename_view(&resolved.module.record.id),
             ));

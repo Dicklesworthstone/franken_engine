@@ -3630,6 +3630,11 @@ impl ExecutionOrchestrator {
         } else {
             lowering_ctx
         };
+        let lowering_ctx = if self.module_resolver.is_some() {
+            lowering_ctx.with_preserved_runtime_module_loads()
+        } else {
+            lowering_ctx
+        };
         let lowering_output = lower_ir0_to_ir3(&ir0, &lowering_ctx)?;
         let entry_flow_label_ceiling = crate::lowering_pipeline::lowered_unit_flow_label_ceiling(
             &lowering_output.ir2,

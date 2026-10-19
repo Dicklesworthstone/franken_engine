@@ -17,8 +17,8 @@ use frankenengine_engine::module_compatibility_matrix::CompatibilityMode;
 use frankenengine_engine::module_resolver::{
     AllowAllPolicy, CapabilityPolicyHook, DeterministicModuleResolver, ExecutionModuleResolver,
     ImportStyle, ModuleDefinition, ModuleDependency, ModulePolicyHook, ModuleRecord, ModuleRequest,
-    ModuleResolver, ModuleSourceLocation, ModuleSyntax, ResolutionContext, ResolutionOutcome,
-    ResolutionResult,
+    ModuleResolver, ModuleSourceLocation, ModuleSyntax, NativeBuiltinModule, ResolutionContext,
+    ResolutionOutcome, ResolutionResult,
 };
 use frankenengine_engine::runtime_config::RuntimeConfig;
 
@@ -31,6 +31,10 @@ enum Corruption {
     None,
     StaleHash,
     ChangeCachedSource,
+    ForgeBuiltin,
+    MalformedBuiltinMarker,
+    ChangeBuiltinProvider,
+    BuiltinAliasesEntry,
     Panic,
 }
 
@@ -56,6 +60,36 @@ impl OpaqueResolver {
             requests: Mutex::new(Vec::new()),
             corruption: Corruption::None,
         }
+    }
+
+    fn with_native_builtins(mut self) -> Self {
+        for native in [
+            NativeBuiltinModule::Buffer,
+            NativeBuiltinModule::Events,
+            NativeBuiltinModule::Os,
+            NativeBuiltinModule::Querystring,
+            NativeBuiltinModule::Url,
+            NativeBuiltinModule::Timers,
+            NativeBuiltinModule::PerfHooks,
+        ] {
+            let canonical = native.canonical_specifier();
+            for name in [canonical, canonical.strip_prefix("node:").expect("core prefix")] {
+                let record = native.record(format!("builtin:{name}"));
+                self.inner
+                    .register_builtin(
+                        name,
+                        ModuleDefinition {
+                            syntax: record.syntax,
+                            source: record.source,
+                            dependencies: record.dependencies,
+                            required_capabilities: record.required_capabilities,
+                            provenance_origin: record.provenance.origin,
+                        },
+                    )
+                    .expect("real native provider descriptor");
+            }
+        }
+        self
     }
 }
 
@@ -95,6 +129,32 @@ impl ModuleResolver for OpaqueResolver {
                 _ => {}
             }
         }
+        if NativeBuiltinModule::from_record(&outcome.module.record).is_some() {
+            match self.corruption {
+                Corruption::ForgeBuiltin => {
+                    outcome.module.record.source =
+                        "throw new Error('a builtin descriptor must never execute source');"
+                            .to_string();
+                    outcome.module.content_hash = outcome.module.record.canonical_hash();
+                }
+                Corruption::MalformedBuiltinMarker => {
+                    outcome.module.record.provenance.origin =
+                        "franken-engine/native-builtin/v99:node:querystring".to_string();
+                    outcome.module.content_hash = outcome.module.record.canonical_hash();
+                }
+                Corruption::ChangeBuiltinProvider if occurrence > 1 => {
+                    outcome.module.record =
+                        NativeBuiltinModule::Buffer.record(outcome.module.record.id.clone());
+                    outcome.module.content_hash = outcome.module.record.canonical_hash();
+                }
+                Corruption::BuiltinAliasesEntry => {
+                    outcome.module.record.id = format!("{ID_PREFIX}{ROOT}/entry.cjs");
+                    outcome.module.canonical_specifier = outcome.module.record.id.clone();
+                    outcome.module.content_hash = outcome.module.record.canonical_hash();
+                }
+                _ => {}
+            }
+        }
         Ok(outcome)
     }
 
@@ -128,6 +188,7 @@ impl ModuleResolver for OpaqueResolver {
 struct RecordingPolicy {
     requests: Mutex<Vec<(ModuleRequest, ResolutionContext)>>,
     denied: Option<(String, usize)>,
+    allow_native_builtins: bool,
 }
 
 impl ModulePolicyHook for RecordingPolicy {
@@ -145,7 +206,11 @@ impl ModulePolicyHook for RecordingPolicy {
                 .filter(|(prior, _)| prior.specifier == request.specifier)
                 .count()
         };
-        let mut policy = CapabilityPolicyHook::new(BTreeSet::from([RuntimeCapability::ModuleLoad]));
+        let mut grants = BTreeSet::from([RuntimeCapability::ModuleLoad]);
+        if self.allow_native_builtins {
+            grants.extend([RuntimeCapability::Builtin, RuntimeCapability::Timer]);
+        }
+        let mut policy = CapabilityPolicyHook::new(grants);
         if self
             .denied
             .as_ref()
@@ -591,4 +656,229 @@ fn delivered_resolver_panic_preserves_cell_cleanup_and_restores_installation() {
         .execute(&ordinary)
         .expect("a classified resolver panic cannot contaminate an ordinary run");
     assert_eq!(lines(&result), ["after panic"]);
+}
+
+#[test]
+fn delivered_native_builtins_execute_real_providers_and_preserve_alias_identity() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![(
+                "entry.cjs",
+                definition(
+                    ModuleSyntax::CommonJs,
+                    r#"
+const load = require;
+const q = load('querystring');
+q.marker = 17;
+console.log(require('node:querystring') === q, require('querystring').marker);
+console.log(q.stringify({ a: 'x y' }));
+console.log(load('buffer').Buffer.from('abc').length);
+console.log(typeof load('events'), typeof load('os').EOL,
+    typeof load('url').URL, typeof load('timers').setTimeout,
+    typeof load('perf_hooks').performance.now);
+console.log(require.resolve('querystring'), require.resolve('node:querystring'));
+"#,
+                ),
+            )])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let policy = Arc::new(RecordingPolicy {
+            allow_native_builtins: true,
+            ..RecordingPolicy::default()
+        });
+        let installed =
+            ExecutionModuleResolver::new(&source.module.record.id, resolver, policy.clone());
+        let result = orchestrator(lane, ModuleSyntax::CommonJs)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("admitted descriptors dispatch the engine's real core providers");
+        assert_eq!(
+            lines(&result),
+            [
+                "true 17",
+                "a=x%20y",
+                "3",
+                "function string function function function",
+                "querystring node:querystring"
+            ]
+        );
+        assert_eq!(
+            policy.requests.lock().expect("policy log").len(),
+            11,
+            "aliases, cached objects and require.resolve must all authorize their route"
+        );
+    }
+}
+
+#[test]
+fn delivered_native_builtin_cache_cannot_bypass_policy_in_nested_source() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![
+                (
+                    "entry.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        "const q = require('querystring'); console.log(q.stringify({ a: 'x' })); require('./child.cjs');",
+                    )
+                    .with_dependency(ModuleDependency::new("./child.cjs", ImportStyle::Require)),
+                ),
+                (
+                    "child.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        "const q = require('querystring'); console.log(q.stringify({ blocked: 'x' }));",
+                    ),
+                ),
+            ])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let policy = Arc::new(RecordingPolicy {
+            denied: Some(("querystring".to_string(), 2)),
+            allow_native_builtins: true,
+            ..RecordingPolicy::default()
+        });
+        let installed =
+            ExecutionModuleResolver::new(&source.module.record.id, resolver, policy.clone());
+        let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
+        let error = engine
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect_err("nested literal require must authorize before returning a cached core object");
+        assert!(
+            error
+                .to_string()
+                .contains("closed-world module resolution refused"),
+            "{error}"
+        );
+        assert_eq!(
+            engine
+                .last_failed_console_output()
+                .iter()
+                .map(|entry| entry.message.as_str())
+                .collect::<Vec<_>>(),
+            ["a=x"]
+        );
+        assert_eq!(
+            policy
+                .requests
+                .lock()
+                .expect("policy log")
+                .iter()
+                .filter(|(request, _)| request.specifier == "querystring")
+                .count(),
+            2
+        );
+    }
+}
+
+#[test]
+fn delivered_native_descriptors_reject_forgery_and_cached_provider_substitution() {
+    for corruption in [
+        Corruption::ForgeBuiltin,
+        Corruption::MalformedBuiltinMarker,
+        Corruption::ChangeBuiltinProvider,
+        Corruption::BuiltinAliasesEntry,
+    ] {
+        let mut resolver = OpaqueResolver::new(vec![(
+            "entry.cjs",
+            definition(
+                ModuleSyntax::CommonJs,
+                "require('querystring'); require('querystring');",
+            ),
+        )])
+        .with_native_builtins();
+        resolver.corruption = corruption;
+        let resolver = Arc::new(resolver);
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let error = orchestrator(LaneChoice::QuickJs, ModuleSyntax::CommonJs)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect_err("native descriptor validation and identity pinning precede provider dispatch");
+        let expected = match corruption {
+            Corruption::ChangeBuiltinProvider | Corruption::BuiltinAliasesEntry => {
+                "changed after its first authorized load"
+            }
+            _ => "not an authenticated native provider descriptor",
+        };
+        assert!(error.to_string().contains(expected), "{error}");
+    }
+}
+
+#[test]
+fn delivered_source_defined_builtins_keep_ordinary_source_execution() {
+    let mut resolver = OpaqueResolver::new(vec![(
+        "entry.cjs",
+        definition(
+            ModuleSyntax::CommonJs,
+            "console.log(require('source-builtin'));",
+        ),
+    )]);
+    resolver
+        .inner
+        .register_builtin(
+            "source-builtin",
+            definition(ModuleSyntax::CommonJs, "module.exports = 17;")
+                .with_provenance("application/builtin-source"),
+        )
+        .expect("ordinary source-defined builtin");
+    let resolver = Arc::new(resolver);
+    let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+    let installed =
+        ExecutionModuleResolver::new(&source.module.record.id, resolver, Arc::new(AllowAllPolicy));
+    let result = orchestrator(LaneChoice::QuickJs, ModuleSyntax::CommonJs)
+        .execute_resolved_entry_with_resolver(&package(), &source, installed)
+        .expect("the reserved native descriptor contract does not replace source-defined builtins");
+    assert_eq!(lines(&result), ["17"]);
+}
+
+#[test]
+fn delivered_unknown_native_alias_cannot_use_an_already_cached_provider() {
+    let mut resolver = OpaqueResolver::new(vec![(
+        "entry.cjs",
+        definition(
+            ModuleSyntax::CommonJs,
+            "console.log(require('querystring').stringify({ a: 'x' })); require('node:querystring');",
+        ),
+    )]);
+    let record = NativeBuiltinModule::Querystring.record("builtin:querystring");
+    resolver
+        .inner
+        .register_builtin(
+            "querystring",
+            ModuleDefinition {
+                syntax: record.syntax,
+                source: record.source,
+                dependencies: record.dependencies,
+                required_capabilities: record.required_capabilities,
+                provenance_origin: record.provenance.origin,
+            },
+        )
+        .expect("only the bare querystring route is admitted");
+    let resolver = Arc::new(resolver);
+    let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+    let installed =
+        ExecutionModuleResolver::new(&source.module.record.id, resolver, Arc::new(AllowAllPolicy));
+    let mut engine = orchestrator(LaneChoice::QuickJs, ModuleSyntax::CommonJs);
+    let error = engine
+        .execute_resolved_entry_with_resolver(&package(), &source, installed)
+        .expect_err("an uncaptured alias must not inherit another route's authorization");
+    assert!(
+        error
+            .to_string()
+            .contains("closed-world module resolution refused"),
+        "{error}"
+    );
+    assert_eq!(
+        engine
+            .last_failed_console_output()
+            .iter()
+            .map(|entry| entry.message.as_str())
+            .collect::<Vec<_>>(),
+        ["a=x"]
+    );
 }

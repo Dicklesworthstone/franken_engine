@@ -1882,6 +1882,9 @@ impl InterpreterCore {
             array_join_stack: _,
             next_promise_combinator_id: _,
             module_state,
+            // Source records, policy, origin metadata and hashes only;
+            // evaluated module values and activations live in module_state.
+            module_resolver: _,
             pending_async_module_import,
             active_cjs_context,
             current_module_specifier: _,

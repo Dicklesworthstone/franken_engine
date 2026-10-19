@@ -10685,13 +10685,21 @@ impl ScopeFrame {
             .saturating_add(InterpreterCore::estimate_string_bytes(name))
     }
 
-    fn declare(&mut self, name: String, kind: BindingKind) -> Option<ScopeBinding> {
+    fn declare<'name>(
+        &mut self,
+        name: impl Into<Cow<'name, str>>,
+        kind: BindingKind,
+    ) -> Option<ScopeBinding> {
+        let name = name.into();
         if kind == BindingKind::Var
-            && let Some(existing) = self.bindings.get(&name)
+            && let Some(existing) = self.bindings.get(name.as_ref())
         {
             return Some(existing.clone());
         }
-        self.insert_binding(name, ScopeBinding::new(kind))
+        // Bytecode names normally borrow the immutable constant pool. Own the
+        // key only when a declaration actually changes the frame; a repeated
+        // `var` keeps its existing key, cell, and shared map without copying.
+        self.insert_binding(name.into_owned(), ScopeBinding::new(kind))
     }
 
     fn insert_binding(&mut self, name: String, binding: ScopeBinding) -> Option<ScopeBinding> {
@@ -57959,13 +57967,9 @@ impl InterpreterCore {
                     name_pool_index,
                     kind,
                 } => {
-                    let name = module
-                        .constant_pool
-                        .get(name_pool_index as usize)
-                        .map(ToString::to_string)
-                        .unwrap_or_else(|| format!("__binding_{name_pool_index}"));
+                    let name = Self::scoped_constant_name(module, name_pool_index);
                     let binding_kind = BindingKind::from_u8(kind)?;
-                    let existing = self.scope_chain.current()?.get(&name).is_some();
+                    let existing = self.scope_chain.current()?.get(name.as_ref()).is_some();
                     // bd-9vouw.31: a new name adds its entry plus one fresh
                     // cell that nothing else reaches, and re-declaring an
                     // existing `var` changes nothing. Only replacing a
@@ -57982,14 +57986,17 @@ impl InterpreterCore {
                     let replaced = self
                         .scope_chain
                         .current_mut()?
-                        .declare(name.clone(), binding_kind);
+                        .declare(name.as_ref(), binding_kind);
                     let memory_result = if local_delta {
                         let added_cell_bytes = if existing {
                             0
                         } else {
-                            self.scope_chain.current()?.get(&name).map_or(0, |binding| {
-                                Self::estimate_binding_cell_payload_bytes(&binding.state)
-                            })
+                            self.scope_chain
+                                .current()?
+                                .get(name.as_ref())
+                                .map_or(0, |binding| {
+                                    Self::estimate_binding_cell_payload_bytes(&binding.state)
+                                })
                         };
                         #[cfg(debug_assertions)]
                         debug_assert_eq!(
@@ -58013,9 +58020,9 @@ impl InterpreterCore {
                             && !current.restore_copied_bindings(checkpoint)
                         {
                             if let Some(old) = replaced {
-                                current.insert_binding(name, old);
+                                current.insert_binding(name.into_owned(), old);
                             } else {
-                                current.remove_binding(&name);
+                                current.remove_binding(name.as_ref());
                             }
                         }
                         return Err(err);
@@ -161298,6 +161305,52 @@ mod tests {
             core.estimated_memory_bytes(),
             "iterator allocation delta must match full recompute"
         );
+    }
+
+    #[test]
+    fn borrowed_scope_declaration_refusal_restores_unique_and_shared_maps() {
+        for captured in [false, true] {
+            let mut core = quickjs_test_core();
+            core.scope_chain.current_mut().unwrap().insert_binding(
+                "keep".to_owned(),
+                ScopeBinding::with_labeled_state(
+                    BindingKind::Let,
+                    Value::str("retained payload"),
+                    Label::Secret,
+                    true,
+                ),
+            );
+            if captured {
+                core.closures.push(ClosureValue {
+                    function_index: 0,
+                    captured_env: core.scope_chain.snapshot(),
+                });
+            }
+            core.sync_estimated_memory_bytes().expect("seed scope");
+            let before = core.estimated_memory_bytes();
+            let map = Rc::as_ptr(&core.scope_chain.current().unwrap().bindings);
+            core.config.max_total_memory_bytes = before;
+            let module = test_module_with_pool(
+                vec![Ir3Instruction::DeclareBinding {
+                    name_pool_index: 0,
+                    kind: BindingKind::Let as u8,
+                }],
+                vec!["名_declared".to_owned()],
+            );
+
+            assert!(matches!(
+                core.run_loop(&module),
+                Err(InterpreterError::MemoryBudgetExceeded { .. })
+            ));
+            let frame = core.scope_chain.current().unwrap();
+            assert_eq!(Rc::as_ptr(&frame.bindings), map);
+            assert!(frame.get("名_declared").is_none());
+            let retained = frame.get("keep").unwrap();
+            assert_eq!(retained.value().unwrap(), Value::str("retained payload"));
+            assert_eq!(retained.label().unwrap(), Label::Secret);
+            assert_eq!(core.estimated_memory_bytes(), before);
+            assert_eq!(core.recompute_estimated_memory_bytes(), before);
+        }
     }
 
     #[test]

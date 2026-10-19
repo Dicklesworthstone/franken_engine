@@ -347,6 +347,137 @@ pub fn encode_value(value: &CanonicalValue) -> Vec<u8> {
     buf
 }
 
+/// Append canonical fields directly from borrowed data. Large IR modules use
+/// this writer to avoid first allocating an owned `CanonicalValue` tree.
+/// Container callers emit keys in lexicographic order and exactly the number
+/// of elements returned by the header method, including length clamping.
+pub(crate) struct CanonicalWriter {
+    buf: Vec<u8>,
+}
+
+impl CanonicalWriter {
+    pub(crate) fn new() -> Self {
+        Self { buf: Vec::new() }
+    }
+
+    pub(crate) fn finish(self) -> Vec<u8> {
+        self.buf
+    }
+
+    pub(crate) fn value(&mut self, value: &CanonicalValue) {
+        encode_into(&mut self.buf, value);
+    }
+
+    pub(crate) fn u64(&mut self, value: u64) {
+        self.value(&CanonicalValue::U64(value));
+    }
+
+    pub(crate) fn i64(&mut self, value: i64) {
+        self.value(&CanonicalValue::I64(value));
+    }
+
+    pub(crate) fn boolean(&mut self, value: bool) {
+        self.value(&CanonicalValue::Bool(value));
+    }
+
+    pub(crate) fn null(&mut self) {
+        self.value(&CanonicalValue::Null);
+    }
+
+    pub(crate) fn string(&mut self, value: &str) {
+        self.buf.push(TAG_STRING);
+        self.key(value);
+    }
+
+    pub(crate) fn bytes(&mut self, value: &[u8]) {
+        self.buf.push(TAG_BYTES);
+        self.length_prefixed_bytes(value);
+    }
+
+    pub(crate) fn key(&mut self, value: &str) {
+        self.length_prefixed_bytes(value.as_bytes());
+    }
+
+    fn length_prefixed_bytes(&mut self, value: &[u8]) {
+        let clamped = value.len().min(u32::MAX as usize);
+        self.buf.extend_from_slice(&(clamped as u32).to_be_bytes());
+        self.buf.extend_from_slice(&value[..clamped]);
+    }
+
+    pub(crate) fn array_header(&mut self, len: usize) -> usize {
+        self.container_header(TAG_ARRAY, len)
+    }
+
+    pub(crate) fn map_header(&mut self, len: usize) -> usize {
+        self.container_header(TAG_MAP, len)
+    }
+
+    fn container_header(&mut self, tag: u8, len: usize) -> usize {
+        let clamped = len.min(u32::MAX as usize);
+        self.buf.push(tag);
+        self.buf.extend_from_slice(&(clamped as u32).to_be_bytes());
+        clamped
+    }
+}
+
+#[cfg(test)]
+mod writer_tests {
+    use super::*;
+
+    #[test]
+    fn borrowed_fields_match_reference_encoding() {
+        let values = [
+            CanonicalValue::U64(u64::MAX),
+            CanonicalValue::I64(i64::MIN),
+            CanonicalValue::Bool(false),
+            CanonicalValue::Null,
+            CanonicalValue::str("\0é🚀"),
+            CanonicalValue::Bytes(vec![0, 127, 128, 255]),
+        ];
+        let mut writer = CanonicalWriter::new();
+        writer.array_header(values.len());
+        writer.u64(u64::MAX);
+        writer.i64(i64::MIN);
+        writer.boolean(false);
+        writer.null();
+        writer.string("\0é🚀");
+        writer.bytes(&[0, 127, 128, 255]);
+        let actual = writer.finish();
+        let reference = CanonicalValue::Array(values.into());
+        assert_eq!(actual, encode_value(&reference));
+        assert_eq!(decode_value(&actual).expect("canonical fields"), reference);
+    }
+
+    #[test]
+    fn borrowed_map_keys_and_nested_values_match_reference() {
+        let nested = CanonicalValue::Array(vec![CanonicalValue::Bool(true)]);
+        let mut writer = CanonicalWriter::new();
+        writer.map_header(2);
+        writer.key("");
+        writer.value(&nested);
+        writer.key("é");
+        writer.string("");
+        let reference =
+            CanonicalValue::map_from_entries([("", nested), ("é", CanonicalValue::str(""))]);
+        assert_eq!(writer.finish(), encode_value(&reference));
+    }
+
+    #[test]
+    fn container_headers_clamp_before_iteration() {
+        for len in [0, 1, u32::MAX as usize, usize::MAX] {
+            let count = len.min(u32::MAX as usize);
+            let mut writer = CanonicalWriter::new();
+            assert_eq!(writer.array_header(len), count);
+            assert_eq!(writer.map_header(len), count);
+            let mut expected = vec![TAG_ARRAY];
+            expected.extend_from_slice(&(count as u32).to_be_bytes());
+            expected.push(TAG_MAP);
+            expected.extend_from_slice(&(count as u32).to_be_bytes());
+            assert_eq!(writer.finish(), expected);
+        }
+    }
+}
+
 #[cfg(feature = "_h4_profile")]
 fn encode_into(buf: &mut Vec<u8>, value: &CanonicalValue) {
     _h4_phase_serialize_canonical_value(buf, value);

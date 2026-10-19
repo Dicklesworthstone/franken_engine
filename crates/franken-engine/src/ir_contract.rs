@@ -18,6 +18,8 @@ use crate::hash_tiers::ContentHash;
 use crate::ifc_artifacts::Label;
 use crate::js_string::{JsString, canonical_js_string_value};
 
+mod canonical;
+
 // ---------------------------------------------------------------------------
 // Schema versioning
 // ---------------------------------------------------------------------------
@@ -2872,7 +2874,7 @@ impl Ir3Module {
     }
 
     pub fn canonical_bytes(&self) -> Vec<u8> {
-        deterministic_serde::encode_value(&self.canonical_value())
+        canonical::module_bytes(self)
     }
 
     pub fn content_hash(&self) -> ContentHash {

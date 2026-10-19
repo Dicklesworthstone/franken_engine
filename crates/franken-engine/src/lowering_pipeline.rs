@@ -11624,10 +11624,23 @@ fn lower_ir2_to_ir3_with_input_hash(
             register
         });
 
-        // When this function has free variables, put parameters on the
-        // scope chain so LoadScoped can find them alongside captured
-        // outer bindings.
-        if !free_vars.is_empty() {
+        // Captures use exact scope-cell names, while ordinary parameters
+        // already have their positional registers in fn_binding_regs. Do
+        // not build a second, unused named copy of those parameters for a
+        // callback merely because it reads an outer binding (bd-9vouw.503).
+        // Keep the named environment for any body that can observe it, any
+        // child capture, and the arguments/new.target setup below.
+        let named_parameter_scope = !free_vars.is_empty()
+            && (arguments_register.is_some()
+                || new_target_register.is_some()
+                || !fn_child_captured_locals.is_empty()
+                || fn_rest_param_index.is_some()
+                || param_binding_ids.len() != param_names.len()
+                || param_names
+                    .iter()
+                    .any(|name| name.starts_with(SYNTHETIC_PARAM_SLOT_PREFIX))
+                || !function_parameter_names_are_unobserved(body_ops));
+        if named_parameter_scope {
             ir3.instructions.push(Ir3Instruction::PushScope);
             for (i, pname) in param_names.iter().enumerate() {
                 let pool_idx = push_constant_optimized(&mut constant_pool, pname);
@@ -11644,7 +11657,7 @@ fn lower_ir2_to_ir3_with_input_hash(
         // `arguments` is a var of the function's own scope (pushed above
         // for functions with free variables, otherwise here).
         if let Some(register) = arguments_register {
-            if free_vars.is_empty() {
+            if !named_parameter_scope {
                 ir3.instructions.push(Ir3Instruction::PushScope);
             }
             let pool_idx = push_constant_optimized(&mut constant_pool, "arguments");
@@ -11658,7 +11671,7 @@ fn lower_ir2_to_ir3_with_input_hash(
             });
         }
         if let Some(register) = new_target_register {
-            if free_vars.is_empty() && arguments_register.is_none() {
+            if !named_parameter_scope && arguments_register.is_none() {
                 ir3.instructions.push(Ir3Instruction::PushScope);
             }
             let pool_idx = push_constant_optimized(&mut constant_pool, ARROW_NEW_TARGET_BINDING);
@@ -22275,6 +22288,33 @@ fn function_reads_arguments(
             } => function_reads_arguments(runtime_global_loads, body_ops),
             _ => false,
         })
+}
+
+/// Whether a simple parameter list can remain exclusively in registers.
+/// Resolved binding loads/stores do not read the legacy source-name mirror;
+/// captured outer bindings have their own exact IDs and scope-cell names.
+///
+/// This deliberately excludes nested functions (including nested eval or
+/// with rewrites), dynamic name operations, and hostcall/suspension seams.
+/// Such bodies keep their original environment until their name-observation
+/// contract has been proved separately. In particular, an unrecognized
+/// hostcall is never assumed unable to inspect the current environment.
+fn function_parameter_names_are_unobserved(body_ops: &[Ir1Op]) -> bool {
+    !body_ops.iter().any(|op| {
+        matches!(
+            op,
+            Ir1Op::LoadName { .. }
+                | Ir1Op::ResolveNameStatus { .. }
+                | Ir1Op::DeleteName { .. }
+                | Ir1Op::PutName { .. }
+                | Ir1Op::PutNameWithStatus { .. }
+                | Ir1Op::DeclareFunction { .. }
+                | Ir1Op::CreateFunction { .. }
+                | Ir1Op::HostCall { .. }
+                | Ir1Op::Await
+                | Ir1Op::Yield { .. }
+        )
+    })
 }
 
 /// Positional arguments a call lowers into registers. A longer list (a

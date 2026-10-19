@@ -3417,6 +3417,86 @@ fn commonjs_require_refuses_unexported_and_missing_packages_bd_4dme3() {
     }
 }
 
+#[test]
+fn module_imports_share_nearest_package_format_across_relative_and_bare_paths() {
+    let root = tempfile::tempdir().expect("module root");
+    write_tree(root.path(), &[
+        ("package.json", r#"{"type":"module"}"#),
+        ("common/package.json", r#"{"type":"commonjs"}"#),
+        ("common/value.js", "module.exports = { value: 20 };"),
+        ("node_modules/legacy/index.js", "module.exports = { value: 30 };"),
+        ("node_modules/esm/package.json", r#"{"type":"module","main":"./index.js"}"#),
+        ("node_modules/esm/index.js", "export const value = 42;"),
+        ("entry.mjs",
+            "import a from './common/value.js'; import b from 'legacy'; import { value } from 'esm'; console.log(a.value + b.value + value);"),
+    ]);
+    let entry = root.path().join("entry.mjs");
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let result = ExecutionOrchestrator::new(OrchestratorConfig {
+            force_lane: Some(lane),
+            parse_goal: ParseGoal::Module,
+            ..OrchestratorConfig::default()
+        })
+        .execute(&commonjs_entry_package(root.path(), &entry, "mixed-module-format"))
+        .unwrap_or_else(|error| panic!("{lane:?}: mixed module formats failed: {error}"));
+        assert_eq!(console_lines(&result), ["92"], "{lane:?}");
+    }
+}
+
+#[test]
+fn dynamic_import_obeys_a_relative_commonjs_package_scope() {
+    let root = tempfile::tempdir().expect("module root");
+    write_tree(root.path(), &[
+        ("package.json", r#"{"type":"module"}"#),
+        ("common/package.json", r#"{"type":"commonjs"}"#),
+        ("common/value.js", "module.exports = { value: 20 };"),
+        ("entry.mjs", "import('./common/value.js').then(m => console.log(m.default.value));"),
+    ]);
+    let entry = root.path().join("entry.mjs");
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let result = ExecutionOrchestrator::new(OrchestratorConfig {
+            force_lane: Some(lane),
+            parse_goal: ParseGoal::Module,
+            ..OrchestratorConfig::default()
+        })
+        .execute(&commonjs_entry_package(root.path(), &entry, "dynamic-module-format"))
+        .unwrap_or_else(|error| panic!("{lane:?}: dynamic CommonJS import failed: {error}"));
+        assert_eq!(console_lines(&result), ["20"], "{lane:?}");
+    }
+}
+
+#[test]
+fn filesystem_module_source_budget_admits_the_boundary_and_rejects_the_next_byte() {
+    let root = tempfile::tempdir().expect("module root");
+    let entry = root.path().join("entry.cjs");
+    let dependency = root.path().join("dependency.cjs");
+    std::fs::write(&entry, "console.log(require('./dependency.cjs').answer);").expect("entry");
+    let body = "module.exports = { answer: 42 };";
+    let source = format!("{}{body}", " ".repeat(64 - body.len()));
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let mut config = OrchestratorConfig {
+            force_lane: Some(lane),
+            commonjs_entry: true,
+            ..OrchestratorConfig::default()
+        };
+        config.parser_options.budget.max_source_bytes = 64;
+        std::fs::write(&dependency, &source).expect("exactly admitted source");
+        let result = ExecutionOrchestrator::new(config.clone())
+            .execute(&commonjs_entry_package(root.path(), &entry, "module-byte-boundary"))
+            .unwrap_or_else(|error| panic!("{lane:?}: exact byte budget failed: {error}"));
+        assert_eq!(console_lines(&result), ["42"], "{lane:?}");
+
+        std::fs::write(&dependency, format!("{source} ")).expect("one byte over budget");
+        let error = ExecutionOrchestrator::new(config)
+            .execute(&commonjs_entry_package(root.path(), &entry, "module-byte-refusal"))
+            .expect_err("the dependency exceeds its source admission budget");
+        assert!(
+            error.to_string().contains("source-byte budget"),
+            "{lane:?}: {error}"
+        );
+    }
+}
+
 /// A required module is parsed under the orchestrator's parser options, the
 /// ones the entry was parsed under, not the parser's built-in defaults: a
 /// dependency over the default 65,536-token budget fails under the default

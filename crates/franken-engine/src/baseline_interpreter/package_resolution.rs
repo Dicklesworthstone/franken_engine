@@ -189,6 +189,8 @@ struct PackageManifest {
     exports: Option<PackageExports>,
     #[serde(default)]
     imports: Option<PackageExports>,
+    #[serde(default, rename = "type")]
+    module_type: Option<serde_json::Value>,
 }
 
 impl PackageManifest {
@@ -677,6 +679,29 @@ impl InterpreterCore {
             .map_err(failed)
     }
 
+    /// The nearest package scope determines a module's declared format.
+    /// Reuse the same bounded, containment-checked metadata reader as package
+    /// resolution, including its node_modules and configured-root boundaries.
+    pub(super) fn package_parse_goal_for_module(
+        &self,
+        resolved: &str,
+    ) -> Result<Option<ParseGoal>, InterpreterError> {
+        let Some(root) = self.canonical_module_root_path() else {
+            return Ok(None);
+        };
+        let Some(directory) = Path::new(resolved).parent() else {
+            return Ok(None);
+        };
+        let Some((_, manifest)) = self.require_package_scope(resolved, directory, &root)? else {
+            return Ok(None);
+        };
+        Ok(match manifest.module_type.as_ref().and_then(serde_json::Value::as_str) {
+            Some("module") => Some(ParseGoal::Module),
+            Some("commonjs") => Some(ParseGoal::Script),
+            _ => None,
+        })
+    }
+
     /// The module root, canonicalized: the boundary every resolved module and
     /// every `node_modules` lookup must stay inside.
     pub(super) fn canonical_module_root_path(&self) -> Option<PathBuf> {
@@ -988,6 +1013,52 @@ mod tests {
                 .expect("resolved path"),
             expected.canonicalize().expect("expected path")
         );
+    }
+
+    #[test]
+    fn module_format_uses_nearest_scope_and_stops_at_node_modules() {
+        let root = tempfile::tempdir().expect("module root");
+        for (path, text) in [
+            ("package.json", r#"{"type":"module"}"#),
+            ("common/package.json", r#"{"type":"commonjs"}"#),
+            ("untyped/package.json", "{}"),
+            ("node_modules/typed/package.json", r#"{"type":"module"}"#),
+        ] {
+            write_package_fixture(root.path(), path, text);
+        }
+        let core = package_test_core(root.path());
+        for (path, expected) in [
+            ("entry.js", Some(ParseGoal::Module)),
+            ("common/nested/value.js", Some(ParseGoal::Script)),
+            ("untyped/value.js", None),
+            ("node_modules/loose/value.js", None),
+            ("node_modules/typed/value.js", Some(ParseGoal::Module)),
+        ] {
+            assert_eq!(
+                core.package_parse_goal_for_module(&root.path().join(path).display().to_string())
+                    .expect("contained format"),
+                expected,
+                "{path}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn module_format_refuses_a_package_manifest_outside_the_module_root() {
+        let root = tempfile::tempdir().expect("module root");
+        let outside = tempfile::tempdir().expect("outside metadata");
+        write_package_fixture(outside.path(), "package.json", r#"{"type":"module"}"#);
+        std::os::unix::fs::symlink(
+            outside.path().join("package.json"),
+            root.path().join("package.json"),
+        )
+        .expect("manifest link");
+        let core = package_test_core(root.path());
+        let error = core
+            .package_parse_goal_for_module(&root.path().join("entry.js").display().to_string())
+            .expect_err("a format probe cannot read outside metadata");
+        assert!(error.to_string().contains("escapes module root"), "{error}");
     }
 
     #[test]

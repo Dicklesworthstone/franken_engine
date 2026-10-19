@@ -9820,6 +9820,15 @@ enum RuntimeIteratorState {
 // Module runtime state (RC-1.13)
 // ---------------------------------------------------------------------------
 
+/// The host operation that requested a filesystem module. Source-delivered
+/// records carry their syntax explicitly and do not use filename inference.
+#[derive(Clone, Copy)]
+enum ModuleLoadKind {
+    Require,
+    Import,
+    DynamicImport,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ModuleRuntimeStatus {
     Evaluating,
@@ -39700,7 +39709,7 @@ impl InterpreterCore {
         &mut self,
         module: &Ir3Module,
         resolved: &str,
-        is_cjs: bool,
+        load_kind: ModuleLoadKind,
         import_bound: Option<&Label>,
         delivered: Option<ResolutionOutcome>,
     ) -> Result<Value, InterpreterError> {
@@ -39773,38 +39782,43 @@ impl InterpreterCore {
         }
 
         let source_is_delivered = delivered.is_some();
+        let declared_goal = match delivered.as_ref() {
+            Some(delivered) => Some(if delivered.module.record.syntax == ModuleSyntax::CommonJs {
+                ParseGoal::Script
+            } else {
+                ParseGoal::Module
+            }),
+            None => match self.file_module_parse_goal(resolved, load_kind) {
+                Ok(goal) => goal,
+                Err(error) => {
+                    self.fail_module_record(resolved, &error.to_string());
+                    return Err(error);
+                }
+            },
+        };
         let source = match delivered {
             Some(delivered) => delivered.module.record.source,
-            None if self.module_resolver.is_some() => {
-                return Err(InterpreterError::ModuleLoweringFailed {
-                    specifier: resolved.to_string(),
-                    error: "installed resolver cannot fall back to filesystem source".to_string(),
-                });
-            }
-            None => fs::read_to_string(resolved).map_err(|error| {
-                InterpreterError::ModuleReadFailed {
-                    specifier: resolved.to_string(),
-                    error: error.to_string(),
+            None => match self.read_module_source(resolved) {
+                Ok(source) => source,
+                Err(error) => {
+                    self.fail_module_record(resolved, &error.to_string());
+                    return Err(error);
                 }
-            })?,
+            },
         };
         let is_json = !source_is_delivered
             && Path::new(resolved)
                 .extension()
                 .is_some_and(|extension| extension.eq_ignore_ascii_case("json"));
-        let source = match (is_json, is_cjs) {
-            (true, true) => Self::json_module_source(&source)?,
-            // An ES module import of a `.json` file (`with { type: 'json' }`,
-            // bd-9vouw.387) is a JSON module: its only export is `default`.
-            (true, false) => Self::json_es_module_source(&source)?,
+        let source = match (is_json, declared_goal) {
+            (true, Some(ParseGoal::Script)) => Self::json_module_source(&source)?,
+            // An ES module import of a .json file exposes only default.
+            (true, _) => Self::json_es_module_source(&source)?,
             (false, _) => source,
         };
-        // An imported TypeScript file (`.ts`, `.tsx`, `.mts`, `.cts`) is
-        // normalized as an entry file is: the parser reads JavaScript, so a
-        // type annotation or `export interface` failed the import as
-        // unsupported syntax (bd-9vouw.430). A file of declarations only
-        // is empty once its types are erased: a module with no code and no
-        // exports.
+        // Delivered sources were already prepared by their capture host.
+        // Normalize filesystem TypeScript before any syntax detection so the
+        // detection and execution parser consume the same JavaScript bytes.
         let source = if !source_is_delivered
             && !is_json
             && crate::ts_normalization::source_label_has_typescript_extension(resolved)
@@ -39829,25 +39843,60 @@ impl InterpreterCore {
         } else {
             source
         };
-        let parser_source = ParserSource {
-            label: resolved.to_string(),
-            text: source,
+        let (parse_goal, parsed) = match declared_goal {
+            Some(goal) => (
+                goal,
+                CanonicalEs2020Parser.parse_with_options(
+                    ParserSource {
+                        label: resolved.to_string(),
+                        text: source,
+                    },
+                    goal,
+                    &self.config.module_parser_options,
+                ),
+            ),
+            None => {
+                // Reuse a successful detection AST for CommonJS lowering.
+                // A budget failure or empty source is not evidence of ESM.
+                let script = CanonicalEs2020Parser.parse_with_options(
+                    ParserSource {
+                        label: resolved.to_string(),
+                        text: source.clone(),
+                    },
+                    ParseGoal::Script,
+                    &self.config.module_parser_options,
+                );
+                if script.as_ref().is_err_and(|error| {
+                    !matches!(
+                        error.code,
+                        ParseErrorCode::BudgetExceeded
+                            | ParseErrorCode::SourceTooLarge
+                            | ParseErrorCode::EmptySource
+                    )
+                }) {
+                    (
+                        ParseGoal::Module,
+                        CanonicalEs2020Parser.parse_with_options(
+                            ParserSource {
+                                label: resolved.to_string(),
+                                text: source,
+                            },
+                            ParseGoal::Module,
+                            &self.config.module_parser_options,
+                        ),
+                    )
+                } else {
+                    (ParseGoal::Script, script)
+                }
+            }
         };
-        let parse_goal = if is_cjs {
-            ParseGoal::Script
-        } else {
-            ParseGoal::Module
-        };
+        let is_cjs = parse_goal == ParseGoal::Script;
         // A module whose source is not valid (a parse error or an early
         // error) is a SyntaxError the importer can catch, as Node's loader
         // throws for `require` and rejects `import()` with (bd-9vouw.389);
         // its record fails, so importing it again fails again. Unsupported
         // syntax and every policy refusal stay uncatchable.
-        let syntax_tree = match CanonicalEs2020Parser.parse_with_options(
-            parser_source,
-            parse_goal,
-            &self.config.module_parser_options,
-        ) {
+        let syntax_tree = match parsed {
             Ok(syntax_tree) => syntax_tree,
             // An empty file, or one holding only comments, white space or
             // TypeScript declarations, is a module with no code and no
@@ -39987,42 +40036,27 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let specifier = Self::utf8_module_specifier(specifier)?;
         self.run_pre_import_hook(module, specifier)?;
-        if self.module_resolver.is_some() {
-            let delivered = self.resolve_installed_module(specifier, ImportStyle::Import)?;
-            let resolved = delivered.module.record.id.clone();
-            let is_cjs = delivered.module.record.syntax == ModuleSyntax::CommonJs;
-            let import_bound = (crate::lowering_pipeline::is_bounded_import_specifier(specifier)
-                && Self::unit_declares_bounded_imports(module))
-            .then_some(crate::lowering_pipeline::IFC_BOUNDED_IMPORT_LABEL);
-            return self.load_module_resolved(
-                module,
-                &resolved,
-                is_cjs,
-                import_bound.as_ref(),
-                Some(delivered),
-            );
-        }
-        let resolved = self.resolve_module_specifier(specifier)?;
-        let extension = Path::new(&resolved)
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .map(str::to_ascii_lowercase);
-        let is_cjs = match extension.as_deref() {
-            Some("cjs") => true,
-            // bd-mgfhs: a package's `.js` file is CommonJS unless its nearest
-            // package.json declares "type": "module" (Node's package format).
-            Some("js") if Self::is_bare_module_specifier(specifier) => {
-                !self.required_js_is_esm(&resolved)
-            }
-            _ => false,
+        let delivered = self
+            .module_resolver
+            .as_ref()
+            .map(|_| self.resolve_installed_module(specifier, ImportStyle::Import))
+            .transpose()?;
+        let resolved = match &delivered {
+            Some(source) => source.module.record.id.clone(),
+            None => self.resolve_module_specifier(specifier)?,
         };
-        // bd-j8f7q: a unit lowered under the bounded-imports contract assumed
-        // this module (a local file or a package) yields at most
-        // IFC_BOUNDED_IMPORT_LABEL.
+        // A unit lowered under the bounded-imports contract assumed this
+        // module yields at most IFC_BOUNDED_IMPORT_LABEL.
         let import_bound = (crate::lowering_pipeline::is_bounded_import_specifier(specifier)
             && Self::unit_declares_bounded_imports(module))
         .then_some(crate::lowering_pipeline::IFC_BOUNDED_IMPORT_LABEL);
-        self.load_module_resolved(module, &resolved, is_cjs, import_bound.as_ref(), None)
+        self.load_module_resolved(
+            module,
+            &resolved,
+            ModuleLoadKind::Import,
+            import_bound.as_ref(),
+            delivered,
+        )
     }
 
     /// Mark a module whose load failed before evaluation, so a later import
@@ -40364,22 +40398,17 @@ impl InterpreterCore {
             Some(source) => source.module.record.id.clone(),
             None => self.resolve_require_specifier(specifier)?,
         };
-        let is_cjs = match &delivered {
-            Some(source) => source.module.record.syntax == ModuleSyntax::CommonJs,
-            None => match Path::new(&resolved)
+        let is_json = delivered.is_none()
+            && Path::new(&resolved)
                 .extension()
-                .and_then(|ext| ext.to_str())
-            {
-                Some(ext) if ext.eq_ignore_ascii_case("cjs") => true,
-                Some(ext) if ext.eq_ignore_ascii_case("mjs") => false,
-                Some(ext) if ext.eq_ignore_ascii_case("js") => !self.required_js_is_esm(&resolved),
-                _ => true,
-            },
-        };
-        let namespace = self.load_module_resolved(module, &resolved, is_cjs, None, delivered)?;
-        if !is_cjs {
-            return Ok(namespace);
-        }
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("json"));
+        let namespace = self.load_module_resolved(
+            module,
+            &resolved,
+            ModuleLoadKind::Require,
+            None,
+            delivered,
+        )?;
         if let Some(record) = self.module_state.modules.get(&resolved)
             && let Some(module_object) = record.cjs_module_object
         {
@@ -40392,6 +40421,12 @@ impl InterpreterCore {
             )?;
             return Ok(export_value);
         }
+        // Requiring an ES module returns its namespace. JSON first loaded by
+        // an ES import has no CommonJS module object; require still returns
+        // that JSON value rather than its namespace wrapper.
+        if !is_json {
+            return Ok(namespace);
+        }
         let Value::Object(namespace_object) = namespace else {
             return Ok(namespace);
         };
@@ -40399,60 +40434,60 @@ impl InterpreterCore {
         Ok(default_value)
     }
 
-    /// Node's reading of a `require`d `.js` (bd-rff5g): the nearest
-    /// `package.json` inside the module root decides when it declares a
-    /// `"type"`; otherwise, as with Node's module-syntax detection, a file that
-    /// parses as a script is CommonJS and one that needs `import`/`export` is
-    /// an ES module. `resolved` is already canonical and inside the root.
-    fn required_js_is_esm(&self, resolved: &str) -> bool {
-        if let Some(root) = self.canonical_module_root_path() {
-            for dir in Path::new(resolved).ancestors().skip(1) {
-                if !dir.starts_with(&root) {
-                    break;
-                }
-                let manifest = dir.join("package.json");
-                if !manifest.is_file() {
-                    continue;
-                }
-                let declared_type = fs::read(&manifest)
-                    .ok()
-                    .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-                    .and_then(|manifest| {
-                        manifest
-                            .get("type")
-                            .and_then(|value| value.as_str())
-                            .map(str::to_owned)
-                    });
-                match declared_type.as_deref() {
-                    Some("module") => return true,
-                    Some("commonjs") => return false,
-                    _ => break,
-                }
-            }
-        }
-        let Ok(text) = fs::read_to_string(resolved) else {
-            // Unreadable here means unreadable for the loader too, which
-            // reports the real error; the goal chosen does not matter.
-            return false;
+    /// Read a dependency once and charge its raw bytes before decoding or
+    /// syntax detection. Reading at most limit + 1 also bounds files that grow
+    /// after they were selected by the resolver.
+    fn read_module_source(&self, resolved: &str) -> Result<String, InterpreterError> {
+        let failed = |error: std::io::Error| InterpreterError::ModuleReadFailed {
+            specifier: resolved.to_string(),
+            error: error.to_string(),
         };
-        // Only a syntax refusal says the file needs module syntax. A file that
-        // exceeds the parse budget is not thereby an ES module: load it as
-        // CommonJS and let the loader report the budget error it hits.
-        CanonicalEs2020Parser
-            .parse_with_options(
-                ParserSource {
-                    label: resolved.to_string(),
-                    text,
-                },
-                ParseGoal::Script,
-                &self.config.module_parser_options,
-            )
-            .is_err_and(|error| {
-                !matches!(
-                    error.code,
-                    ParseErrorCode::BudgetExceeded | ParseErrorCode::SourceTooLarge
-                )
-            })
+        let file = fs::File::open(resolved).map_err(failed)?;
+        let limit = self.config.module_parser_options.budget.max_source_bytes;
+        let mut bytes = Vec::new();
+        file.take(limit.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(failed)?;
+        let source_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        if source_bytes > limit {
+            return Err(InterpreterError::ModuleParseFailed {
+                specifier: resolved.to_string(),
+                error: "module exceeds the configured parser source-byte budget".to_string(),
+            });
+        }
+        self.check_temporary_memory_budget(source_bytes)?;
+        String::from_utf8(bytes).map_err(|error| InterpreterError::ModuleReadFailed {
+            specifier: resolved.to_string(),
+            error: error.to_string(),
+        })
+    }
+
+    /// A declared format wins over source detection. An ambiguous .js or
+    /// TypeScript file follows its nearest package scope for every load form,
+    /// including relative static imports.
+    fn file_module_parse_goal(
+        &self,
+        resolved: &str,
+        load_kind: ModuleLoadKind,
+    ) -> Result<Option<ParseGoal>, InterpreterError> {
+        let extension = Path::new(resolved)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_ascii_lowercase);
+        Ok(match extension.as_deref() {
+            Some("mjs" | "mts") => Some(ParseGoal::Module),
+            Some("cjs" | "cts") => Some(ParseGoal::Script),
+            Some("json") => Some(match load_kind {
+                ModuleLoadKind::Import => ParseGoal::Module,
+                ModuleLoadKind::Require | ModuleLoadKind::DynamicImport => ParseGoal::Script,
+            }),
+            Some("js" | "ts" | "tsx") => self.package_parse_goal_for_module(resolved)?,
+            _ => match load_kind {
+                ModuleLoadKind::DynamicImport => self.package_parse_goal_for_module(resolved)?,
+                ModuleLoadKind::Require => Some(ParseGoal::Script),
+                ModuleLoadKind::Import => Some(ParseGoal::Module),
+            },
+        })
     }
 
     fn generated_function_owner(
@@ -70645,11 +70680,10 @@ impl InterpreterCore {
         if self.module_resolver.is_some() {
             let delivered = self.resolve_installed_module(specifier, ImportStyle::Import)?;
             let resolved = delivered.module.record.id.clone();
-            let is_cjs = delivered.module.record.syntax == ModuleSyntax::CommonJs;
             return self.load_module_resolved(
                 module,
                 &resolved,
-                is_cjs,
+                ModuleLoadKind::DynamicImport,
                 import_bound.as_ref(),
                 Some(delivered),
             );
@@ -70665,16 +70699,13 @@ impl InterpreterCore {
             });
         }
         let resolved = self.resolve_module_specifier(specifier)?;
-        let extension = Path::new(&resolved)
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .map(str::to_ascii_lowercase);
-        let is_cjs = match extension.as_deref() {
-            Some("mjs") => false,
-            Some("cjs" | "json") => true,
-            _ => !self.required_js_is_esm(&resolved),
-        };
-        self.load_module_resolved(module, &resolved, is_cjs, import_bound.as_ref(), None)
+        self.load_module_resolved(
+            module,
+            &resolved,
+            ModuleLoadKind::DynamicImport,
+            import_bound.as_ref(),
+            None,
+        )
     }
 
     /// The rejection reason of a failed ImportCall: the value a guest throw
@@ -123178,6 +123209,58 @@ mod async_runtime_tests_current {
                 ModuleRuntimeStatus::Failed(_)
             ));
         }
+    }
+
+    #[test]
+    fn module_source_read_enforces_raw_byte_budget_before_utf8() {
+        let root = tempfile::tempdir().expect("source root");
+        let path = root.path().join("dependency.js");
+        let resolved = path.display().to_string();
+        let mut core = test_interpreter();
+        core.config.module_parser_options.budget.max_source_bytes = 64;
+
+        fs::write(&path, vec![b' '; 64]).expect("exact-size source");
+        assert_eq!(core.read_module_source(&resolved).expect("admitted bytes").len(), 64);
+
+        fs::write(&path, vec![0xff; 65]).expect("oversized invalid UTF-8");
+        assert!(matches!(
+            core.read_module_source(&resolved),
+            Err(InterpreterError::ModuleParseFailed { error, .. })
+                if error.contains("source-byte budget")
+        ));
+
+        fs::write(&path, vec![0xff; 64]).expect("bounded invalid UTF-8");
+        assert!(matches!(
+            core.read_module_source(&resolved),
+            Err(InterpreterError::ModuleReadFailed { .. })
+        ));
+    }
+
+    #[test]
+    fn cached_commonjs_load_keeps_its_format_and_source_identity() {
+        let root = tempfile::tempdir().expect("module root");
+        let entry_path = root.path().join("entry.mjs");
+        let dependency = root.path().join("dependency.js");
+        fs::write(&entry_path, "export const marker = 0;").expect("entry");
+        fs::write(&dependency, "module.exports = { answer: 42 };").expect("CommonJS source");
+        let entry = lower_module_graph_entry_bd_yn3lv(&entry_path, "export const marker = 0;");
+        let mut core = async_module_graph_core_bd_yn3lv(root.path());
+        core.current_module_specifier = Some(entry_path.display().to_string());
+        let request = JsString::from("./dependency.js");
+        let first = core.require_module(&entry, &request).expect("first require");
+        let Value::Object(exports) = first else {
+            panic!("CommonJS exports object");
+        };
+        assert_eq!(core.prototype_chain_get(exports, "answer").unwrap(), Value::Int(42));
+
+        // The cache identity survives changes to both format and source.
+        // Invalid bytes prove a cache hit does not read the source again.
+        fs::write(root.path().join("package.json"), r#"{"type":"module"}"#)
+            .expect("changed package type");
+        fs::write(&dependency, [0xff, 0xfe]).expect("changed source");
+        let again = core.require_module(&entry, &request).expect("cached require");
+        assert_eq!(again, Value::Object(exports));
+        assert_eq!(core.prototype_chain_get(exports, "answer").unwrap(), Value::Int(42));
     }
 
     #[test]

@@ -154,6 +154,11 @@ impl SecureAggregationSession {
         if self.current_round != AggregationRound::Unmasking {
             return Err(SecureAggregationError::InvalidRound);
         }
+        if self.config.field_modulus == 0 || self.config.field_modulus > i64::MAX as u64 {
+            return Err(SecureAggregationError::ProtocolViolation(
+                "Field modulus must fit a positive signed representation".into(),
+            ));
+        }
 
         let mut result = self
             .aggregated_result
@@ -167,9 +172,10 @@ impl SecureAggregationSession {
             }
 
             for (i, &mask_value) in mask.iter().enumerate() {
-                // Subtract the mask (which is the sum of all secret shares for this participant)
-                result[i] = (result[i] - mask_value + self.config.field_modulus as i64)
-                    % self.config.field_modulus as i64;
+                // Remove the participant's generated-minus-received net mask.
+                result[i] = (i128::from(result[i]) - i128::from(mask_value))
+                    .rem_euclid(i128::from(self.config.field_modulus))
+                    as i64;
             }
         }
 
@@ -228,6 +234,44 @@ pub struct AggregationStatus {
 mod tests {
     use super::*;
     use rand::thread_rng;
+
+    #[test]
+    fn signed_net_masks_unmask_without_overflow_or_negative_residues() {
+        let modulus = (1u64 << 61) - 1;
+        let mut session = SecureAggregationSession::new(
+            "signed-unmasking".into(),
+            AggregationConfig {
+                min_participants: 2,
+                vector_dimension: 2,
+                field_modulus: modulus,
+                ..AggregationConfig::default()
+            },
+        );
+        let alice = ParticipantId("alice".into());
+        let bob = ParticipantId("bob".into());
+        session
+            .add_participant(Participant::new(alice.clone()))
+            .unwrap();
+        session
+            .add_participant(Participant::new(bob.clone()))
+            .unwrap();
+        session.start_aggregation(&mut thread_rng()).unwrap();
+        session.current_round = AggregationRound::ContributionSubmission;
+        session
+            .aggregate_contributions(vec![
+                MaskedContribution::new(alice.clone(), vec![4, 8], Vec::new()),
+                MaskedContribution::new(bob, vec![6, 12], Vec::new()),
+            ])
+            .unwrap();
+        let three_moduli = 3 * modulus as i64;
+        assert_eq!(
+            session
+                .complete_aggregation(vec![(alice, vec![-three_moduli + 1, three_moduli - 1]),])
+                .unwrap(),
+            vec![9, 21]
+        );
+        assert_eq!(session.current_round, AggregationRound::Complete);
+    }
 
     #[test]
     fn session_creation() {

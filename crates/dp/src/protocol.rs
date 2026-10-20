@@ -153,6 +153,13 @@ impl AggregationProtocol {
         if masked_aggregate.len() != self.security_params.vector_dimension {
             return Err(SecureAggregationError::InvalidDimension);
         }
+        if self.security_params.field_modulus == 0
+            || self.security_params.field_modulus > i64::MAX as u64
+        {
+            return Err(SecureAggregationError::ProtocolViolation(
+                "Field modulus must fit a positive signed representation".into(),
+            ));
+        }
 
         let mut result = masked_aggregate;
 
@@ -162,8 +169,9 @@ impl AggregationProtocol {
             }
 
             for (i, &unmask_value) in unmasking.iter().enumerate() {
-                result[i] = (result[i] - unmask_value + self.security_params.field_modulus as i64)
-                    % self.security_params.field_modulus as i64;
+                result[i] = (i128::from(result[i]) - i128::from(unmask_value))
+                    .rem_euclid(i128::from(self.security_params.field_modulus))
+                    as i64;
             }
         }
 
@@ -293,6 +301,41 @@ impl ProtocolMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unmasking_accepts_signed_net_masks_across_multiple_moduli() {
+        let modulus = (1u64 << 61) - 1;
+        let protocol = AggregationProtocol::new(SecurityParameters {
+            vector_dimension: 2,
+            field_modulus: modulus,
+            ..SecurityParameters::default()
+        });
+        let three_moduli = 3 * modulus as i64;
+        assert_eq!(
+            protocol
+                .apply_unmasking(
+                    vec![10, 20],
+                    vec![vec![-three_moduli + 1, three_moduli - 1]],
+                )
+                .unwrap(),
+            vec![9, 21]
+        );
+    }
+
+    #[test]
+    fn unmasking_rejects_unrepresentable_field_moduli() {
+        for modulus in [0, u64::MAX] {
+            let protocol = AggregationProtocol::new(SecurityParameters {
+                vector_dimension: 2,
+                field_modulus: modulus,
+                ..SecurityParameters::default()
+            });
+            assert!(matches!(
+                protocol.apply_unmasking(vec![0, 0], Vec::new()),
+                Err(SecureAggregationError::ProtocolViolation(_))
+            ));
+        }
+    }
 
     #[test]
     fn protocol_creation() {

@@ -183,22 +183,48 @@ impl Participant {
         Ok(masked_contribution)
     }
 
-    /// Get the unmasking values for the final aggregation step
+    /// Get the signed generated-minus-received mask for final aggregation.
+    ///
+    /// These values reproduce the input when subtracted from its masked
+    /// contribution. Disclosing them individually does not provide threshold
+    /// privacy against a coordinator holding that contribution.
     pub fn get_unmasking_values(&mut self) -> Result<Vec<i64>> {
         if self.status != ParticipantStatus::ContributionSubmitted {
             return Err(SecureAggregationError::InvalidState);
         }
 
         let dimension = self.get_expected_dimension()?;
-        let mut unmasking = vec![0i64; dimension];
+        let mut unmasking = vec![0i128; dimension];
 
-        // The unmasking values are the sum of all shares this participant generated
-        // These will be subtracted from the final aggregate to remove the masks
+        // create_masked_contribution adds generated shares and subtracts
+        // received shares. Remove that same NET mask, not the generated half:
+        // after peer exchange the latter would subtract cancelled masks twice.
         for share in self.generated_shares.values() {
+            if share.share_values.len() != dimension {
+                return Err(SecureAggregationError::InvalidDimension);
+            }
             for (i, &share_val) in share.share_values.iter().enumerate() {
-                unmasking[i] += share_val;
+                unmasking[i] += i128::from(share_val);
             }
         }
+        for share in self.received_shares.values() {
+            if share.share_values.len() != dimension {
+                return Err(SecureAggregationError::InvalidDimension);
+            }
+            for (i, &share_val) in share.share_values.iter().enumerate() {
+                unmasking[i] -= i128::from(share_val);
+            }
+        }
+        let unmasking = unmasking
+            .into_iter()
+            .map(|value| {
+                i64::try_from(value).map_err(|_| {
+                    SecureAggregationError::ProtocolViolation(
+                        "Net unmasking value exceeds signed representation".into(),
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         self.status = ParticipantStatus::Complete;
         Ok(unmasking)
@@ -289,7 +315,7 @@ impl Participant {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::thread_rng;
+    use rand::{SeedableRng, thread_rng};
 
     #[test]
     fn participant_creation() {
@@ -392,6 +418,39 @@ mod tests {
 
         let unmasking = alice.get_unmasking_values().unwrap();
         assert_eq!(unmasking.len(), 2);
+        assert_eq!(alice.status, ParticipantStatus::Complete);
+    }
+
+    #[test]
+    fn exchanged_shares_unmask_the_original_input() {
+        let alice_id = ParticipantId("alice".into());
+        let bob_id = ParticipantId("bob".into());
+        let mut alice = Participant::new(alice_id.clone());
+        let mut bob = Participant::new(bob_id.clone());
+        let mut rng = rand::rngs::StdRng::seed_from_u64(41);
+        let modulus = 1_000_000;
+        let alice_share = alice
+            .generate_secret_shares(std::slice::from_ref(&bob_id), 3, modulus, &mut rng)
+            .unwrap()
+            .remove(0);
+        let bob_share = bob
+            .generate_secret_shares(std::slice::from_ref(&alice_id), 3, modulus, &mut rng)
+            .unwrap()
+            .remove(0);
+        alice.receive_secret_share(bob_id, bob_share).unwrap();
+        bob.receive_secret_share(alice_id, alice_share).unwrap();
+
+        let input = vec![100, 0, 999_999];
+        let masked = alice
+            .create_masked_contribution(input.clone(), modulus)
+            .unwrap();
+        let net_mask = alice.get_unmasking_values().unwrap();
+        let recovered: Vec<_> = masked
+            .iter()
+            .zip(net_mask)
+            .map(|(&value, mask)| (value - mask).rem_euclid(modulus as i64))
+            .collect();
+        assert_eq!(recovered, input);
         assert_eq!(alice.status, ParticipantStatus::Complete);
     }
 }

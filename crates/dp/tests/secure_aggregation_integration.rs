@@ -10,8 +10,8 @@ use dp::{
 };
 use rand::thread_rng;
 
-/// Integration test demonstrating complete secure aggregation workflow
-/// where individual contributions remain cryptographically hidden
+/// Arithmetic round-trip through real share exchange, masking and unmasking.
+/// This does not prove secrecy against a coordinator given individual masks.
 #[test]
 fn complete_secure_aggregation_workflow() {
     let mut rng = thread_rng();
@@ -45,6 +45,7 @@ fn complete_secure_aggregation_workflow() {
     // Simulate participants generating and exchanging secret shares
     let participant_ids: Vec<ParticipantId> = session.participants.keys().cloned().collect();
     let mut all_masked_contributions = Vec::new();
+    let mut messages = Vec::new();
 
     // Each participant's private input (these would be real sensitive data)
     let private_inputs = [
@@ -53,7 +54,7 @@ fn complete_secure_aggregation_workflow() {
         vec![5, 10, 15, 20],  // Charlie's private vector
     ];
 
-    for (i, participant_id) in participant_ids.iter().enumerate() {
+    for participant_id in &participant_ids {
         let mut participant = session.participants[participant_id].clone();
 
         // Generate secret shares for other participants
@@ -74,9 +75,25 @@ fn complete_secure_aggregation_workflow() {
 
         assert_eq!(shares.len(), 2); // One share for each other participant
 
-        // Simulate receiving shares from other participants (simplified)
-        // In practice, this would involve actual cryptographic exchange
-
+        messages.extend(
+            shares
+                .into_iter()
+                .map(|share| (participant_id.clone(), share)),
+        );
+        session
+            .participants
+            .insert(participant_id.clone(), participant);
+    }
+    for (sender, share) in messages {
+        session
+            .participants
+            .get_mut(&share.recipient)
+            .unwrap()
+            .receive_secret_share(sender, share)
+            .unwrap();
+    }
+    for (i, participant_id) in participant_ids.iter().enumerate() {
+        let participant = session.participants.get_mut(participant_id).unwrap();
         // Create masked contribution
         let masked_values = participant
             .create_masked_contribution(private_inputs[i].clone(), config.field_modulus)
@@ -89,9 +106,6 @@ fn complete_secure_aggregation_workflow() {
         );
 
         all_masked_contributions.push(contribution);
-        session
-            .participants
-            .insert(participant_id.clone(), participant);
     }
 
     // Aggregator receives only masked contributions (individual inputs hidden)
@@ -120,18 +134,12 @@ fn complete_secure_aggregation_workflow() {
     assert_eq!(final_result.len(), config.vector_dimension);
     assert_eq!(session.current_round, AggregationRound::Complete);
 
-    // Verify privacy guarantee: aggregator learned the sum but not individual values
-    // The sum of private inputs should be: [30, 55, 80, 105]
-    // (Note: actual values may differ due to masking/unmasking operations)
+    // The recovered sum must be exact, including after actual peer exchange.
     let expected_sum: Vec<i64> = (0..config.vector_dimension)
         .map(|i| private_inputs.iter().map(|input| input[i]).sum::<i64>())
         .collect();
 
-    println!("Expected sum: {:?}", expected_sum);
-    println!("Actual result: {:?}", final_result);
-
-    // The key security property: individual inputs remain hidden
-    // Only the aggregate is revealed to the aggregator
+    assert_eq!(final_result, expected_sum);
 }
 
 /// Test secure aggregation with participant dropout

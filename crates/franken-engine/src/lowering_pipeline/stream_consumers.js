@@ -42,15 +42,47 @@
   async function text(stream) {
     const decoder = new Decoder();
     const parts = [];
+    const fragments = [];
+    let fragmentUnits = 0;
+    // Retained metadata must follow output, not the number of reads. In
+    // particular, empty input and incomplete UTF-8 prefixes produce no entry.
+    // Bound both fragment count and code units before joining a small batch.
+    // Large decoded chunks pass through without an intermediate string copy;
+    // small strings participate in at most one batch join and the final join.
+    function flush() {
+      if (fragments.length !== 0) {
+        const part = fragments.length === 1 ? fragments[0] : apply(join, fragments, ['']);
+        apply(push, parts, [part]);
+        fragments.length = 0;
+        fragmentUnits = 0;
+      }
+    }
+    function append(part) {
+      // A replaced codec may return a non-string. Preserve the previous
+      // deferred Array.join coercion (and its order), rather than inspecting
+      // an arbitrary .length or invoking a conversion while pulling input.
+      if (typeof part !== 'string') {
+        flush();
+        apply(push, parts, [part]);
+      } else if (part.length !== 0) {
+        if (part.length >= 16384) {
+          flush();
+          apply(push, parts, [part]);
+        } else {
+          apply(push, fragments, [part]);
+          fragmentUnits += part.length;
+          if (fragments.length >= 64 || fragmentUnits >= 16384) flush();
+        }
+      }
+    }
     for await (const chunk of stream) {
       // String chunks are already decoded. Do not flush pending byte state
       // between them: a later byte chunk can complete the previous codepoint.
       const part = typeof chunk === 'string' ? chunk : apply(decode, decoder, [chunk, { stream: true }]);
-      apply(push, parts, [part]);
+      append(part);
     }
-    apply(push, parts, [apply(decode, decoder, [])]);
-    // One final join avoids repeatedly copying the accumulated output for
-    // highly fragmented input. Collection is explicit in this API.
+    append(apply(decode, decoder, []));
+    flush();
     return apply(join, parts, ['']);
   }
 

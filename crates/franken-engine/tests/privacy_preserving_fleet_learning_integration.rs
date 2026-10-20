@@ -17,8 +17,11 @@ use frankenengine_engine::differential_privacy_posterior::{
 };
 use frankenengine_engine::federated_posterior_aggregation::PosteriorDelta;
 use frankenengine_engine::hash_tiers::ContentHash;
+use frankenengine_engine::secure_aggregation::{
+    PeerInput, SecureAggregationReject, SecureAggregationRound, append_event_line,
+};
 use frankenengine_engine::{fleet_immune_protocol::NodeId, security_epoch::SecurityEpoch};
-use rand::{SeedableRng, rngs::StdRng};
+use rand::{RngCore, SeedableRng, rngs::StdRng};
 
 // Weighted signed deltas exceed the primitive's default 31-bit field. This
 // Mersenne prime leaves room for both the weighted sum and its signed decoding.
@@ -64,6 +67,24 @@ fn decode_field(values: Vec<i64>) -> Vec<i64> {
             } else {
                 value
             }
+        })
+        .collect()
+}
+
+fn peer_inputs(inputs: &[Option<Vec<i64>>]) -> Vec<PeerInput> {
+    inputs
+        .iter()
+        .enumerate()
+        .filter_map(|(index, input)| {
+            input.as_ref().map(|input| {
+                PeerInput::new(
+                    format!("node-{index}"),
+                    input
+                        .iter()
+                        .map(|value| value.rem_euclid(FIELD_MODULUS as i64))
+                        .collect(),
+                )
+            })
         })
         .collect()
 }
@@ -177,6 +198,18 @@ fn end_to_end_privacy_preserving_fleet_learning() {
     assert_eq!(reference.participant_count, 4);
     assert_eq!(reference.total_confidence_weight_millionths, 3_050_000);
     assert_eq!(aggregate_masked_inputs(&inputs, 3).unwrap(), expected);
+    let round = SecureAggregationRound::with_field_modulus(
+        "charged-fleet-round",
+        epoch,
+        (0..inputs.len()).map(|index| format!("node-{index}")),
+        DIMENSION,
+        FIELD_MODULUS,
+    );
+    let outcome = round.run(&peer_inputs(&inputs), &mut StdRng::seed_from_u64(17));
+    assert_eq!(
+        decode_field(outcome.aggregate().unwrap().to_vec()),
+        expected
+    );
 
     // A constant-returning stand-in cannot satisfy this changed-input probe.
     let mut changed = inputs.clone();
@@ -189,6 +222,11 @@ fn end_to_end_privacy_preserving_fleet_learning() {
     let actual_changed = aggregate_masked_inputs(&changed, 3).unwrap();
     assert_eq!(actual_changed, expected_changed);
     assert_ne!(actual_changed, expected);
+    let changed_outcome = round.run(&peer_inputs(&changed), &mut StdRng::seed_from_u64(17));
+    assert_eq!(
+        decode_field(changed_outcome.aggregate().unwrap().to_vec()),
+        expected_changed
+    );
 }
 
 #[test]
@@ -325,4 +363,92 @@ fn duplicate_round_is_rejected_without_budget_burn() {
         Err(DifferentialPrivacyError::DuplicateRoundAllocation)
     );
     assert_eq!(aggregator.get_node_budget(&node).unwrap(), &before);
+}
+
+#[test]
+fn engine_round_rejects_incomplete_or_invalid_peer_sets() {
+    let epoch = SecurityEpoch::from_raw(5000);
+    let round = SecureAggregationRound::with_field_modulus(
+        "admission-regression",
+        epoch,
+        (0..3).map(|index| format!("node-{index}")),
+        DIMENSION,
+        FIELD_MODULUS,
+    );
+    let honest = vec![
+        PeerInput::new("node-0", vec![1, 2, 3, 4]),
+        PeerInput::new("node-1", vec![5, 6, 7, 8]),
+        PeerInput::new("node-2", vec![9, 10, 11, 12]),
+    ];
+    let mut duplicate = honest.clone();
+    duplicate.push(honest[0].clone());
+    let mut unexpected = honest.clone();
+    unexpected[2].participant_id = "unregistered".into();
+    let mut malformed = honest.clone();
+    malformed[1].update.truncate(DIMENSION - 1);
+    let mut malicious = honest.clone();
+    malicious[1] = PeerInput::from_revealed_commitment(
+        "node-1",
+        vec![5, 6, 7, 9],
+        b"test-only-nonce",
+        &PeerInput::commitment_of(&honest[1].update, b"test-only-nonce"),
+    );
+    let cases = [
+        (honest[..2].to_vec(), "dropped_peer"),
+        (duplicate, "duplicate_peer"),
+        (unexpected, "unexpected_peer"),
+        (malformed, "dimension_mismatch"),
+        (malicious, "malicious_peer"),
+    ];
+    for (inputs, expected_code) in cases {
+        let outcome = round.run(&inputs, &mut StdRng::seed_from_u64(17));
+        assert!(outcome.aggregate().is_none());
+        assert_eq!(
+            outcome.reject_reason().map(SecureAggregationReject::code),
+            Some(expected_code)
+        );
+    }
+}
+
+#[test]
+fn logging_privacy_compliance() {
+    // Exercise the existing runtime event serializer and actual append sink.
+    // Only the successful-event path is claimed here; arbitrary rejection
+    // detail text has a separate redaction boundary.
+    let epoch = SecurityEpoch::from_raw(5000);
+    let inputs = vec![
+        PeerInput::new("private-peer-alice", vec![912_731, 88, 55, 12]),
+        PeerInput::new("private-peer-bob", vec![171_113, 34, 21, 18]),
+        PeerInput::new("private-peer-charlie", vec![318_133, 13, 42, 10]),
+    ];
+    let round = SecureAggregationRound::with_field_modulus(
+        "metadata-only-round",
+        epoch,
+        inputs.iter().map(|input| input.participant_id.clone()),
+        DIMENSION,
+        FIELD_MODULUS,
+    );
+    let (outcome, event) = round.run_logged(&inputs, &mut StdRng::seed_from_u64(17));
+    assert!(outcome.is_aggregated());
+    let scratch_id = rand::rngs::OsRng.next_u64();
+    let directory = std::env::temp_dir().join(format!(
+        "franken-fleet-log-{}-{scratch_id:016x}",
+        std::process::id()
+    ));
+    std::fs::create_dir(&directory).unwrap();
+    let path = directory.join("events.jsonl");
+    append_event_line(&path, &event).unwrap();
+    let emitted = std::fs::read_to_string(path).unwrap();
+    assert_eq!(emitted.lines().count(), 1);
+    let record: serde_json::Value = serde_json::from_str(emitted.trim()).unwrap();
+    assert_eq!(record["participant_count"], 3);
+    assert_eq!(record["aggregate_dimension"], DIMENSION);
+    assert_eq!(record["outcome"], "aggregated");
+    for input in &inputs {
+        assert!(!emitted.contains(&input.participant_id));
+        assert!(!emitted.contains(&input.update[0].to_string()));
+    }
+    assert!(record.get("aggregate").is_none());
+    assert!(record.get("update").is_none());
+    assert!(record.get("shares").is_none());
 }

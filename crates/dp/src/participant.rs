@@ -92,6 +92,11 @@ impl Participant {
         if self.status != ParticipantStatus::Joined {
             return Err(SecureAggregationError::InvalidState);
         }
+        if field_modulus == 0 || field_modulus > i64::MAX as u64 {
+            return Err(SecureAggregationError::ProtocolViolation(
+                "Field modulus must fit a positive signed representation".into(),
+            ));
+        }
 
         self.status = ParticipantStatus::GeneratingShares;
 
@@ -153,6 +158,11 @@ impl Participant {
     ) -> Result<Vec<i64>> {
         if self.status != ParticipantStatus::SharesSubmitted {
             return Err(SecureAggregationError::InvalidState);
+        }
+        if field_modulus == 0 || field_modulus > i64::MAX as u64 {
+            return Err(SecureAggregationError::ProtocolViolation(
+                "Field modulus must fit a positive signed representation".into(),
+            ));
         }
 
         if input_vector.len() != self.get_expected_dimension()? {
@@ -452,5 +462,30 @@ mod tests {
             .collect();
         assert_eq!(recovered, input);
         assert_eq!(alice.status, ParticipantStatus::Complete);
+    }
+
+    #[test]
+    fn invalid_moduli_reject_before_share_or_mask_state_changes() {
+        let bob = ParticipantId("bob".into());
+        let mut alice = Participant::new(ParticipantId("alice".into()));
+        let mut rng = rand::rngs::StdRng::seed_from_u64(41);
+        for modulus in [0, u64::MAX] {
+            assert!(matches!(
+                alice.generate_secret_shares(std::slice::from_ref(&bob), 2, modulus, &mut rng),
+                Err(SecureAggregationError::ProtocolViolation(_))
+            ));
+            assert_eq!(alice.status, ParticipantStatus::Joined);
+            assert!(alice.generated_shares.is_empty());
+        }
+        alice
+            .generate_secret_shares(&[bob], 2, 1_000_000, &mut rng)
+            .unwrap();
+        for modulus in [0, u64::MAX] {
+            assert!(matches!(
+                alice.create_masked_contribution(vec![1, 2], modulus),
+                Err(SecureAggregationError::ProtocolViolation(_))
+            ));
+            assert_eq!(alice.status, ParticipantStatus::SharesSubmitted);
+        }
     }
 }

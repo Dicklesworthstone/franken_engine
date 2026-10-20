@@ -53,3 +53,56 @@ console.log(out.join(' '));
         ]
     );
 }
+
+#[test]
+fn compact_numeric_paths_preserve_special_values_and_observable_fallbacks() {
+    let source = r#"
+function add(a, b) { return a + b; }
+function sub(a, b) { return a - b; }
+function mul(a, b) { return a * b; }
+function div(a, b) { return a / b; }
+function mod(a, b) { return a % b; }
+var value = 0.5;
+for (var i = 0; i < 256; i++) {
+  value = mod(sub(div(mul(add(value, 0.5), 1.5), 1.5), 0.25), 97.25);
+}
+var trace = [];
+var left = { valueOf: function () { trace.push('L'); return 7.5; } };
+var right = { valueOf: function () { trace.push('R'); return 2; } };
+var converted = [add(left, right), sub(left, right), mul(left, right),
+  div(left, right), mod(left, right)];
+var checks = [
+  Object.is(mul(0, -3), -0),
+  Object.is(mul(-0, -3), 0),
+  Object.is(mod(-6, 3), -0),
+  Object.is(div(-0, -3), 0),
+  Object.is(div(0, -3), -0),
+  Number.isNaN(mod(1, 0)),
+  Number.isNaN(mod(Infinity, 2)),
+  div(1, 0) === Infinity,
+  div(-1, 0) === -Infinity,
+  Number.isNaN(sub(Infinity, Infinity)),
+  Number.isNaN(mul(Infinity, 0)),
+  add(9007199254740991, 2) === 9007199254740992,
+  sub(-9007199254740991, 2) === -9007199254740992,
+  mul(9007199254740991, 2) === 18014398509481982,
+  mod(7n, 2n) === 1n,
+  add('2', 3) === '23'
+];
+console.log(value + '|' + checks.join(',') + '|' + converted.join(',') + '|' + trace.join(''));
+"#;
+    let outcome = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"));
+    let lines: Vec<&str> = outcome
+        .console_output
+        .iter()
+        .map(|entry| entry.message.as_str())
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "64.5|true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true|9.5,5.5,15,3.75,1.5|LRLRLRLRLR"
+        ]
+    );
+}

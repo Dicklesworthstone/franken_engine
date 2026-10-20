@@ -2394,6 +2394,23 @@ pub fn js_int_mul(x: i64, y: i64) -> Value {
     }
 }
 
+/// `x % y` for Number operands held as integers, including a zero divisor,
+/// a negative-zero remainder, and the overflowing `i64::MIN % -1` case.
+/// Tier R and the compact numeric handler share this exact conversion.
+#[inline(always)]
+fn js_int_mod(x: i64, y: i64) -> Value {
+    if y == 0 {
+        return Value::Float(Float64::new(f64::NAN));
+    }
+    if let Some(rem) = x.checked_rem(y) {
+        if x < 0 && rem == 0 {
+            return Value::Float(Float64::new(-0.0));
+        }
+        return Value::Int(rem);
+    }
+    js_number_to_value(x as f64 % y as f64)
+}
+
 // ---------------------------------------------------------------------------
 // Value — JS runtime value representation
 // ---------------------------------------------------------------------------
@@ -7887,8 +7904,8 @@ fn engine_symbol_id(symbol: CoreSymbolId) -> SymbolId {
 
 const UPPER_HEX: &[u8; 16] = b"0123456789ABCDEF";
 
-/// A physical register `InterpreterCore::compact_public_int_operands` found
-/// eligible for a static write; only that check makes one (bd-9vouw.504).
+/// A physical register the compact numeric operand guards found eligible for
+/// a static write; only those checks make one (bd-9vouw.504).
 #[derive(Debug, Clone, Copy)]
 struct StaticWriteSlot(usize);
 
@@ -58382,17 +58399,12 @@ impl InterpreterCore {
                 self.ip += 1;
             }
             Op::Add => {
-                let mut compact_handled = false;
-                if let Some((left, right, slot)) = self.compact_public_int_operands(dst, lhs, rhs) {
-                    if let Some(sum) = left.checked_add(right) {
-                        if sum >= MIN_SAFE_INTEGER && sum <= MAX_SAFE_INTEGER {
-                            self.write_static_slot(slot, Value::Int(sum));
-                            self.record_tier_i_specialization();
-                            compact_handled = true;
-                        }
-                    }
-                }
-                if !compact_handled {
+                if let Some((result, slot)) =
+                    self.compact_public_number_arithmetic(dst, lhs, rhs, Op::Add)
+                {
+                    self.write_static_slot(slot, result);
+                    self.record_tier_i_specialization();
+                } else {
                     let _bigint_peak = self.preflight_bigint_add(dst, lhs, rhs)?;
                     let result_label = self.binary_operation_label(lhs, rhs)?;
                     let result = self.eval_add(Some(module), lhs, rhs)?;
@@ -58401,17 +58413,12 @@ impl InterpreterCore {
                 self.ip += 1;
             }
             Op::Sub => {
-                let mut compact_handled = false;
-                if let Some((left, right, slot)) = self.compact_public_int_operands(dst, lhs, rhs) {
-                    if let Some(diff) = left.checked_sub(right) {
-                        if diff >= MIN_SAFE_INTEGER && diff <= MAX_SAFE_INTEGER {
-                            self.write_static_slot(slot, Value::Int(diff));
-                            self.record_tier_i_specialization();
-                            compact_handled = true;
-                        }
-                    }
-                }
-                if !compact_handled {
+                if let Some((result, slot)) =
+                    self.compact_public_number_arithmetic(dst, lhs, rhs, Op::Sub)
+                {
+                    self.write_static_slot(slot, result);
+                    self.record_tier_i_specialization();
+                } else {
                     let result_label = self.binary_operation_label(lhs, rhs)?;
                     let result = self.eval_arith(lhs, rhs, "sub")?;
                     self.write_reg_with_label(dst, result, result_label)?;
@@ -58419,19 +58426,12 @@ impl InterpreterCore {
                 self.ip += 1;
             }
             Op::Mul => {
-                let mut compact_handled = false;
-                if let Some((left, right, slot)) = self.compact_public_int_operands(dst, lhs, rhs) {
-                    if !((left == 0 && right < 0) || (right == 0 && left < 0)) {
-                        if let Some(prod) = left.checked_mul(right) {
-                            if prod >= MIN_SAFE_INTEGER && prod <= MAX_SAFE_INTEGER {
-                                self.write_static_slot(slot, Value::Int(prod));
-                                self.record_tier_i_specialization();
-                                compact_handled = true;
-                            }
-                        }
-                    }
-                }
-                if !compact_handled {
+                if let Some((result, slot)) =
+                    self.compact_public_number_arithmetic(dst, lhs, rhs, Op::Mul)
+                {
+                    self.write_static_slot(slot, result);
+                    self.record_tier_i_specialization();
+                } else {
                     let result_label = self.binary_operation_label(lhs, rhs)?;
                     let result = self.eval_arith(lhs, rhs, "mul")?;
                     self.write_reg_with_label(dst, result, result_label)?;
@@ -58439,15 +58439,29 @@ impl InterpreterCore {
                 self.ip += 1;
             }
             Op::Div => {
-                let result_label = self.binary_operation_label(lhs, rhs)?;
-                let result = self.eval_div(lhs, rhs)?;
-                self.write_reg_with_label(dst, result, result_label)?;
+                if let Some((result, slot)) =
+                    self.compact_public_number_arithmetic(dst, lhs, rhs, Op::Div)
+                {
+                    self.write_static_slot(slot, result);
+                    self.record_tier_i_specialization();
+                } else {
+                    let result_label = self.binary_operation_label(lhs, rhs)?;
+                    let result = self.eval_div(lhs, rhs)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
+                }
                 self.ip += 1;
             }
             Op::Mod => {
-                let result_label = self.binary_operation_label(lhs, rhs)?;
-                let result = self.eval_mod(lhs, rhs)?;
-                self.write_reg_with_label(dst, result, result_label)?;
+                if let Some((result, slot)) =
+                    self.compact_public_number_arithmetic(dst, lhs, rhs, Op::Mod)
+                {
+                    self.write_static_slot(slot, result);
+                    self.record_tier_i_specialization();
+                } else {
+                    let result_label = self.binary_operation_label(lhs, rhs)?;
+                    let result = self.eval_mod(lhs, rhs)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
+                }
                 self.ip += 1;
             }
             Op::Exp => {
@@ -58629,6 +58643,79 @@ impl InterpreterCore {
         Some((*left, *right, StaticWriteSlot(actual_dst)))
     }
 
+    /// Borrow Number operands and compute a primitive result only when the
+    /// full value/label write owns no dynamic bytes. This extends compact
+    /// arithmetic to floating and mixed Numbers without cloning `Value`s or
+    /// repeating the canonical label, coercion, and destination checks.
+    ///
+    /// No state changes until the caller consumes the checked slot. Aliased
+    /// operands are read before the write; non-Numbers, non-Public labels,
+    /// callback/method contexts, dynamic destinations and exhausted budgets
+    /// remain on the canonical transaction path.
+    #[inline(always)]
+    fn compact_public_number_arithmetic(
+        &self,
+        dst: u32,
+        lhs: u32,
+        rhs: u32,
+        opcode: CompactTier1Opcode,
+    ) -> Option<(Value, StaticWriteSlot)> {
+        use CompactTier1Opcode as Op;
+
+        if dst >= self.config.max_registers
+            || lhs >= self.config.max_registers
+            || rhs >= self.config.max_registers
+        {
+            return None;
+        }
+        let actual_dst = self.register_base.checked_add(dst as usize)?;
+        let actual_lhs = self.register_base.checked_add(lhs as usize)?;
+        let actual_rhs = self.register_base.checked_add(rhs as usize)?;
+        let left = self.registers.get(actual_lhs)?;
+        let right = self.registers.get(actual_rhs)?;
+        if !matches!(left, Value::Int(_) | Value::Float(_))
+            || !matches!(right, Value::Int(_) | Value::Float(_))
+            || !matches!(self.register_labels.get(actual_lhs), Some(Label::Public))
+            || !matches!(self.register_labels.get(actual_rhs), Some(Label::Public))
+            || !self.static_register_write_eligible(actual_dst, &Value::Undefined, &Label::Public)
+        {
+            return None;
+        }
+
+        let result = if let (Value::Int(left), Value::Int(right)) = (left, right) {
+            match opcode {
+                Op::Add => js_int_add(*left, *right),
+                Op::Sub => js_int_sub(*left, *right),
+                Op::Mul => js_int_mul(*left, *right),
+                Op::Div => js_number_to_value(*left as f64 / *right as f64),
+                Op::Mod => js_int_mod(*left, *right),
+                _ => unreachable!("compact Number arithmetic opcode is statically selected"),
+            }
+        } else {
+            let number = |value: &Value| match value {
+                Value::Int(value) => *value as f64,
+                Value::Float(value) => value.inner(),
+                _ => unreachable!("compact Number operands were checked before arithmetic"),
+            };
+            let (left, right) = (number(left), number(right));
+            js_number_to_value(match opcode {
+                Op::Add => left + right,
+                Op::Sub => left - right,
+                Op::Mul => left * right,
+                Op::Div => left / right,
+                Op::Mod => left % right,
+                _ => unreachable!("compact Number arithmetic opcode is statically selected"),
+            })
+        };
+        // Float64 retains NaN payload bits. Let the canonical operator
+        // choose that representation, including NaNs produced from otherwise
+        // numeric inputs, rather than relying on optimizer propagation here.
+        if matches!(&result, Value::Float(value) if value.is_nan()) {
+            return None;
+        }
+        Some((result, StaticWriteSlot(actual_dst)))
+    }
+
     /// `Move dst, src` when the source value and label own no dynamic bytes
     /// and the destination is eligible for a static write: the write
     /// `write_reg_with_label` makes on its static path, without cloning the
@@ -58662,10 +58749,10 @@ impl InterpreterCore {
     }
 
     /// Store a compact operator's Public primitive result in the slot
-    /// `compact_public_int_operands` found eligible: the write
+    /// the compact numeric operand guards found eligible: the write
     /// `write_reg_with_label` makes on its static path, without checking
     /// eligibility a second time (bd-9vouw.504). Nothing runs between the
-    /// check and this write but the operator's integer arithmetic.
+    /// check and this write but the operator's primitive numeric arithmetic.
     #[inline(always)]
     fn write_static_slot(&mut self, slot: StaticWriteSlot, value: Value) {
         debug_assert!(Self::static_register_value(&value));
@@ -58960,20 +59047,10 @@ impl InterpreterCore {
             return result;
         }
 
-        // Fast path: Int % Int stays in integer domain if non-zero divisor, safe, and not producing -0.0
+        // Share the exact integer remainder, negative-zero and overflow cases
+        // with compact Number arithmetic.
         if let (Value::Int(x), Value::Int(y)) = (&a, &b) {
-            if *y == 0 {
-                // JS: x % 0 = NaN
-                return Ok(Value::Float(Float64::new(f64::NAN)));
-            }
-            if let Some(rem) = x.checked_rem(*y) {
-                // In JS: if x < 0 and rem == 0, the result is -0.0 (e.g. -5 % 5 === -0)
-                if *x < 0 && rem == 0 {
-                    return Ok(Value::Float(Float64::new(-0.0)));
-                }
-                return Ok(Value::Int(rem));
-            }
-            return Ok(js_number_to_value(*x as f64 % *y as f64));
+            return Ok(js_int_mod(*x, *y));
         }
 
         let x = Self::coerce_to_float(&a).ok_or_else(|| InterpreterError::TypeError {
@@ -151595,6 +151672,334 @@ mod tests {
         assert_execution_semantics_equal(&compact, &baseline);
         assert!(matches!(compact.value, Value::Float(value) if value.is_nan()));
         assert_eq!(compact.tier_i_specialized_instructions_executed, 0);
+    }
+
+    fn compact_number_test_instruction(
+        opcode: CompactTier1Opcode,
+        dst: u32,
+        lhs: u32,
+        rhs: u32,
+    ) -> Ir3Instruction {
+        match opcode {
+            CompactTier1Opcode::Add => Ir3Instruction::Add { dst, lhs, rhs },
+            CompactTier1Opcode::Sub => Ir3Instruction::Sub { dst, lhs, rhs },
+            CompactTier1Opcode::Mul => Ir3Instruction::Mul { dst, lhs, rhs },
+            CompactTier1Opcode::Div => Ir3Instruction::Div { dst, lhs, rhs },
+            CompactTier1Opcode::Mod => Ir3Instruction::Mod { dst, lhs, rhs },
+            _ => unreachable!("numeric test selects only arithmetic opcodes"),
+        }
+    }
+
+    #[test]
+    fn compact_tier1_number_arithmetic_matches_tier_r_bits_and_aliases() {
+        use CompactTier1Opcode as Op;
+
+        let float = |value| Value::Float(Float64::new(value));
+        let pairs = [
+            (float(1.25), float(2.5)),
+            (Value::Int(7), float(2.5)),
+            (float(-7.5), Value::Int(2)),
+            (float(0.5), float(0.5)),
+            (float(-0.0), float(-0.0)),
+            (float(-0.0), float(0.0)),
+            (Value::Int(0), Value::Int(-2)),
+            (Value::Int(-6), Value::Int(3)),
+            (Value::Int(7), Value::Int(0)),
+            (Value::Int(0), Value::Int(0)),
+            (float(-0.0), Value::Int(2)),
+            (float(1.0), float(-0.0)),
+            (Value::Int(MAX_SAFE_INTEGER), Value::Int(1)),
+            (Value::Int(MIN_SAFE_INTEGER), Value::Int(-1)),
+            (Value::Int(1_i64 << 32), Value::Int(1_i64 << 32)),
+            (Value::Int(i64::MAX), Value::Int(1)),
+            (Value::Int(i64::MIN), Value::Int(-1)),
+            (Value::Int(9_007_199_254_740_993), float(1.0)),
+            (float(f64::INFINITY), float(f64::INFINITY)),
+            (float(f64::INFINITY), float(f64::NEG_INFINITY)),
+            (float(f64::INFINITY), Value::Int(0)),
+            (Value::Int(0), float(f64::NEG_INFINITY)),
+            (float(f64::from_bits(0x7ff8_0000_0000_0001)), Value::Int(1)),
+            (Value::Int(1), float(f64::from_bits(0xfff8_0000_0000_0002))),
+            (float(f64::from_bits(1)), float(0.5)),
+            (float(f64::MAX), float(f64::MAX)),
+        ];
+        for opcode in [Op::Add, Op::Sub, Op::Mul, Op::Div, Op::Mod] {
+            for (left, right) in &pairs {
+                for dst in 0..=2 {
+                    let module = test_module(vec![
+                        compact_number_test_instruction(opcode, dst, 1, 2),
+                        Ir3Instruction::Return { value: dst },
+                    ]);
+                    let plan = CompactTier1Program::compile(&module).expect("numeric plan");
+                    let run = |compact| {
+                        let mut core = quickjs_test_core();
+                        core.set_reg(1, left.clone());
+                        core.set_reg(2, right.clone());
+                        let result = core
+                            .execute_with_trace_handoff(
+                                &module,
+                                if compact { Some(&plan) } else { None },
+                                TraceHandoff::RetainInCore,
+                            )
+                            .expect("Number arithmetic executes");
+                        (core, result)
+                    };
+                    let (compact_core, compact) = run(true);
+                    let (baseline_core, baseline) = run(false);
+                    // Value::Float equality preserves NaN payload bits and
+                    // distinguishes negative zero, not just numeric equality.
+                    assert_execution_semantics_equal(&compact, &baseline);
+                    let is_nan = matches!(&baseline.value, Value::Float(value) if value.is_nan());
+                    let expected_specializations = u64::from(!is_nan);
+                    assert_eq!(
+                        compact.tier_i_specialized_instructions_executed,
+                        expected_specializations,
+                        "{opcode:?}, {left:?}, {right:?}, dst={dst}"
+                    );
+                    assert_eq!(compact_core.registers.value, baseline_core.registers.value);
+                    assert_eq!(compact_core.register_labels, baseline_core.register_labels);
+                    assert_eq!(compact_core.seed_epoch, baseline_core.seed_epoch);
+                    assert_eq!(
+                        compact_core.estimated_memory_bytes(),
+                        baseline_core.estimated_memory_bytes()
+                    );
+                    assert_eq!(
+                        compact_core.estimated_memory_bytes(),
+                        compact_core.recompute_estimated_memory_bytes()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn compact_tier1_number_arithmetic_keeps_accounted_fallbacks() {
+        use CompactTier1Opcode as Op;
+
+        for opcode in [Op::Add, Op::Sub, Op::Mul, Op::Div, Op::Mod] {
+            for fallback in 0..7 {
+                let module = test_module(vec![
+                    compact_number_test_instruction(opcode, 0, 1, 2),
+                    Ir3Instruction::Return { value: 0 },
+                ]);
+                let plan = CompactTier1Program::compile(&module).expect("numeric plan");
+                let make_core = || {
+                    let mut core = quickjs_test_core();
+                    core.set_reg(1, Value::Float(Float64::new(6.5)));
+                    core.set_reg(2, Value::Float(Float64::new(2.5)));
+                    match fallback {
+                        0 => core.set_register_label(1, Label::Secret).unwrap(),
+                        1 => core
+                            .set_register_label(
+                                2,
+                                Label::Custom {
+                                    name: "numeric-source".to_string(),
+                                    level: 3,
+                                },
+                            )
+                            .unwrap(),
+                        2 => core.set_reg(0, Value::str("owned destination")),
+                        3 => core
+                            .set_register_label(
+                                0,
+                                Label::Custom {
+                                    name: "replaced-destination".to_string(),
+                                    level: 2,
+                                },
+                            )
+                            .unwrap(),
+                        4 => core.active_inline_callback_context_label = Some(Label::Secret),
+                        5 => core.set_reg(1, Value::str("6.5")),
+                        6 => {
+                            core.set_reg(1, Value::BigInt(Arc::from("13")));
+                            core.set_reg(2, Value::BigInt(Arc::from("2")));
+                        }
+                        _ => unreachable!(),
+                    }
+                    core.sync_estimated_memory_bytes().expect("fallback fixture");
+                    core
+                };
+                let mut compact = make_core();
+                let mut baseline = make_core();
+                let before_epoch = compact.seed_epoch;
+                let before_registers = compact.registers.value.clone();
+                assert!(
+                    compact.compact_public_number_arithmetic(0, 1, 2, opcode).is_none(),
+                    "{opcode:?} fallback {fallback}"
+                );
+                assert_eq!(compact.seed_epoch, before_epoch);
+                assert_eq!(compact.registers.value, before_registers);
+                // Enter the real dispatch loops directly so the callback
+                // context survives; top-level prepare intentionally clears it.
+                let compact_result = compact
+                    .run_loop_labeled_with_compact_tier1(&module, Some(&plan))
+                    .expect("compact fallback");
+                let baseline_result = baseline
+                    .run_loop_labeled(&module)
+                    .expect("Tier R fallback");
+                assert_eq!(compact_result.value, baseline_result.value);
+                assert_eq!(compact_result.label, baseline_result.label);
+                assert_eq!(compact.tier_i_specialized_instructions_executed, 0);
+                assert_eq!(compact.instructions_executed, baseline.instructions_executed);
+                assert_eq!(compact.registers.value, baseline.registers.value);
+                assert_eq!(compact.register_labels, baseline.register_labels);
+                assert_eq!(compact.seed_epoch, baseline.seed_epoch);
+                assert_eq!(compact.nondeterminism_trace, baseline.nondeterminism_trace);
+                assert_eq!(
+                    compact.estimated_memory_bytes(),
+                    baseline.estimated_memory_bytes()
+                );
+                assert_eq!(
+                    compact.estimated_memory_bytes(),
+                    compact.recompute_estimated_memory_bytes()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn compact_tier1_number_arithmetic_preserves_seed_and_memory_refusal() {
+        use CompactTier1Opcode as Op;
+
+        for opcode in [Op::Add, Op::Sub, Op::Mul, Op::Div, Op::Mod] {
+            for over_budget in [false, true] {
+                let module = test_module(vec![
+                    compact_number_test_instruction(opcode, 1, 1, 2),
+                    Ir3Instruction::Return { value: 1 },
+                ]);
+                let plan = CompactTier1Program::compile(&module).expect("numeric plan");
+                let make_core = || {
+                    let mut core = quickjs_test_core();
+                    core.set_reg(1, Value::Float(Float64::new(1.25)));
+                    core.set_reg(2, Value::Float(Float64::new(2.5)));
+                    core.sync_estimated_memory_bytes().expect("numeric fixture");
+                    let seed = core.capture_execution_seed().expect("seed fits");
+                    core.config.max_total_memory_bytes = core
+                        .estimated_memory_bytes()
+                        .saturating_sub(u64::from(over_budget));
+                    (core, seed)
+                };
+                let (mut compact, compact_seed) = make_core();
+                let (mut baseline, baseline_seed) = make_core();
+                let before_epoch = compact.seed_epoch;
+                let before_registers = compact.registers.value.clone();
+                let compact_result =
+                    compact.run_loop_labeled_with_compact_tier1(&module, Some(&plan));
+                let baseline_result = baseline.run_loop_labeled(&module);
+                match (compact_result, baseline_result) {
+                    (Err(compact_error), Err(baseline_error)) if over_budget => {
+                        assert_eq!(compact_error, baseline_error);
+                        assert!(matches!(
+                            compact_error,
+                            InterpreterError::MemoryBudgetExceeded { .. }
+                        ));
+                        assert_eq!(compact.registers.value, before_registers);
+                        assert_eq!(compact.seed_epoch, before_epoch);
+                        assert_eq!(compact.tier_i_specialized_instructions_executed, 0);
+                    }
+                    (Ok(compact_value), Ok(baseline_value)) if !over_budget => {
+                        assert_eq!(compact_value.value, baseline_value.value);
+                        assert_eq!(compact_value.label, baseline_value.label);
+                        assert_eq!(compact.tier_i_specialized_instructions_executed, 1);
+                        for seed in [&compact_seed, &baseline_seed] {
+                            seed.inspect(|state| match state {
+                                ExecutionSeed::Materialized { registers, .. } => {
+                                    assert_eq!(registers, &before_registers);
+                                }
+                                ExecutionSeed::Lazy { .. } => {
+                                    panic!("the numeric write must preserve the pre-write seed");
+                                }
+                            });
+                        }
+                    }
+                    _ => panic!("numeric memory boundary differs for {opcode:?}, {over_budget}"),
+                }
+                assert_eq!(compact.registers.value, baseline.registers.value);
+                assert_eq!(compact.register_labels, baseline.register_labels);
+                assert_eq!(compact.seed_epoch, baseline.seed_epoch);
+                assert_eq!(compact.instructions_executed, baseline.instructions_executed);
+                assert_eq!(
+                    compact.estimated_memory_bytes(),
+                    baseline.estimated_memory_bytes()
+                );
+                assert_eq!(
+                    compact.live_execution_seed_reserved_bytes(),
+                    baseline.live_execution_seed_reserved_bytes()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn compact_tier1_number_loop_preserves_budget_and_cancellation_boundaries() {
+        let module = test_module(vec![
+            Ir3Instruction::LoadFloat {
+                dst: 0,
+                bits: 1.25_f64.to_bits(),
+            },
+            Ir3Instruction::LoadFloat {
+                dst: 1,
+                bits: 2.5_f64.to_bits(),
+            },
+            Ir3Instruction::Add {
+                dst: 0,
+                lhs: 0,
+                rhs: 1,
+            },
+            Ir3Instruction::Sub {
+                dst: 0,
+                lhs: 0,
+                rhs: 1,
+            },
+            Ir3Instruction::Mul {
+                dst: 0,
+                lhs: 0,
+                rhs: 1,
+            },
+            Ir3Instruction::Div {
+                dst: 0,
+                lhs: 0,
+                rhs: 1,
+            },
+            Ir3Instruction::Mod {
+                dst: 0,
+                lhs: 0,
+                rhs: 1,
+            },
+            Ir3Instruction::Jump { target: 2 },
+        ]);
+        let plan = CompactTier1Program::compile(&module).expect("numeric loop");
+        for cancelled in [false, true] {
+            for budget in 0..=20 {
+                let mut config = test_quickjs_config();
+                config.instruction_budget = budget;
+                config.checkpoint_density = 3;
+                if cancelled {
+                    let token = CancellationToken::new();
+                    token.cancel();
+                    config.cancellation_token = Some(token);
+                }
+                let mut compact = InterpreterCore::new(config.clone(), "numeric-boundary");
+                let mut baseline = InterpreterCore::new(config, "numeric-boundary");
+                let compact_error = compact
+                    .run_loop_labeled_with_compact_tier1(&module, Some(&plan))
+                    .expect_err("loop must stop");
+                let baseline_error = baseline
+                    .run_loop_labeled(&module)
+                    .expect_err("loop must stop");
+                assert_eq!(compact_error, baseline_error);
+                assert_eq!(compact.instructions_executed, baseline.instructions_executed);
+                assert_eq!(compact.ip, baseline.ip);
+                assert_eq!(compact.registers.value, baseline.registers.value);
+                assert_eq!(compact.register_labels, baseline.register_labels);
+                assert_eq!(compact.seed_epoch, baseline.seed_epoch);
+                assert_eq!(compact.nondeterminism_trace, baseline.nondeterminism_trace);
+                assert_eq!(
+                    compact.estimated_memory_bytes(),
+                    baseline.estimated_memory_bytes()
+                );
+            }
+        }
     }
 
     #[test]

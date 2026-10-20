@@ -1,616 +1,328 @@
 #![forbid(unsafe_code)]
-//! Integration test for privacy-preserving fleet learning
-//! Combines federated posterior aggregation + differential privacy + secure aggregation
-//! to demonstrate end-to-end privacy-preserving fleet learning with cryptographic guarantees.
+//! Composed regression for charged DP updates and the real dp masking APIs.
+//!
+//! Deterministic noise is deliberately used for reproducible tests. Successful
+//! arithmetic does not establish production DP, authenticated transport,
+//! threshold recovery, or cryptographic secrecy against an aggregator that
+//! receives individual unmasking values.
 
-use std::collections::BTreeMap;
-
-// Note: dp module not available yet (cc_4 working on differential_privacy)
-// use dp::{
-//     AggregationConfig, SecureAggregationSession,
-//     participant::{Participant, ParticipantId, ParticipantStatus},
-//     protocol::{AggregationProtocol, SecurityParameters},
-// };
+use dp::{
+    AggregationConfig, AggregationRound, MaskedContribution, Participant, ParticipantId,
+    SecureAggregationError, SecureAggregationSession,
+    protocol::{AggregationProtocol, SecurityParameters},
+};
 use frankenengine_engine::differential_privacy_posterior::{
-    DeterministicTestNoiseGenerator, PrivacyBudget, PrivacyParameters, PrivacyPreservingAggregator,
+    DeterministicTestNoiseGenerator, DifferentialPrivacyError, PrivacyParameters,
+    PrivacyPreservingAggregator, PrivatePosteriorDelta,
 };
-use frankenengine_engine::federated_posterior_aggregation::{
-    AggregationCoordinator, LocalPosteriorProvider, PosteriorDelta,
-};
+use frankenengine_engine::federated_posterior_aggregation::PosteriorDelta;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::{fleet_immune_protocol::NodeId, security_epoch::SecurityEpoch};
+use rand::{SeedableRng, rngs::StdRng};
 
-// Temporary type definitions for test compilation
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum RiskLevel {
-    Benign,
-    Anomalous,
-    Malicious,
-    Unknown,
-}
+// Weighted signed deltas exceed the primitive's default 31-bit field. This
+// Mersenne prime leaves room for both the weighted sum and its signed decoding.
+const FIELD_MODULUS: u64 = (1u64 << 61) - 1;
+const DIMENSION: usize = 4;
 
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct Timestamp(u64);
-
-impl Timestamp {
-    pub fn from_millis(millis: u64) -> Self {
-        Self(millis)
+fn delta(values: [i64; DIMENSION], weight: u64, epoch: SecurityEpoch) -> PosteriorDelta {
+    assert_eq!(values.iter().sum::<i64>(), 0);
+    PosteriorDelta {
+        extension_id: "shared-extension".to_string(),
+        delta_benign_millionths: values[0],
+        delta_anomalous_millionths: values[1],
+        delta_malicious_millionths: values[2],
+        delta_unknown_millionths: values[3],
+        confidence_weight_millionths: weight,
+        evidence_hash: ContentHash::compute(format!("{values:?}:{weight}").as_bytes()),
+        epoch,
     }
 }
 
-// Stub types for missing dp module
-#[derive(Debug, Clone)]
-pub struct AggregationConfig {
-    pub min_participants: usize,
-    pub max_participants: usize,
-    pub vector_dimension: usize,
-    pub field_modulus: i64,
-    pub dropout_threshold: usize,
+fn weighted_input(private: &PrivatePosteriorDelta) -> Vec<i64> {
+    let delta = private.get_noisy_delta();
+    let weight = i64::try_from(delta.confidence_weight_millionths).unwrap();
+    [
+        delta.delta_benign_millionths,
+        delta.delta_anomalous_millionths,
+        delta.delta_malicious_millionths,
+        delta.delta_unknown_millionths,
+    ]
+    .into_iter()
+    .map(|value| value.checked_mul(weight).unwrap())
+    .collect()
 }
 
-#[derive(Debug)]
-#[allow(dead_code)]
-pub struct SecureAggregationSession {
-    pub current_round: AggregationRound,
-    config: AggregationConfig,
+fn decode_field(values: Vec<i64>) -> Vec<i64> {
+    let modulus = i64::try_from(FIELD_MODULUS).unwrap();
+    values
+        .into_iter()
+        .map(|value| {
+            assert!((0..modulus).contains(&value));
+            if value > modulus / 2 {
+                value - modulus
+            } else {
+                value
+            }
+        })
+        .collect()
 }
 
-impl SecureAggregationSession {
-    pub fn new(_session_id: String, config: AggregationConfig) -> Self {
-        Self {
-            current_round: AggregationRound::Setup,
-            config,
-        }
-    }
-
-    pub fn add_participant(&mut self, _participant: Participant) -> Result<(), String> {
-        Ok(())
-    }
-
-    pub fn start_aggregation(&mut self, _rng: &mut impl rand::Rng) -> Result<Vec<Vec<u8>>, String> {
-        Ok(vec![])
-    }
-
-    pub fn aggregate_contributions(
-        &mut self,
-        _contributions: Vec<MaskedContribution>,
-    ) -> Result<Vec<i64>, String> {
-        // Simulate aggregation result
-        Ok(vec![250_000, 450_000, 650_000, 850_000])
-    }
-
-    pub fn complete_aggregation(
-        &mut self,
-        _unmasking_shares: Vec<(ParticipantId, Vec<i64>)>,
-    ) -> Result<Vec<i64>, String> {
-        // Simulate final aggregate result
-        Ok(vec![1_350_000, 950_000, 1_000_000, 1_300_000])
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum AggregationRound {
-    Setup,
-    ContributionSubmission,
-    Unmasking,
-}
-
-#[derive(Debug)]
-#[allow(dead_code)]
-pub struct Participant {
-    id: ParticipantId,
-}
-
-impl Participant {
-    pub fn new(id: ParticipantId) -> Self {
-        Self { id }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ParticipantId(pub String);
-
-#[derive(Debug)]
-#[allow(dead_code)]
-pub struct MaskedContribution {
-    participant_id: ParticipantId,
-    values: Vec<i64>,
-    mask: Vec<u8>,
-}
-
-impl MaskedContribution {
-    pub fn new(participant_id: ParticipantId, values: Vec<i64>, mask: Vec<u8>) -> Self {
-        Self {
-            participant_id,
-            values,
-            mask,
-        }
-    }
-}
-use rand::thread_rng;
-
-/// Integration test demonstrating complete privacy-preserving fleet learning workflow
-/// with all three privacy layers: federated aggregation, differential privacy, and secure aggregation
-#[test]
-fn end_to_end_privacy_preserving_fleet_learning() {
-    let mut rng = thread_rng();
-
-    // Setup fleet nodes across multiple zones
-    let nodes = vec![
-        NodeId::new("node_us_east_1".to_string()),
-        NodeId::new("node_us_west_2".to_string()),
-        NodeId::new("node_eu_central_1".to_string()),
-        NodeId::new("node_ap_southeast_1".to_string()),
-    ];
-
-    let epoch = SecurityEpoch::from_raw(5000);
-    let _timestamp = Timestamp::from_millis(1640995500000);
-
-    // Each node generates local posterior evidence
-    let local_posteriors = [
-        // Node 1: High confidence in malicious classification
-        create_posterior_map(vec![
-            (RiskLevel::Benign, 100_000),
-            (RiskLevel::Anomalous, 200_000),
-            (RiskLevel::Malicious, 650_000),
-            (RiskLevel::Unknown, 50_000),
-        ]),
-        // Node 2: High confidence in benign classification
-        create_posterior_map(vec![
-            (RiskLevel::Benign, 700_000),
-            (RiskLevel::Anomalous, 150_000),
-            (RiskLevel::Malicious, 100_000),
-            (RiskLevel::Unknown, 50_000),
-        ]),
-        // Node 3: Moderate confidence in anomalous classification
-        create_posterior_map(vec![
-            (RiskLevel::Benign, 300_000),
-            (RiskLevel::Anomalous, 500_000),
-            (RiskLevel::Malicious, 150_000),
-            (RiskLevel::Unknown, 50_000),
-        ]),
-        // Node 4: Mixed signals, uncertain classification
-        create_posterior_map(vec![
-            (RiskLevel::Benign, 400_000),
-            (RiskLevel::Anomalous, 300_000),
-            (RiskLevel::Malicious, 200_000),
-            (RiskLevel::Unknown, 100_000),
-        ]),
-    ];
-
-    let confidence_levels = [900_000, 850_000, 700_000, 600_000];
-
-    // === LAYER 1: Federated Posterior Aggregation ===
-    let _coordinator = AggregationCoordinator::new(NodeId::new("coordinator".to_string()), epoch);
-    let mut local_providers = vec![];
-
-    for node_id in &nodes {
-        let provider = LocalPosteriorProvider::new(node_id.clone(), epoch);
-        local_providers.push(provider);
-    }
-
-    // Generate local posterior deltas
-    let mut posterior_deltas = vec![];
-    for (i, node_id) in nodes.iter().enumerate() {
-        let posterior = &local_posteriors[i];
-        let delta = PosteriorDelta {
-            extension_id: node_id.as_str().to_string(),
-            delta_benign_millionths: *posterior.get(&RiskLevel::Benign).unwrap_or(&0) as i64,
-            delta_anomalous_millionths: *posterior.get(&RiskLevel::Anomalous).unwrap_or(&0) as i64,
-            delta_malicious_millionths: *posterior.get(&RiskLevel::Malicious).unwrap_or(&0) as i64,
-            delta_unknown_millionths: *posterior.get(&RiskLevel::Unknown).unwrap_or(&0) as i64,
-            confidence_weight_millionths: confidence_levels[i] as u64,
-            evidence_hash: ContentHash::compute(format!("evidence_{}", i).as_bytes()),
-            epoch,
-        };
-        posterior_deltas.push(delta);
-    }
-
-    // === LAYER 2: Differential Privacy Protection ===
-    let privacy_params = PrivacyParameters::new(1_000_000, 10).unwrap();
-    let _privacy_budget = PrivacyBudget::new(20_000_000, 100, epoch).unwrap(); // 20.0ε, 1e-4δ
-    let dp_aggregator = PrivacyPreservingAggregator::new(privacy_params, epoch);
-
-    // Apply differential privacy to each local posterior
-    let mut private_deltas = vec![];
-    let mut noise_generator = DeterministicTestNoiseGenerator::new();
-    for (i, delta) in posterior_deltas.into_iter().enumerate() {
-        let private_delta =
-            frankenengine_engine::differential_privacy_posterior::PrivatePosteriorDelta::from_delta(
-                delta,
-                privacy_params,
-                format!("round_{}", i),
-                &mut noise_generator,
-            );
-        private_deltas.push(private_delta);
-    }
-
-    // Aggregate with differential privacy
-    let dp_aggregate = dp_aggregator
-        .aggregate_private_deltas(private_deltas, "main_round".to_string())
-        .expect("Differential privacy aggregation should succeed");
-
-    // === LAYER 3: Secure Cryptographic Aggregation ===
-    let secure_config = AggregationConfig {
-        min_participants: 3,
-        max_participants: 6,
-        vector_dimension: 4, // Four risk levels
-        field_modulus: 2_147_483_647,
+/// Generate and exchange actual shares for all enrolled participants. Entries
+/// without an input drop out AFTER exchanging shares. Recovery here reveals
+/// active participants' net masks; it is not threshold/collusion privacy proof.
+fn aggregate_masked_inputs(inputs: &[Option<Vec<i64>>], minimum: usize) -> dp::Result<Vec<i64>> {
+    let config = AggregationConfig {
+        min_participants: minimum,
+        max_participants: inputs.len(),
+        vector_dimension: DIMENSION,
+        field_modulus: FIELD_MODULUS,
         dropout_threshold: 1,
     };
+    let mut session = SecureAggregationSession::new("composed-api-regression".into(), config);
+    let ids: Vec<_> = (0..inputs.len())
+        .map(|index| ParticipantId(format!("node-{index}")))
+        .collect();
+    for id in &ids {
+        session.add_participant(Participant::new(id.clone()))?;
+    }
+    let mut rng = StdRng::seed_from_u64(0x1_2026);
+    assert_eq!(session.start_aggregation(&mut rng)?.len(), inputs.len());
+    assert_eq!(session.current_round, AggregationRound::ShareGeneration);
 
-    let mut secure_session =
-        SecureAggregationSession::new("fleet-learning-session".to_string(), secure_config.clone());
-
-    // Create secure aggregation participants
-    for node_id in &nodes {
-        let participant = Participant::new(ParticipantId(node_id.as_str().to_string()));
-        secure_session.add_participant(participant).unwrap();
+    let mut messages = Vec::new();
+    for sender in &ids {
+        let others: Vec<_> = ids.iter().filter(|id| *id != sender).cloned().collect();
+        let shares = session
+            .participants
+            .get_mut(sender)
+            .unwrap()
+            .generate_secret_shares(&others, DIMENSION, FIELD_MODULUS, &mut rng)?;
+        messages.extend(shares.into_iter().map(|share| (sender.clone(), share)));
+    }
+    for (sender, share) in messages {
+        session
+            .participants
+            .get_mut(&share.recipient)
+            .unwrap()
+            .receive_secret_share(sender, share)?;
     }
 
-    // Start secure aggregation protocol
-    let _share_seeds = secure_session.start_aggregation(&mut rng).unwrap();
-
-    // Convert differentially private posteriors to secure aggregation format
-    let _secure_inputs: Vec<Vec<i64>> = vec![vec![
-        dp_aggregate.aggregate_delta_benign_millionths,
-        dp_aggregate.aggregate_delta_anomalous_millionths,
-        dp_aggregate.aggregate_delta_malicious_millionths,
-        dp_aggregate.aggregate_delta_unknown_millionths,
-    ]];
-
-    // Simulate secure aggregation workflow
-    secure_session.current_round = AggregationRound::ContributionSubmission;
-
-    // Create masked contributions (simplified for testing)
-    let masked_contributions = vec![
-        MaskedContribution::new(
-            ParticipantId("node_us_east_1".to_string()),
-            vec![100_000, 150_000, 600_000, 50_000], // Masked values
-            vec![0; 32],
-        ),
-        MaskedContribution::new(
-            ParticipantId("node_us_west_2".to_string()),
-            vec![650_000, 100_000, 80_000, 40_000], // Masked values
-            vec![1; 32],
-        ),
-        MaskedContribution::new(
-            ParticipantId("node_eu_central_1".to_string()),
-            vec![250_000, 450_000, 120_000, 40_000], // Masked values
-            vec![2; 32],
-        ),
-        MaskedContribution::new(
-            ParticipantId("node_ap_southeast_1".to_string()),
-            vec![350_000, 250_000, 180_000, 80_000], // Masked values
-            vec![3; 32],
-        ),
-    ];
-
-    let _masked_aggregate = secure_session
-        .aggregate_contributions(masked_contributions)
-        .unwrap();
-
-    // Simulate unmasking phase
-    let unmasking_shares = vec![
-        (
-            ParticipantId("node_us_east_1".to_string()),
-            vec![0, 0, 0, 0],
-        ),
-        (
-            ParticipantId("node_us_west_2".to_string()),
-            vec![0, 0, 0, 0],
-        ),
-        (
-            ParticipantId("node_eu_central_1".to_string()),
-            vec![0, 0, 0, 0],
-        ),
-        (
-            ParticipantId("node_ap_southeast_1".to_string()),
-            vec![0, 0, 0, 0],
-        ),
-    ];
-
-    let final_aggregate = secure_session
-        .complete_aggregation(unmasking_shares)
-        .unwrap();
-
-    // === Verification: Privacy Guarantees Maintained ===
-
-    // 1. Verify federated aggregation worked
-    assert_eq!(dp_aggregate.participant_count, 4);
-    assert!(!dp_aggregate.extension_id.is_empty());
-
-    // 2. Verify differential privacy was applied (noise should be present)
-    let original_total: u64 = local_posteriors
-        .iter()
-        .flat_map(|m| m.values())
-        .map(|&x| x as u64)
-        .sum();
-    let dp_total: i64 = dp_aggregate.aggregate_delta_benign_millionths
-        + dp_aggregate.aggregate_delta_anomalous_millionths
-        + dp_aggregate.aggregate_delta_malicious_millionths
-        + dp_aggregate.aggregate_delta_unknown_millionths;
-
-    // Due to noise, totals should be different but within reasonable bounds
-    assert!(dp_total.abs() > 0);
-    println!("Original total: {}, DP total: {}", original_total, dp_total);
-
-    // 3. Verify secure aggregation completed
-    assert_eq!(final_aggregate.len(), 4); // Four risk categories
-    assert!(final_aggregate.iter().all(|&x| x >= 0)); // All non-negative
-
-    // 4. Verify privacy budget was consumed
-    assert!(dp_aggregate.total_confidence_weight_millionths > 0);
-
-    // === Privacy Analysis ===
-
-    // Key privacy guarantee: No individual node's data can be reconstructed
-    // - Federated aggregation: Only sees weighted sum, not individual contributions
-    // - Differential privacy: Adds calibrated noise to hide contribution patterns
-    // - Secure aggregation: Cryptographically masks individual inputs
-
-    println!("Privacy-preserving fleet learning completed successfully!");
-    println!("Final secure aggregate: {:?}", final_aggregate);
-    println!(
-        "Total confidence weight: {}",
-        dp_aggregate.total_confidence_weight_millionths
-    );
-    println!("Participant count: {}", dp_aggregate.participant_count);
+    let mut contributions = Vec::new();
+    let mut unmasking = Vec::new();
+    for (id, input) in ids.iter().zip(inputs) {
+        let Some(input) = input else { continue };
+        let participant = session.participants.get_mut(id).unwrap();
+        let encoded: Vec<_> = input
+            .iter()
+            .map(|value| value.rem_euclid(FIELD_MODULUS as i64))
+            .collect();
+        let masked = participant.create_masked_contribution(encoded, FIELD_MODULUS)?;
+        // This API carries opaque commitment bytes; it does not authenticate
+        // them. Do not infer authentication from this arithmetic regression.
+        contributions.push(MaskedContribution::new(id.clone(), masked, Vec::new()));
+        unmasking.push((id.clone(), participant.get_unmasking_values()?));
+    }
+    session.current_round = AggregationRound::ContributionSubmission;
+    session.aggregate_contributions(contributions)?;
+    assert_eq!(session.current_round, AggregationRound::Unmasking);
+    let result = session.complete_aggregation(unmasking)?;
+    assert_eq!(session.current_round, AggregationRound::Complete);
+    Ok(decode_field(result))
 }
 
-/// Test privacy budget exhaustion handling
+#[test]
+fn end_to_end_privacy_preserving_fleet_learning() {
+    let epoch = SecurityEpoch::from_raw(5000);
+    let parameters = PrivacyParameters::new(1_000_000, 10).unwrap();
+    let mut aggregator = PrivacyPreservingAggregator::new(parameters, epoch);
+    let mut noise = DeterministicTestNoiseGenerator::new();
+    let local = [
+        ([-150_000, -50_000, 400_000, -200_000], 900_000),
+        ([450_000, -100_000, -150_000, -200_000], 850_000),
+        ([50_000, 250_000, -100_000, -200_000], 700_000),
+        ([150_000, 50_000, -50_000, -150_000], 600_000),
+    ];
+    let mut private = Vec::new();
+    for (index, (values, weight)) in local.into_iter().enumerate() {
+        let node = NodeId::new(format!("node-{index}"));
+        aggregator
+            .initialize_node_budget(node.clone(), 2_000_000, 20)
+            .unwrap();
+        let input = delta(values, weight, epoch);
+        private.push(
+            aggregator
+                .make_delta_private(&node, input, "main-round".into(), &mut noise)
+                .unwrap(),
+        );
+        let budget = aggregator.get_node_budget(&node).unwrap();
+        assert_eq!(budget.consumed_epsilon_millionths, 1_000_000);
+        assert_eq!(budget.consumed_delta_millionths, 10);
+        assert_eq!(budget.round_consumptions.len(), 1);
+    }
+    let inputs: Vec<_> = private
+        .iter()
+        .map(|value| Some(weighted_input(value)))
+        .collect();
+    let reference = aggregator
+        .aggregate_private_deltas(private, "main-round".into())
+        .unwrap();
+    let expected = vec![
+        reference.aggregate_delta_benign_millionths,
+        reference.aggregate_delta_anomalous_millionths,
+        reference.aggregate_delta_malicious_millionths,
+        reference.aggregate_delta_unknown_millionths,
+    ];
+    assert_eq!(reference.extension_id, "shared-extension");
+    assert_eq!(reference.participant_count, 4);
+    assert_eq!(reference.total_confidence_weight_millionths, 3_050_000);
+    assert_eq!(aggregate_masked_inputs(&inputs, 3).unwrap(), expected);
+
+    // A constant-returning stand-in cannot satisfy this changed-input probe.
+    let mut changed = inputs.clone();
+    let contribution = changed[0].as_mut().unwrap();
+    contribution[0] += 123_456;
+    contribution[1] -= 123_456;
+    let mut expected_changed = expected.clone();
+    expected_changed[0] += 123_456;
+    expected_changed[1] -= 123_456;
+    let actual_changed = aggregate_masked_inputs(&changed, 3).unwrap();
+    assert_eq!(actual_changed, expected_changed);
+    assert_ne!(actual_changed, expected);
+}
+
 #[test]
 fn privacy_budget_exhaustion_handling() {
-    let _rng = thread_rng();
-
-    // Create a very small privacy budget to force exhaustion
     let epoch = SecurityEpoch::from_raw(1000);
-    let privacy_params = PrivacyParameters::new(2_000_000, 10).unwrap();
-    let _privacy_budget = PrivacyBudget::new(3_000_000, 100, epoch).unwrap(); // 3.0ε, 1e-4δ
+    let parameters = PrivacyParameters::new(2_000_000, 10).unwrap();
+    let mut aggregator = PrivacyPreservingAggregator::new(parameters, epoch);
+    let node = NodeId::new("budget-node");
+    aggregator
+        .initialize_node_budget(node.clone(), 3_000_000, 100)
+        .unwrap();
+    let input = delta([-100_000, 0, 100_000, 0], 800_000, epoch);
+    let mut noise = DeterministicTestNoiseGenerator::new();
+    aggregator
+        .make_delta_private(&node, input.clone(), "first".into(), &mut noise)
+        .unwrap();
+    let before = aggregator.get_node_budget(&node).unwrap().clone();
+    assert_eq!(before.remaining_epsilon(), 1_000_000);
+    assert_eq!(before.remaining_delta(), 90);
+    assert_eq!(
+        aggregator.make_delta_private(&node, input, "second".into(), &mut noise,),
+        Err(DifferentialPrivacyError::InsufficientBudget)
+    );
+    assert_eq!(aggregator.get_node_budget(&node).unwrap(), &before);
 
-    let node = NodeId::new("test_node".to_string());
-    let _timestamp = Timestamp::from_millis(1640995200000);
-
-    let posterior = create_posterior_map(vec![
-        (RiskLevel::Benign, 500_000),
-        (RiskLevel::Malicious, 500_000),
-    ]);
-
-    let delta = PosteriorDelta {
-        extension_id: node.as_str().to_string(),
-        delta_benign_millionths: *posterior.get(&RiskLevel::Benign).unwrap_or(&0) as i64,
-        delta_anomalous_millionths: 0,
-        delta_malicious_millionths: *posterior.get(&RiskLevel::Malicious).unwrap_or(&0) as i64,
-        delta_unknown_millionths: 0,
-        confidence_weight_millionths: 800_000,
-        evidence_hash: ContentHash::compute(b"budget_test_evidence"),
-        epoch,
-    };
-
-    // For this test, we'll just verify the delta was created successfully
-    // Budget exhaustion testing would require a more complex setup
-    let mut noise_generator = DeterministicTestNoiseGenerator::new();
-    let result1 =
-        frankenengine_engine::differential_privacy_posterior::PrivatePosteriorDelta::from_delta(
-            delta.clone(),
-            privacy_params,
-            "budget_test_1".to_string(),
-            &mut noise_generator,
-        );
-
-    // Verify the delta was processed
-    assert!(!result1.base_delta.extension_id.is_empty());
-    println!("Privacy budget test completed successfully");
+    // Delta is a separate composition limit even with epsilon remaining.
+    let delta_limited = NodeId::new("delta-limited-node");
+    aggregator
+        .initialize_node_budget(delta_limited.clone(), 6_000_000, 10)
+        .unwrap();
+    let input = delta([-100_000, 0, 100_000, 0], 800_000, epoch);
+    aggregator
+        .make_delta_private(&delta_limited, input.clone(), "first".into(), &mut noise)
+        .unwrap();
+    let before = aggregator.get_node_budget(&delta_limited).unwrap().clone();
+    assert_eq!(before.remaining_epsilon(), 4_000_000);
+    assert_eq!(before.remaining_delta(), 0);
+    assert_eq!(
+        aggregator.make_delta_private(&delta_limited, input, "second".into(), &mut noise),
+        Err(DifferentialPrivacyError::InsufficientBudget)
+    );
+    assert_eq!(aggregator.get_node_budget(&delta_limited).unwrap(), &before);
 }
 
-/// Test secure aggregation dropout resilience
 #[test]
 fn secure_aggregation_dropout_resilience() {
-    let mut rng = thread_rng();
-
-    let config = AggregationConfig {
-        min_participants: 2,
-        max_participants: 4,
-        vector_dimension: 4,
-        field_modulus: 1_000_000,
-        dropout_threshold: 1, // Can tolerate 1 dropout
-    };
-
-    let mut session = SecureAggregationSession::new("dropout-test".to_string(), config.clone());
-
-    // Add 3 participants
-    let participants = vec!["alice", "bob", "charlie"];
-    for name in &participants {
-        let participant = Participant::new(ParticipantId(name.to_string()));
-        session.add_participant(participant).unwrap();
-    }
-
-    session.start_aggregation(&mut rng).unwrap();
-
-    // Simulate only 2 participants contributing (charlie drops out)
-    session.current_round = AggregationRound::ContributionSubmission;
-    let contributions = vec![
-        MaskedContribution::new(
-            ParticipantId("alice".to_string()),
-            vec![100_000, 200_000, 300_000, 400_000],
-            vec![0; 32],
-        ),
-        MaskedContribution::new(
-            ParticipantId("bob".to_string()),
-            vec![150_000, 250_000, 350_000, 450_000],
-            vec![1; 32],
-        ),
+    let inputs = vec![
+        Some(vec![-100_000, 200_000, -300_000, 400_000]),
+        Some(vec![150_000, -250_000, 350_000, -450_000]),
+        Some(vec![20_000, 30_000, -40_000, -10_000]),
+        None,
     ];
-
-    // Should succeed with minimum participants despite dropout
-    let result = session.aggregate_contributions(contributions);
-    assert!(result.is_ok());
-
-    let aggregated = result.unwrap();
-    assert_eq!(aggregated, vec![250_000, 450_000, 650_000, 850_000]);
+    assert_eq!(
+        aggregate_masked_inputs(&inputs, 3).unwrap(),
+        vec![70_000, -20_000, 10_000, -60_000]
+    );
+    let mut insufficient = inputs;
+    insufficient[2] = None;
+    assert_eq!(
+        aggregate_masked_inputs(&insufficient, 3),
+        Err(SecureAggregationError::InsufficientContributions)
+    );
 }
 
-/// Test end-to-end privacy verification
 #[test]
 fn privacy_verification_e2e() {
-    // This test verifies that the complete privacy-preserving pipeline
-    // maintains the fundamental privacy guarantees
-
-    let _rng = thread_rng();
-    let nodes = [
-        NodeId::new("node_1".to_string()),
-        NodeId::new("node_2".to_string()),
-        NodeId::new("node_3".to_string()),
-    ];
-
-    // Create distinct individual posteriors
-    let individual_posteriors = [
-        create_posterior_map(vec![
-            (RiskLevel::Benign, 800_000),
-            (RiskLevel::Malicious, 200_000),
-        ]),
-        create_posterior_map(vec![
-            (RiskLevel::Benign, 200_000),
-            (RiskLevel::Malicious, 800_000),
-        ]),
-        create_posterior_map(vec![
-            (RiskLevel::Benign, 500_000),
-            (RiskLevel::Malicious, 500_000),
-        ]),
-    ];
-
-    let epoch = SecurityEpoch::from_raw(2000);
-    let _timestamp = Timestamp::from_millis(1640995300000);
-
-    // Privacy-preserving aggregation
-    let privacy_params = PrivacyParameters::new(1_000_000, 10).unwrap();
-    let dp_aggregator = PrivacyPreservingAggregator::new(privacy_params, epoch);
-
-    let mut private_deltas = vec![];
-    let mut noise_generator = DeterministicTestNoiseGenerator::new();
-    for (i, node_id) in nodes.iter().enumerate() {
-        let posterior = &individual_posteriors[i];
-        let delta = PosteriorDelta {
-            extension_id: node_id.as_str().to_string(),
-            delta_benign_millionths: *posterior.get(&RiskLevel::Benign).unwrap_or(&0) as i64,
-            delta_anomalous_millionths: 0,
-            delta_malicious_millionths: *posterior.get(&RiskLevel::Malicious).unwrap_or(&0) as i64,
-            delta_unknown_millionths: 0,
-            confidence_weight_millionths: 850_000,
-            evidence_hash: ContentHash::compute(format!("evidence_{}", i).as_bytes()),
-            epoch,
-        };
-
-        let private_delta =
-            frankenengine_engine::differential_privacy_posterior::PrivatePosteriorDelta::from_delta(
-                delta,
-                privacy_params,
-                format!("verification_round_{}", i),
-                &mut noise_generator,
-            );
-        private_deltas.push(private_delta);
-    }
-
-    let final_aggregate = dp_aggregator
-        .aggregate_private_deltas(private_deltas, "verification_main".to_string())
-        .unwrap();
-
-    // Verify privacy properties
-    assert_eq!(final_aggregate.participant_count, 3);
-    assert!(!final_aggregate.extension_id.is_empty());
-
-    // The key privacy test: aggregator learns the approximate aggregate
-    // but cannot determine individual contributions due to:
-    // 1. Additive noise from differential privacy
-    // 2. Cryptographic masking from secure aggregation
-    // 3. Only seeing weighted sums, not raw individual data
-
-    let aggregate_benign = final_aggregate.aggregate_delta_benign_millionths;
-    let aggregate_malicious = final_aggregate.aggregate_delta_malicious_millionths;
-
-    // Verify the aggregate is plausible but noisy
-    assert!(aggregate_benign > 0);
-    assert!(aggregate_malicious > 0);
-
-    // Verify total confidence weight is reasonable
-    assert!(
-        final_aggregate.total_confidence_weight_millionths > 0,
-        "Total confidence weight should be positive: {}",
-        final_aggregate.total_confidence_weight_millionths
+    // Corrupted exchange data must be rejected by the actual participant API.
+    let alice_id = ParticipantId("alice".into());
+    let bob_id = ParticipantId("bob".into());
+    let mut alice = Participant::new(alice_id.clone());
+    let mut bob = Participant::new(bob_id.clone());
+    let mut rng = StdRng::seed_from_u64(41);
+    let mut share = alice
+        .generate_secret_shares(
+            std::slice::from_ref(&bob_id),
+            DIMENSION,
+            FIELD_MODULUS,
+            &mut rng,
+        )
+        .unwrap()
+        .remove(0);
+    share.share_values[0] ^= 1;
+    assert_eq!(
+        bob.receive_secret_share(alice_id, share),
+        Err(SecureAggregationError::InvalidShare)
+    );
+    assert!(bob.received_shares.is_empty());
+    assert_eq!(
+        bob.create_masked_contribution(vec![0; DIMENSION], FIELD_MODULUS),
+        Err(SecureAggregationError::InvalidState)
     );
 
-    println!("Privacy verification successful!");
-    println!("Aggregate benign: {}", aggregate_benign);
-    println!("Aggregate malicious: {}", aggregate_malicious);
+    let protocol = AggregationProtocol::new(SecurityParameters {
+        field_modulus: FIELD_MODULUS,
+        min_participants: 2,
+        dropout_threshold: 1,
+        vector_dimension: DIMENSION,
+    });
+    let malformed = vec![
+        MaskedContribution::new(bob_id, vec![1; DIMENSION - 1], Vec::new()),
+        MaskedContribution::new(
+            ParticipantId("charlie".into()),
+            vec![2; DIMENSION],
+            Vec::new(),
+        ),
+    ];
+    assert_eq!(
+        protocol.validate_contributions(&malformed),
+        Err(SecureAggregationError::InvalidDimension)
+    );
 }
 
-/// Helper function to create posterior probability maps
-fn create_posterior_map(entries: Vec<(RiskLevel, u32)>) -> BTreeMap<RiskLevel, u32> {
-    entries.into_iter().collect()
-}
-
-/// Test logging privacy requirements - ensure no individual data leaks
 #[test]
-fn logging_privacy_compliance() {
-    // This test verifies that the privacy-preserving fleet learning
-    // respects the logging discipline: no individual peer contributions
-    // should be logged or accessible
-
-    let _rng = thread_rng();
-
-    let node = NodeId::new("sensitive_node".to_string());
+fn duplicate_round_is_rejected_without_budget_burn() {
     let epoch = SecurityEpoch::from_raw(3000);
-    let _timestamp = Timestamp::from_millis(1640995400000);
-
-    // Simulate sensitive individual data
-    let sensitive_posterior = create_posterior_map(vec![
-        (RiskLevel::Benign, 100_000),    // Low benign confidence
-        (RiskLevel::Malicious, 900_000), // High malicious confidence - sensitive!
-    ]);
-
-    let delta = PosteriorDelta {
-        extension_id: node.as_str().to_string(),
-        delta_benign_millionths: *sensitive_posterior.get(&RiskLevel::Benign).unwrap_or(&0) as i64,
-        delta_anomalous_millionths: 0,
-        delta_malicious_millionths: *sensitive_posterior.get(&RiskLevel::Malicious).unwrap_or(&0)
-            as i64,
-        delta_unknown_millionths: 0,
-        confidence_weight_millionths: 950_000,
-        evidence_hash: ContentHash::compute(b"sensitive_evidence"),
-        epoch,
-    };
-
-    // Apply privacy protection
-    let privacy_params = PrivacyParameters::new(1_000_000, 10).unwrap();
-    let mut noise_generator = DeterministicTestNoiseGenerator::new();
-
-    let private_delta =
-        frankenengine_engine::differential_privacy_posterior::PrivatePosteriorDelta::from_delta(
-            delta.clone(),
-            privacy_params,
-            "logging_test".to_string(),
-            &mut noise_generator,
-        );
-
-    // Verify privacy protection was applied (noise should be added)
-    assert_ne!(
-        private_delta.base_delta.delta_malicious_millionths,
-        delta.delta_malicious_millionths
-    ); // Should be different due to noise
-
-    // Key privacy compliance: In a real system, the logging should only record:
-    // - Aggregate counts (number of participants)
-    // - Privacy budget consumption
-    // - Cryptographic proof of secure aggregation
-    // - Security epoch and timestamp
-    //
-    // NEVER log:
-    // - Individual posterior values
-    // - Individual confidence levels
-    // - Node-specific risk classifications
-
-    // This test represents the privacy discipline that the gate scripts must follow
-    println!("Privacy logging compliance verified");
-    println!("Only aggregate metadata logged, no individual peer data exposed");
+    let parameters = PrivacyParameters::new(1_000_000, 10).unwrap();
+    let mut aggregator = PrivacyPreservingAggregator::new(parameters, epoch);
+    let node = NodeId::new("sensitive-node");
+    let input = delta([-100_000, 0, 100_000, 0], 950_000, epoch);
+    let mut noise = DeterministicTestNoiseGenerator::new();
+    assert_eq!(
+        aggregator.make_delta_private(&node, input.clone(), "once".into(), &mut noise,),
+        Err(DifferentialPrivacyError::NodeBudgetNotFound)
+    );
+    aggregator
+        .initialize_node_budget(node.clone(), 3_000_000, 100)
+        .unwrap();
+    aggregator
+        .make_delta_private(&node, input.clone(), "once".into(), &mut noise)
+        .unwrap();
+    let before = aggregator.get_node_budget(&node).unwrap().clone();
+    assert_eq!(
+        aggregator.make_delta_private(&node, input, "once".into(), &mut noise,),
+        Err(DifferentialPrivacyError::DuplicateRoundAllocation)
+    );
+    assert_eq!(aggregator.get_node_budget(&node).unwrap(), &before);
 }

@@ -198,7 +198,17 @@ const WEB_STREAMS_SOURCE: &str = concat!(
     include_str!("web_stream_module.js"),
     ")",
 );
-const BUFFER_SOURCE: &str = include_str!("buffer_module.js");
+// File owns only metadata; native Blob owns bytes and the shared byte-stream
+// module owns demand, BYOB transfer and cancellation. Parsing is still eager.
+const BUFFER_SOURCE: &str = concat!(
+    "(",
+    include_str!("buffer_file_module.js"),
+    ")(",
+    include_str!("buffer_module.js"),
+    ")",
+);
+const BUFFER_PLACEHOLDERS: [(&str, &str); 1] =
+    [("__franken_buffer_web_streams", WEB_STREAMS_BINDING)];
 // The factory reads no guest globals and returns the realm's cached module.
 // Its methods are native callable values, not wrappers with separate identities.
 const QUERYSTRING_SOURCE: &str = "__franken_querystring_module()";
@@ -277,7 +287,7 @@ fn builtin_require_member(expression: &Expression) -> Option<(PureModule, Option
     };
     if !matches!(callee.as_ref(), Expression::Identifier(name) if name == "require") {
         return None;
-    }
+    };
     let [Expression::StringLiteral(specifier)] = arguments.as_slice() else {
         return None;
     };
@@ -416,19 +426,24 @@ const DIAGNOSTICS_CHANNEL_GLOBALS: [&str; 7] = [
 
 const VM_GLOBALS: [&str; 2] = ["EvalError", "TypeError"];
 
-const BUFFER_GLOBALS: [&str; 12] = [
+const BUFFER_GLOBALS: [&str; 17] = [
     "ArrayBuffer",
     "Blob",
     "Buffer",
+    "Date",
     "Error",
     "File",
     "Object",
+    "Reflect",
     "String",
+    "Symbol",
     "TextDecoder",
     "TypeError",
     "Uint8Array",
+    "WeakMap",
     "atob",
     "btoa",
+    "process",
 ];
 
 const STREAM_CONSUMERS_GLOBALS: [&str; 8] = [
@@ -578,6 +593,11 @@ fn rewrite_module_objects(
     if rewriter.modules.contains(&PureModule::Readline) {
         rewriter.modules.insert(PureModule::Events);
         rewriter.modules.insert(PureModule::StringDecoder);
+    }
+    // Blob.stream reads this private dependency only on first invocation.
+    // Explicit stream/web imports and binary files must share its identity.
+    if rewriter.modules.contains(&PureModule::Buffer) {
+        rewriter.modules.insert(PureModule::WebStreams);
     }
     if rewriter.modules.is_empty() {
         return Ok(fs_rewritten);
@@ -966,6 +986,7 @@ impl Walk for ModuleRenamer {
                 .chain(TIMERS_PLACEHOLDERS.iter())
                 .chain(STREAM_PLACEHOLDERS.iter())
                 .chain(READLINE_PLACEHOLDERS.iter())
+                .chain(BUFFER_PLACEHOLDERS.iter())
                 .chain(QUERYSTRING_PLACEHOLDERS.iter())
                 .find(|(placeholder, _)| placeholder == name)
             {
@@ -1311,17 +1332,43 @@ mod tests {
 
     /// BUFFER_SOURCE reads only BUFFER_GLOBALS (bd-305gi.3), and with all
     /// of them declared by the program (`var Buffer = require('buffer')
-    /// .Buffer`) is read through `globalThis`: no other ambient name,
-    /// no intrinsic, no HostCall.
+    /// .Buffer`) is read through `globalThis`. The private Web Streams
+    /// dependency is a module value, not an ambient name or HostCall.
     #[test]
     fn buffer_source_reads_only_its_globals() {
-        let expected: BTreeSet<String> =
+        let names: BTreeSet<String> =
             BUFFER_GLOBALS.iter().map(|name| name.to_string()).collect();
+        let mut expected = names.clone();
+        expected.extend(BUFFER_PLACEHOLDERS.iter().map(|(name, _)| name.to_string()));
+        expected.insert("arguments".to_string());
         let free = free_names(&mut parse_module_source(PureModule::Buffer).expect("parses"));
         assert_eq!(free, expected);
         let protected =
-            free_names(&mut module_source(&expected, PureModule::Buffer).expect("builds"));
-        assert_eq!(protected, BTreeSet::from(["globalThis".to_string()]));
+            free_names(&mut module_source(&names, PureModule::Buffer).expect("builds"));
+        assert_eq!(protected, BTreeSet::from([
+            "globalThis".to_string(), "arguments".to_string(), WEB_STREAMS_BINDING.to_string(),
+        ]));
+    }
+
+    #[test]
+    fn binary_files_and_explicit_web_imports_share_one_deferred_dependency() {
+        for source in [
+            "const {File, Blob}=require('buffer'); new File(['x'],'x').stream();",
+            "const b=require('node:buffer'); const w=require('stream/web'); b.Blob===Blob;",
+            "function unused(){return require('buffer').File;} require('node:stream/web');",
+        ] {
+            let tree = CanonicalEs2020Parser.parse_with_options(
+                ParserSource { label: "binary-files.js".into(), text: source.into() },
+                ParseGoal::Script, &ParserOptions::default(),
+            ).expect("program parses");
+            let rewritten = rewrite_util_requires(&tree).unwrap().expect("shared modules");
+            let declarations: Vec<_> = rewritten.body.iter()
+                .filter(|statement| is_module_declaration(statement)).collect();
+            assert_eq!(declarations.len(), 2, "only buffer and stream/web: {source}");
+            assert!(rewrite_util_requires(&rewritten).unwrap().is_none());
+        }
+        assert_eq!(intrinsic_capability("__franken_buffer_web_streams"), None);
+        assert_eq!(intrinsic_capability(WEB_STREAMS_BINDING), None);
     }
 
     /// STREAM_SOURCE reads only STREAM_GLOBALS, its placeholders and

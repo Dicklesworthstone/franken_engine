@@ -9,7 +9,7 @@ use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3}
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
 const CASES: &str = include_str!("fixtures/collection_cursor_order.js");
-const EXPECTED: [&str; 6] = [
+const EXPECTED: [&str; 8] = [
     "512:130816:512",
     "a,a,b,b,d,z,z,true,true,later,true",
     "outer1,inner1,inner3,inner4,outer3,outer4|3,4",
@@ -19,6 +19,8 @@ const EXPECTED: [&str; 6] = [
     "1,3,4:4|1,2,3:1,3",
     "a,a,b,true,b,c,d,true",
     "2,10,lone,replacement,a,b|8,2,4,5,6,7",
+    "96:129:97:130:63:8967:30:5205:65",
+    "0:263:36675:1:true:true:2000",
 ];
 
 fn run_case(index: usize) {
@@ -83,4 +85,11 @@ fn collection_walks_keep_live_cursors_and_member_identity() {
 #[test]
 fn set_algebra_keeps_live_and_private_copy_iteration_distinct() {
     run_case(3);
+}
+
+#[test]
+fn collection_cursors_survive_deleted_prefixes_and_order_index_rebuilds() {
+    for index in [6, 7] {
+        run_case(index);
+    }
 }

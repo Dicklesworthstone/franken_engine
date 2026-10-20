@@ -119,5 +119,45 @@
     var keys = map.keys();
     if (!Number.isNaN(keys.next().value) || !Object.is(keys.next().value, 0)) throw new Error('number keys');
     return names + '|' + values;
+  },
+  function deletedPrefixAndCompaction() {
+    var map = new Map();
+    for (var i = 0; i < 256; i++) map.set('k' + i, i);
+    var behind = map.values();
+    var ahead = map.values();
+    behind.next();
+    for (var j = 0; j < 129; j++) ahead.next();
+    // Leave a deleted prefix spanning multiple order-index words without
+    // reaching compaction, then compact while both cursors remain live.
+    for (var prefix = 0; prefix < 96; prefix++) map.delete('k' + prefix);
+    var out = [behind.next().value, ahead.next().value];
+    for (var tail = 160; tail < 256; tail++) map.delete('k' + tail);
+    map.set('k0', 1000);
+    out.push(behind.next().value, ahead.next().value);
+    var behindCount = 0, behindSum = 0;
+    for (var value of behind) { behindCount++; behindSum += value; }
+    var aheadCount = 0, aheadSum = 0;
+    for (var item of ahead) { aheadCount++; aheadSum += item; }
+    out.push(behindCount, behindSum, aheadCount, aheadSum, map.size);
+    return out.join(':');
+  },
+  function deletingAcrossOrderWords() {
+    var set = new Set();
+    for (var i = 0; i < 260; i++) set.add(i);
+    var iterator = set.values();
+    var initial = iterator.next().value;
+    var count = 0, sum = 0;
+    set.forEach(function (value) {
+      count++; sum += value;
+      set.delete(value);
+      // Reinsertions append to the live order even when deletion rebuilds
+      // the order index. The separate cursor must still see that suffix.
+      if (value < 4) set.add(value + 1000);
+      if (value === 259) set.delete(1001);
+    });
+    var empty = iterator.next().done;
+    set.add(2000);
+    return [initial, count, sum, set.size, empty, iterator.next().done,
+      Array.from(set).join(',')].join(':');
   }
 ]

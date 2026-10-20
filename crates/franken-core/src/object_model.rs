@@ -90,7 +90,7 @@ struct Sidecars<V> {
     // field contributes to observable equality or serde. The position index
     // is built only for larger carriers; tombstones appear only after delete.
     named_string_positions: Option<BTreeMap<String, usize>>,
-    named_string_tombstones: BTreeSet<usize>,
+    named_string_tombstones: NamedStringTombstones,
 }
 
 impl<V> Default for Sidecars<V> {
@@ -103,8 +103,136 @@ impl<V> Default for Sidecars<V> {
             baseline_symbol_properties: BTreeMap::new(),
             baseline_symbol_key_order: Vec::new(),
             named_string_positions: None,
-            named_string_tombstones: BTreeSet::new(),
+            named_string_tombstones: NamedStringTombstones::default(),
         }
+    }
+}
+
+/// Deleted creation slots, with prefix counts for live collection cursors.
+///
+/// A tree of individual tombstones makes finding the nth live entry scan all
+/// preceding deletions. Iterating a partly drained Map then takes quadratic
+/// time. Bitmap membership is constant-time; a Fenwick tree over the bitmap
+/// words supplies deleted-prefix counts and live-slot selection in logarithmic
+/// time. Only words through the last deletion are allocated, so maps without
+/// deletions retain their direct vector cursor and allocate no index here.
+#[derive(Debug, Clone, Default)]
+struct NamedStringTombstones {
+    words: Vec<u64>,
+    // One-based Fenwick nodes, stored at node - 1. Each node counts deleted
+    // bits in its lowbit(node) bitmap words.
+    counts: Vec<usize>,
+    deleted: usize,
+}
+
+impl NamedStringTombstones {
+    const WORD_BITS: usize = u64::BITS as usize;
+
+    fn len(&self) -> usize {
+        self.deleted
+    }
+
+    fn is_empty(&self) -> bool {
+        self.deleted == 0
+    }
+
+    fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    fn contains(&self, position: &usize) -> bool {
+        self.words
+            .get(position / Self::WORD_BITS)
+            .is_some_and(|word| word & (1u64 << (position % Self::WORD_BITS)) != 0)
+    }
+
+    fn prefix_words(&self, end: usize) -> usize {
+        let mut node = end.min(self.counts.len());
+        let mut count = 0;
+        while node != 0 {
+            count += self.counts[node - 1];
+            node &= node - 1;
+        }
+        count
+    }
+
+    fn insert(&mut self, position: usize) {
+        let word_index = position / Self::WORD_BITS;
+        while self.words.len() <= word_index {
+            // Newly appended words contain no deletions, but a new Fenwick
+            // parent must include the already populated words it covers.
+            let node = self.words.len() + 1;
+            let lowbit = node & node.wrapping_neg();
+            let count = self.deleted - self.prefix_words(node - lowbit);
+            self.words.push(0);
+            self.counts.push(count);
+        }
+        let mask = 1u64 << (position % Self::WORD_BITS);
+        if self.words[word_index] & mask != 0 {
+            return;
+        }
+        self.words[word_index] |= mask;
+        self.deleted += 1;
+        let mut node = word_index + 1;
+        while node <= self.counts.len() {
+            self.counts[node - 1] += 1;
+            node += node & node.wrapping_neg();
+        }
+    }
+
+    /// Number of deleted physical slots strictly before `position`.
+    fn deleted_before(&self, position: usize) -> usize {
+        let word_index = position / Self::WORD_BITS;
+        let bit = position % Self::WORD_BITS;
+        let preceding = self.prefix_words(word_index);
+        let within_word = self.words.get(word_index).map_or(0, |word| {
+            (word & ((1u64 << bit) - 1)).count_ones() as usize
+        });
+        preceding + within_word
+    }
+
+    /// Physical slot of the `position`th live key. `slots` is the length of
+    /// the creation-order vector, including its tombstoned slots.
+    fn live_slot(&self, position: usize, slots: usize) -> Option<usize> {
+        if position >= slots.checked_sub(self.deleted)? {
+            return None;
+        }
+        if self.is_empty() {
+            return Some(position);
+        }
+
+        let mut word_index = 0usize;
+        let mut live_before = 0usize;
+        let mut step = 1usize << self.words.len().ilog2();
+        while step != 0 {
+            let next = word_index + step;
+            if next <= self.words.len() {
+                let live = step * Self::WORD_BITS - self.counts[next - 1];
+                if live_before + live <= position {
+                    word_index = next;
+                    live_before += live;
+                }
+            }
+            step >>= 1;
+        }
+
+        // Every slot beyond the indexed prefix is live. In particular,
+        // appending a key need not grow or update the tombstone index.
+        let Some(word) = self.words.get(word_index) else {
+            return Some(position + self.deleted);
+        };
+        let mut live_bits = !word;
+        let mut ordinal = position - live_before;
+        let mut bit = 0usize;
+        for width in [32, 16, 8, 4, 2, 1] {
+            let lower_count = (live_bits & ((1u64 << width) - 1)).count_ones() as usize;
+            if ordinal >= lower_count {
+                ordinal -= lower_count;
+                live_bits >>= width;
+                bit += width;
+            }
+        }
+        Some(word_index * Self::WORD_BITS + bit)
     }
 }
 
@@ -1054,8 +1182,8 @@ impl<V> OrderedStringMap<V> {
     /// engine's Map and Set entry storage) this is [`Self::keys`]'s order.
     ///
     /// The common deletion-free cursor is one direct vector lookup. With
-    /// tombstones, walk only deleted physical slots before the requested live
-    /// position; do not rescan every preceding live key on each iterator step.
+    /// tombstones, prefix counts select the physical slot in logarithmic time
+    /// without rescanning preceding deletions on every iterator step.
     pub fn insertion_key_at(&self, position: usize) -> Option<&String> {
         let tombstones = self
             .sidecars()
@@ -1063,13 +1191,7 @@ impl<V> OrderedStringMap<V> {
         let Some(tombstones) = tombstones.filter(|deleted| !deleted.is_empty()) else {
             return self.string_insertion_order.get(position);
         };
-        let mut physical = position;
-        for &deleted in tombstones {
-            if deleted > physical {
-                break;
-            }
-            physical = physical.checked_add(1)?;
-        }
+        let physical = tombstones.live_slot(position, self.string_insertion_order.len())?;
         self.string_insertion_order.get(physical)
     }
 
@@ -1078,12 +1200,9 @@ impl<V> OrderedStringMap<V> {
     pub fn insertion_key_position(&self, key: &str) -> Option<usize> {
         if let Some(sidecars) = self.sidecars()
             && let Some(positions) = sidecars.named_string_positions.as_ref()
-            && let Some(&physical) = positions.get(key)
         {
-            let deleted_before = sidecars
-                .named_string_tombstones
-                .range(..physical)
-                .count();
+            let &physical = positions.get(key)?;
+            let deleted_before = sidecars.named_string_tombstones.deleted_before(physical);
             return physical.checked_sub(deleted_before);
         }
         self.live_named_string_keys()
@@ -1353,7 +1472,7 @@ impl<'de, V: Deserialize<'de>> Deserialize<'de> for OrderedStringMap<V> {
 pub struct OrderedStringMapIter<'a, V> {
     indexed: indexed_values::Values<'a, V>,
     named: std::iter::Enumerate<std::slice::Iter<'a, String>>,
-    named_tombstones: Option<&'a BTreeSet<usize>>,
+    named_tombstones: Option<&'a NamedStringTombstones>,
     by_key: &'a KeyedValues<V>,
 }
 
@@ -4291,6 +4410,161 @@ mod tests {
             top.splice_dense_index_values(u32::MAX, u32::MAX, 0, vec![1]),
             Err(vec![1])
         );
+    }
+
+    #[test]
+    fn named_string_tombstone_rank_select_matches_slot_oracle() {
+        fn check(index: &NamedStringTombstones, deleted: &[bool]) {
+            let expected: Vec<usize> = deleted
+                .iter()
+                .enumerate()
+                .filter_map(|(position, removed)| (!removed).then_some(position))
+                .collect();
+            assert_eq!(index.len(), deleted.len() - expected.len());
+            let mut prefix = 0;
+            for (position, removed) in deleted.iter().enumerate() {
+                assert_eq!(index.contains(&position), *removed, "slot {position}");
+                assert_eq!(index.deleted_before(position), prefix, "prefix {position}");
+                prefix += usize::from(*removed);
+            }
+            assert_eq!(index.deleted_before(deleted.len()), prefix);
+            assert_eq!(index.deleted_before(usize::MAX), prefix);
+            for (rank, position) in expected.iter().enumerate() {
+                assert_eq!(
+                    index.live_slot(rank, deleted.len()),
+                    Some(*position),
+                    "rank {rank}"
+                );
+            }
+            assert_eq!(index.live_slot(expected.len(), deleted.len()), None);
+            assert_eq!(index.live_slot(usize::MAX, deleted.len()), None);
+        }
+
+        let mut index = NamedStringTombstones::default();
+        let mut deleted = vec![false; 769];
+        check(&index, &deleted);
+        assert!(index.words.is_empty());
+        assert!(index.counts.is_empty());
+
+        // Grow the Fenwick index after earlier words already contain deletes,
+        // across both bitmap-word and power-of-two parent boundaries.
+        for position in [0, 63, 64, 65, 127, 128, 129, 255, 256, 511, 512, 767, 768] {
+            index.insert(position);
+            index.insert(position);
+            deleted[position] = true;
+            check(&index, &deleted);
+        }
+
+        // A permutation fills the words in non-monotonic order, including
+        // completely deleted words and a final partial word.
+        for offset in 0..769 {
+            let position = (offset * 397) % 769;
+            index.insert(position);
+            deleted[position] = true;
+            if offset % 29 == 0 || offset == 768 {
+                check(&index, &deleted);
+            }
+        }
+        assert!(index.live_slot(0, deleted.len()).is_none());
+
+        index.clear();
+        assert!(index.is_empty());
+        assert_eq!(index.words.capacity(), 0);
+        assert_eq!(index.counts.capacity(), 0);
+        deleted.fill(false);
+        check(&index, &deleted);
+        index.insert(128);
+        deleted[128] = true;
+        check(&index, &deleted);
+    }
+
+    #[test]
+    fn insertion_cursors_match_creation_order_under_mutation() {
+        fn check(map: &OrderedStringMap<u32>, expected: &[(String, u32)]) {
+            assert_eq!(map.len(), expected.len());
+            let actual = map
+                .iter()
+                .map(|(key, value)| (key.clone(), *value))
+                .collect::<Vec<_>>();
+            assert_eq!(actual.as_slice(), expected);
+            for (position, (key, value)) in expected.iter().enumerate() {
+                assert_eq!(map.insertion_key_at(position), Some(key));
+                assert_eq!(map.insertion_key_position(key), Some(position));
+                assert_eq!(map.get(key), Some(value));
+            }
+            assert_eq!(map.insertion_key_at(expected.len()), None);
+            assert_eq!(map.insertion_key_at(usize::MAX), None);
+            assert_eq!(map.insertion_key_position("never-present"), None);
+        }
+
+        let mut map = OrderedStringMap::new();
+        let mut expected = Vec::new();
+        for index in 0..320 {
+            let key = format!("key-{index}");
+            map.insert(key.clone(), index);
+            expected.push((key, index));
+        }
+        check(&map, &expected);
+
+        // Deterministic mixed insert/update/delete order exercises both
+        // directions of the cursor index while repeatedly crossing compaction
+        // and position-index thresholds.
+        let mut state = 0x51a7_9e33_u64;
+        for round in 0..1200_u32 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            let key = format!("key-{}", state % 384);
+            if state & 3 == 0 {
+                let previous = if let Some((_, value)) =
+                    expected.iter_mut().find(|(candidate, _)| candidate == &key)
+                {
+                    Some(std::mem::replace(value, round))
+                } else {
+                    expected.push((key.clone(), round));
+                    None
+                };
+                assert_eq!(map.insert(key, round), previous);
+            } else {
+                let previous = expected
+                    .iter()
+                    .position(|(candidate, _)| candidate == &key)
+                    .map(|position| expected.remove(position).1);
+                assert_eq!(map.remove(&key), previous);
+            }
+            if round % 83 == 0 {
+                map.retain(|_, value| *value % 3 != 0);
+                expected.retain(|(_, value)| value % 3 != 0);
+            }
+            if round % 17 == 0 {
+                check(&map, &expected);
+            }
+        }
+        check(&map, &expected);
+
+        // Rollback may restore a deleted entry at its former live position.
+        if expected.len() >= 4 {
+            let position = expected.len() / 2;
+            let (key, value) = expected.remove(position);
+            assert_eq!(map.remove(&key), Some(value));
+            assert_eq!(
+                map.insert_exact_at_string_position(JsString::from(&key), value, position),
+                None
+            );
+            expected.insert(position, (key, value));
+            check(&map, &expected);
+        }
+
+        let serialized = serde_json::to_string(&map).unwrap();
+        let restored: OrderedStringMap<u32> = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(map, restored);
+        check(&restored, &expected);
+        map.clear();
+        expected.clear();
+        check(&map, &expected);
+        map.insert("after-clear".to_string(), 42);
+        expected.push(("after-clear".to_string(), 42));
+        check(&map, &expected);
     }
 
     #[test]

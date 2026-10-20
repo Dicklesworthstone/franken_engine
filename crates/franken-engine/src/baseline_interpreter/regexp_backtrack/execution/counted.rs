@@ -1,10 +1,11 @@
-//! Constant-space execution of counted atoms and fixed-count literal bodies.
+//! Constant-space execution of counted atoms and fixed-width literal bodies.
 //!
 //! Recognize the compiler's exact CountedLoop/Mark/atom/CounterStep/Jump
 //! shape. Two register undo frames retain the mandatory prefix. Optional
 //! greedy iterations keep every earlier exit in one range paired with two
 //! register frames. Lazy iterations retain just the next extension with two
-//! original-register undos. Capturing and nullable bodies remain scalar.
+//! original-register undos. Multi-character exits advance by whole bodies,
+//! never by characters. Capturing and nullable bodies remain scalar.
 //! Assertion floors, partial refusal state and instruction charges are kept;
 //! compact choices neither widen ordinary frames nor renew the allowance.
 
@@ -24,6 +25,7 @@ pub(super) struct CountedRepeat {
     pub(super) counter: usize,
     pub(super) mark: usize,
     pub(super) width: usize,
+    exit: usize,
     count: usize,
     atom: Atom,
     backward: bool,
@@ -33,7 +35,7 @@ impl CountedRepeat {
     pub(super) fn at(regexp: &BacktrackRegExp, pc: usize) -> Option<Self> {
         let first = pc.checked_add(2)?;
         let [
-            Inst::CountedLoop { counter, min, max, body, exit, .. },
+            Inst::CountedLoop { counter, min, body, exit, .. },
             Inst::Mark(mark),
         ] = regexp.program.get(pc..first)? else {
             return None;
@@ -64,13 +66,10 @@ impl CountedRepeat {
         }
         let (atom, backward) = match regexp.program.get(first)? {
             Inst::Char { backward, .. } if width > 1 => {
-                // Optional multi-character exits need width-aware range
-                // restoration; until then they keep ordinary execution.
-                if *max != Some(*min)
-                    || !regexp.program[first..end].iter().all(|instruction| {
-                        matches!(instruction, Inst::Char { backward: direction, .. }
-                            if direction == backward)
-                    })
+                if !regexp.program[first..end].iter().all(|instruction| {
+                    matches!(instruction, Inst::Char { backward: direction, .. }
+                        if direction == backward)
+                })
                 {
                     return None;
                 }
@@ -86,7 +85,13 @@ impl CountedRepeat {
             Inst::Any { backward } if width == 1 => (Atom::Any, *backward),
             _ => return None,
         };
-        Some(Self { counter: *counter, mark: *mark, width, count: *min, atom, backward })
+        Some(Self { counter: *counter, mark: *mark, width, exit: *exit, count: *min, atom, backward })
+    }
+
+    /// Reconstruct the preceding COMPLETE iteration, in either direction.
+    /// A saved range always has at least one successful body to undo here.
+    fn previous(&self, position: usize) -> usize {
+        if self.backward { position + self.width } else { position - self.width }
     }
 
     fn accepts(&self, regexp: &BacktrackRegExp, chars: &[char], position: usize) -> bool {
@@ -215,7 +220,7 @@ impl Run<'_> {
             stack.push(Frame::Register { register: repeat.counter, old: old_count });
             stack.push(Frame::CountedGreedy {
                 pc,
-                position: if repeat.backward { position + 1 } else { position - 1 },
+                position: repeat.previous(position),
                 start,
             });
         }
@@ -267,7 +272,7 @@ impl Run<'_> {
         if max.is_none_or(|maximum| self.registers[repeat.counter] < maximum) {
             stack.push(Frame::CountedLazy { pc, position });
         }
-        Ok(Some((pc + 5, position)))
+        Ok(Some((repeat.exit, position)))
     }
 
     /// Tail writes have already unwound when this range is popped. Rebuild
@@ -291,16 +296,21 @@ impl Run<'_> {
                 if *mark == repeat.mark && *counter == repeat.counter => (*old_mark, *old_count),
             _ => unreachable!("counted choices retain their mark and counter undo"),
         };
-        self.registers[repeat.counter] = old_count + position.abs_diff(start);
+        let distance = position.abs_diff(start);
+        debug_assert_eq!(distance % repeat.width, 0);
+        // Counters count iterations, not matched characters. Preserve the
+        // existing one-atom path without introducing division there.
+        let iterations = if repeat.width == 1 { distance } else { distance / repeat.width };
+        self.registers[repeat.counter] = old_count + iterations;
         if position == start {
             self.registers[repeat.mark] = old_mark;
             stack.truncate(paired);
         } else {
-            let previous = if repeat.backward { position + 1 } else { position - 1 };
+            let previous = repeat.previous(position);
             self.registers[repeat.mark] = previous;
             stack.push(Frame::CountedGreedy { pc, position: previous, start });
         }
-        (pc + 5, position)
+        (repeat.exit, position)
     }
 }
 

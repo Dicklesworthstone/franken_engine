@@ -10,13 +10,42 @@
 //! for ALL stream constructors in the program. Ordinary facade-only programs
 //! keep their fast path; we do not guess that an alias is an array or a stream.
 
+use std::collections::BTreeSet;
+
 use super::{
     BindingPattern, Expression, Outcome, PureModule, Statement, Walk, builtin_require_member, walk_expression,
     walk_statement,
 };
 
 pub(super) fn requires_stream_module(body: &[Statement]) -> bool {
-    let mut search = OperatorUse { found: false };
+    // Only top-level named requires are candidates for the constructor facade.
+    // Namespace, escaping and nested imports already take the full module path.
+    // A shadowed local can conservatively disable optimization, but this scan
+    // never rewrites a binding or decides filesystem/host-call authority.
+    let mut constructors = BTreeSet::new();
+    for statement in body {
+        if let Statement::VariableDeclaration(declaration) = statement {
+            for declarator in &declaration.declarations {
+                if let Some(initializer) = &declarator.initializer
+                    && matches!(builtin_require_member(initializer), Some((PureModule::Stream, None)))
+                    && let BindingPattern::ObjectPattern(properties) = &declarator.pattern
+                {
+                    for property in properties {
+                        if !property.computed
+                            && matches!(
+                                super::super::well_formed_static_name(&property.key),
+                                Some("Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough")
+                            )
+                            && let BindingPattern::Identifier(local) = &property.value
+                        {
+                            constructors.insert(local.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut search = OperatorUse { found: false, constructors };
     // The canonical walker accepts mutable nodes; it does not change them.
     // Fail toward the full module if a future AST form cannot be walked.
     search.statements(&mut body.to_vec()).is_err() || search.found
@@ -24,6 +53,36 @@ pub(super) fn requires_stream_module(body: &[Statement]) -> bool {
 
 struct OperatorUse {
     found: bool,
+    constructors: BTreeSet<String>,
+}
+
+impl OperatorUse {
+    fn has_constructor_options(&self, expression: &Expression) -> bool {
+        let (callee, arguments) = match expression {
+            Expression::New { callee, arguments, .. }
+            | Expression::Call { callee, arguments, .. } => (callee.as_ref(), arguments),
+            _ => return false,
+        };
+        let option_index = match callee {
+            Expression::Identifier(local) if self.constructors.contains(local) => 0,
+            Expression::Member { object, property, .. }
+                if matches!(object.as_ref(), Expression::Identifier(local) if self.constructors.contains(local))
+                    && super::super::well_formed_static_name(property) == Some("from") => 1,
+            _ => return false,
+        };
+        // Spread can place options at either position. Dynamic values and
+        // nonempty objects can supply signal through getters/prototypes/spread;
+        // constructor-form recognition is not a proof of their lifecycle.
+        // Keep the existing absent/null/undefined/empty-literal fast path.
+        if arguments.iter().any(|argument| matches!(argument, Expression::SpreadElement(_))) {
+            return true;
+        }
+        match arguments.get(option_index) {
+            None | Some(Expression::UndefinedLiteral | Expression::NullLiteral) => false,
+            Some(Expression::ObjectLiteral(properties)) => !properties.is_empty(),
+            Some(_) => true,
+        }
+    }
 }
 
 impl Walk for OperatorUse {
@@ -57,6 +116,13 @@ impl Walk for OperatorUse {
 
     fn expression(&mut self, expression: &mut Expression) -> Outcome {
         if self.found {
+            return Ok(());
+        }
+        // Select one shared implementation for ALL endpoints. Leaving a
+        // separately imported sink on the finite facade would split a pipeline
+        // between incompatible stream representations.
+        if self.has_constructor_options(expression) {
+            self.found = true;
             return Ok(());
         }
         // A consumer drives its source through async iteration rather than a
@@ -214,6 +280,54 @@ mod tests {
             assert!(!requires_stream_module(&tree.body), "{source}");
             assert!(rewrite_util_requires(&tree).expect("rewrite").is_none(), "{source}");
         }
+    }
+
+    #[test]
+    fn constructor_options_keep_all_endpoints_on_the_complete_module() {
+        for source in [
+            "const { Readable: R }=require('stream'); R.from([1],{signal:controller.signal});",
+            "const { Writable: W }=require('node:stream'); new W({signal});",
+            "const { PassThrough: P }=require('stream'); new P(settings);",
+            "const { Transform: T }=require('stream'); new T({...settings});",
+            "const { Writable: W }=require('stream'); W({get signal(){return controller.signal;}});",
+            "const { Readable: R }=require('stream'); R.from(...args);",
+            "const { Readable: R }=require('stream'); const { Writable: W }=require('node:stream'); R.from([1],settings).pipe(new W({}));",
+            "const { Writable: W }=require('stream'); new W({[key]:value});",
+        ] {
+            let tree = parse(source);
+            assert!(requires_stream_module(&tree.body), "{source}");
+            let rewritten = rewrite_util_requires(&tree)
+                .expect("constructor lifecycle rewrite")
+                .expect("complete stream module");
+            assert_eq!(rewritten.body.iter().filter(|s| is_module_declaration(s)).count(), 3, "{source}");
+            assert!(rewrite_util_requires(&rewritten).expect("second pass").is_none());
+        }
+    }
+
+    #[test]
+    fn constructor_option_scan_does_not_claim_unrelated_objects_or_shadowed_loaders() {
+        for source in [
+            "const cfg={signal:controller.signal}; const {Readable:R}=require('stream'); R.from([1]);",
+            "const {Writable:W}=require('stream'); new Unrelated(settings); new W({});",
+        ] {
+            assert!(!requires_stream_module(&parse(source).body), "{source}");
+        }
+        for source in [
+            "const require=custom; const {Writable:W}=require('stream'); new W({signal});",
+            "function f(require){const {Readable:R}=require('stream'); return R.from([1],{signal});}",
+        ] {
+            assert!(rewrite_util_requires(&parse(source)).expect("scoped loader").is_none(), "{source}");
+        }
+    }
+
+    #[test]
+    fn constructor_cancellation_uses_the_realm_weakmap_not_a_guest_binding() {
+        let names = BTreeSet::from(["WeakMap".to_string()]);
+        let mut source = super::super::module_source(&names, PureModule::Stream)
+            .expect("protected stream module source");
+        let free = super::super::tests::free_names(&mut source);
+        assert!(!free.contains("WeakMap"));
+        assert!(free.contains("globalThis"));
     }
 
     #[test]

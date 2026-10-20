@@ -19,6 +19,13 @@
   // Callbacks waiting for _construct to finish (Node waits on an internal
   // symbol-named event; a list keeps them off the emitter).
   const kConstructWaiters = Symbol('kConstructWaiters');
+  // Constructor cancellation is owned by the stream's actual lifecycle, not
+  // its public events. No registry is allocated on the no-signal path.
+  const StreamWeakMap = WeakMap;
+  const streamWeakGet = WeakMap.prototype.get;
+  const streamWeakSet = WeakMap.prototype.set;
+  const streamWeakDelete = WeakMap.prototype.delete;
+  let constructorSignals;
   function nop() {}
   const ENCODINGS = ['utf8', 'utf-8', 'ucs2', 'ucs-2', 'utf16le', 'utf-16le', 'latin1', 'binary',
     'base64', 'base64url', 'hex', 'ascii'];
@@ -188,6 +195,7 @@
     checkError(error, writableState, readableState);
     if (writableState) writableState.destroyed = true;
     if (readableState) readableState.destroyed = true;
+    releaseConstructorSignal(this);
     if (!state.constructed) {
       const self = this;
       this[kConstructWaiters].push(function (constructError) {
@@ -609,6 +617,7 @@
   function Readable(options) {
     if (!(this instanceof Readable)) return new Readable(options);
     const isDuplex = this instanceof Duplex;
+    const signal = isDuplex ? undefined : constructorSignalOption(options);
     this._readableState = new ReadableState(options, this, isDuplex);
     if (options) {
       if (typeof options.read === 'function') this._read = options.read;
@@ -620,6 +629,7 @@
     constructStream(this, function () {
       if (self._readableState.needReadable) maybeReadMore(self, self._readableState);
     });
+    if (signal !== undefined) attachConstructorSignal(this, signal);
   }
   Object.setPrototypeOf(Readable.prototype, Stream.prototype);
   Object.setPrototypeOf(Readable, Stream);
@@ -1232,6 +1242,7 @@
   function endReadableNT(state, stream) {
     if (!state.errored && !state.closeEmitted && !state.endEmitted && state.length === 0) {
       state.endEmitted = true;
+      releaseFinishedConstructorSignal(stream);
       stream.emit('end');
       if (stream.writable && stream.allowHalfOpen === false) {
         nextTick(endWritableNT, stream);
@@ -1270,7 +1281,12 @@
     } else {
       throw errors.invalidIterable(iterable);
     }
-    const readable = new ReadableClass(Object.assign({ objectMode: true, highWaterMark: 1 }, options));
+    const settings = Object.assign({ objectMode: true, highWaterMark: 1 }, options);
+    const signal = constructorSignalOption(settings);
+    // The iterable owns cleanup as soon as its iterator has been acquired.
+    // Install _destroy before a pre-aborted signal can destroy the stream.
+    settings.signal = undefined;
+    const readable = new ReadableClass(settings);
     let reading = false;
     let isAsyncValues = false;
     readable._read = function () {
@@ -1388,6 +1404,7 @@
         break;
       }
     }
+    if (signal !== undefined) attachConstructorSignal(readable, signal);
     return readable;
   }
 
@@ -1445,6 +1462,7 @@
     if (!isDuplex && !Function.prototype[Symbol.hasInstance].call(Writable, this)) {
       return new Writable(options);
     }
+    const signal = isDuplex ? undefined : constructorSignalOption(options);
     this._writableState = new WritableState(options, this, isDuplex);
     if (options) {
       if (typeof options.write === 'function') this._write = options.write;
@@ -1460,6 +1478,7 @@
       if (!state.writing) clearBuffer(self, state);
       finishMaybe(self, state);
     });
+    if (signal !== undefined) attachConstructorSignal(this, signal);
   }
   Object.setPrototypeOf(Writable.prototype, Stream.prototype);
   Object.setPrototypeOf(Writable, Stream);
@@ -1808,6 +1827,7 @@
   function finish(stream, state) {
     state.pendingcb--;
     state.finished = true;
+    releaseFinishedConstructorSignal(stream);
     const finishedCallbacks = state[kOnFinished].splice(0);
     for (let i = 0; i < finishedCallbacks.length; i++) finishedCallbacks[i](null);
     stream.emit('finish');
@@ -1865,6 +1885,7 @@
   // ---- Duplex ----
   function Duplex(options) {
     if (!(this instanceof Duplex)) return new Duplex(options);
+    const signal = constructorSignalOption(options);
     Readable.call(this, options);
     Writable.call(this, options);
     if (options) {
@@ -1883,6 +1904,9 @@
     } else {
       this.allowHalfOpen = true;
     }
+    // Readable/Writable defer here: both halves and disabled-side flags must
+    // exist before cancellation invokes the subclass's destroy implementation.
+    if (signal !== undefined) attachConstructorSignal(this, signal);
   }
   Object.setPrototypeOf(Duplex.prototype, Readable.prototype);
   Object.setPrototypeOf(Duplex, Readable);
@@ -2156,6 +2180,60 @@
   const pipelineCreateObject = Object.create;
   const pipelineIterator = Symbol.iterator;
   const PipelinePromise = Promise;
+
+  function constructorSignalOption(options) {
+    const signal = options == null ? undefined : options.signal;
+    // The Node constructor band ignores null/falsy optional signals. Every
+    // supplied object is authenticated without consulting replaceable fields.
+    if (!signal) return undefined;
+    try { pipelineApply(pipelineSignalAborted, signal, []); }
+    catch (error) {
+      throw makeError(TypeError, 'ERR_INVALID_ARG_TYPE', 'The "signal" option must be an AbortSignal');
+    }
+    return signal;
+  }
+  function releaseConstructorSignal(stream) {
+    if (constructorSignals === undefined) return;
+    const owned = pipelineApply(streamWeakGet, constructorSignals, [stream]);
+    if (owned === undefined) return;
+    pipelineApply(streamWeakDelete, constructorSignals, [stream]);
+    try { owned.remove(); }
+    finally {
+      // Remove first: successful completion must not look like cancellation.
+      // Revoke the private source to unlink its dependent from a long-lived
+      // caller signal, without allocating a default DOMException.
+      owned.scope.abort(null);
+    }
+  }
+  function releaseFinishedConstructorSignal(stream) {
+    if (constructorSignals === undefined) return;
+    const readable = stream._readableState;
+    const writable = stream._writableState;
+    if ((!readable || readable.readable === false || readable.endEmitted)
+      && (!writable || writable.writable === false || writable.finished)) {
+      releaseConstructorSignal(stream);
+    }
+  }
+  function attachConstructorSignal(stream, signal) {
+    const scope = pipelineCancellation(signal);
+    const owned = { scope: scope, remove: nop };
+    if (constructorSignals === undefined) constructorSignals = new StreamWeakMap();
+    pipelineApply(streamWeakSet, constructorSignals, [stream, owned]);
+    function cancel() {
+      if (pipelineApply(streamWeakGet, constructorSignals, [stream]) !== owned) return;
+      // Reuse ordinary destroy, including _construct synchronization and the
+      // caller's asynchronous _destroy. An abort is not successful EOF.
+      stream.destroy(scope.error());
+    }
+    try {
+      owned.remove = scope.listen(cancel);
+      if (scope.aborted()) cancel();
+      else releaseFinishedConstructorSignal(stream);
+    } catch (error) {
+      releaseConstructorSignal(stream);
+      throw error;
+    }
+  }
 
   function pipelineCancellation(outer) {
     if (outer !== undefined) {

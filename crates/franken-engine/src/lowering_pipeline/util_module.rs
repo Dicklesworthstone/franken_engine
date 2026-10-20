@@ -465,7 +465,7 @@ const WEB_STREAMS_GLOBALS: [&str; 26] = [
     "Uint16Array", "Uint32Array", "WeakMap",
 ];
 
-const STREAM_GLOBALS: [&str; 21] = [
+const STREAM_GLOBALS: [&str; 22] = [
     "AbortController",
     "AbortSignal",
     "AggregateError",
@@ -487,6 +487,7 @@ const STREAM_GLOBALS: [&str; 21] = [
     "Symbol",
     "TypeError",
     "Uint8Array",
+    "WeakMap",
 ];
 
 /// `const %util_module = <module>;`, which the rewrite puts first in the

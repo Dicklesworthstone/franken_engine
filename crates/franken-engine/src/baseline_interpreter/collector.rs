@@ -1047,7 +1047,7 @@ impl InterpreterCore {
         // scope frames. Every callback built one (seven mark tables, and a
         // zeroed chunk for each table a pin lands in) and dropped it
         // (bd-9vouw.504).
-        let mut values = Vec::new();
+        let mut values = Vec::with_capacity(pins.len());
         let mut marker: Option<GcMarker> = None;
         let mut async_functions_from: Option<usize> = None;
         for pin in pins {
@@ -1070,16 +1070,37 @@ impl InterpreterCore {
             scope_frames = marker.deferred_scope_frames.take().unwrap_or_default();
             values.extend(Self::gc_marked_values(&marker));
         }
-        self.gc.nested_pins.push(NestedPins {
+        Some(self.gc_arm_nested_pins(NestedPins {
             values,
             scope_frames,
             async_functions_from,
-        });
+        }))
+    }
+
+    /// `gc_arm_nested` when every pin is a value (a callback's held values,
+    /// callee, receiver and arguments): the values are kept as they come,
+    /// without a `GcPin` list built only to be read back (bd-9vouw.503).
+    pub(super) fn gc_arm_nested_values<'v>(
+        &mut self,
+        values: impl Iterator<Item = &'v Value>,
+    ) -> Option<NestedGcArm> {
+        if !self.gc_context_is_safe() || self.gc.builtin_depth > 1 {
+            return None;
+        }
+        Some(self.gc_arm_nested_pins(NestedPins {
+            values: values.cloned().collect(),
+            scope_frames: Vec::new(),
+            async_functions_from: None,
+        }))
+    }
+
+    fn gc_arm_nested_pins(&mut self, pins: NestedPins) -> NestedGcArm {
+        self.gc.nested_pins.push(pins);
         let previous = self
             .gc
             .safe_depth
             .replace(self.gc.run_loop_depth.saturating_add(1));
-        Some(NestedGcArm { previous })
+        NestedGcArm { previous }
     }
 
     /// Undo `gc_arm_nested` once the armed loop has returned.
@@ -2362,6 +2383,53 @@ mod tests {
             14,
             "nothing else is marked"
         );
+    }
+
+    /// bd-9vouw.503: gc_arm_nested_values arms exactly as gc_arm_nested
+    /// with the same values as `GcPin::Value` pins, and refuses where it
+    /// refuses.
+    #[test]
+    fn arming_with_values_matches_arming_with_value_pins() {
+        let values = [
+            Value::Object(ObjectId(1)),
+            Value::Int(2),
+            Value::Closure(3),
+            Value::str("s"),
+        ];
+        let arm_with = |by_values: bool| {
+            let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "gc-unit");
+            core.gc_enter_run_loop();
+            core.gc.safe_depth = Some(1);
+            core.gc_enter_builtin();
+            let arm = if by_values {
+                core.gc_arm_nested_values(values.iter())
+            } else {
+                let pins = values.iter().map(GcPin::Value).collect::<Vec<_>>();
+                core.gc_arm_nested(&pins)
+            };
+            let pins = core.gc.nested_pins.last().expect("armed");
+            let state = (
+                arm.is_some(),
+                pins.values.clone(),
+                pins.scope_frames.len(),
+                pins.async_functions_from,
+                core.gc.safe_depth,
+            );
+            core.gc_disarm_nested(arm);
+            (state, core.gc.nested_pins.len(), core.gc.safe_depth)
+        };
+        assert_eq!(arm_with(true), arm_with(false));
+        assert_eq!(arm_with(true).0.1, values.to_vec());
+
+        // A builtin dispatched inside another builtin's Rust frame refuses
+        // either way.
+        let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "gc-unit");
+        core.gc_enter_run_loop();
+        core.gc.safe_depth = Some(1);
+        core.gc_enter_builtin();
+        core.gc_enter_builtin();
+        assert!(core.gc_arm_nested_values(values.iter()).is_none());
+        assert!(core.gc.nested_pins.is_empty());
     }
 
     /// Only the outermost builtin at a run-loop level may arm a nested loop

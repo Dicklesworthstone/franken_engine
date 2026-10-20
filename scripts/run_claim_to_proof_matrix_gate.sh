@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# Homebrew Bash 5.3.9 on Darwin hangs on large heredocs (even a standalone
+# 4 KiB Python comment reproduces it). Use the OS shell before any heredoc is
+# evaluated; explicit `bash script` invocations need the same protection.
+if [[ "${OSTYPE:-}" == darwin* && "$BASH" != /bin/bash ]]; then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -22,6 +28,10 @@ printf './scripts/run_claim_to_proof_matrix_gate.sh %s\n' "$mode" >"$commands_pa
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "jq is required for claim-to-proof matrix validation" >&2
+  exit 2
+fi
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "python3 is required for claim-to-proof matrix validation" >&2
   exit 2
 fi
 
@@ -54,119 +64,92 @@ json_string() {
   jq -Rn --arg value "$1" '$value'
 }
 
-calculate_freshness_days() {
-  local generated_utc="$1"
-  local current_utc
-  current_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+artifact_metadata() {
+  # Python is already required for receipt integrity and drift checks. Keep
+  # filesystem ordering and UTC parsing in that portable interpreter rather
+  # than GNU find -printf/cut -z/date -d/stat -c. Canonical manifests still
+  # precede *_manifest.json, with newest filesystem mtime first in each group.
+  python3 - "$1" "$2" <<'PY'
+import json
+import os
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
 
-  # Convert UTC timestamps to epoch seconds for calculation
-  local generated_epoch
-  local current_epoch
 
-  # Try parsing standard ISO format first
-  if generated_epoch=$(date -d "$generated_utc" +%s 2>/dev/null); then
-    :  # Successfully parsed
-  # Try parsing compact format like "20260501T101240Z"
-  elif [[ "$generated_utc" =~ ^([0-9]{4})([0-9]{2})([0-9]{2})T([0-9]{2})([0-9]{2})([0-9]{2})Z$ ]]; then
-    local year="${BASH_REMATCH[1]}"
-    local month="${BASH_REMATCH[2]}"
-    local day="${BASH_REMATCH[3]}"
-    local hour="${BASH_REMATCH[4]}"
-    local minute="${BASH_REMATCH[5]}"
-    local second="${BASH_REMATCH[6]}"
-    local iso_format="${year}-${month}-${day}T${hour}:${minute}:${second}Z"
-    generated_epoch=$(date -d "$iso_format" +%s 2>/dev/null)
-  fi
+def timestamp(value):
+    if not isinstance(value, str) or not value or value == "null":
+        raise ValueError("missing timestamp")
+    if len(value) == 16 and value.endswith("Z"):
+        parsed = datetime.strptime(value, "%Y%m%dT%H%M%SZ")
+    else:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp())
 
-  if [[ -n "$generated_epoch" ]] && current_epoch=$(date -d "$current_utc" +%s 2>/dev/null); then
-    local diff_seconds=$((current_epoch - generated_epoch))
-    local diff_days=$((diff_seconds / 86400))
-    printf '%d\n' "$diff_days"
-  else
-    # Return a high value if timestamp parsing fails (treated as stale)
-    printf '999\n'
-  fi
+
+def freshness(path):
+    if path.is_file():
+        return int((int(time.time()) - int(path.stat().st_mtime)) / 86400)
+    canonical, specific = [], []
+
+    def walk_error(error):
+        raise error
+
+    for directory, _, names in os.walk(path, onerror=walk_error):
+        for name in names:
+            if name != "manifest.json" and not name.endswith("_manifest.json"):
+                continue
+            candidate = Path(directory) / name
+            if candidate.is_file():
+                group = canonical if name == "manifest.json" else specific
+                group.append((candidate.stat().st_mtime_ns, str(candidate)))
+    for _, name in sorted(canonical, reverse=True) + sorted(specific, reverse=True):
+        try:
+            with open(name, encoding="utf-8") as handle:
+                manifest = json.load(handle)
+            nested = manifest.get("freshness")
+            if nested is None:
+                nested = {}
+            values = (nested.get("generated_utc"), manifest.get("generated_utc"),
+                      manifest.get("generated_at_utc"))
+            # Match jq's //: null/false fall through, but an empty string
+            # selects this field and causes the candidate to be skipped below.
+            generated = next((v for v in values if v is not None and v is not False), None)
+        except (OSError, ValueError, AttributeError, TypeError):
+            continue
+        if generated is not None and generated != "" and generated != "null":
+            # A malformed date on the selected receipt stays unknown/stale;
+            # it must not fall through to an older but conveniently fresh one.
+            return int((int(time.time()) - timestamp(generated)) / 86400)
+    return 999
+
+
+operation, value = sys.argv[1:]
+try:
+    if operation == "timestamp":
+        print(timestamp(value))
+    elif operation == "mtime":
+        print(int(Path(value).stat().st_mtime))
+    else:
+        print(freshness(Path(value)))
+except (OSError, ValueError, TypeError, OverflowError) as error:
+    if operation == "freshness":
+        print(f"Cannot determine artifact freshness for {value}: {error}", file=sys.stderr)
+        print(999)
+    else:
+        sys.exit(1)
+PY
 }
 
 derive_artifact_freshness() {
-  local artifact_path="$1"
-
-  # If artifact_path is a file (not a directory), extract modification time
-  if [[ -f "$artifact_path" ]]; then
-    local file_mtime
-    if file_mtime=$(stat -c %Y "$artifact_path" 2>/dev/null); then
-      local current_epoch
-      if current_epoch=$(date +%s); then
-        local diff_seconds=$((current_epoch - file_mtime))
-        local diff_days=$((diff_seconds / 86400))
-        printf '%d\n' "$diff_days"
-        return 0
-      fi
-    fi
-    # Fallback: treat files as fresh if we can't get mtime
-    printf '0\n'
-    return 0
-  fi
-
-  # For directories, look for manifests with various naming patterns
-  local manifest_candidates=()
-
-  if [[ -d "$artifact_path" ]]; then
-    # Look for proof-artifact-contract manifests (most recent first)
-    while IFS= read -r -d '' manifest_file; do
-      manifest_candidates+=("$manifest_file")
-    done < <(find "$artifact_path" -name "manifest.json" -printf '%T@ %p\0' | sort -z -nr | cut -z -d' ' -f2-)
-
-    # Look for gate-specific manifests (most recent first)
-    while IFS= read -r -d '' manifest_file; do
-      manifest_candidates+=("$manifest_file")
-    done < <(find "$artifact_path" -name "*_manifest.json" -printf '%T@ %p\0' | sort -z -nr | cut -z -d' ' -f2-)
-  fi
-
-  # Try each manifest candidate
-  for manifest_path in "${manifest_candidates[@]}"; do
-    if [[ -f "$manifest_path" ]]; then
-      local generated_utc
-      # Try multiple timestamp field patterns
-      if generated_utc=$(jq -r '.freshness.generated_utc // .generated_utc // .generated_at_utc // empty' "$manifest_path" 2>/dev/null) &&
-         [[ -n "$generated_utc" && "$generated_utc" != "null" ]]; then
-        calculate_freshness_days "$generated_utc"
-        return 0
-      fi
-    fi
-  done
-
-  # Return high value if no manifest found or no timestamp available
-  printf '999\n'
+  artifact_metadata freshness "$1"
 }
 
 artifact_timestamp_epoch() {
-  local generated_utc="$1"
-  local generated_epoch
-
-  if [[ -z "$generated_utc" || "$generated_utc" == "null" ]]; then
-    return 1
-  fi
-
-  if generated_epoch=$(date -d "$generated_utc" +%s 2>/dev/null); then
-    printf '%s\n' "$generated_epoch"
-    return 0
-  elif [[ "$generated_utc" =~ ^([0-9]{4})([0-9]{2})([0-9]{2})T([0-9]{2})([0-9]{2})([0-9]{2})Z$ ]]; then
-    local year="${BASH_REMATCH[1]}"
-    local month="${BASH_REMATCH[2]}"
-    local day="${BASH_REMATCH[3]}"
-    local hour="${BASH_REMATCH[4]}"
-    local minute="${BASH_REMATCH[5]}"
-    local second="${BASH_REMATCH[6]}"
-    local iso_format="${year}-${month}-${day}T${hour}:${minute}:${second}Z"
-
-    if generated_epoch=$(date -d "$iso_format" +%s 2>/dev/null); then
-      printf '%s\n' "$generated_epoch"
-      return 0
-    fi
-  fi
-
-  return 1
+  artifact_metadata timestamp "$1"
 }
 
 # bd-q0cwt: receipt-layer integrity. A docs/evidence-style manifest must not
@@ -219,7 +202,7 @@ classify_quality_candidate() {
   local verification_commands
   local text_blob
 
-  outcome="$(jq -r '.overall_outcome // .outcome // ""' <<<"$candidate_json" | tr '[:upper:]' '[:lower:]')"
+  outcome="$(jq -r '(.overall_outcome | select(. != "")) // .outcome // ""' <<<"$candidate_json" | tr '[:upper:]' '[:lower:]')"
   verdict="$(jq -r '.verdict // ""' <<<"$candidate_json" | tr '[:upper:]' '[:lower:]')"
   uses_placeholder="$(jq -r '.uses_placeholder_baselines // false' <<<"$candidate_json")"
   outcome_reason="$(jq -r '.outcome_reason // .reason // ""' <<<"$candidate_json")"
@@ -332,7 +315,7 @@ detect_simulated_hot_path_evidence() {
   fi
 
   local candidate
-  for candidate in "${candidates[@]}"; do
+  for candidate in ${candidates[@]+"${candidates[@]}"}; do
     if grep -Eq 'hot_paths_simulation|MockCertificate' "$candidate"; then
       simulated_hot_path_evidence_report_path="$candidate"
       return 0
@@ -372,7 +355,7 @@ inspect_observed_artifact_quality() {
   local latest_json=""
   local latest_status="ok"
 
-  for candidate in "${candidates[@]}"; do
+  for candidate in ${candidates[@]+"${candidates[@]}"}; do
     local candidate_json
     if ! candidate_json="$(jq -c 'select(type == "object") | {
       overall_outcome: (.overall_outcome // ""),
@@ -409,7 +392,7 @@ inspect_observed_artifact_quality() {
     local candidate_epoch
     generated_utc="$(jq -r '.generated_utc // ""' <<<"$candidate_json")"
     if ! candidate_epoch="$(artifact_timestamp_epoch "$generated_utc")"; then
-      if ! candidate_epoch="$(stat -c %Y "$candidate" 2>/dev/null)"; then
+      if ! candidate_epoch="$(artifact_metadata mtime "$candidate")"; then
         candidate_epoch=0
       fi
     fi
@@ -441,7 +424,7 @@ inspect_observed_artifact_quality() {
   local verdict
   local uses_placeholder
   local outcome_reason
-  outcome="$(jq -r '.overall_outcome // .outcome // ""' <<<"$latest_json")"
+  outcome="$(jq -r '(.overall_outcome | select(. != "")) // .outcome // ""' <<<"$latest_json")"
   verdict="$(jq -r '.verdict // ""' <<<"$latest_json")"
   uses_placeholder="$(jq -r '.uses_placeholder_baselines // false' <<<"$latest_json")"
   outcome_reason="$(jq -r '.outcome_reason // ""' <<<"$latest_json")"
@@ -538,7 +521,6 @@ emit_event() {
 
 failures=0
 claim_count=0
-max_observed_freshness_days="$(jq -r '.max_observed_freshness_days // 30' "$matrix_path")"
 stale_threshold_days="$(jq -r '.stale_threshold_days // .max_observed_freshness_days // 30' "$matrix_path")"
 # ADR-0012 §3 (BRIDGE-19.18). `max_observed_freshness_days` used to serve two
 # incompatible purposes: the default staleness window AND the ceiling on what a
@@ -562,7 +544,7 @@ tier_policy_json="$(jq -c '.freshness_tier_policy.tiers // {}' "$matrix_path")"
 # identical answers.
 drift_report_path="${run_dir}/evidence_drift_report.json"
 drift_available=0
-if python3 scripts/check_evidence_drift.py --json "$drift_report_path" --quiet >/dev/null 2>&1; then
+if python3 scripts/check_evidence_drift.py --json "$drift_report_path" --quiet >/dev/null; then
   drift_available=1
 else
   # Fail-open on the *reporting* of a new signal is acceptable; fail-open on the
@@ -708,7 +690,12 @@ while IFS= read -r claim; do
         stale_why="$(IFS='; '; printf '%s' "${stale_signals[*]}")"
         if [[ "$decision" == "allow_observed" ]]; then
           decision="downgrade_stale_proof"
-          local_reason="proof artifact is stale (${stale_why}); downgraded to provisional"
+          stale_reason="proof artifact is stale (${stale_why}); downgraded to provisional"
+          if [[ "$status" == "pass" ]]; then
+            local_reason="$stale_reason"
+          else
+            local_reason="${local_reason}; ${stale_reason}"
+          fi
 
           # Update downgrade_text to reflect provisional status
           if [[ -n "$downgrade_text" ]]; then

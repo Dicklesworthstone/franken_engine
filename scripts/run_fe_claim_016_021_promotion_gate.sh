@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# Darwin's Homebrew Bash 5.3.9 stalls while preparing large heredocs. The
+# system shell handles the identical input; also cover `bash script` callers.
+if [[ "${OSTYPE:-}" == darwin* && "$BASH" != /bin/bash ]]; then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 # G.10 — FE-CLAIM-016..021 matrix-promotion umbrella gate (bd-cixqu.7.13)
@@ -142,8 +147,9 @@ PY
 
 # ── selftest mode ───────────────────────────────────────────────────────────
 if [[ "$mode" == "selftest" ]]; then
-  work="$(mktemp -d "${TMPDIR:-/tmp}/fe-claim-016-021-selftest.XXXXXX")"
-  trap 'rm -rf "$work"' EXIT
+  mkdir -p "$artifact_root"
+  work="$(mktemp -d "${artifact_root}/selftest.XXXXXX")"
+  echo "fe_claim_016_021_selftest_artifacts=$work"
   failures=0
 
   matrix_with_state() {
@@ -227,7 +233,7 @@ if [[ "$mode" == "selftest" ]]; then
            FE_CLAIM_016_021_PROMOTION_ARTIFACT_ROOT="${fxdir}/out" \
            "$0" ci 2>&1)"
   set -e
-  if printf '%s\n' "$fxout" | grep -Fq "$ERR_FIXTURE"; then
+  if grep -Fq "$ERR_FIXTURE" <<<"$fxout"; then
     echo "PASS selftest [fixture-error-code]: ${ERR_FIXTURE} surfaced"
   else
     echo "FAIL selftest [fixture-error-code]: ${ERR_FIXTURE} not surfaced" >&2

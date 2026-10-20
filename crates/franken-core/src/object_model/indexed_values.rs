@@ -23,6 +23,18 @@ pub(super) enum IndexedValues<V> {
     Dictionary(BTreeMap<u32, (String, V)>),
 }
 
+/// Leave geometric headroom when reducing an indexed backing allocation.
+/// Both callers retain their existing shrink trigger and live-entry bound.
+/// Shrinking to the exact span lets one append grow the backing again; two
+/// tail removals then shrink it again, making a linear drain request quadratic
+/// relocation work. A target between live and 2*live separates those thresholds.
+/// Holes still own positions, so never shrink below the occupied slot span.
+/// No removed value is retained in the spare, uninitialized capacity.
+fn shrink_target(live: usize, span: usize) -> usize {
+    debug_assert!(live <= span && span <= live.saturating_mul(2));
+    span.max(live.saturating_add(live / 2))
+}
+
 impl<V> IndexedValues<V> {
     pub(super) fn new() -> Self {
         Self::Packed(Vec::new())
@@ -123,11 +135,17 @@ impl<V> IndexedValues<V> {
                     let removed = entries.pop();
                     // Logical removal releases the caller's existing charge.
                     // Do not retain a formerly huge buffer after a pop drain.
-                    // Shrink geometrically rather than reallocating each pop.
+                    // Keep headroom inside the same bound, so append/two-pop
+                    // cycles cannot shrink to full and immediately grow again.
                     if entries.is_empty() {
                         *entries = Vec::new();
                     } else if entries.len() < entries.capacity() / 2 {
-                        entries.shrink_to_fit();
+                        entries.shrink_to(shrink_target(entries.len(), entries.len()));
+                        // Shrinking is best-effort. If the allocator retains
+                        // surplus beyond the old bound, keep the old request.
+                        if entries.len() < entries.capacity() / 2 {
+                            entries.shrink_to_fit();
+                        }
                     }
                     return removed;
                 }
@@ -656,6 +674,7 @@ mod tests {
                             (front.next_back(), back.next_back())
                         };
                         assert_eq!(left, right);
+                        assert_eq!(front.len(), back.len());
                     }
                     assert_eq!(front.next(), None);
                     assert_eq!(back.next_back(), None);
@@ -1233,3 +1252,6 @@ mod tests {
         assert_eq!(decoded, actual);
     }
 }
+
+#[cfg(test)]
+mod capacity_tests;

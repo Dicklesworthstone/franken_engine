@@ -45,7 +45,15 @@ impl<V> HoleyValues<V> {
         // entries rather than holes. Never retain an old large backing after
         // its logical entries have been removed and their charges released.
         if self.slots.capacity() > self.live.saturating_mul(2) {
-            self.slots.shrink_to_fit();
+            // Preserve headroom when density permits it; the same live-entry
+            // envelope still bounds the target even when the span has holes.
+            self.slots
+                .shrink_to(super::shrink_target(self.live, self.slots.len()));
+            if self.slots.capacity() > self.live.saturating_mul(2) {
+                // Preserve the original request if a best-effort shrink
+                // exposes more capacity than the live-entry envelope permits.
+                self.slots.shrink_to_fit();
+            }
         }
     }
 }

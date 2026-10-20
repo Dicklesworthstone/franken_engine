@@ -7,7 +7,7 @@
 
 use super::{BacktrackError, BacktrackRegExp, Inst};
 
-const LITERAL_WIDTH: usize = 32;
+pub(super) const LITERAL_WIDTH: usize = 32;
 const CACHE_SLOTS: usize = 4;
 
 #[derive(Default)]

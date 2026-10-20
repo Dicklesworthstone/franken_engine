@@ -1,4 +1,4 @@
-//! Constant-space execution of one-character counted repetitions.
+//! Constant-space execution of counted atoms and fixed-count literal bodies.
 //!
 //! Recognize the compiler's exact CountedLoop/Mark/atom/CounterStep/Jump
 //! shape. Two register undo frames retain the mandatory prefix. Optional
@@ -9,17 +9,21 @@
 //! compact choices neither widen ordinary frames nor renew the allowance.
 
 use super::{BacktrackError, BacktrackRegExp, Frame, Inst, Run, is_line_terminator};
+use super::literals::LITERAL_WIDTH;
 
 #[derive(Clone, Copy)]
 enum Atom {
     Char(char),
     Class(usize),
     Any,
+    /// First instruction of a complete, bounded literal block.
+    Literal(usize),
 }
 
 pub(super) struct CountedRepeat {
     pub(super) counter: usize,
     pub(super) mark: usize,
+    pub(super) width: usize,
     count: usize,
     atom: Atom,
     backward: bool,
@@ -27,18 +31,27 @@ pub(super) struct CountedRepeat {
 
 impl CountedRepeat {
     pub(super) fn at(regexp: &BacktrackRegExp, pc: usize) -> Option<Self> {
-        let end = pc.checked_add(5)?;
+        let first = pc.checked_add(2)?;
         let [
-            Inst::CountedLoop { counter, min, body, exit, .. },
+            Inst::CountedLoop { counter, min, max, body, exit, .. },
             Inst::Mark(mark),
-            atom,
+        ] = regexp.program.get(pc..first)? else {
+            return None;
+        };
+        let end = exit.checked_sub(2)?;
+        let width = end.checked_sub(first)?;
+        // The shared literal block is the only multi-character matcher. Do
+        // not accept an over-wide prefix and mistake it for the whole body.
+        if width == 0 || width > LITERAL_WIDTH || *exit >= regexp.program.len() {
+            return None;
+        }
+        let [
             Inst::CounterStep { counter: step_counter, mark: step_mark, min: step_min },
             Inst::Jump(head),
-        ] = regexp.program.get(pc..end)? else {
+        ] = regexp.program.get(end..*exit)? else {
             return None;
         };
         if *body != pc + 1
-            || *exit != end
             || *head != pc
             || counter != step_counter
             || mark != step_mark
@@ -46,22 +59,34 @@ impl CountedRepeat {
             || counter == mark
             || *counter >= regexp.registers
             || *mark >= regexp.registers
-            || end >= regexp.program.len()
         {
             return None;
         }
-        let (atom, backward) = match atom {
+        let (atom, backward) = match regexp.program.get(first)? {
+            Inst::Char { backward, .. } if width > 1 => {
+                // Optional multi-character exits need width-aware range
+                // restoration; until then they keep ordinary execution.
+                if *max != Some(*min)
+                    || !regexp.program[first..end].iter().all(|instruction| {
+                        matches!(instruction, Inst::Char { backward: direction, .. }
+                            if direction == backward)
+                    })
+                {
+                    return None;
+                }
+                (Atom::Literal(first), *backward)
+            }
             Inst::Char { c, backward } => {
                 let literal = if regexp.ignore_case { regexp.canonicalize(*c) } else { *c };
                 (Atom::Char(literal), *backward)
             }
-            Inst::Class { class, backward } if *class < regexp.classes.len() => {
+            Inst::Class { class, backward } if width == 1 && *class < regexp.classes.len() => {
                 (Atom::Class(*class), *backward)
             }
-            Inst::Any { backward } => (Atom::Any, *backward),
+            Inst::Any { backward } if width == 1 => (Atom::Any, *backward),
             _ => return None,
         };
-        Some(Self { counter: *counter, mark: *mark, count: *min, atom, backward })
+        Some(Self { counter: *counter, mark: *mark, width, count: *min, atom, backward })
     }
 
     fn accepts(&self, regexp: &BacktrackRegExp, chars: &[char], position: usize) -> bool {
@@ -75,55 +100,8 @@ impl CountedRepeat {
             }
             Atom::Class(class) => regexp.class_matches(&regexp.classes[class], c),
             Atom::Any => regexp.dot_all || !is_line_terminator(c),
+            Atom::Literal(_) => unreachable!("literal bodies use the shared block matcher"),
         }
-    }
-
-    /// The caller has paid CountedLoop. Each successful iteration pays Mark,
-    /// atom, CounterStep, Jump and the next CountedLoop. An atom failure must
-    /// undo ALL iterations before the caller takes its surrounding choice.
-    /// Budget refusal instead exposes the exact partially written registers.
-    pub(super) fn execute_required(
-        &self,
-        regexp: &BacktrackRegExp,
-        chars: &[char],
-        mut position: usize,
-        registers: &mut [usize],
-        steps_left: &mut u64,
-    ) -> Result<Option<usize>, BacktrackError> {
-        debug_assert!(position <= chars.len());
-        let old_count = registers[self.counter];
-        let old_mark = registers[self.mark];
-        while registers[self.counter] < self.count {
-            if *steps_left >= 5 {
-                if !self.accepts(regexp, chars, position) {
-                    *steps_left -= 2;
-                    registers[self.counter] = old_count;
-                    registers[self.mark] = old_mark;
-                    return Ok(None);
-                }
-                *steps_left -= 5;
-                registers[self.mark] = position;
-                position = if self.backward { position - 1 } else { position + 1 };
-                registers[self.counter] += 1;
-                continue;
-            }
-            // Reproduce each write boundary rather than rejecting a whole
-            // iteration up front: callers observe registers on StepBudget.
-            pay(steps_left)?; // Mark
-            registers[self.mark] = position;
-            pay(steps_left)?; // atom
-            if !self.accepts(regexp, chars, position) {
-                registers[self.counter] = old_count;
-                registers[self.mark] = old_mark;
-                return Ok(None);
-            }
-            pay(steps_left)?; // CounterStep
-            registers[self.counter] += 1;
-            pay(steps_left)?; // Jump
-            pay(steps_left)?; // next CountedLoop (cannot fit this short tail)
-            unreachable!("fewer than five steps cannot complete a counted iteration");
-        }
-        Ok(Some(position))
     }
 
     pub(super) fn push_undo(&self, stack: &mut Vec<Frame>, old_count: usize, old_mark: usize) {
@@ -135,7 +113,27 @@ impl CountedRepeat {
 }
 
 impl Run<'_> {
-    /// Execute one optional atom and pay through the following CountedLoop.
+    /// Required and optional bodies share one executor. A failed mandatory
+    /// body undoes the entire prefix; refusal retains its last paid writes.
+    pub(super) fn execute_counted_required(
+        &mut self,
+        repeat: &CountedRepeat,
+        mut position: usize,
+    ) -> Result<Option<usize>, BacktrackError> {
+        let old_count = self.registers[repeat.counter];
+        let old_mark = self.registers[repeat.mark];
+        while self.registers[repeat.counter] < repeat.count {
+            let Some(next) = self.advance_counted_atom(repeat, position)? else {
+                self.registers[repeat.counter] = old_count;
+                self.registers[repeat.mark] = old_mark;
+                return Ok(None);
+            };
+            position = next;
+        }
+        Ok(Some(position))
+    }
+
+    /// Execute one complete body and pay through the following CountedLoop.
     /// A failed atom undoes its Mark; budget refusal keeps precisely the
     /// writes that scalar dispatch completed before the unpaid instruction.
     fn advance_counted_atom(
@@ -144,6 +142,27 @@ impl Run<'_> {
         position: usize,
     ) -> Result<Option<usize>, BacktrackError> {
         debug_assert!(position <= self.input.chars.len());
+        if let Atom::Literal(body) = repeat.atom {
+            pay(&mut self.steps_left)?; // Mark
+            let old_mark = self.registers[repeat.mark];
+            self.registers[repeat.mark] = position;
+            pay(&mut self.steps_left)?; // First Char
+            let block = self.literal_blocks.at(self.regexp, body)
+                .expect("a complete bounded literal body was proved before execution");
+            debug_assert_eq!(block.len, repeat.width);
+            let Some(next) = block.execute_after_dispatch(
+                self.regexp, &self.input.chars, position, &mut self.steps_left,
+            )? else {
+                self.registers[repeat.mark] = old_mark;
+                return Ok(None);
+            };
+            // Increment once per complete body, never once per character.
+            pay(&mut self.steps_left)?; // CounterStep
+            self.registers[repeat.counter] += 1;
+            pay(&mut self.steps_left)?; // Jump
+            pay(&mut self.steps_left)?; // Next CountedLoop
+            return Ok(Some(next));
+        }
         if self.steps_left >= 5 {
             if !repeat.accepts(self.regexp, &self.input.chars, position) {
                 self.steps_left -= 2; // Mark and the failed atom.
@@ -302,3 +321,6 @@ mod optional_tests;
 
 #[cfg(test)]
 mod lazy_tests;
+
+#[cfg(test)]
+mod literal_tests;

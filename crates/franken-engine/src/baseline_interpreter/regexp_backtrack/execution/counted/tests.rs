@@ -17,12 +17,12 @@ fn compare(regexp: &BacktrackRegExp, input: &PreparedInput, start: usize, sticky
 }
 
 #[test]
-fn recognizes_only_the_compilers_single_atom_counted_shape() {
-    for pattern in ["a{17}", "a{17}?", "a{17,18}", "a{17,}", "a{17,18}?", "(?:a){17}", "[a-c]{17}", ".{17}", "(a{17})", "(?<=a{17})b"] {
+fn recognizes_only_the_compilers_supported_counted_shapes() {
+    for pattern in ["a{17}", "a{17}?", "a{17,18}", "a{17,}", "a{17,18}?", "(?:a){17}", "[a-c]{17}", ".{17}", "(a{17})", "(?<=a{17})b", "(?:ab){17}"] {
         let regexp = BacktrackRegExp::new(pattern, "").unwrap();
         assert!((0..regexp.program.len()).any(|pc| CountedRepeat::at(&regexp, pc).is_some()), "{pattern}");
     }
-    for pattern in ["(a){17}", "(?:ab){17}", "(?:a?){17}", "a*", "a{16}"] {
+    for pattern in ["(a){17}", "(?:a?){17}", "a*", "a{16}"] {
         let regexp = BacktrackRegExp::new(pattern, "").unwrap();
         assert!((0..regexp.program.len()).all(|pc| CountedRepeat::at(&regexp, pc).is_none()), "{pattern}");
     }

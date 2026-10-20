@@ -321,17 +321,14 @@ impl Run<'_> {
                     // a compact range; neither grants a fresh allowance.
                     let repeat = CountedRepeat::at(regexp, pc);
                     #[cfg(test)]
-                    let repeat = repeat.filter(|_| !self.repetitions_disabled);
+                    let repeat = repeat.filter(|repeat| {
+                        !self.repetitions_disabled
+                            && (repeat.width == 1 || !self.literal_blocks.disabled)
+                    });
                     let completed = if let Some(repeat) = &repeat {
                         let old_count = self.registers[repeat.counter];
                         let old_mark = self.registers[repeat.mark];
-                        let end = repeat.execute_required(
-                            regexp,
-                            chars,
-                            position,
-                            &mut self.registers,
-                            &mut self.steps_left,
-                        )?;
+                        let end = self.execute_counted_required(repeat, position)?;
                         if let Some(end) = end {
                             repeat.push_undo(stack, old_count, old_mark);
                             position = end;

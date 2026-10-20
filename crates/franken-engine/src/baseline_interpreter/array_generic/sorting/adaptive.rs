@@ -7,7 +7,12 @@
 use std::cmp::Ordering;
 
 mod gallop;
-use gallop::{AFTER_WINS, winning_span};
+use gallop::{AFTER_WINS, prefix_boundary, winning_span};
+
+// Avoid adding boundary probes to short merges. Above one bulk-copy window,
+// trimming can avoid copying an otherwise settled prefix or suffix into
+// scratch; no payload or index needs to move while proving those bounds.
+const MIN_TRIM_LENGTH: usize = gallop::MAX_SPAN;
 
 #[derive(Clone, Copy, Default)]
 struct Run {
@@ -98,8 +103,34 @@ fn merge_top<E>(
     Ok(())
 }
 
+/// The caller has proved that the last left key exceeds the first right key.
+/// Leave the left <= first-right prefix and the right >= last-left suffix in
+/// place. Left ties precede every right tie; right ties follow every left tie.
+///
+/// Exclude the already-proven crossing endpoints from each search, keeping
+/// both active runs nonempty. Only immutable primitive comparisons reach
+/// this function. Every probe is fallible and metered; neither search writes
+/// indices or scratch, allocates storage, or skips a bulk-copy checkpoint.
+fn overlap_bounds<E>(
+    order: &[usize],
+    middle: usize,
+    compare: &mut impl FnMut(usize, usize) -> Result<Ordering, E>,
+) -> Result<(usize, usize), E> {
+    let first_right = order[middle];
+    let last_left = order[middle - 1];
+    let prefix = prefix_boundary(middle - 1, |offset| {
+        compare(order[offset], first_right).map(|ordering| ordering != Ordering::Greater)
+    })?;
+    let suffix = prefix_boundary(order.len() - middle - 1, |offset| {
+        compare(last_left, order[order.len() - 1 - offset])
+            .map(|ordering| ordering != Ordering::Greater)
+    })?;
+    Ok((prefix, order.len() - suffix))
+}
+
 /// Save the SMALLER run, not invariably the left half: natural run lengths
-/// need not be balanced. The existing floor(n/2) scratch is always enough.
+/// need not be balanced. Trim settled ends first so a small overlap does not
+/// copy an entire run. The existing floor(n/2) scratch is always enough.
 /// Forward ties take the earlier left identity; backward ties take the later
 /// right identity first, placing it at the higher output position.
 fn merge<E>(
@@ -112,6 +143,13 @@ fn merge<E>(
     if compare(order[middle - 1], order[middle])? != Ordering::Greater {
         return Ok(());
     }
+    let (start, end) = if order.len() >= MIN_TRIM_LENGTH {
+        overlap_bounds(order, middle, compare)?
+    } else {
+        (0, order.len())
+    };
+    let middle = middle - start;
+    let order = &mut order[start..end];
     let right_len = order.len() - middle;
     if middle <= right_len {
         scratch[..middle].copy_from_slice(&order[..middle]);

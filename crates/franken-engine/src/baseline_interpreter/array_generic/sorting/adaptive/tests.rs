@@ -241,3 +241,180 @@ fn native_budget_refusal_inside_bulk_merge_releases_all_sort_scratch() {
         }
     }
 }
+
+#[test]
+fn narrow_overlap_moves_only_the_active_window_in_both_merge_directions() {
+    let middle = 4096;
+    for backward in [false, true] {
+        let mut values: Vec<i32> = (0..8192).collect();
+        if backward {
+            // Leave two left keys above the first right key, including a tie
+            // with the settled prefix. The right scratch run has one key.
+            values[middle] = middle as i32 - 3;
+        } else {
+            values.swap(middle - 1, middle);
+        }
+        let original: Vec<_> = (0..values.len()).collect();
+        let (start, end) = overlap_bounds(&original, middle, &mut |a, b| {
+            Ok::<_, ()>(values[a].cmp(&values[b]))
+        })
+        .unwrap();
+        assert_eq!(middle - start, if backward { 2 } else { 1 });
+        assert_eq!(end - middle, 1);
+        let mut order = original.clone();
+        let mut scratch = vec![usize::MAX; middle + 2];
+        let mut calls = 0;
+        merge(&mut order, middle, &mut scratch[1..=middle], &mut |a, b| {
+            calls += 1;
+            Ok::<_, ()>(values[a].cmp(&values[b]))
+        })
+        .unwrap();
+        let mut expected = original.clone();
+        expected.sort_by_key(|index| values[*index]);
+        assert_eq!(order, expected);
+        assert_eq!(order[..start], original[..start]);
+        assert_eq!(order[end..], original[end..]);
+        assert_eq!(scratch[0], usize::MAX);
+        assert_ne!(scratch[1], usize::MAX);
+        assert!(scratch[2..].iter().all(|slot| *slot == usize::MAX));
+        assert!(calls < 128, "{calls} comparisons for a narrow overlap");
+    }
+}
+
+#[test]
+fn overlap_bounds_match_stable_linear_bounds_for_unequal_duplicate_runs() {
+    for left in [1, 2, 7, 127, 128, 129, 255, 256, 257, 1024] {
+        for right in [1, 2, 7, 127, 128, 129, 255, 256, 257, 1024] {
+            for repeats in [1, 2, 8] {
+                let shift = (left / (2 * repeats)) as i32 - 1;
+                let values: Vec<i32> = (0..left)
+                    .map(|i| (i / repeats) as i32)
+                    .chain((0..right).map(|i| (i / repeats) as i32 + shift))
+                    .collect();
+                let mut order: Vec<_> = (0..values.len()).collect();
+                let (start, end) = overlap_bounds(&order, left, &mut |a, b| {
+                    Ok::<_, ()>(values[a].cmp(&values[b]))
+                })
+                .unwrap();
+                let prefix = values[..left]
+                    .iter()
+                    .take_while(|key| **key <= values[left])
+                    .count();
+                let suffix = values[left..]
+                    .iter()
+                    .rev()
+                    .take_while(|key| **key >= values[left - 1])
+                    .count();
+                assert_eq!((start, end), (prefix, values.len() - suffix));
+                assert!(start < left && left < end);
+                let mut scratch = vec![usize::MAX; left.min(right) + 2];
+                merge(&mut order, left, &mut scratch[1..1 + left.min(right)], &mut |a, b| {
+                    Ok::<_, ()>(values[a].cmp(&values[b]))
+                })
+                .unwrap();
+                let mut expected: Vec<_> = (0..values.len()).collect();
+                expected.sort_by_key(|index| values[*index]);
+                assert_eq!(order, expected);
+                assert_eq!(scratch[0], usize::MAX);
+                assert_eq!(*scratch.last().unwrap(), usize::MAX);
+            }
+        }
+    }
+}
+
+#[test]
+fn refusal_at_any_overlap_probe_precedes_all_index_and_scratch_writes() {
+    let middle = 512;
+    let mut values: Vec<i32> = (0..1024).collect();
+    values.swap(middle - 1, middle);
+    let original: Vec<_> = (0..values.len()).collect();
+    let mut probes = 0;
+    overlap_bounds(&original, middle, &mut |a, b| {
+        probes += 1;
+        Ok::<_, usize>(values[a].cmp(&values[b]))
+    })
+    .unwrap();
+    // Include the comparison proving that the two runs actually cross.
+    for fail_at in 1..=probes + 1 {
+        let mut order = original.clone();
+        let mut scratch = vec![usize::MAX; middle];
+        let mut seen = 0;
+        let result = merge(&mut order, middle, &mut scratch, &mut |a, b| {
+            seen += 1;
+            if seen == fail_at {
+                Err(seen)
+            } else {
+                Ok(values[a].cmp(&values[b]))
+            }
+        });
+        assert_eq!(result, Err(fail_at));
+        assert_eq!(seen, fail_at);
+        assert_eq!(order, original);
+        assert!(scratch.iter().all(|slot| *slot == usize::MAX));
+    }
+}
+
+#[test]
+fn trimmed_sort_keeps_exact_utf16_order_and_equal_key_identities() {
+    use crate::js_string::JsString;
+
+    let alphabet = [
+        vec![0x0061],
+        vec![0x00e9],
+        vec![0xd800],
+        vec![0xd83d, 0xde00],
+        vec![0xdc00],
+        vec![0xfffd],
+    ];
+    let units: Vec<_> = alphabet[..5]
+        .iter()
+        .chain(alphabet[2..].iter())
+        .flat_map(|key| std::iter::repeat_n(key.clone(), 96))
+        .collect();
+    let keys: Vec<_> = units.iter().map(|key| JsString::from_code_units(key)).collect();
+    let mut order: Vec<_> = (0..keys.len()).collect();
+    let mut expected = order.clone();
+    expected.sort_by_key(|index| &units[*index]);
+    sort(&mut order, &mut vec![0; keys.len() / 2], &mut |a, b| {
+        Ok::<_, ()>(keys[a].utf16_cmp(&keys[b]))
+    })
+    .unwrap();
+    assert_eq!(order, expected);
+}
+
+#[test]
+fn native_overlap_trimming_preserves_provenance_and_accounting() {
+    for config in [InterpreterConfig::quickjs_defaults(), InterpreterConfig::v8_defaults()] {
+        let mut core = core(config);
+        let mut items: Vec<_> = (1000..1512).map(Value::Int).collect();
+        items.swap(255, 256);
+        core.replace_pending_hostcall_result_label(Some(Label::Secret)).unwrap();
+        core.sort_captured_values(None, &mut items, &Value::Undefined).unwrap();
+        assert_eq!(items, (1000..1512).map(Value::Int).collect::<Vec<_>>());
+        assert_eq!(core.active_inline_callback_context_label, Some(Label::Secret));
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+    }
+}
+
+#[test]
+fn native_refusal_at_every_trimmed_merge_probe_never_publishes_values() {
+    // Four-digit integer keys have the same numeric and default UTF-16 order.
+    let mut values: Vec<i32> = (1000..1512).collect();
+    values.swap(255, 256);
+    let comparisons = ordered(&values).1;
+    for config in [InterpreterConfig::quickjs_defaults(), InterpreterConfig::v8_defaults()] {
+        for compared in values.len() - 1..comparisons {
+            let mut core = core(config.clone());
+            let original: Vec<_> = values.iter().map(|value| Value::Int(i64::from(*value))).collect();
+            let mut items = original.clone();
+            core.config.instruction_budget = core.instructions_executed
+                + core.native_hole_reads.get() + items.len() as u64 + compared as u64;
+            assert!(matches!(core.sort_captured_values(None, &mut items, &Value::Undefined),
+                Err(InterpreterError::BudgetExhausted { .. })));
+            assert_eq!(items, original);
+            assert_eq!(core.json_parse_temporary_bytes, 0);
+            assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        }
+    }
+}

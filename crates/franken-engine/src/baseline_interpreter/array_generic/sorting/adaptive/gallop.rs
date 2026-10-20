@@ -1,8 +1,9 @@
 //! Bounded fallible galloping over a sorted run's winning prefix.
 //!
 //! Each predicate uses the caller's ordinary comparison/work/provenance gate.
-//! Search at most 256 indices before returning to the merger: copying a huge
-//! proven run must not introduce an unbounded cancellation-polling gap.
+//! A bulk-copy span covers at most 256 indices: copying a huge proven run
+//! must not introduce an unbounded cancellation-polling gap. Read-only
+//! boundary searches may cover the whole run; every probe remains metered.
 
 pub(super) const AFTER_WINS: usize = 7;
 pub(super) const MAX_SPAN: usize = 256;
@@ -13,21 +14,32 @@ pub(super) const MAX_SPAN: usize = 256;
 /// propagates before any part of this span is copied by the caller.
 pub(super) fn winning_span<E>(
     count: usize,
+    wins: impl FnMut(usize) -> Result<bool, E>,
+) -> Result<usize, E> {
+    prefix_boundary(count.min(MAX_SPAN), wins)
+}
+
+/// Find an entire monotone prefix without moving it. Unlike `winning_span`,
+/// this result must NOT authorize an unmetered copy of the returned length.
+/// It is used to leave already-settled merge ends untouched. Probe growth is
+/// saturating so every usize extent is valid, including a virtual MAX-sized
+/// range. There are at most twice usize::BITS fallible predicate calls.
+pub(super) fn prefix_boundary<E>(
+    count: usize,
     mut wins: impl FnMut(usize) -> Result<bool, E>,
 ) -> Result<usize, E> {
-    let count = count.min(MAX_SPAN);
     if count == 0 {
         return Ok(0);
     }
     let mut accepted = 0;
-    let mut probe = 1;
+    let mut probe = 1_usize;
     loop {
         if wins(probe - 1)? {
             accepted = probe;
             if accepted == count {
                 return Ok(count);
             }
-            probe = (probe * 2).min(count);
+            probe = probe.saturating_mul(2).min(count);
         } else {
             let mut end = probe - 1;
             while accepted < end {
@@ -46,6 +58,53 @@ pub(super) fn winning_span<E>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn full_prefix_boundaries_match_linear_search_without_the_copy_cap() {
+        for count in 0..=1024 {
+            for prefix in 0..=count {
+                let mut calls = 0;
+                let actual = prefix_boundary(count, |index| {
+                    calls += 1;
+                    assert!(index < count);
+                    Ok::<_, ()>(index < prefix)
+                })
+                .unwrap();
+                assert_eq!(actual, prefix, "count={count}, prefix={prefix}");
+                assert!(calls <= 2 * usize::BITS);
+            }
+        }
+    }
+
+    #[test]
+    fn full_prefix_boundaries_cover_virtual_usize_extents_and_every_refusal() {
+        for count in [257, 4096, 1 << (usize::BITS - 1), usize::MAX] {
+            for prefix in [0, 1, 255, 256, count / 2, count - 1, count] {
+                let mut calls = 0;
+                let actual = prefix_boundary(count, |index| {
+                    calls += 1;
+                    assert!(index < count);
+                    Ok::<_, u32>(index < prefix)
+                })
+                .unwrap();
+                assert_eq!(actual, prefix);
+                assert!(calls <= 2 * usize::BITS);
+                for fail_at in 1..=calls {
+                    let mut seen = 0;
+                    let result = prefix_boundary(count, |index| {
+                        seen += 1;
+                        if seen == fail_at {
+                            Err(seen)
+                        } else {
+                            Ok(index < prefix)
+                        }
+                    });
+                    assert_eq!(result, Err(fail_at));
+                    assert_eq!(seen, fail_at);
+                }
+            }
+        }
+    }
 
     #[test]
     fn all_prefix_lengths_and_capped_windows_match_linear_search() {

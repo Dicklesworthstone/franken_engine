@@ -61,13 +61,6 @@ const WINDOWS_1252_HIGH: [u16; 32] = [
     0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x009D, 0x017E, 0x0178,
 ];
 
-/// UTF-8 of a string's UTF-16 code units, lone surrogates as U+FFFD.
-pub(super) fn utf8_of_code_units(units: impl IntoIterator<Item = u16>) -> String {
-    char::decode_utf16(units)
-        .map(|unit| unit.unwrap_or(char::REPLACEMENT_CHARACTER))
-        .collect()
-}
-
 impl InterpreterCore {
     /// `new TextEncoder()`.
     pub(super) fn construct_text_encoder(&mut self) -> Result<Value, InterpreterError> {
@@ -623,8 +616,10 @@ mod tests {
 
     #[test]
     fn lone_surrogates_encode_as_replacement_characters() {
+        // TextEncoder::encode borrows this canonical USVString projection.
+        let text = JsString::from_code_units(&[0xD800, 0x78]);
         assert_eq!(
-            utf8_of_code_units([0xD800, 0x78]).as_bytes(),
+            text.as_utf8_projection().as_bytes(),
             [0xEF, 0xBF, 0xBD, 0x78]
         );
     }

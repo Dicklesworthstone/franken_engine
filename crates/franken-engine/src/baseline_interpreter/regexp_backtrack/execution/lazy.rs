@@ -93,7 +93,7 @@ impl Run<'_> {
         Ok(Some((repeat.exit, position)))
     }
 
-    fn lazy_atom_step(&self, pc: usize, position: usize) -> Option<usize> {
+    fn lazy_atom_step(&mut self, pc: usize, position: usize) -> Option<usize> {
         let regexp = self.regexp;
         match &regexp.program[pc + 2] {
             Inst::Char { c, backward } => self.step(position, *backward, |input| {
@@ -103,9 +103,7 @@ impl Run<'_> {
                     input == *c
                 }
             }),
-            Inst::Class { class, backward } => self.step(position, *backward, |input| {
-                regexp.class_matches(&regexp.classes[*class], input)
-            }),
+            Inst::Class { class, backward } => self.class_step(position, *backward, *class),
             Inst::Any { backward } => self.step(position, *backward, |input| {
                 regexp.dot_all || !is_line_terminator(input)
             }),

@@ -11,6 +11,7 @@
 
 use super::{BacktrackError, BacktrackRegExp, Frame, Inst, Run, is_line_terminator};
 use super::literals::LITERAL_WIDTH;
+use super::ClassMatches;
 
 #[derive(Clone, Copy)]
 enum Atom {
@@ -94,7 +95,13 @@ impl CountedRepeat {
         if self.backward { position + self.width } else { position - self.width }
     }
 
-    fn accepts(&self, regexp: &BacktrackRegExp, chars: &[char], position: usize) -> bool {
+    fn accepts(
+        &self,
+        regexp: &BacktrackRegExp,
+        chars: &[char],
+        position: usize,
+        classes: &mut ClassMatches,
+    ) -> bool {
         let index = if self.backward { position.checked_sub(1) } else { Some(position) };
         let Some(&c) = index.and_then(|index| chars.get(index)) else {
             return false;
@@ -103,7 +110,7 @@ impl CountedRepeat {
             Atom::Char(literal) => {
                 if regexp.ignore_case { regexp.canonicalize(c) == literal } else { c == literal }
             }
-            Atom::Class(class) => regexp.class_matches(&regexp.classes[class], c),
+            Atom::Class(class) => classes.matches(regexp, class, c),
             Atom::Any => regexp.dot_all || !is_line_terminator(c),
             Atom::Literal(_) => unreachable!("literal bodies use the shared block matcher"),
         }
@@ -169,7 +176,7 @@ impl Run<'_> {
             return Ok(Some(next));
         }
         if self.steps_left >= 5 {
-            if !repeat.accepts(self.regexp, &self.input.chars, position) {
+            if !repeat.accepts(self.regexp, &self.input.chars, position, &mut self.class_matches) {
                 self.steps_left -= 2; // Mark and the failed atom.
                 return Ok(None);
             }
@@ -182,7 +189,7 @@ impl Run<'_> {
         pay(&mut self.steps_left)?;
         self.registers[repeat.mark] = position;
         pay(&mut self.steps_left)?;
-        if !repeat.accepts(self.regexp, &self.input.chars, position) {
+        if !repeat.accepts(self.regexp, &self.input.chars, position, &mut self.class_matches) {
             self.registers[repeat.mark] = old_mark;
             return Ok(None);
         }

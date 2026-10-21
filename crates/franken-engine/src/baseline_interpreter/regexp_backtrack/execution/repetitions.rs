@@ -7,6 +7,7 @@
 //! The existing frame width and instruction/refusal boundaries stay unchanged.
 
 use super::{BacktrackError, BacktrackRegExp, Frame, Inst, Run, is_line_terminator};
+use super::ClassMatches;
 
 #[derive(Clone, Copy)]
 enum Atom {
@@ -50,7 +51,13 @@ impl GreedyRepeat {
         Some(Self { register: *register, exit, atom, backward })
     }
 
-    fn accepts(&self, regexp: &BacktrackRegExp, chars: &[char], position: usize) -> bool {
+    fn accepts(
+        &self,
+        regexp: &BacktrackRegExp,
+        chars: &[char],
+        position: usize,
+        classes: &mut ClassMatches,
+    ) -> bool {
         let index = if self.backward { position.checked_sub(1) } else { Some(position) };
         let Some(&c) = index.and_then(|index| chars.get(index)) else {
             return false;
@@ -59,7 +66,7 @@ impl GreedyRepeat {
             Atom::Char(literal) => {
                 if regexp.ignore_case { regexp.canonicalize(c) == literal } else { c == literal }
             }
-            Atom::Class(class) => regexp.class_matches(&regexp.classes[class], c),
+            Atom::Class(class) => classes.matches(regexp, class, c),
             Atom::Any => regexp.dot_all || !is_line_terminator(c),
         }
     }
@@ -75,11 +82,12 @@ impl GreedyRepeat {
         mut position: usize,
         mark: &mut usize,
         steps_left: &mut u64,
+        classes: &mut ClassMatches,
     ) -> Result<usize, BacktrackError> {
         debug_assert!(position <= chars.len());
         loop {
             if *steps_left >= 5 {
-                if !self.accepts(regexp, chars, position) {
+                if !self.accepts(regexp, chars, position, classes) {
                     *steps_left -= 2;
                     return Ok(position);
                 }
@@ -102,7 +110,7 @@ impl GreedyRepeat {
                 return Err(BacktrackError::StepBudget);
             }
             *steps_left -= 1;
-            if !self.accepts(regexp, chars, position) {
+            if !self.accepts(regexp, chars, position, classes) {
                 *mark = old;
                 return Ok(position);
             }
@@ -254,7 +262,10 @@ mod tests {
                     if budget > 0 {
                         let mut mark = 97;
                         let mut left = budget - 1;
-                        let result = repeat.execute_after_split(&regexp, &input.chars, start, &mut mark, &mut left);
+                        let result = repeat.execute_after_split(
+                            &regexp, &input.chars, start, &mut mark, &mut left,
+                            &mut ClassMatches::default(),
+                        );
                         match result {
                             Ok(end) => {
                                 // The reference then paid Match, or refused immediately before it.

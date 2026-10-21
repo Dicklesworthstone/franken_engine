@@ -7,6 +7,7 @@
 use super::{BacktrackError, BacktrackRegExp, Captures, Inst, PreparedInput};
 use super::{is_line_terminator, is_word_char};
 
+mod classes;
 mod counted;
 mod lazy;
 mod literal_repeat;
@@ -14,6 +15,7 @@ mod literals;
 mod prefix;
 mod repetitions;
 
+use classes::ClassMatches;
 use counted::CountedRepeat;
 use lazy::LazyRepeat;
 use literal_repeat::LiteralRepeat;
@@ -95,6 +97,7 @@ pub(super) struct Run<'a> {
     // A compaction touches and clears only the slots present in its suffix.
     capture_seen: Vec<bool>,
     literal_blocks: LiteralBlocks,
+    class_matches: ClassMatches,
     #[cfg(test)]
     candidate_executions: usize,
     #[cfg(test)]
@@ -191,12 +194,7 @@ impl Run<'_> {
                 Inst::Any { backward } => self.step(position, *backward, |input| {
                     regexp.dot_all || !is_line_terminator(input)
                 }),
-                Inst::Class { class, backward } => {
-                    let class = &regexp.classes[*class];
-                    self.step(position, *backward, |input| {
-                        regexp.class_matches(class, input)
-                    })
-                }
+                Inst::Class { class, backward } => self.class_step(position, *backward, *class),
                 Inst::LineStart => (position == 0
                     || (regexp.multiline && is_line_terminator(chars[position - 1])))
                 .then_some(position),
@@ -224,6 +222,7 @@ impl Run<'_> {
                             position,
                             &mut self.registers[repeat.register],
                             &mut self.steps_left,
+                            &mut self.class_matches,
                         )?;
                         repeat.push_choices(stack, position, end, old);
                         position = end;
@@ -614,6 +613,7 @@ impl<'a> Run<'a> {
             stack: Vec::new(),
             capture_seen: Vec::new(),
             literal_blocks: LiteralBlocks::default(),
+            class_matches: ClassMatches::default(),
             #[cfg(test)]
             candidate_executions: 0,
             #[cfg(test)]

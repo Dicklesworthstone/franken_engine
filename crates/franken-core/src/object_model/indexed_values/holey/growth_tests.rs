@@ -94,7 +94,7 @@ fn capacity_plans_refuse_remote_sparse_and_overflow_requests_before_allocation()
                     assert!(gap <= MAX_FORWARD_GAP);
                     assert!(offset < planned && planned <= 2 * (live + 1));
                     if planned > capacity {
-                        assert!(offset < live + 1 + (live + 1) / 2);
+                        assert!(offset < live + 1 + live.div_ceil(2));
                     }
                 }
             }

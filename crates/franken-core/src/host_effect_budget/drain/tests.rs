@@ -263,13 +263,15 @@ fn one_frontier_drains_both_process_and_io_bindings() {
     let process = budget.bind_process_spawn(process_inner, &work);
     let io_worker = std::thread::spawn(move || io.perform(&read(), &[HostIoCapability::FsRead]));
     let process_worker = std::thread::spawn(move || {
-        process.perform(
-            &ProcessSpawnRequest::Wait {
-                handle: "test-handle".into(),
-                timeout_millis: None,
-            },
-            &[ProcessSpawnCapability::Spawn],
-        )
+        process
+            .perform(
+                &ProcessSpawnRequest::Wait {
+                    handle: "test-handle".into(),
+                    timeout_millis: None,
+                },
+                &[ProcessSpawnCapability::Spawn],
+            )
+            .map_err(Box::new)
     });
     io_entered.recv_timeout(WAIT).unwrap();
     process_entered.recv_timeout(WAIT).unwrap();

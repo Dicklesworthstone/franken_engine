@@ -45,8 +45,8 @@ fn run() -> ProcessSpawnRequest {
     }
 }
 
-fn process_success() -> ProcessSpawnOutcome {
-    Ok(ProcessSpawnResponse::Run {
+fn process_success() -> ProcessSpawnResponse {
+    ProcessSpawnResponse::Run {
         exit: ProcessExit {
             success: true,
             code: Some(0),
@@ -54,7 +54,7 @@ fn process_success() -> ProcessSpawnOutcome {
         },
         stdout: vec![7],
         stderr: Vec::new(),
-    })
+    }
 }
 
 #[derive(Debug, Default)]
@@ -115,7 +115,7 @@ impl ProcessSpawnProvider for Observed {
             "native unwind"
         );
         *self.process_control.lock().unwrap() = Some(control);
-        process_success()
+        Ok(process_success())
     }
 
     fn cleanup_handle(&self, _: &str) -> ProcessSpawnOutcome {
@@ -453,9 +453,9 @@ fn provider_unwind_quarantines_the_family_but_preserves_cleanup() {
     let work = ExecutionWorkPool::new(1);
     let process = first.bind_process_spawn(inner.clone(), &work);
     assert!(
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-            || process.perform(&run(), PROCESS)
-        ))
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| process
+            .perform(&run(), PROCESS)
+            .map_err(Box::new)))
         .is_err()
     );
     assert!(root.is_revoked() && sibling.is_revoked());
@@ -499,7 +499,7 @@ impl ProcessSpawnProvider for PausedProcess {
         self.entered.send(()).unwrap();
         self.release.lock().unwrap().recv_timeout(WAIT).unwrap();
         control.checkpoint()?;
-        process_success()
+        Ok(process_success())
     }
 
     fn cleanup_handle(&self, _: &str) -> ProcessSpawnOutcome {
@@ -522,7 +522,7 @@ fn a_process_in_one_tenant_blocks_io_in_another_at_the_ancestor_limit() {
         }),
         &work,
     );
-    let worker = std::thread::spawn(move || process.perform(&run(), PROCESS));
+    let worker = std::thread::spawn(move || process.perform(&run(), PROCESS).map_err(Box::new));
     entered.recv_timeout(WAIT).unwrap();
     let inner = Arc::new(Observed::default());
     let io = second.bind_host_io(inner.clone(), &work);

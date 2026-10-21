@@ -5447,33 +5447,58 @@ impl InterpreterCore {
                     })
                     .sum::<u64>(),
             );
-        // The async object owns a second complete register/label file while
-        // the active frame remains installed. Preflight that physical clone
-        // before either vector allocates or the await reaction is registered.
-        self.check_temporary_memory_budget(saved_snapshot_bytes)?;
-        let saved_registers = self.registers[self.register_base..].to_vec();
-        let saved_register_labels =
-            self.register_labels_in_range(self.register_base, self.registers.len());
+        let saved_state_bytes =
+            saved_snapshot_bytes.saturating_add(Self::async_resumption_context_entry_bytes());
+        self.check_temporary_memory_budget(saved_state_bytes)?;
         // Transactional await registration (bd-ur3tk.21): the reaction slots
         // and any settled-path microtask are charged atomically, with the
         // pre-registration store/queue restored on a ceiling refusal.
+        let previous_estimated_bytes = self.estimated_memory_bytes;
         let previous_promise_runtime_bytes = self.promise_runtime_memory_bytes();
-        self.check_temporary_memory_budget(previous_promise_runtime_bytes)?;
+        let rollback_snapshot_bytes = self
+            .promise_store
+            .estimated_memory_bytes()
+            .saturating_add(self.event_loop.microtasks.estimated_memory_bytes());
+        self.check_temporary_memory_budget(rollback_snapshot_bytes)?;
         let promise_store_snapshot = self.promise_store.clone();
         let microtask_queue_snapshot = self.event_loop.microtasks.clone();
-        let result_promise = self
-            .promise_store
-            .then_for_await(promise_handle, await_label, &mut self.event_loop.microtasks)
-            .map_err(|error| InterpreterError::TypeError {
-                expected: "valid pending promise for await".to_string(),
-                got: error.to_string(),
-            })?;
-        if let Err(error) = self.apply_promise_runtime_memory_delta(previous_promise_runtime_bytes)
+        let result_promise = match self.promise_store.then_for_await(
+            promise_handle,
+            await_label,
+            &mut self.event_loop.microtasks,
+        ) {
+            Ok(result_promise) => result_promise,
+            Err(error) => {
+                self.promise_store = promise_store_snapshot;
+                self.event_loop.microtasks = microtask_queue_snapshot;
+                return Err(InterpreterError::TypeError {
+                    expected: "valid pending promise for await".to_string(),
+                    got: error.to_string(),
+                });
+            }
+        };
+        if let Err(error) = self
+            .apply_promise_runtime_memory_delta(previous_promise_runtime_bytes)
+            .and_then(|()| {
+                // Rollback copies and saved vectors live in separate phases.
+                // Admit the larger peak against the newly registered runtime,
+                // not two independently affordable pieces of the same state.
+                self.check_temporary_memory_budget(saved_state_bytes.max(rollback_snapshot_bytes))
+            })
         {
             self.promise_store = promise_store_snapshot;
             self.event_loop.microtasks = microtask_queue_snapshot;
+            self.estimated_memory_bytes = previous_estimated_bytes;
             return Err(error);
         }
+        drop(promise_store_snapshot);
+        drop(microtask_queue_snapshot);
+
+        // Clone only after the complete retained state is admitted, and after
+        // releasing the rollback copies whose peak was checked above.
+        let saved_registers = self.registers[self.register_base..].to_vec();
+        let saved_register_labels =
+            self.register_labels_in_range(self.register_base, self.registers.len());
 
         let async_function = self
             .async_functions
@@ -5484,8 +5509,6 @@ impl InterpreterCore {
         async_function.saved_register_labels = saved_register_labels;
         async_function.saved_register_base = self.register_base;
         async_function.phase = AsyncFunctionPhase::SuspendedAwait;
-        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
-
         self.async_resumption_contexts.insert(
             result_promise.0,
             AsyncResumptionContext {
@@ -5493,7 +5516,21 @@ impl InterpreterCore {
                 result_register,
             },
         );
+        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
         Ok(())
+    }
+
+    fn async_resumption_context_entry_bytes() -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(std::mem::size_of::<AsyncResumptionContext>() as u64)
+    }
+
+    fn take_async_resumption_context(&mut self, promise: u32) -> Option<AsyncResumptionContext> {
+        let context = self.async_resumption_contexts.remove(&promise)?;
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(Self::async_resumption_context_entry_bytes());
+        Some(context)
     }
 
     fn resume_async_function_after_await(
@@ -13587,7 +13624,7 @@ impl InterpreterCore {
                 } => {
                     if handler.is_none()
                         && let Some(resumption_context) =
-                            self.async_resumption_contexts.remove(&result_promise.0)
+                            self.take_async_resumption_context(result_promise.0)
                     {
                         if let Err(error) = self
                             .resume_async_function_after_await(
@@ -13616,7 +13653,7 @@ impl InterpreterCore {
                     label: task_label,
                 } => {
                     if let Some(resumption_context) =
-                        self.async_resumption_contexts.remove(&result_promise.0)
+                        self.take_async_resumption_context(result_promise.0)
                     {
                         if let Err(error) = self
                             .resume_async_function_after_await(
@@ -16712,6 +16749,10 @@ impl InterpreterCore {
                     .sum::<u64>(),
             )
             .saturating_add(self.async_function_snapshots_memory_bytes())
+            .saturating_add(
+                (self.async_resumption_contexts.len() as u64)
+                    .saturating_mul(Self::async_resumption_context_entry_bytes()),
+            )
             .saturating_add(self.promise_runtime_memory_bytes())
             .saturating_add(self.temporarily_suspended_execution_bytes)
     }
@@ -29211,30 +29252,100 @@ mod tests {
                     .sum::<u64>(),
             );
         let promise_count = core.promise_store.len();
-
-        core.config.max_total_memory_bytes = baseline + snapshot_bytes - 1;
-        let error = core
-            .suspend_async_function_for_await(awaited, 0, crate::ifc_artifacts::Label::Public)
-            .expect_err("one-byte-short async label snapshot must fail before cloning");
-        assert!(matches!(
-            error,
-            InterpreterError::MemoryBudgetExceeded { .. }
-        ));
+        let original_promise = core.promise_store.get(awaited).unwrap().clone();
+        let original_witness = core.promise_store.witness_log().to_vec();
+        let original_queue_witness = core.event_loop.microtasks.witness_log().to_vec();
+        let original_runtime_bytes = core.promise_runtime_memory_bytes();
+        // Price the registration through the independent storage layer. The
+        // Core operation under test must compose this cost with its snapshot.
+        let rollback_bytes = core.promise_store.estimated_memory_bytes()
+            + core.event_loop.microtasks.estimated_memory_bytes();
+        let mut expected_store = core.promise_store.clone();
+        let mut expected_queue = core.event_loop.microtasks.clone();
+        let continuation = expected_store
+            .then_for_await(
+                awaited,
+                crate::ifc_artifacts::Label::Public,
+                &mut expected_queue,
+            )
+            .unwrap();
+        let registration_bytes = expected_store.estimated_memory_bytes()
+            + expected_queue.estimated_memory_bytes()
+            - rollback_bytes;
+        assert!(registration_bytes > 0);
+        assert_eq!(expected_store.len(), promise_count + 1);
+        let context_bytes = InterpreterCore::async_resumption_context_entry_bytes();
+        let saved_state_bytes = snapshot_bytes + context_bytes;
+        let complete_ceiling =
+            baseline + registration_bytes + saved_state_bytes.max(rollback_bytes);
+        let invalid = core
+            .suspend_async_function_for_await(
+                crate::promise_model::PromiseHandle(u32::MAX),
+                0,
+                crate::ifc_artifacts::Label::Public,
+            )
+            .expect_err("invalid awaited handle must not publish registration state");
+        assert!(matches!(invalid, InterpreterError::TypeError { .. }));
         assert_eq!(core.promise_store.len(), promise_count);
-        assert!(core.async_resumption_contexts.is_empty());
-        assert_eq!(core.async_functions[0].phase, AsyncFunctionPhase::Executing);
-        assert!(core.async_functions[0].saved_registers.is_empty());
-        assert!(core.async_functions[0].saved_register_labels.is_empty());
+        assert_eq!(core.promise_store.witness_log(), original_witness);
+        assert_eq!(
+            core.event_loop.microtasks.witness_log(),
+            original_queue_witness
+        );
+        assert_eq!(core.promise_runtime_memory_bytes(), original_runtime_bytes);
         assert_eq!(core.estimated_memory_bytes(), baseline);
+        assert!(core.async_resumption_contexts.is_empty());
+        for ceiling in [
+            baseline + snapshot_bytes - 1,
+            baseline + snapshot_bytes,
+            baseline + saved_state_bytes,
+            complete_ceiling - 1,
+        ] {
+            core.config.max_total_memory_bytes = ceiling;
+            let error = core
+                .suspend_async_function_for_await(awaited, 0, crate::ifc_artifacts::Label::Public)
+                .expect_err("incomplete await ceiling must fail before cloning saved labels");
+            assert!(matches!(
+                error,
+                InterpreterError::MemoryBudgetExceeded { .. }
+            ));
+            assert_eq!(core.promise_store.len(), promise_count);
+            assert_eq!(core.promise_store.get(awaited).unwrap(), &original_promise);
+            assert_eq!(core.promise_store.witness_log(), original_witness);
+            assert_eq!(
+                core.event_loop.microtasks.witness_log(),
+                original_queue_witness
+            );
+            assert_eq!(core.promise_runtime_memory_bytes(), original_runtime_bytes);
+            assert!(core.async_resumption_contexts.is_empty());
+            assert_eq!(core.async_functions[0].phase, AsyncFunctionPhase::Executing);
+            assert!(core.async_functions[0].saved_registers.is_empty());
+            assert!(core.async_functions[0].saved_register_labels.is_empty());
+            assert_eq!(core.estimated_memory_bytes(), baseline);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes(),
+                "after refused combined await"
+            );
+        }
 
-        core.config.max_total_memory_bytes = baseline + snapshot_bytes;
+        core.config.max_total_memory_bytes = complete_ceiling;
         core.suspend_async_function_for_await(awaited, 0, crate::ifc_artifacts::Label::Public)
-            .expect("exact async label snapshot ceiling");
+            .expect("complete await peak ceiling");
         assert_eq!(
             core.async_functions[0].phase,
             AsyncFunctionPhase::SuspendedAwait
         );
-        assert_eq!(core.estimated_memory_bytes(), baseline + snapshot_bytes);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            baseline + registration_bytes + saved_state_bytes
+        );
+        assert!(core.estimated_memory_bytes() <= core.config.max_total_memory_bytes);
+        assert_eq!(
+            core.promise_store.get(continuation).unwrap(),
+            expected_store.get(continuation).unwrap(),
+            "refused registrations must not advance creation identity"
+        );
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
@@ -29244,10 +29355,14 @@ mod tests {
             Some(crate::ifc_artifacts::Label::Custom { level: 3, .. })
         ));
 
-        let (_, context) = core
-            .async_resumption_contexts
-            .pop_first()
+        let context = core
+            .take_async_resumption_context(continuation.0)
             .expect("await registration should publish one resumption context");
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "after removing the resumption owner"
+        );
         core.resume_async_function_after_await(
             context,
             Ok(crate::object_model::JsValue::Int(9)),
@@ -29257,7 +29372,10 @@ mod tests {
         .expect("resuming should move the saved label file back without cloning it");
         assert!(core.async_functions[0].saved_registers.is_empty());
         assert!(core.async_functions[0].saved_register_labels.is_empty());
-        assert_eq!(core.estimated_memory_bytes(), baseline);
+        assert!(core.async_resumption_contexts.is_empty());
+        // Promise records and replay witnesses remain live after the saved
+        // vectors and the resumption context have been released.
+        assert_eq!(core.estimated_memory_bytes(), baseline + registration_bytes);
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
@@ -29282,24 +29400,31 @@ mod tests {
             }),
             accumulated_label: initial_label.clone(),
         };
+        let entry_bytes = MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            + InterpreterCore::estimate_promise_combinator_state_bytes(&state());
+        for ceiling in [
+            baseline + initial_bytes - 1,
+            baseline + initial_bytes,
+            baseline + entry_bytes - 1,
+        ] {
+            core.config.max_total_memory_bytes = ceiling;
+            let error = core
+                .register_combinator(state())
+                .expect_err("label-only or one-byte-short full accumulator must not publish");
+            assert!(matches!(
+                error,
+                InterpreterError::MemoryBudgetExceeded { .. }
+            ));
+            assert!(core.promise_combinators.is_empty());
+            assert_eq!(core.next_promise_combinator_id, 0);
+            assert_eq!(core.estimated_memory_bytes(), baseline);
+        }
 
-        core.config.max_total_memory_bytes = baseline + initial_bytes - 1;
-        let error = core
-            .register_combinator(state())
-            .expect_err("one-byte-short accumulator must not publish");
-        assert!(matches!(
-            error,
-            InterpreterError::MemoryBudgetExceeded { .. }
-        ));
-        assert!(core.promise_combinators.is_empty());
-        assert_eq!(core.next_promise_combinator_id, 0);
-        assert_eq!(core.estimated_memory_bytes(), baseline);
-
-        core.config.max_total_memory_bytes = baseline + initial_bytes;
+        core.config.max_total_memory_bytes = baseline + entry_bytes;
         let combinator_id = core
             .register_combinator(state())
             .expect("exact accumulator ceiling");
-        assert_eq!(core.estimated_memory_bytes(), baseline + initial_bytes);
+        assert_eq!(core.estimated_memory_bytes(), baseline + entry_bytes);
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
@@ -29332,7 +29457,10 @@ mod tests {
             core.promise_combinators[&combinator_id].accumulated_label,
             dominant_label
         );
-        assert_eq!(core.estimated_memory_bytes(), baseline + dominant_bytes);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            baseline + MEMORY_ESTIMATE_MAP_ENTRY_BYTES + dominant_bytes
+        );
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()

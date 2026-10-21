@@ -40,8 +40,8 @@ fn request() -> ProcessSpawnRequest {
     }
 }
 
-fn success() -> ProcessSpawnOutcome {
-    Ok(ProcessSpawnResponse::Run {
+fn success() -> ProcessSpawnResponse {
+    ProcessSpawnResponse::Run {
         exit: ProcessExit {
             success: true,
             code: Some(0),
@@ -49,7 +49,7 @@ fn success() -> ProcessSpawnOutcome {
         },
         stdout: vec![1],
         stderr: Vec::new(),
-    })
+    }
 }
 
 fn assert_denied(outcome: ProcessSpawnOutcome, code: &str) {
@@ -84,7 +84,7 @@ impl ProcessSpawnProvider for Counting {
         assert_eq!(granted, GRANTED);
         control.checkpoint()?;
         self.calls.fetch_add(1, Ordering::SeqCst);
-        success()
+        Ok(success())
     }
 
     fn cleanup_handle(&self, _: &str) -> ProcessSpawnOutcome {
@@ -235,7 +235,7 @@ impl ProcessSpawnProvider for Prepared {
         _: &ProcessSpawnRequest,
         _: &[ProcessSpawnCapability],
     ) -> ProcessSpawnOutcome {
-        success()
+        Ok(success())
     }
     fn cleanup_handle(&self, _: &str) -> ProcessSpawnOutcome {
         Err(denied("cleanup failed"))
@@ -313,7 +313,7 @@ impl ProcessSpawnProvider for Blocking {
             .recv_timeout(Duration::from_secs(5))
             .unwrap();
         control.checkpoint()?;
-        success()
+        Ok(success())
     }
     fn cleanup_handle(&self, _: &str) -> ProcessSpawnOutcome {
         Ok(ProcessSpawnResponse::Cleaned { was_present: true })
@@ -333,7 +333,7 @@ fn process_in_flight_blocks_io_admission_without_spending_a_second_credit() {
         }),
         &work,
     );
-    let worker = std::thread::spawn(move || process.perform(&request(), GRANTED));
+    let worker = std::thread::spawn(move || process.perform(&request(), GRANTED).map_err(Box::new));
     entered.recv_timeout(Duration::from_secs(5)).unwrap();
     let io_inner = Arc::new(CountingIo::default());
     let io = budget.bind_host_io(io_inner.clone(), &work);
@@ -364,11 +364,14 @@ fn active_process_observes_child_and_ancestor_revocation_without_revoking_siblin
         }),
         &child,
     );
-    let worker = std::thread::spawn(move || process.perform(&request(), GRANTED));
+    let worker = std::thread::spawn(move || process.perform(&request(), GRANTED).map_err(Box::new));
     entered.recv_timeout(Duration::from_secs(5)).unwrap();
     child.revoke();
     release.send(()).unwrap();
-    assert_denied(worker.join().unwrap(), "HOST_EFFECT_SCOPE_REVOKED");
+    assert_denied(
+        worker.join().unwrap().map_err(|error| *error),
+        "HOST_EFFECT_SCOPE_REVOKED",
+    );
     let inner = Arc::new(Counting::default());
     let peer = budget.bind_process_spawn(inner.clone(), &sibling);
     peer.perform(&request(), GRANTED).unwrap();
@@ -441,9 +444,9 @@ fn unwinding_revokes_the_shared_pool_but_cleanup_remains_available() {
     let work = ExecutionWorkPool::new(1);
     let provider = budget.bind_process_spawn(Arc::new(Panicking), &work);
     assert!(
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-            || provider.perform(&request(), GRANTED)
-        ))
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| provider
+            .perform(&request(), GRANTED)
+            .map_err(Box::new)))
         .is_err()
     );
     assert!(budget.is_revoked());
@@ -529,7 +532,7 @@ impl ProcessSpawnProvider for ResetAfterRefusal {
         );
         self.0.0.store(false, Ordering::SeqCst);
         assert!(control.checkpoint().is_err());
-        success()
+        Ok(success())
     }
     fn cleanup_handle(&self, _: &str) -> ProcessSpawnOutcome {
         unreachable!()
@@ -620,7 +623,7 @@ impl ProcessSpawnProvider for SecretProvider {
         _: &ProcessSpawnRequest,
         _: &[ProcessSpawnCapability],
     ) -> ProcessSpawnOutcome {
-        success()
+        Ok(success())
     }
     fn cleanup_handle(&self, _: &str) -> ProcessSpawnOutcome {
         unreachable!()

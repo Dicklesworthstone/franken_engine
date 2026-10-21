@@ -77,8 +77,8 @@ fn run() -> ProcessSpawnRequest {
     }
 }
 
-fn process_success() -> ProcessSpawnOutcome {
-    Ok(ProcessSpawnResponse::Run {
+fn process_success() -> ProcessSpawnResponse {
+    ProcessSpawnResponse::Run {
         exit: ProcessExit {
             success: true,
             code: Some(0),
@@ -86,7 +86,7 @@ fn process_success() -> ProcessSpawnOutcome {
         },
         stdout: vec![7],
         stderr: Vec::new(),
-    })
+    }
 }
 
 fn io_denied(result: HostIoOutcome, code: &str) {
@@ -200,7 +200,7 @@ impl ProcessSpawnProvider for Probe {
                 handle: "owned-child".into(),
             })
         } else {
-            process_success()
+            Ok(process_success())
         }
     }
 
@@ -465,7 +465,7 @@ impl ProcessSpawnProvider for ParkedProcess {
         self.entered.send(()).unwrap();
         self.release.lock().unwrap().recv_timeout(WAIT).unwrap();
         control.checkpoint()?;
-        process_success()
+        Ok(process_success())
     }
 
     fn cleanup_handle(&self, _: &str) -> ProcessSpawnOutcome {
@@ -490,13 +490,13 @@ fn cancelling_active_process_does_not_release_concurrency_before_callback_return
     );
     let inner = Arc::new(Probe::default());
     let io = budget.bind_host_io_for_admission(inner.clone(), &sibling);
-    let worker = std::thread::spawn(move || process.perform(&run(), PROCESS));
+    let worker = std::thread::spawn(move || process.perform(&run(), PROCESS).map_err(Box::new));
     entered.recv_timeout(WAIT).unwrap();
     job.task_control().cancel();
     let blocked = io.perform(&read(), IO);
     let during = budget.snapshot().unwrap();
     release.send(()).unwrap();
-    let outcome = worker.join().unwrap();
+    let outcome = worker.join().unwrap().map_err(|error| *error);
     io_denied(blocked, "HOST_EFFECT_CONCURRENCY_LIMIT");
     process_denied(outcome);
     assert_eq!(during.in_flight, 1);

@@ -1,10 +1,13 @@
 # FrankenEngine Core
 
-⚠️ **This crate is currently excluded from the workspace.**
+This crate is a member of the root workspace and a path dependency of
+`frankenengine-engine`.
 
-## Status: Standalone Manifest Compileable
+## Status: Integrated Runtime Core
 
-This crate represents an in-progress modularization effort to extract core runtime modules from the main `frankenengine-engine` crate. The standalone crate manifest is expected to compile, but workspace integration remains a separate follow-up because the public API boundary still needs deliberate validation.
+This crate extracts core runtime modules from `frankenengine-engine`. Workspace
+membership does not establish API parity between the two crates; changes to
+shared behavior still require tests through each consuming runtime.
 
 ## Extracted Runtime Modules
 
@@ -18,11 +21,13 @@ The following core modules are extracted from `frankenengine-engine` for standal
 
 ## Workspace Integration
 
-**Do not add this crate to the workspace** until the integration pass validates the extracted API boundary against the full workspace.
+Run focused checks from the repository root:
 
-Before re-adding it to the root workspace:
-1. Validate the standalone manifest and focused runtime tests.
-2. Audit the copied runtime modules for API drift against `frankenengine-engine`.
-3. Run the full workspace compiler, lint, format, and test gates with `franken-core` included.
+```bash
+cargo check -p frankenengine-core --all-targets
+cargo clippy -p frankenengine-core --all-targets -- -D warnings
+cargo test -p frankenengine-core
+```
 
-Until then, this directory should be built directly through `cargo --manifest-path crates/franken-core/Cargo.toml ...` rather than as a workspace member.
+Follow the repository's remote-build requirements when executing Cargo. Focused
+checks supplement the full workspace gates; they do not replace them.

@@ -108,12 +108,12 @@ fn capacity_and_closed_refusal_never_invoke_preparation_or_consume_quota() {
     let parent = ExecutionWorkPool::new(256);
     let mut group = ExecutionTaskGroup::new(&parent, 256, 0).unwrap();
     let calls = AtomicUsize::new(0);
-    let mut prepare = |_: &ExecutionAdmission, _: &mut InterpreterConfig| {
+    let prepare = |_: &ExecutionAdmission, _: &mut InterpreterConfig| {
         calls.fetch_add(1, Ordering::SeqCst);
         Ok(None)
     };
     assert!(matches!(
-        group.spawn_with_preparation(module("7;"), config(128), "full", &mut prepare),
+        group.spawn_with_preparation(module("7;"), config(128), "full", prepare),
         Err(ExecutionGroupStartError::Capacity { limit: 0 })
     ));
     group.close();

@@ -280,7 +280,7 @@ fn deterministic_mixed_unicode_searches_match_reference() {
         }
         while leaves.len() > 1 {
             let mut level = Vec::new();
-            for pair in leaves.chunks_exact(2) {
+            for pair in leaves.as_chunks::<2>().0 {
                 level.push(rope(pair[0].clone(), pair[1].clone()));
             }
             leaves = level;

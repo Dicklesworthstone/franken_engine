@@ -21,16 +21,27 @@ fn check(map: &OrderedStringMap<u32>, front: u32, back: u32, reverse: bool) {
 fn packed_and_dictionary_seek_use_numeric_order_without_visiting_the_prefix() {
     let mut map = dense(4096);
     for reverse in [false, true] {
-        assert_eq!(map.probe_index_key(4000..4096, reverse),
-            (Some(if reverse {4095} else {4000}), 1));
+        assert_eq!(
+            map.probe_index_key(4000..4096, reverse),
+            (Some(if reverse { 4095 } else { 4000 }), 1)
+        );
         assert_eq!(map.probe_index_key(4096..u32::MAX, reverse), (None, 1));
         assert_eq!(map.probe_index_key(4..4, reverse), (None, 0));
-        assert_eq!(map.probe_index_key(9..3, reverse), (None, 0));
+        // Deliberately invalid bounds are input data for the probe, not an
+        // attempt to iterate a reversed Rust range.
+        let reversed = std::ops::Range { start: 9, end: 3 };
+        assert_eq!(map.probe_index_key(reversed, reverse), (None, 0));
     }
     map.insert((u32::MAX - 1).to_string(), 99);
     assert!(matches!(map.array_entries, IndexedValues::Dictionary(_)));
-    assert_eq!(map.probe_index_key(5000..u32::MAX, false), (Some(u32::MAX - 1), 1));
-    assert_eq!(map.probe_index_key(5000..u32::MAX, true), (Some(u32::MAX - 1), 1));
+    assert_eq!(
+        map.probe_index_key(5000..u32::MAX, false),
+        (Some(u32::MAX - 1), 1)
+    );
+    assert_eq!(
+        map.probe_index_key(5000..u32::MAX, true),
+        (Some(u32::MAX - 1), 1)
+    );
     assert_eq!(map.probe_index_key(4096..u32::MAX - 1, true), (None, 1));
 }
 

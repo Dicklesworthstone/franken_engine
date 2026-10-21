@@ -1430,6 +1430,7 @@ fn classify_orchestrator_error(error: &OrchestratorError) -> FailureClass {
         | OrchestratorError::InvalidModuleRoot { .. }
         | OrchestratorError::EmptyExtensionId
         | OrchestratorError::ProcessSpawnAttempt(_)
+        | OrchestratorError::ResolvedEntryRejected { .. }
         | OrchestratorError::PreparedExecutionContextMismatch { .. } => FailureClass::Runtime,
         OrchestratorError::PostCellFailure(_) => {
             unreachable!("primary_error recursively unwraps post-cell failures")
@@ -2593,6 +2594,45 @@ mod tests {
             let error = OrchestratorError::WorkBudget(refusal);
             assert_eq!(classify_orchestrator_error(&error), FailureClass::Runtime);
         }
+    }
+
+    #[test]
+    fn resolved_entry_rejection_preserves_failure_class_parity() {
+        let error = OrchestratorError::ResolvedEntryRejected {
+            detail: "dependency-bearing graph requires the runtime resolver".to_string(),
+        };
+        let detail = error.to_string();
+        let library_class = classify_orchestrator_error(&error);
+        let cli_class = classify_failure_detail(&format!("run failed: {error}"));
+        assert_eq!(library_class, FailureClass::Runtime);
+        assert_eq!(cli_class, FailureClass::Runtime);
+        let library = InvocationRecord::failure("library_run", 1, library_class, &detail, None);
+        let cli = InvocationRecord::failure("frankenctl_run", 1, cli_class, &detail, None);
+        assert_eq!(
+            compare_records(
+                ParityCommandFamily::Run,
+                ExpectedOutcome::Failure,
+                &library,
+                &cli,
+            ),
+            (ParityVerdict::Match, None)
+        );
+        let misclassified = InvocationRecord::failure(
+            "frankenctl_run",
+            1,
+            FailureClass::SourceIngestion,
+            &detail,
+            None,
+        );
+        assert_eq!(
+            compare_records(
+                ParityCommandFamily::Run,
+                ExpectedOutcome::Failure,
+                &library,
+                &misclassified,
+            ),
+            (ParityVerdict::Mismatch, Some(MismatchKind::FailureClass))
+        );
     }
 
     #[test]

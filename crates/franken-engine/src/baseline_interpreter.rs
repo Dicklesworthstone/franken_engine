@@ -44993,14 +44993,15 @@ impl InterpreterCore {
                 self.call_standard_constructor(module, builtin, args)
             }
             BuiltinFunctionKind::StaticHostcall => {
-                // bd-9vouw.94: `C.from(...)` / `C.of(...)` with a constructor
+                // bd-9vouw.94/172: `C.from(...)`, `C.of(...)`, and
+                // `C.fromAsync(...)` with a constructor
                 // `C` other than %Array% (a subclass of Array inherits them;
                 // `Array.from.call(Object, ...)`) construct a C (ES2020
                 // 22.1.2.1 steps 5.a and 12.a, 22.1.2.3 step 4), in the
                 // specification's order (bd-9vouw.361).
                 let array_static = matches!(
                     &*builtin.module_specifier,
-                    "builtin:ArrayFrom" | "builtin:ArrayOf"
+                    "builtin:ArrayFrom" | "builtin:ArrayOf" | "builtin:ArrayFromAsync"
                 );
                 if array_static
                     && let Some(constructor) = receiver.clone()
@@ -45012,6 +45013,8 @@ impl InterpreterCore {
                     check_hostcall_capability_gate(self, &tag, instruction_index)?;
                     if tag == "builtin:ArrayFrom" {
                         self.array_from_with_constructor(module, args, constructor)
+                    } else if tag == "builtin:ArrayFromAsync" {
+                        self.array_from_async_with_constructor(module, args, constructor)
                     } else {
                         self.array_of_with_constructor(module, args, constructor)
                     }

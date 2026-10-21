@@ -6,8 +6,9 @@
 //!
 //! The expected lines are Node v22.2.0's output for the same programs (Bun
 //! 1.4.2 prints the same lines), except `closing_when_return_fails`, where
-//! V8 12.4 departs from the spec and the lines are Bun's. Each program runs
-//! on both interpreter profiles, as written and with a collection at every
+//! V8 12.4 departs from the spec and the lines are Bun's. Constructor receiver
+//! traces were instead checked on Node v26.8.1. Each program runs on both
+//! interpreter profiles, as written and with a collection at every
 //! (and every seventh) safe point, and the memory-accounting oracle must
 //! hold after each run.
 
@@ -92,6 +93,80 @@ fn shape_and_value_reads() {
             "true [object Promise]",
             "true 0",
             "value call 7",
+        ],
+    );
+}
+
+/// Custom receivers use the existing constructor-aware state machine. The
+/// expected traces for these receiver regressions were checked on Node v26.8.1.
+#[test]
+fn constructible_receivers_preserve_iterator_order_and_result_type() {
+    assert_lines(
+        r#"(async () => {
+  const steps = [];
+  function Result(...args) { steps.push('construct ' + args.length); }
+  const source = {
+    get [Symbol.iterator]() {
+      steps.push('get iterator');
+      return function () {
+        steps.push('iterator');
+        let i = 0;
+        return { next() { i++; return { value: i, done: i > 2 }; } };
+      };
+    }
+  };
+  const result = await Array.fromAsync.call(Result, source, x => {
+    steps.push('map ' + x);
+    return Promise.resolve(x * 3);
+  });
+  console.log(result instanceof Result, Array.isArray(result), result.length, result[0], result[1]);
+  console.log(steps.join('|'));
+  class Sub extends Array {}
+  const sub = await Sub.fromAsync([Promise.resolve(4), 5]);
+  console.log(sub instanceof Sub, Array.isArray(sub), sub.length, sub[0], sub[1]);
+  const object = await Array.fromAsync.call(Object, [1, 2]);
+  console.log(Array.isArray(object), object.length, object[0], object[1]);
+})();"#,
+        &[
+            "true false 2 3 6",
+            "get iterator|iterator|construct 0|map 1|map 2",
+            "true true 2 4 5",
+            "false 2 1 2",
+        ],
+    );
+}
+
+#[test]
+fn array_like_receiver_gets_length_and_constructor_fault_rejects() {
+    assert_lines(
+        r#"(async () => {
+  const steps = [];
+  function Result(length) { steps.push('construct ' + arguments.length + ':' + length); }
+  const source = {
+    get length() { steps.push('length'); return 2; },
+    get 0() { steps.push('get 0'); return Promise.resolve(7); },
+    get 1() { steps.push('get 1'); return 8; }
+  };
+  const result = await Array.fromAsync.call(Result, source, x => Promise.resolve(x + 1));
+  console.log(result instanceof Result, Array.isArray(result), result.length, result[0], result[1]);
+  console.log(steps.join('|'));
+  const reason = { tag: 'constructor fault' };
+  function Broken() { throw reason; }
+  let promise;
+  try {
+    promise = Array.fromAsync.call(Broken, []);
+    console.log('returned promise', promise instanceof Promise);
+  } catch (e) { console.log('unexpected synchronous throw'); }
+  try { await promise; } catch (e) { console.log('rejected same reason', e === reason); }
+  const plain = await Array.fromAsync.call(() => {}, [Promise.resolve(9)]);
+  console.log('nonconstructible fallback', Array.isArray(plain), plain[0]);
+})();"#,
+        &[
+            "true false 2 8 9",
+            "length|construct 1:2|get 0|get 1",
+            "returned promise true",
+            "rejected same reason true",
+            "nonconstructible fallback true 9",
         ],
     );
 }

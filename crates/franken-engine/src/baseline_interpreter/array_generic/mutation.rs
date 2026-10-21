@@ -330,15 +330,15 @@ mod tests {
                 let length = (next(&mut seed) % 24) as u32;
                 let mut object = array(length);
                 for index in 0..length {
-                    if next(&mut seed) % 5 != 0 {
+                    if !next(&mut seed).is_multiple_of(5) {
                         object.properties.insert(index.to_string(), Value::Int(i64::from(index)));
                     }
-                    if next(&mut seed) % 3 == 0 {
+                    if next(&mut seed).is_multiple_of(3) {
                         let key = InterpreterCore::generic_index_key(u64::from(index));
                         let mut attributes = object.own_property_attributes(&key);
-                        attributes.writable = next(&mut seed) % 2 == 0;
-                        attributes.configurable = next(&mut seed) % 2 == 0;
-                        attributes.enumerable = next(&mut seed) % 2 == 0;
+                        attributes.writable = next(&mut seed).is_multiple_of(2);
+                        attributes.configurable = next(&mut seed).is_multiple_of(2);
+                        attributes.enumerable = next(&mut seed).is_multiple_of(2);
                         object.property_attributes.insert(key, attributes);
                     }
                 }
@@ -348,7 +348,7 @@ mod tests {
                     attributes.writable = false;
                     object.property_attributes.insert(key, attributes);
                 }
-                object.is_frozen = next(&mut seed) % 17 == 0;
+                object.is_frozen = next(&mut seed).is_multiple_of(17);
                 for _ in 0..16 {
                     let start = (next(&mut seed) % u64::from(length + 3)) as u32;
                     let end = (next(&mut seed) % u64::from(length + 3)) as u32;
@@ -383,5 +383,4 @@ mod tests {
             println!("{name}: {} ns", start.elapsed().as_nanos());
         }
     }
-
 }

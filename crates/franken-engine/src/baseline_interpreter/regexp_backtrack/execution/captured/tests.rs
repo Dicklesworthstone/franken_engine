@@ -1,6 +1,8 @@
 use super::*;
 use super::super::PreparedInput;
 
+type CaptureCase<'a> = (&'a str, &'a str, &'a str, &'a [Option<(usize, usize)>]);
+
 fn compare(regexp: &BacktrackRegExp, text: &str, start: usize, budget: u64, sticky: bool) {
     let input = PreparedInput::new(text);
     let mut actual = Run::new(regexp, &input, budget);
@@ -187,7 +189,7 @@ fn global_reuse_and_caught_budget_errors_keep_original_allowance() {
 
 #[test]
 fn fixed_external_capture_results_include_greedy_retreat_and_lookbehind() {
-    let cases: &[(&str, &str, &str, &[Option<(usize, usize)>])] = &[
+    let cases: &[CaptureCase<'_>] = &[
         ("((ab))*ab", "", "ababab", &[Some((0, 6)), Some((2, 4)), Some((2, 4))]),
         ("((ab))*\\1x", "", "abababx", &[Some((0, 7)), Some((2, 4)), Some((2, 4))]),
         ("(?<=((ab))*)x", "", "ababx", &[Some((4, 5)), Some((0, 2)), Some((0, 2))]),
@@ -375,7 +377,7 @@ fn lazy_captured_search_reuse_keeps_one_allowance_and_cleans_failed_histories() 
 #[test]
 fn fixed_external_lazy_results_keep_minimal_exits_and_backward_capture_spans() {
     // Node v22.16.0 d-indices converted to the native byte-span contract.
-    let cases: &[(&str, &str, &str, &[Option<(usize, usize)>])] = &[
+    let cases: &[CaptureCase<'_>] = &[
         ("((ab))*?ab", "", "ababab", &[Some((0, 2)), None, None]),
         ("((ab))+?ab", "", "ababab", &[Some((0, 4)), Some((0, 2)), Some((0, 2))]),
         ("((ab))*?\\1x", "", "abababx", &[Some((0, 7)), Some((2, 4)), Some((2, 4))]),

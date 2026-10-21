@@ -323,7 +323,7 @@ fn fatal_adoption_generated_graphs_match_independent_reachability() {
             }
         }
         let root = case % COUNT;
-        let mut expected = vec![false; COUNT];
+        let mut expected = [false; COUNT];
         let mut work = vec![root];
         while let Some(node) = work.pop() {
             if expected[node] {

@@ -320,7 +320,8 @@ mod tests {
         // Captured with Node v22.16.0 / V8 12.4.254.21-node.26. Convert its
         // UTF-16 `d` indices to byte offsets, the native Captures contract.
         // These are fixed observables, not another call to the scalar path.
-        let cases: &[(&str, &str, &str, &[Option<(usize, usize)>])] = &[
+        type CaptureCase<'a> = (&'a str, &'a str, &'a str, &'a [Option<(usize, usize)>]);
+        let cases: &[CaptureCase<'_>] = &[
             (
                 "(abcdefghijklmnop){2}\\1", "",
                 "xxabcdefghijklmnopabcdefghijklmnopabcdefghijklmnop",

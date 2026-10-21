@@ -792,7 +792,9 @@ mod tests {
         use std::hint::black_box;
         use std::time::Instant;
 
-        assert!(!cfg!(debug_assertions), "benchmark requires --release");
+        if cfg!(debug_assertions) {
+            panic!("benchmark requires --release");
+        }
 
         fn measure<T>(iterations: u32, operation: &mut impl FnMut() -> T) -> u128 {
             for _ in 0..100 {

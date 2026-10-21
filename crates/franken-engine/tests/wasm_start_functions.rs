@@ -158,9 +158,11 @@ fn start_reads_initialized_data_and_publishes_its_memory_writes() {
 
 #[test]
 fn start_can_dispatch_through_initialized_element_segments() {
-    let mut fixture = Fixture::default();
-    fixture.tables = vec![1, 0x70, 0, 1];
-    fixture.elements = vec![1, 0, 0x41, 0, 0x0b, 1, 2];
+    let mut fixture = Fixture {
+        tables: vec![1, 0x70, 0, 1],
+        elements: vec![1, 0, 0x41, 0, 0x0b, 1, 2],
+        ..Fixture::default()
+    };
     fixture.functions.push((0, vec![0x41, 42, 0x24, 0, 0x0b]));
     fixture.functions[0].1 = vec![0x41, 0, 0x11, 0, 0, 0x0b];
     let vm = fixture.vm();
@@ -201,8 +203,10 @@ fn absent_start_is_distinct_from_an_empty_start_and_never_invokes_function_zero(
 
 #[test]
 fn a_non_exported_start_function_still_executes() {
-    let mut fixture = Fixture::default();
-    fixture.exports = vec![1, 1, b'g', 3, 0];
+    let fixture = Fixture {
+        exports: vec![1, 1, b'g', 3, 0],
+        ..Fixture::default()
+    };
     let vm = fixture.vm();
     assert_eq!(vm.export_names().count(), 0);
     assert_eq!(vm.instantiate().unwrap().global_export("g"), Some(&I32(1)));
@@ -218,8 +222,10 @@ fn start_indices_signatures_and_section_integrity_are_validated_before_execution
         vec![vec![0x80]],
         vec![vec![0], vec![0]],
     ] {
-        let mut fixture = Fixture::default();
-        fixture.starts = starts;
+        let fixture = Fixture {
+            starts,
+            ..Fixture::default()
+        };
         assert!(WasmNumericVm::parse(&fixture.bytes(), WasmNumericLimits::default()).is_err());
     }
     let mut fixture = Fixture::default();
@@ -367,10 +373,12 @@ fn start_memory_growth_uses_the_same_native_work_meter() {
 
 #[test]
 fn imported_start_function_does_not_acquire_ambient_host_authority() {
-    let mut fixture = Fixture::default();
-    fixture.imports = vec![1, 1, b'h', 1, b'f', 0, 0];
-    fixture.functions.clear();
-    fixture.exports = vec![1, 1, b'g', 3, 0];
+    let fixture = Fixture {
+        imports: vec![1, 1, b'h', 1, b'f', 0, 0],
+        functions: Vec::new(),
+        exports: vec![1, 1, b'g', 3, 0],
+        ..Fixture::default()
+    };
     assert!(
         matches!(fixture.vm().instantiate(), Err(WasmNumericVmError::ImportedFunctionUnsupported { function_index: 0, module, name }) if module == "h" && name == "f")
     );

@@ -192,8 +192,8 @@ fn nan_sign_and_payload_do_not_change_the_zero_result() {
         };
         for value in values {
             assert_eq!(
-                vm.call_export("f", &[value]).unwrap().results,
-                [zero.clone()]
+                vm.call_export("f", &[value]).unwrap().results.as_slice(),
+                std::slice::from_ref(&zero)
             );
         }
     }

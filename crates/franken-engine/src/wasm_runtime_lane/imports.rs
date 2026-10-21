@@ -546,7 +546,11 @@ mod tests {
             definition.required_capabilities,
             wasm_module_required_capabilities()
         );
-        assert!(std::str::from_utf8(STATE_MODULE).is_err());
+        let state_definition =
+            ModuleDefinition::wasm_binary(STATE_MODULE, &WasmNumericLimits::default()).unwrap();
+        let state_bytes = source_bytes(&state_definition.source, STATE_MODULE.len()).unwrap();
+        assert_eq!(state_bytes.as_ref(), STATE_MODULE);
+        assert!(std::str::from_utf8(state_bytes.as_ref()).is_err());
         let raw = "\0asm\x01\0\0\0";
         let mut registry = registry_with_referrer();
         registry

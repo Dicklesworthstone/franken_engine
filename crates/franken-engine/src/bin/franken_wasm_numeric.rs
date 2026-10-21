@@ -33,10 +33,10 @@ struct Response {
 
 fn decode_module_hex(module_hex: &str, limits: &WasmNumericLimits) -> Result<Vec<u8>, String> {
     let module_hex = module_hex.trim();
-    if module_hex.len() % 2 != 0 {
+    if !module_hex.len().is_multiple_of(2) {
         return Err("module_hex must contain an even number of hexadecimal digits".to_string());
     }
-    let max_hex_digits = limits.max_module_bytes.checked_mul(2).unwrap_or(usize::MAX);
+    let max_hex_digits = limits.max_module_bytes.saturating_mul(2);
     if module_hex.len() > max_hex_digits {
         return Err(format!(
             "module_hex represents {} bytes; limit is {}",

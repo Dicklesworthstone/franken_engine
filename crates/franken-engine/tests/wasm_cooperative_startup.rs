@@ -82,7 +82,7 @@ fn program(code: &[u8], imports: u8, start: Option<u32>) -> Vec<u8> {
     section(&mut bytes, 1, &[2, 0x60, 0, 0, 0x60, 0, 1, 0x7f]);
     if imports != 0 {
         let mut entries = vec![imports];
-        for name in [b'f', b'x'].into_iter().take(usize::from(imports)) {
+        for name in b"fx".iter().copied().take(usize::from(imports)) {
             entries.extend([1, b'h', 1, name, 0, 0]);
         }
         section(&mut bytes, 2, &entries);

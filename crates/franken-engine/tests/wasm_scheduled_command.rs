@@ -798,8 +798,8 @@ mod scheduling {
         let mut completed = BTreeSet::new();
         for turn in 0..32 {
             let result = queue.run_next(work(2), &ctx, &allowed).unwrap();
-            if turn < 4 {
-                assert_eq!(result.task_id, order[turn]);
+            if let Some(expected) = order.get(turn) {
+                assert_eq!(result.task_id, *expected);
             }
             match result.outcome {
                 WasmTaskOutcome::Pending => {}

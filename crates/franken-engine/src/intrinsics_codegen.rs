@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn prototype_installation_rejects_nonprototype_rows() {
         assert!(matches!(
-            generate_prototype_installations(&[SEED_ROWS[3].clone()]),
+            generate_prototype_installations(std::slice::from_ref(&SEED_ROWS[3])),
             Err(CodegenError::NotPrototypeIntrinsic("Date.now"))
         ));
     }

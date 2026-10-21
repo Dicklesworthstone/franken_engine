@@ -231,9 +231,11 @@ fn explicit_nonzero_table_indices_and_element_encodings_execute() {
             1, 6, 1, 0x41, 0, 0x0b, 0x70, 2, 0xd2, 0, 0x0b, 0xd2, 1, 0x0b,
         ],
     ] {
-        let mut fixture = Fixture::default();
-        fixture.tables = vec![2, 0x70, 0, 0, 0x70, 1, 2, 2];
-        fixture.elements = elements;
+        let mut fixture = Fixture {
+            tables: vec![2, 0x70, 0, 0, 0x70, 1, 2, 2],
+            elements,
+            ..Fixture::default()
+        };
         fixture.functions[2].1[8] = 1;
         fixture.exports[8] = 1;
         let vm = fixture.vm();
@@ -254,10 +256,12 @@ fn explicit_nonzero_table_indices_and_element_encodings_execute() {
 
 #[test]
 fn expression_elements_preserve_explicit_nulls() {
-    let mut fixture = Fixture::default();
-    fixture.elements = vec![
-        1, 4, 0x41, 0, 0x0b, 3, 0xd2, 0, 0x0b, 0xd0, 0x70, 0x0b, 0xd2, 1, 0x0b,
-    ];
+    let fixture = Fixture {
+        elements: vec![
+            1, 4, 0x41, 0, 0x0b, 3, 0xd2, 0, 0x0b, 0xd0, 0x70, 0x0b, 0xd2, 1, 0x0b,
+        ],
+        ..Fixture::default()
+    };
     let vm = fixture.vm();
     let mut instance = vm.instantiate().unwrap();
     assert_eq!(
@@ -281,10 +285,12 @@ fn expression_elements_preserve_explicit_nulls() {
 
 #[test]
 fn later_element_segments_win_and_empty_end_boundary_is_valid() {
-    let mut fixture = Fixture::default();
-    fixture.elements = vec![
-        3, 0, 0x41, 0, 0x0b, 2, 0, 1, 2, 0, 0x41, 1, 0x0b, 0, 1, 0, 0, 0x41, 3, 0x0b, 0,
-    ];
+    let fixture = Fixture {
+        elements: vec![
+            3, 0, 0x41, 0, 0x0b, 2, 0, 1, 2, 0, 0x41, 1, 0x0b, 0, 1, 0, 0, 0x41, 3, 0x0b, 0,
+        ],
+        ..Fixture::default()
+    };
     let vm = fixture.vm();
     let instance = vm.instantiate().unwrap();
     assert_eq!(
@@ -296,8 +302,10 @@ fn later_element_segments_win_and_empty_end_boundary_is_valid() {
 #[test]
 fn element_bounds_fail_at_instantiation_without_wrapping_or_partial_publication() {
     for (offset, entries) in [(3, vec![0]), (4, vec![]), (0x7f, vec![])] {
-        let mut fixture = Fixture::default();
-        fixture.elements = vec![2, 0, 0x41, 0, 0x0b, 1, 0, 0, 0x41, offset, 0x0b];
+        let mut fixture = Fixture {
+            elements: vec![2, 0, 0x41, 0, 0x0b, 1, 0, 0, 0x41, offset, 0x0b],
+            ..Fixture::default()
+        };
         fixture.elements.extend(leb(entries.len()));
         fixture.elements.extend(entries);
         let vm = fixture.vm();
@@ -363,16 +371,18 @@ fn imported_function_targets_cannot_bypass_the_host_authority_boundary() {
 
 #[test]
 fn recursive_indirect_calls_obey_the_same_call_depth_and_instruction_caps() {
-    let mut fixture = Fixture::default();
-    fixture.types = vec![(vec![0x7f], vec![0x7f])];
-    fixture.functions = vec![(
-        0,
-        vec![
-            0x20, 0, 0x45, 0x04, 0x7f, 0x41, 0, 0x05, 0x20, 0, 0x20, 0, 0x41, 1, 0x6b, 0x41, 0,
-            0x11, 0, 0, 0x6a, 0x0b, 0x0b,
-        ],
-    )];
-    fixture.elements = vec![1, 0, 0x41, 0, 0x0b, 1, 0];
+    let mut fixture = Fixture {
+        types: vec![(vec![0x7f], vec![0x7f])],
+        functions: vec![(
+            0,
+            vec![
+                0x20, 0, 0x45, 0x04, 0x7f, 0x41, 0, 0x05, 0x20, 0, 0x20, 0, 0x41, 1, 0x6b, 0x41, 0,
+                0x11, 0, 0, 0x6a, 0x0b, 0x0b,
+            ],
+        )],
+        elements: vec![1, 0, 0x41, 0, 0x0b, 1, 0],
+        ..Fixture::default()
+    };
     fixture.exports[4] = 0;
     assert_eq!(
         fixture.vm().call_export("f", &[I32(5)]).unwrap().results,
@@ -474,8 +484,10 @@ fn malformed_or_unsupported_tables_and_elements_are_refused() {
         vec![1, 0x70, 1, 2, 1],
         vec![1, 0x70, 0, 0x80],
     ] {
-        let mut fixture = Fixture::default();
-        fixture.tables = table;
+        let fixture = Fixture {
+            tables: table,
+            ..Fixture::default()
+        };
         assert!(WasmNumericVm::parse(&fixture.bytes(), WasmNumericLimits::default()).is_err());
     }
     for elements in [
@@ -487,8 +499,10 @@ fn malformed_or_unsupported_tables_and_elements_are_refused() {
         vec![1, 4, 0x41, 0, 0x0b, 1, 0xd0, 0x6f, 0x0b], // extern null
         vec![1, 4, 0x41, 0, 0x0b, 1, 0xd2, 0, 0xd2, 1, 0x0b], // trailing expression
     ] {
-        let mut fixture = Fixture::default();
-        fixture.elements = elements;
+        let fixture = Fixture {
+            elements,
+            ..Fixture::default()
+        };
         assert!(WasmNumericVm::parse(&fixture.bytes(), WasmNumericLimits::default()).is_err());
     }
 }
@@ -554,8 +568,10 @@ fn duplicate_export_names_and_invalid_table_exports_fail_validation() {
         vec![2, 1, b'f', 0, 2, 1, b'f', 1, 0],
         vec![2, 1, b't', 1, 0, 1, b't', 1, 0],
     ] {
-        let mut fixture = Fixture::default();
-        fixture.exports = exports;
+        let fixture = Fixture {
+            exports,
+            ..Fixture::default()
+        };
         assert!(matches!(
             WasmNumericVm::parse(&fixture.bytes(), WasmNumericLimits::default()),
             Err(WasmNumericVmError::DuplicateExport { .. })
@@ -573,8 +589,10 @@ fn duplicate_export_names_and_invalid_table_exports_fail_validation() {
 
 #[test]
 fn passive_import_references_still_require_authorized_host_bindings() {
-    let mut fixture = Fixture::default();
-    fixture.imports = vec![1, 1, b'h', 1, b'f', 0, 0];
+    let mut fixture = Fixture {
+        imports: vec![1, 1, b'h', 1, b'f', 0, 0],
+        ..Fixture::default()
+    };
     let mut caller = vec![0x41, 0, 0x41, 0, 0x41, 1, 0xfc, 12, 0, 0, 0xfc, 13, 0];
     caller.extend(fixture.functions[2].1.iter().copied());
     fixture.functions = vec![(1, caller)];

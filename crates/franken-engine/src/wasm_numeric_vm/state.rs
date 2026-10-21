@@ -1565,8 +1565,9 @@ mod tests {
             assert_eq!(
                 a.call_export("f", std::slice::from_ref(&input))
                     .unwrap()
-                    .results,
-                [input.clone()]
+                    .results
+                    .as_slice(),
+                std::slice::from_ref(&input)
             );
             assert_eq!(a.global_export("g"), Some(&input));
             assert_eq!(b.global_export("g"), Some(&initial));
@@ -1800,10 +1801,7 @@ mod tests {
             Some(&data(&[(0, b"x")])),
             Some(&globals),
         );
-        assert!(matches!(
-            WasmNumericVm::parse(&bytes, WasmNumericLimits::default()),
-            Ok(_)
-        ));
+        assert!(WasmNumericVm::parse(&bytes, WasmNumericLimits::default()).is_ok());
         assert!(matches!(
             WasmNumericVm::parse(
                 &bytes,

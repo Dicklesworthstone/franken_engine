@@ -531,7 +531,12 @@ mod tests {
         let parts = [high, low, rope, JsString::from("aé€\0")];
         let expected = parts
             .iter()
-            .map(|text| super::super::text_codec::utf8_of_code_units(text.encode_utf16()))
+            .flat_map(|text| {
+                // Independent standard-library oracle, decoding each Blob part
+                // separately so isolated halves cannot pair across parts.
+                char::decode_utf16(text.encode_utf16())
+                    .map(|unit| unit.unwrap_or(char::REPLACEMENT_CHARACTER))
+            })
             .collect::<String>();
         let baseline = core.estimated_memory_bytes();
         core.config.max_total_memory_bytes = baseline + expected.len() as u64;

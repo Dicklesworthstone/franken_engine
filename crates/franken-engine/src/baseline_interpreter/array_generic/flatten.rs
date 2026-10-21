@@ -33,8 +33,9 @@ fn frame_bytes(capacity: usize) -> u64 {
 impl InterpreterCore {
     /// ES FlattenIntoArray: top-level mapping only, depth-first nested Array
     /// expansion, and CreateDataPropertyOrThrow at consecutive output indices.
-    /// The caller owns the species/provenance scope and suppresses nested GC
-    /// while the traversal holds source handles outside interpreter registers.
+    /// The caller owns the species/provenance scope. Only the top frame is
+    /// mapped: pin its source and species result while the mapper runs.
+    /// Getters and traps still run without a nested collection request.
     pub(super) fn generic_flatten_into(
         &mut self,
         module: Option<&Ir3Module>,
@@ -73,15 +74,23 @@ impl InterpreterCore {
                 let mut element = self.generic_get(module, from, &key)?;
                 self.observe_scoped_callback_result()?;
                 if mapped && let Some((mapper, this_arg)) = mapper {
-                    element = self.invoke_inline_method_call(
-                        module,
-                        mapper.clone(),
-                        this_arg.clone(),
-                        vec![
-                            element,
-                            Self::generic_length_value(index),
-                            self.generic_object_value(from),
-                        ],
+                    // Child frames are never mapped. These are the only
+                    // traversal-owned objects outside interpreter state;
+                    // the call itself pins mapper, thisArg and arguments.
+                    element = self.with_gc_nested_request(
+                        vec![Value::Object(target), Value::Object(source)],
+                        |core| {
+                            core.invoke_inline_method_call(
+                                module,
+                                mapper.clone(),
+                                this_arg.clone(),
+                                vec![
+                                    element,
+                                    Self::generic_length_value(index),
+                                    core.generic_object_value(from),
+                                ],
+                            )
+                        },
                     )?;
                     self.observe_scoped_callback_result()?;
                 }

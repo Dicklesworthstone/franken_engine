@@ -50,6 +50,22 @@ fn try_run_with_budgets(
     max_heap_objects: Option<u32>,
     max_total_memory_bytes: Option<u64>,
 ) -> Option<Run> {
+    try_run_with_config(
+        source,
+        stress_interval,
+        max_heap_objects,
+        max_total_memory_bytes,
+        InterpreterConfig::quickjs_defaults(),
+    )
+}
+
+fn try_run_with_config(
+    source: &str,
+    stress_interval: Option<u64>,
+    max_heap_objects: Option<u32>,
+    max_total_memory_bytes: Option<u64>,
+    mut config: InterpreterConfig,
+) -> Option<Run> {
     let tree = CanonicalEs2020Parser
         .parse_with_options(
             ParserSource {
@@ -66,7 +82,6 @@ fn try_run_with_budgets(
     )
     .ok()?
     .ir3;
-    let mut config = InterpreterConfig::quickjs_defaults();
     config.instruction_budget = 1_000_000_000;
     if let Some(max_heap_objects) = max_heap_objects {
         config.max_heap_objects = max_heap_objects;
@@ -650,6 +665,108 @@ fn callback_value_roots_survive_collection_with_a_bounded_heap() {
         let run = try_run_with_object_budget(source, stress, Some(3000)).expect("lowers");
         assert_eq!(console_lines(&run, source), vec!["3021,3023,3025 true"]);
         assert!(run.gc.collections > 0, "no collection ran: {stress:?}");
+    }
+}
+
+#[test]
+fn flat_map_callbacks_collect_with_a_bounded_heap_and_preserve_roots() {
+    let source = r#"
+        class Result {
+            constructor(length) { this.marker = { tag: 'species', length }; }
+        }
+        class Input extends Array {
+            static get [Symbol.species]() { return Result; }
+        }
+        const receiver = { bias: 10 };
+        const input = new Input({ x: 1 }, { x: 2 }, { x: 3 });
+        const out = input.flatMap(function (item, index, array) {
+            let checksum = 0;
+            for (let i = 0; i < 6000; i++) {
+                const temporary = { i };
+                checksum += temporary.i & 1;
+            }
+            return [
+                { owner: array, receiver: this, item,
+                  total: item.x + index + this.bias + checksum },
+                { owner: array, receiver: this, item,
+                  total: item.x * 10 + index + this.bias + checksum }
+            ];
+        }, receiver);
+        const rows = [out[0], out[1], out[2], out[3], out[4], out[5]];
+        console.log(rows.map(row => row.total).join(','),
+            rows.every((row, index) => row.owner === input &&
+                row.receiver === receiver && row.item === input[Math.floor(index / 2)]),
+            out instanceof Result, out.marker.tag, out.marker.length);
+        const reason = { tag: 'mapper throw' };
+        try {
+            input.flatMap(item => {
+                let checksum = 0;
+                for (let i = 0; i < 6000; i++) {
+                    const temporary = { i };
+                    checksum += temporary.i & 1;
+                }
+                if (item.x === 2 && checksum === 3000) throw reason;
+                return [item];
+            });
+        } catch (error) { console.log(error === reason); }
+        console.log(input[2].x, out.marker.tag);
+    "#;
+    for throughput in [false, true] {
+        for stress in [None, Some(1), Some(7)] {
+            let config = if throughput {
+                InterpreterConfig::v8_defaults()
+            } else {
+                InterpreterConfig::quickjs_defaults()
+            };
+            let run = try_run_with_config(source, stress, Some(3000), None, config)
+                .expect("flatMap root regression lowers");
+            assert_eq!(
+                console_lines(&run, source),
+                [
+                    "3011,3020,3013,3031,3015,3042 true true species 0",
+                    "true",
+                    "3 species",
+                ],
+                "throughput={throughput}, gc={stress:?}"
+            );
+            assert!(
+                run.gc.collections > 0,
+                "throughput={throughput}, gc={stress:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn flat_map_live_callback_values_still_exceed_the_heap_limit() {
+    let source = r#"
+        const retained = [];
+        [1].flatMap(() => {
+            for (let i = 0; i < 6000; i++) { retained.push({ i }); }
+            return retained;
+        });
+    "#;
+    for throughput in [false, true] {
+        for stress in [None, Some(1), Some(7)] {
+            let config = if throughput {
+                InterpreterConfig::v8_defaults()
+            } else {
+                InterpreterConfig::quickjs_defaults()
+            };
+            let run = try_run_with_config(source, stress, Some(3000), None, config)
+                .expect("live-allocation negative lowers");
+            assert!(
+                matches!(&run.result, Err(InterpreterError::MemoryBudgetExceeded {
+                    requested_heap_objects, max_heap_objects: 3000, ..
+                }) if *requested_heap_objects > 3000),
+                "throughput={throughput}, gc={stress:?}: {:?}",
+                run.result
+            );
+            assert!(
+                run.gc.collections > 0,
+                "throughput={throughput}, gc={stress:?}"
+            );
+        }
     }
 }
 

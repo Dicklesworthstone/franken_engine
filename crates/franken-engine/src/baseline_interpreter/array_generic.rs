@@ -12,8 +12,9 @@
 //! specification writes them, over [[Get]], [[Set]], [[HasProperty]] and
 //! [[Delete]], so getters and proxy traps observe every step.
 //!
-//! Callbacks and traps run without a nested collection request, so the
-//! arrays and values held here stay reachable while guest code runs.
+//! Traps run without a nested collection request, so the arrays and values
+//! held here stay reachable. Callback paths that enumerate their held roots,
+//! including the flattening mapper, can request collection within the call.
 //!
 //! Proxy `values`/`keys`/`entries` use the same source-retaining iterator as
 //! ordinary arrays: construction reads neither length nor elements. Typed

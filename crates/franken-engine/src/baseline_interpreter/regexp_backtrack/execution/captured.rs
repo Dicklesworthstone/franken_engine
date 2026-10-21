@@ -1,4 +1,4 @@
-//! Bounded capture history for greedy repetitions of a fixed-width body.
+//! Bounded capture history for greedy and lazy fixed-width repetitions.
 //!
 //! Recognize nested captures enclosing one consuming atom or a bounded literal
 //! block. All selected groups span the entire iteration, so earlier exits can
@@ -13,6 +13,7 @@ const MAX_CAPTURE_SLOTS: usize = MAX_CAPTURE_GROUPS * 2;
 
 pub(super) struct CapturedRepeat {
     pub(super) exit: usize,
+    pub(super) greedy: bool,
     register: usize,
     from: usize,
     to: usize,
@@ -33,7 +34,9 @@ impl CapturedRepeat {
         else {
             return None;
         };
-        if *first != pc + 1 || *register >= regexp.registers || *from < 2
+        let greedy = *first == pc + 1;
+        let target = if greedy { *second } else { *first };
+        if (!greedy && *second != pc + 1) || *register >= regexp.registers || *from < 2
             || from % 2 != 0 || to % 2 != 0 || from >= to
             || *to > regexp.group_count.checked_mul(2)?
         {
@@ -77,13 +80,13 @@ impl CapturedRepeat {
         }
         let progress = close.checked_add(groups)?;
         let exit = progress.checked_add(2)?;
-        if *second != exit || exit >= regexp.program.len()
+        if target != exit || exit >= regexp.program.len()
             || !matches!(regexp.program.get(progress), Some(Inst::CheckProgress(mark)) if mark == register)
             || !matches!(regexp.program.get(progress + 1), Some(Inst::Jump(head)) if *head == pc)
         {
             return None;
         }
-        Some(Self { exit, register: *register, from: *from, to: *to, body, width, backward })
+        Some(Self { exit, greedy, register: *register, from: *from, to: *to, body, width, backward })
     }
 
     fn previous(&self, position: usize) -> usize {
@@ -181,6 +184,41 @@ impl Run<'_> {
             stack.push(Frame::CapturedGreedy { pc, position: repeat.previous(position), start });
         }
         Ok(position)
+    }
+
+    /// The current lazy exit failed. Defer the original capture/mark history
+    /// until this first extension, so a zero-iteration match keeps only its
+    /// choice frame. A positive-width body moves monotonically: position can
+    /// equal start only before the first completed extension.
+    ///
+    /// Subsequent failed exits need no individual history. The ordinary
+    /// unwinder restores the one original snapshot after body failure; a
+    /// budget refusal instead keeps the shared body's exact partial writes.
+    pub(super) fn resume_captured_lazy(
+        &mut self,
+        frame: Frame,
+        stack: &mut Vec<Frame>,
+    ) -> Result<Option<(usize, usize)>, BacktrackError> {
+        let Frame::CapturedLazy { pc, position, start } = frame else {
+            unreachable!("only captured lazy choices resume here");
+        };
+        let repeat = CapturedRepeat::at(self.regexp, pc, &mut self.literal_blocks)
+            .expect("the saved capture shape belongs to an immutable program");
+        debug_assert!(!repeat.greedy);
+        if position == start {
+            stack.push(Frame::Register {
+                register: repeat.register,
+                old: self.registers[repeat.register],
+            });
+            for slot in repeat.from..repeat.to {
+                stack.push(Frame::Slot { slot, old: self.slots[slot] });
+            }
+        }
+        let Some(position) = self.advance_captured_body(&repeat, position)? else {
+            return Ok(None);
+        };
+        stack.push(Frame::CapturedLazy { pc, position, start });
+        Ok(Some((repeat.exit, position)))
     }
 
     pub(super) fn resume_captured_greedy(

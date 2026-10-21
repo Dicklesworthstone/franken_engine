@@ -61,6 +61,23 @@ fn ascii_middle_boundary(text: &str, length: usize, position: usize) -> Option<u
 /// at the returned byte. Search from the nearer end; ASCII spans retain a
 /// vectorizable byte check rather than decoding each character.
 pub(super) fn utf16_boundary(text: &str, length: usize, position: usize) -> (usize, bool) {
+    utf16_boundary_impl::<true>(text, length, position)
+}
+
+/// Search already has a native byte scanner. Do not precede its UTF-16 offset
+/// conversion with another potentially long ASCII probe: a non-ASCII scalar
+/// at the probe's end would make that prefix get scanned twice. Keep the same
+/// bounded fringe/fixed-width proofs and pair boundaries. Reverse decoding
+/// is selected only when its worst-case byte work beats a forward scan.
+pub(super) fn utf16_search_boundary(text: &str, length: usize, position: usize) -> (usize, bool) {
+    utf16_boundary_impl::<false>(text, length, position)
+}
+
+fn utf16_boundary_impl<const PROBE_ASCII: bool>(
+    text: &str,
+    length: usize,
+    position: usize,
+) -> (usize, bool) {
     debug_assert!(position <= length);
     if position == 0 {
         return (0, false);
@@ -76,8 +93,19 @@ pub(super) fn utf16_boundary(text: &str, length: usize, position: usize) -> (usi
         return (byte, false);
     }
     let bytes = text.as_bytes();
-    if position <= remaining {
-        if bytes[..position].is_ascii() {
+    // A UTF-16 unit occupies at most three UTF-8 bytes, plus one byte when
+    // the requested boundary splits an astral scalar. For searches, the
+    // conservative division test bounds reverse decoding below the prefix's
+    // minimum byte length. This avoids trading a short ASCII prefix for a
+    // shorter-in-units but larger-in-bytes Unicode suffix. Indexed access
+    // retains its original nearer-unit-end choice and vectorized ASCII probe.
+    let from_front = if PROBE_ASCII {
+        position <= remaining
+    } else {
+        position / 3 <= remaining
+    };
+    if from_front {
+        if PROBE_ASCII && bytes[..position].is_ascii() {
             return (position, false);
         }
         let mut offset = position;
@@ -93,7 +121,7 @@ pub(super) fn utf16_boundary(text: &str, length: usize, position: usize) -> (usi
         }
     } else {
         let byte = bytes.len() - remaining;
-        if bytes[byte..].is_ascii() {
+        if PROBE_ASCII && bytes[byte..].is_ascii() {
             return (byte, false);
         }
         let mut offset = remaining;

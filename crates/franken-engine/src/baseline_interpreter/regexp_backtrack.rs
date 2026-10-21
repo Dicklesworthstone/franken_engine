@@ -149,14 +149,23 @@ pub(super) enum CaptureRetention {
     WholeMatchExceptLast,
 }
 
+/// Byte coordinates for decoded RegExp input.
+///
+/// ASCII needs no table. Non-ASCII inputs whose complete UTF-8 byte length
+/// fits in u32 keep four-byte offsets even on 64-bit hosts; exceptionally
+/// large inputs retain the exact usize table. Matching code sees only the
+/// conversion methods below, so this changes storage width, not semantics.
+enum ByteOffsets {
+    Identity,
+    U32(Vec<u32>),
+    Usize(Vec<usize>),
+}
+
 /// The characters of a haystack and their byte offsets, prepared once per
 /// operation so repeated searches (global match, replace, split) stay linear.
 pub(super) struct PreparedInput {
     chars: Vec<char>,
-    /// Empty for ASCII: character indices already ARE byte offsets. Otherwise
-    /// `byte_offsets[i]` is the byte offset of `chars[i]`, with one final entry
-    /// for EOF. No execution code depends on the physical offset storage.
-    byte_offsets: Vec<usize>,
+    byte_offsets: ByteOffsets,
 }
 
 impl PreparedInput {
@@ -164,7 +173,7 @@ impl PreparedInput {
         if text.is_ascii() {
             return Self {
                 chars: text.bytes().map(char::from).collect(),
-                byte_offsets: Vec::new(),
+                byte_offsets: ByteOffsets::Identity,
             };
         }
         // Reserve by scalar count rather than UTF-8 byte count. The extra
@@ -172,15 +181,32 @@ impl PreparedInput {
         // non-ASCII input, without growing either vector during decoding.
         let count = text.chars().count();
         let mut chars = Vec::with_capacity(count);
-        let mut byte_offsets = Vec::with_capacity(count + 1);
-        for (offset, c) in text.char_indices() {
-            chars.push(c);
-            byte_offsets.push(offset);
-        }
-        byte_offsets.push(text.len());
-        Self {
-            chars,
-            byte_offsets,
+        if u32::try_from(text.len()).is_ok() {
+            let mut byte_offsets = Vec::with_capacity(count + 1);
+            for (offset, c) in text.char_indices() {
+                chars.push(c);
+                byte_offsets.push(
+                    u32::try_from(offset).expect("offset is bounded by the admitted text length"),
+                );
+            }
+            byte_offsets.push(
+                u32::try_from(text.len()).expect("text length was checked before decoding"),
+            );
+            Self {
+                chars,
+                byte_offsets: ByteOffsets::U32(byte_offsets),
+            }
+        } else {
+            let mut byte_offsets = Vec::with_capacity(count + 1);
+            for (offset, c) in text.char_indices() {
+                chars.push(c);
+                byte_offsets.push(offset);
+            }
+            byte_offsets.push(text.len());
+            Self {
+                chars,
+                byte_offsets: ByteOffsets::Usize(byte_offsets),
+            }
         }
     }
 
@@ -190,21 +216,27 @@ impl PreparedInput {
 
     /// The character index at `byte` (the next character boundary).
     pub(super) fn char_index_at_byte(&self, byte: usize) -> usize {
-        if self.byte_offsets.is_empty() {
-            // A start beyond EOF must stay beyond EOF, not become a valid
-            // empty match at the end. Match the dense table's partition point.
-            byte.min(self.chars.len().saturating_add(1))
-        } else {
-            self.byte_offsets.partition_point(|&offset| offset < byte)
+        match &self.byte_offsets {
+            ByteOffsets::Identity => {
+                // A start beyond EOF must stay beyond EOF, not become a valid
+                // empty match at the end. Match the dense table's partition point.
+                byte.min(self.chars.len().saturating_add(1))
+            }
+            ByteOffsets::U32(offsets) => offsets.partition_point(|&offset| {
+                usize::try_from(offset).unwrap_or(usize::MAX) < byte
+            }),
+            ByteOffsets::Usize(offsets) => offsets.partition_point(|&offset| offset < byte),
         }
     }
 
     pub(super) fn byte_offset(&self, char_index: usize) -> usize {
         let index = char_index.min(self.chars.len());
-        if self.byte_offsets.is_empty() {
-            index
-        } else {
-            self.byte_offsets[index]
+        match &self.byte_offsets {
+            ByteOffsets::Identity => index,
+            ByteOffsets::U32(offsets) => {
+                usize::try_from(offsets[index]).unwrap_or(usize::MAX)
+            }
+            ByteOffsets::Usize(offsets) => offsets[index],
         }
     }
 }

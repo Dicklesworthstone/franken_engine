@@ -10,10 +10,17 @@ impl Run<'_> {
         start_pc: usize,
         start_position: usize,
     ) -> Result<Option<usize>, BacktrackError> {
+        // This oracle never executes a fused instruction. Its undo stack must
+        // not depend on the production executor's expanding frame variants.
+        enum ReferenceFrame {
+            Alternative { pc: usize, position: usize },
+            Slot { slot: usize, old: Option<usize> },
+            Register { register: usize, old: usize },
+        }
         let regexp = self.regexp;
         let input = self.input;
         let chars = &input.chars;
-        let mut stack: Vec<Frame> = Vec::new();
+        let mut stack: Vec<ReferenceFrame> = Vec::new();
         let mut pc = start_pc;
         let mut position = start_position;
         loop {
@@ -50,7 +57,7 @@ impl Run<'_> {
                     ((before != after) != *negated).then_some(position)
                 }
                 Inst::Split { first, second } => {
-                    stack.push(Frame::Alternative {
+                    stack.push(ReferenceFrame::Alternative {
                         pc: *second,
                         position,
                     });
@@ -62,7 +69,7 @@ impl Run<'_> {
                     continue;
                 }
                 Inst::Save(slot) => {
-                    stack.push(Frame::Slot {
+                    stack.push(ReferenceFrame::Slot {
                         slot: *slot,
                         old: self.slots[*slot],
                     });
@@ -73,7 +80,7 @@ impl Run<'_> {
                     self.charge(to - from)?;
                     for (offset, value) in self.slots[*from..*to].iter_mut().enumerate() {
                         if let Some(old) = value.take() {
-                            stack.push(Frame::Slot {
+                            stack.push(ReferenceFrame::Slot {
                                 slot: from + offset,
                                 old: Some(old),
                             });
@@ -82,7 +89,7 @@ impl Run<'_> {
                     Some(position)
                 }
                 Inst::Mark(register) => {
-                    stack.push(Frame::Register {
+                    stack.push(ReferenceFrame::Register {
                         register: *register,
                         old: self.registers[*register],
                     });
@@ -93,7 +100,7 @@ impl Run<'_> {
                     (self.registers[*register] != position).then_some(position)
                 }
                 Inst::CounterReset(counter) => {
-                    stack.push(Frame::Register {
+                    stack.push(ReferenceFrame::Register {
                         register: *counter,
                         old: self.registers[*counter],
                     });
@@ -119,7 +126,7 @@ impl Run<'_> {
                         } else {
                             (*exit, *body)
                         };
-                        stack.push(Frame::Alternative {
+                        stack.push(ReferenceFrame::Alternative {
                             pc: second,
                             position,
                         });
@@ -132,7 +139,7 @@ impl Run<'_> {
                     if count >= *min && self.registers[*mark] == position {
                         None
                     } else {
-                        stack.push(Frame::Register {
+                        stack.push(ReferenceFrame::Register {
                             register: *counter,
                             old: count,
                         });
@@ -171,7 +178,7 @@ impl Run<'_> {
                             // Keep the captures, undoably.
                             for (slot, old) in before.into_iter().enumerate() {
                                 if self.slots[slot] != old {
-                                    stack.push(Frame::Slot { slot, old });
+                                    stack.push(ReferenceFrame::Slot { slot, old });
                                 }
                             }
                         }
@@ -189,14 +196,11 @@ impl Run<'_> {
                 None => loop {
                     match stack.pop() {
                         None => return Ok(None),
-                        Some(Frame::Slot { slot, old }) => self.slots[slot] = old,
-                        Some(Frame::Register { register, old }) => {
+                        Some(ReferenceFrame::Slot { slot, old }) => self.slots[slot] = old,
+                        Some(ReferenceFrame::Register { register, old }) => {
                             self.registers[register] = old;
                         }
-                        Some(Frame::RepeatForward { .. } | Frame::RepeatBackward { .. }) => {
-                            unreachable!("the independent scalar executor never creates repetition ranges");
-                        }
-                        Some(Frame::Alternative {
+                        Some(ReferenceFrame::Alternative {
                             pc: resume,
                             position: at,
                         }) => {
@@ -249,6 +253,10 @@ fn shared_stack_matches_reference_captures_and_every_budget_boundary() {
     let patterns = [
         "a|bc",
         "((a)|(b))+",
+        "((ab))*ab",
+        r"((ab))*\1x",
+        r"(?<=((ab))*)c",
+        r"(?=((ab))*)c|a",
         "(a?b??)*",
         r"(?=(a+))a*b\1",
         r"(?=(a|ab))\1c",
@@ -358,9 +366,10 @@ fn small_searches_reuse_work_buffers_after_success_failure_and_nested_assertions
 
 #[test]
 fn search_releases_an_oversized_stack_instead_of_retaining_an_adversarial_peak() {
-    // Captures inside the repeated atom deliberately keep the scalar path:
-    // plain a* now compresses its choices instead of creating an oversized stack.
-    let regexp = BacktrackRegExp::new("(a)*", "").unwrap();
+    // A branching capture deliberately keeps the scalar path. Whole-body
+    // captures such as (a)* now compresses their history too; retain the same
+    // peak-release assertions using a body outside both compact paths.
+    let regexp = BacktrackRegExp::new("(a|b)*", "").unwrap();
     let text = "a".repeat(MAX_RETAINED_FRAMES * 2);
     let input = PreparedInput::new(&text);
     let mut run = Run::new(&regexp, &input, 1_000_000);

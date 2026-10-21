@@ -477,7 +477,6 @@ mod tests {
     // implementations; the unhardened copies this module used to carry were
     // unreachable outside these tests.
     use crate::key_attestation::{AttestationStore, NonceRegistry};
-    use std::collections::BTreeSet;
 
     const TEST_ZONE: &str = "test-zone";
 

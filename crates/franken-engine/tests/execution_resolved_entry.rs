@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeSet;
-
 use frankenengine_engine::ast::ParseGoal;
 use frankenengine_engine::baseline_interpreter::LaneChoice;
 use frankenengine_engine::capability::RuntimeCapability;

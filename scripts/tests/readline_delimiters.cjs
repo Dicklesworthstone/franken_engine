@@ -210,3 +210,198 @@ test('empty decoded chunks do not dispatch substring searches', () => {
   assert.equal(c.calls.filter(x => x.kind === 'search').length, 0);
   assert.deepEqual(r.lines, []);
 });
+
+// Observe actual factory allocations and references, without replacing its
+// collector. Host-side storage is outside the guest realm being inspected.
+function publicationCandidate() {
+  const records = new Map(), arrays = [], metrics = { records: 0, joins: 0 };
+  class ObservedWeakMap extends WeakMap {
+    set(key, value) {
+      if (value && Object.hasOwn(value, 'fragments')) records.set(key, value);
+      return super.set(key, value);
+    }
+  }
+  const context = vm.createContext({
+    __franken_readline_events: E,
+    __franken_readline_decoder: require('node:string_decoder'),
+    AbortController, AbortSignal, Symbol, WeakMap: ObservedWeakMap,
+    observeRecord() { metrics.records++; },
+    observeArray(value) { arrays.push(value); },
+    observeJoin() { metrics.joins++; },
+  });
+  vm.runInContext(`{
+    const create = Object.create, setPrototype = Object.setPrototypeOf;
+    const join = Array.prototype.join, isArray = Array.isArray;
+    Object.create = function (prototype, descriptors) {
+      if (prototype === null) observeRecord();
+      return Reflect.apply(create, Object, [prototype, descriptors]);
+    };
+    Object.setPrototypeOf = function (value, prototype) {
+      const result = Reflect.apply(setPrototype, Object, [value, prototype]);
+      if (prototype === null && isArray(value)) observeArray(value);
+      return result;
+    };
+    Array.prototype.join = function (separator) {
+      observeJoin();
+      return Reflect.apply(join, this, [separator]);
+    };
+  }`, context);
+  const api = vm.runInContext(source, context, { filename: 'production-readline.js' });
+  function reset() { metrics.records = 0; metrics.joins = 0; arrays.length = 0; }
+  return { api, context, records, arrays, metrics, reset };
+}
+
+test('whole lines bypass fragment records, joins and per-line publication nodes', () => {
+  for (const count of [1, 2, 65, 4096]) {
+    for (const value of ['', 'row', 'é\ud800🚀']) {
+      const c = publicationCandidate(), r = open(c.api);
+      const pending = c.records.get(r.rl).fragments.pending;
+      c.reset();
+      r.input.emit('data', (value + '\n').repeat(count));
+      assert.deepEqual(r.lines, Array(count).fill(value));
+      assert.equal(c.metrics.records, 0, 'no per-line fragment/publication nodes');
+      assert.equal(c.metrics.joins, 0, 'complete lines do not visit fragment joins');
+      assert.ok(c.arrays.length <= (count > 1 ? 1 : 0), 'at most one list per multi-line chunk');
+      assert.equal(c.records.get(r.rl).fragments.pending, pending, 'unused fragment scratch is not replaced');
+      r.input.emit('end');
+      assert.equal(r.closed, 1);
+      assert.equal(r.input.listenerCount('data'), 0);
+    }
+  }
+});
+
+test('single-line chunks need no publication list even after repeated delivery', () => {
+  const c = publicationCandidate(), r = open(c.api);
+  c.reset();
+  for (let n = 0; n < 1024; n++) r.input.emit('data', (n % 2 ? 'line' : '') + '\n');
+  assert.equal(r.lines.length, 1024);
+  assert.equal(c.metrics.records, 0);
+  assert.equal(c.metrics.joins, 0);
+  assert.equal(c.arrays.length, 0);
+  r.input.emit('end');
+});
+
+test('only the first completed line consumes an existing fragmented prefix', () => {
+  for (const count of [1, 63, 64, 65, 129]) {
+    const c = publicationCandidate(), r = open(c.api), reference = open(nodeReadline);
+    for (let n = 0; n < count; n++) {
+      r.input.emit('data', 'p'); reference.input.emit('data', 'p');
+    }
+    c.reset();
+    const chunk = 'tail\r\n' + 'row\n'.repeat(4096) + 'unfinished';
+    r.input.emit('data', chunk); reference.input.emit('data', chunk);
+    assert.deepEqual(r.lines, reference.lines);
+    assert.equal(c.metrics.records, 1, 'only the pending prefix needs a fragment node');
+    assert.ok(c.metrics.joins <= 2, 'later whole lines do not repeat joins');
+    r.input.emit('data', '-end\n'); reference.input.emit('data', '-end\n');
+    r.input.emit('end'); reference.input.emit('end');
+    assert.deepEqual(r.lines, reference.lines);
+    assert.equal(r.lines[0], 'p'.repeat(count) + 'tail');
+    assert.equal(r.lines.at(-1), 'unfinished-end');
+  }
+});
+
+test('publication releases consumed list entries before invoking listeners', () => {
+  const c = publicationCandidate(), r = open(c.api);
+  c.reset();
+  r.rl.on('line', line => {
+    assert.equal(c.arrays.length, 1, 'one private list, not one record per line');
+    const values = Array.from(c.arrays[0]);
+    assert.equal(Object.getPrototypeOf(c.arrays[0]), null);
+    if (line === 'first') assert.deepEqual(values, ['second', 'third']);
+    else if (line === 'second') assert.deepEqual(values, [undefined, 'third']);
+    else assert.deepEqual(values, [undefined, undefined]);
+  });
+  r.input.emit('data', 'first\nsecond\nthird\n');
+  assert.deepEqual(r.lines, ['first', 'second', 'third']);
+  r.input.emit('end');
+});
+
+test('multi-line reentry, listener replacement and EOF keep live Node ordering', () => {
+  for (const action of ['data', 'write', 'end', 'replace', 'question']) {
+    function run(api) {
+      const r = open(api), order = [];
+      const later = line => order.push('later:' + line);
+      function listener(line) {
+        order.push('line:' + line);
+        if (line !== 'first') return;
+        if (action === 'data') r.input.emit('data', 'nested1\nnested2\ninner-suffix');
+        if (action === 'write') r.rl.write('nested1\nnested2\ninner-suffix');
+        if (action === 'end') r.input.emit('end');
+        if (action === 'replace') { r.rl.removeListener('line', listener); r.rl.on('line', later); }
+        if (action === 'question') r.rl.question('?', answer => order.push('answer:' + answer));
+      }
+      r.rl.on('line', listener);
+      r.rl.on('close', () => order.push('close'));
+      r.input.emit('data', 'first\r\nsecond\nthird\rsuffix');
+      r.input.emit('end'); r.rl.close();
+      return order;
+    }
+    assert.deepEqual(run(candidate().api), run(nodeReadline), action);
+  }
+});
+
+test('throwing on a later line drops undelivered complete lines but not the suffix', () => {
+  for (const reason of [undefined, null, false, 0, Symbol('later'), {}]) {
+    for (const api of [candidate().api, nodeReadline]) {
+      const r = open(api), listener = line => { if (line === 'second') throw reason; };
+      r.rl.on('line', listener);
+      let caught = false;
+      try { r.input.emit('data', 'first\nsecond\nthird\nsuffix'); }
+      catch (error) { caught = true; assert.equal(error, reason); }
+      assert.ok(caught);
+      r.rl.removeListener('line', listener);
+      r.input.emit('data', 'tail\n'); r.input.emit('end');
+      assert.deepEqual(r.lines, ['first', 'second', 'suffixtail']);
+    }
+  }
+});
+
+test('private publication storage ignores indexed hooks and iterators changed during delivery', () => {
+  const c = candidate(), r = open(c.api);
+  r.rl.on('line', line => {
+    if (line !== 'first') return;
+    vm.runInContext(`for (const index of ['0', '1', '63']) {
+      Object.defineProperty(Array.prototype, index, {
+        configurable: true,
+        get() { throw new Error('inherited publication read'); },
+        set() { throw new Error('inherited publication write'); }
+      });
+    }
+    Array.prototype[Symbol.iterator] = Array.prototype.shift = function () {
+      throw new Error('publication must not consult guest iteration or shift');
+    };`, c.context);
+    r.input.emit('data', 'nested1\nnested2\nnested3\n');
+  });
+  r.input.emit('data', 'first\n' + 'row\n'.repeat(128) + 'suffix');
+  r.input.emit('end');
+  assert.deepEqual(r.lines, ['first', 'suffixnested1', 'nested2', 'nested3', ...Array(128).fill('row')]);
+});
+
+test('buffered async iteration delivers every line across its pause threshold', async () => {
+  async function run(api) {
+    const r = open(api), iterator = r.rl[Symbol.asyncIterator]();
+    const text = Array.from({ length: 1100 }, (_, i) => 'row' + i).join('\n') + '\n';
+    r.input.emit('data', text); r.input.emit('end');
+    const result = [];
+    for await (const line of iterator) result.push(line);
+    r.rl.close();
+    assert.equal(r.closed, 1);
+    assert.equal(r.input.listenerCount('data'), 0);
+    return result;
+  }
+  assert.deepEqual(await run(candidate().api), await run(nodeReadline));
+});
+
+test('abort during publication preserves already-complete lines and one close', () => {
+  function run(api) {
+    const controller = new AbortController(), r = open(api, { signal: controller.signal });
+    r.rl.on('line', line => { if (line === 'first') controller.abort('stop'); });
+    r.input.emit('data', 'first\nsecond\nthird\npending');
+    r.input.emit('end');
+    assert.equal(r.closed, 1);
+    assert.equal(r.input.listenerCount('data'), 0);
+    return r.lines;
+  }
+  assert.deepEqual(run(candidate().api), run(nodeReadline));
+});

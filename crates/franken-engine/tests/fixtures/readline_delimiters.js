@@ -56,5 +56,54 @@ async function verifyReadlineDelimiters(readline, EventEmitter) {
   const items = [];
   for await (const line of iter) items.push(line);
   same(items, ['one', 'two', 'three'], 'async iteration');
+  // Exercise the complete-line path as well as a first line assembled from
+  // pending fragments. Later lines must not consume the trailing suffix.
+  for (const count of [1, 2, 65]) {
+    same(collect(['row\n'.repeat(count)], false), Array(count).fill('row'), 'whole lines');
+    same(collect(['\n'.repeat(count)], true), Array(count).fill(''), 'empty whole lines');
+  }
+  same(collect(['p'.repeat(64), 'p', 'tail\nrow\nunfinished', '-end\n'], false),
+    ['p'.repeat(65) + 'tail', 'row', 'unfinished-end'], 'prefix and complete lines');
+  {
+    const r = open(), values = [];
+    const reason = { later: true };
+    function listener(line) {
+      values.push(line);
+      if (line === 'second') throw reason;
+    }
+    r.rl.on('line', listener);
+    let caught = false;
+    try { r.input.emit('data', 'first\nsecond\nthird\nsuffix'); }
+    catch (error) { check(error === reason, 'later error identity'); caught = true; }
+    check(caught, 'later callback must throw');
+    r.rl.removeListener('line', listener);
+    r.rl.on('line', function (line) { values.push(line); });
+    r.input.emit('data', 'tail\n'); r.input.emit('end');
+    same(values, ['first', 'second', 'suffixtail'], 'later throw retains suffix only');
+  }
+  {
+    const r = open();
+    let trace = '';
+    const prototype = Object.getPrototypeOf([]);
+    const previous = Object.getOwnPropertyDescriptor(prototype, '1');
+    r.rl.on('line', function (line) {
+      trace += '[' + line + ']';
+      if (line === 'first') {
+        Object.defineProperty(prototype, '1', {
+          configurable: true,
+          get: function () { throw new Error('inherited publication read'); },
+          set: function () { throw new Error('inherited publication write'); }
+        });
+        r.input.emit('data', 'nested1\nnested2\nnested3\n');
+      }
+    });
+    try { r.input.emit('data', 'first\nsecond\nthird\nsuffix'); }
+    finally {
+      if (previous === undefined) delete prototype[1];
+      else Object.defineProperty(prototype, '1', previous);
+      r.rl.close();
+    }
+    check(trace === '[first][suffixnested1][nested2][nested3][second][third]', 'private publication reentry');
+  }
   return 'readline delimiters: long lines, CRLF, UTF-16, UTF-8, reentry, question, iteration';
 }

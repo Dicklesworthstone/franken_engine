@@ -758,6 +758,14 @@ const FROM_ASYNC_AWAITS: [FromAsyncAwait; 8] = [
     FromAsyncAwait::SyncCloseValue,
 ];
 
+/// Guest-supplied source, mapping call and constructor for one invocation.
+struct FromAsyncCall {
+    items: Value,
+    mapper: Value,
+    this_arg: Value,
+    constructor: Option<Value>,
+}
+
 /// `Array.fromAsync` (ES2024 23.1.2.1, bd-9vouw.172). The spec runs the body
 /// as an async function. Here it is a state machine: the state lives in a
 /// holder object, and every Await registers the two resumption steps
@@ -799,10 +807,7 @@ impl InterpreterCore {
         if let Err(error) = self.array_from_async_start(
             module,
             promise,
-            items,
-            mapper,
-            this_arg,
-            constructor,
+            FromAsyncCall { items, mapper, this_arg, constructor },
             &label,
         ) {
             let (reason, reason_label) = self.thrown_completion_value(error, &label)?;
@@ -816,12 +821,15 @@ impl InterpreterCore {
         &mut self,
         module: Option<&Ir3Module>,
         promise: crate::promise_model::PromiseHandle,
-        items: Value,
-        mapper: Value,
-        this_arg: Value,
-        constructor: Option<Value>,
+        call: FromAsyncCall,
         label: &Label,
     ) -> Result<(), InterpreterError> {
+        let FromAsyncCall {
+            items,
+            mapper,
+            this_arg,
+            constructor,
+        } = call;
         // IsCallable(mapfn) precedes GetMethod(items, @@asyncIterator).
         if !matches!(mapper, Value::Undefined) && !mapper.is_callable() {
             return Err(InterpreterError::TypeError {

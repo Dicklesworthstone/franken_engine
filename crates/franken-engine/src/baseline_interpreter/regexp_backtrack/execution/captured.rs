@@ -97,7 +97,7 @@ impl CapturedRepeat {
         let previous = self.previous(position);
         run.registers[self.register] = previous;
         let (from, to) = if self.backward { (position, previous) } else { (previous, position) };
-        for pair in run.slots[self.from..self.to].chunks_exact_mut(2) {
+        for pair in run.slots[self.from..self.to].as_chunks_mut::<2>().0 {
             pair[0] = Some(from);
             pair[1] = Some(to);
         }

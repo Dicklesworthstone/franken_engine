@@ -388,7 +388,7 @@ impl BytecodeVm {
                     self.record_event(EventRecord {
                         step: steps,
                         ip: ip as u32,
-                        opcode: &opcode,
+                        opcode,
                         event: "return",
                         outcome: "ok",
                         error_code: None,
@@ -415,7 +415,7 @@ impl BytecodeVm {
                     self.record_event(EventRecord {
                         step: steps,
                         ip: ip as u32,
-                        opcode: &opcode,
+                        opcode,
                         event: "instruction",
                         outcome: "error",
                         error_code: Some(error.code().to_string()),

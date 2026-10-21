@@ -29,7 +29,7 @@ impl InterpreterCore {
 
     /// Isolate only these protocol observations; do not leave an observation
     /// floor installed on unrelated code after a suspended or failed step.
-    fn from_async_sync_scope<T>(
+    fn async_from_sync_scope<T>(
         &mut self,
         label: &Label,
         step: impl FnOnce(&mut Self) -> Result<T, InterpreterError>,
@@ -54,7 +54,7 @@ impl InterpreterCore {
         })
     }
 
-    fn from_async_sync_get(
+    fn async_from_sync_get(
         &mut self,
         module: &Ir3Module,
         value: &Value,
@@ -71,7 +71,7 @@ impl InterpreterCore {
         Ok(value)
     }
 
-    fn from_async_sync_call(
+    fn async_from_sync_call(
         &mut self,
         module: &Ir3Module,
         method: Value,
@@ -95,19 +95,21 @@ impl InterpreterCore {
         holder: ObjectId,
         label: &Label,
     ) -> Result<(), InterpreterError> {
-        self.from_async_sync_scope(label, |core| {
+        self.async_from_sync_scope(label, |core| {
             let step = (|| {
                 let iterator = core.array_from_async_slot(holder, "__iterator")?;
                 let next = core.array_from_async_slot(holder, "__next")?;
-                let result = core.from_async_sync_call(module, next, iterator)?;
+                let result = core.async_from_sync_call(module, next, iterator)?;
                 if !result.is_object_like() {
                     return Err(InterpreterError::TypeError {
                         expected: "sync iterator result object".to_string(),
                         got: result.type_name().to_string(),
                     });
                 }
-                let done = core.from_async_sync_get(module, &result, "done")?.is_truthy();
-                let value = core.from_async_sync_get(module, &result, "value")?;
+                let done = core
+                    .async_from_sync_get(module, &result, "done")?
+                    .is_truthy();
+                let value = core.async_from_sync_get(module, &result, "value")?;
                 core.array_from_async_set(holder, "__done", Value::Bool(done))?;
                 Ok(value)
             })();
@@ -120,13 +122,13 @@ impl InterpreterCore {
                     // Only language errors reject the wrapper. Budget and
                     // cancellation faults propagate out of the native run.
                     let (reason, label) = core.thrown_completion_value(error, &observed)?;
-                    core.from_async_sync_rejected_step(module, holder, reason, label)
+                    core.async_from_sync_rejected_step(module, holder, reason, label)
                 }
             }
         })
     }
 
-    fn from_async_sync_rejected_step(
+    fn async_from_sync_rejected_step(
         &mut self,
         module: &Ir3Module,
         holder: ObjectId,
@@ -143,17 +145,18 @@ impl InterpreterCore {
     /// Return lookup/call is shared, but its consumers differ: a yielded
     /// rejection performs synchronous IteratorClose and ignores the result;
     /// a mapper failure awaits the value of the return result instead.
-    fn from_async_sync_return(
+    fn async_from_sync_return(
         &mut self,
         module: &Ir3Module,
         holder: ObjectId,
     ) -> Result<Option<Value>, InterpreterError> {
         let iterator = self.array_from_async_slot(holder, "__iterator")?;
-        let method = self.from_async_sync_get(module, &iterator, "return")?;
+        let method = self.async_from_sync_get(module, &iterator, "return")?;
         if matches!(method, Value::Undefined | Value::Null) {
             return Ok(None);
         }
-        self.from_async_sync_call(module, method, iterator).map(Some)
+        self.async_from_sync_call(module, method, iterator)
+            .map(Some)
     }
 
     pub(super) fn array_from_async_sync_value_rejected(
@@ -166,12 +169,12 @@ impl InterpreterCore {
         // Publish the exact reason in the charged, traced holder before any
         // cleanup callback can allocate, reenter, or overwrite exception slots.
         self.array_from_async_keep_close_reason(holder, reason, label)?;
-        self.from_async_sync_scope(label, |core| {
-            let closed = core.from_async_sync_return(module, holder).map(|_| ());
+        self.async_from_sync_scope(label, |core| {
+            let closed = core.async_from_sync_return(module, holder).map(|_| ());
             core.array_from_async_discard_close_error(closed)?;
             let reason = core.array_from_async_slot(holder, "__error")?;
             let observed = core.json_parse_context_label()?;
-            core.from_async_sync_rejected_step(module, holder, reason, observed)
+            core.async_from_sync_rejected_step(module, holder, reason, observed)
         })
     }
 
@@ -181,9 +184,9 @@ impl InterpreterCore {
         holder: ObjectId,
         label: &Label,
     ) -> Result<(), InterpreterError> {
-        self.from_async_sync_scope(label, |core| {
+        self.async_from_sync_scope(label, |core| {
             let result = (|| {
-                let Some(result) = core.from_async_sync_return(module, holder)? else {
+                let Some(result) = core.async_from_sync_return(module, holder)? else {
                     return Ok(None);
                 };
                 if !result.is_object_like() {
@@ -194,8 +197,10 @@ impl InterpreterCore {
                 }
                 // Both getters are observable, even though the original throw
                 // wins and the return result cannot add another output element.
-                let _done = core.from_async_sync_get(module, &result, "done")?.is_truthy();
-                core.from_async_sync_get(module, &result, "value").map(Some)
+                let _done = core
+                    .async_from_sync_get(module, &result, "done")?
+                    .is_truthy();
+                core.async_from_sync_get(module, &result, "value").map(Some)
             })();
             let observed = core.json_parse_context_label()?;
             match result {

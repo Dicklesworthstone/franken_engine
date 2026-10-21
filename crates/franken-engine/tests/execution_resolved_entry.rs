@@ -92,6 +92,7 @@ fn resolved_commonjs_entry_uses_commonjs_runtime_bindings() {
         .execute_resolved_entry(&package(), &resolved)
         .expect("resolved CommonJS entry executes");
     assert_eq!(result.console_output[0].message, "43");
+    assert_eq!(result.source_label, "/app/entry.js");
 }
 
 #[test]

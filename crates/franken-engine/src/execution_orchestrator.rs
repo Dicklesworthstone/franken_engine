@@ -3641,7 +3641,7 @@ impl ExecutionOrchestrator {
             host_io_exception_provenance,
         );
         Ok(PreparedLoweringOutput {
-            source_label,
+            source_label: ir0_source_label.to_string(),
             source_ingestion,
             lowering_output,
             entry_flow_label_ceiling,

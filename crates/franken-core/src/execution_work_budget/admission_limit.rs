@@ -29,7 +29,7 @@ impl AdmissionSlot {
     pub(super) fn acquire(slots: &Arc<AdmissionSlots>) -> Result<Self, WorkBudgetError> {
         slots
             .occupied
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |occupied| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |occupied| {
                 // The strict comparison also prevents overflow at usize::MAX.
                 (occupied < slots.limit).then(|| occupied + 1)
             })

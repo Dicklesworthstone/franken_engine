@@ -162,7 +162,7 @@ impl NamedStringTombstones {
             // Newly appended words contain no deletions, but a new Fenwick
             // parent must include the already populated words it covers.
             let node = self.words.len() + 1;
-            let lowbit = node & node.wrapping_neg();
+            let lowbit = node.isolate_lowest_one();
             let count = self.deleted - self.prefix_words(node - lowbit);
             self.words.push(0);
             self.counts.push(count);
@@ -176,7 +176,7 @@ impl NamedStringTombstones {
         let mut node = word_index + 1;
         while node <= self.counts.len() {
             self.counts[node - 1] += 1;
-            node += node & node.wrapping_neg();
+            node += node.isolate_lowest_one();
         }
     }
 

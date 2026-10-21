@@ -394,9 +394,13 @@ impl<V: fmt::Debug> fmt::Debug for IndexedValues<V> {
     }
 }
 
+type HoleyValueIter<'a, V> = Counted<std::iter::Flatten<slice::Iter<'a, Option<(String, V)>>>>;
+type HoleyValueIterMut<'a, V> = Counted<std::iter::Flatten<slice::IterMut<'a, Option<(String, V)>>>>;
+type HoleyValueIntoIter<V> = Counted<std::iter::Flatten<vec::IntoIter<Option<(String, V)>>>>;
+
 pub(super) enum Values<'a, V> {
     Packed(slice::Iter<'a, (String, V)>),
-    Holey(Counted<std::iter::Flatten<slice::Iter<'a, Option<(String, V)>>>>),
+    Holey(HoleyValueIter<'a, V>),
     Dictionary(btree_map::Values<'a, u32, (String, V)>),
 }
 
@@ -435,7 +439,7 @@ impl<V> std::iter::FusedIterator for Values<'_, V> {}
 
 pub(super) enum ValuesMut<'a, V> {
     Packed(slice::IterMut<'a, (String, V)>),
-    Holey(Counted<std::iter::Flatten<slice::IterMut<'a, Option<(String, V)>>>>),
+    Holey(HoleyValueIterMut<'a, V>),
     Dictionary(btree_map::ValuesMut<'a, u32, (String, V)>),
 }
 
@@ -512,7 +516,7 @@ impl<V> std::iter::FusedIterator for RangeValuesMut<'_, V> {}
 
 pub(super) enum IntoValues<V> {
     Packed(vec::IntoIter<(String, V)>),
-    Holey(Counted<std::iter::Flatten<vec::IntoIter<Option<(String, V)>>>>),
+    Holey(HoleyValueIntoIter<V>),
     Dictionary(btree_map::IntoValues<u32, (String, V)>),
 }
 

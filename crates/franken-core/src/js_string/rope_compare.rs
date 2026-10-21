@@ -92,7 +92,7 @@ impl Text {
                 left.as_ref().cmp(right.as_ref())
             };
         }
-        if self.len() == 0 || other.len() == 0 {
+        if self.is_empty() || other.is_empty() {
             return self.len().cmp(&other.len());
         }
         let mut left = ByteCursor::new(self);
@@ -115,7 +115,7 @@ impl Text {
                 cmp_utf16_common_prefix(left, right).then_with(|| left.len().cmp(&right.len()))
             };
         }
-        if self.len() == 0 || other.len() == 0 {
+        if self.is_empty() || other.is_empty() {
             return self.len().cmp(&other.len());
         }
         let mut left = ByteCursor::new(self);

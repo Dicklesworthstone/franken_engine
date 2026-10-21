@@ -194,6 +194,10 @@ impl Text {
         }
     }
 
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     #[inline]
     fn as_str(&self) -> &str {
         match self {

@@ -320,7 +320,7 @@
   // as Dir. An inclusion automaton decides whether a subtree can match BEFORE
   // it is opened. Exclusions prune before descent too. No regex backtracking,
   // ambient glob library, whole-tree collection, or implicit symlink following.
-  // Supported portable syntax: *, ?, **, character classes and brace lists.
+  // Supported portable syntax: *, ?, **, classes, brace lists and positive extglobs.
   // Ordering follows host directory observations and is not an oracle claim.
   const splitString = String.prototype.split;
   const sliceString = String.prototype.slice;
@@ -330,7 +330,7 @@
   function globLimit() { return error('ERR_FS_GLOB_LIMIT', 'Glob resource limit exceeded'); }
   function globUnsupported() {
     return error('ERR_FS_GLOB_UNSUPPORTED',
-      'Glob supports relative slash-separated patterns, brace lists, UTF-8 cwd, and synchronous predicate or pattern-array exclusions');
+      'Glob supports relative slash-separated patterns, brace lists, positive extglobs, UTF-8 cwd, and synchronous predicate or pattern-array exclusions');
   }
   function chargeGlob(budget, amount) {
     if (amount > MAX_GLOB_WORK - budget.work) throw globLimit();
@@ -376,8 +376,168 @@
     if (budget.patternUnits > MAX_GLOB_PATTERN_UNITS) throw globLimit();
     output[output.length] = pattern;
   }
-  function globSegment(value) {
-    if (value === '**') return { globstar: true };
+  // Thompson-style states for positive extglobs. Alternation and repetition
+  // add edges, never expand combinations or delegate to a backtracking regexp.
+  // Private numeric lists have no inherited slots; all closure work is charged
+  // against the SAME per-query budget as ordinary glob matching.
+  function globList() { const list = create(null); list.length = 0; return list; }
+  function extglobStart(value) {
+    for (let i = 0; i + 1 < value.length; i++) {
+      if (value[i] === '[') {
+        let end = i + 1;
+        if (value[end] === '!' || value[end] === '^') end++;
+        if (value[end] === ']') end++;
+        while (end < value.length && value[end] !== ']') end++;
+        if (end < value.length) { i = end; continue; }
+      }
+      const c = value[i];
+      if (value[i + 1] === '(' && (c === '@' || c === '+' || c === '?' || c === '*' || c === '!')) return true;
+    }
+    return false;
+  }
+  function compileExtglob(value, budget) {
+    const states = globList();
+    let offset = 0;
+    function node(token) {
+      if (budget.extglobStates >= MAX_GLOB_PATTERN_UNITS) throw globLimit();
+      budget.extglobStates++;
+      chargeGlob(budget, 1);
+      const id = states.length++;
+      states[id] = { token: token, target: undefined, edges: globList(), guard: false };
+      return id;
+    }
+    function edge(from, to, repeated) {
+      chargeGlob(budget, 1);
+      const edges = states[from].edges; edges[edges.length++] = repeated ? -to - 1 : to;
+    }
+    function empty() { const id = node(undefined); return { start: id, end: id, tailStars: undefined }; }
+    function append(left, right) {
+      edge(left.end, right.start); left.end = right.end; left.tailStars = right.tailStars;
+    }
+    function fragment(text, atStart, nested) {
+      const result = empty();
+      if (text.length === 0) return result;
+      const tokens = globSegment(text, budget, true).tokens;
+      const first = tokens[0];
+      states[result.start].guard = atStart && !(first &&
+        ((first.kind === 'literal' && first.value === '.') ||
+          (first.kind === 'class' && !first.negate && classMatches(first, '.'))));
+      // Defer the Node dialect's terminal single-star rule until enclosing
+      // suffixes are known. A star before a suffix (or raw **) may be empty.
+      if (text === '*' && (!nested || atStart)) { result.tailStars = globList(); result.tailStars[0] = result.start; result.tailStars.length = 1; }
+      for (let i = 0; i < tokens.length; i++) {
+        const token = tokens[i];
+        const start = node(token.kind === '*' ? { kind: '?' } : token);
+        const end = node(undefined);
+        states[start].target = token.kind === '*' ? start : end;
+        if (token.kind === '*') {
+          edge(start, end);
+          edge(result.end, start);
+        } else edge(result.end, start);
+        result.end = end;
+      }
+      return result;
+    }
+    function sequence(atStart, nested, depth) {
+      const result = empty();
+      let beginning = offset;
+      while (offset < value.length) {
+        const c = value[offset];
+        if (nested && (c === '|' || c === ')')) break;
+        if (c === '[') {
+          let end = offset + 1;
+          if (value[end] === '!' || value[end] === '^') end++;
+          if (value[end] === ']') end++;
+          while (end < value.length && value[end] !== ']') end++;
+          if (end < value.length) { offset = end + 1; continue; }
+        }
+        if (value[offset + 1] === '(' &&
+            (c === '@' || c === '+' || c === '?' || c === '*' || c === '!')) {
+          if (c === '!' || depth >= 16) {
+            if (depth >= 16) throw globLimit();
+            throw globUnsupported();
+          }
+          if (offset !== beginning) {
+            append(result, fragment(slice(value, beginning, offset), atStart, nested)); atStart = false;
+          }
+          offset += 2;
+          // Empty/bare-parenthesized and negative extglobs retain explicit
+          // refusal; they are not guessed as literal or negated patterns.
+          if (value[offset] === ')') throw globUnsupported();
+          const start = node(undefined), end = node(undefined), tails = globList();
+          for (;;) {
+            const part = sequence(atStart, true, depth + 1);
+            edge(start, part.start); edge(part.end, end);
+            if (part.tailStars !== undefined) for (let i = 0; i < part.tailStars.length; i++) {
+              tails[tails.length++] = part.tailStars[i];
+            }
+            if (c === '+' || c === '*') edge(part.end, start, true);
+            if (value[offset] === ')') { offset++; break; }
+            if (value[offset] !== '|') throw globUnsupported();
+            offset++;
+          }
+          if (c === '?' || c === '*') edge(start, end);
+          append(result, { start: start, end: end, tailStars: tails });
+          atStart = false; beginning = offset;
+          continue;
+        }
+        if (nested && c === '(') throw globUnsupported();
+        offset++;
+      }
+      if (offset !== beginning) append(result, fragment(slice(value, beginning, offset), atStart, nested));
+      return result;
+    }
+    const compiled = sequence(true, false, 0);
+    if (compiled.tailStars !== undefined) for (let i = 0; i < compiled.tailStars.length; i++) {
+      const prefix = states[compiled.tailStars[i]], first = node({ kind: '?' });
+      states[first].target = prefix.edges[0]; prefix.edges[0] = first;
+    }
+    return { globstar: false, tokens: undefined, literal: undefined,
+      machine: { states: states, start: compiled.start, end: compiled.end } };
+  }
+  function extglobMatches(machine, name, budget) {
+    const states = machine.states;
+    function add(active, seen, code, position) {
+      // Two visits distinguish the first alternative from a repeated one.
+      // Node permits a nullable first repetition before a wildcard alternative
+      // consumes a leading dot. Do not accidentally allow the zero-repeat
+      // bypass itself to count as an iteration.
+      if (seen[code]) return;
+      seen[code] = true;
+      const id = code >> 1;
+      if (position === 0 && (code & 1) === 0 && name[0] === '.' && states[id].guard) return;
+      active[active.length++] = code;
+    }
+    function closure(active, seen, position) {
+      for (let i = 0; i < active.length; i++) {
+        const code = active[i], edges = states[code >> 1].edges;
+        chargeGlob(budget, edges.length + 1);
+        for (let j = 0; j < edges.length; j++) {
+          const target = edges[j];
+          add(active, seen, target < 0 ? (-target - 1) * 2 + 1 : target * 2 + (code & 1), position);
+        }
+      }
+    }
+    let active = globList(), seen = create(null);
+    add(active, seen, machine.start * 2, 0); closure(active, seen, 0);
+    for (let at = 0; at < name.length; at++) {
+      const next = globList(), visited = create(null), c = name[at];
+      for (let i = 0; i < active.length; i++) {
+        const state = states[active[i] >> 1], token = state.token;
+        chargeGlob(budget, token !== undefined && token.kind === 'class' ? token.ranges.length + 1 : 1);
+        if (token !== undefined && (token.kind === '?' ||
+            (token.kind === 'literal' ? c === token.value : classMatches(token, c)))) {
+          add(next, visited, state.target * 2 + 1, at + 1);
+        }
+      }
+      if (next.length === 0) return false;
+      closure(next, visited, at + 1); active = next; seen = visited;
+    }
+    return !!(seen[machine.end * 2] || seen[machine.end * 2 + 1]);
+  }
+  function globSegment(value, budget, fragment) {
+    if (!fragment && value === '**') return { globstar: true };
+    if (!fragment && extglobStart(value)) return compileExtglob(value, budget);
     const tokens = [];
     let literal = true;
     for (let i = 0; i < value.length; i++) {
@@ -415,7 +575,7 @@
     // Keep an own undefined slot on wildcard segments so guest prototype
     // properties cannot turn a wildcard into a literal. Validate the entire
     // segment above before specializing; unsupported extglobs still refuse.
-    return { globstar: false, tokens: tokens, literal: literal ? value : undefined };
+    return { globstar: false, tokens: tokens, literal: literal ? value : undefined, machine: undefined };
   }
   function classMatches(token, c) {
     let found = false;
@@ -426,6 +586,7 @@
     return token.negate ? !found : found;
   }
   function segmentMatches(segment, name, budget) {
+    if (segment.machine !== undefined) return extglobMatches(segment.machine, name, budget);
     if (segment.literal !== undefined) {
       // Workspace manifests and static directory prefixes need no DP rows.
       // Equality preserves exact UTF-16 and dot-name semantics. Charge a
@@ -478,7 +639,7 @@
       for (let j = 0; j < parts.length; j++) {
         if (parts[j] === '..') throw globUnsupported();
         if (parts[j] === '' || parts[j] === '.') continue;
-        segments[segments.length] = globSegment(parts[j]);
+        segments[segments.length] = globSegment(parts[j], budget);
       }
       if (segments.length > MAX_DEPTH) throw globLimit();
       if (segments.length !== 0 || exclusion) patterns[patterns.length] = {
@@ -551,7 +712,7 @@
     if ((follow !== undefined && follow !== false) || depth !== undefined) throw globUnsupported();
     const predicate = typeof exclude === 'function' ? exclude : undefined;
     if (exclude !== undefined && predicate === undefined && !isArray(exclude)) throw invalid('options.exclude');
-    const budget = { work: 0, patternUnits: 0 };
+    const budget = { work: 0, patternUnits: 0, extglobStates: 0 };
     return { cwd: cwd === undefined ? '.' : path(cwd), typed: typed === true,
       include: compileGlobs(pattern, budget, false),
       exclude: compileGlobs(exclude === undefined || predicate !== undefined ? [] : exclude, budget, true),

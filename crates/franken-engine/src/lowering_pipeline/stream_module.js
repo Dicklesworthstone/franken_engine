@@ -1281,127 +1281,125 @@
     } else {
       throw errors.invalidIterable(iterable);
     }
+    function resultObject(value, method) {
+      if (value === null || (typeof value !== 'object' && typeof value !== 'function')) {
+        throw makeError(TypeError, 'ERR_INVALID_RETURN_VALUE',
+          'Expected an object from iterator.' + method + '()');
+      }
+      return value;
+    }
+    resultObject(iterator, isAsync ? '[Symbol.asyncIterator]' : '[Symbol.iterator]');
     const settings = Object.assign({ objectMode: true, highWaterMark: 1 }, options);
     const signal = constructorSignalOption(settings);
-    // The iterable owns cleanup as soon as its iterator has been acquired.
-    // Install _destroy before a pre-aborted signal can destroy the stream.
+    // Install producer cleanup before observing a pre-aborted signal.
     settings.signal = undefined;
     const readable = new ReadableClass(settings);
     let reading = false;
-    let isAsyncValues = false;
+    let stopped = false;
+    function live() { return !stopped && !readable.destroyed; }
+    function failed(reason) {
+      reading = false;
+      // A rejected producer may throw any JS value. Falsy errors must not
+      // become destroy-without-error and a successful partial pipeline.
+      if (live()) readable.destroy(pipelineRejection(reason));
+    }
+    function publish(value) {
+      if (!live()) return false;
+      if (value === null) throw errors.nullValues();
+      const more = readable.push(value);
+      // push() can synchronously call arbitrary consumers, including destroy.
+      if (!more || !live()) { reading = false; return false; }
+      return true;
+    }
     readable._read = function () {
-      if (!reading) {
-        reading = true;
-        if (isAsync) {
-          nextAsync();
-        } else if (isAsyncValues) {
-          nextSyncWithAsyncValues();
-        } else {
-          nextSyncWithSyncValues();
-        }
-      }
+      if (reading || !live()) return;
+      reading = true;
+      if (isAsync) nextAsync(); else nextSync();
     };
     readable._destroy = function (error, callback) {
+      // Retire the pump before invoking guest cleanup. Late next()/value
+      // completions are observed, but cannot inspect or publish another step.
+      stopped = true;
+      reading = false;
       close(error).then(
         function () { nextTick(callback, error); },
-        function (closeError) { nextTick(callback, closeError || error); },
+        function (closeError) { nextTick(callback, aggregateTwoErrors(closeError, error)); },
       );
     };
     async function close(error) {
-      const hadError = error !== undefined && error !== null;
-      const hasThrow = typeof iterator.throw === 'function';
-      if (hadError && hasThrow) {
-        const result = await iterator.throw(error);
-        await result.value;
-        if (result.done) return;
+      let cleanupError;
+      let done = false;
+      if (error !== undefined && error !== null) {
+        try {
+          const method = iterator.throw;
+          if (typeof method === 'function') {
+            const result = await streamApply(method, iterator, [error]);
+            // readline's iterator.throw deliberately settles with undefined.
+            // That is not a completed iterator: still call return(), rather
+            // than replacing the original abort with a property-access error.
+            if (result !== undefined) {
+              resultObject(result, 'throw');
+              await result.value;
+              done = !!result.done;
+            }
+          }
+        } catch (reason) {
+          if (reason !== error) cleanupError = pipelineRejection(reason);
+        }
       }
-      if (typeof iterator.return === 'function') {
-        const result = await iterator.return();
-        await result.value;
+      if (!done) {
+        try {
+          const method = iterator.return;
+          if (typeof method === 'function') {
+            const result = resultObject(await streamApply(method, iterator, []), 'return');
+            await result.value;
+          }
+        } catch (reason) {
+          const nextError = pipelineRejection(reason);
+          cleanupError = aggregateTwoErrors(nextError, cleanupError);
+        }
       }
+      if (cleanupError !== undefined) throw cleanupError;
     }
-    function nextSyncWithSyncValues() {
-      for (;;) {
+    function nextSync() {
+      while (live()) {
         try {
           const step = iterator.next();
-          if (step.done) {
-            readable.push(null);
-            return;
-          }
+          if (!live()) return;
+          resultObject(step, 'next');
+          const done = step.done;
+          if (!live()) return;
+          if (done) { readable.push(null); return; }
           const value = step.value;
+          if (!live()) return;
           if (value && typeof value.then === 'function') {
-            isAsyncValues = true;
-            changeToAsyncValues(value);
+            settleValue(value);
             return;
           }
-          if (value === null) {
-            reading = false;
-            throw errors.nullValues();
-          }
-          if (readable.push(value)) continue;
-          reading = false;
-        } catch (error) {
-          readable.destroy(error);
-        }
-        break;
+          if (!publish(value)) return;
+        } catch (error) { failed(error); return; }
       }
     }
-    async function changeToAsyncValues(value) {
+    async function settleValue(value) {
       try {
         const resolved = await value;
-        if (resolved === null) {
-          reading = false;
-          throw errors.nullValues();
-        }
-        if (readable.push(resolved)) {
-          nextSyncWithAsyncValues();
-          return;
-        }
-        reading = false;
-      } catch (error) {
-        readable.destroy(error);
-      }
-    }
-    async function nextSyncWithAsyncValues() {
-      for (;;) {
-        try {
-          const step = iterator.next();
-          if (step.done) {
-            readable.push(null);
-            return;
-          }
-          const value = step.value;
-          const resolved = value && typeof value.then === 'function' ? await value : value;
-          if (resolved === null) {
-            reading = false;
-            throw errors.nullValues();
-          }
-          if (readable.push(resolved)) continue;
-          reading = false;
-        } catch (error) {
-          readable.destroy(error);
-        }
-        break;
-      }
+        if (publish(resolved)) nextSync();
+      } catch (error) { failed(error); }
+      // No sticky async-value mode: after this one awaited value, plain
+      // synchronous chunks return to the allocation-free synchronous pump.
     }
     async function nextAsync() {
-      for (;;) {
+      while (live()) {
         try {
           const step = await iterator.next();
-          if (step.done) {
-            readable.push(null);
-            return;
-          }
-          if (step.value === null) {
-            reading = false;
-            throw errors.nullValues();
-          }
-          if (readable.push(step.value)) continue;
-          reading = false;
-        } catch (error) {
-          readable.destroy(error);
-        }
-        break;
+          if (!live()) return;
+          resultObject(step, 'next');
+          const done = step.done;
+          if (!live()) return;
+          if (done) { readable.push(null); return; }
+          const value = step.value;
+          if (!publish(value)) return;
+        } catch (error) { failed(error); return; }
       }
     }
     if (signal !== undefined) attachConstructorSignal(readable, signal);

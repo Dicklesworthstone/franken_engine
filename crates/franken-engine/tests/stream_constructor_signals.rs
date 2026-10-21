@@ -123,3 +123,94 @@ fn completed_non_autodestroy_stream_does_not_become_aborted_later() {
         assert_eq!(lines, ["complete false 0"]);
     }
 }
+
+#[test]
+fn async_cursor_getters_publish_each_record_once_through_the_native_pipeline() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let (root, lines) = run(
+            r#"const fs=require('fs');const streams=require('node:stream');
+            (async function(){
+              const rows=['first\n','second\n','third\n'];let gets=0;let returned=0;
+              const cursor={ [Symbol.asyncIterator](){return this;},
+                async next(){return rows.length?{done:false,
+                  get value(){gets++;return rows.shift()||null;}}:{done:true};},
+                return(){returned++;return {done:true};}};
+              fs.writeFileSync('records.txt','');
+              const sink=new streams.Writable({write(chunk,encoding,done){
+                fs.appendFileSync('records.txt',chunk);queueMicrotask(done);}});
+              await streams.promises.pipeline(streams.Readable.from(cursor,{objectMode:false}),sink);
+              console.log('CURSOR_COMPLETE',gets,returned,sink.writableFinished);
+            })();"#,
+            lane,
+        );
+        assert_eq!(lines, ["CURSOR_COMPLETE 3 1 true"]);
+        assert_eq!(std::fs::read(root.path().join("records.txt")).unwrap(), b"first\nsecond\nthird\n");
+    }
+}
+
+#[test]
+fn mixed_sync_and_promised_records_reenter_the_bounded_native_pump() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let (_, lines) = run(
+            r#"const streams=require('stream');
+            (async function(){let next=0;let expected=0;let total=0;
+              const producer={ [Symbol.iterator](){return this;},next(){
+                if(next===257)return {done:true};const n=next++;
+                return {done:false,value:n%64===0?Promise.resolve(n):n};}};
+              const sink=new streams.Writable({objectMode:true,highWaterMark:1,
+                write(value,encoding,done){if(value!==expected++)throw Error('out of order');
+                  total+=value;queueMicrotask(done);}});
+              await streams.promises.pipeline(streams.Readable.from(producer),sink);
+              console.log('MIXED_COMPLETE',expected,total,sink.writableFinished);
+            })();"#,
+            lane,
+        );
+        assert_eq!(lines, ["MIXED_COMPLETE 257 32896 true"]);
+    }
+}
+
+#[test]
+fn stopped_native_iterable_does_not_observe_late_result_getters() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let (_, lines) = run(
+            r#"const streams=require('node:stream');
+            (async function(){let ready,settle;let reads=0;let returns=0;
+              const started=new Promise(resolve=>ready=resolve);
+              const pending=new Promise(resolve=>settle=resolve);
+              const producer={ [Symbol.asyncIterator](){return this;},
+                next(){ready();return pending;},return(){returns++;return {done:true};}};
+              const source=streams.Readable.from(producer);const reason=new Error('stop');
+              let same=false;source.on('error',error=>same=error===reason);
+              const closed=new Promise(resolve=>source.once('close',resolve));
+              source.resume();await started;source.destroy(reason);await closed;
+              settle({get done(){reads++;return false;},get value(){reads++;return 9;}});
+              await Promise.resolve();await Promise.resolve();
+              console.log('RETIRED_COMPLETE',reads,returns,same,source.closed);
+            })();"#,
+            lane,
+        );
+        assert_eq!(lines, ["RETIRED_COMPLETE 0 1 true true"]);
+    }
+}
+
+#[test]
+fn native_readline_iterator_cleanup_preserves_the_original_abort() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let (_, lines) = run(
+            r#"const streams=require('node:stream');const line=require('node:readline');
+            (async function(){const input=new streams.PassThrough();
+              const lines=line.createInterface({input:input,terminal:false});
+              const source=streams.Readable.from(lines);const reason=new Error('cancel export');
+              let same=false;source.on('error',error=>same=error===reason);
+              const closed=new Promise(resolve=>source.once('close',resolve));
+              const accepted=new Promise(resolve=>source.once('data',resolve));
+              source.resume();input.write('accepted\n');await accepted;
+              source.destroy(reason);await closed;
+              console.log('LINE_ABORT_COMPLETE',same,lines.closed,input.destroyed);
+              input.destroy();
+            })();"#,
+            lane,
+        );
+        assert_eq!(lines, ["LINE_ABORT_COMPLETE true true false"]);
+    }
+}

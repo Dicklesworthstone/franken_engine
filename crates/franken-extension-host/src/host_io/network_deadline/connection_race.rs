@@ -633,7 +633,7 @@ mod tests {
         fn checkpoint(&self) -> Result<(), crate::host_io::HostIoError> {
             use std::sync::atomic::Ordering;
             self.0
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |left| {
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |left| {
                     left.checked_sub(1)
                 })
                 .map(|_| ())

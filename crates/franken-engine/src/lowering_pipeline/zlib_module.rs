@@ -3,7 +3,10 @@
 
 pub(super) const BINDING: &str = "%zlib_module";
 pub(super) const SOURCE: &str = include_str!("zlib_module.js");
-pub(super) const GLOBALS: [&str; 1] = ["Object"];
+pub(super) const GLOBALS: [&str; 9] = [
+    "ArrayBuffer", "DataView", "Object", "RangeError", "Reflect", "String",
+    "TypeError", "Uint8Array", "Uint32Array",
+];
 pub(super) const PLACEHOLDERS: [(&str, &str); 14] = [
     ("__franken_zlib_gzip_sync", "%ZlibGzipSync"),
     ("__franken_zlib_gunzip_sync", "%ZlibGunzipSync"),
@@ -130,6 +133,8 @@ mod tests {
             "const z=require('zlib'); z['gzipSync']('x');",
             "const a=require('zlib'); const b=require('node:zlib'); b.gzipSync=f; a.gzipSync('x');",
             "const z=require('node:zlib'); console.log(z.constants===z.constants);",
+            "const z=require('zlib'); z.crc32('package');",
+            "const {crc32}=require('node:zlib'); const check=crc32; check('package');",
         ] {
             let tree = parse(source);
             let rewritten = rewrite_util_requires(&tree).unwrap().expect("zlib module");
@@ -201,7 +206,7 @@ mod tests {
         let mut expected: BTreeSet<String> = GLOBALS.iter().map(|s| (*s).into()).collect();
         expected.extend(PLACEHOLDERS.iter().map(|(name, _)| (*name).into()));
         assert_eq!(free_names(&mut parse_module_source(PureModule::Zlib).unwrap()), expected);
-        let names = BTreeSet::from(["Object".to_string()]);
+        let names: BTreeSet<String> = GLOBALS.iter().map(|name| (*name).into()).collect();
         let mut protected = BTreeSet::from(["globalThis".to_string()]);
         protected.extend(PLACEHOLDERS.iter().map(|(_, name)| (*name).into()));
         assert_eq!(free_names(&mut module_source(&names, PureModule::Zlib).unwrap()), protected);

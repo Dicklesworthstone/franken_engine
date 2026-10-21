@@ -32,7 +32,115 @@
     if (typeof options === 'function') return __franken_zlib_inflate(input, options);
     return __franken_zlib_inflate(input, options, callback);
   }
+  // CRC32 is a data-integrity checksum, not cryptographic authentication.
+  // Keep its table private and lazy: importing compression or checksumming
+  // an empty chunk does not allocate the table. The ordinary interpreter
+  // charges these byte operations and the 1 KiB typed-array allocation.
+  const apply = Reflect.apply;
+  const charCodeAt = String.prototype.charCodeAt;
+  const isView = ArrayBuffer.isView;
+  const ByteView = Uint8Array;
+  const Words = Uint32Array;
+  const Type = TypeError;
+  const Range = RangeError;
+  const viewPrototype = Object.getPrototypeOf(ByteView.prototype);
+  const getOwnDescriptor = Object.getOwnPropertyDescriptor;
+  const typedBuffer = getOwnDescriptor(viewPrototype, 'buffer').get;
+  const typedOffset = getOwnDescriptor(viewPrototype, 'byteOffset').get;
+  const typedLength = getOwnDescriptor(viewPrototype, 'byteLength').get;
+  const dataBuffer = getOwnDescriptor(DataView.prototype, 'buffer').get;
+  const dataOffset = getOwnDescriptor(DataView.prototype, 'byteOffset').get;
+  const dataLength = getOwnDescriptor(DataView.prototype, 'byteLength').get;
+  let crcTable;
+  function invalidCrcArgument(name) {
+    const error = new Type('Invalid CRC32 ' + name + ' argument');
+    error.code = 'ERR_INVALID_ARG_TYPE';
+    return error;
+  }
+  function crc32(data, value) {
+    // Use actual backing windows, never replaceable .buffer/.byteOffset/
+    // .byteLength properties. Subclasses, Buffers and foreign-realm views
+    // must checksum their own bytes rather than arbitrary decoy storage.
+    const text = typeof data === 'string';
+    if (!text && !isView(data)) throw invalidCrcArgument('data');
+    if (value === undefined) value = 0;
+    if (typeof value !== 'number') throw invalidCrcArgument('value');
+    if (value < 0 || value > 4294967295 || value % 1 !== 0) {
+      const error = new Range('CRC32 value must be an unsigned 32-bit integer');
+      error.code = 'ERR_OUT_OF_RANGE';
+      throw error;
+    }
+    let bytes, length;
+    if (text) length = data.length;
+    else {
+      let buffer, typed = true;
+      try { buffer = apply(typedBuffer, data, []); }
+      catch (error) {
+        typed = false;
+        buffer = apply(dataBuffer, data, []);
+      }
+      const offset = apply(typed ? typedOffset : dataOffset, data, []);
+      length = apply(typed ? typedLength : dataLength, data, []);
+      // Construct even an empty window so detached storage fails explicitly.
+      // A detached input must not silently reset an archive's rolling checksum.
+      bytes = new ByteView(buffer, offset, length);
+    }
+    if (length === 0) return value >>> 0;
+    if (crcTable === undefined) {
+      const table = new Words(256);
+      for (let i = 0; i < 256; i++) {
+        let entry = i;
+        for (let bit = 0; bit < 8; bit++) {
+          entry = (entry >>> 1) ^ ((entry & 1) === 0 ? 0 : 0xedb88320);
+        }
+        table[i] = entry >>> 0;
+      }
+      crcTable = table;
+    }
+    let crc = value ^ 0xffffffff;
+    if (text) {
+      // Feed UTF-8 directly from UTF-16 without a whole-string Buffer. A lone
+      // surrogate encodes U+FFFD, and separate calls never share surrogate
+      // carry. Reuse the private own-index argument list, not one per unit.
+      const index = [0];
+      for (let i = 0; i < length; i++) {
+        index[0] = i;
+        let code = apply(charCodeAt, data, index);
+        if (code >= 0xd800 && code <= 0xdfff) {
+          if (code <= 0xdbff && i + 1 < length) {
+            index[0] = i + 1;
+            const low = apply(charCodeAt, data, index);
+            if (low >= 0xdc00 && low <= 0xdfff) {
+              code = 0x10000 + ((code - 0xd800) << 10) + low - 0xdc00;
+              i++;
+            } else code = 0xfffd;
+          } else code = 0xfffd;
+        }
+        if (code < 0x80) {
+          crc = (crc >>> 8) ^ crcTable[(crc ^ code) & 255];
+        } else if (code < 0x800) {
+          crc = (crc >>> 8) ^ crcTable[(crc ^ (0xc0 | (code >>> 6))) & 255];
+          crc = (crc >>> 8) ^ crcTable[(crc ^ (0x80 | (code & 63))) & 255];
+        } else {
+          if (code >= 0x10000) {
+            crc = (crc >>> 8) ^ crcTable[(crc ^ (0xf0 | (code >>> 18))) & 255];
+            crc = (crc >>> 8) ^ crcTable[(crc ^ (0x80 | ((code >>> 12) & 63))) & 255];
+          } else {
+            crc = (crc >>> 8) ^ crcTable[(crc ^ (0xe0 | (code >>> 12))) & 255];
+          }
+          crc = (crc >>> 8) ^ crcTable[(crc ^ (0x80 | ((code >>> 6) & 63))) & 255];
+          crc = (crc >>> 8) ^ crcTable[(crc ^ (0x80 | (code & 63))) & 255];
+        }
+      }
+    } else {
+      for (let i = 0; i < length; i++) {
+        crc = (crc >>> 8) ^ crcTable[(crc ^ bytes[i]) & 255];
+      }
+    }
+    return (crc ^ 0xffffffff) >>> 0;
+  }
   const exports = {
+    crc32: crc32,
     gzipSync: gzipSync, gunzipSync: gunzipSync,
     deflateSync: deflateSync, inflateSync: inflateSync,
     deflateRawSync: deflateRawSync, inflateRawSync: inflateRawSync,

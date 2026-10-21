@@ -76,3 +76,51 @@ console.log(z.constants.Z_BEST_COMPRESSION);
 console.log('ZLIB_VALUES_COMPLETE');
 "#), "object function\nshadow\nreassigned\ntrue\ntrue\ntrue\n9\nZLIB_VALUES_COMPLETE");
 }
+
+#[test]
+fn checksum_exports_preserve_unsigned_values_and_chunked_seed_state() {
+    assert_eq!(run(r#"
+const {crc32}=require('node:zlib');
+const Buffer='guest',Object='guest',Reflect='guest',Uint32Array='guest';
+console.log(crc32('123456789'));
+console.log(crc32('world',crc32('hello')));
+let value=0;
+for(const chunk of ['archive: ','café ','😀','\n'])value=crc32(chunk,value);
+console.log(value===crc32('archive: café 😀\n'));
+console.log(crc32('',4294967295));
+for(const seed of [-1,4294967296,1.5]){
+  try{crc32('x',seed);}catch(error){console.log(error.code);}
+}
+console.log('CRC32_SEED_COMPLETE');
+"#), "3421780262\n4192936109\ntrue\n4294967295\nERR_OUT_OF_RANGE\nERR_OUT_OF_RANGE\nERR_OUT_OF_RANGE\nCRC32_SEED_COMPLETE");
+}
+
+#[test]
+fn checksum_uses_authentic_byte_windows_instead_of_public_view_metadata() {
+    assert_eq!(run(r#"
+const {crc32}=require('zlib');
+const bytes=new Uint8Array([88,82,69,65,76,89]);
+const data=new DataView(bytes.buffer,1,4);
+const view=bytes.subarray(1,5);
+Object.defineProperty(view,'buffer',{get:function(){throw Error('decoy buffer');}});
+Object.defineProperty(view,'byteOffset',{get:function(){throw Error('decoy offset');}});
+Object.defineProperty(view,'byteLength',{get:function(){throw Error('decoy length');}});
+console.log(crc32(data),crc32(view),crc32('REAL'));
+console.log(bytes[0],bytes[5]);
+const captured=crc32;const api=require('node:zlib');api.crc32=function(){return 1;};
+console.log(captured('123456789'),api.crc32('123456789'));
+console.log('CRC32_WINDOW_COMPLETE');
+"#), "2686002401 2686002401 2686002401\n88 89\n3421780262 1\nCRC32_WINDOW_COMPLETE");
+}
+
+#[test]
+fn checksum_encodes_utf16_directly_and_keeps_calls_independent() {
+    assert_eq!(run(r#"
+const {crc32}=require('node:zlib');
+const String='guest',Uint32Array='guest',Reflect='guest';
+const pieces=['A\0\x7f\x80\u07ff\u0800','\ud7ff\ud800','\udc00\udfff','\udbff\udfff','café 東京 😀'];
+let rolling=4294967295;
+for(const piece of pieces)rolling=crc32(piece,rolling);
+console.log('UTF8_DIRECT',crc32(pieces.join('')),rolling,crc32(pieces.join(''),4294967295));
+"#), "UTF8_DIRECT 1826171974 244545859 4255863571");
+}

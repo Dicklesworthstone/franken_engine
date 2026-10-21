@@ -18,7 +18,9 @@ function candidate(root, visits = []) {
   return install(api);
 }
 function fixture(files) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'franken-extglob-'));
+  // Provider paths and traversal assertions use the same physical root even
+  // when the host's temporary directory is reached through a symlink.
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'franken-extglob-')));
   for (const [name, text] of Object.entries(files)) {
     const file = path.join(root, name); fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, text);

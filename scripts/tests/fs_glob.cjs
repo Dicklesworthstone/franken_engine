@@ -21,8 +21,10 @@ function factory(overrides = {}) {
   return { io: install(base), calls };
 }
 function fixture(t) {
-  const root = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'franken-glob-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  // Use the physical fixture root on hosts whose temporary directory is a
+  // symlink (for example /var -> /private/var on macOS). Retain fixtures for
+  // failure inspection; this test must not delete files.
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'franken-glob-')));
   for (const name of [
     'app.js', 'app.ts', '.hidden.js', 'file1.txt', 'file2.txt', 'file9.txt',
     'src/a.js', 'src/b.ts', 'src/deep/c.js', 'src/.secret.js',

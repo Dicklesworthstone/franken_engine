@@ -573,6 +573,19 @@
       readFile: function (options) {
         return perform('readFile', function (fd) { return readContents(fd, options); });
       },
+      readLines: function (options) {
+        // Compose the same descriptor-backed stream and readline Interface
+        // exposed by their modules. No whole-file read, second line parser,
+        // reopened pathname or replacement filesystem provider is involved.
+        if (closing) {
+          var error = new RangeError('The FileHandle is closed or closing');
+          error.code = 'ERR_OUT_OF_RANGE';
+          throw error;
+        }
+        var createInterface = lineInterfaceFactory();
+        var input = new (streamClasses().ReadStream)(undefined, options, handle);
+        return createInterface({ input: input, crlfDelay: 1 / 0, terminal: false });
+      },
       createReadStream: function (options) {
         return new (streamClasses().ReadStream)(undefined, options, handle);
       },
@@ -681,6 +694,15 @@
   // the stream dependency with the full fs facade; no path is opened merely
   // by loading either module. Class/owner registries initialize on first use.
   var fileStreamClasses;
+  var fileLineInterface;
+  function lineInterfaceFactory() {
+    if (fileLineInterface === undefined) {
+      // The native module rewrite resolves this literal private dependency.
+      // Its loader initializes readline only when readLines is requested.
+      fileLineInterface = require('readline').createInterface;
+    }
+    return fileLineInterface;
+  }
   var fileWebMethods;
   function fileWebStreamMethods() {
     if (fileWebMethods !== undefined) { return fileWebMethods; }

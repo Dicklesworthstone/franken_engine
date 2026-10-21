@@ -50,17 +50,17 @@ fn collisions_replace_positive_and_negative_membership_together() {
 }
 
 #[test]
-fn unicode_is_uncached_and_does_not_evict_ascii_results() {
+fn unicode_reuses_complete_results_without_evicting_ascii_results() {
     for flags in ["", "i", "u", "iu"] {
         let regexp = BacktrackRegExp::new("[a-zKſΣé😀]", flags).unwrap();
         let mut cache = ClassMatches::default();
         let ascii = cache.matches(&regexp, 0, 'k');
         for c in ['K', 'ſ', 'Σ', 'σ', 'ς', 'é', 'É', '😀', '\u{80}', '\u{10ffff}'] {
-            for _ in 0..2 {
-                let before = cache.evaluations;
-                assert_eq!(cache.matches(&regexp, 0, c), regexp.class_matches(&regexp.classes[0], c));
-                assert_eq!(cache.evaluations, before + 1);
-            }
+            let expected = regexp.class_matches(&regexp.classes[0], c);
+            assert_eq!(cache.matches(&regexp, 0, c), expected);
+            let before = cache.evaluations;
+            assert_eq!(cache.matches(&regexp, 0, c), expected);
+            assert_eq!(cache.evaluations, before, "Unicode repeat must reuse its predicate");
         }
         let before = cache.evaluations;
         assert_eq!(cache.matches(&regexp, 0, 'k'), ascii);
@@ -142,12 +142,12 @@ fn eof_and_unaffordable_instructions_never_prepare_membership() {
     let mut run = Run::new(&regexp, &empty, 1000);
     assert_eq!(run.search(0, true).unwrap(), None);
     assert_eq!(run.class_matches.evaluations, 0);
-    assert!(run.class_matches.entries.iter().all(Option::is_none));
+    assert!(run.class_matches.entries.iter().all(|entry| entry.known == [0; 2]));
     let input = PreparedInput::new("abc");
     let mut run = Run::new(&regexp, &input, 0);
     assert!(run.search(0, true).is_err());
     assert_eq!(run.class_matches.evaluations, 0);
-    assert!(run.class_matches.entries.iter().all(Option::is_none));
+    assert!(run.class_matches.entries.iter().all(|entry| entry.known == [0; 2]));
 }
 
 #[test]
@@ -169,7 +169,7 @@ fn warm_caches_survive_search_reuse_but_not_new_programs() {
     for (pattern, flags, expected) in [("[a]", "", true), ("[^a]", "", false), ("[A]", "", false), ("[A]", "i", true)] {
         let regexp = BacktrackRegExp::new(pattern, flags).unwrap();
         let mut run = Run::new(&regexp, &input, 1000);
-        assert!(run.class_matches.entries.iter().all(Option::is_none));
+        assert!(run.class_matches.entries.iter().all(|entry| entry.known == [0; 2]));
         assert_eq!(run.class_matches.matches(&regexp, 0, 'a'), expected);
         assert_eq!(run.class_matches.evaluations, 1);
     }
@@ -300,17 +300,17 @@ fn successful_prefix_warms_execution_without_paying_its_instructions() {
 }
 
 #[test]
-fn prefix_unicode_fallback_preserves_warm_ascii_bits() {
+fn prefix_unicode_reuse_preserves_warm_ascii_bits() {
     let regexp = BacktrackRegExp::new(r"[a-z](?=!)", "iu").unwrap();
     let input = PreparedInput::new(&format!("!{}k!", "é".repeat(32)));
     let prefix = super::super::StartPrefix::new(&regexp).unwrap();
     let mut run = Run::new(&regexp, &input, 1_000_000);
     assert_eq!(run.skip_prefix_misses(0, &prefix), 33);
-    assert_eq!(run.class_matches.evaluations, 34, "two ASCII values and 32 scalars");
+    assert_eq!(run.class_matches.evaluations, 3, "two ASCII values and one Unicode scalar");
     let before = run.class_matches.evaluations;
     let budget = run.steps_left;
     assert_eq!(run.skip_prefix_misses(0, &prefix), 33);
-    assert_eq!(run.class_matches.evaluations - before, 32, "Unicode remains uncached");
+    assert_eq!(run.class_matches.evaluations - before, 0, "Unicode and ASCII stay warm");
     assert_eq!(budget - run.steps_left, 66, "same charge on warm/cold analysis");
     let before = run.class_matches.evaluations;
     assert_eq!(run.search(33, true).unwrap().unwrap()[0], Some((65, 66)));

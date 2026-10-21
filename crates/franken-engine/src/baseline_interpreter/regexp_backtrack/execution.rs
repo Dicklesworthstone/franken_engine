@@ -16,7 +16,7 @@ mod literals;
 mod prefix;
 mod repetitions;
 
-use captured::CapturedRepeat;
+use captured::{CapturedCounted, CapturedRepeat};
 use classes::ClassMatches;
 use counted::CountedRepeat;
 use lazy::LazyRepeat;
@@ -354,7 +354,21 @@ impl Run<'_> {
                         !self.repetitions_disabled
                             && (repeat.width == 1 || !self.literal_blocks.disabled)
                     });
-                    let completed = if let Some(repeat) = &repeat {
+                    let captured = if repeat.is_none() {
+                        CapturedCounted::at(regexp, pc, &mut self.literal_blocks)
+                    } else {
+                        None
+                    };
+                    #[cfg(test)]
+                    let captured = captured.filter(|_| !self.repetitions_disabled);
+                    let completed = if let Some(captured) = &captured {
+                        if let Some(end) = self.execute_captured_counted_required(captured, position, stack)? {
+                            position = end;
+                            true
+                        } else {
+                            false
+                        }
+                    } else if let Some(repeat) = &repeat {
                         let old_count = self.registers[repeat.counter];
                         let old_mark = self.registers[repeat.mark];
                         let end = self.execute_counted_required(repeat, position)?;

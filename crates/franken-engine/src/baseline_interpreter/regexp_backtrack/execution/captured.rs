@@ -28,15 +28,40 @@ impl CapturedRepeat {
         pc: usize,
         blocks: &mut LiteralBlocks,
     ) -> Option<Self> {
+        let Inst::Split { first, second } = regexp.program.get(pc)? else {
+            return None;
+        };
+        let next = pc.checked_add(1)?;
+        let greedy = *first == next;
+        if !greedy && *second != next {
+            return None;
+        }
+        let target = if greedy { *second } else { *first };
+        let repeat = Self::body_at(regexp, pc, target, greedy, blocks)?;
+        if !matches!(regexp.program.get(repeat.exit - 2),
+            Some(Inst::CheckProgress(mark)) if *mark == repeat.register)
+        {
+            return None;
+        }
+        Some(repeat)
+    }
+
+    /// Both loop kinds share the exact Mark/Clear/nested-Save/body shape.
+    /// The caller separately proves CheckProgress or CounterStep at the tail.
+    fn body_at(
+        regexp: &BacktrackRegExp,
+        pc: usize,
+        target: usize,
+        greedy: bool,
+        blocks: &mut LiteralBlocks,
+    ) -> Option<Self> {
         let begin = pc.checked_add(3)?;
-        let [Inst::Split { first, second }, Inst::Mark(register), Inst::Clear { from, to }] =
-            regexp.program.get(pc..begin)?
+        let [Inst::Mark(register), Inst::Clear { from, to }] =
+            regexp.program.get(pc + 1..begin)?
         else {
             return None;
         };
-        let greedy = *first == pc + 1;
-        let target = if greedy { *second } else { *first };
-        if (!greedy && *second != pc + 1) || *register >= regexp.registers || *from < 2
+        if *register >= regexp.registers || *from < 2
             || from % 2 != 0 || to % 2 != 0 || from >= to
             || *to > regexp.group_count.checked_mul(2)?
         {
@@ -81,7 +106,6 @@ impl CapturedRepeat {
         let progress = close.checked_add(groups)?;
         let exit = progress.checked_add(2)?;
         if target != exit || exit >= regexp.program.len()
-            || !matches!(regexp.program.get(progress), Some(Inst::CheckProgress(mark)) if mark == register)
             || !matches!(regexp.program.get(progress + 1), Some(Inst::Jump(head)) if *head == pc)
         {
             return None;
@@ -104,11 +128,72 @@ impl CapturedRepeat {
     }
 }
 
+/// A counted loop whose captures all span the complete, positive-width body.
+/// Fixed counts need only one original snapshot, irrespective of their size.
+pub(super) struct CapturedCounted {
+    body: CapturedRepeat,
+    counter: usize,
+    minimum: usize,
+}
+
+impl CapturedCounted {
+    pub(super) fn at(
+        regexp: &BacktrackRegExp,
+        pc: usize,
+        blocks: &mut LiteralBlocks,
+    ) -> Option<Self> {
+        let Inst::CountedLoop { counter, min, max, greedy, body, exit } =
+            regexp.program.get(pc)?
+        else {
+            return None;
+        };
+        if *max != Some(*min) || *body != pc.checked_add(1)? || *counter >= regexp.registers {
+            return None;
+        }
+        let body = CapturedRepeat::body_at(regexp, pc, *exit, *greedy, blocks)?;
+        if *counter == body.register
+            || !matches!(regexp.program.get(body.exit - 2),
+                Some(Inst::CounterStep { counter: step, mark, min: minimum })
+                    if step == counter && *mark == body.register && minimum == min)
+        {
+            return None;
+        }
+        Some(Self { body, counter: *counter, minimum: *min })
+    }
+}
+
 impl Run<'_> {
-    /// Split has been paid. Preserve Clear's atomic extra charge and every
-    /// Save/Mark write boundary. A mismatch undoes this iteration; exhaustion
-    /// leaves exactly the writes completed before the unpaid instruction.
-    fn advance_captured_body(
+    /// Execute through the closing Saves, leaving loop-specific bookkeeping
+    /// to the caller. A mismatch undoes this iteration; exhaustion leaves the
+    /// exact paid writes. Clear's extra slot charge is atomic in both loops.
+    fn advance_captured_iteration(
+        &mut self,
+        repeat: &CapturedRepeat,
+        position: usize,
+    ) -> Result<Option<usize>, BacktrackError> {
+        let count = repeat.to - repeat.from;
+        // Mark, Clear (+ every slot), opening/closing Saves, and the body.
+        // The recognized body cannot read captures, branch or call guest code.
+        // When all of it is affordable, publish only its final captures: no
+        // snapshot, clearing or opening-Save writes are observable in between.
+        let complete_cost = 2 + 2 * count + repeat.width;
+        if self.steps_left < complete_cost as u64 {
+            return self.advance_captured_iteration_precise(repeat, position);
+        }
+        self.charge(3 + count + count / 2)?; // through the first body instruction
+        let next = self.match_captured_atom(repeat, position)?;
+        if let Some(next) = next {
+            self.charge(count / 2)?; // all closing Saves, now proved affordable
+            repeat.restore_iteration(self, next);
+        }
+        // On mismatch the old state was never touched, exactly as if this
+        // iteration's undo records had been unwound. Pay only the failed path.
+        Ok(next)
+    }
+
+    /// A short allowance needs each individual write/refusal boundary. This
+    /// is also the reference for the affordable-body path in focused tests.
+    fn advance_captured_iteration_precise(
         &mut self,
         repeat: &CapturedRepeat,
         position: usize,
@@ -127,13 +212,31 @@ impl Run<'_> {
             self.slots[repeat.from + group * 2 + usize::from(repeat.backward)] = Some(position);
         }
         self.charge(1)?; // first body instruction
+        let Some(next) = self.match_captured_atom(repeat, position)? else {
+            self.registers[repeat.register] = old_mark;
+            self.slots[repeat.from..repeat.to].copy_from_slice(&old_slots[..count]);
+            return Ok(None);
+        };
+        for group in 0..count / 2 {
+            self.charge(1)?; // closing Save, inner to outer
+            self.slots[repeat.to - 2 - group * 2 + usize::from(!repeat.backward)] = Some(next);
+        }
+        Ok(Some(next))
+    }
+
+    /// First consuming instruction is already paid by either capture path.
+    fn match_captured_atom(
+        &mut self,
+        repeat: &CapturedRepeat,
+        position: usize,
+    ) -> Result<Option<usize>, BacktrackError> {
         let regexp = self.regexp;
-        let next = if repeat.width > 1 {
+        if repeat.width > 1 {
             self.literal_blocks.at(regexp, repeat.body)
                 .expect("the immutable bounded literal body was proved")
-                .execute_after_dispatch(regexp, &self.input.chars, position, &mut self.steps_left)?
+                .execute_after_dispatch(regexp, &self.input.chars, position, &mut self.steps_left)
         } else {
-            match &regexp.program[repeat.body] {
+            Ok(match &regexp.program[repeat.body] {
                 Inst::Char { c, backward } => self.step(position, *backward, |input| {
                     if regexp.ignore_case {
                         regexp.canonicalize(input) == regexp.canonicalize(*c)
@@ -144,21 +247,71 @@ impl Run<'_> {
                     regexp.dot_all || !is_line_terminator(input)
                 }),
                 _ => unreachable!("a captured body contains only proved consuming atoms"),
-            }
-        };
-        let Some(next) = next else {
-            self.registers[repeat.register] = old_mark;
-            self.slots[repeat.from..repeat.to].copy_from_slice(&old_slots[..count]);
+            })
+        }
+    }
+
+    fn advance_captured_body(
+        &mut self,
+        repeat: &CapturedRepeat,
+        position: usize,
+    ) -> Result<Option<usize>, BacktrackError> {
+        let Some(next) = self.advance_captured_iteration(repeat, position)? else {
             return Ok(None);
         };
-        for group in 0..count / 2 {
-            self.charge(1)?; // closing Save, inner to outer
-            self.slots[repeat.to - 2 - group * 2 + usize::from(!repeat.backward)] = Some(next);
-        }
         self.charge(1)?; // CheckProgress: the proved body has positive width
         self.charge(1)?; // Jump
         self.charge(1)?; // next Split
         Ok(Some(next))
+    }
+
+    fn advance_captured_counted_body(
+        &mut self,
+        repeat: &CapturedCounted,
+        position: usize,
+    ) -> Result<Option<usize>, BacktrackError> {
+        let Some(next) = self.advance_captured_iteration(&repeat.body, position)? else {
+            return Ok(None);
+        };
+        self.charge(1)?; // CounterStep: exactly one completed body
+        self.registers[repeat.counter] += 1;
+        self.charge(1)?; // Jump
+        self.charge(1)?; // next CountedLoop
+        Ok(Some(next))
+    }
+
+    /// The loop head has been paid. Failure restores the entire mandatory
+    /// prefix, not just its last iteration. Refusal leaves partial writes.
+    pub(super) fn execute_captured_counted_required(
+        &mut self,
+        repeat: &CapturedCounted,
+        mut position: usize,
+        stack: &mut Vec<Frame>,
+    ) -> Result<Option<usize>, BacktrackError> {
+        let old_count = self.registers[repeat.counter];
+        if old_count >= repeat.minimum {
+            return Ok(Some(position));
+        }
+        let body = &repeat.body;
+        let old_mark = self.registers[body.register];
+        let count = body.to - body.from;
+        let mut old_slots = [None; MAX_CAPTURE_SLOTS];
+        old_slots[..count].copy_from_slice(&self.slots[body.from..body.to]);
+        while self.registers[repeat.counter] < repeat.minimum {
+            let Some(next) = self.advance_captured_counted_body(repeat, position)? else {
+                self.registers[repeat.counter] = old_count;
+                self.registers[body.register] = old_mark;
+                self.slots[body.from..body.to].copy_from_slice(&old_slots[..count]);
+                return Ok(None);
+            };
+            position = next;
+        }
+        stack.push(Frame::Register { register: repeat.counter, old: old_count });
+        stack.push(Frame::Register { register: body.register, old: old_mark });
+        for (offset, old) in old_slots[..count].iter().copied().enumerate() {
+            stack.push(Frame::Slot { slot: body.from + offset, old });
+        }
+        Ok(Some(position))
     }
 
     pub(super) fn execute_captured_greedy(
@@ -256,3 +409,9 @@ impl Run<'_> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod counted_tests;
+
+#[cfg(test)]
+mod body_tests;

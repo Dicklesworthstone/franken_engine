@@ -217,4 +217,171 @@ if (require.main === module) {
     assert.deepEqual((await collect(h, undefined, lane)).lines, ['real']);
     assert.equal(lane.live.size, 0);
   });
+
+  // File adapters must use the same authenticated constructor cancellation
+  // as ordinary streams. Node still owns language/host primitives here.
+  for (const [label, make] of [['node', () => reference], ['engine-js', createHarness]]) {
+    test(`${label}: public abort propagation cannot keep an acquired file stream alive`, { timeout: 5000 }, async t => {
+      for (const writable of [false, true]) {
+        const lane = make(), f = fixture(t, 'data\n'), control = new AbortController();
+        control.signal.addEventListener('abort', event => event.stopImmediatePropagation());
+        const stream = writable ? lane.api.createWriteStream(f.file, { signal: control.signal })
+          : lane.api.createReadStream(f.file, { signal: control.signal });
+        let error; stream.on('error', value => { error = value; });
+        await new Promise(resolve => stream.once('ready', resolve));
+        const closed = new Promise(resolve => stream.once('close', resolve));
+        control.abort(false);
+        const cancelled = stream.destroyed;
+        // Clean up even the old implementation before reporting its failure.
+        if (!cancelled) stream.destroy();
+        await closed;
+        assert.equal(cancelled, true); assert.equal(error.code, 'ABORT_ERR');
+        assert.equal(error.cause, false); assert.equal(stream.fd, null);
+        if (lane.live) assert.equal(lane.live.size, 0);
+      }
+    });
+    test(`${label}: successful retained file streams release their former cancellation owner`, { timeout: 5000 }, async t => {
+      for (const writable of [false, true]) {
+        const lane = make(), f = fixture(t, 'kept\n'), h = await lane.api.promises.open(f.file, 'r+');
+        const control = new AbortController(), errors = [];
+        const stream = writable ? h.createWriteStream({ signal: control.signal, autoClose: false })
+          : h.createReadStream({ signal: control.signal, autoClose: false });
+        stream.on('error', error => errors.push(error));
+        const complete = new Promise(resolve => stream.once(writable ? 'finish' : 'end', resolve));
+        if (writable) stream.end('done\n'); else stream.resume();
+        await complete; control.abort('after-completion'); await tick();
+        const destroyed = stream.destroyed;
+        const retained = h.fd >= 0;
+        // Node holds a FileHandle stream reference even after EOF when the
+        // caller retains the input. Release it explicitly before closing h.
+        if (!stream.destroyed) {
+          const closed = new Promise(resolve => stream.once('close', resolve));
+          stream.destroy(); await closed;
+        }
+        await h.close();
+        assert.equal(destroyed, false); assert.equal(retained, true); assert.deepEqual(errors, []);
+        if (lane.live) assert.equal(lane.live.size, 0);
+      }
+    });
+  }
+  test('engine-js: synthetic abort events cannot consume file-stream cancellation', { timeout: 5000 }, async t => {
+    const lane = createHarness(), f = fixture(t, 'kept'), control = new AbortController();
+    const stream = lane.api.createWriteStream(f.file, { signal: control.signal });
+    let error; stream.on('error', value => { error = value; });
+    await new Promise(resolve => stream.once('ready', resolve));
+    control.signal.dispatchEvent(new Event('abort'));
+    assert.equal(stream.destroyed, false);
+    const closed = new Promise(resolve => stream.once('close', resolve));
+    control.abort(null); const cancelled = stream.destroyed;
+    if (!cancelled) stream.destroy();
+    await closed;
+    assert.equal(cancelled, true); assert.equal(error.cause, null); assert.equal(lane.live.size, 0);
+  });
+  test('engine-js: replaced methods and post-attachment signal fields cannot redirect cancellation', { timeout: 5000 }, async t => {
+    const lane = createHarness(), f = fixture(t, 'kept'), control = new AbortController();
+    let publicCalls = 0;
+    const replaced = () => { publicCalls++; throw Error('replaceable signal surface'); };
+    for (const name of ['addEventListener', 'removeEventListener']) Object.defineProperty(control.signal, name, { value: replaced });
+    const stream = lane.api.createReadStream(f.file, { signal: control.signal });
+    let error; stream.on('error', value => { error = value; });
+    await new Promise((resolve, reject) => {
+      stream.once('ready', resolve); stream.once('error', reject);
+    });
+    // Node 22's AbortSignal.any reads public state during composition; the
+    // core constructor suite records that host-primitive limitation. Change
+    // state fields only after attachment here, without masking that boundary.
+    for (const name of ['aborted', 'reason']) Object.defineProperty(control.signal, name, { get: replaced });
+    const closed = new Promise(resolve => stream.once('close', resolve));
+    const reason = { original: true }; control.abort(reason); await closed;
+    assert.equal(publicCalls, 0); assert.equal(error.code, 'ABORT_ERR'); assert.equal(error.cause, reason);
+    assert.equal(lane.live.size, 0);
+  });
+  test('engine-js: signal lookalikes fail before path acquisition or truncation', { timeout: 5000 }, async t => {
+    const lane = createHarness(), f = fixture(t, 'retained');
+    const fake = { aborted: false, addEventListener() {}, removeEventListener() {} };
+    let rejected = false, stream;
+    try { stream = lane.api.createWriteStream(f.file, { signal: fake }); }
+    catch (error) { assert.equal(error.code, 'ERR_INVALID_ARG_TYPE'); rejected = true; }
+    if (stream) { stream.on('error', () => {}); const closed = new Promise(r => stream.once('close', r)); stream.destroy(); await closed; }
+    await tick();
+    assert.equal(rejected, true); assert.equal(lane.effects.length, 0);
+    assert.equal(fs.readFileSync(f.file, 'utf8'), 'retained');
+  });
+  test('engine-js: pre-aborted file streams never open paths and still close borrowed owners', { timeout: 5000 }, async t => {
+    for (const writable of [false, true]) {
+      const lane = createHarness(), f = fixture(t, 'retained');
+      const stream = writable ? lane.api.createWriteStream(f.file, { signal: AbortSignal.abort('pre') })
+        : lane.api.createReadStream(f.file, { signal: AbortSignal.abort('pre') });
+      let error; stream.on('error', value => { error = value; });
+      await new Promise(resolve => stream.once('close', resolve));
+      assert.equal(error.code, 'ABORT_ERR'); assert.equal(error.cause, 'pre');
+      assert.equal(lane.effects.length, 0); assert.equal(fs.readFileSync(f.file, 'utf8'), 'retained');
+      const h = await lane.api.promises.open(f.file);
+      const borrowed = h.createReadStream({ signal: AbortSignal.abort(null), emitClose: false });
+      borrowed.on('error', () => {}); await tick();
+      assert.equal(borrowed.closed, true); assert.equal(h.fd, -1); assert.equal(lane.live.size, 0);
+      assert.equal(lane.effects.filter(e => e.op === 'read_fd').length, 0);
+    }
+  });
+  test('engine-js: cancellation during a read retires returned bytes before publication', { timeout: 5000 }, async t => {
+    const control = new AbortController();
+    control.signal.addEventListener('abort', event => event.stopImmediatePropagation());
+    const lane = createHarness({ effect(op) { if (op === 'read_fd') control.abort(false); } });
+    const f = fixture(t, 'must-not-publish\n');
+    const stream = lane.api.createReadStream(f.file, { signal: control.signal });
+    const output = [], errors = [];
+    stream.on('data', chunk => output.push(chunk)); stream.on('error', error => errors.push(error));
+    await new Promise(resolve => stream.once('close', resolve));
+    assert.deepEqual(output, []); assert.equal(errors.length, 1);
+    assert.equal(errors[0].code, 'ABORT_ERR'); assert.equal(errors[0].cause, false);
+    assert.equal(lane.live.size, 0);
+    assert.deepEqual(lane.effects.map(e => e.op), ['open', 'read_fd', 'close_fd']);
+  });
+  test('engine-js: cancellation during a write preserves only the accepted prefix and drains flush-close', { timeout: 5000 }, async t => {
+    const control = new AbortController();
+    control.signal.addEventListener('abort', event => event.stopImmediatePropagation());
+    const lane = createHarness({ effect(op) { if (op === 'write_fd') control.abort('stop-write'); } });
+    const f = fixture(t, ''), errors = [], callbacks = [];
+    const stream = lane.api.createWriteStream(f.file, { signal: control.signal, flush: true });
+    stream.on('error', error => errors.push(error));
+    const closed = new Promise(resolve => stream.once('close', resolve));
+    stream.end(Buffer.alloc(50000, 82), error => callbacks.push(error)); await closed;
+    assert.equal(fs.readFileSync(f.file).length, 16384); assert.equal(stream.bytesWritten, 16384);
+    assert.equal(callbacks.length, 1); assert.equal(callbacks[0].code, 'ABORT_ERR');
+    assert.equal(errors.length, 1); assert.equal(errors[0].cause, 'stop-write');
+    assert.deepEqual(lane.effects.map(e => e.op), ['open', 'write_fd', 'fsync', 'close_fd']);
+    assert.equal(lane.live.size, 0);
+  });
+  test('engine-js: failed descriptor closure preserves cancellation and close failures', { timeout: 5000 }, async t => {
+    const control = new AbortController(), closeError = new Error('close failed');
+    control.signal.addEventListener('abort', event => event.stopImmediatePropagation());
+    const lane = createHarness({ effect(op) { if (op === 'close_fd') throw closeError; } });
+    const f = fixture(t, 'kept'), errors = [];
+    const stream = lane.api.createReadStream(f.file, { signal: control.signal });
+    stream.on('error', error => errors.push(error));
+    await new Promise(resolve => stream.once('ready', resolve)); const fd = stream.fd;
+    const closed = new Promise(resolve => stream.once('close', resolve));
+    control.abort('cancel'); if (!stream.destroyed) stream.destroy(); await closed;
+    // The injected provider failed before close; release only this test-owned
+    // descriptor explicitly, without retrying it in the production adapter.
+    fs.closeSync(fd); lane.live.delete(fd);
+    assert.equal(errors.length, 1); assert(errors[0] instanceof AggregateError);
+    assert.equal(errors[0].errors[0].code, 'ABORT_ERR');
+    assert.equal(errors[0].errors[0].cause, 'cancel'); assert.equal(errors[0].errors[1], closeError);
+    assert.equal(lane.effects.filter(e => e.op === 'close_fd').length, 1);
+  });
+  test('engine-js: line iteration cannot convert a suppressed abort into successful EOF', { timeout: 5000 }, async t => {
+    const control = new AbortController();
+    control.signal.addEventListener('abort', event => event.stopImmediatePropagation());
+    const lane = createHarness({ effect(op) { if (op === 'read_fd') control.abort('line-cancel'); } });
+    const f = fixture(t, 'never\n'), h = await lane.api.promises.open(f.file);
+    const lines = h.readLines({ signal: control.signal }), output = [];
+    const closed = new Promise(resolve => lines.input.once('close', resolve));
+    let failure;
+    try { for await (const line of lines) output.push(line); }
+    catch (error) { failure = error; }
+    lines.close(); await closed;
+    assert.equal(failure?.code, 'ABORT_ERR'); assert.equal(failure.cause, 'line-cancel');
+    assert.deepEqual(output, []); assert.equal(h.fd, -1); assert.equal(lane.live.size, 0);
+  });
 }

@@ -144,3 +144,87 @@ fn line_stream_errors_reject_and_creation_does_not_infer_read_authority() {
         assert!(denied.is_err(), "opening a line stream requires ordinary file authority");
     }
 }
+
+#[test]
+fn file_readers_and_writers_share_unsuppressible_constructor_cancellation() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("input"), b"unchanged\n").unwrap();
+        let (lines, effects) = run(
+            r#"const fs=require('fs');
+            async function cancel(path,writable){
+              const control=new AbortController();
+              control.signal.addEventListener('abort',event=>event.stopImmediatePropagation());
+              const stream=writable?fs.createWriteStream(path,{signal:control.signal}):
+                fs.createReadStream(path,{signal:control.signal});
+              let failure;stream.on('error',error=>failure=error);
+              const closed=new Promise(resolve=>stream.once('close',resolve));
+              await new Promise(resolve=>stream.once('ready',resolve));
+              control.abort(false);await closed;
+              console.log('CANCELLED',writable,failure.code,failure.cause===false,stream.fd);
+            }
+            (async function(){await cancel('input',false);await cancel('output',true);
+              console.log('CANCELLATION_COMPLETE');})();"#,
+            root.path(), &["fs_read", "fs_write"], lane,
+        ).expect("both adapters use the shared abort owner");
+        assert_eq!(lines, [
+            "CANCELLED false ABORT_ERR true null",
+            "CANCELLED true ABORT_ERR true null",
+            "CANCELLATION_COMPLETE",
+        ]);
+        assert_eq!(std::fs::read(root.path().join("input")).unwrap(), b"unchanged\n");
+        assert_eq!(std::fs::read(root.path().join("output")).unwrap(), b"");
+        let mut opens = 0;
+        let mut closes = 0;
+        for (request, _) in effects {
+            match request {
+                HostIoRequest::FsMeta { operation: FsOperation::Open, .. } => opens += 1,
+                HostIoRequest::FsMeta { operation: FsOperation::CloseFd, .. } => closes += 1,
+                other => panic!("cancelled idle streams must not read or write: {other:?}"),
+            }
+        }
+        assert_eq!((opens, closes), (2, 2));
+    }
+}
+
+#[test]
+fn finished_file_writer_releases_signal_without_stealing_retained_descriptor() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let root = tempfile::tempdir().unwrap();
+        let (lines, _) = run(
+            r#"(async function(){const h=await require('fs/promises').open('output','w');
+              const control=new AbortController(),errors=[];
+              const stream=h.createWriteStream({signal:control.signal,autoClose:false});
+              stream.on('error',error=>errors.push(error));
+              const finished=new Promise(resolve=>stream.once('finish',resolve));
+              stream.end('kept\n');await finished;control.abort('late');
+              console.log('RETAINED',stream.writableFinished,stream.destroyed,h.fd>=0,errors.length);
+              const closed=new Promise(resolve=>stream.once('close',resolve));
+              stream.destroy();await closed;await h.close();console.log('RELEASED',h.fd);
+            })();"#,
+            root.path(), &["fs_read", "fs_write"], lane,
+        ).expect("late abort does not invalidate completed output");
+        assert_eq!(lines, ["RETAINED true false true 0", "RELEASED -1"]);
+        assert_eq!(std::fs::read(root.path().join("output")).unwrap(), b"kept\n");
+    }
+}
+
+#[test]
+fn pre_aborted_path_writer_finishes_cleanup_without_file_authority_or_truncation() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("output"), b"retained\n").unwrap();
+        let (lines, effects) = run(
+            r#"(async function(){const fs=require('fs');
+              const stream=fs.createWriteStream('output',{signal:AbortSignal.abort(null)});
+              let failure;stream.on('error',error=>failure=error);
+              await new Promise(resolve=>stream.once('close',resolve));
+              console.log('NO_ACQUISITION',failure.code,failure.cause===null,stream.fd);
+            })();"#,
+            root.path(), &[], lane,
+        ).expect("cancelled construction needs no filesystem effect");
+        assert_eq!(lines, ["NO_ACQUISITION ABORT_ERR true null"]);
+        assert!(effects.is_empty());
+        assert_eq!(std::fs::read(root.path().join("output")).unwrap(), b"retained\n");
+    }
+}

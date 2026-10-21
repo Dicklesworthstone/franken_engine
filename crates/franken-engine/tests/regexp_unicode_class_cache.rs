@@ -7,8 +7,11 @@ fn check(source: &str, expected: &[&str]) {
     let outcome = HybridRouter::default()
         .eval(source)
         .unwrap_or_else(|error| panic!("evaluation failed: {error}"));
-    let lines: Vec<_> = outcome.console_output.iter()
-        .map(|entry| entry.message.as_str()).collect();
+    let lines: Vec<_> = outcome
+        .console_output
+        .iter()
+        .map(|entry| entry.message.as_str())
+        .collect();
     assert_eq!(lines, expected);
 }
 
@@ -43,12 +46,15 @@ var found = sticky.exec('xé😀!y');
 console.log(found.index + ':' + found[0].length + ':' + sticky.lastIndex + '|' +
   (sticky.exec('xé😀!y') === null) + ':' + sticky.lastIndex);
 "#;
-    check(source, &[
-        r#"1:1024:true:1025:1026:true:2050:true|1:1024:true:1025:1026:true:2050:true|1:1024:true:1025:1026:true:2050:true|1:2048:true:2049:2050:true:4098:true"#,
-        r#"2:éÉ|6:Σσς|9:Жя"#,
-        r#"éΣÉσ:éΣ|KſkS:KſkS"#,
-        r#"1:3:4|true:0"#,
-    ]);
+    check(
+        source,
+        &[
+            r#"1:1024:true:1025:1026:true:2050:true|1:1024:true:1025:1026:true:2050:true|1:1024:true:1025:1026:true:2050:true|1:2048:true:2049:2050:true:4098:true"#,
+            r#"2:éÉ|6:Σσς|9:Жя"#,
+            r#"éΣÉσ:éΣ|KſkS:KſkS"#,
+            r#"1:3:4|true:0"#,
+        ],
+    );
 }
 
 #[test]
@@ -73,10 +79,13 @@ var edge = '\u00bf\u00c0\u00ff\u0100\u03bf\u03c0\u03ff\u0400';
 var result = edge.match(/(?=)[\u00c0-\u00ff\u03c0-\u03ff]/gu);
 console.log(result.map(function (c) { return c.codePointAt(0); }).join(','));
 "#;
-    check(source, &[
-        r#"256:192:é:􏿩:ũ"#,
-        r#"a|b|c:[2]![2]!"#,
-        r#"1011|1001|1000|1000|1000|1000|0100|0100|0100"#,
-        r#"192,255,960,1023"#,
-    ]);
+    check(
+        source,
+        &[
+            r#"256:192:é:􏿩:ũ"#,
+            r#"a|b|c:[2]![2]!"#,
+            r#"1011|1001|1000|1000|1000|1000|0100|0100|0100"#,
+            r#"192,255,960,1023"#,
+        ],
+    );
 }

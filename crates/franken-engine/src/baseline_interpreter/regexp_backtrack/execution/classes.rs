@@ -76,7 +76,11 @@ impl ClassMatches {
         // must not be confused with an untested character or another class.
         let entry = &mut self.entries[slot];
         if entry.class != class {
-            *entry = Entry { class, known: [0; 2], matched: [0; 2] };
+            *entry = Entry {
+                class,
+                known: [0; 2],
+                matched: [0; 2],
+            };
         }
         entry.known[word] |= bit;
         if matched {
@@ -101,7 +105,12 @@ impl ClassMatches {
         let matched = self.evaluate(regexp, class, c);
         let entry = &mut self.unicode[slot];
         if entry.class != class || entry.block != block {
-            *entry = UnicodeEntry { class, block, known: 0, matched: 0 };
+            *entry = UnicodeEntry {
+                class,
+                block,
+                known: 0,
+                matched: 0,
+            };
         }
         entry.known |= bit;
         if matched {
@@ -128,9 +137,14 @@ impl Run<'_> {
         backward: bool,
         class: usize,
     ) -> Option<usize> {
-        let index = if backward { position.checked_sub(1)? } else { position };
+        let index = if backward {
+            position.checked_sub(1)?
+        } else {
+            position
+        };
         let &c = self.input.chars.get(index)?;
-        self.class_matches.matches(self.regexp, class, c)
+        self.class_matches
+            .matches(self.regexp, class, c)
             .then_some(if backward { index } else { position + 1 })
     }
 }

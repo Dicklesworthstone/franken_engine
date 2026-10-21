@@ -887,7 +887,12 @@ fn host_api_decision_stable_id(
 pub enum ResolutionErrorCode {
     EmptySpecifier,
     InvalidReferrer,
+    /// Invalid or unadmitted route. Installed execution keeps this refusal
+    /// outside guest exception handling, even for a CommonJS optional load.
     UnsupportedSpecifier,
+    /// An admitted lookup found no module. Installed CommonJS execution
+    /// exposes this as the catchable Node `MODULE_NOT_FOUND` error. A closed
+    /// graph must not use this for routes outside its captured lookup domain.
     ModuleNotFound,
     PolicyDenied,
 }
@@ -955,6 +960,22 @@ impl ResolutionError {
         self.canonical_specifier = canonical_specifier;
         self.source_kind = source_kind;
         self.probe_sequence = probe_sequence;
+        self
+    }
+
+    /// A policy hook may hide a denied resource behind a not-found code.
+    /// Keep that diagnostic, but never turn a policy-origin refusal into
+    /// the catchable absence of an admitted optional dependency.
+    fn into_policy_denial(mut self) -> Self {
+        if self.code != ResolutionErrorCode::PolicyDenied {
+            self.message = format!(
+                "module policy denied ({}): {}",
+                self.code.stable_code(),
+                self.message
+            );
+        }
+        self.code = ResolutionErrorCode::PolicyDenied;
+        self.event.error_code = self.code.stable_code().to_string();
         self
     }
 
@@ -1227,6 +1248,21 @@ pub struct ExecutionModuleResolver {
     source_locations: Arc<BTreeMap<String, ModuleSourceLocation>>,
 }
 
+struct ExecutionModulePolicy<'a>(&'a dyn ModulePolicyHook);
+
+impl ModulePolicyHook for ExecutionModulePolicy<'_> {
+    fn authorize(
+        &self,
+        request: &ModuleRequest,
+        resolved: &ModuleRecord,
+        context: &ResolutionContext,
+    ) -> ResolutionResult<()> {
+        self.0
+            .authorize(request, resolved, context)
+            .map_err(|error| Box::new((*error).into_policy_denial()))
+    }
+}
+
 /// Guest-visible origin metadata supplied by the trusted source-capture host.
 ///
 /// These values never authorize an I/O operation or serve as resolver keys.
@@ -1275,7 +1311,7 @@ impl ExecutionModuleResolver {
         context: &ResolutionContext,
     ) -> ResolutionResult<ResolutionOutcome> {
         self.resolver
-            .resolve(request, context, self.policy.as_ref())
+            .resolve(request, context, &ExecutionModulePolicy(self.policy.as_ref()))
     }
 }
 
@@ -1972,7 +2008,7 @@ impl ModuleResolver for DeterministicModuleResolver {
         policy
             .authorize(request, record, context)
             .map_err(|error| {
-                Box::new((*error).with_resolution_attempt(
+                Box::new((*error).into_policy_denial().with_resolution_attempt(
                     request.specifier.clone(),
                     Some(canonical_specifier.clone()),
                     Some(record.provenance.kind),
@@ -2870,6 +2906,48 @@ mod tests {
             ResolutionErrorCode::PolicyDenied.stable_code()
         );
         assert!(error.message.contains("fs_write"));
+    }
+
+    #[test]
+    fn policy_error_codes_cannot_masquerade_as_optional_dependency_absence() {
+        struct Refuse(ResolutionErrorCode);
+        impl ModulePolicyHook for Refuse {
+            fn authorize(
+                &self,
+                _request: &ModuleRequest,
+                _resolved: &ModuleRecord,
+                context: &ResolutionContext,
+            ) -> ResolutionResult<()> {
+                Err(Box::new(ResolutionError::new(self.0, "hidden resource", context)))
+            }
+        }
+
+        let mut resolver = DeterministicModuleResolver::new("/app");
+        resolver
+            .register_workspace_module(
+                "/app/dep.cjs",
+                ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = 7;"),
+            )
+            .expect("fixture source");
+        let request = ModuleRequest::new("/app/dep.cjs", ImportStyle::Require);
+        for code in [
+            ResolutionErrorCode::EmptySpecifier,
+            ResolutionErrorCode::InvalidReferrer,
+            ResolutionErrorCode::UnsupportedSpecifier,
+            ResolutionErrorCode::ModuleNotFound,
+            ResolutionErrorCode::PolicyDenied,
+        ] {
+            let error = resolver
+                .resolve(&request, &context(), &Refuse(code))
+                .expect_err("a hook refusal is always a policy refusal");
+            assert_eq!(error.code, ResolutionErrorCode::PolicyDenied);
+            assert_eq!(error.event.error_code, ResolutionErrorCode::PolicyDenied.stable_code());
+            assert_eq!(error.request_specifier, "/app/dep.cjs");
+            assert!(error.message.contains("hidden resource"));
+            if code != ResolutionErrorCode::PolicyDenied {
+                assert!(error.message.contains(code.stable_code()));
+            }
+        }
     }
 
     #[test]

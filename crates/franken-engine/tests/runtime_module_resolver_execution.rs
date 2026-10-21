@@ -18,7 +18,7 @@ use frankenengine_engine::module_resolver::{
     AllowAllPolicy, CapabilityPolicyHook, DeterministicModuleResolver, ExecutionModuleResolver,
     ImportStyle, ModuleDefinition, ModuleDependency, ModulePolicyHook, ModuleRecord, ModuleRequest,
     ModuleResolver, ModuleSourceLocation, ModuleSyntax, NativeBuiltinModule, ResolutionContext,
-    ResolutionOutcome, ResolutionResult,
+    ResolutionErrorCode, ResolutionOutcome, ResolutionResult,
 };
 use frankenengine_engine::runtime_config::RuntimeConfig;
 
@@ -45,6 +45,7 @@ struct OpaqueResolver {
     inner: DeterministicModuleResolver,
     requests: Mutex<Vec<ModuleRequest>>,
     corruption: Corruption,
+    missing_routes: BTreeSet<String>,
 }
 
 impl OpaqueResolver {
@@ -59,7 +60,13 @@ impl OpaqueResolver {
             inner,
             requests: Mutex::new(Vec::new()),
             corruption: Corruption::None,
+            missing_routes: BTreeSet::new(),
         }
+    }
+
+    fn with_missing_route(mut self, specifier: &str) -> Self {
+        self.missing_routes.insert(specifier.to_string());
+        self
     }
 
     fn with_native_builtins(mut self) -> Self {
@@ -111,7 +118,20 @@ impl ModuleResolver for OpaqueResolver {
         {
             *referrer = path.to_string();
         }
-        let mut outcome = self.inner.resolve(&translated, context, &AllowAllPolicy)?;
+        let mut outcome = self
+            .inner
+            .resolve(&translated, context, &AllowAllPolicy)
+            .map_err(|mut error| {
+                // This fixture models a closed graph, rather than an open
+                // package resolver: only explicitly captured negative routes
+                // represent catchable absence. Unknown routes stay refused.
+                if error.code == ResolutionErrorCode::ModuleNotFound
+                    && !self.missing_routes.contains(&request.specifier)
+                {
+                    error.code = ResolutionErrorCode::UnsupportedSpecifier;
+                }
+                error
+            })?;
         outcome.module.record.id = format!("{ID_PREFIX}{}", outcome.module.record.id);
         outcome.module.canonical_specifier = outcome.module.record.id.clone();
         outcome.module.content_hash = outcome.module.record.canonical_hash();
@@ -188,6 +208,7 @@ impl ModuleResolver for OpaqueResolver {
 struct RecordingPolicy {
     requests: Mutex<Vec<(ModuleRequest, ResolutionContext)>>,
     denied: Option<(String, usize)>,
+    denial_code: Option<ResolutionErrorCode>,
     allow_native_builtins: bool,
 }
 
@@ -218,7 +239,13 @@ impl ModulePolicyHook for RecordingPolicy {
         {
             policy.denied_specifiers.insert(request.specifier.clone());
         }
-        policy.authorize(request, record, context)
+        policy.authorize(request, record, context).map_err(|mut error| {
+            if let Some(code) = self.denial_code {
+                error.code = code;
+                error.event.error_code = code.stable_code().to_string();
+            }
+            error
+        })
     }
 }
 
@@ -580,6 +607,95 @@ fn delivered_sources_keep_package_capabilities_and_parser_budgets() {
         error.to_string().contains("parser source-byte budget"),
         "{error}"
     );
+}
+
+#[test]
+fn delivered_missing_routes_are_catchable_without_filesystem_fallback() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![
+                (
+                    "entry.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        r#"
+try { require('./optional.cjs'); } catch (error) {
+    console.log(error.code, error.message.indexOf('./optional.cjs') >= 0);
+}
+try { require.resolve('./optional.cjs'); } catch (error) {
+    console.log(error.code, error.message.indexOf('./optional.cjs') >= 0);
+}
+console.log(require('./fallback.cjs').answer);
+"#,
+                    ),
+                ),
+                (
+                    "fallback.cjs",
+                    definition(ModuleSyntax::CommonJs, "module.exports = { answer: 42 };"),
+                ),
+            ])
+            .with_missing_route("./optional.cjs"),
+        );
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver.clone(),
+            Arc::new(AllowAllPolicy),
+        );
+        let result = orchestrator(lane, ModuleSyntax::CommonJs)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("an admitted absent optional dependency permits the program's fallback");
+        assert_eq!(lines(&result), ["MODULE_NOT_FOUND true", "MODULE_NOT_FOUND true", "42"]);
+        assert_eq!(
+            resolver
+                .requests
+                .lock()
+                .expect("request log")
+                .iter()
+                .filter(|request| request.specifier == "./optional.cjs")
+                .count(),
+            2,
+            "both loading and resolving must consult the installed resolver"
+        );
+    }
+}
+
+#[test]
+fn delivered_policy_refusals_are_not_optional_dependency_fallbacks() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for operation in ["require", "require.resolve"] {
+            for denial_code in [
+                ResolutionErrorCode::PolicyDenied,
+                ResolutionErrorCode::ModuleNotFound,
+                ResolutionErrorCode::UnsupportedSpecifier,
+                ResolutionErrorCode::InvalidReferrer,
+                ResolutionErrorCode::EmptySpecifier,
+            ] {
+                let code = format!(
+                    "try {{ {operation}('./dep.cjs'); }} catch (error) {{ console.log('must not catch policy'); }}"
+                );
+                let resolver = Arc::new(OpaqueResolver::new(vec![
+                    ("entry.cjs", definition(ModuleSyntax::CommonJs, &code)),
+                    ("dep.cjs", definition(ModuleSyntax::CommonJs, "module.exports = 42;")),
+                ]));
+                let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+                let policy = Arc::new(RecordingPolicy {
+                    denied: Some(("./dep.cjs".to_string(), 1)),
+                    denial_code: Some(denial_code),
+                    ..RecordingPolicy::default()
+                });
+                let installed =
+                    ExecutionModuleResolver::new(&source.module.record.id, resolver, policy);
+                let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
+                let error = engine
+                    .execute_resolved_entry_with_resolver(&package(), &source, installed)
+                    .expect_err("guest catch blocks cannot suppress a load-policy refusal");
+                assert!(error.to_string().contains("closed-world module resolution refused"), "{error}");
+                assert!(error.to_string().contains("FE-MODRES-0005"), "{error}");
+                assert!(engine.last_failed_console_output().is_empty());
+            }
+        }
+    }
 }
 
 #[test]

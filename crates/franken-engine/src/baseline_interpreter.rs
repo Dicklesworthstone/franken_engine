@@ -175,7 +175,7 @@ use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use crate::module_compatibility_matrix::CompatibilityMode;
 use crate::module_resolver::{
     ExecutionModuleResolver, ImportStyle, ModuleRequest, ModuleSyntax, NativeBuiltinModule,
-    ResolutionContext, ResolutionOutcome,
+    ResolutionContext, ResolutionErrorCode, ResolutionOutcome,
 };
 use crate::object_model::{SymbolId, WellKnownSymbol};
 use crate::parser::{
@@ -39262,9 +39262,23 @@ impl InterpreterCore {
         let resolved = installed
             .resolver
             .resolve(&request, &installed.context)
-            .map_err(|error| InterpreterError::ModuleLoweringFailed {
-                specifier: specifier.to_string(),
-                error: format!("closed-world module resolution refused: {error}"),
+            .map_err(|error| {
+                // A resolver can bind an observed absence into its closed
+                // world, allowing optional dependencies to use Node's normal
+                // MODULE_NOT_FOUND fallback. An unknown/unauthorized route
+                // must instead report UnsupportedSpecifier/PolicyDenied;
+                // those refusals remain outside guest exception handling.
+                if error.code == ResolutionErrorCode::ModuleNotFound {
+                    InterpreterError::ModuleResolutionFailed {
+                        specifier: specifier.to_string(),
+                        reason: ModuleResolutionFailureReason::ModuleNotFound,
+                    }
+                } else {
+                    InterpreterError::ModuleLoweringFailed {
+                        specifier: specifier.to_string(),
+                        error: format!("closed-world module resolution refused: {error}"),
+                    }
+                }
             })?;
         let record = &resolved.module.record;
         if u64::try_from(record.source.len()).unwrap_or(u64::MAX)
@@ -70636,7 +70650,13 @@ impl InterpreterCore {
         };
         let specifier = Self::utf8_module_specifier(&request)?;
         if self.module_resolver.is_some() {
-            let resolved = self.resolve_installed_module(specifier, ImportStyle::Require)?;
+            let resolved = match self.resolve_installed_module(specifier, ImportStyle::Require) {
+                Ok(resolved) => resolved,
+                Err(InterpreterError::ModuleResolutionFailed { reason, .. }) => {
+                    return Err(self.throw_module_not_found(request.as_ref(), &reason));
+                }
+                Err(error) => return Err(error),
+            };
             if let Some(native) = NativeBuiltinModule::from_record(&resolved.module.record) {
                 let name = if NativeBuiltinModule::from_specifier(specifier) == Some(native) {
                     specifier

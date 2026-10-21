@@ -9846,11 +9846,18 @@ fn try_parse_assignment(
     // Scan for assignment operators at top-level (depth 0).
     let bytes = expr.as_bytes();
     let mut assignment = None;
+    let mut update_token_end = 0;
     let complete = scan_binding_pattern_source_with_context(
         expr,
         ScanGrammarContext::from_execution_context(context).expression(),
         |index, _ch, depth, quoted| {
-            if assignment.is_some() || quoted || depth != 0 {
+            if assignment.is_some() || quoted || depth != 0 || index < update_token_end {
+                return;
+            }
+            // The lexical scanner visits both bytes of an update token. Its
+            // second + or - cannot begin += or -= in x++==y or x--===y.
+            if matches!(bytes[index], b'+' | b'-') && bytes.get(index + 1) == Some(&bytes[index]) {
+                update_token_end = index + 2;
                 return;
             }
             let Some((operator, len)) = match_assignment_operator_at(bytes, index) else {
@@ -17374,6 +17381,78 @@ mod tests {
                 UpdateOperator::Decrement,
             ),
             ("x+++y;", BinaryOperator::Add, UpdateOperator::Increment),
+            ("x++==y;", BinaryOperator::Equal, UpdateOperator::Increment),
+            (
+                "x++===y;",
+                BinaryOperator::StrictEqual,
+                UpdateOperator::Increment,
+            ),
+            (
+                "x++!=y;",
+                BinaryOperator::NotEqual,
+                UpdateOperator::Increment,
+            ),
+            (
+                "x++!==y;",
+                BinaryOperator::StrictNotEqual,
+                UpdateOperator::Increment,
+            ),
+            (
+                "x++<y;",
+                BinaryOperator::LessThan,
+                UpdateOperator::Increment,
+            ),
+            (
+                "x++<=y;",
+                BinaryOperator::LessThanOrEqual,
+                UpdateOperator::Increment,
+            ),
+            (
+                "x++>y;",
+                BinaryOperator::GreaterThan,
+                UpdateOperator::Increment,
+            ),
+            (
+                "x++>=y;",
+                BinaryOperator::GreaterThanOrEqual,
+                UpdateOperator::Increment,
+            ),
+            ("x--==y;", BinaryOperator::Equal, UpdateOperator::Decrement),
+            (
+                "x--===y;",
+                BinaryOperator::StrictEqual,
+                UpdateOperator::Decrement,
+            ),
+            (
+                "x--!=y;",
+                BinaryOperator::NotEqual,
+                UpdateOperator::Decrement,
+            ),
+            (
+                "x--!==y;",
+                BinaryOperator::StrictNotEqual,
+                UpdateOperator::Decrement,
+            ),
+            (
+                "x--<y;",
+                BinaryOperator::LessThan,
+                UpdateOperator::Decrement,
+            ),
+            (
+                "x--<=y;",
+                BinaryOperator::LessThanOrEqual,
+                UpdateOperator::Decrement,
+            ),
+            (
+                "x-->y;",
+                BinaryOperator::GreaterThan,
+                UpdateOperator::Decrement,
+            ),
+            (
+                "x-->=y;",
+                BinaryOperator::GreaterThanOrEqual,
+                UpdateOperator::Decrement,
+            ),
         ] {
             let tree = parser
                 .parse(source, ParseGoal::Script)

@@ -81,6 +81,14 @@ fn consumed_postfix_decrement_still_mutates_operand() {
     assert_eq!(completion(src), Value::Int(4));
 }
 
+#[test]
+fn adjacent_postfix_comparisons_preserve_prior_values_and_single_writeback() {
+    let source = "(function () { var count=0; var a=count++===0; var b=count--==1; \
+                  var c=count++!==0; var d=count--!=1; var final=count; count+=41; \
+                  return a && b && !c && !d && final===0 && count===41; })();";
+    assert_eq!(completion(source), Value::Bool(true));
+}
+
 // --- Consumed prefix yields the NEW value. ------------------------------------
 
 #[test]

@@ -131,7 +131,7 @@ pub(crate) fn runtime_module_tree() -> Result<SyntaxTree, LoweringPipelineError>
     else {
         return Err(wrapper_failed());
     };
-    *right = Box::new(module_source(&BTreeSet::new())?);
+    **right = module_source(&BTreeSet::new())?;
     Ok(tree)
 }
 

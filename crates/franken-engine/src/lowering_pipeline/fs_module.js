@@ -766,17 +766,11 @@
       if (encoding !== undefined && encoding !== null && !isEncoding(encoding)) {
         throw argumentError('encoding');
       }
-      var addAbort;
-      var removeAbort;
-      if (signal !== undefined) {
-        if (signal === null || typeof signal !== 'object' || typeof signal.aborted !== 'boolean') {
-          throw argumentError('options.signal');
-        }
-        addAbort = signal.addEventListener;
-        removeAbort = signal.removeEventListener;
-        if (typeof addAbort !== 'function' || typeof removeAbort !== 'function') {
-          throw argumentError('options.signal');
-        }
+      // Keep the file API's optional-signal shape check. The shared stream
+      // constructor authenticates the AbortSignal brand using realm accessors;
+      // never consult replaceable public state or listener methods here.
+      if (signal !== undefined && (signal === null || typeof signal !== 'object')) {
+        throw argumentError('options.signal');
       }
       if (start !== undefined) { position(start, 'start'); }
       if (end === undefined) { end = 1 / 0; }
@@ -793,8 +787,7 @@
         flags: flags === undefined ? (writable ? 'w' : 'r') : flags, mode: mode,
         autoClose: autoClose === undefined ? true : !!autoClose,
         highWaterMark: highWaterMark === undefined ? 65536 : highWaterMark,
-        encoding: encoding, emitClose: emitClose, signal: signal, flush: flush === true,
-        addAbort: addAbort, removeAbort: removeAbort };
+        encoding: encoding, emitClose: emitClose, signal: signal, flush: flush === true };
     }
     function bindOwner(state, owner) {
       state.owner = owner;
@@ -848,16 +841,6 @@
       if (state.destroyCallback === undefined || state.inflight !== 0) { return; }
       var callback = state.destroyCallback;
       state.destroyCallback = undefined;
-      if (state.abortListener !== undefined) {
-        var listener = state.abortListener;
-        state.abortListener = undefined;
-        try { apply(state.options.removeAbort, state.options.signal, ['abort', listener]); }
-        catch (error) {
-          error = failure(error);
-          state.destroyError = state.destroyError ? new NativeAggregateError([state.destroyError, error],
-            'Filesystem stream and abort-listener cleanup both failed') : error;
-        }
-      }
       function done(closeError) {
         state.destroyFinished = true;
         var error = state.destroyError;
@@ -873,9 +856,11 @@
     }
     function construct(stream, callback) {
       var state = stateOf(stream);
-      // Pre-abort or listener-registration failure must not open/truncate a
-      // path while the base stream is waiting for construction to settle.
-      if (state.abortRequested) { callback(); return; }
+      // Constructor cancellation marks the stream destroyed before this
+      // deferred acquisition runs. Do not open/truncate a cancelled path.
+      // The base stream waits for this callback before _destroy, so initialize
+      // has already published the private owner even for a pre-aborted signal.
+      if (stream.destroyed) { callback(); return; }
       if (state.owner !== undefined) {
         if (state.descriptor() < 0) {
           var error = new Error('file closed');
@@ -915,34 +900,15 @@
       stream.path = path;
       stream.flags = options.flags;
       stream.mode = options.mode;
-      // The engine's generic stream constructors do not consume signal.
-      // Install one adapter-owned listener for both read and write streams;
-      // cleanup belongs to _destroy even when emitClose is false.
-      if (options.signal !== undefined) {
-        function abort() {
-          try {
-            checkAbort(options.signal);
-          } catch (error) {
-            state.abortRequested = true;
-            stream.destroy(failure(error));
-          }
-        }
-        state.abortListener = abort;
-        try {
-          apply(options.addAbort, options.signal, ['abort', abort, { once: true }]);
-          abort();
-        } catch (error) {
-          state.abortRequested = true;
-          stream.destroy(failure(error));
-        }
-      }
+      // Signal lifetime belongs to the shared base stream. This owner only
+      // drains admitted descriptor I/O, optional flushing and descriptor close.
       return state;
     }
     class ReadStream extends streams.Readable {
       constructor(path, options, owner) {
         var config = settings(options, owner);
         super({ highWaterMark: config.highWaterMark, encoding: config.encoding,
-          autoDestroy: config.autoClose, emitClose: config.emitClose });
+          autoDestroy: config.autoClose, emitClose: config.emitClose, signal: config.signal });
         initialize(this, path, config);
       }
       get fd() {
@@ -1105,7 +1071,7 @@
         var config = settings(options, owner, true);
         super({ highWaterMark: config.highWaterMark, defaultEncoding: config.encoding,
           decodeStrings: true, autoDestroy: config.autoClose,
-          emitClose: config.emitClose });
+          emitClose: config.emitClose, signal: config.signal });
         initialize(this, path, config);
       }
       get fd() {

@@ -138,6 +138,21 @@ fn run_package(source: &str) -> (Result<(), OrchestratorError>, Arc<RecordingHos
     (outcome, provider)
 }
 
+#[test]
+fn ordinary_scripts_cannot_claim_the_commonjs_require_binding() {
+    let (outcome, provider) =
+        run_package("const load = require; load('./private-dependency.cjs');");
+    let error = outcome.expect_err("ordinary Script has no authenticated require binding");
+    assert!(matches!(
+        error.primary_error(),
+        OrchestratorError::Lowering(lowering_error)
+            if matches!(lowering_error.as_ref(),
+                LoweringPipelineError::AmbientAuthorityViolation { accessor, .. }
+                    if accessor == "require")
+    ));
+    assert_eq!(provider.count(|_| true), 0);
+}
+
 fn assert_confidentiality_denial(outcome: &Result<(), OrchestratorError>, capability: &str) {
     let error = outcome.as_ref().expect_err("the flow must be refused");
     assert!(

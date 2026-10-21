@@ -483,17 +483,38 @@ impl Walk for DirectFsCalls {
             arguments.resize(spec.max_args, Expression::UndefinedLiteral);
             // Always distinguish the operation from the guest path, including
             // read/write: a filename must never become dispatch metadata.
-            arguments.insert(0, Expression::StringLiteral(
-                format!("\0fsop:{}", spec.operation.as_str()).into(),
-            ));
-            **callee = Expression::Identifier(match spec.capability {
-                "fs:read" => "%FsRead",
-                "fs:write" => "%FsWrite",
-                _ => return Err(LoweringPipelineError::InvariantViolation {
-                    detail: "filesystem operation has no protected intrinsic",
-                }),
-            }.to_string());
+            arguments.insert(
+                0,
+                Expression::StringLiteral(format!("\0fsop:{}", spec.operation.as_str()).into()),
+            );
+            **callee = Expression::Identifier(
+                match spec.capability {
+                    "fs:read" => "%FsRead",
+                    "fs:write" => "%FsWrite",
+                    _ => {
+                        return Err(LoweringPipelineError::InvariantViolation {
+                            detail: "filesystem operation has no protected intrinsic",
+                        });
+                    }
+                }
+                .to_string(),
+            );
             self.calls += 1;
+            return Ok(());
+        }
+        if let Expression::Call {
+            callee, arguments, ..
+        } = expression
+            && matches!(callee.as_ref(), Expression::Identifier(name) if name == "require")
+            && matches!(arguments.as_slice(), [Expression::StringLiteral(specifier)]
+                if specifier.as_str().is_some_and(|specifier|
+                    super::super::is_http_module_specifier(specifier)
+                        || super::super::is_https_module_specifier(specifier)))
+        {
+            // These fixed networking facades do not load guest modules or
+            // expose the filesystem namespace. Leave their require intact for
+            // the ordinary HTTP/HTTPS recognizers and authority checks. A
+            // source binding named require still invalidates the whole proof.
             return Ok(());
         }
         if matches!(expression, Expression::Identifier(name) if name == "require") {
@@ -1007,6 +1028,51 @@ mod tests {
     }
 
     #[test]
+    fn literal_network_facades_preserve_direct_fs_calls_without_claiming_their_loads() {
+        for specifier in ["http", "node:http", "https", "node:https"] {
+            let tree = parse(&format!(
+                "const fs = require('fs'); const net = require('{specifier}'); \
+                 const data = fs.readFileSync('config.txt', 'utf8'); net.get(data);"
+            ));
+            let original = serde_json::to_value(&tree).unwrap();
+            let rewritten = direct_fs_calls(&tree)
+                .unwrap()
+                .expect("independent core facade");
+            assert_eq!(rewritten.body.len(), tree.body.len());
+            assert_eq!(require_count(&rewritten), 1, "preserve the networking load");
+            assert_eq!(rewritten.body[1], tree.body[1]);
+            assert!(!rewritten.body.iter().any(is_module_declaration));
+            let Statement::VariableDeclaration(declaration) = &rewritten.body[2] else {
+                panic!("file-read declaration");
+            };
+            let Some(Expression::Call {
+                callee, arguments, ..
+            }) = &declaration.declarations[0].initializer
+            else {
+                panic!("protected file read");
+            };
+            assert_eq!(callee.as_ref(), &Expression::Identifier("%FsRead".into()));
+            assert_eq!(
+                arguments[0],
+                Expression::StringLiteral("\0fsop:read".into())
+            );
+            assert_eq!(serde_json::to_value(&tree).unwrap(), original);
+            assert!(rewrite_fs_requires(&rewritten).unwrap().is_none());
+        }
+        for source in [
+            "const fs = require('fs'); require('./guest.cjs'); fs.readFileSync('x');",
+            "const fs = require('fs'); const http = require('http'); consume(fs); fs.readFileSync('x');",
+            "function f(require) { const fs = require('fs'); require('http'); fs.readFileSync('x'); }",
+            "const fs = require('fs'); require(networkModule); fs.readFileSync('x');",
+        ] {
+            assert!(
+                direct_fs_calls(&parse(source)).unwrap().is_none(),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
     fn one_observable_or_unsupported_use_keeps_the_complete_module_path() {
         for suffix in [
             "const fs = require('fs');",
@@ -1218,5 +1284,4 @@ mod tests {
         let tree = parse("function f(require) { return require('fs').readdirSync('tree', {recursive:true}); }");
         assert!(rewrite_fs_requires(&tree).unwrap().is_none());
     }
-
 }

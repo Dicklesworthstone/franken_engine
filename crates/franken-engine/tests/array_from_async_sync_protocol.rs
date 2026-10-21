@@ -29,6 +29,9 @@ fn config(throughput: bool) -> InterpreterConfig {
         RuntimeCapability::HeapAllocate,
         RuntimeCapability::Builtin,
         RuntimeCapability::Console,
+        // The ordering fixture explicitly calls queueMicrotask, which requires
+        // Timer authority independently of native Promise reaction jobs.
+        RuntimeCapability::Timer,
     ]
     .into_iter()
     .collect();
@@ -63,6 +66,56 @@ fn sync_completion_and_cleanup_follow_the_native_promise_scheduler() {
                     "{}: throughput={throughput}, gc={stress:?}", fixture.name);
                 assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes(),
                     "{}: throughput={throughput}, gc={stress:?}", fixture.name);
+            }
+        }
+    }
+}
+
+#[test]
+fn explicit_microtasks_require_timer_authority() {
+    let source = "queueMicrotask(() => console.log('queued')); console.log('scheduled');";
+    let tree = parse_script(source).expect("microtask authority fixture parses");
+    let module = lower_ir0_to_ir3(
+        &Ir0Module::from_syntax_tree(tree, "microtask-authority.js"),
+        &LoweringContext::new("async-sync-protocol", "authority", "builtin-only"),
+    )
+    .expect("microtask authority fixture lowers")
+    .ir3;
+    for throughput in [false, true] {
+        for stress in [None, Some(1), Some(7)] {
+            for grant_timer in [false, true] {
+                let mut config = config(throughput);
+                if !grant_timer {
+                    config
+                        .granted_capabilities
+                        .remove(&RuntimeCapability::Timer);
+                }
+                let mut core = InterpreterCore::new(config, "microtask-authority");
+                core.set_gc_stress_interval(stress);
+                let result = core.execute(&module);
+                if grant_timer {
+                    let result = result.expect("explicit Timer grant permits scheduling");
+                    assert_eq!(
+                        result
+                            .console_output
+                            .iter()
+                            .map(|entry| entry.message.as_str())
+                            .collect::<Vec<_>>(),
+                        ["scheduled", "queued"],
+                        "throughput={throughput}, gc={stress:?}"
+                    );
+                } else {
+                    assert!(matches!(
+                        result,
+                        Err(InterpreterError::CapabilityDenied { capability })
+                            if capability == "builtin:QueueMicrotask"
+                    ));
+                    assert!(core.console_output().is_empty());
+                }
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
             }
         }
     }

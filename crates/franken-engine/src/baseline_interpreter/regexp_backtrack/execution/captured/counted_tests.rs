@@ -32,13 +32,14 @@ fn direct_loop(groups: usize, width: usize, minimum: usize, backward: bool) -> B
 #[test]
 fn counted_capture_recognition_requires_complete_fixed_width_groups() {
     for pattern in ["(a){17}", "((ab)){17}?", "([a-z]){20}", "(.){17}",
-        "(?<=((ab)){17})x", "(?<word>abc){32}", "(a){17,18}", "(a){17,}"] {
+        "(?<=((ab)){17})x", "(?<word>abc){32}", "(a){17,18}", "(a){17,}",
+        "(a){17,18}?", "(a){17,}?"] {
         let regexp = BacktrackRegExp::new(pattern, "").unwrap();
         let mut blocks = LiteralBlocks::default();
         assert!((0..regexp.program.len()).any(|pc|
             CapturedCounted::at(&regexp, pc, &mut blocks).is_some()), "{pattern}");
     }
-    for pattern in ["(a){17,18}?", "(a){17,}?", "(a|b){17}", "(a?){17}",
+    for pattern in ["(a|b){17}", "(a?){17}",
         "((a)b){17}", "(?:(a)(b)){17}", "(a[bc]){17}", "(?:ab){17}",
         "(a)*", "(a)*?", "(a){16}", "(((((((((a))))))))){17}"] {
         let regexp = BacktrackRegExp::new(pattern, "").unwrap();

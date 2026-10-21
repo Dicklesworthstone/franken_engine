@@ -148,10 +148,7 @@ impl CapturedCounted {
         else {
             return None;
         };
-        // Lazy optional captures remain scalar until their continuation is
-        // supported. Fixed counts have no optional choice in either order.
-        if (!*greedy && *max != Some(*min))
-            || max.is_some_and(|maximum| maximum < *min)
+        if max.is_some_and(|maximum| maximum < *min)
             || *body != pc.checked_add(1)? || *counter >= regexp.registers
         {
             return None;
@@ -403,6 +400,43 @@ impl Run<'_> {
             });
         }
         (body.exit, position)
+    }
+
+    /// The current lazy exit has failed. Save the state after the required
+    /// prefix only on the first extension; a zero-extension success needs no
+    /// snapshot. Each resume consumes one COMPLETE body through the existing
+    /// helper and preserves every refusal boundary. At the maximum, discard
+    /// only the next choice: a failing final exit must still undo all values.
+    pub(super) fn resume_captured_counted_lazy(
+        &mut self,
+        frame: Frame,
+        stack: &mut Vec<Frame>,
+    ) -> Result<Option<(usize, usize)>, BacktrackError> {
+        let Frame::CapturedCountedLazy { pc, position, start } = frame else {
+            unreachable!("only a counted capture continuation resumes here");
+        };
+        let repeat = CapturedCounted::at(self.regexp, pc, &mut self.literal_blocks)
+            .expect("the saved counted capture shape belongs to an immutable program");
+        let body = &repeat.body;
+        debug_assert!(!body.greedy);
+        if position == start {
+            stack.push(Frame::Register {
+                register: repeat.counter, old: self.registers[repeat.counter],
+            });
+            stack.push(Frame::Register {
+                register: body.register, old: self.registers[body.register],
+            });
+            for (offset, &old) in self.slots[body.from..body.to].iter().enumerate() {
+                stack.push(Frame::Slot { slot: body.from + offset, old });
+            }
+        }
+        let Some(position) = self.advance_captured_counted_body(&repeat, position)? else {
+            return Ok(None);
+        };
+        if repeat.maximum.is_none_or(|maximum| self.registers[repeat.counter] < maximum) {
+            stack.push(Frame::CapturedCountedLazy { pc, position, start });
+        }
+        Ok(Some((body.exit, position)))
     }
 
     pub(super) fn execute_captured_greedy(

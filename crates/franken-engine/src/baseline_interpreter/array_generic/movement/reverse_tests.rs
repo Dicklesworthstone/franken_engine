@@ -119,10 +119,13 @@ fn reverse_keeps_a_completed_write_when_upper_deletion_refuses() {
     put(&mut core, id, 131_071, 8);
     put(&mut core, id, 50_000, 9);
     let key = InterpreterCore::generic_index_key(131_071);
-    let object = &mut core.heap[id.0 as usize];
-    let mut attributes = object.own_property_attributes(&key);
+    let mut attributes = core.heap[id.0 as usize].own_property_attributes(&key);
     attributes.configurable = false;
-    object.property_attributes.insert(key, attributes);
+    core.mutate_heap(|heap| {
+        heap[id.0 as usize]
+            .property_attributes
+            .insert(key, attributes);
+    });
     assert!(reverse(&mut core, id, 131_072).is_err());
     let properties = &core.heap[id.0 as usize].properties;
     assert_eq!(properties.get_index(0), Some(&Value::Int(8)));

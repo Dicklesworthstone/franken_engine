@@ -175,7 +175,7 @@ use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use crate::module_compatibility_matrix::CompatibilityMode;
 use crate::module_resolver::{
     ExecutionModuleResolver, ImportStyle, ModuleRequest, ModuleSyntax, NativeBuiltinModule,
-    ResolutionContext, ResolutionErrorCode, ResolutionOutcome,
+    ResolutionContext, ResolutionErrorCode, ResolutionOutcome, ResolvedModule,
 };
 use crate::object_model::{SymbolId, WellKnownSymbol};
 use crate::parser::{
@@ -6403,6 +6403,11 @@ const OS_MODULE_KEY: &str = "<module os>";
 /// Seed-tracked slot of the realm's querystring module (bd-305gi), shared by
 /// the lowering factory and runtime CommonJS requests.
 const QUERYSTRING_MODULE_KEY: &str = "<module querystring>";
+
+/// Runtime-loaded path namespaces share one retained engine-owned factory.
+const PATH_MODULE_KEY: &str = "<module path>";
+const PATH_WIN32_MODULE_KEY: &str = "<module path/win32>";
+const PATH_RUNTIME_MODULE_ID: &str = "\0franken-engine/native-path";
 
 /// Seed-tracked slot of the `require('url')` module object (bd-9vouw.224).
 const URL_MODULE_KEY: &str = "<module url>";
@@ -39766,7 +39771,7 @@ impl InterpreterCore {
         resolved: &str,
         load_kind: ModuleLoadKind,
         import_bound: Option<&Label>,
-        delivered: Option<ResolutionOutcome>,
+        delivered: Option<ResolvedModule>,
     ) -> Result<Value, InterpreterError> {
         if self.module_resolver.is_some() && delivered.is_none() {
             return Err(InterpreterError::ModuleLoweringFailed {
@@ -39774,7 +39779,7 @@ impl InterpreterCore {
                 error: "installed resolver cannot fall back to filesystem source".to_string(),
             });
         }
-        let source_hash = delivered.as_ref().map(|source| source.module.content_hash);
+        let source_hash = delivered.as_ref().map(|source| source.content_hash);
         if let Some(record) = self.module_state.modules.get(resolved) {
             if source_hash.is_some() && record.resolved_source_hash != source_hash {
                 return Err(InterpreterError::ModuleLoweringFailed {
@@ -39837,8 +39842,14 @@ impl InterpreterCore {
         }
 
         let source_is_delivered = delivered.is_some();
+        let native_path = delivered.as_ref().is_some_and(|source| {
+            matches!(
+                NativeBuiltinModule::from_record(&source.record),
+                Some(NativeBuiltinModule::Path | NativeBuiltinModule::PathWin32)
+            )
+        });
         let declared_goal = match delivered.as_ref() {
-            Some(delivered) => Some(if delivered.module.record.syntax == ModuleSyntax::CommonJs {
+            Some(delivered) => Some(if delivered.record.syntax == ModuleSyntax::CommonJs {
                 ParseGoal::Script
             } else {
                 ParseGoal::Module
@@ -39852,7 +39863,7 @@ impl InterpreterCore {
             },
         };
         let source = match delivered {
-            Some(delivered) => delivered.module.record.source,
+            Some(delivered) => delivered.record.source,
             None => match self.read_module_source(resolved) {
                 Ok(source) => source,
                 Err(error) => {
@@ -39952,6 +39963,19 @@ impl InterpreterCore {
         // its record fails, so importing it again fails again. Unsupported
         // syntax and every policy refusal stay uncatchable.
         let syntax_tree = match parsed {
+            _ if native_path => {
+                self.check_temporary_memory_budget(
+                    crate::lowering_pipeline::path_module::RUNTIME_SOURCE_BYTES as u64,
+                )
+                .inspect_err(|error| self.fail_module_record(resolved, &error.to_string()))?;
+                crate::lowering_pipeline::path_module::runtime_module_tree().map_err(|error| {
+                    self.fail_module_record(resolved, &error.to_string());
+                    InterpreterError::ModuleLoweringFailed {
+                        specifier: resolved.to_string(),
+                        error: error.to_string(),
+                    }
+                })?
+            }
             Ok(syntax_tree) => syntax_tree,
             // An empty file, or one holding only comments, white space or
             // TypeScript declarations, is a module with no code and no
@@ -40115,7 +40139,7 @@ impl InterpreterCore {
             &resolved,
             ModuleLoadKind::Import,
             import_bound.as_ref(),
-            delivered,
+            delivered.map(|source| source.module),
         )
     }
 
@@ -40455,7 +40479,7 @@ impl InterpreterCore {
             &resolved,
             ModuleLoadKind::Require,
             None,
-            delivered,
+            delivered.map(|source| source.module),
         )?;
         if let Some(record) = self.module_state.modules.get(&resolved)
             && let Some(module_object) = record.cjs_module_object
@@ -40525,7 +40549,75 @@ impl InterpreterCore {
             NativeBuiltinModule::Url => self.url_core_module(),
             NativeBuiltinModule::Timers => self.timers_core_module(),
             NativeBuiltinModule::PerfHooks => self.perf_hooks_core_module(),
+            NativeBuiltinModule::Path | NativeBuiltinModule::PathWin32 => {
+                self.path_core_module(module, native)
+            }
         }
+    }
+
+    /// Instantiate the existing path factory once per realm through the same
+    /// retained-module and CommonJS execution path as other source modules.
+    /// Its methods therefore keep their defining module and lexical context
+    /// when a captured npm package exports or calls them. The private source
+    /// descriptor carries no policy decision; the caller has already checked
+    /// its import hook and, when installed, its resolver on every request.
+    fn path_core_module(
+        &mut self,
+        module: &Ir3Module,
+        native: NativeBuiltinModule,
+    ) -> Result<Value, InterpreterError> {
+        let key = if native == NativeBuiltinModule::PathWin32 {
+            PATH_WIN32_MODULE_KEY
+        } else {
+            PATH_MODULE_KEY
+        };
+        if let Some(object) = self.builtin_prototypes.get(key) {
+            return Ok(Value::Object(*object));
+        }
+        let record = NativeBuiltinModule::Path.record(PATH_RUNTIME_MODULE_ID);
+        let source = ResolvedModule {
+            request_specifier: "node:path".to_string(),
+            canonical_specifier: PATH_RUNTIME_MODULE_ID.to_string(),
+            content_hash: record.canonical_hash(),
+            record,
+            probe_sequence: Vec::new(),
+        };
+        self.load_module_resolved(
+            module,
+            PATH_RUNTIME_MODULE_ID,
+            ModuleLoadKind::Require,
+            None,
+            Some(source),
+        )?;
+        let module_object = self
+            .module_state
+            .modules
+            .get(PATH_RUNTIME_MODULE_ID)
+            .and_then(|record| record.cjs_module_object)
+            .ok_or_else(|| InterpreterError::ModuleEvaluationFailed {
+                specifier: "node:path".to_string(),
+                reason: "native path factory did not initialize its CommonJS exports".to_string(),
+            })?;
+        let posix = self.prototype_chain_get(module_object, "exports")?;
+        let Value::Object(posix) = posix else {
+            return Err(InterpreterError::InternalError {
+                details: "native path factory exported a non-object".to_string(),
+            });
+        };
+        let Value::Object(win32) = self.prototype_chain_get(posix, "win32")? else {
+            return Err(InterpreterError::InternalError {
+                details: "native path factory omitted its Windows namespace".to_string(),
+            });
+        };
+        self.mutate_builtin_prototypes(|prototypes| {
+            prototypes.insert(PATH_MODULE_KEY.to_string(), posix);
+            prototypes.insert(PATH_WIN32_MODULE_KEY.to_string(), win32);
+        });
+        Ok(Value::Object(if native == NativeBuiltinModule::PathWin32 {
+            win32
+        } else {
+            posix
+        }))
     }
 
     /// Read a dependency once and charge its raw bytes before decoding or
@@ -70860,7 +70952,7 @@ impl InterpreterCore {
                 &resolved,
                 ModuleLoadKind::DynamicImport,
                 import_bound.as_ref(),
-                Some(delivered),
+                Some(delivered.module),
             );
         }
         if import_bound.is_some()

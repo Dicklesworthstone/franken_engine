@@ -129,11 +129,12 @@ impl CapturedRepeat {
 }
 
 /// A counted loop whose captures all span the complete, positive-width body.
-/// Fixed counts need only one original snapshot, irrespective of their size.
+/// Required and optional prefixes keep separate, bounded original snapshots.
 pub(super) struct CapturedCounted {
     body: CapturedRepeat,
     counter: usize,
     minimum: usize,
+    maximum: Option<usize>,
 }
 
 impl CapturedCounted {
@@ -147,7 +148,9 @@ impl CapturedCounted {
         else {
             return None;
         };
-        if *max != Some(*min) || *body != pc.checked_add(1)? || *counter >= regexp.registers {
+        if max.is_some_and(|maximum| maximum < *min)
+            || *body != pc.checked_add(1)? || *counter >= regexp.registers
+        {
             return None;
         }
         let body = CapturedRepeat::body_at(regexp, pc, *exit, *greedy, blocks)?;
@@ -158,7 +161,7 @@ impl CapturedCounted {
         {
             return None;
         }
-        Some(Self { body, counter: *counter, minimum: *min })
+        Some(Self { body, counter: *counter, minimum: *min, maximum: *max })
     }
 }
 
@@ -314,6 +317,128 @@ impl Run<'_> {
         Ok(Some(position))
     }
 
+    /// The minimum is satisfied and CountedLoop was paid. Keep all optional
+    /// exits, but only one snapshot of the state AFTER the required prefix.
+    /// A final failed body restores its own partial iteration; a refusal
+    /// keeps the existing helper's exact paid capture/counter writes.
+    pub(super) fn execute_captured_counted_greedy(
+        &mut self,
+        repeat: &CapturedCounted,
+        pc: usize,
+        mut position: usize,
+        stack: &mut Vec<Frame>,
+    ) -> Result<usize, BacktrackError> {
+        let start = position;
+        let body = &repeat.body;
+        let old_count = self.registers[repeat.counter];
+        let old_mark = self.registers[body.register];
+        let count = body.to - body.from;
+        let mut old_slots = [None; MAX_CAPTURE_SLOTS];
+        old_slots[..count].copy_from_slice(&self.slots[body.from..body.to]);
+        debug_assert!(old_count >= repeat.minimum);
+        while repeat.maximum.is_none_or(|maximum| self.registers[repeat.counter] < maximum) {
+            let Some(next) = self.advance_captured_counted_body(repeat, position)? else {
+                break;
+            };
+            position = next;
+        }
+        if position != start {
+            stack.push(Frame::Register { register: repeat.counter, old: old_count });
+            stack.push(Frame::Register { register: body.register, old: old_mark });
+            for (offset, old) in old_slots[..count].iter().copied().enumerate() {
+                stack.push(Frame::Slot { slot: body.from + offset, old });
+            }
+            stack.push(Frame::CapturedCountedGreedy {
+                pc, position: body.previous(position), start,
+            });
+        }
+        Ok(position)
+    }
+
+    /// Tail writes have unwound before this range is popped. Positions move
+    /// by the COMPLETE body width; character distance is not an iteration
+    /// count. The final optional exit restores the mandatory prefix exactly,
+    /// leaving its separate undo history available to the enclosing caller.
+    pub(super) fn resume_captured_counted_greedy(
+        &mut self,
+        frame: Frame,
+        stack: &mut Vec<Frame>,
+    ) -> (usize, usize) {
+        let Frame::CapturedCountedGreedy { pc, position, start } = frame else {
+            unreachable!("only a counted capture range resumes here");
+        };
+        let repeat = CapturedCounted::at(self.regexp, pc, &mut self.literal_blocks)
+            .expect("the saved counted capture shape belongs to an immutable program");
+        let body = &repeat.body;
+        let paired = stack.len().checked_sub(body.to - body.from + 2)
+            .expect("a counted capture range retains its original snapshot");
+        let old_count = match &stack[paired] {
+            Frame::Register { register, old } if *register == repeat.counter => *old,
+            _ => unreachable!("the original counter precedes the mark and captures"),
+        };
+        let distance = position.abs_diff(start);
+        debug_assert!(distance.is_multiple_of(body.width));
+        self.registers[repeat.counter] = old_count + distance / body.width;
+        if position == start {
+            for slot in (body.from..body.to).rev() {
+                let Some(Frame::Slot { slot: saved, old }) = stack.pop() else {
+                    unreachable!("counted capture ranges retain their original slots");
+                };
+                debug_assert_eq!(saved, slot);
+                self.slots[slot] = old;
+            }
+            let Some(Frame::Register { register, old }) = stack.pop() else {
+                unreachable!("counted capture ranges retain their original mark");
+            };
+            debug_assert_eq!(register, body.register);
+            self.registers[register] = old;
+            stack.truncate(paired);
+        } else {
+            body.restore_iteration(self, position);
+            stack.push(Frame::CapturedCountedGreedy {
+                pc, position: body.previous(position), start,
+            });
+        }
+        (body.exit, position)
+    }
+
+    /// The current lazy exit has failed. Save the state after the required
+    /// prefix only on the first extension; a zero-extension success needs no
+    /// snapshot. Each resume consumes one COMPLETE body through the existing
+    /// helper and preserves every refusal boundary. At the maximum, discard
+    /// only the next choice: a failing final exit must still undo all values.
+    pub(super) fn resume_captured_counted_lazy(
+        &mut self,
+        frame: Frame,
+        stack: &mut Vec<Frame>,
+    ) -> Result<Option<(usize, usize)>, BacktrackError> {
+        let Frame::CapturedCountedLazy { pc, position, start } = frame else {
+            unreachable!("only a counted capture continuation resumes here");
+        };
+        let repeat = CapturedCounted::at(self.regexp, pc, &mut self.literal_blocks)
+            .expect("the saved counted capture shape belongs to an immutable program");
+        let body = &repeat.body;
+        debug_assert!(!body.greedy);
+        if position == start {
+            stack.push(Frame::Register {
+                register: repeat.counter, old: self.registers[repeat.counter],
+            });
+            stack.push(Frame::Register {
+                register: body.register, old: self.registers[body.register],
+            });
+            for (offset, &old) in self.slots[body.from..body.to].iter().enumerate() {
+                stack.push(Frame::Slot { slot: body.from + offset, old });
+            }
+        }
+        let Some(position) = self.advance_captured_counted_body(&repeat, position)? else {
+            return Ok(None);
+        };
+        if repeat.maximum.is_none_or(|maximum| self.registers[repeat.counter] < maximum) {
+            stack.push(Frame::CapturedCountedLazy { pc, position, start });
+        }
+        Ok(Some((body.exit, position)))
+    }
+
     pub(super) fn execute_captured_greedy(
         &mut self,
         repeat: &CapturedRepeat,
@@ -415,3 +540,6 @@ mod counted_tests;
 
 #[cfg(test)]
 mod body_tests;
+
+#[cfg(test)]
+mod optional_tests;

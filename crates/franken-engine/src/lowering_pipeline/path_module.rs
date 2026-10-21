@@ -30,14 +30,15 @@
 use std::collections::BTreeSet;
 
 use super::LoweringPipelineError;
+use super::native_module_source::NativeModuleSource;
 use super::util_module::scoped_walk;
 use super::with_statement::{
-    FunctionBody, FunctionParts, Outcome, Search, Walk, lexical_names, var_names, walk_expression,
-    walk_class, walk_function, walk_statement, walk_switch_cases,
+    FunctionBody, FunctionParts, Outcome, Search, Walk, lexical_names, var_names, walk_class,
+    walk_expression, walk_function, walk_statement, walk_switch_cases,
 };
 use crate::ast::{
-    BindingPattern, CatchClause, Expression, MethodDefinition, ParseGoal, SourceSpan, Statement, SwitchCase,
-    SyntaxTree, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
+    BindingPattern, CatchClause, Expression, MethodDefinition, ParseGoal, SourceSpan, Statement,
+    SwitchCase, SyntaxTree, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
 };
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
@@ -100,6 +101,39 @@ pub(super) fn intrinsic_capability(name: &str) -> Option<&'static str> {
 /// `resolve` with normalization delegated; the rest call the HostCall the
 /// facade lowers the same member call to.
 const PATH_SOURCE: &str = include_str!("path_module.js");
+static PATH_SYNTAX: NativeModuleSource = NativeModuleSource::new("franken:path", PATH_SOURCE);
+
+/// Fixed engine implementation size, charged before building its runtime AST.
+pub(crate) const RUNTIME_SOURCE_BYTES: usize = PATH_SOURCE.len();
+
+/// The same path implementation as the syntax facade, packaged as a real
+/// CommonJS module for authenticated native-provider descriptors. Only this
+/// engine-owned factory receives unspellable intrinsic names; delivered guest
+/// source never passes through this entrypoint.
+pub(crate) fn runtime_module_tree() -> Result<SyntaxTree, LoweringPipelineError> {
+    let wrapper_failed = || LoweringPipelineError::InvariantViolation {
+        detail: "the engine's path module wrapper failed to parse",
+    };
+    let mut tree = CanonicalEs2020Parser
+        .parse_with_options(
+            ParserSource {
+                label: "franken:path".into(),
+                text: "module.exports = undefined;".into(),
+            },
+            ParseGoal::Script,
+            &ParserOptions::default(),
+        )
+        .map_err(|_| wrapper_failed())?;
+    let Some(Statement::Expression(crate::ast::ExpressionStatement {
+        expression: Expression::Assignment { right, .. },
+        ..
+    })) = tree.body.first_mut()
+    else {
+        return Err(wrapper_failed());
+    };
+    *right = Box::new(module_source(&BTreeSet::new())?);
+    Ok(tree)
+}
 
 /// For `require(specifier)` with one of `specifiers`, whatever `require`
 /// names.
@@ -246,23 +280,7 @@ pub(super) fn rewrite_path_requires(
 }
 
 fn parse_module_source() -> Result<Expression, LoweringPipelineError> {
-    let parse_failed = || LoweringPipelineError::InvariantViolation {
-        detail: "the engine's path module source failed to parse",
-    };
-    let tree = CanonicalEs2020Parser
-        .parse_with_options(
-            ParserSource {
-                label: "franken:path".into(),
-                text: PATH_SOURCE.into(),
-            },
-            ParseGoal::Script,
-            &ParserOptions::default(),
-        )
-        .map_err(|_| parse_failed())?;
-    let [Statement::Expression(statement)] = tree.body.as_slice() else {
-        return Err(parse_failed());
-    };
-    Ok(statement.expression.clone())
+    PATH_SYNTAX.expression()
 }
 
 /// Rename only engine intrinsics and protect the factory's Array binding.
@@ -488,6 +506,23 @@ mod tests {
             assert!(source.contains(intrinsic), "{intrinsic}");
             assert_eq!(intrinsic_capability(intrinsic), Some(capability));
         }
+    }
+
+    #[test]
+    fn path_syntax_is_parsed_once_without_sharing_program_rewrites() {
+        let pristine = parse_module_source().expect("cached syntax");
+        let ordinary = module_source(&BTreeSet::new()).expect("unshadowed program");
+        let shadowed_names = BTreeSet::from(["Array".to_string()]);
+        let protected = module_source(&shadowed_names).expect("shadowed program");
+        assert_ne!(ordinary, pristine, "intrinsic rewriting uses a private AST");
+        assert_ne!(ordinary, protected, "Array protection is program-specific");
+        for _ in 0..4 {
+            assert_eq!(module_source(&shadowed_names).unwrap(), protected);
+            assert_eq!(module_source(&BTreeSet::new()).unwrap(), ordinary);
+            runtime_module_tree().expect("runtime factory uses the same source");
+            assert_eq!(parse_module_source().unwrap(), pristine);
+        }
+        assert_eq!(PATH_SYNTAX.parse_attempt_count(), 1);
     }
 }
 

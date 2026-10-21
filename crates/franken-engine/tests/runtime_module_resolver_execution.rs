@@ -78,9 +78,15 @@ impl OpaqueResolver {
             NativeBuiltinModule::Url,
             NativeBuiltinModule::Timers,
             NativeBuiltinModule::PerfHooks,
+            NativeBuiltinModule::Path,
+            NativeBuiltinModule::PathWin32,
         ] {
             let canonical = native.canonical_specifier();
-            for name in [canonical, canonical.strip_prefix("node:").expect("core prefix")] {
+            let mut names = vec![canonical, canonical.strip_prefix("node:").expect("core prefix")];
+            if native == NativeBuiltinModule::Path {
+                names.extend(["path/posix", "node:path/posix"]);
+            }
+            for name in names {
                 let record = native.record(format!("builtin:{name}"));
                 self.inner
                     .register_builtin(
@@ -827,6 +833,129 @@ console.log(require.resolve('querystring'), require.resolve('node:querystring'))
 }
 
 #[test]
+fn delivered_path_modules_reuse_complete_namespaces_across_package_boundaries() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![
+                (
+                    "entry.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        r#"
+const windows = require('node:path/win32');
+const path = require('path');
+const child = require('./child.cjs');
+console.log(windows.posix === path, path.win32 === windows,
+    path === require('path/posix'), path === child.path);
+console.log(child.make('file.txt'), windows.join('C:\\root', '..', 'out'));
+console.log(windows.resolve('D:\\ignored', 'C:\\base', '..', 'out'));
+console.log(windows.format(windows.parse('C:\\base\\file.txt')));
+const oldJoin = path.join;
+path.join = function() { return 'patched'; };
+console.log(child.make('ignored'), require('node:path').join('ignored'));
+console.log(child.join('one', 'two'));
+path.join = oldJoin;
+console.log(child.make('restored'), windows.posix.win32 === windows);
+"#,
+                    )
+                    .with_dependency(ModuleDependency::new("./child.cjs", ImportStyle::Require)),
+                ),
+                (
+                    "child.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        r#"
+const path = require('node:path/posix');
+module.exports = {
+    path: path,
+    join: path.join,
+    make: function(value) { return path.join('root', value); }
+};
+"#,
+                    ),
+                ),
+            ])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let policy = Arc::new(RecordingPolicy {
+            allow_native_builtins: true,
+            ..RecordingPolicy::default()
+        });
+        let installed =
+            ExecutionModuleResolver::new(&source.module.record.id, resolver, policy.clone());
+        let result = orchestrator(lane, ModuleSyntax::CommonJs)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("captured packages execute the engine-owned path factory");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true true true",
+                "root/file.txt C:\\out",
+                "C:\\out",
+                "C:\\base\\file.txt",
+                "patched patched",
+                "one/two",
+                "root/restored true",
+            ]
+        );
+        assert!(
+            policy
+                .requests
+                .lock()
+                .expect("policy log")
+                .iter()
+                .all(|(request, _)| !request.specifier.starts_with('\0')),
+            "engine implementation must not request an uncaptured source route"
+        );
+    }
+}
+
+#[test]
+fn delivered_path_cache_still_authorizes_each_request() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![(
+                "entry.cjs",
+                definition(
+                    ModuleSyntax::CommonJs,
+                    "const p=require('path'); console.log(p.join('a','b')); require('path');",
+                ),
+            )])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let policy = Arc::new(RecordingPolicy {
+            denied: Some(("path".to_string(), 2)),
+            allow_native_builtins: true,
+            ..RecordingPolicy::default()
+        });
+        let installed =
+            ExecutionModuleResolver::new(&source.module.record.id, resolver, policy.clone());
+        let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
+        let error = engine
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect_err("a retained path namespace is not a cached policy grant");
+        assert!(
+            error
+                .to_string()
+                .contains("closed-world module resolution refused"),
+            "{error}"
+        );
+        assert_eq!(
+            policy
+                .requests
+                .lock()
+                .expect("policy log")
+                .iter()
+                .filter(|(request, _)| request.specifier == "path")
+                .count(),
+            2
+        );
+    }
+}
+
+#[test]
 fn delivered_native_builtin_cache_cannot_bypass_policy_in_nested_source() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         let resolver = Arc::new(
@@ -890,17 +1019,21 @@ fn delivered_native_builtin_cache_cannot_bypass_policy_in_nested_source() {
 
 #[test]
 fn delivered_native_descriptors_reject_forgery_and_cached_provider_substitution() {
-    for corruption in [
-        Corruption::ForgeBuiltin,
-        Corruption::MalformedBuiltinMarker,
-        Corruption::ChangeBuiltinProvider,
-        Corruption::BuiltinAliasesEntry,
-    ] {
+    for (builtin, corruption) in ["querystring", "path"].into_iter().flat_map(|builtin| {
+        [
+            Corruption::ForgeBuiltin,
+            Corruption::MalformedBuiltinMarker,
+            Corruption::ChangeBuiltinProvider,
+            Corruption::BuiltinAliasesEntry,
+        ]
+        .into_iter()
+        .map(move |corruption| (builtin, corruption))
+    }) {
         let mut resolver = OpaqueResolver::new(vec![(
             "entry.cjs",
             definition(
                 ModuleSyntax::CommonJs,
-                "require('querystring'); require('querystring');",
+                &format!("require('{builtin}'); require('{builtin}');"),
             ),
         )])
         .with_native_builtins();
@@ -914,7 +1047,9 @@ fn delivered_native_descriptors_reject_forgery_and_cached_provider_substitution(
         );
         let error = orchestrator(LaneChoice::QuickJs, ModuleSyntax::CommonJs)
             .execute_resolved_entry_with_resolver(&package(), &source, installed)
-            .expect_err("native descriptor validation and identity pinning precede provider dispatch");
+            .expect_err(
+                "native descriptor validation and identity pinning precede provider dispatch",
+            );
         let expected = match corruption {
             Corruption::ChangeBuiltinProvider | Corruption::BuiltinAliasesEntry => {
                 "changed after its first authorized load"

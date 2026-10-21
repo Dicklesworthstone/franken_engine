@@ -18,6 +18,12 @@
   var apply = Reflect.apply;
   var defineProperty = Object.defineProperty;
   var createObject = Object.create;
+  // Internal event delivery must not call guest-replaced Promise helpers after
+  // removing an event or installing a waiter. Capture them alongside the other
+  // realm intrinsics; binding once avoids an argument-array allocation per read.
+  var EventPromise = Promise;
+  var resolvePromise = Promise.resolve.bind(Promise);
+  var rejectPromise = Promise.reject.bind(Promise);
   var iteratorKey = Symbol.iterator;
   var controllerSignal = Object.getOwnPropertyDescriptor(AbortController.prototype, 'signal').get;
   var signalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'aborted').get;
@@ -181,7 +187,7 @@
     // Native emitter dispatch still owns listener storage and argument labels.
     // The async return adopts the event Promise as Node does; a single then()
     // forwards synchronous emissions one microtask too early.
-    return new Promise(function (resolve, reject) {
+    return new EventPromise(function (resolve, reject) {
       var links = subscriptions(emitter);
       var settled = false;
       function finish(error, values, failed) {
@@ -304,7 +310,7 @@
           // Reserve this delivery before invoking user code. A failing resume
           // becomes the iterator's terminal error, after already queued events,
           // instead of throwing from next() and silently losing this value.
-          var ready = Promise.resolve(result(value, false));
+          var ready = resolvePromise(result(value, false));
           resumeProducer();
           return ready;
         }
@@ -312,14 +318,14 @@
           hasError = false;
           var error = terminalError;
           terminalError = undefined;
-          return Promise.reject(error);
+          return rejectPromise(error);
         }
-        if (finished) { return Promise.resolve(result(undefined, true)); }
-        var pending = new Promise(function (resolve, reject) { put(waiters, { resolve: resolve, reject: reject }); });
+        if (finished) { return resolvePromise(result(undefined, true)); }
+        var pending = new EventPromise(function (resolve, reject) { put(waiters, { resolve: resolve, reject: reject }); });
         resumeProducer();
         return pending;
       },
-      return: function () { close(); return Promise.resolve(result(undefined, true)); },
+      return: function () { close(); return resolvePromise(result(undefined, true)); },
       throw: function (error) {
         if (!(error instanceof Error)) { throw invalidType('error'); }
         // Explicit iterator injection is permitted even after return/close,

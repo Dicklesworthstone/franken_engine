@@ -90,6 +90,18 @@ enum Frame {
         position: usize,
         start: usize,
     },
+    /// Optional counted exits, paired with original counter/mark/capture undo.
+    CapturedCountedGreedy {
+        pc: usize,
+        position: usize,
+        start: usize,
+    },
+    /// Next counted extension; original values are saved only on first resume.
+    CapturedCountedLazy {
+        pc: usize,
+        position: usize,
+        start: usize,
+    },
     Slot {
         slot: usize,
         old: Option<usize>,
@@ -388,6 +400,14 @@ impl Run<'_> {
                             pc = *body;
                         } else if max.is_some_and(|max| count >= max) {
                             pc = *exit;
+                        } else if *greedy && let Some(captured) = &captured {
+                            position = self.execute_captured_counted_greedy(
+                                captured, pc, position, stack,
+                            )?;
+                            pc = *exit;
+                        } else if captured.is_some() {
+                            stack.push(Frame::CapturedCountedLazy { pc, position, start: position });
+                            pc = *exit;
                         } else if *greedy && let Some(repeat) = &repeat {
                             position = self.execute_counted_greedy(
                                 repeat, pc, position, *max, stack,
@@ -518,6 +538,16 @@ impl Run<'_> {
                         }
                         Some(frame @ Frame::CapturedLazy { .. }) => {
                             if let Some(next) = self.resume_captured_lazy(frame, stack)? {
+                                (pc, position) = next;
+                                break;
+                            }
+                        }
+                        Some(frame @ Frame::CapturedCountedGreedy { .. }) => {
+                            (pc, position) = self.resume_captured_counted_greedy(frame, stack);
+                            break;
+                        }
+                        Some(frame @ Frame::CapturedCountedLazy { .. }) => {
+                            if let Some(next) = self.resume_captured_counted_lazy(frame, stack)? {
                                 (pc, position) = next;
                                 break;
                             }

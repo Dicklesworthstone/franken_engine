@@ -92,6 +92,7 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use crate::deterministic_serde::CanonicalValue;
 
 mod access;
+mod flat_search;
 mod rope_compare;
 mod rope_units;
 mod search;
@@ -748,13 +749,13 @@ impl JsString {
                 .map(|index| from + index);
         }
         if self.is_well_formed() && needle.is_well_formed() {
-            // A well-formed needle cannot begin at the low half of a pair.
-            // Round a split starting position up to the next scalar boundary.
-            let (byte_start, unit_start) = utf8_search_boundary(&self.utf8, from, true);
-            let suffix = &self.utf8[byte_start..];
-            return suffix
-                .find(needle.utf8.as_str())
-                .map(|index| unit_start + suffix[..index].encode_utf16().count());
+            return flat_search::index_of(
+                &self.utf8,
+                haystack_len,
+                needle.utf8.as_str(),
+                needle_len,
+                from,
+            );
         }
         let needle_units = needle.code_units_vec();
         search_utf16_units(self.encode_utf16().skip(from), &needle_units, false)
@@ -794,58 +795,17 @@ impl JsString {
             return self.utf8[..end].rfind(needle.utf8.as_str());
         }
         if self.is_well_formed() && needle.is_well_formed() {
-            if from >= haystack_len - needle_len {
-                // The usual unbounded reverse search needs no forward scan
-                // to locate `from`. Count from the nearer end of the match.
-                return self.utf8.rfind(needle.utf8.as_str()).map(|index| {
-                    if index <= self.utf8.len() / 2 {
-                        self.utf8[..index].encode_utf16().count()
-                    } else {
-                        haystack_len - self.utf8[index..].encode_utf16().count()
-                    }
-                });
-            }
-            let (byte_start, unit_start) = utf8_search_boundary(&self.utf8, from, false);
-            // Include the whole needle for a match starting at byte_start.
-            // Clamp without overflow, then round the end DOWN: every actual
-            // UTF-8 match already ends at a scalar boundary. This excludes no
-            // permitted match, and no match can start later than byte_start.
-            let mut byte_end = byte_start + needle.utf8.len().min(self.utf8.len() - byte_start);
-            while !self.utf8.is_char_boundary(byte_end) {
-                byte_end -= 1;
-            }
-            return self.utf8[..byte_end]
-                .rfind(needle.utf8.as_str())
-                .map(|index| unit_start - self.utf8[index..byte_start].encode_utf16().count());
+            return flat_search::last_index_of(
+                &self.utf8,
+                haystack_len,
+                needle.utf8.as_str(),
+                needle_len,
+                start,
+            );
         }
         let needle_units = needle.code_units_vec();
         search_utf16_units(self.encode_utf16().take(end), &needle_units, true)
     }
-}
-
-/// Map a UTF-16 position in well-formed UTF-8 to a scalar boundary. An
-/// astral scalar straddling `position` rounds up for indexOf and down for
-/// lastIndexOf. Return both coordinates so callers do not rescan the prefix.
-fn utf8_search_boundary(text: &str, position: usize, round_up: bool) -> (usize, usize) {
-    if position == 0 {
-        return (0, 0);
-    }
-    let mut units = 0;
-    for (byte, ch) in text.char_indices() {
-        if units == position {
-            return (byte, units);
-        }
-        let next = units + ch.len_utf16();
-        if next > position {
-            return if round_up {
-                (byte + ch.len_utf8(), next)
-            } else {
-                (byte, units)
-            };
-        }
-        units = next;
-    }
-    (text.len(), units)
 }
 
 /// KMP over exact code units. Only the needle and its failure function need

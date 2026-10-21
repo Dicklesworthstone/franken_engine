@@ -179,3 +179,52 @@ fn upper_value_provenance_reaches_the_lower_write() {
     reverse(&mut core, id, 2).unwrap();
     assert_eq!(core.runtime_property_label(id, &InterpreterCore::generic_index_key(0)), Label::Secret);
 }
+
+#[test]
+fn reverse_runtime_writes_preserve_public_and_secret_values_in_both_profiles() {
+    let module = module();
+    for throughput in [false, true] {
+        for label in [Label::Public, Label::Secret] {
+            for lower_exists in [false, true] {
+                let mut core = core(throughput);
+                let id = array(&mut core, 2);
+                if lower_exists {
+                    put(&mut core, id, 0, 3);
+                }
+                put(&mut core, id, 1, 7);
+                let lower = InterpreterCore::generic_index_key(0);
+                let upper = InterpreterCore::generic_index_key(1);
+                core.set_own_runtime_property_label(id, &upper, &label)
+                    .unwrap();
+                let result = core
+                    .array_method_generic(
+                        &module,
+                        BuiltinFunctionKind::ArrayReverse,
+                        id,
+                        RegRange { start: 0, count: 0 },
+                    )
+                    .unwrap();
+                assert_eq!(result, Some(Value::Object(id)));
+                assert_eq!(
+                    core.heap[id.0 as usize].properties.get_index(0),
+                    Some(&Value::Int(7))
+                );
+                assert_eq!(core.runtime_property_label(id, &lower), label);
+                if lower_exists {
+                    assert_eq!(
+                        core.heap[id.0 as usize].properties.get_index(1),
+                        Some(&Value::Int(3))
+                    );
+                    assert_eq!(core.runtime_property_label(id, &upper), label);
+                } else {
+                    assert_eq!(core.heap[id.0 as usize].properties.get_index(1), None);
+                }
+                assert_eq!(core.json_parse_temporary_bytes, 0);
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
+            }
+        }
+    }
+}

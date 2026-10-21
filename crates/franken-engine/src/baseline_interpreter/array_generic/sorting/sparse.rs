@@ -194,18 +194,35 @@ mod tests {
     fn non_public_receiver_and_prototype_metadata_keep_the_full_path() {
         let mut core = InterpreterCore::new(test_config(), "sparse-sort-labels");
         let array = sparse_array(&mut core);
-        core.join_direct_object_mutation_label(array, &Label::Secret).unwrap();
+        core.join_direct_object_mutation_label(array, &Label::Secret)
+            .unwrap();
         let mut retained = 0;
-        assert!(core.sparse_sort_indices(array, 0, u64::from(u32::MAX), true, &mut retained)
-            .unwrap().is_none());
+        assert!(
+            core.sparse_sort_indices(array, 0, u64::from(u32::MAX), true, &mut retained)
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(retained, 0);
         let other = sparse_array(&mut core);
-        let prototype = core.observable_prototype_link(
-            core.heap.get(other.0 as usize).unwrap(), other,
-        ).unwrap();
-        core.join_direct_object_mutation_label(prototype, &Label::Secret).unwrap();
-        assert!(core.sparse_sort_indices(other, 0, u64::from(u32::MAX), true, &mut retained)
-            .unwrap().is_none());
+        // The direct allocator deliberately creates a null-prototype Array.
+        // Install the ordinary prototype this test needs explicitly.
+        let prototype = core.alloc_object_with_prototype(None).unwrap();
+        core.mutate_heap(|heap| heap[other.0 as usize].prototype = Some(prototype));
+        let public_plan = core
+            .sparse_sort_indices(other, 0, u64::from(u32::MAX), true, &mut retained)
+            .unwrap()
+            .expect("a Public ordinary prototype admits the sparse plan");
+        assert_eq!(public_plan, [7, 40_000, u32::MAX - 1]);
+        drop(public_plan);
+        core.json_release_temporary(retained);
+        retained = 0;
+        core.join_direct_object_mutation_label(prototype, &Label::Secret)
+            .unwrap();
+        assert!(
+            core.sparse_sort_indices(other, 0, u64::from(u32::MAX), true, &mut retained)
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(retained, 0);
     }
 
@@ -258,5 +275,4 @@ mod tests {
         // Deleting an accessor never invokes it; both keys belong to that plan.
         assert_eq!(numeric_inventory(&object, 0, 100_000, false), (2, 2, true));
     }
-
 }

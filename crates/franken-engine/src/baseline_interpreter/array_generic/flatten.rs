@@ -61,6 +61,16 @@ impl InterpreterCore {
                 let from = frame.source;
                 let depth_left = frame.depth;
                 let mapped = frame.mapped;
+                // An empty nested Array still controls the compacted output's
+                // shape. Retain its length/mutation provenance on a species
+                // result that may already have a Public alias, including when
+                // this frame emits no element at all.
+                {
+                    let prefix_label =
+                        self.array_result_prefix_label(from, target, &Label::Public)?;
+                    self.record_array_result_prefix_label(target, &prefix_label)?;
+                }
+                self.observe_scoped_callback_result()?;
                 let Some(index) = frame.cursor.next(self, from)? else {
                     stack.pop();
                     continue;

@@ -185,19 +185,27 @@ impl InterpreterCore {
             };
             match (lower_exists, upper_exists) {
                 (true, true) => {
-                    self.generic_set(module, object, &lower_key, upper_value)?;
+                    self.generic_species_output_write(object, &lower_key, |core| {
+                        core.generic_set(module, object, &lower_key, upper_value)
+                    })?;
                     self.observe_scoped_callback_result()?;
-                    self.generic_set(module, object, &upper_key, lower_value)?;
+                    self.generic_species_output_write(object, &upper_key, |core| {
+                        core.generic_set(module, object, &upper_key, lower_value)
+                    })?;
                 }
                 (false, true) => {
-                    self.generic_set(module, object, &lower_key, upper_value)?;
+                    self.generic_species_output_write(object, &lower_key, |core| {
+                        core.generic_set(module, object, &lower_key, upper_value)
+                    })?;
                     self.observe_scoped_callback_result()?;
                     self.generic_delete(module, object, &upper_key)?;
                 }
                 (true, false) => {
                     self.generic_delete(module, object, &lower_key)?;
                     self.observe_scoped_callback_result()?;
-                    self.generic_set(module, object, &upper_key, lower_value)?;
+                    self.generic_species_output_write(object, &upper_key, |core| {
+                        core.generic_set(module, object, &upper_key, lower_value)
+                    })?;
                 }
                 (false, false) => {}
             }

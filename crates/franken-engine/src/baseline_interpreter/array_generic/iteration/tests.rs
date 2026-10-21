@@ -1,11 +1,40 @@
 use super::*;
 
 pub(super) fn for_each_runtime_profile(trace: &str, mut run: impl FnMut(InterpreterCore)) {
+    for mut config in [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ] {
+        // These fixtures construct their receivers through the guarded public
+        // allocator; traversal itself receives no additional authority.
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::HeapAllocate);
+        run(InterpreterCore::new(config, trace));
+    }
+}
+
+#[test]
+fn receiver_allocation_still_requires_explicit_heap_authority() {
     for config in [
         InterpreterConfig::quickjs_defaults(),
         InterpreterConfig::v8_defaults(),
     ] {
-        run(InterpreterCore::new(config, trace));
+        let mut core = InterpreterCore::new(config, "live-indices-denied-allocation");
+        let before = core.estimated_memory_bytes();
+        let heap_len = core.heap.len();
+        for result in [
+            core.alloc_object_with_prototype(None),
+            core.alloc_array_from_values(&[]),
+        ] {
+            assert!(matches!(
+                result,
+                Err(InterpreterError::CapabilityDenied { capability })
+                    if capability == "HeapAllocate"
+            ));
+        }
+        assert_eq!(core.heap.len(), heap_len);
+        assert_eq!(core.estimated_memory_bytes(), before);
     }
 }
 

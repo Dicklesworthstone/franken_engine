@@ -69,6 +69,90 @@ fn depth_zero_keeps_child_identity_and_shared_children_repeat() {
 }
 
 #[test]
+fn empty_children_preserve_length_and_mutation_provenance_on_species_aliases() {
+    for label in [Label::Public, Label::Secret] {
+        for mutation_label in [false, true] {
+            for append_public in [false, true] {
+                let mut core = core();
+                let child = array(&mut core, 0);
+                if mutation_label {
+                    core.join_object_mutation_label(child, &label).unwrap();
+                } else {
+                    core.set_own_property_label(child, "length", &label)
+                        .unwrap();
+                }
+                let source = array(&mut core, if append_public { 2 } else { 1 });
+                core.set_object_property(source, "0".into(), Value::Object(child))
+                    .unwrap();
+                if append_public {
+                    core.set_object_property(source, "1".into(), Value::Int(9))
+                        .unwrap();
+                }
+                let target = array(&mut core, 0);
+                flatten(
+                    &mut core,
+                    target,
+                    source,
+                    if append_public { 2 } else { 1 },
+                    1.0,
+                )
+                .unwrap();
+                assert_eq!(core.own_property_label(target, "length"), label);
+                if append_public {
+                    assert_eq!(
+                        core.heap[target.0 as usize].properties.get_index(0),
+                        Some(&Value::Int(9))
+                    );
+                    assert_eq!(core.own_property_label(target, "0"), label);
+                }
+                assert_eq!(core.json_parse_temporary_bytes, 0);
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn empty_source_custom_provenance_respects_live_memory_headroom() {
+    for allow_temporary in [false, true] {
+        let mut core = core();
+        let source = array(&mut core, 0);
+        let target = array(&mut core, 0);
+        let label = Label::Custom {
+            name: "flatten-source-length".repeat(256),
+            level: 6,
+        };
+        core.set_own_property_label(source, "length", &label)
+            .unwrap();
+        let before = core.estimated_memory_bytes();
+        if !allow_temporary {
+            core.config.max_total_memory_bytes =
+                before + frame_bytes(4) + InterpreterCore::estimate_label_bytes(&label) - 1;
+        }
+        let outcome = flatten(&mut core, target, source, 0, 1.0);
+        if allow_temporary {
+            outcome.expect("ordinary headroom retains the observed Custom provenance");
+            assert_eq!(core.own_property_label(target, "length"), label);
+        } else {
+            assert!(matches!(
+                outcome,
+                Err(InterpreterError::MemoryBudgetExceeded { .. })
+            ));
+            assert_eq!(core.own_property_label(target, "length"), Label::Public);
+            assert_eq!(core.estimated_memory_bytes(), before);
+        }
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+}
+
+#[test]
 fn stack_capacity_is_charged_until_the_operation_releases_it() {
     let mut core = core();
     let source = array(&mut core, 0);

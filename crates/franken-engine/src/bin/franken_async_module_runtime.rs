@@ -5,24 +5,10 @@ use std::io::{self, Read};
 
 use serde::{Deserialize, Serialize};
 
-pub use frankenengine_engine::esm_loader;
-pub use frankenengine_engine::ifc_artifacts;
-pub use frankenengine_engine::module_async_evaluation;
-pub use frankenengine_engine::module_live_binding;
-pub use frankenengine_engine::object_model;
-pub use frankenengine_engine::promise_model;
-
-#[path = "../async_module_graph.rs"]
-mod async_module_graph;
-#[path = "../async_module_promise_bridge.rs"]
-mod async_module_promise_bridge;
-#[path = "../async_module_scheduler.rs"]
-mod async_module_scheduler;
-
-use async_module_graph::{
+use frankenengine_engine::async_module_graph::{
     ModuleGraphLimits, ModuleGraphNode, ModuleGraphPlan, register_module_graph,
 };
-use async_module_scheduler::{
+use frankenengine_engine::async_module_scheduler::{
     ASYNC_MODULE_SCHEDULER_SCHEMA_VERSION, AsyncModuleScheduler, AsyncModuleSchedulerConfig,
     ModuleTask, SchedulerSnapshot,
 };
@@ -503,7 +489,7 @@ mod tests {
         assert_eq!(output.dispatched[2].module_specifier, "a-waiter");
         assert_eq!(
             output.dispatched[2].kind,
-            async_module_scheduler::ModuleTaskKind::Resume
+            frankenengine_engine::async_module_scheduler::ModuleTaskKind::Resume
         );
         assert_eq!(output.dispatched[2].generation, 2);
         assert!(

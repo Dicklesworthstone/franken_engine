@@ -5,17 +5,9 @@ use std::io::{self, Read};
 
 use serde::{Deserialize, Serialize};
 
-pub use frankenengine_engine::esm_loader;
-pub use frankenengine_engine::ifc_artifacts;
-pub use frankenengine_engine::module_async_evaluation;
-pub use frankenengine_engine::module_live_binding;
-pub use frankenengine_engine::object_model;
-pub use frankenengine_engine::promise_model;
-
-#[path = "../async_module_promise_bridge.rs"]
-mod async_module_promise_bridge;
-
-use async_module_promise_bridge::{AsyncModulePromiseBridge, ModulePromiseUpdate};
+use frankenengine_engine::async_module_promise_bridge::{
+    AsyncModulePromiseBridge, ModulePromiseUpdate,
+};
 use frankenengine_engine::ifc_artifacts::Label;
 use frankenengine_engine::module_async_evaluation::{AsyncEvalConfig, AsyncModulePhase};
 use frankenengine_engine::object_model::JsValue;

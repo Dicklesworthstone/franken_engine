@@ -363,8 +363,8 @@ impl Run<'_> {
                 register: repeat.register,
                 old: self.registers[repeat.register],
             });
-            for slot in repeat.from..repeat.to {
-                stack.push(Frame::Slot { slot, old: self.slots[slot] });
+            for (offset, &old) in self.slots[repeat.from..repeat.to].iter().enumerate() {
+                stack.push(Frame::Slot { slot: repeat.from + offset, old });
             }
         }
         let Some(position) = self.advance_captured_body(&repeat, position)? else {

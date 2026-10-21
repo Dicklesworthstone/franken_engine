@@ -279,6 +279,8 @@ pub enum NativeBuiltinModule {
     Url,
     Timers,
     PerfHooks,
+    Path,
+    PathWin32,
 }
 
 impl NativeBuiltinModule {
@@ -291,6 +293,8 @@ impl NativeBuiltinModule {
             "url" | "node:url" => Some(Self::Url),
             "timers" | "node:timers" => Some(Self::Timers),
             "perf_hooks" | "node:perf_hooks" => Some(Self::PerfHooks),
+            "path" | "node:path" | "path/posix" | "node:path/posix" => Some(Self::Path),
+            "path/win32" | "node:path/win32" => Some(Self::PathWin32),
             _ => None,
         }
     }
@@ -304,6 +308,8 @@ impl NativeBuiltinModule {
             Self::Url => "node:url",
             Self::Timers => "node:timers",
             Self::PerfHooks => "node:perf_hooks",
+            Self::Path => "node:path",
+            Self::PathWin32 => "node:path/win32",
         }
     }
 
@@ -2491,7 +2497,18 @@ mod tests {
 
     #[test]
     fn native_builtin_descriptors_bind_exact_provider_and_capabilities() {
-        for name in ["buffer", "events", "os", "querystring", "url", "timers", "perf_hooks"] {
+        for name in [
+            "buffer",
+            "events",
+            "os",
+            "querystring",
+            "url",
+            "timers",
+            "perf_hooks",
+            "path",
+            "path/posix",
+            "path/win32",
+        ] {
             let builtin = NativeBuiltinModule::from_specifier(name).unwrap();
             assert_eq!(
                 NativeBuiltinModule::from_specifier(&format!("node:{name}")),
@@ -2502,22 +2519,40 @@ mod tests {
             assert!(record.source.is_empty());
             assert!(record.dependencies.is_empty());
             assert_eq!(record.provenance.kind, ModuleSourceKind::BuiltIn);
-            assert!(record.required_capabilities.contains(&RuntimeCapability::ModuleLoad));
-            assert!(record.required_capabilities.contains(&RuntimeCapability::Builtin));
+            assert!(
+                record
+                    .required_capabilities
+                    .contains(&RuntimeCapability::ModuleLoad)
+            );
+            assert!(
+                record
+                    .required_capabilities
+                    .contains(&RuntimeCapability::Builtin)
+            );
             assert_eq!(
-                record.required_capabilities.contains(&RuntimeCapability::Timer),
+                record
+                    .required_capabilities
+                    .contains(&RuntimeCapability::Timer),
                 name == "timers"
             );
             let request = ModuleRequest::new(name, ImportStyle::Require);
-            let denied = CapabilityPolicyHook::new(BTreeSet::from([
-                RuntimeCapability::ModuleLoad,
-            ]));
+            let denied = CapabilityPolicyHook::new(BTreeSet::from([RuntimeCapability::ModuleLoad]));
             assert!(denied.authorize(&request, &record, &context()).is_err());
             let allowed = CapabilityPolicyHook::new(record.required_capabilities.clone());
             assert!(allowed.authorize(&request, &record, &context()).is_ok());
         }
-        for name in ["fs", "path", "node:unknown", "node:node:buffer", "./buffer", "Buffer"] {
-            assert!(NativeBuiltinModule::from_specifier(name).is_none(), "{name}");
+        for name in [
+            "fs",
+            "path/unknown",
+            "node:unknown",
+            "node:node:buffer",
+            "./buffer",
+            "Buffer",
+        ] {
+            assert!(
+                NativeBuiltinModule::from_specifier(name).is_none(),
+                "{name}"
+            );
         }
     }
 

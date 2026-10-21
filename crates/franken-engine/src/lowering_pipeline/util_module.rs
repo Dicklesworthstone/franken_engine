@@ -56,8 +56,6 @@ mod fs_module;
 mod stream_operators;
 #[path = "native_module_loader.rs"]
 mod native_module_loader;
-#[path = "native_module_source.rs"]
-mod native_module_source;
 #[cfg(test)]
 #[path = "readline_module_tests.rs"]
 mod readline_module_tests;
@@ -65,9 +63,8 @@ mod readline_module_tests;
 #[path = "diagnostics_channel_module_tests.rs"]
 mod diagnostics_channel_module_tests;
 
-use native_module_source::NativeModuleSource;
-
 use super::LoweringPipelineError;
+use super::native_module_source::NativeModuleSource;
 use super::with_statement::{
     FunctionBody, FunctionParts, Outcome, Search, Walk, lexical_names, var_names, walk_class,
     walk_expression, walk_function, walk_statement, walk_switch_cases,

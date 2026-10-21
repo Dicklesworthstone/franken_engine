@@ -78,7 +78,8 @@ use crate::parser_gap_inventory::{
 use crate::unified_authority_algebra::{AuthorityLattice, BudgetEnvelope, CapabilitySet};
 
 mod esm_core_imports;
-mod path_module;
+mod native_module_source;
+pub(crate) mod path_module;
 mod util_module;
 mod with_statement;
 

@@ -1,7 +1,8 @@
-//! WHATWG Shift_JIS and EUC-JP decoding on the existing TextDecoder state.
+//! WHATWG Japanese decoding on the existing TextDecoder state.
 //!
-//! Only the incomplete character is retained: one Shift_JIS lead, or EUC-JP's
+//! The byte-pair paths retain only one Shift_JIS lead, or EUC-JP's
 //! lead / 0x8F-plus-lead. No input buffer, locale, ICU or runtime index parser.
+//! ISO-2022-JP reuses the same packed slot for its bounded designation state.
 //! Error recovery preserves ASCII delimiters instead of swallowing them into
 //! malformed multibyte sequences. EOF is not inferred from an empty chunk.
 //! Fatal streaming errors retain the engine's existing reset policy; retention
@@ -39,6 +40,8 @@
 //! POSSIBILITY OF SUCH DAMAGE.
 
 use super::{DecodeState, JsString};
+
+mod iso2022;
 
 const JIS0208_LENGTH: usize = 11104;
 const JIS0212_LENGTH: usize = 7211;
@@ -88,6 +91,7 @@ const fn expand_indexes(jis0208: &[u8], jis0212: &[u8]) -> [u8; (JIS0208_LENGTH 
 pub(super) enum Encoding {
     ShiftJis,
     EucJp,
+    Iso2022Jp,
 }
 
 impl Encoding {
@@ -95,6 +99,7 @@ impl Encoding {
         match name {
             "shift_jis" => Some(Self::ShiftJis),
             "euc-jp" => Some(Self::EucJp),
+            "iso-2022-jp" => Some(Self::Iso2022Jp),
             _ => None,
         }
     }
@@ -103,6 +108,7 @@ impl Encoding {
         match self {
             Self::ShiftJis => matches!(byte, 0x81..=0x9f | 0xe0..=0xfc),
             Self::EucJp => matches!(byte, 0x8e | 0x8f | 0xa1..=0xfe),
+            Self::Iso2022Jp => false, // The separate designation machine owns its lead.
         }
     }
 }
@@ -113,6 +119,7 @@ pub(super) fn canonical_encoding(label: &str) -> Option<&'static str> {
         "csshiftjis" | "ms932" | "ms_kanji" | "shift-jis" | "shift_jis" | "sjis"
         | "windows-31j" | "x-sjis" => Some("shift_jis"),
         "cseucpkdfmtjapanese" | "euc-jp" | "x-euc-jp" => Some("euc-jp"),
+        "csiso2022jp" | "iso-2022-jp" => Some("iso-2022-jp"),
         _ => None,
     }
 }
@@ -175,6 +182,9 @@ pub(super) fn decode(
     fatal: bool,
     stream: bool,
 ) -> Option<JsString> {
+    if encoding == Encoding::Iso2022Jp {
+        return iso2022::decode(state, bytes, fatal, stream);
+    }
     if !state.streaming {
         *state = DecodeState::default();
     }
@@ -219,6 +229,7 @@ pub(super) fn decode(
                         index(usize::from(previous - 0xa1) * 94 + usize::from(byte - 0xa1), jis0212)
                     }
                     Encoding::EucJp => None,
+                    Encoding::Iso2022Jp => return None, // Dispatched before this byte-pair path.
                 };
                 jis0212 = false;
                 emit(&mut text, scalar, byte, fatal)?;

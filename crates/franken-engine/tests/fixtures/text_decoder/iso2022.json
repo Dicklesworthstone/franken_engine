@@ -1,0 +1,105 @@
+[
+  {
+    "name": "labels",
+    "source": "const labels = ['iso-2022-jp','csiso2022jp',' \\tISO-2022-JP\\r\\n'];\nfor (const label of labels) console.log(new TextDecoder(label).encoding);\nlet failures=0;\nfor (const label of ['iso2022jp','iso-2022-jp-2','\\u00a0iso-2022-jp']) {\n try {new TextDecoder(label);} catch(e) {if (e instanceof RangeError) failures++;}\n}\nconsole.log(failures);",
+    "expected": [
+      "iso-2022-jp",
+      "iso-2022-jp",
+      "iso-2022-jp",
+      "3"
+    ]
+  },
+  {
+    "name": "all_modes",
+    "source": "const b=Uint8Array.from([65,27,40,74,92,126,27,40,73,33,95,27,36,66,70,124,75,92,27,40,66,90]);\nfor(const fatal of [false,true]) console.log(new TextDecoder('iso-2022-jp',{fatal}).decode(b));\nconsole.log(new TextDecoder('iso-2022-jp').decode(Uint8Array.from([27,36,64,36,34])));",
+    "expected": [
+      "A¥‾｡ﾟ日本Z",
+      "A¥‾｡ﾟ日本Z",
+      "あ"
+    ]
+  },
+  {
+    "name": "every_split",
+    "source": "const input=Uint8Array.from([65,27,40,74,92,126,27,40,73,33,95,27,36,66,70,124,75,92,27,40,66,90]);\nfor(let cut=0;cut<=input.length;cut++) {\n const d=new TextDecoder('iso-2022-jp');\n let text=d.decode(input.subarray(0,cut),{stream:true});\n if(d.decode(new Uint8Array(0),{stream:true})!=='')throw new Error('early EOF');\n text+=d.decode(input.subarray(cut),{stream:true})+d.decode();\n if(text!=='A¥‾｡ﾟ日本Z')throw new Error('split '+cut);\n}\nconst d=new TextDecoder('iso-2022-jp');let text='';\nfor(const byte of input)text+=d.decode(Uint8Array.of(byte),{stream:true});\ntext+=d.decode();if(text!=='A¥‾｡ﾟ日本Z')throw new Error('bytewise');\nconsole.log('ISO_SPLITS_OK');",
+    "expected": [
+      "ISO_SPLITS_OK"
+    ]
+  },
+  {
+    "name": "offset_views",
+    "source": "const constructors=[Int8Array,Uint8Array,Uint8ClampedArray,Int16Array,Uint16Array,Int32Array,Uint32Array,Float32Array,Float64Array,BigInt64Array,BigUint64Array,DataView];\nfor(const C of constructors){\n const bytes=new Uint8Array(32);bytes.fill(65);bytes[8]=27;bytes[9]=40;bytes[10]=74;bytes[11]=92;bytes[12]=126;\n const view=C===DataView?new DataView(bytes.buffer,8,8):new C(bytes.buffer,8,8/C.BYTES_PER_ELEMENT);\n const value=new TextDecoder('iso-2022-jp').decode(view);\n if(value!=='¥‾AAA')throw new Error(C.name+': '+value);\n}\nconsole.log('ISO_VIEWS_OK');",
+    "expected": [
+      "ISO_VIEWS_OK"
+    ]
+  },
+  {
+    "name": "borrowed_prefix_lifetime",
+    "source": "const d=new TextDecoder('iso-2022-jp');\nconst bytes=Uint8Array.from([0,27,36,66,36,0]);\nconsole.log(JSON.stringify(d.decode(new DataView(bytes.buffer,1,4),{stream:true})));\nbytes.fill(0);console.log(d.decode(Uint8Array.of(34)));\nconsole.log(d.decode(Uint8Array.of(92)));\n",
+    "expected": [
+      "\"\"",
+      "あ",
+      "\\"
+    ]
+  },
+  {
+    "name": "reentrant_options",
+    "source": "const d=new TextDecoder('iso-2022-jp');const bytes=Uint8Array.of(92);\nconst output=d.decode(bytes,{get stream(){d.decode(Uint8Array.from([27,40,74]),{stream:true});return false;}});\nconsole.log(output);console.log(d.decode(bytes));",
+    "expected": [
+      "¥",
+      "\\"
+    ]
+  },
+  {
+    "name": "repeat_designations",
+    "source": "const d=new TextDecoder('iso-2022-jp');\nconsole.log(JSON.stringify(d.decode(Uint8Array.from([27,40,66]),{stream:true})));\nconsole.log(JSON.stringify(d.decode(new Uint8Array(0),{stream:true})));\nconsole.log(d.decode(Uint8Array.from([27,40,74,92])));\nconsole.log(new TextDecoder('iso-2022-jp').decode(Uint8Array.from([27,40,74,92,27,40,66,27,40,74,92])));",
+    "expected": [
+      "\"\"",
+      "\"\"",
+      "�¥",
+      "¥�¥"
+    ]
+  },
+  {
+    "name": "malformed_escape_replay",
+    "source": "for(const bytes of [[27,36,88,33],[27,34],[27],[27,36],[27,40]])\n console.log(JSON.stringify(new TextDecoder('iso-2022-jp').decode(Uint8Array.from(bytes))));",
+    "expected": [
+      "\"�$X!\"",
+      "\"�\\\"\"",
+      "\"�\"",
+      "\"�$\"",
+      "\"�(\""
+    ],
+    "reference_note": "Node 22 drops restored bytes for some incomplete/unsupported escape sequences."
+  },
+  {
+    "name": "incomplete_doublebyte_recovery",
+    "source": "for(const bytes of [[27,36,66,36,27,40,66,111,107],[27,36,66,36],[27,36,66,36,32,27,40,66,33],[27,36,66,27,36]])\n console.log(new TextDecoder('iso-2022-jp').decode(Uint8Array.from(bytes)));",
+    "expected": [
+      "�ok",
+      "�",
+      "�!",
+      "��"
+    ],
+    "reference_note": "EOF after an invalid escape in JIS mode must restore the lead and report its subsequent incomplete pair."
+  },
+  {
+    "name": "fatal_errors",
+    "source": "let failed=0;\nfor(const bytes of [[14],[255],[27],[27,36],[27,36,66,36],[27,40,66,27,40,74]]){\n try{new TextDecoder('iso-2022-jp',{fatal:true}).decode(Uint8Array.from(bytes));}\n catch(e){if(e instanceof TypeError)failed++;else throw e;}\n}\nconsole.log(failed);\nconst d=new TextDecoder('iso-2022-jp',{fatal:true});d.decode(Uint8Array.from([27]),{stream:true});\ntry{d.decode();}catch(e){console.log(e instanceof TypeError);}\nconsole.log(d.decode(Uint8Array.of(65)));",
+    "expected": [
+      "6",
+      "true",
+      "A"
+    ]
+  },
+  {
+    "name": "non_unicode_bom_and_controls",
+    "source": "for(const ignoreBOM of [false,true]){\n console.log(new TextDecoder('iso-2022-jp',{ignoreBOM}).decode(Uint8Array.from([239,187,191])));\n console.log(JSON.stringify(new TextDecoder('iso-2022-jp',{ignoreBOM}).decode(Uint8Array.from([0,10,13,127]))));\n}\nconsole.log(new TextDecoder('iso-2022-jp').decode(Uint8Array.from([14,15,128])));",
+    "expected": [
+      "���",
+      "\"\\u0000\\n\\r\u007f\"",
+      "���",
+      "\"\\u0000\\n\\r\u007f\"",
+      "���"
+    ]
+  }
+]

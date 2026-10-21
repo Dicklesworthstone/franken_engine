@@ -657,23 +657,27 @@ impl<V> OrderedStringMap<V> {
         if let Some(index) = canonical_array_index(&key) {
             return self.array_entries.insert(index, (key, value));
         }
-        if !self.by_key.contains_key(&key) {
-            self.maybe_compact_named_string_order(false);
-            let position = self.string_insertion_order.len();
-            self.string_insertion_order.push(key.clone());
-            if let Some(sidecars) = self.sidecars.as_deref_mut() {
-                if let Some(positions) = sidecars.named_string_positions.as_mut() {
-                    positions.insert(key.clone(), position);
-                }
-                let exact_key = JsString::from(&key);
-                if let Some(order) = sidecars.exact_string_insertion_order.as_mut() {
-                    order.push(exact_key.clone());
-                }
-                if let Some(order) = sidecars.baseline_string_key_order.as_mut()
-                    && !order.iter().any(|candidate| candidate == &exact_key)
-                {
-                    order.push(exact_key);
-                }
+        // Property overwrites need neither a second string search nor any
+        // creation-order maintenance. Keep the stored key and its position;
+        // only the old value is returned to the caller.
+        if let Some(previous) = self.by_key.get_mut(&key) {
+            return Some(std::mem::replace(previous, value));
+        }
+        self.maybe_compact_named_string_order(false);
+        let position = self.string_insertion_order.len();
+        self.string_insertion_order.push(key.clone());
+        if let Some(sidecars) = self.sidecars.as_deref_mut() {
+            if let Some(positions) = sidecars.named_string_positions.as_mut() {
+                positions.insert(key.clone(), position);
+            }
+            let exact_key = JsString::from(&key);
+            if let Some(order) = sidecars.exact_string_insertion_order.as_mut() {
+                order.push(exact_key.clone());
+            }
+            if let Some(order) = sidecars.baseline_string_key_order.as_mut()
+                && !order.iter().any(|candidate| candidate == &exact_key)
+            {
+                order.push(exact_key);
             }
         }
         let previous = self.by_key.insert(key, value);
@@ -1134,12 +1138,19 @@ impl<V> OrderedStringMap<V> {
         F: FnMut(&String, &mut V) -> bool,
     {
         self.maybe_compact_named_string_order(true);
+        // Only the mixed data/accessor chronology needs to distinguish
+        // removed data keys from accessor-only keys. Ordinary maps and
+        // arrays need no allocated snapshot of every key before retention.
         let old_keys = self
-            .by_key
-            .keys()
-            .chain(self.array_entries.values().map(|(key, _)| key))
-            .cloned()
-            .collect::<BTreeSet<_>>();
+            .sidecars()
+            .is_some_and(|sidecars| sidecars.baseline_string_key_order.is_some())
+            .then(|| {
+                self.by_key
+                    .keys()
+                    .chain(self.array_entries.values().map(|(key, _)| key))
+                    .cloned()
+                    .collect::<BTreeSet<_>>()
+            });
         self.by_key.retain(|key, value| keep(key, value));
         self.array_entries
             .retain(|_, (key, value)| keep(key, value));
@@ -1159,7 +1170,9 @@ impl<V> OrderedStringMap<V> {
                         .map_or_else(|| exact_only_by_key.contains_key(key), still_present)
                 });
             }
-            if let Some(order) = sidecars.baseline_string_key_order.as_mut() {
+            if let (Some(order), Some(old_keys)) =
+                (sidecars.baseline_string_key_order.as_mut(), old_keys.as_ref())
+            {
                 order.retain(|key| {
                     key.as_str()
                         .is_none_or(|key| !old_keys.contains(key) || still_present(key))
@@ -4661,6 +4674,56 @@ mod tests {
     }
 
     #[test]
+    fn retain_preserves_accessor_only_chronology_while_removing_data() {
+        let mut map = OrderedStringMap::from_iter([
+            ("before".to_string(), 1usize),
+            ("removed".to_string(), 2),
+            ("2".to_string(), 3),
+        ]);
+        let exact_data = JsString::from_code_units(&[0xd800]);
+        let exact_accessor = JsString::from_code_units(&[0xd801]);
+        map.insert_exact(exact_data.clone(), 4);
+        map.insert_baseline_exact_string_accessor(
+            exact_accessor.clone(),
+            BaselineStringAccessor {
+                get: Some(5),
+                set: None,
+            },
+        );
+        map.set_baseline_string_key_order(Some(vec![
+            JsString::from("before"),
+            exact_accessor.clone(),
+            JsString::from("removed"),
+            exact_data.clone(),
+        ]));
+
+        let mut visited = BTreeSet::new();
+        map.retain(|key, value| {
+            assert!(visited.insert(key.clone()), "visit each data entry once");
+            *value += 10;
+            key != "removed"
+        });
+        assert_eq!(
+            visited,
+            BTreeSet::from(["before".to_string(), "removed".to_string(), "2".to_string()])
+        );
+        assert_eq!(map.get("before"), Some(&11));
+        assert_eq!(map.get_index(2), Some(&13));
+        assert_eq!(map.get("removed"), None);
+        assert_eq!(map.get_exact(&exact_data), Some(&4));
+        assert_eq!(
+            map.baseline_exact_string_accessor(&exact_accessor)
+                .unwrap()
+                .get,
+            Some(5)
+        );
+        assert_eq!(
+            map.baseline_string_key_order().unwrap(),
+            [JsString::from("before"), exact_accessor, exact_data]
+        );
+    }
+
+    #[test]
     fn unordered_values_are_the_ordered_values_bd_9vouw_333() {
         let mut map = OrderedStringMap::new();
         for index in 0..40 {
@@ -4781,6 +4844,62 @@ mod tests {
             map.keys().map(String::as_str).collect::<Vec<_>>(),
             vec!["a", "b"]
         );
+    }
+
+    #[test]
+    fn named_overwrites_preserve_mixed_key_chronology_and_cursor_positions() {
+        for size in [4usize, 8, 9, 31, 32, 80] {
+            let mut map = OrderedStringMap::new();
+            for index in 0..size {
+                map.insert(format!("key-{index}"), index);
+            }
+            // Keep tombstones, an exact-only key, numeric entries, and a
+            // Symbol sidecar live while overwriting both small and large maps.
+            map.remove("key-0");
+            let exact = JsString::from_code_units(&[0xd800]);
+            map.insert_exact(exact.clone(), 1000);
+            map.insert("2".to_string(), 2000);
+            map.insert("01".to_string(), 3000);
+            map.insert_baseline_symbol_property(SymbolId(7), BaselineSymbolProperty::Data(4000));
+            let before_keys = map.exact_keys();
+            let before_slots = map.string_insertion_order.clone();
+            let before_order = map.baseline_string_key_order().map(<[JsString]>::to_vec);
+            let before_positions = (1..size)
+                .map(|index| map.insertion_key_position(&format!("key-{index}")))
+                .collect::<Vec<_>>();
+
+            for index in 1..size {
+                assert_eq!(
+                    map.insert(format!("key-{index}"), index + 10_000),
+                    Some(index)
+                );
+                assert_eq!(map.get(&format!("key-{index}")), Some(&(index + 10_000)));
+            }
+            assert_eq!(map.exact_keys(), before_keys);
+            assert_eq!(map.string_insertion_order, before_slots);
+            assert_eq!(map.baseline_string_key_order(), before_order.as_deref());
+            assert_eq!(
+                (1..size)
+                    .map(|index| map.insertion_key_position(&format!("key-{index}")))
+                    .collect::<Vec<_>>(),
+                before_positions
+            );
+            assert_eq!(map.get_exact(&exact), Some(&1000));
+            assert_eq!(map.get_index(2), Some(&2000));
+            assert_eq!(map.get("01"), Some(&3000));
+            assert_eq!(
+                map.baseline_symbol_property(SymbolId(7)),
+                Some(&BaselineSymbolProperty::Data(4000))
+            );
+
+            // The JSON carrier does not serialize the independent Symbol
+            // sidecar. Every exact data key and updated value must round-trip.
+            let restored: OrderedStringMap<usize> =
+                serde_json::from_str(&serde_json::to_string(&map).unwrap()).unwrap();
+            assert_eq!(restored.exact_entries(), map.exact_entries());
+            assert_eq!(map.insert("key-0".to_string(), 99), None);
+            assert_eq!(map.exact_keys().last(), Some(&JsString::from("key-0")));
+        }
     }
 
     /// Canonical array-index keys live in their own integer-keyed store.

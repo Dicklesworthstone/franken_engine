@@ -727,7 +727,42 @@
   var mapGet = Map.prototype.get;
   var mapSet = Map.prototype.set;
   var mapDelete = Map.prototype.delete;
+  var mapSize = Object.getOwnPropertyDescriptor(Map.prototype, 'size').get;
   var collectionApply = Reflect.apply;
+  // Small comparisons keep their short ancestor scan. Deep comparisons index
+  // ACTIVE ordered pairs, never completed results: getters and failed unordered
+  // candidates must still be evaluated again. The common, distinct-left path
+  // needs one Map and no per-level pair allocation after promotion. Only a
+  // repeated left object with a different right needs a secondary pair set.
+  function indexedPair(seen, a, b) {
+    var first = collectionApply(mapGet, seen[0], [a]);
+    if (first === b) { return true; }
+    if (first === undefined) {
+      collectionApply(mapSet, seen[0], [a, b]);
+      return false;
+    }
+    if (seen[1] === undefined) { seen[1] = new MapClass(); }
+    var others = collectionApply(mapGet, seen[1], [a]);
+    if (others === undefined) {
+      others = new MapClass();
+      collectionApply(mapSet, seen[1], [a, others]);
+    } else if (collectionApply(mapHas, others, [b])) {
+      return true;
+    }
+    collectionApply(mapSet, others, [b, true]);
+    return false;
+  }
+  function leaveIndexedPair(seen, a, b) {
+    if (collectionApply(mapGet, seen[0], [a]) === b) {
+      collectionApply(mapDelete, seen[0], [a]);
+    } else {
+      var others = collectionApply(mapGet, seen[1], [a]);
+      collectionApply(mapDelete, others, [b]);
+      if (collectionApply(mapSize, others, []) === 0) {
+        collectionApply(mapDelete, seen[1], [a]);
+      }
+    }
+  }
   function enumerableKeys(value) {
     var keys = Reflect.ownKeys(value);
     var result = [];
@@ -886,22 +921,43 @@
     if (tag === 'WeakMap' || tag === 'WeakSet') {
       return false;
     }
-    for (var i = 0; i < seen.length; i++) {
-      if (seen[i][0] === a && seen[i][1] === b) {
-        return true;
+    if (seen === undefined) { seen = [undefined, undefined]; }
+    // Two own header slots hold the optional indexes; later slots are the
+    // short ancestor stack. This avoids a second context allocation on the
+    // common shallow path, and never reads an inherited metadata property.
+    if (seen[0] === undefined) {
+      for (var i = 2; i < seen.length; i++) {
+        if (seen[i][0] === a && seen[i][1] === b) {
+          return true;
+        }
+      }
+      if (seen.length < 66) { // two headers plus at most 64 active pairs
+        seen.push([a, b]);
+        try {
+          return equalObject(a, b, tag, seen);
+        } finally {
+          seen.pop();
+          // A descendant may have promoted this same comparison. Its index
+          // includes these earlier ancestors and must unwind them too.
+          if (seen[0] !== undefined) { leaveIndexedPair(seen, a, b); }
+        }
+      }
+      seen[0] = new MapClass();
+      for (var j = 2; j < seen.length; j++) {
+        indexedPair(seen, seen[j][0], seen[j][1]);
       }
     }
+    if (indexedPair(seen, a, b)) { return true; }
     // Only active ancestors break cycles. A failed unordered candidate must
     // not leave "equal" pairs behind for the next candidate or sibling.
-    seen.push([a, b]);
     try {
       return equalObject(a, b, tag, seen);
     } finally {
-      seen.pop();
+      leaveIndexedPair(seen, a, b);
     }
   }
   function isDeepStrictEqual(a, b) {
-    return deepEqual(a, b, []);
+    return deepEqual(a, b);
   }
   function tagIs(name) {
     return function (value) {

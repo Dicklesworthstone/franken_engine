@@ -300,3 +300,362 @@ test('host boundary: Node AbortSignal intrinsics accept proxy signals and inspec
   Object.defineProperty(signal, 'aborted', { get() { throw failure; } });
   assert.throws(() => AbortSignal.any([signal]), error => error === failure);
 });
+
+// Exercise the production Web adapter together with the complete production
+// Node stream state machines. Node supplies Web Streams and host primitives;
+// this is not Rust or execution of the engine-owned Web Stream kernel.
+const web = require('node:stream/web');
+const bridgeSource = fs.readFileSync(process.env.STREAM_BRIDGE_SOURCE || path.join(__dirname,
+  '../../crates/franken-engine/src/lowering_pipeline/stream_web_bridge.js'), 'utf8');
+function bridgeCandidate() {
+  const core = load().stream;
+  assert.notEqual(core.Readable, node.Readable);
+  assert.notEqual(core.Writable, node.Writable);
+  return new Function('return ' + bridgeSource)()(core, () => web);
+}
+const adapterKinds = ['Readable', 'Writable', 'Duplex'];
+function adapt(io, kind, source, destination, options) {
+  return io[kind].fromWeb(kind === 'Readable' ? source : kind === 'Writable' ? destination :
+    { readable: source, writable: destination }, options);
+}
+for (const kind of adapterKinds) {
+  for (const timing of ['pre-aborted', 'option-getter', 'before-construction-job']) {
+    test(`Web adoption: ${kind} ${timing} waits for acquired endpoint cleanup`,
+      { timeout: 3000 }, async () => {
+        for (const io of [bridgeCandidate(), node]) {
+          const c = new AbortController(), left = deferred(), right = deferred();
+          const reason = false, calls = [], errors = [];
+          let pulls = 0, writes = 0, closed = false;
+          const input = new web.ReadableStream({
+            pull() { pulls++; },
+            cancel(error) { aborted(error, reason); calls.push('cancel'); return left.promise; }
+          }, { highWaterMark: 0 });
+          const output = new web.WritableStream({
+            write() { writes++; },
+            abort(error) { aborted(error, reason); calls.push('abort'); return right.promise; }
+          });
+          const options = { signal: c.signal };
+          if (timing === 'pre-aborted') c.abort(reason);
+          if (timing === 'option-getter') Object.defineProperty(options, 'objectMode', {
+            get() { c.abort(reason); return false; }
+          });
+          const stream = adapt(io, kind, input, output, options);
+          stream.on('error', error => errors.push(error));
+          const completion = new Promise(resolve => stream.once('close', () => { closed = true; resolve(); }));
+          if (timing === 'before-construction-job') c.abort(reason);
+          assert.equal(stream.destroyed, true);
+          await tick();
+          assert.deepEqual(calls, kind === 'Readable' ? ['cancel'] : kind === 'Writable' ? ['abort'] : ['cancel', 'abort']);
+          assert.equal(closed, false, 'close must not overtake resource release');
+          assert.equal(errors.length, 0, 'destruction has not completed');
+          assert.equal(pulls, 0); assert.equal(writes, 0);
+          left.resolve(); await tick();
+          if (kind !== 'Readable') assert.equal(closed, false, 'writable cleanup still pending');
+          right.resolve(); await completion;
+          assert.equal(errors.length, 1); aborted(errors[0], reason);
+          assert.equal(input.locked, kind !== 'Writable');
+          assert.equal(output.locked, kind !== 'Readable');
+          // Explicit fromWeb adapters retain their established lock ownership.
+          c.abort('again'); await tick();
+          assert.equal(calls.length, kind === 'Duplex' ? 2 : 1);
+        }
+      });
+  }
+}
+
+test('Web adoption: pre-aborted Duplex starts interdependent cancellation algorithms together',
+  { timeout: 3000 }, async () => {
+    for (const io of [bridgeCandidate(), node]) {
+      const c = new AbortController(); c.abort(null);
+      const readStarted = deferred(), writeStarted = deferred();
+      const calls = [];
+      const input = new web.ReadableStream({ cancel(error) {
+        aborted(error, null); calls.push('cancel'); readStarted.resolve(); return writeStarted.promise;
+      } }, { highWaterMark: 0 });
+      const output = new web.WritableStream({ abort(error) {
+        aborted(error, null); calls.push('abort'); writeStarted.resolve(); return readStarted.promise;
+      } });
+      const stream = io.Duplex.fromWeb({ readable: input, writable: output }, { signal: c.signal });
+      const errors = []; stream.on('error', e => errors.push(e));
+      await new Promise(resolve => stream.once('close', resolve));
+      assert.deepEqual(calls, ['cancel', 'abort']); assert.equal(errors.length, 1);
+      aborted(errors[0], null);
+    }
+  });
+
+for (const kind of adapterKinds) {
+  test(`Web adoption: ${kind} locked endpoint throws without an orphan abort event`, { timeout: 3000 }, () => {
+    // A thrown factory never exposes the intermediate Node stream to callers.
+    // A fresh process makes any unhandled error/rejection a hard test failure.
+    const { spawnSync } = require('node:child_process');
+    for (const role of ['candidate', 'node']) {
+      const code = `
+        const assert=require('node:assert/strict'),web=require('node:stream/web');
+        const core=${JSON.stringify(source)},bridge=${JSON.stringify(bridgeSource)};
+        const s=${JSON.stringify(role)}==='node'?require('node:stream'):
+          new Function('return '+bridge)()(new Function('__franken_stream_events',
+            '__franken_stream_string_decoder','__franken_stream_next_tick','return '+core)(
+              require('node:events'),require('node:string_decoder'),f=>process.nextTick(f)),()=>web);
+        const c=new AbortController();c.abort('never-owned');let effects=0;
+        const r=new web.ReadableStream({cancel(){effects++;}},{highWaterMark:0});
+        const w=new web.WritableStream({abort(){effects++;}});
+        const kind=${JSON.stringify(kind)};
+        const held=kind==='Readable'?r.getReader():w.getWriter();
+        assert.throws(()=>s[kind].fromWeb(kind==='Readable'?r:kind==='Writable'?w:
+          {readable:r,writable:w},{signal:c.signal}),e=>e.code==='ERR_INVALID_STATE');
+        setImmediate(()=>{assert.equal(effects,0);assert.equal(r.locked,kind==='Readable');
+          assert.equal(w.locked,kind!=='Readable');held.releaseLock();console.log('NO_ORPHAN');});
+      `;
+      const result = spawnSync(process.execPath, ['--unhandled-rejections=strict'],
+        { input: code, encoding: 'utf8', timeout: 2000 });
+      assert.equal(result.status, 0, role + ': ' + result.stderr);
+      assert.equal(result.stdout, 'NO_ORPHAN\n'); assert.equal(result.stderr, '');
+    }
+  });
+}
+
+test('Web adoption: pre-aborted source closes its descriptor before pipeline rejection',
+  { timeout: 3000 }, async () => {
+    for (const io of [bridgeCandidate(), node]) {
+      const c = new AbortController(); c.abort('cancel-job');
+      const release = deferred(); const receipt = [];
+      let closed = false, published = false;
+      const source = new web.ReadableStream({ cancel(error) {
+        aborted(error, 'cancel-job'); receipt.push('cancel');
+        return release.promise.then(() => { receipt.push('release'); });
+      } }, { highWaterMark: 0 });
+      const input = io.Readable.fromWeb(source, { signal: c.signal });
+      input.on('close', () => { closed = true; });
+      const output = new io.Writable({
+        write(chunk, encoding, done) { receipt.push('unexpected-write'); done(); },
+        final(done) { published = true; done(); }
+      });
+      let settled = false;
+      const done = io.promises.pipeline(input, output).then(() => { throw Error('unexpected success'); },
+        error => { settled = true; return error; });
+      await tick();
+      assert.deepEqual(receipt, ['cancel']); assert.equal(settled, false); assert.equal(closed, false);
+      release.resolve(); const error = await done;
+      aborted(error, 'cancel-job'); assert.deepEqual(receipt, ['cancel', 'release']);
+      assert.equal(closed, true); assert.equal(published, false);
+    }
+  });
+
+test('Web adoption: the no-signal fast path does not add a construction job', () => {
+  const io = bridgeCandidate();
+  for (const kind of adapterKinds) {
+    const r = new web.ReadableStream({}, { highWaterMark: 0 }), w = new web.WritableStream();
+    const stream = adapt(io, kind, r, w);
+    assert.equal(stream._construct, undefined);
+    if (stream._readableState) assert.equal(stream._readableState.constructed, true);
+    if (stream._writableState) assert.equal(stream._writableState.constructed, true);
+    stream.on('error', () => {}); stream.destroy();
+  }
+});
+
+// The adapter and both complete stream kernels run together here. This is
+// still JavaScript-on-Node: language, Buffer, native emitter/decoder, signals
+// and scheduling are host primitives, not a Rust interpreter execution.
+const webSource = fs.readFileSync(path.join(__dirname,
+  '../../crates/franken-engine/src/lowering_pipeline/web_stream_module.js'), 'utf8');
+function fullBridgeCandidate() {
+  const kernel = new Function('return ' + webSource)();
+  const io = new Function('return ' + bridgeSource)()(load().stream, () => kernel);
+  assert.notEqual(kernel.ReadableStream, web.ReadableStream);
+  assert.notEqual(io.Readable, node.Readable);
+  return { io, web: kernel };
+}
+function fullLanes() {
+  return [['node', { io: node, web }], ['engine-kernels', fullBridgeCandidate()]];
+}
+// Node 22.16's explicit adapters discard an admitted chunk in this race,
+// although its direct pipeline(WebReadable, NodeWritable) preserves it. Its
+// Duplex also differs in failure cleanup. These five stronger groups are NOT
+// parity passes. Strict mode includes Node with the SAME assertions and must
+// exit nonzero on that reference; it never rewrites the desired expectations.
+const strictDelivery = process.env.STRICT_NODE_STREAM_DELIVERY === '1';
+function admissionLanes(directPipeline) {
+  return fullLanes().filter(([label]) => directPipeline || strictDelivery || label !== 'node');
+}
+for (const kind of ['Readable', 'Duplex', 'pipeline']) {
+  test(`Shared kernels / reference differences: ${kind} admitted bytes before source failure`,
+    { timeout: 3000 }, async () => {
+      for (const [label, lane] of admissionLanes(kind === 'pipeline')) {
+        const io = lane.io, failure = new Error('after-record'), seen = [];
+        let pulls = 0, final = false, abortedWith;
+        const source = new lane.web.ReadableStream({ pull(c) {
+          pulls++; c.enqueue(Buffer.from('accepted\n')); c.error(failure);
+        } }, { highWaterMark: 0 });
+        const output = new io.Writable({ write(chunk, encoding, done) {
+          seen.push(chunk.toString()); done();
+        }, final(done) { final = true; done(); } });
+        let input = source;
+        if (kind === 'Readable') input = io.Readable.fromWeb(source);
+        if (kind === 'Duplex') input = io.Duplex.fromWeb({ readable: source,
+          writable: new lane.web.WritableStream({ abort(error) { abortedWith = error; } }) });
+        await assert.rejects(io.promises.pipeline(input, output), error => error === failure);
+        assert.deepEqual(seen, ['accepted\n'], label);
+        assert.equal(pulls, 1); assert.equal(final, false);
+        if (kind === 'Duplex') assert.equal(abortedWith, failure);
+      }
+    });
+}
+
+test('Shared kernels / reference differences: object-mode admission retains identity and falsy chunks',
+  { timeout: 3000 }, async () => {
+    for (const [label, lane] of admissionLanes(false)) {
+      for (const chunk of [undefined, false, 0, '', { record: 7 }]) {
+        const error = new Error('record boundary'), seen = [];
+        const source = new lane.web.ReadableStream({ pull(c) {
+          c.enqueue(chunk); c.error(error);
+        } }, { highWaterMark: 0 });
+        const input = lane.io.Readable.fromWeb(source, { objectMode: true });
+        const output = new lane.io.Writable({ objectMode: true,
+          write(value, encoding, done) { seen.push(value); done(); } });
+        await assert.rejects(lane.io.promises.pipeline(input, output), e => e === error);
+        assert.equal(seen.length, 1, label); assert.equal(seen[0], chunk, label);
+      }
+    }
+  });
+
+test('Shared kernels / reference differences: source failure awaits Duplex cleanup after admitted output',
+  { timeout: 3000 }, async () => {
+    for (const [label, lane] of admissionLanes(false)) {
+      const error = new Error('source failed'), release = deferred();
+      let abortCalls = 0, settled = false;
+      const source = new lane.web.ReadableStream({ pull(c) {
+        c.enqueue(Buffer.from('record')); c.error(error);
+      } }, { highWaterMark: 0 });
+      const destination = new lane.web.WritableStream({ abort(reason) {
+        assert.equal(reason, error); abortCalls++; return release.promise;
+      } });
+      const input = lane.io.Duplex.fromWeb({ readable: source, writable: destination });
+      const seen = [];
+      const output = new lane.io.Writable({ write(chunk, encoding, done) {
+        seen.push(chunk.toString()); done();
+      } });
+      const completion = lane.io.promises.pipeline(input, output).then(
+        () => { settled = true; return undefined; }, reason => { settled = true; return reason; });
+      try {
+        await tick();
+        assert.deepEqual(seen, ['record'], label);
+        assert.equal(abortCalls, 1); assert.equal(settled, false);
+      } finally { release.resolve(); }
+      assert.equal(await completion, error);
+      assert.equal(input.closed, true); assert.equal(output.closed, true);
+    }
+  });
+
+test('Shared kernels / reference difference: destination failure cancels a stalled source immediately',
+  { timeout: 3000 }, async () => {
+    for (const [label, lane] of admissionLanes(false)) {
+      const error = new Error('destination failed'), release = deferred();
+      let sourceController, sinkController, pulls = 0, cancels = 0;
+      const source = new lane.web.ReadableStream({ start(c) { sourceController = c; },
+        pull() { pulls++; }, cancel(reason) {
+          assert.equal(reason, error); cancels++; return release.promise;
+        } }, { highWaterMark: 0 });
+      const destination = new lane.web.WritableStream({ start(c) { sinkController = c; } });
+      const input = lane.io.Duplex.fromWeb({ readable: source, writable: destination });
+      const seen = [], output = new lane.io.Writable({ write(x, e, done) { seen.push(x); done(); } });
+      let settled = false;
+      const completion = lane.io.promises.pipeline(input, output).then(
+        () => { settled = true; return undefined; }, reason => { settled = true; return reason; });
+      try {
+        await tick(); assert.equal(pulls, 1, label); sinkController.error(error);
+        await tick();
+        assert.equal(cancels, 1, label); assert.equal(settled, false);
+        assert.throws(() => sourceController.enqueue(Buffer.from('late')), TypeError);
+      } finally {
+        // Node's reference Duplex does not observe the idle writer failure.
+        // Explicit teardown is test cleanup, not a claimed adapter success.
+        if (!input.destroyed) input.destroy(error);
+        release.resolve();
+      }
+      assert.equal(await completion, error); assert.deepEqual(seen, []);
+    }
+  });
+
+test('Shared kernels: caller cancellation still suppresses a late admitted read',
+  { timeout: 3000 }, async () => {
+    for (const [label, lane] of fullLanes()) {
+      const control = new AbortController(); let cancels = 0;
+      const source = new lane.web.ReadableStream({ pull(c) {
+        c.enqueue(Buffer.from('must-not-publish')); control.abort('stop');
+      }, cancel(reason) { aborted(reason, 'stop'); cancels++; } }, { highWaterMark: 0 });
+      const input = lane.io.Readable.fromWeb(source, { signal: control.signal });
+      const seen = [], output = new lane.io.Writable({ write(x, e, done) { seen.push(x); done(); } });
+      await assert.rejects(lane.io.promises.pipeline(input, output), error => {
+        aborted(error, 'stop'); return true;
+      });
+      assert.deepEqual(seen, [], label); assert.equal(cancels, 1, label);
+    }
+  });
+
+test('Shared kernels: pending and idle read failures propagate without requiring more demand',
+  { timeout: 3000 }, async () => {
+    for (const [label, lane] of fullLanes()) {
+      for (const pending of [false, true]) {
+        const error = new Error('no chunk'), errors = []; let controller;
+        const source = new lane.web.ReadableStream({ start(c) { controller = c; } }, { highWaterMark: 0 });
+        const input = lane.io.Readable.fromWeb(source);
+        input.on('error', e => errors.push(e));
+        const closed = new Promise(resolve => input.once('close', resolve));
+        if (pending) input.read(0);
+        controller.error(error); await closed;
+        assert.deepEqual(errors, [error], label); assert.equal(input.closed, true);
+      }
+    }
+  });
+
+test('Shared kernels: ordinary close preserves the last byte chunk and successful finalization',
+  { timeout: 3000 }, async () => {
+    for (const [label, lane] of fullLanes()) {
+      const seen = []; let final = 0;
+      const source = new lane.web.ReadableStream({ pull(c) {
+        c.enqueue(Buffer.from('last')); c.close();
+      } }, { highWaterMark: 0 });
+      const output = new lane.io.Writable({ write(chunk, e, done) { seen.push(chunk.toString()); done(); },
+        final(done) { final++; done(); } });
+      await lane.io.promises.pipeline(lane.io.Readable.fromWeb(source), output);
+      assert.deepEqual(seen, ['last'], label); assert.equal(final, 1);
+    }
+  });
+
+test('Shared kernels: fragmented transforms respect slow Node destination demand',
+  { timeout: 5000 }, async () => {
+    for (const [label, lane] of fullLanes()) {
+      let next = 0, expected = 0, active = 0, peak = 0, sum = 0;
+      const source = new lane.web.ReadableStream({ pull(c) {
+        if (next === 1024) c.close(); else c.enqueue(next++);
+      } }, { highWaterMark: 0 });
+      const transform = new lane.web.TransformStream({ transform(value, c) {
+        c.enqueue(value * 2); c.enqueue(value * 2 + 1);
+      } });
+      const output = new lane.io.Writable({ objectMode: true, highWaterMark: 1,
+        write(value, encoding, done) {
+          assert.equal(value, expected++, label); sum += value;
+          peak = Math.max(peak, ++active);
+          setImmediate(() => { active--; done(); });
+        } });
+      await lane.io.promises.pipeline(source, transform, output);
+      assert.equal(expected, 2048); assert.equal(sum, 2096128); assert.equal(peak, 1);
+    }
+  });
+
+test('Shared kernels: falsy source failures retain their cause after accepted output',
+  { timeout: 3000 }, async () => {
+    // Err-first Node callbacks cannot carry these rejection values. This is
+    // the existing explicit failure-wrapper contract, not Node parity.
+    for (const reason of [undefined, null, false, 0, '']) {
+      const lane = fullBridgeCandidate(), seen = [];
+      const source = new lane.web.ReadableStream({ pull(c) {
+        c.enqueue(Buffer.from('prefix')); c.error(reason);
+      } }, { highWaterMark: 0 });
+      const input = lane.io.Readable.fromWeb(source);
+      const output = new lane.io.Writable({ write(chunk, encoding, done) { seen.push(chunk.toString()); done(); } });
+      await assert.rejects(lane.io.promises.pipeline(input, output), error =>
+        error.code === 'ERR_STREAM_WEB' && Object.hasOwn(error, 'cause') && error.cause === reason);
+      assert.deepEqual(seen, ['prefix']);
+    }
+  });

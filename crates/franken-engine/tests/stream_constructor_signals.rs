@@ -214,3 +214,126 @@ fn native_readline_iterator_cleanup_preserves_the_original_abort() {
         assert_eq!(lines, ["LINE_ABORT_COMPLETE true true false"]);
     }
 }
+
+#[test]
+fn web_adapters_cancel_acquired_endpoints_before_reporting_pre_aborted_close() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let (_, lines) = run(
+            r#"const s=require('node:stream');const web=require('stream/web');
+            (async function(){
+              for(const name of ['Readable','Writable','Duplex']){
+                const c=new AbortController();c.abort(false);let released=0;let reason=true;
+                const r=new web.ReadableStream({cancel(e){reason=reason&&e.code==='ABORT_ERR'&&e.cause===false;
+                  return Promise.resolve().then(()=>{released++;});}},{highWaterMark:0});
+                const w=new web.WritableStream({abort(e){reason=reason&&e.code==='ABORT_ERR'&&e.cause===false;
+                  return Promise.resolve().then(()=>{released++;});}});
+                const input=name==='Readable'?r:name==='Writable'?w:{readable:r,writable:w};
+                const n=s[name].fromWeb(input,{signal:c.signal});let errors=0;
+                n.on('error',e=>{if(e.code!=='ABORT_ERR'||e.cause!==false)throw e;errors++;});
+                await new Promise(resolve=>n.once('close',resolve));
+                console.log('ADOPTED',name,released,errors,reason,n.closed);
+              }
+            })();"#,
+            lane,
+        );
+        assert_eq!(lines, [
+            "ADOPTED Readable 1 1 true true",
+            "ADOPTED Writable 1 1 true true",
+            "ADOPTED Duplex 2 1 true true",
+        ]);
+    }
+}
+
+#[test]
+fn pre_aborted_web_pipeline_waits_for_the_owned_file_release() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let (root, lines) = run(
+            r#"const fs=require('fs');const s=require('stream');const web=require('node:stream/web');
+            (async function(){fs.writeFileSync('resource.txt','owned');
+              const fd=fs.openSync('resource.txt','r');const c=new AbortController();c.abort(null);
+              const source=new web.ReadableStream({cancel(e){return Promise.resolve().then(()=>{
+                fs.closeSync(fd);fs.writeFileSync('released.txt','closed\n');
+              });}},{highWaterMark:0});
+              const input=s.Readable.fromWeb(source,{signal:c.signal});
+              const output=new s.Writable({write(x,e,cb){cb();},
+                final(cb){fs.writeFileSync('unexpected.txt','published');cb();}});
+              try{await s.promises.pipeline(input,output);throw Error('success');}
+              catch(e){console.log('WEB_CANCEL',e.code,e.cause===null,input.closed,output.destroyed);}
+              console.log('RELEASED',fs.readFileSync('released.txt','utf8').trim());
+            })();"#,
+            lane,
+        );
+        assert_eq!(lines, ["WEB_CANCEL ABORT_ERR true true true", "RELEASED closed"]);
+        assert_eq!(std::fs::read(root.path().join("released.txt")).unwrap(), b"closed\n");
+        assert!(!root.path().join("unexpected.txt").exists());
+    }
+}
+
+#[test]
+fn web_duplex_pre_abort_starts_both_cleanup_sides_before_awaiting_either() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let (_, lines) = run(
+            r#"const {Duplex}=require('stream');const web=require('stream/web');
+            (async function(){let rReady,wReady;const calls=[];
+              const left=new Promise(resolve=>rReady=resolve),right=new Promise(resolve=>wReady=resolve);
+              const r=new web.ReadableStream({cancel(){calls.push('read');rReady();return right;}},{highWaterMark:0});
+              const w=new web.WritableStream({abort(){calls.push('write');wReady();return left;}});
+              const c=new AbortController();c.abort('stop');
+              const d=Duplex.fromWeb({readable:r,writable:w},{signal:c.signal});
+              let original=false;d.on('error',e=>{original=e.code==='ABORT_ERR'&&e.cause==='stop';});
+              await new Promise(resolve=>d.once('close',resolve));
+              console.log('BOTH_RELEASED',calls.join(','),original,d.closed);
+            })();"#,
+            lane,
+        );
+        assert_eq!(lines, ["BOTH_RELEASED read,write true true"]);
+    }
+}
+
+#[test]
+fn web_pipeline_preserves_admitted_bytes_before_reporting_source_failure() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let (root, lines) = run(
+            r#"const fs=require('fs');const s=require('node:stream');const w=require('stream/web');
+            (async function(){const reason=new Error('upstream');let writes=0;
+              const input=new w.ReadableStream({pull(c){c.enqueue(Buffer.from('accepted\n'));c.error(reason);}},
+                {highWaterMark:0});
+              const output=new s.Writable({write(chunk,encoding,done){
+                fs.appendFileSync('partial.txt',chunk);writes++;done();},
+                final(done){fs.writeFileSync('unexpected.txt','published');done();}});
+              fs.writeFileSync('partial.txt','');await Promise.resolve();
+              let same=false;try{await s.promises.pipeline(input,output);}catch(error){same=error===reason;}
+              console.log('ADMITTED_COMPLETE',same,writes,output.closed,
+                fs.readFileSync('partial.txt','utf8')==='accepted\n');
+            })();"#,
+            lane,
+        );
+        assert_eq!(lines, ["ADMITTED_COMPLETE true 1 true true"]);
+        assert_eq!(std::fs::read(root.path().join("partial.txt")).unwrap(), b"accepted\n");
+        assert!(!root.path().join("unexpected.txt").exists());
+    }
+}
+
+#[test]
+fn web_duplex_admitted_record_precedes_both_endpoint_failure_cleanup() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let (_, lines) = run(
+            r#"const s=require('stream');const w=require('node:stream/web');
+            (async function(){const reason=new Error('source');const row={id:7};let accepted=false;
+              let released=false;let original=false;
+              const source=new w.ReadableStream({pull(c){c.enqueue(row);c.error(reason);}},{highWaterMark:0});
+              const target=new w.WritableStream({abort(error){original=error===reason;
+                return Promise.resolve().then(()=>{released=true;});}});
+              const input=s.Duplex.fromWeb({readable:source,writable:target},{objectMode:true});
+              const output=new s.Writable({objectMode:true,write(value,encoding,done){accepted=value===row;done();}});
+              await Promise.resolve();let same=false;
+              try{await s.promises.pipeline(input,output);}catch(error){same=error===reason;}
+              console.log('DUPLEX_ADMITTED',accepted,released,original,same,input.closed,output.closed);
+            })();"#,
+            lane,
+        );
+        // Intentional stronger delivery/cleanup than the Node 22 explicit
+        // Duplex adapter. The host differential suite records that difference.
+        assert_eq!(lines, ["DUPLEX_ADMITTED true true true true true true"]);
+    }
+}

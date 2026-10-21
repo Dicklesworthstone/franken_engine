@@ -82,15 +82,29 @@
       out.decodeStrings = input.decodeStrings;
       if (out.decodeStrings !== undefined && typeof out.decodeStrings !== 'boolean') throw fail('options.decodeStrings');
     }
+    // A pre-aborted signal can destroy a Node stream inside its constructor.
+    // Keep _destroy behind the existing construction barrier until the Web
+    // endpoints below have been acquired. Otherwise destruction sees no owner,
+    // reports close, and only then acquires a permanently live Web resource.
+    // No signal means no extra construction job on the ordinary data path.
+    if (out.signal) out.construct = constructAfterAdoption;
     return out;
+  }
+  function constructAfterAdoption(done) { done(); }
+  function discardAdapter(node, destroy) {
+    // Setup throws synchronously, so the caller never receives this Node
+    // object. Observe its possible queued abort error while its construction
+    // barrier drains. Do not cancel an endpoint whose lock we never acquired.
+    apply(on, node, ['error', function () {}]);
+    apply(destroy, node, []);
   }
   function readableFromWeb(source, settings) { return makeReadableFromWeb(source, settings); }
   function makeReadableFromWeb(source, settings, owner) {
     const a = api(); apply(a.rLocked, source, []); // brand check before taking ownership
     const config = nodeOptions(settings, true);
-    let reader, node, reading = false, stopping = false, ended = false;
+    let reader, node, reading = false, stopping = false, ended = false, readError;
     config.read = function () {
-      if (reading || stopping || ended) return;
+      if (reading || stopping || ended || readError !== undefined) return;
       reading = true;
       then(apply(a.read, reader, []), function (item) {
         reading = false;
@@ -106,6 +120,10 @@
             }
             apply(push, node, [item.value]);
           }
+          // A synchronous Web pull can fulfill this read and then error
+          // before read() returns. Its closed reaction may run first: publish
+          // the already-admitted chunk before reporting that terminal error.
+          if (readError !== undefined && !stopping) apply(destroyR, node, [readError]);
         } catch (error) { apply(destroyR, node, [error]); }
       }, function (reason) { reading = false; if (!stopping) apply(destroyR, node, [failure(reason)]); });
     };
@@ -119,9 +137,13 @@
     // constructor does not start reading until a consumer asks for data.
     node = new R(config);
     try { reader = apply(a.getReader, source, []); }
-    catch (error) { apply(destroyR, node, []); throw error; }
+    catch (error) { discardAdapter(node, destroyR); throw error; }
     then(apply(a.rClosed, reader, []), undefined, function (reason) {
-      if (!stopping) apply(destroyR, node, [failure(reason)]);
+      if (stopping) return;
+      readError = failure(reason);
+      // A pending read settles on the same Web error. Let its result decide
+      // whether a chunk was admitted; idle failures still destroy promptly.
+      if (!reading) apply(destroyR, node, [readError]);
     });
     if (owner !== undefined) owner.own(node, function () { stopping = true; apply(a.releaseReader, reader, []); });
     // Like Node's adapters, ownership of the Web lock is permanent. It is
@@ -146,7 +168,7 @@
     };
     node = new W(config);
     try { writer = apply(a.getWriter, destination, []); }
-    catch (error) { apply(destroyW, node, []); throw error; }
+    catch (error) { discardAdapter(node, destroyW); throw error; }
     then(apply(a.wClosed, writer, []), undefined, function (reason) {
       if (!stopping) apply(destroyW, node, [failure(reason)]);
     });
@@ -181,9 +203,9 @@
     config.allowHalfOpen = halfOpen === undefined ? false : halfOpen;
     if (typeof config.allowHalfOpen !== 'boolean') throw fail('options.allowHalfOpen');
     let node, reader, writer, reading = false, stopping = false;
-    let readEnded = false, writeEnded = false;
+    let readEnded = false, writeEnded = false, readError;
     config.read = function () {
-      if (reading || stopping || readEnded) return;
+      if (reading || stopping || readEnded || readError !== undefined) return;
       reading = true;
       then(apply(a.read, reader, []), function (item) {
         reading = false;
@@ -195,6 +217,7 @@
             error.code = 'ERR_STREAM_NULL_VALUES'; throw error;
           }
           apply(push, node, [item.value]);
+          if (readError !== undefined && !stopping) apply(destroyR, node, [readError]);
         } catch (error) { apply(destroyR, node, [error]); }
       }, function (reason) { reading = false; if (!stopping) apply(destroyR, node, [failure(reason)]); });
     };
@@ -235,9 +258,15 @@
       reader = apply(a.getReader, source, []);
       try { writer = apply(a.getWriter, destination, []); }
       catch (error) { apply(a.releaseReader, reader, []); reader = undefined; throw error; }
-    } catch (error) { apply(destroyR, node, []); throw error; }
+    } catch (error) { discardAdapter(node, destroyR); throw error; }
     function rejected(reason) { if (!stopping) apply(destroyR, node, [failure(reason)]); }
-    then(apply(a.rClosed, reader, []), undefined, rejected);
+    then(apply(a.rClosed, reader, []), undefined, function (reason) {
+      if (stopping) return;
+      readError = failure(reason);
+      if (!reading) apply(destroyR, node, [readError]);
+    });
+    // A destination failure is different: stop immediately and suppress any
+    // late source delivery instead of waiting for a stalled read.
     then(apply(a.wClosed, writer, []), undefined, rejected);
     if (owner !== undefined) owner.own(node, function () { stopping = true; apply(a.releaseReader, reader, []); });
     return node;

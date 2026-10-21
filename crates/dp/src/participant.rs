@@ -178,17 +178,17 @@ impl Participant {
         }
 
         let modulus = i128::from(field_modulus);
-        let mut masked_contribution: Vec<i64> = input_vector
-            .into_iter()
-            .map(|value| i128::from(value).rem_euclid(modulus) as i64)
-            .collect();
+        let mut masked_contribution = input_vector;
+        for value in &mut masked_contribution {
+            *value = i128::from(*value).rem_euclid(modulus) as i64;
+        }
 
         // Add all shares this participant has generated for others (positive mask)
         for share in self.generated_shares.values() {
             for (i, &share_val) in share.share_values.iter().enumerate() {
                 masked_contribution[i] = (i128::from(masked_contribution[i])
                     + i128::from(share_val))
-                    .rem_euclid(modulus) as i64;
+                .rem_euclid(modulus) as i64;
             }
         }
 
@@ -197,7 +197,7 @@ impl Participant {
             for (i, &share_val) in share.share_values.iter().enumerate() {
                 masked_contribution[i] = (i128::from(masked_contribution[i])
                     - i128::from(share_val))
-                    .rem_euclid(modulus) as i64;
+                .rem_euclid(modulus) as i64;
             }
         }
 
@@ -338,6 +338,77 @@ impl Participant {
 mod tests {
     use super::*;
     use rand::{SeedableRng, thread_rng};
+
+    #[test]
+    fn masking_widens_field_arithmetic_and_canonicalizes_signed_inputs() {
+        let mut alice = Participant::new(ParticipantId("alice".into()));
+        let bob = ParticipantId("bob".into());
+        let modulus = i64::MAX;
+        let values = vec![modulus - 1, modulus - 1];
+        alice.generated_shares.insert(
+            bob.clone(),
+            SecretShare {
+                recipient: bob.clone(),
+                share_hash: Participant::compute_share_hash(&bob, &values),
+                share_values: values,
+            },
+        );
+        alice
+            .receive_secret_share(
+                bob,
+                SecretShare {
+                    recipient: alice.id.clone(),
+                    share_hash: Participant::compute_share_hash(&alice.id, &[modulus - 1, 0]),
+                    share_values: vec![modulus - 1, 0],
+                },
+            )
+            .unwrap();
+        alice.status = ParticipantStatus::SharesSubmitted;
+        assert_eq!(
+            alice
+                .create_masked_contribution(vec![i64::MIN, modulus - 1], modulus as u64)
+                .unwrap(),
+            vec![modulus - 1, modulus - 2]
+        );
+        assert_eq!(alice.status, ParticipantStatus::ContributionSubmitted);
+    }
+
+    #[test]
+    fn mismatched_share_dimensions_reject_before_masking_or_status_change() {
+        let mut alice = Participant::new(ParticipantId("alice".into()));
+        alice
+            .generate_secret_shares(&[ParticipantId("bob".into())], 1, 101, &mut thread_rng())
+            .unwrap();
+        alice
+            .receive_secret_share(
+                ParticipantId("charlie".into()),
+                SecretShare {
+                    recipient: alice.id.clone(),
+                    share_hash: Participant::compute_share_hash(&alice.id, &[1, 2]),
+                    share_values: vec![1, 2],
+                },
+            )
+            .unwrap();
+        assert!(matches!(
+            alice.create_masked_contribution(vec![100], 101),
+            Err(SecureAggregationError::InvalidDimension)
+        ));
+        assert_eq!(alice.status, ParticipantStatus::SharesSubmitted);
+        assert_eq!(
+            alice
+                .generated_shares
+                .values()
+                .next()
+                .unwrap()
+                .share_values
+                .len(),
+            1
+        );
+        assert_eq!(
+            alice.received_shares.values().next().unwrap().share_values,
+            [1, 2]
+        );
+    }
 
     #[test]
     fn participant_creation() {

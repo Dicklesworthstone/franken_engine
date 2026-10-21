@@ -1,14 +1,132 @@
 #![forbid(unsafe_code)]
-//! Integration tests for secure aggregation primitive (Bonawitz 2017)
-//! Demonstrates end-to-end cryptographic privacy where aggregator
-//! sees only the sum, not individual contributions.
+//! Public-API arithmetic tests for the Bonawitz 2017 aggregation track.
+//! These in-process round trips do not establish coordinator privacy.
 
 use dp::{
-    AggregationConfig, SecureAggregationSession,
+    AggregationConfig, SecureAggregationError, SecureAggregationSession,
     participant::{Participant, ParticipantId, ParticipantStatus},
     protocol::{AggregationProtocol, AggregationRound, MaskedContribution, SecurityParameters},
 };
 use rand::thread_rng;
+
+#[test]
+fn aggregate_sums_near_the_signed_field_limit_without_overflow() {
+    let modulus = i64::MAX;
+    let contributions = vec![
+        MaskedContribution::new(
+            ParticipantId("alice".into()),
+            vec![modulus - 1, modulus - 2],
+            Vec::new(),
+        ),
+        MaskedContribution::new(
+            ParticipantId("bob".into()),
+            vec![modulus - 1, modulus - 2],
+            Vec::new(),
+        ),
+    ];
+    let protocol = AggregationProtocol::new(SecurityParameters {
+        field_modulus: modulus as u64,
+        vector_dimension: 2,
+        ..SecurityParameters::default()
+    });
+    assert_eq!(
+        protocol
+            .aggregate_masked_contributions(contributions.clone())
+            .unwrap(),
+        vec![modulus - 2, modulus - 4]
+    );
+    let mut session = SecureAggregationSession::new(
+        "field-limit".into(),
+        AggregationConfig {
+            field_modulus: modulus as u64,
+            vector_dimension: 2,
+            ..AggregationConfig::default()
+        },
+    );
+    session.current_round = AggregationRound::ContributionSubmission;
+    let result = session.aggregate_contributions(contributions).unwrap();
+    assert_eq!(result, vec![modulus - 2, modulus - 4]);
+    assert_eq!(session.aggregated_result.as_ref(), Some(&result));
+    assert_eq!(session.current_round, AggregationRound::Unmasking);
+}
+
+#[test]
+fn invalid_moduli_are_rejected_even_for_empty_vectors() {
+    for modulus in [0, 1_u64 << 63, u64::MAX] {
+        let contribution =
+            MaskedContribution::new(ParticipantId("alice".into()), Vec::new(), Vec::new());
+        assert!(matches!(
+            contribution.verify_field_bounds(modulus),
+            Err(SecureAggregationError::ProtocolViolation(_))
+        ));
+        let protocol = AggregationProtocol::new(SecurityParameters {
+            field_modulus: modulus,
+            vector_dimension: 0,
+            min_participants: 0,
+            ..SecurityParameters::default()
+        });
+        assert!(matches!(
+            protocol.aggregate_masked_contributions(Vec::new()),
+            Err(SecureAggregationError::ProtocolViolation(_))
+        ));
+        let mut session = SecureAggregationSession::new(
+            "invalid-field".into(),
+            AggregationConfig {
+                field_modulus: modulus,
+                vector_dimension: 0,
+                min_participants: 0,
+                ..AggregationConfig::default()
+            },
+        );
+        session.current_round = AggregationRound::ContributionSubmission;
+        assert!(matches!(
+            session.aggregate_contributions(Vec::new()),
+            Err(SecureAggregationError::ProtocolViolation(_))
+        ));
+        assert_eq!(
+            session.current_round,
+            AggregationRound::ContributionSubmission
+        );
+        assert!(session.aggregated_result.is_none());
+    }
+}
+
+#[test]
+fn rejected_field_elements_leave_session_ready_for_a_valid_retry() {
+    let mut session = SecureAggregationSession::new(
+        "field-validation".into(),
+        AggregationConfig {
+            field_modulus: 101,
+            vector_dimension: 1,
+            min_participants: 1,
+            ..AggregationConfig::default()
+        },
+    );
+    session.current_round = AggregationRound::ContributionSubmission;
+    for invalid in [-1, 101, i64::MAX] {
+        let contribution =
+            MaskedContribution::new(ParticipantId("alice".into()), vec![invalid], Vec::new());
+        assert!(matches!(
+            session.aggregate_contributions(vec![contribution]),
+            Err(SecureAggregationError::ProtocolViolation(_))
+        ));
+        assert_eq!(
+            session.current_round,
+            AggregationRound::ContributionSubmission
+        );
+        assert!(session.aggregated_result.is_none());
+    }
+    assert_eq!(
+        session
+            .aggregate_contributions(vec![MaskedContribution::new(
+                ParticipantId("alice".into()),
+                vec![100],
+                Vec::new(),
+            )])
+            .unwrap(),
+        vec![100]
+    );
+}
 
 /// Arithmetic round-trip through real share exchange, masking and unmasking.
 /// This does not prove secrecy against a coordinator given individual masks.

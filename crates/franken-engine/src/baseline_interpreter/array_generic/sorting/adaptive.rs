@@ -13,6 +13,10 @@ use gallop::{AFTER_WINS, prefix_boundary, winning_span};
 // trimming can avoid copying an otherwise settled prefix or suffix into
 // scratch; no payload or index needs to move while proving those bounds.
 const MIN_TRIM_LENGTH: usize = gallop::MAX_SPAN;
+// Whole-input proofs avoid a setup cost on short arrays. The bitset fits in
+// the existing half-size scratch on every supported usize width.
+const MIN_WHOLE_DESCENDING_LENGTH: usize = gallop::MAX_SPAN;
+const BOUNDARY_WORD_BITS: usize = usize::BITS as usize;
 
 #[derive(Clone, Copy, Default)]
 struct Run {
@@ -45,7 +49,11 @@ pub(super) fn sort<E>(
     let mut pending = 0;
     let mut start = 0;
     while start < order.len() {
-        let len = normalize_run(&mut order[start..], compare)?;
+        let len = if start == 0 {
+            normalize_first_run(order, scratch, compare)?
+        } else {
+            normalize_run(&mut order[start..], compare)?
+        };
         runs[pending] = Run { start, len };
         pending += 1;
         start += len;
@@ -72,7 +80,18 @@ fn normalize_run<E>(
         return Ok(order.len());
     }
     let descending = compare(order[0], order[1])? == Ordering::Greater;
-    let mut end = 2;
+    finish_run(order, descending, 2, compare)
+}
+
+/// Continue the original strict-descending/nondecreasing run detector after
+/// comparisons the first-run probe has already performed. A rejected probe
+/// must not change the run partition or add any index movement on fallback.
+fn finish_run<E>(
+    order: &mut [usize],
+    descending: bool,
+    mut end: usize,
+    compare: &mut impl FnMut(usize, usize) -> Result<Ordering, E>,
+) -> Result<usize, E> {
     while end < order.len() {
         let ordering = compare(order[end - 1], order[end])?;
         if (ordering == Ordering::Greater) != descending {
@@ -84,6 +103,146 @@ fn normalize_run<E>(
         order[..end].reverse();
     }
     Ok(end)
+}
+
+/// A whole nonincreasing input with ties need not be split into equal-key
+/// runs and merged. Prove it once, without changing any index. The caller's
+/// initial identity order lets us emit the reversed GROUP order directly,
+/// preserving source order within each group rather than reversing it twice.
+/// Check that identity explicitly so arbitrary input permutations still work.
+///
+/// Strict boundaries occupy one bit per adjacent pair in the existing paid
+/// scratch, not a new allocation. Before the first changed comparison every
+/// word is uniform and can be reconstructed; all-equal and strictly descending
+/// inputs therefore retain their original comparison and scratch-write counts.
+/// Only the first run gets this probe. A miss resumes the original detector
+/// without rescanning its known prefix or changing its original run boundary.
+fn normalize_first_run<E>(
+    order: &mut [usize],
+    scratch: &mut [usize],
+    compare: &mut impl FnMut(usize, usize) -> Result<Ordering, E>,
+) -> Result<usize, E> {
+    if order.len() < MIN_WHOLE_DESCENDING_LENGTH || order[0] != 0 || order[1] != 1 {
+        return normalize_run(order, compare);
+    }
+    let first = compare(0, 1)?;
+    let descending = first == Ordering::Greater;
+    if first == Ordering::Less {
+        return finish_run(order, false, 2, compare);
+    }
+    let mut original_end = None;
+    let mut saved_from = None;
+    let mut bits = usize::from(descending);
+    for end in 2..order.len() {
+        if order[end] != end {
+            let Some(original_end) = original_end else {
+                return finish_run(order, descending, end, compare);
+            };
+            if descending {
+                order[..original_end].reverse();
+            }
+            return Ok(original_end);
+        }
+        let ordering = compare(end - 1, end)?;
+        if original_end.is_none() && (ordering == Ordering::Greater) != descending {
+            original_end = Some(end);
+        }
+        if ordering == Ordering::Less {
+            let Some(original_end) = original_end else {
+                return finish_run(order, false, end + 1, compare);
+            };
+            if descending {
+                order[..original_end].reverse();
+            }
+            return Ok(original_end);
+        }
+        let edge = end - 1;
+        let word = edge / BOUNDARY_WORD_BITS;
+        if ordering != first && saved_from.is_none() {
+            saved_from = Some(word);
+        }
+        if ordering == Ordering::Greater {
+            bits |= 1_usize << (edge % BOUNDARY_WORD_BITS);
+        }
+        if (edge + 1).is_multiple_of(BOUNDARY_WORD_BITS) {
+            if saved_from.is_some() {
+                scratch[word] = bits;
+            }
+            bits = 0;
+        }
+    }
+    let Some(saved_from) = saved_from else {
+        if descending {
+            order.reverse();
+        }
+        return Ok(order.len());
+    };
+    let last_edge = order.len() - 2;
+    if !(last_edge + 1).is_multiple_of(BOUNDARY_WORD_BITS) {
+        scratch[last_edge / BOUNDARY_WORD_BITS] = bits;
+    }
+    emit_descending_groups(order, scratch, saved_from, descending, compare)?;
+    Ok(order.len())
+}
+
+/// Find groups from the right using the boundary bitmap, then write their
+/// original source indices from left to right. No Value is cloned or moved.
+/// On a refusal the private index buffer may be unfinished, exactly as after
+/// a failed merge; sort_captured_values never applies it to the payloads.
+fn emit_descending_groups<E>(
+    order: &mut [usize],
+    boundaries: &[usize],
+    saved_from: usize,
+    initial_descending: bool,
+    compare: &mut impl FnMut(usize, usize) -> Result<Ordering, E>,
+) -> Result<(), E> {
+    let uniform = if initial_descending { usize::MAX } else { 0 };
+    let mut remaining = 0;
+    let mut output = 0;
+    let mut end = order.len();
+    while end != 0 {
+        let mut before = end - 1;
+        let mut start = 0;
+        while before != 0 {
+            descending_checkpoint(&mut remaining, end - 1, compare)?;
+            let word = (before - 1) / BOUNDARY_WORD_BITS;
+            let used = (before - 1) % BOUNDARY_WORD_BITS + 1;
+            let bits = if word < saved_from { uniform } else { boundaries[word] };
+            let bits = bits & (usize::MAX >> (BOUNDARY_WORD_BITS - used));
+            if bits != 0 {
+                start = word * BOUNDARY_WORD_BITS
+                    + (BOUNDARY_WORD_BITS - bits.leading_zeros() as usize);
+                break;
+            }
+            before = word * BOUNDARY_WORD_BITS;
+        }
+        for source in start..end {
+            descending_checkpoint(&mut remaining, source, compare)?;
+            order[output] = source;
+            output += 1;
+        }
+        end = start;
+    }
+    debug_assert_eq!(output, order.len());
+    Ok(())
+}
+
+/// Bitmap probes and index emission must not create an unmetered O(n) tail
+/// after the order proof. A self-comparison goes through the SAME fallible
+/// work/provenance gate at most 256 operations apart. Keys are immutable
+/// primitives here: this cannot invoke guest code, and its result is unused.
+/// The source is an original item index, not an entry in the rewriting order.
+fn descending_checkpoint<E>(
+    remaining: &mut usize,
+    source: usize,
+    compare: &mut impl FnMut(usize, usize) -> Result<Ordering, E>,
+) -> Result<(), E> {
+    if *remaining == 0 {
+        compare(source, source)?;
+        *remaining = gallop::MAX_SPAN;
+    }
+    *remaining -= 1;
+    Ok(())
 }
 
 fn merge_top<E>(
@@ -244,3 +403,6 @@ fn merge<E>(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod descending_tests;

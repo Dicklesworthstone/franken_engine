@@ -203,9 +203,9 @@
         (s.delay === Infinity || now() - s.crTime <= s.delay)) start = 1;
     s.afterCR = false;
     if (start === text.length) return;
-    // Most fragments of a long line contain no delimiter. Do not allocate a
-    // publication queue until this chunk actually completes its first line.
-    let lines;
+    // Keep the first completed line inline. Only multi-line chunks need a
+    // publication list, and that private list has no inherited indexed hooks.
+    let firstLine, lines;
     // Scan ONLY newly decoded text, using native search rather than one
     // interpreted charCodeAt call per code unit. Keep independent cursors:
     // recomputing a missing CR for every LF (or vice versa) would rescan the
@@ -218,9 +218,20 @@
     while (lf !== -1 || cr !== -1) {
       let at = lf === -1 || (cr !== -1 && cr < lf) ? cr : lf;
       const carriage = at === cr;
-      if (at > start) appendFragment(s.fragments, textSlice(text, start, at));
-      if (lines === undefined) lines = queue();
-      append(lines, joinFragments(s.fragments));
+      let line;
+      if (s.fragments.head === undefined && s.fragments.pending.length === 0) {
+        // A complete line in this chunk needs no fragment node, batch join
+        // or replacement scratch array. Slicing still preserves exact UTF-16.
+        line = textSlice(text, start, at);
+      } else {
+        if (at > start) appendFragment(s.fragments, textSlice(text, start, at));
+        line = joinFragments(s.fragments);
+      }
+      if (firstLine === undefined) firstLine = line;
+      else {
+        if (lines === undefined) lines = fragmentParts();
+        lines[lines.length] = line;
+      }
       if (carriage) {
         if (lf === at + 1) at++;
         else if (at + 1 === text.length) {
@@ -235,7 +246,18 @@
     if (start < text.length) appendFragment(s.fragments, textSlice(text, start));
     // close()/pause() in a line listener do not discard other complete lines
     // already received in this chunk, matching the documented Node contract.
-    while (lines !== undefined && lines.head !== undefined) publish(rl, take(lines));
+    if (firstLine !== undefined) {
+      const line = firstLine;
+      firstLine = undefined;
+      publish(rl, line);
+    }
+    for (let i = 0; lines !== undefined && i < lines.length; i++) {
+      const line = lines[i];
+      // Release each consumed string before guest code runs, as take() did.
+      // Do not shift the remaining entries or keep prior lines alive on reentry.
+      lines[i] = undefined;
+      publish(rl, line);
+    }
   }
   function Interface(input, output, completer, terminal) {
     if (!(this instanceof Interface)) return new Interface(input, output, completer, terminal);

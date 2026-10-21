@@ -232,11 +232,11 @@ fn end_to_end_privacy_preserving_fleet_learning() {
 #[test]
 fn privacy_budget_exhaustion_handling() {
     let epoch = SecurityEpoch::from_raw(1000);
-    let parameters = PrivacyParameters::new(2_000_000, 10).unwrap();
+    let parameters = PrivacyParameters::new(500_000, 10).unwrap();
     let mut aggregator = PrivacyPreservingAggregator::new(parameters, epoch);
     let node = NodeId::new("budget-node");
     aggregator
-        .initialize_node_budget(node.clone(), 3_000_000, 100)
+        .initialize_node_budget(node.clone(), 750_000, 100)
         .unwrap();
     let input = delta([-100_000, 0, 100_000, 0], 800_000, epoch);
     let mut noise = DeterministicTestNoiseGenerator::new();
@@ -244,7 +244,7 @@ fn privacy_budget_exhaustion_handling() {
         .make_delta_private(&node, input.clone(), "first".into(), &mut noise)
         .unwrap();
     let before = aggregator.get_node_budget(&node).unwrap().clone();
-    assert_eq!(before.remaining_epsilon(), 1_000_000);
+    assert_eq!(before.remaining_epsilon(), 250_000);
     assert_eq!(before.remaining_delta(), 90);
     assert_eq!(
         aggregator.make_delta_private(&node, input, "second".into(), &mut noise,),
@@ -252,17 +252,24 @@ fn privacy_budget_exhaustion_handling() {
     );
     assert_eq!(aggregator.get_node_budget(&node).unwrap(), &before);
 
+    // Re-initialization cannot mint a fresh budget for a node that spent it.
+    assert_eq!(
+        aggregator.initialize_node_budget(node.clone(), 3_000_000, 100),
+        Err(DifferentialPrivacyError::NodeBudgetAlreadyInitialized)
+    );
+    assert_eq!(aggregator.get_node_budget(&node).unwrap(), &before);
+
     // Delta is a separate composition limit even with epsilon remaining.
     let delta_limited = NodeId::new("delta-limited-node");
     aggregator
-        .initialize_node_budget(delta_limited.clone(), 6_000_000, 10)
+        .initialize_node_budget(delta_limited.clone(), 1_500_000, 10)
         .unwrap();
     let input = delta([-100_000, 0, 100_000, 0], 800_000, epoch);
     aggregator
         .make_delta_private(&delta_limited, input.clone(), "first".into(), &mut noise)
         .unwrap();
     let before = aggregator.get_node_budget(&delta_limited).unwrap().clone();
-    assert_eq!(before.remaining_epsilon(), 4_000_000);
+    assert_eq!(before.remaining_epsilon(), 1_000_000);
     assert_eq!(before.remaining_delta(), 0);
     assert_eq!(
         aggregator.make_delta_private(&delta_limited, input, "second".into(), &mut noise),

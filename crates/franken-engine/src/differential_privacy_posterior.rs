@@ -235,10 +235,19 @@ impl PrivacyBudget {
 
     /// Check if budget is sufficient for a proposed allocation.
     pub fn can_allocate(&self, params: &PrivacyParameters) -> bool {
-        self.consumed_epsilon_millionths + params.epsilon_millionths
-            <= self.total_epsilon_millionths
-            && self.consumed_delta_millionths + params.delta_millionths
-                <= self.total_delta_millionths
+        let Some(epsilon) = self
+            .consumed_epsilon_millionths
+            .checked_add(params.epsilon_millionths)
+        else {
+            return false;
+        };
+        let Some(delta) = self
+            .consumed_delta_millionths
+            .checked_add(params.delta_millionths)
+        else {
+            return false;
+        };
+        epsilon <= self.total_epsilon_millionths && delta <= self.total_delta_millionths
     }
 
     /// Allocate budget for a round (if sufficient budget exists).
@@ -731,14 +740,20 @@ impl PrivacyPreservingAggregator {
         total_epsilon_millionths: u64,
         total_delta_millionths: u64,
     ) -> Result<(), DifferentialPrivacyError> {
-        let budget = PrivacyBudget::new(
-            total_epsilon_millionths,
-            total_delta_millionths,
-            self.current_epoch,
-        )?;
-
-        self.node_budgets.insert(node_id, budget);
-        Ok(())
+        match self.node_budgets.entry(node_id) {
+            std::collections::btree_map::Entry::Occupied(_) => {
+                Err(DifferentialPrivacyError::NodeBudgetAlreadyInitialized)
+            }
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                let budget = PrivacyBudget::new(
+                    total_epsilon_millionths,
+                    total_delta_millionths,
+                    self.current_epoch,
+                )?;
+                entry.insert(budget);
+                Ok(())
+            }
+        }
     }
 
     /// Apply differential privacy to a posterior delta.
@@ -876,6 +891,8 @@ pub enum DifferentialPrivacyError {
     InsufficientBudget,
     /// Node budget not initialized.
     NodeBudgetNotFound,
+    /// An existing node's finite budget must not be reset by initialization.
+    NodeBudgetAlreadyInitialized,
     /// Duplicate round allocation attempted.
     DuplicateRoundAllocation,
     /// Empty aggregation (no deltas provided).
@@ -895,6 +912,7 @@ impl std::fmt::Display for DifferentialPrivacyError {
             Self::InvalidLearningRate => write!(f, "Invalid learning rate"),
             Self::InsufficientBudget => write!(f, "Insufficient privacy budget"),
             Self::NodeBudgetNotFound => write!(f, "Node budget not initialized"),
+            Self::NodeBudgetAlreadyInitialized => write!(f, "Node budget already initialized"),
             Self::DuplicateRoundAllocation => write!(f, "Duplicate round allocation"),
             Self::EmptyAggregation => write!(f, "Empty aggregation"),
             Self::InconsistentPrivacyParams => write!(f, "Inconsistent privacy parameters"),
@@ -949,6 +967,81 @@ mod tests {
             budget.allocate_for_round("round_1", params),
             Err(DifferentialPrivacyError::DuplicateRoundAllocation)
         );
+    }
+
+    #[test]
+    fn privacy_budget_composition_overflow_preserves_spent_state() {
+        let mut budget = PrivacyBudget::new(1_000_000, 100, SecurityEpoch::from_raw(1)).unwrap();
+        budget
+            .allocate_for_round("spent", PrivacyParameters::new(100_000, 10).unwrap())
+            .unwrap();
+        let spent = budget.clone();
+        // Public fields/serde input can carry values outside constructor bounds.
+        // Each addition must reject independently, without debug panic or wrap.
+        for params in [
+            PrivacyParameters {
+                epsilon_millionths: u64::MAX,
+                delta_millionths: 1,
+            },
+            PrivacyParameters {
+                epsilon_millionths: 1,
+                delta_millionths: u64::MAX,
+            },
+        ] {
+            assert!(!budget.can_allocate(&params));
+            assert_eq!(
+                budget.allocate_for_round("overflow", params),
+                Err(DifferentialPrivacyError::InsufficientBudget)
+            );
+            assert_eq!(budget, spent);
+        }
+        budget
+            .allocate_for_round("next-valid", PrivacyParameters::new(100_000, 10).unwrap())
+            .unwrap();
+        assert_eq!(budget.consumed_epsilon_millionths, 200_000);
+        assert_eq!(budget.consumed_delta_millionths, 20);
+        assert_eq!(budget.round_consumptions.len(), 2);
+    }
+
+    #[test]
+    fn privacy_budget_reinitialization_cannot_erase_spending() {
+        let epoch = SecurityEpoch::from_raw(1);
+        let parameters = PrivacyParameters::new(100_000, 10).unwrap();
+        let mut aggregator = PrivacyPreservingAggregator::new(parameters, epoch);
+        let node = NodeId::new("node");
+        aggregator
+            .initialize_node_budget(node.clone(), 200_000, 20)
+            .unwrap();
+        let initial = aggregator.get_node_budget(&node).unwrap().clone();
+        assert_eq!(
+            aggregator.initialize_node_budget(node.clone(), 1_000_000, 100),
+            Err(DifferentialPrivacyError::NodeBudgetAlreadyInitialized)
+        );
+        assert_eq!(aggregator.get_node_budget(&node), Some(&initial));
+        aggregator
+            .node_budgets
+            .get_mut(&node)
+            .unwrap()
+            .allocate_for_round("spent", parameters)
+            .unwrap();
+        let spent = aggregator.get_node_budget(&node).unwrap().clone();
+        assert_eq!(
+            aggregator.initialize_node_budget(node.clone(), 1_000_000, 100),
+            Err(DifferentialPrivacyError::NodeBudgetAlreadyInitialized)
+        );
+        assert_eq!(aggregator.get_node_budget(&node), Some(&spent));
+        let other = NodeId::new("other-node");
+        aggregator
+            .initialize_node_budget(other.clone(), 100_000, 10)
+            .unwrap();
+        assert_eq!(
+            aggregator
+                .get_node_budget(&other)
+                .unwrap()
+                .remaining_epsilon(),
+            100_000
+        );
+        assert_eq!(aggregator.get_node_budget(&node), Some(&spent));
     }
 
     #[test]

@@ -5,8 +5,10 @@
 //! failed candidate can be skipped: its capture/register writes would all be
 //! undone. Successful, unsupported, over-complex and unaffordable candidates
 //! still execute normally, including their exact partial refusal state.
+//! Class checks share the Run's bounded membership cache with VM execution;
+//! only memoized predicate bits change during analysis, never semantic state.
 
-use super::{BacktrackRegExp, Inst, Run, is_line_terminator, is_word_char};
+use super::{BacktrackRegExp, ClassMatches, Inst, Run, is_line_terminator, is_word_char};
 
 const MAX_PREFIX_INSTRUCTIONS: usize = 64;
 const MAX_PREFIX_CHECKS: usize = 8;
@@ -24,7 +26,13 @@ enum Predicate {
 }
 
 impl Predicate {
-    fn accepts(self, regexp: &BacktrackRegExp, chars: &[char], position: usize) -> bool {
+    fn accepts(
+        self,
+        regexp: &BacktrackRegExp,
+        chars: &[char],
+        position: usize,
+        classes: &mut ClassMatches,
+    ) -> bool {
         debug_assert!(position <= chars.len());
         match self {
             Self::Char(literal) => chars.get(position).is_some_and(|&c| {
@@ -36,7 +44,7 @@ impl Predicate {
             }),
             Self::Class(class) => chars
                 .get(position)
-                .is_some_and(|&c| regexp.class_matches(&regexp.classes[class], c)),
+                .is_some_and(|&c| classes.matches(regexp, class, c)),
             Self::Any => chars
                 .get(position)
                 .is_some_and(|&c| regexp.dot_all || !is_line_terminator(c)),
@@ -152,6 +160,28 @@ impl StartPrefix {
     /// The exact charge of a fully affordable rejection, otherwise no proof.
     /// Do not debit successful checks: the ordinary VM will execute them if
     /// this prefix cannot reject, and must still see its original allowance.
+    fn rejection_cost_with_cache(
+        &self,
+        regexp: &BacktrackRegExp,
+        chars: &[char],
+        start: usize,
+        budget: u64,
+        classes: &mut ClassMatches,
+    ) -> Option<u64> {
+        for check in &self.checks[..self.len] {
+            if check.cost > budget {
+                return None;
+            }
+            let position = start.checked_add(check.offset)?;
+            if !check.predicate.accepts(regexp, chars, position, classes) {
+                return Some(check.cost);
+            }
+        }
+        self.branch.as_ref()?.rejection_cost(regexp, chars, start, budget, classes)
+    }
+
+    /// Isolate cold-cache cost checks without replacing the production walk.
+    #[cfg(test)]
     fn rejection_cost(
         &self,
         regexp: &BacktrackRegExp,
@@ -159,16 +189,7 @@ impl StartPrefix {
         start: usize,
         budget: u64,
     ) -> Option<u64> {
-        for check in &self.checks[..self.len] {
-            if check.cost > budget {
-                return None;
-            }
-            let position = start.checked_add(check.offset)?;
-            if !check.predicate.accepts(regexp, chars, position) {
-                return Some(check.cost);
-            }
-        }
-        self.branch.as_ref()?.rejection_cost(regexp, chars, start, budget)
+        self.rejection_cost_with_cache(regexp, chars, start, budget, &mut ClassMatches::default())
     }
 }
 
@@ -184,6 +205,7 @@ impl BranchStart {
         chars: &[char],
         start: usize,
         budget: u64,
+        classes: &mut ClassMatches,
     ) -> Option<u64> {
         let mut alternatives = [(0_usize, 0_usize); MAX_PREFIX_ALTERNATIVES];
         let mut depth = 0;
@@ -246,7 +268,7 @@ impl BranchStart {
                 // counter/progress reads also require ordinary execution.
                 _ => return None,
             };
-            if predicate.accepts(regexp, chars, position) {
+            if predicate.accepts(regexp, chars, position, classes) {
                 position += usize::from(consumes);
                 pc = pc.checked_add(1)?;
             } else if depth == 0 {
@@ -265,8 +287,9 @@ impl Run<'_> {
         let count = (self.input.chars.len() - at).min(MAX_SKIP_BATCH);
         let mut missed = 0;
         while missed < count {
-            let Some(cost) = prefix.rejection_cost(
+            let Some(cost) = prefix.rejection_cost_with_cache(
                 self.regexp, &self.input.chars, at + missed, self.steps_left,
+                &mut self.class_matches,
             ) else {
                 break;
             };

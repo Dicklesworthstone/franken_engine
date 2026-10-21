@@ -197,3 +197,140 @@ fn mixed_character_step_directions_and_caller_frames_remain_unchanged() {
         }
     }
 }
+
+#[test]
+fn prefix_rejections_share_membership_with_candidate_execution() {
+    for (pattern, tail) in [
+        (r"[a-z](?=!)", "a!"),
+        (r"(?:[a-z]|[0-9])(?=!)", "5!"),
+        (r"[\p{L}\p{N}_](?=!)", "a!"),
+    ] {
+        let regexp = BacktrackRegExp::new(pattern, "u").unwrap();
+        let input = PreparedInput::new(&format!("{}{tail}", "!".repeat(8192)));
+        let mut actual = Run::new(&regexp, &input, 1_000_000);
+        let mut reference = Run::new(&regexp, &input, 1_000_000);
+        reference.class_matches.disabled = true;
+        let result = actual.search(0, false).unwrap().expect("matching tail");
+        assert_eq!(result[0], Some((8192, 8193)));
+        assert_eq!(Some(result), reference.search(0, false).unwrap());
+        assert_eq!(actual.steps_left, reference.steps_left);
+        assert_eq!(actual.slots, reference.slots);
+        assert_eq!(actual.registers, reference.registers);
+        assert_eq!(actual.candidate_executions, 1, "prefix must reject the long head");
+        assert_eq!(actual.candidate_executions, reference.candidate_executions);
+        assert!(actual.class_matches.evaluations <= regexp.classes.len() * 2 + 1, "{pattern}");
+        assert!(actual.class_matches.hits >= 8191, "{pattern}");
+        assert!(reference.class_matches.evaluations >= 8192, "{pattern}");
+    }
+}
+
+#[test]
+fn prefix_branches_collisions_and_nullable_exits_keep_refusal_state() {
+    for (pattern, flags) in [
+        (r"([a-z])(?=!)", ""),
+        (r"(?:([a-z])|([0-9]))(?=!)", ""),
+        (r"(?:[a]|[b]|[c]|[d]|[e]|[f])(?=!)", ""),
+        (r"([a-z]?)(?=!)", "i"),
+        (r"([a-z]??)(?=!)", "i"),
+        (r"(?:[a-z]|)(?=!)", ""),
+        (r"([a-z]+)\1(?=!)", "i"),
+        (r"[^a-z](?=!)", "i"),
+        (r"[\p{L}\p{N}_](?=!)", "u"),
+        (r"(?:[\p{L}]|[\p{N}])(?=!)", "u"),
+        (r"[a-z](?=!)", "iu"),
+    ] {
+        let regexp = BacktrackRegExp::new(pattern, flags).expect(pattern);
+        for text in ["", "!", "!!a!", "!e!7!", "aBaB!", "!K!é!", "\0\n!a!"] {
+            let input = PreparedInput::new(text);
+            for start in 0..=input.char_len() + 1 {
+                for budget in (0..=80).chain([127, 255, 4096]) {
+                    for sticky in [false, true] {
+                        compare(&regexp, &input, start, sticky, budget);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn prefix_affordability_and_eof_checks_precede_membership() {
+    let regexp = BacktrackRegExp::new("[a-z]", "").unwrap();
+    let input = PreparedInput::new("!a");
+    let prefix = super::super::StartPrefix::new(&regexp).unwrap();
+    let mut run = Run::new(&regexp, &input, 1);
+    // Save(0) and Class cost two instructions. An unaffordable class must
+    // not even populate the cache, and no candidate's writes are simulated.
+    assert_eq!(run.skip_prefix_misses(0, &prefix), 0);
+    assert_eq!(run.steps_left, 1);
+    assert_eq!(run.class_matches.evaluations, 0);
+    run.steps_left = 2;
+    assert_eq!(run.skip_prefix_misses(0, &prefix), 1);
+    assert_eq!(run.steps_left, 0);
+    assert_eq!(run.class_matches.evaluations, 1);
+    assert_eq!(run.skip_prefix_misses(1, &prefix), 0);
+    assert_eq!(run.class_matches.evaluations, 1);
+    run.steps_left = 1000;
+    assert_eq!(run.skip_prefix_misses(input.char_len(), &prefix), 0);
+    assert_eq!(run.class_matches.evaluations, 1);
+    assert_eq!(run.steps_left, 1000);
+    assert!(run.slots.iter().all(Option::is_none));
+    assert_eq!(run.stack.capacity(), 0);
+}
+
+#[test]
+fn successful_prefix_warms_execution_without_paying_its_instructions() {
+    let regexp = BacktrackRegExp::new("[a-z]", "").unwrap();
+    let input = PreparedInput::new("a");
+    let prefix = super::super::StartPrefix::new(&regexp).unwrap();
+    for budget in 2..=4 {
+        let mut actual = Run::new(&regexp, &input, budget);
+        let mut reference = Run::new(&regexp, &input, budget);
+        reference.class_matches.disabled = true;
+        assert_eq!(actual.skip_prefix_misses(0, &prefix), 0);
+        assert_eq!(actual.steps_left, budget, "no rejection was proved");
+        assert_eq!(actual.class_matches.evaluations, 1);
+        assert_eq!(actual.search(0, true), reference.search(0, true));
+        assert_eq!(actual.steps_left, reference.steps_left);
+        assert_eq!(actual.slots, reference.slots);
+        assert_eq!(actual.registers, reference.registers);
+        assert_eq!(actual.class_matches.evaluations, 1, "VM reuses prefix result");
+        assert_eq!(actual.class_matches.hits, 1);
+    }
+}
+
+#[test]
+fn prefix_unicode_fallback_preserves_warm_ascii_bits() {
+    let regexp = BacktrackRegExp::new(r"[a-z](?=!)", "iu").unwrap();
+    let input = PreparedInput::new(&format!("!{}k!", "é".repeat(32)));
+    let prefix = super::super::StartPrefix::new(&regexp).unwrap();
+    let mut run = Run::new(&regexp, &input, 1_000_000);
+    assert_eq!(run.skip_prefix_misses(0, &prefix), 33);
+    assert_eq!(run.class_matches.evaluations, 34, "two ASCII values and 32 scalars");
+    let before = run.class_matches.evaluations;
+    let budget = run.steps_left;
+    assert_eq!(run.skip_prefix_misses(0, &prefix), 33);
+    assert_eq!(run.class_matches.evaluations - before, 32, "Unicode remains uncached");
+    assert_eq!(budget - run.steps_left, 66, "same charge on warm/cold analysis");
+    let before = run.class_matches.evaluations;
+    assert_eq!(run.search(33, true).unwrap().unwrap()[0], Some((65, 66)));
+    assert_eq!(run.class_matches.evaluations, before, "accepted k survives Unicode misses");
+}
+
+#[test]
+fn prefix_and_execution_reuse_one_cache_across_searches_and_refusals() {
+    let regexp = BacktrackRegExp::new(r"(?:([a-z]+)|([0-9]))(?=!)", "iu").unwrap();
+    let input = PreparedInput::new("!!ab!7!K!e!");
+    for budget in (0..=192).chain([1024]) {
+        let mut actual = Run::new(&regexp, &input, budget);
+        let mut reference = Run::new(&regexp, &input, budget);
+        reference.class_matches.disabled = true;
+        for (start, sticky) in [(0, false), (5, false), (7, true), (9, false), (0, true), (usize::MAX, false), (0, false)] {
+            assert_eq!(actual.search(start, sticky), reference.search(start, sticky));
+            assert_eq!(actual.steps_left, reference.steps_left);
+            assert_eq!(actual.slots, reference.slots);
+            assert_eq!(actual.registers, reference.registers);
+            assert!(actual.stack.is_empty());
+        }
+    }
+}

@@ -84,6 +84,12 @@ enum Frame {
         position: usize,
         start: usize,
     },
+    /// Next whole-body lazy extension; its snapshot is saved on first resume.
+    CapturedLazy {
+        pc: usize,
+        position: usize,
+        start: usize,
+    },
     Slot {
         slot: usize,
         old: Option<usize>,
@@ -273,7 +279,11 @@ impl Run<'_> {
                         {
                             self.repeat_dispatches += 1;
                         }
-                        position = self.execute_captured_greedy(&captured, pc, position, stack)?;
+                        if captured.greedy {
+                            position = self.execute_captured_greedy(&captured, pc, position, stack)?;
+                        } else {
+                            stack.push(Frame::CapturedLazy { pc, position, start: position });
+                        }
                         pc = captured.exit;
                         continue;
                     }
@@ -491,6 +501,12 @@ impl Run<'_> {
                         Some(frame @ Frame::CapturedGreedy { .. }) => {
                             (pc, position) = self.resume_captured_greedy(frame, stack);
                             break;
+                        }
+                        Some(frame @ Frame::CapturedLazy { .. }) => {
+                            if let Some(next) = self.resume_captured_lazy(frame, stack)? {
+                                (pc, position) = next;
+                                break;
+                            }
                         }
                         Some(Frame::Alternative {
                             pc: resume,

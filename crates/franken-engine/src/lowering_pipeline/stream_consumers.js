@@ -13,17 +13,35 @@
   const apply = Reflect.apply;
   const push = Array.prototype.push;
   const join = Array.prototype.join;
-  const values = Array.prototype.values;
   const iterator = Symbol.iterator;
   const defineProperty = Object.defineProperty;
   const create = Object.create;
+  const setPrototype = Object.setPrototypeOf;
+
+  function privateList() {
+    // push/join are captured, but their indexed access still observes the
+    // receiver's prototype. Never expose private chunks to inherited setters
+    // or getters, including ones installed while a producer is suspended.
+    return setPrototype([], null);
+  }
 
   async function blob(stream) {
-    const parts = [];
-    // The private list must not consult a replaced Array iterator when Blob
-    // copies it. Chunk coercion itself remains observable, as for new Blob.
+    const parts = privateList();
+    // Own the complete cursor protocol, not just Symbol.iterator. Capturing
+    // Array.prototype.values alone still lets a replaced iterator-prototype
+    // next/return intercept this private list when Blob copies it. Caller
+    // chunk coercion and the source iterator remain observable and unchanged.
     const descriptor = create(null);
-    descriptor.value = values;
+    descriptor.value = function () {
+      const cursor = create(null);
+      let index = 0;
+      cursor.next = function () {
+        return index < parts.length
+          ? { value: parts[index++], done: false }
+          : { value: undefined, done: true };
+      };
+      return cursor;
+    };
     defineProperty(parts, iterator, descriptor);
     for await (const chunk of stream) apply(push, parts, [chunk]);
     return new BlobClass(parts);
@@ -41,8 +59,8 @@
 
   async function text(stream) {
     const decoder = new Decoder();
-    const parts = [];
-    const fragments = [];
+    const parts = privateList();
+    const fragments = privateList();
     let fragmentUnits = 0;
     // Retained metadata must follow output, not the number of reads. In
     // particular, empty input and incomplete UTF-8 prefixes produce no entry.

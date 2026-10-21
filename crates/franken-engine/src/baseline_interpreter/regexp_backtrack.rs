@@ -149,15 +149,26 @@ pub(super) enum CaptureRetention {
     WholeMatchExceptLast,
 }
 
+/// Scalars covered by one compact byte-coordinate checkpoint.
+///
+/// A u64 stores 32 two-bit UTF-8 widths; one u32 checkpoint records the
+/// byte offset at the start of that block. This keeps conversion work bounded
+/// while using 12 bytes per 32 scalars instead of four bytes per scalar.
+const OFFSET_BLOCK_SCALARS: usize = 32;
+
 /// Byte coordinates for decoded RegExp input.
 ///
-/// ASCII needs no table. Non-ASCII inputs whose complete UTF-8 byte length
-/// fits in u32 keep four-byte offsets even on 64-bit hosts; exceptionally
-/// large inputs retain the exact usize table. Matching code sees only the
-/// conversion methods below, so this changes storage width, not semantics.
+/// ASCII needs no table. Ordinary non-ASCII input stores one u32 checkpoint
+/// and one packed u64 width word per 32 scalars. Exceptionally large inputs
+/// retain the exact usize table. Matching code sees only the conversion
+/// methods below, so this changes storage width, not semantics.
 enum ByteOffsets {
     Identity,
-    U32(Vec<u32>),
+    Compact {
+        checkpoints: Vec<u32>,
+        widths: Vec<u64>,
+        byte_len: u32,
+    },
     Usize(Vec<usize>),
 }
 
@@ -181,20 +192,37 @@ impl PreparedInput {
         // non-ASCII input, without growing either vector during decoding.
         let count = text.chars().count();
         let mut chars = Vec::with_capacity(count);
-        if u32::try_from(text.len()).is_ok() {
-            let mut byte_offsets = Vec::with_capacity(count + 1);
-            for (offset, c) in text.char_indices() {
+        if let Ok(byte_len) = u32::try_from(text.len()) {
+            let blocks = count.div_ceil(OFFSET_BLOCK_SCALARS);
+            let mut checkpoints = Vec::with_capacity(blocks);
+            let mut widths = Vec::with_capacity(blocks);
+            let mut width_word = 0_u64;
+            for (index, (offset, c)) in text.char_indices().enumerate() {
+                if index % OFFSET_BLOCK_SCALARS == 0 {
+                    checkpoints.push(
+                        u32::try_from(offset)
+                            .expect("offset is bounded by the admitted text length"),
+                    );
+                    width_word = 0;
+                }
                 chars.push(c);
-                byte_offsets.push(
-                    u32::try_from(offset).expect("offset is bounded by the admitted text length"),
-                );
+                let lane = index % OFFSET_BLOCK_SCALARS;
+                let encoded_width = u64::from(c.len_utf8() as u8 - 1);
+                width_word |= encoded_width << (2 * lane);
+                if lane + 1 == OFFSET_BLOCK_SCALARS {
+                    widths.push(width_word);
+                }
             }
-            byte_offsets.push(
-                u32::try_from(text.len()).expect("text length was checked before decoding"),
-            );
+            if count % OFFSET_BLOCK_SCALARS != 0 {
+                widths.push(width_word);
+            }
             Self {
                 chars,
-                byte_offsets: ByteOffsets::U32(byte_offsets),
+                byte_offsets: ByteOffsets::Compact {
+                    checkpoints,
+                    widths,
+                    byte_len,
+                },
             }
         } else {
             let mut byte_offsets = Vec::with_capacity(count + 1);
@@ -222,9 +250,40 @@ impl PreparedInput {
                 // empty match at the end. Match the dense table's partition point.
                 byte.min(self.chars.len().saturating_add(1))
             }
-            ByteOffsets::U32(offsets) => offsets.partition_point(|&offset| {
-                usize::try_from(offset).unwrap_or(usize::MAX) < byte
-            }),
+            ByteOffsets::Compact {
+                checkpoints,
+                widths,
+                byte_len,
+            } => {
+                let total = usize::try_from(*byte_len).unwrap_or(usize::MAX);
+                if byte > total {
+                    return self.chars.len().saturating_add(1);
+                }
+                if byte == total {
+                    return self.chars.len();
+                }
+                let byte = u32::try_from(byte).expect("byte below compact total fits u32");
+                let block = checkpoints
+                    .partition_point(|&offset| offset <= byte)
+                    .saturating_sub(1);
+                let mut character = block * OFFSET_BLOCK_SCALARS;
+                let limit = (character + OFFSET_BLOCK_SCALARS).min(self.chars.len());
+                let mut current =
+                    usize::try_from(checkpoints[block]).unwrap_or(usize::MAX);
+                let word = widths[block];
+                while character < limit {
+                    if current >= usize::try_from(byte).unwrap_or(usize::MAX) {
+                        return character;
+                    }
+                    let lane = character % OFFSET_BLOCK_SCALARS;
+                    current += 1 + ((word >> (2 * lane)) & 3) as usize;
+                    character += 1;
+                    if current >= usize::try_from(byte).unwrap_or(usize::MAX) {
+                        return character;
+                    }
+                }
+                character
+            }
             ByteOffsets::Usize(offsets) => offsets.partition_point(|&offset| offset < byte),
         }
     }
@@ -233,8 +292,23 @@ impl PreparedInput {
         let index = char_index.min(self.chars.len());
         match &self.byte_offsets {
             ByteOffsets::Identity => index,
-            ByteOffsets::U32(offsets) => {
-                usize::try_from(offsets[index]).unwrap_or(usize::MAX)
+            ByteOffsets::Compact {
+                checkpoints,
+                widths,
+                byte_len,
+            } => {
+                if index == self.chars.len() {
+                    return usize::try_from(*byte_len).unwrap_or(usize::MAX);
+                }
+                let block = index / OFFSET_BLOCK_SCALARS;
+                let within = index % OFFSET_BLOCK_SCALARS;
+                let mut offset =
+                    usize::try_from(checkpoints[block]).unwrap_or(usize::MAX);
+                let word = widths[block];
+                for lane in 0..within {
+                    offset += 1 + ((word >> (2 * lane)) & 3) as usize;
+                }
+                offset
             }
             ByteOffsets::Usize(offsets) => offsets[index],
         }

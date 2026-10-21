@@ -102,13 +102,23 @@ fn preparation_retains_no_ascii_table_and_no_byte_sized_unicode_slack() {
         let text = scalar.repeat(4096);
         let input = PreparedInput::new(&text);
         assert_eq!(input.chars.capacity(), 4096);
-        let ByteOffsets::U32(offsets) = &input.byte_offsets else {
-            panic!("ordinary Unicode input should use compact offsets");
+        let ByteOffsets::Compact {
+            checkpoints,
+            widths,
+            byte_len,
+        } = &input.byte_offsets
+        else {
+            panic!("ordinary Unicode input should use packed offsets");
         };
-        assert_eq!(offsets.capacity(), 4097);
-        assert_eq!(
-            offsets.capacity() * std::mem::size_of::<u32>(),
-            4097 * std::mem::size_of::<u32>()
+        assert_eq!(checkpoints.len(), 4096 / OFFSET_BLOCK_SCALARS);
+        assert_eq!(widths.len(), checkpoints.len());
+        assert_eq!(usize::try_from(*byte_len).unwrap(), text.len());
+        let packed_bytes = checkpoints.len() * std::mem::size_of::<u32>()
+            + widths.len() * std::mem::size_of::<u64>();
+        let prior_u32_bytes = (4096 + 1) * std::mem::size_of::<u32>();
+        assert!(
+            packed_bytes * 10 < prior_u32_bytes,
+            "{packed_bytes} packed bytes vs {prior_u32_bytes} dense u32 bytes"
         );
         assert_eq!(input.byte_offset(4096), text.len());
     }
@@ -211,23 +221,65 @@ fn global_matches_keep_byte_spans_when_inputs_change_encoding() {
 fn compact_offsets_match_wide_oracle_at_u32_boundaries() {
     // Construct the representations directly so the wide fallback receives
     // coverage without materializing a multi-gigabyte guest string.
-    let compact = PreparedInput {
-        chars: vec!['a', 'é', '日', '😀'],
-        byte_offsets: ByteOffsets::U32(vec![0, 1, 3, 6, 10]),
-    };
+    let compact = PreparedInput::new("aé日😀");
     let wide = PreparedInput {
         chars: compact.chars.clone(),
         byte_offsets: ByteOffsets::Usize(vec![0, 1, 3, 6, 10]),
     };
+    assert!(matches!(compact.byte_offsets, ByteOffsets::Compact { .. }));
     for byte in (0..=12).chain([usize::MAX]) {
         assert_eq!(compact.char_index_at_byte(byte), wide.char_index_at_byte(byte));
     }
     for character in (0..=6).chain([usize::MAX]) {
         assert_eq!(compact.byte_offset(character), wide.byte_offset(character));
     }
+    let ByteOffsets::Compact {
+        checkpoints,
+        widths,
+        ..
+    } = &compact.byte_offsets
+    else {
+        panic!("mixed Unicode fixture must use packed offsets");
+    };
+    assert_eq!(checkpoints.len(), 1);
+    assert_eq!(widths.len(), 1);
     assert_eq!(
-        std::mem::size_of::<u32>() * 5,
-        20,
-        "compact table is four bytes per boundary"
+        checkpoints.len() * std::mem::size_of::<u32>()
+            + widths.len() * std::mem::size_of::<u64>(),
+        12,
+        "one 32-scalar block uses one checkpoint and one width word"
     );
+}
+
+
+#[test]
+fn packed_offsets_cross_every_block_boundary_exactly() {
+    let alphabet = ['a', 'é', '日', '😀'];
+    let text: String = (0..97).map(|index| alphabet[index % alphabet.len()]).collect();
+    let actual = PreparedInput::new(&text);
+    let reference = dense_input(&text);
+    let ByteOffsets::Compact {
+        checkpoints,
+        widths,
+        ..
+    } = &actual.byte_offsets
+    else {
+        panic!("mixed Unicode input must use packed offsets");
+    };
+    assert_eq!(checkpoints.len(), 4);
+    assert_eq!(widths.len(), 4);
+    for character in (0..=actual.char_len()).chain([usize::MAX]) {
+        assert_eq!(
+            actual.byte_offset(character),
+            reference.byte_offset(character),
+            "character={character}"
+        );
+    }
+    for byte in (0..=text.len() + 1).chain([usize::MAX]) {
+        assert_eq!(
+            actual.char_index_at_byte(byte),
+            reference.char_index_at_byte(byte),
+            "byte={byte}"
+        );
+    }
 }

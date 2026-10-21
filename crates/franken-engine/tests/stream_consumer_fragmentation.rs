@@ -91,3 +91,17 @@ fn esm_consumers_preserve_fragmented_text_and_failures() {
         run_case(index, true);
     }
 }
+
+#[test]
+fn commonjs_consumers_isolate_private_storage_without_hiding_caller_protocols() {
+    for index in 6..10 {
+        run_case(index, false);
+    }
+}
+
+#[test]
+fn esm_consumers_isolate_private_storage_without_hiding_caller_protocols() {
+    for index in 6..10 {
+        run_case(index, true);
+    }
+}

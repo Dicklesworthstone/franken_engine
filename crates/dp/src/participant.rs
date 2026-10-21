@@ -168,24 +168,36 @@ impl Participant {
         if input_vector.len() != self.get_expected_dimension()? {
             return Err(SecureAggregationError::InvalidDimension);
         }
+        if self
+            .generated_shares
+            .values()
+            .chain(self.received_shares.values())
+            .any(|share| share.share_values.len() != input_vector.len())
+        {
+            return Err(SecureAggregationError::InvalidDimension);
+        }
 
-        // Start with the input vector
-        let mut masked_contribution = input_vector;
+        let modulus = i128::from(field_modulus);
+        let mut masked_contribution: Vec<i64> = input_vector
+            .into_iter()
+            .map(|value| i128::from(value).rem_euclid(modulus) as i64)
+            .collect();
 
         // Add all shares this participant has generated for others (positive mask)
         for share in self.generated_shares.values() {
             for (i, &share_val) in share.share_values.iter().enumerate() {
-                masked_contribution[i] =
-                    (masked_contribution[i] + share_val) % field_modulus as i64;
+                masked_contribution[i] = (i128::from(masked_contribution[i])
+                    + i128::from(share_val))
+                    .rem_euclid(modulus) as i64;
             }
         }
 
         // Subtract all shares this participant has received from others (negative mask)
         for share in self.received_shares.values() {
             for (i, &share_val) in share.share_values.iter().enumerate() {
-                masked_contribution[i] = (masked_contribution[i] - share_val
-                    + field_modulus as i64)
-                    % field_modulus as i64;
+                masked_contribution[i] = (i128::from(masked_contribution[i])
+                    - i128::from(share_val))
+                    .rem_euclid(modulus) as i64;
             }
         }
 

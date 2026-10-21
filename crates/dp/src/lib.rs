@@ -1,9 +1,9 @@
 #![forbid(unsafe_code)]
-//! Secure aggregation primitive implementing Bonawitz et al. 2017
-//! "Practical Secure Aggregation for Privacy-Preserving Machine Learning"
+//! Masked-aggregation arithmetic prototype for the Bonawitz et al. 2017 track.
 //!
-//! This crate provides cryptographic secure aggregation where the aggregator
-//! can only see the sum of participant contributions, not individual values.
+//! The coordinator-owned participants and individual unmasking values do not
+//! provide threshold privacy against that coordinator. Distributed key custody,
+//! authenticated share exchange and dropout recovery remain under bd-cixqu.43.2.
 
 use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -119,25 +119,31 @@ impl SecureAggregationSession {
         if self.current_round != AggregationRound::ContributionSubmission {
             return Err(SecureAggregationError::InvalidRound);
         }
+        if self.config.field_modulus == 0 || self.config.field_modulus > i64::MAX as u64 {
+            return Err(SecureAggregationError::ProtocolViolation(
+                "Field modulus must fit a positive signed representation".into(),
+            ));
+        }
 
         // Verify we have enough contributions
         if contributions.len() < self.config.min_participants {
             return Err(SecureAggregationError::InsufficientContributions);
         }
 
-        // Validate contribution dimensions
+        // Validate every contribution before changing the session state.
         for contribution in &contributions {
-            if contribution.masked_values.len() != self.config.vector_dimension {
-                return Err(SecureAggregationError::InvalidDimension);
-            }
+            contribution.verify_dimension(self.config.vector_dimension)?;
+            contribution.verify_field_bounds(self.config.field_modulus)?;
         }
 
         // Aggregate the masked values
         let mut aggregated = vec![0i64; self.config.vector_dimension];
         for contribution in &contributions {
             for (i, &value) in contribution.masked_values.iter().enumerate() {
-                // Use modular arithmetic to prevent overflow
-                aggregated[i] = (aggregated[i] + value) % self.config.field_modulus as i64;
+                // Widen before adding; reduction after i64 addition is too late.
+                aggregated[i] = (i128::from(aggregated[i]) + i128::from(value))
+                    .rem_euclid(i128::from(self.config.field_modulus))
+                    as i64;
             }
         }
 

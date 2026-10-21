@@ -56,6 +56,11 @@ impl MaskedContribution {
 
     /// Check if values are within the expected field modulus
     pub fn verify_field_bounds(&self, field_modulus: u64) -> Result<()> {
+        if field_modulus == 0 || field_modulus > i64::MAX as u64 {
+            return Err(SecureAggregationError::ProtocolViolation(
+                "Field modulus must fit a positive signed representation".into(),
+            ));
+        }
         for &value in &self.masked_values {
             if value < 0 || value >= field_modulus as i64 {
                 return Err(SecureAggregationError::ProtocolViolation(
@@ -114,6 +119,14 @@ impl AggregationProtocol {
 
     /// Validate a set of masked contributions
     pub fn validate_contributions(&self, contributions: &[MaskedContribution]) -> Result<()> {
+        // Validate the modulus even for empty or zero-dimensional inputs.
+        if self.security_params.field_modulus == 0
+            || self.security_params.field_modulus > i64::MAX as u64
+        {
+            return Err(SecureAggregationError::ProtocolViolation(
+                "Field modulus must fit a positive signed representation".into(),
+            ));
+        }
         if contributions.len() < self.security_params.min_participants {
             return Err(SecureAggregationError::InsufficientContributions);
         }
@@ -137,7 +150,9 @@ impl AggregationProtocol {
 
         for contribution in contributions {
             for (i, &value) in contribution.masked_values.iter().enumerate() {
-                aggregated[i] = (aggregated[i] + value) % self.security_params.field_modulus as i64;
+                aggregated[i] = (i128::from(aggregated[i]) + i128::from(value))
+                    .rem_euclid(i128::from(self.security_params.field_modulus))
+                    as i64;
             }
         }
 

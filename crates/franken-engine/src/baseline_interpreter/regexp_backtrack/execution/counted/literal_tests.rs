@@ -47,13 +47,13 @@ fn counted_literal_recognition_requires_the_complete_bounded_body() {
     }
     for pattern in ["(?:ab){17}", "(?:abc){18}?", "((?:abcd){17})", "(?<=(?:ab){17})x",
         "(?:ab){17,20}", "(?:ab){17,20}?", "(?:abc){0,32}?", "(?:ab){17,}",
-        "(?<=(?:ab){17,20}?)x"] {
+        "(?<=(?:ab){17,20}?)x", "(?:a[bc]){17}", "(?:a.){17}"] {
         let regexp = BacktrackRegExp::new(pattern, "").unwrap();
         assert!((0..regexp.program.len()).any(|pc| {
             CountedRepeat::at(&regexp, pc).is_some_and(|repeat| repeat.width > 1)
         }), "{pattern}");
     }
-    for pattern in ["(ab){17}", "(?:ab|cd){17}", "(?:ab?){17}", "(?:a[bc]){17}", "(?:a.){17}"] {
+    for pattern in ["(ab){17}", "(?:ab|cd){17}", "(?:ab?){17}"] {
         let regexp = BacktrackRegExp::new(pattern, "").unwrap();
         assert!((0..regexp.program.len()).all(|pc| CountedRepeat::at(&regexp, pc).is_none()), "{pattern}");
     }

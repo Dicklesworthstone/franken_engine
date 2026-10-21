@@ -1,4 +1,4 @@
-//! Constant-space execution of counted atoms and fixed-width literal bodies.
+//! Constant-space execution of counted atoms and fixed-width consuming bodies.
 //!
 //! Recognize the compiler's exact CountedLoop/Mark/atom/CounterStep/Jump
 //! shape. Two register undo frames retain the mandatory prefix. Optional
@@ -20,6 +20,9 @@ enum Atom {
     Any,
     /// First instruction of a complete, bounded literal block.
     Literal(usize),
+    /// First instruction of a bounded Char/Class/Any sequence. Its width and
+    /// direction are retained by CountedRepeat, not by each saved choice.
+    Sequence(usize),
 }
 
 pub(super) struct CountedRepeat {
@@ -43,8 +46,9 @@ impl CountedRepeat {
         };
         let end = exit.checked_sub(2)?;
         let width = end.checked_sub(first)?;
-        // The shared literal block is the only multi-character matcher. Do
-        // not accept an over-wide prefix and mistake it for the whole body.
+        // Validate the COMPLETE body. The same existing width bound applies
+        // to literal blocks and mixed consuming sequences; no truncated
+        // prefix can stand in for the loop's body.
         if width == 0 || width > LITERAL_WIDTH || *exit >= regexp.program.len() {
             return None;
         }
@@ -67,14 +71,20 @@ impl CountedRepeat {
         }
         let (atom, backward) = match regexp.program.get(first)? {
             Inst::Char { backward, .. } if width > 1 => {
-                if !regexp.program[first..end].iter().all(|instruction| {
+                if regexp.program[first..end].iter().all(|instruction| {
                     matches!(instruction, Inst::Char { backward: direction, .. }
                         if direction == backward)
-                })
-                {
-                    return None;
+                }) {
+                    // Keep literal recognition and its existing cache fast.
+                    (Atom::Literal(first), *backward)
+                } else {
+                    let backward = fixed_body_direction(regexp, first, width)?;
+                    (Atom::Sequence(first), backward)
                 }
-                (Atom::Literal(first), *backward)
+            }
+            Inst::Class { .. } | Inst::Any { .. } if width > 1 => {
+                let backward = fixed_body_direction(regexp, first, width)?;
+                (Atom::Sequence(first), backward)
             }
             Inst::Char { c, backward } => {
                 let literal = if regexp.ignore_case { regexp.canonicalize(*c) } else { *c };
@@ -112,7 +122,9 @@ impl CountedRepeat {
             }
             Atom::Class(class) => classes.matches(regexp, class, c),
             Atom::Any => regexp.dot_all || !is_line_terminator(c),
-            Atom::Literal(_) => unreachable!("literal bodies use the shared block matcher"),
+            Atom::Literal(_) | Atom::Sequence(_) => {
+                unreachable!("multi-character bodies use their whole-body matcher")
+            }
         }
     }
 
@@ -154,17 +166,27 @@ impl Run<'_> {
         position: usize,
     ) -> Result<Option<usize>, BacktrackError> {
         debug_assert!(position <= self.input.chars.len());
-        if let Atom::Literal(body) = repeat.atom {
+        if let Atom::Literal(body) | Atom::Sequence(body) = repeat.atom {
             pay(&mut self.steps_left)?; // Mark
             let old_mark = self.registers[repeat.mark];
             self.registers[repeat.mark] = position;
-            pay(&mut self.steps_left)?; // First Char
-            let block = self.literal_blocks.at(self.regexp, body)
-                .expect("a complete bounded literal body was proved before execution");
-            debug_assert_eq!(block.len, repeat.width);
-            let Some(next) = block.execute_after_dispatch(
-                self.regexp, &self.input.chars, position, &mut self.steps_left,
-            )? else {
+            pay(&mut self.steps_left)?; // First consuming instruction
+            let next = match repeat.atom {
+                Atom::Literal(_) => {
+                    let block = self.literal_blocks.at(self.regexp, body)
+                        .expect("a complete bounded literal body was proved before execution");
+                    debug_assert_eq!(block.len, repeat.width);
+                    block.execute_after_dispatch(
+                        self.regexp, &self.input.chars, position, &mut self.steps_left,
+                    )?
+                }
+                Atom::Sequence(_) => execute_fixed_body_after_dispatch(
+                    self.regexp, body..body + repeat.width, repeat.backward,
+                    &self.input.chars, position, &mut self.steps_left, &mut self.class_matches,
+                )?,
+                _ => unreachable!("only a multi-character body enters this path"),
+            };
+            let Some(next) = next else {
                 self.registers[repeat.mark] = old_mark;
                 return Ok(None);
             };
@@ -321,6 +343,73 @@ impl Run<'_> {
     }
 }
 
+/// Prove a whole fixed-width body of consuming atoms. Captures, assertions,
+/// alternatives, nullable instructions and mixed directions remain scalar.
+/// Recognition is bounded by the existing literal width, with no new cache.
+pub(super) fn fixed_body_direction(
+    regexp: &BacktrackRegExp,
+    first: usize,
+    width: usize,
+) -> Option<bool> {
+    if !(2..=LITERAL_WIDTH).contains(&width) {
+        return None;
+    }
+    let instructions = regexp.program.get(first..first.checked_add(width)?)?;
+    let direction = |instruction: &Inst| match instruction {
+        Inst::Char { backward, .. } | Inst::Any { backward } => Some(*backward),
+        Inst::Class { class, backward } if *class < regexp.classes.len() => Some(*backward),
+        _ => None,
+    };
+    let backward = direction(instructions.first()?)?;
+    instructions.iter().all(|instruction| direction(instruction) == Some(backward))
+        .then_some(backward)
+}
+
+/// Match the already-proved mixed body in instruction order. Only its first
+/// instruction is prepaid. Each remaining instruction is paid BEFORE reading
+/// input, even at EOF; failure and refusal therefore retain scalar boundaries.
+/// Reuse the Run's existing class predicate cache; do not add another cache.
+/// This routine owns no register/capture writes or choice frames.
+/// The enclosing loop owns its Mark and all rollback/publication decisions.
+pub(super) fn execute_fixed_body_after_dispatch(
+    regexp: &BacktrackRegExp,
+    body: std::ops::Range<usize>,
+    backward: bool,
+    chars: &[char],
+    mut position: usize,
+    steps_left: &mut u64,
+    classes: &mut ClassMatches,
+) -> Result<Option<usize>, BacktrackError> {
+    debug_assert!(position <= chars.len());
+    debug_assert!((2..=LITERAL_WIDTH).contains(&body.len()));
+    for (offset, instruction) in regexp.program[body].iter().enumerate() {
+        if offset != 0 {
+            pay(steps_left)?;
+        }
+        let index = if backward { position.checked_sub(1) } else { Some(position) };
+        let Some(&input) = index.and_then(|index| chars.get(index)) else {
+            return Ok(None);
+        };
+        let accepts = match instruction {
+            Inst::Char { c, .. } => {
+                if regexp.ignore_case {
+                    regexp.canonicalize(input) == regexp.canonicalize(*c)
+                } else {
+                    input == *c
+                }
+            }
+            Inst::Class { class, .. } => classes.matches(regexp, *class, input),
+            Inst::Any { .. } => regexp.dot_all || !is_line_terminator(input),
+            _ => unreachable!("the complete fixed-width body was proved before execution"),
+        };
+        if !accepts {
+            return Ok(None);
+        }
+        position = if backward { position - 1 } else { position + 1 };
+    }
+    Ok(Some(position))
+}
+
 fn pay(steps_left: &mut u64) -> Result<(), BacktrackError> {
     if *steps_left == 0 {
         Err(BacktrackError::StepBudget)
@@ -341,3 +430,6 @@ mod lazy_tests;
 
 #[cfg(test)]
 mod literal_tests;
+
+#[cfg(test)]
+mod mixed_tests;

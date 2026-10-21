@@ -172,6 +172,33 @@ impl Run<'_> {
         position: usize,
     ) -> Result<Option<usize>, BacktrackError> {
         let count = repeat.to - repeat.from;
+        // Mark, Clear (+ every slot), opening/closing Saves, and the body.
+        // The recognized body cannot read captures, branch or call guest code.
+        // When all of it is affordable, publish only its final captures: no
+        // snapshot, clearing or opening-Save writes are observable in between.
+        let complete_cost = 2 + 2 * count + repeat.width;
+        if self.steps_left < complete_cost as u64 {
+            return self.advance_captured_iteration_precise(repeat, position);
+        }
+        self.charge(3 + count + count / 2)?; // through the first body instruction
+        let next = self.match_captured_atom(repeat, position)?;
+        if let Some(next) = next {
+            self.charge(count / 2)?; // all closing Saves, now proved affordable
+            repeat.restore_iteration(self, next);
+        }
+        // On mismatch the old state was never touched, exactly as if this
+        // iteration's undo records had been unwound. Pay only the failed path.
+        Ok(next)
+    }
+
+    /// A short allowance needs each individual write/refusal boundary. This
+    /// is also the reference for the affordable-body path in focused tests.
+    fn advance_captured_iteration_precise(
+        &mut self,
+        repeat: &CapturedRepeat,
+        position: usize,
+    ) -> Result<Option<usize>, BacktrackError> {
+        let count = repeat.to - repeat.from;
         let old_mark = self.registers[repeat.register];
         let mut old_slots = [None; MAX_CAPTURE_SLOTS];
         old_slots[..count].copy_from_slice(&self.slots[repeat.from..repeat.to]);
@@ -185,13 +212,31 @@ impl Run<'_> {
             self.slots[repeat.from + group * 2 + usize::from(repeat.backward)] = Some(position);
         }
         self.charge(1)?; // first body instruction
+        let Some(next) = self.match_captured_atom(repeat, position)? else {
+            self.registers[repeat.register] = old_mark;
+            self.slots[repeat.from..repeat.to].copy_from_slice(&old_slots[..count]);
+            return Ok(None);
+        };
+        for group in 0..count / 2 {
+            self.charge(1)?; // closing Save, inner to outer
+            self.slots[repeat.to - 2 - group * 2 + usize::from(!repeat.backward)] = Some(next);
+        }
+        Ok(Some(next))
+    }
+
+    /// First consuming instruction is already paid by either capture path.
+    fn match_captured_atom(
+        &mut self,
+        repeat: &CapturedRepeat,
+        position: usize,
+    ) -> Result<Option<usize>, BacktrackError> {
         let regexp = self.regexp;
-        let next = if repeat.width > 1 {
+        if repeat.width > 1 {
             self.literal_blocks.at(regexp, repeat.body)
                 .expect("the immutable bounded literal body was proved")
-                .execute_after_dispatch(regexp, &self.input.chars, position, &mut self.steps_left)?
+                .execute_after_dispatch(regexp, &self.input.chars, position, &mut self.steps_left)
         } else {
-            match &regexp.program[repeat.body] {
+            Ok(match &regexp.program[repeat.body] {
                 Inst::Char { c, backward } => self.step(position, *backward, |input| {
                     if regexp.ignore_case {
                         regexp.canonicalize(input) == regexp.canonicalize(*c)
@@ -202,18 +247,8 @@ impl Run<'_> {
                     regexp.dot_all || !is_line_terminator(input)
                 }),
                 _ => unreachable!("a captured body contains only proved consuming atoms"),
-            }
-        };
-        let Some(next) = next else {
-            self.registers[repeat.register] = old_mark;
-            self.slots[repeat.from..repeat.to].copy_from_slice(&old_slots[..count]);
-            return Ok(None);
-        };
-        for group in 0..count / 2 {
-            self.charge(1)?; // closing Save, inner to outer
-            self.slots[repeat.to - 2 - group * 2 + usize::from(!repeat.backward)] = Some(next);
+            })
         }
-        Ok(Some(next))
     }
 
     fn advance_captured_body(
@@ -377,3 +412,6 @@ mod tests;
 
 #[cfg(test)]
 mod counted_tests;
+
+#[cfg(test)]
+mod body_tests;

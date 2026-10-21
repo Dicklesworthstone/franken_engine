@@ -54,6 +54,8 @@ use std::collections::{BTreeMap, BTreeSet};
 mod fs_module;
 #[path = "stream_operators.rs"]
 mod stream_operators;
+#[path = "zlib_module.rs"]
+mod zlib_module;
 #[path = "native_module_loader.rs"]
 mod native_module_loader;
 #[cfg(test)]
@@ -115,6 +117,7 @@ enum PureModule {
     Vm,
     Buffer,
     Querystring,
+    Zlib,
     DiagnosticsChannel,
     StreamConsumers,
     WebStreams,
@@ -134,6 +137,7 @@ impl PureModule {
             Self::Vm => VM_MODULE_BINDING,
             Self::Buffer => BUFFER_MODULE_BINDING,
             Self::Querystring => QUERYSTRING_MODULE_BINDING,
+            Self::Zlib => zlib_module::BINDING,
             Self::DiagnosticsChannel => DIAGNOSTICS_CHANNEL_BINDING,
             Self::Stream => STREAM_MODULE_BINDING,
             Self::StreamConsumers => STREAM_CONSUMERS_BINDING,
@@ -162,7 +166,8 @@ pub(super) fn intrinsic_capability(name: &str) -> Option<&'static str> {
         "%TimersPromisesSetInterval" => Some("builtin:TimersPromisesSetInterval"),
         "%StreamNextTick" => Some("builtin:ProcessNextTick"),
         "%QuerystringModule" => Some("builtin:QuerystringModule"),
-        _ => fs_module::intrinsic_capability(name),
+        _ => fs_module::intrinsic_capability(name)
+            .or_else(|| zlib_module::intrinsic_capability(name)),
     }
 }
 
@@ -314,6 +319,8 @@ fn builtin_require_member(expression: &Expression) -> Option<(PureModule, Option
         Some((PureModule::Buffer, None))
     } else if *specifier == "querystring" || *specifier == "node:querystring" {
         Some((PureModule::Querystring, None))
+    } else if *specifier == "zlib" || *specifier == "node:zlib" {
+        Some((PureModule::Zlib, None))
     } else if *specifier == "diagnostics_channel" || *specifier == "node:diagnostics_channel" {
         Some((PureModule::DiagnosticsChannel, None))
     } else if *specifier == "stream" || *specifier == "node:stream" {
@@ -511,6 +518,7 @@ pub(super) fn is_module_declaration(statement: &Statement) -> bool {
                     || name == WEB_STREAMS_BINDING
                     || name == BUFFER_MODULE_BINDING
                     || name == QUERYSTRING_MODULE_BINDING
+                    || name == zlib_module::BINDING
             )
     )
 }
@@ -569,6 +577,7 @@ fn rewrite_module_objects(
     };
     if !root.contains("require") {
         claimed.extend(facade_claimed_events_declarators(&tree.body));
+        claimed.extend(zlib_module::claimed_declarators(&tree.body));
     }
     for (index, statement) in rewritten.body.iter_mut().enumerate() {
         let held = take_claimed_initializers(statement, index, &claimed);
@@ -911,6 +920,8 @@ fn module_syntax_source(module: PureModule) -> &'static NativeModuleSource {
     static BUFFER: NativeModuleSource = NativeModuleSource::new("franken:buffer", BUFFER_SOURCE);
     static QUERYSTRING: NativeModuleSource =
         NativeModuleSource::new("franken:querystring", QUERYSTRING_SOURCE);
+    static ZLIB: NativeModuleSource =
+        NativeModuleSource::new("franken:zlib", zlib_module::SOURCE);
     static STREAM: NativeModuleSource = NativeModuleSource::new("franken:stream", STREAM_SOURCE);
     static CONSUMERS: NativeModuleSource =
         NativeModuleSource::new("franken:stream/consumers", STREAM_CONSUMERS_SOURCE);
@@ -927,6 +938,7 @@ fn module_syntax_source(module: PureModule) -> &'static NativeModuleSource {
         PureModule::Vm => &VM,
         PureModule::Buffer => &BUFFER,
         PureModule::Querystring => &QUERYSTRING,
+        PureModule::Zlib => &ZLIB,
         PureModule::Stream => &STREAM,
         PureModule::StreamConsumers => &CONSUMERS,
         PureModule::WebStreams => &WEB_STREAMS,
@@ -955,6 +967,7 @@ fn module_source(
         PureModule::Vm => &VM_GLOBALS,
         PureModule::Buffer => &BUFFER_GLOBALS,
         PureModule::Querystring => &[],
+        PureModule::Zlib => &zlib_module::GLOBALS,
         PureModule::Stream => &STREAM_GLOBALS,
         PureModule::StreamConsumers => &STREAM_CONSUMERS_GLOBALS,
         PureModule::WebStreams => &WEB_STREAMS_GLOBALS,
@@ -986,6 +999,7 @@ impl Walk for ModuleRenamer {
                 .chain(READLINE_PLACEHOLDERS.iter())
                 .chain(BUFFER_PLACEHOLDERS.iter())
                 .chain(QUERYSTRING_PLACEHOLDERS.iter())
+                .chain(zlib_module::PLACEHOLDERS.iter())
                 .find(|(placeholder, _)| placeholder == name)
             {
                 *name = (*intrinsic).to_string();
@@ -1235,6 +1249,7 @@ mod tests {
             (PureModule::Vm, "franken:vm", VM_SOURCE),
             (PureModule::Buffer, "franken:buffer", BUFFER_SOURCE),
             (PureModule::Querystring, "franken:querystring", QUERYSTRING_SOURCE),
+            (PureModule::Zlib, "franken:zlib", zlib_module::SOURCE),
             (PureModule::Stream, "franken:stream", STREAM_SOURCE),
             (PureModule::StreamConsumers, "franken:stream/consumers", STREAM_CONSUMERS_SOURCE),
             (PureModule::WebStreams, "franken:stream/web", WEB_STREAMS_SOURCE),

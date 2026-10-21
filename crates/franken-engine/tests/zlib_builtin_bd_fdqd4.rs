@@ -186,18 +186,13 @@ fn node_specifier_and_nested_parameter_shadowing_are_preserved() {
 }
 
 #[test]
-fn unsupported_or_unconsumed_module_aliases_remain_fail_closed() {
+fn dynamic_and_unknown_zlib_module_loads_remain_fail_closed() {
+    // Literal module values are now implemented, not ambient-loader grants.
+    // zlib_module_exports.rs positively covers the formerly refused values,
+    // computed/detached methods, shadowing, mutation and constants protection.
     for source in [
-        "const zlib = require('zlib'); zlib;",
-        "const zlib = require('zlib'); zlib.unsupportedMethod('x');",
-        "const zlib = require('zlib'); zlib['gzipSync']('x');",
         "const name = 'zlib'; require(name).gzipSync('x');",
-        "const zlib = require('zlib'); { const zlib = { gzipSync: (x) => x }; zlib.gzipSync('x'); }",
-        "let zlib = require('zlib'); zlib = { gzipSync: (x) => x }; zlib.gzipSync('x');",
-        "const zlib = require('zlib'); zlib.gzipSync = (x) => x; zlib.gzipSync('x');",
-        "const zlib = require('zlib'); zlib.constants = {}; zlib.gzipSync('x');",
-        "const zlib = require('zlib'); zlib.constants.Z_BEST_COMPRESSION = 1; console.log(zlib.constants.Z_BEST_COMPRESSION);",
-        "const zlib = require('zlib'); consume(zlib); zlib.gzipSync('x');",
+        "require('zlib/unknown');",
     ] {
         let error = eval_error(source);
         assert!(

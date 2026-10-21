@@ -34,7 +34,7 @@
 //!
 //! The last form is for the modules whose facade recognizes member calls on
 //! an alias but no destructured binding (crypto, os, querystring,
-//! timers/promises, zlib). A named export that is a realm global (Buffer,
+//! timers/promises). A named export that is a realm global (Buffer,
 //! URL, performance, the timers) is that global. A binding the program never
 //! names is dropped, so an unused import does not keep a facade from
 //! recognizing the others. Forms the facades do not recognize keep failing
@@ -88,8 +88,9 @@ const GLOBAL_EXPORTS: [(&str, &[&str]); 3] = [
 ];
 
 /// Modules whose facade lowers member calls on an alias but recognizes no
-/// destructured binding.
-const MEMBER_MODULES: [&str; 4] = ["crypto", "os", "querystring", "zlib"];
+/// destructured binding. Zlib uses ordinary import bindings: replacing a
+/// public namespace property must not redirect a previously imported function.
+const MEMBER_MODULES: [&str; 3] = ["crypto", "os", "querystring"];
 
 /// Aliases the member rewrite declares. No source text can spell a `%` name.
 const ALIAS_PREFIX: &str = "%core_import_";

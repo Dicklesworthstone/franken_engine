@@ -9856,9 +9856,10 @@ fn try_parse_assignment(
             let Some((operator, len)) = match_assignment_operator_at(bytes, index) else {
                 return;
             };
-            if !expr[..index].trim().is_empty() && !expr[index + len..].trim().is_empty() {
-                assignment = Some((operator, index, len));
-            }
+            // A recognized operator owns this expression even when an operand
+            // is missing. Let recursive parsing reject that operand instead of
+            // falling through to a Raw expression that lowering can execute.
+            assignment = Some((operator, index, len));
         },
     );
     if !complete {
@@ -22489,6 +22490,36 @@ strict"; var static = 1; }"#,
             }
             other => panic!("expected Assignment, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn assignment_requires_both_operands() {
+        let parser = CanonicalEs2020Parser;
+        for operator in [
+            "=", "+=", "-=", "*=", "/=", "%=", "**=", "<<=", ">>=", ">>>=", "&=", "|=", "^=",
+            "&&=", "||=", "??=",
+        ] {
+            for source in [
+                format!("value {operator};"),
+                format!("{operator} 1;"),
+                format!("value {operator} /* missing value */;"),
+            ] {
+                let error = parser
+                    .parse(source.as_str(), ParseGoal::Script)
+                    .expect_err("an assignment with a missing operand must fail during parsing");
+                assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source}");
+            }
+            let source = format!("value {operator} 1;");
+            let tree = parser
+                .parse(source.as_str(), ParseGoal::Script)
+                .expect("complete assignment operands remain valid");
+            assert!(matches!(first_expr(&tree), Expression::Assignment { .. }));
+        }
+        assert!(parser.parse("let = ;", ParseGoal::Script).is_err());
+        assert!(matches!(
+            first_expr(&parse_script("let = 1;")),
+            Expression::Assignment { .. }
+        ));
     }
 
     #[test]

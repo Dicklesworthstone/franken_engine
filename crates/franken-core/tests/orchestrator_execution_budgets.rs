@@ -333,7 +333,13 @@ fn validation_and_parsing_do_not_spend_native_instruction_reservations() {
     use runtime::execution_orchestrator::ExecutionWorkPool;
     let pool = ExecutionWorkPool::new(128);
     let mut orchestrator = shared_orchestrator(&pool, Some(LaneChoice::QuickJs));
-    for source in ["", "let = ;"] {
+    for source in [
+        "",
+        "let = ;",
+        "value += ;",
+        "= 1;",
+        "value = /* missing */;",
+    ] {
         let error = orchestrator.execute(&package(source)).unwrap_err();
         assert!(!matches!(
             error.primary_error(),

@@ -50,6 +50,7 @@ const patterns = [
   'missing/**/*.js', ['src/*.js', 'dist/*.js'], [], '', '.',
   'unicode/?.js', 'unicode/??.js', 'literal/[[]data].js', 'literal/brace{x}.js',
   '{app,src/{a,b}}.{js,ts}', '{,src/}*.js', '**/**/**/*.json', 'src/*/.',
+  'src/*.@(js|ts)', '@(src|dist)/**', 'file+([1-2]).txt', '@(app|file)?(1).@(js|txt)',
 ];
 for (const [index, pattern] of patterns.entries()) {
   test(`reference and production glob agree on supported pattern ${index}: ${JSON.stringify(pattern)}`, async t => {
@@ -175,7 +176,7 @@ test('no-match is distinct from capability, permission, and provider refusal', a
 });
 test('invalid and unsupported query contracts refuse before filesystem access', async () => {
   const { io, calls } = factory();
-  for (const p of [null, 4, ['ok', null], '/absolute/*', '../*', '!*.js', '@(a|b)', '{1..5}', 'a\0b', 'a\\b']) {
+  for (const p of [null, 4, ['ok', null], '/absolute/*', '../*', '!*.js', '!(a|b)', '{1..5}', 'a\0b', 'a\\b']) {
     assert.throws(() => io.globSync(p));
     await assert.rejects(collect(io.promises.glob(p)));
   }
@@ -281,7 +282,7 @@ test('filesystem mutation in a nonmatching-directory predicate is checked before
     }
     return false;
   } }), { code: 'ERR_FS_DIR_CHANGED' });
-  assert.equal(calls.filter(c => c[0] === 'readdirSync').length, 1);
+  assert.equal(calls.filter(call => call[0] === 'readdirSync').length, 1);
 });
 test('async predicate execution is demand-driven and stops on return', async t => {
   const root = fixture(t), { io, calls } = factory();

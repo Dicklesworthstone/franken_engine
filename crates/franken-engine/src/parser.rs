@@ -8507,6 +8507,12 @@ fn try_parse_assignment(
             i += 1;
             continue;
         }
+        // Consume an update token as a whole. In `counter++===0`, the
+        // second `+` cannot start a `+=` assignment across token boundaries.
+        if matches!(b, b'+' | b'-') && bytes.get(i + 1) == Some(&b) {
+            i += 2;
+            continue;
+        }
         // A conditional `?` ahead of any assignment operator makes this a
         // ConditionalExpression: an `=` after it belongs to a branch
         // (`c ? m.x = 1 : 0`, `c ? 0 : m.x = 2`), never to this level, and an
@@ -23407,6 +23413,65 @@ mod tests {
                 assert_eq!(*operator, AssignmentOperator::AddAssign);
             }
             other => panic!("expected Assignment, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn postfix_updates_keep_token_boundaries_before_comparisons() {
+        for (update, expected_update) in [
+            ("++", AssignmentOperator::PostIncrementAssign),
+            ("--", AssignmentOperator::PostDecrementAssign),
+        ] {
+            for (comparison, expected_comparison) in [
+                ("==", BinaryOperator::Equal),
+                ("===", BinaryOperator::StrictEqual),
+                ("!=", BinaryOperator::NotEqual),
+                ("!==", BinaryOperator::StrictNotEqual),
+                ("<", BinaryOperator::LessThan),
+                (">", BinaryOperator::GreaterThan),
+                ("<=", BinaryOperator::LessThanOrEqual),
+                (">=", BinaryOperator::GreaterThanOrEqual),
+            ] {
+                let source = format!("counter{update}{comparison}0;");
+                let tree = parse_script(&source);
+                let Expression::Binary {
+                    operator,
+                    left,
+                    right,
+                } = first_expr(&tree)
+                else {
+                    panic!("{source}: comparison must not become assignment or Raw");
+                };
+                assert_eq!(*operator, expected_comparison, "{source}");
+                let Expression::Assignment { operator, left, .. } = left.as_ref() else {
+                    panic!("{source}: comparison must retain its postfix update");
+                };
+                assert_eq!(*operator, expected_update, "{source}");
+                assert!(matches!(left.as_ref(), Expression::Identifier(name) if name == "counter"));
+                assert!(matches!(right.as_ref(), Expression::NumericLiteral(0)));
+            }
+        }
+    }
+
+    #[test]
+    fn update_token_consumption_still_rejects_invalid_assignment_targets() {
+        for source in [
+            "counter++=1;",
+            "counter--=1;",
+            "counter+++=1;",
+            "counter---=1;",
+            "counter++==;",
+            "counter--===;",
+            "counter+=;",
+            "counter-=;",
+            "let = ;",
+        ] {
+            assert!(
+                CanonicalEs2020Parser
+                    .parse(source, ParseGoal::Script)
+                    .is_err(),
+                "invalid source must remain rejected: {source}"
+            );
         }
     }
 

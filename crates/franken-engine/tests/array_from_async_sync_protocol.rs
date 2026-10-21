@@ -93,3 +93,36 @@ fn sync_next_resource_exhaustion_cannot_be_caught_or_start_cleanup() {
         assert!(core.console_output().is_empty());
     }
 }
+
+#[test]
+fn postfix_comparison_operands_write_back_exactly_once() {
+    let source = "let count=0; const a=count++===0; const b=count--==1; \
+                  const c=count++!==0; const d=count--!=1; console.log(a,b,c,d,count);";
+    let tree = parse_script(source).expect("adjacent update and comparison tokens parse");
+    let module = lower_ir0_to_ir3(
+        &Ir0Module::from_syntax_tree(tree, "postfix-comparison.js"),
+        &LoweringContext::new("postfix-comparison", "writeback", "builtin-only"),
+    )
+    .expect("postfix comparison lowers")
+    .ir3;
+    for throughput in [false, true] {
+        for stress in [None, Some(1), Some(7)] {
+            let mut core = InterpreterCore::new(config(throughput), "postfix-comparison");
+            core.set_gc_stress_interval(stress);
+            let result = core.execute(&module).expect("postfix comparison executes");
+            assert_eq!(
+                result
+                    .console_output
+                    .iter()
+                    .map(|entry| entry.message.as_str())
+                    .collect::<Vec<_>>(),
+                ["true true false false 0"],
+                "throughput={throughput}, gc={stress:?}"
+            );
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+}

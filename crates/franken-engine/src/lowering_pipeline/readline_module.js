@@ -32,6 +32,7 @@
   const promiseThen = Promise.prototype.then;
   const slice = String.prototype.slice;
   const codeAt = String.prototype.charCodeAt;
+  const join = [].join;
   const asString = String;
   const now = Date.now;
   const Type = TypeError;
@@ -121,10 +122,43 @@
     node.next = undefined;
     return node.value;
   }
+  function fragmentParts() {
+    // These lists are private storage, not guest arrays. Removing the inherited
+    // indexed setters keeps an append from calling guest code or losing data.
+    // The captured join is generic and only needs own length/index properties.
+    return setPrototype([], null);
+  }
+  function fragments() {
+    const q = queue(); q.pending = fragmentParts(); q.units = 0; return q;
+  }
+  function flushFragments(q) {
+    const pending = q.pending;
+    if (pending.length === 0) return;
+    const text = pending.length === 1 ? pending[0] : apply(join, pending, ['']);
+    q.pending = fragmentParts(); q.units = 0;
+    append(q, text);
+  }
+  function appendFragment(q, text) {
+    // Bound per-chunk metadata for highly fragmented, unterminated lines.
+    // Each small fragment participates in at most one batch join and the
+    // final line join; never repeatedly join the entire accumulated prefix.
+    if (text.length >= 16384) {
+      flushFragments(q);
+      append(q, text);
+      return;
+    }
+    q.pending[q.pending.length] = text;
+    q.units += text.length;
+    if (q.pending.length >= 64 || q.units >= 16384) flushFragments(q);
+  }
   function joinFragments(q) {
-    let text = '';
-    while (q.head !== undefined) text += take(q);
-    return text;
+    flushFragments(q);
+    if (q.head === undefined) return '';
+    const first = take(q);
+    if (q.head === undefined) return first;
+    const parts = fragmentParts(); parts[0] = first;
+    while (q.head !== undefined) parts[parts.length] = take(q);
+    return apply(join, parts, ['']);
   }
   function validate(input, output, completer, terminal) {
     let o;
@@ -167,14 +201,17 @@
     if (s.afterCR && code(text, 0) === 10 &&
         (s.delay === Infinity || now() - s.crTime <= s.delay)) start = 1;
     s.afterCR = false;
-    const lines = queue();
+    // Most fragments of a long line contain no delimiter. Do not allocate a
+    // publication queue until this chunk actually completes its first line.
+    let lines;
     // Scan ONLY newly decoded text. Store incomplete-line fragments rather
     // than rescanning/recopying the entire accumulated prefix on every chunk.
     // Finish state before publishing: callbacks may synchronously reenter.
     for (let at = start; at < text.length; at++) {
       const unit = code(text, at);
       if (unit !== 10 && unit !== 13) continue;
-      if (at > start) append(s.fragments, textSlice(text, start, at));
+      if (at > start) appendFragment(s.fragments, textSlice(text, start, at));
+      if (lines === undefined) lines = queue();
       append(lines, joinFragments(s.fragments));
       if (unit === 13) {
         if (at + 1 < text.length && code(text, at + 1) === 10) at++;
@@ -185,17 +222,17 @@
       }
       start = at + 1;
     }
-    if (start < text.length) append(s.fragments, textSlice(text, start));
+    if (start < text.length) appendFragment(s.fragments, textSlice(text, start));
     // close()/pause() in a line listener do not discard other complete lines
     // already received in this chunk, matching the documented Node contract.
-    while (lines.head !== undefined) publish(rl, take(lines));
+    while (lines !== undefined && lines.head !== undefined) publish(rl, take(lines));
   }
   function Interface(input, output, completer, terminal) {
     if (!(this instanceof Interface)) return new Interface(input, output, completer, terminal);
     const config = validate(input, output, completer, terminal);
     apply(E, this, []);
     const rl = this, s = create(null);
-    s.fragments = queue(); s.decoder = new Decoder('utf8'); s.afterCR = false; s.crTime = 0;
+    s.fragments = fragments(); s.decoder = new Decoder('utf8'); s.afterCR = false; s.crTime = 0;
     s.delay = config.delay; s.prompt = config.prompt; s.question = undefined;
     s.iterator = undefined; s.dispose = function () {}; s.removers = queue();
     s.signal = config.signal; s.closed = false;
@@ -231,7 +268,9 @@
         if (s.closed) return;
         // Node readline emits its already decoded suffix at EOF; unlike a
         // direct StringDecoder.end(), it does not flush incomplete UTF-8 bytes.
-        if (s.fragments.head !== undefined) publish(rl, joinFragments(s.fragments));
+        if (s.fragments.head !== undefined || s.fragments.pending.length !== 0) {
+          publish(rl, joinFragments(s.fragments));
+        }
         closeInterface(rl);
       });
       s.dispose = watch(s.signal, function () { closeInterface(rl); });
@@ -262,7 +301,7 @@
     let failed = false, reason;
     try { clearQuestion(s); } catch (e) { failed = true; reason = e; }
     try { s.detach(); } catch (e) { if (!failed) { failed = true; reason = e; } }
-    s.fragments = queue(); s.decoder = undefined;
+    s.fragments = fragments(); s.decoder = undefined;
     try { pauseInterface(rl); } catch (e) { if (!failed) { failed = true; reason = e; } }
     try { apply(emit, rl, ['close']); } catch (e) { if (!failed) { failed = true; reason = e; } }
     if (failed) throw reason;

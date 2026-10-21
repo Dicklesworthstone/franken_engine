@@ -7,6 +7,7 @@
 use super::{BacktrackError, BacktrackRegExp, Captures, Inst, PreparedInput};
 use super::{is_line_terminator, is_word_char};
 
+mod captured;
 mod classes;
 mod counted;
 mod lazy;
@@ -15,6 +16,7 @@ mod literals;
 mod prefix;
 mod repetitions;
 
+use captured::CapturedRepeat;
 use classes::ClassMatches;
 use counted::CountedRepeat;
 use lazy::LazyRepeat;
@@ -72,6 +74,12 @@ enum Frame {
     },
     /// Whole-body greedy exits, paired with the original mark below them.
     LiteralGreedy {
+        pc: usize,
+        position: usize,
+        start: usize,
+    },
+    /// Whole-iteration exits with one original capture/mark snapshot.
+    CapturedGreedy {
         pc: usize,
         position: usize,
         start: usize,
@@ -255,6 +263,18 @@ impl Run<'_> {
                             self.push_literal_lazy(&literal, pc, position, stack);
                         }
                         pc = literal.exit;
+                        continue;
+                    }
+                    let captured = CapturedRepeat::at(regexp, pc, &mut self.literal_blocks);
+                    #[cfg(test)]
+                    let captured = captured.filter(|_| !self.repetitions_disabled);
+                    if let Some(captured) = captured {
+                        #[cfg(test)]
+                        {
+                            self.repeat_dispatches += 1;
+                        }
+                        position = self.execute_captured_greedy(&captured, pc, position, stack)?;
+                        pc = captured.exit;
                         continue;
                     }
                     stack.push(Frame::Alternative {
@@ -466,6 +486,10 @@ impl Run<'_> {
                         }
                         Some(frame @ Frame::LiteralGreedy { .. }) => {
                             (pc, position) = self.resume_literal_greedy(frame, stack);
+                            break;
+                        }
+                        Some(frame @ Frame::CapturedGreedy { .. }) => {
+                            (pc, position) = self.resume_captured_greedy(frame, stack);
                             break;
                         }
                         Some(Frame::Alternative {

@@ -32,6 +32,7 @@
   const promiseThen = Promise.prototype.then;
   const slice = String.prototype.slice;
   const codeAt = String.prototype.charCodeAt;
+  const indexOf = String.prototype.indexOf;
   const join = [].join;
   const asString = String;
   const now = Date.now;
@@ -201,26 +202,35 @@
     if (s.afterCR && code(text, 0) === 10 &&
         (s.delay === Infinity || now() - s.crTime <= s.delay)) start = 1;
     s.afterCR = false;
+    if (start === text.length) return;
     // Most fragments of a long line contain no delimiter. Do not allocate a
     // publication queue until this chunk actually completes its first line.
     let lines;
-    // Scan ONLY newly decoded text. Store incomplete-line fragments rather
-    // than rescanning/recopying the entire accumulated prefix on every chunk.
+    // Scan ONLY newly decoded text, using native search rather than one
+    // interpreted charCodeAt call per code unit. Keep independent cursors:
+    // recomputing a missing CR for every LF (or vice versa) would rescan the
+    // whole remaining suffix and become quadratic on single-delimiter input.
+    // A -1 cursor stays exhausted for this chunk. No all-matches array or
+    // persistent search state is needed, and UTF-16 offsets still feed slice.
     // Finish state before publishing: callbacks may synchronously reenter.
-    for (let at = start; at < text.length; at++) {
-      const unit = code(text, at);
-      if (unit !== 10 && unit !== 13) continue;
+    let lf = apply(indexOf, text, ['\n', start]);
+    let cr = apply(indexOf, text, ['\r', start]);
+    while (lf !== -1 || cr !== -1) {
+      let at = lf === -1 || (cr !== -1 && cr < lf) ? cr : lf;
+      const carriage = at === cr;
       if (at > start) appendFragment(s.fragments, textSlice(text, start, at));
       if (lines === undefined) lines = queue();
       append(lines, joinFragments(s.fragments));
-      if (unit === 13) {
-        if (at + 1 < text.length && code(text, at + 1) === 10) at++;
+      if (carriage) {
+        if (lf === at + 1) at++;
         else if (at + 1 === text.length) {
           s.afterCR = true;
           if (s.delay !== Infinity) s.crTime = now();
         }
       }
       start = at + 1;
+      if (lf !== -1 && lf < start) lf = apply(indexOf, text, ['\n', start]);
+      if (cr !== -1 && cr < start) cr = apply(indexOf, text, ['\r', start]);
     }
     if (start < text.length) appendFragment(s.fragments, textSlice(text, start));
     // close()/pause() in a line listener do not discard other complete lines

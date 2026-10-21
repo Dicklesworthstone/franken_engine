@@ -84412,13 +84412,11 @@ impl InterpreterCore {
             // The caller's registers stay live under the callback's frame, so
             // only what the requesting Rust frames hold needs pinning.
             let gc_arm = gc_request.as_ref().and_then(|held| {
-                let pins = held
-                    .iter()
-                    .chain([&callee, &receiver])
-                    .chain(arguments.iter())
-                    .map(GcPin::Value)
-                    .collect::<Vec<_>>();
-                self.gc_arm_nested(&pins)
+                self.gc_arm_nested_values(
+                    held.iter()
+                        .chain([&callee, &receiver])
+                        .chain(arguments.iter()),
+                )
             });
             let outcome = self.invoke_nested_callback(
                 module,

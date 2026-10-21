@@ -623,6 +623,36 @@ fn garbage_inside_async_bodies_and_callbacks_is_collected() {
     }
 }
 
+#[test]
+fn callback_value_roots_survive_collection_with_a_bounded_heap() {
+    let source = r#"
+        const receiver = { bias: 10 };
+        const input = [{ x: 1 }, { x: 2 }, { x: 3 }];
+        const out = input.map(function (item, index, array) {
+            let checksum = 0;
+            for (let i = 0; i < 6000; i++) {
+                const temporary = { i };
+                checksum += temporary.i & 1;
+            }
+            const nested = [item.x, index].map(function (value) {
+                return value + this.bias;
+            }, this);
+            return { owner: array, receiver: this, item,
+                     total: nested[0] + nested[1] + checksum };
+        }, receiver);
+        console.log(out.map(row => row.total).join(','),
+            out.every((row, index) => row.owner === input &&
+                row.receiver === receiver && row.item === input[index]));
+    "#;
+    // Each callback allocates twice the entire heap allowance. Collection
+    // must work inside the callback while prior output rows are Rust-held.
+    for stress in [None, Some(1), Some(7)] {
+        let run = try_run_with_object_budget(source, stress, Some(3000)).expect("lowers");
+        assert_eq!(console_lines(&run, source), vec!["3021,3023,3025 true"]);
+        assert!(run.gc.collections > 0, "no collection ran: {stress:?}");
+    }
+}
+
 fn promise_case_sources() -> impl Iterator<Item = (String, &'static str)> {
     PROMISE_CASES
         .iter()

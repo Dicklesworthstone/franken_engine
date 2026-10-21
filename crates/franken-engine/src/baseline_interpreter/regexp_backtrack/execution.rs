@@ -90,6 +90,12 @@ enum Frame {
         position: usize,
         start: usize,
     },
+    /// Optional counted exits, paired with original counter/mark/capture undo.
+    CapturedCountedGreedy {
+        pc: usize,
+        position: usize,
+        start: usize,
+    },
     Slot {
         slot: usize,
         old: Option<usize>,
@@ -388,6 +394,11 @@ impl Run<'_> {
                             pc = *body;
                         } else if max.is_some_and(|max| count >= max) {
                             pc = *exit;
+                        } else if *greedy && let Some(captured) = &captured {
+                            position = self.execute_captured_counted_greedy(
+                                captured, pc, position, stack,
+                            )?;
+                            pc = *exit;
                         } else if *greedy && let Some(repeat) = &repeat {
                             position = self.execute_counted_greedy(
                                 repeat, pc, position, *max, stack,
@@ -521,6 +532,10 @@ impl Run<'_> {
                                 (pc, position) = next;
                                 break;
                             }
+                        }
+                        Some(frame @ Frame::CapturedCountedGreedy { .. }) => {
+                            (pc, position) = self.resume_captured_counted_greedy(frame, stack);
+                            break;
                         }
                         Some(Frame::Alternative {
                             pc: resume,

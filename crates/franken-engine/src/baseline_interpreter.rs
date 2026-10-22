@@ -6444,6 +6444,29 @@ const QUERYSTRING_MODULE_KEY: &str = "<module querystring>";
 const PATH_MODULE_KEY: &str = "<module path>";
 const PATH_WIN32_MODULE_KEY: &str = "<module path/win32>";
 const PATH_RUNTIME_MODULE_ID: &str = "\0franken-engine/native-path";
+const PATH_ESM_MODULE_ID: &str = "\0franken-engine/native-path/esm";
+const PATH_POSIX_ESM_MODULE_ID: &str = "\0franken-engine/native-path/posix/esm";
+const PATH_WIN32_ESM_MODULE_ID: &str = "\0franken-engine/native-path/win32/esm";
+// The supported native Path surface, in Node's export-read order. ESM
+// snapshots this fixed list on its first load; guest-added properties are
+// not exports, while deleted original properties still export undefined.
+const PATH_ESM_EXPORT_NAMES: [&str; 15] = [
+    "resolve",
+    "normalize",
+    "isAbsolute",
+    "join",
+    "relative",
+    "toNamespacedPath",
+    "dirname",
+    "basename",
+    "extname",
+    "format",
+    "parse",
+    "sep",
+    "delimiter",
+    "win32",
+    "posix",
+];
 
 /// Seed-tracked slot of the `require('url')` module object (bd-9vouw.224).
 const URL_MODULE_KEY: &str = "<module url>";
@@ -39366,7 +39389,16 @@ impl InterpreterCore {
                         .to_string(),
                 });
             }
-            if style != ImportStyle::Require {
+            if style != ImportStyle::Require
+                && !matches!(
+                    NativeBuiltinModule::from_record(record),
+                    Some(
+                        NativeBuiltinModule::Path
+                            | NativeBuiltinModule::PathPosix
+                            | NativeBuiltinModule::PathWin32
+                    )
+                )
+            {
                 return Err(InterpreterError::ModuleLoweringFailed {
                     specifier: specifier.to_string(),
                     error: "native built-in providers currently require a CommonJS require edge"
@@ -39881,7 +39913,11 @@ impl InterpreterCore {
         let native_path = delivered.as_ref().is_some_and(|source| {
             matches!(
                 NativeBuiltinModule::from_record(&source.record),
-                Some(NativeBuiltinModule::Path | NativeBuiltinModule::PathWin32)
+                Some(
+                    NativeBuiltinModule::Path
+                        | NativeBuiltinModule::PathPosix
+                        | NativeBuiltinModule::PathWin32
+                )
             )
         });
         let declared_goal = match delivered.as_ref() {
@@ -40170,6 +40206,15 @@ impl InterpreterCore {
         let import_bound = (crate::lowering_pipeline::is_bounded_import_specifier(specifier)
             && Self::unit_declares_bounded_imports(module))
         .then_some(crate::lowering_pipeline::IFC_BOUNDED_IMPORT_LABEL);
+        if let Some(source) = delivered.as_ref()
+            && let Some(
+                native @ (NativeBuiltinModule::Path
+                | NativeBuiltinModule::PathPosix
+                | NativeBuiltinModule::PathWin32),
+            ) = NativeBuiltinModule::from_record(&source.module.record)
+        {
+            return self.load_native_path_namespace(module, source, native, import_bound.as_ref());
+        }
         self.load_module_resolved(
             module,
             &resolved,
@@ -40560,11 +40605,17 @@ impl InterpreterCore {
                 error: "resolved module changed after its first authorized load".to_string(),
             });
         }
+        let new_record = !self.module_state.modules.contains_key(resolved);
         let value = self.native_builtin_module(module, native)?;
         self.ensure_module_record(module, resolved)?;
         if let Some(record) = self.module_state.modules.get_mut(resolved) {
             record.resolved_source_hash = Some(source.module.content_hash);
-            record.status = ModuleRuntimeStatus::Evaluated;
+            // A CommonJS cache hit must not reset a separately evaluated
+            // native ESM facade, including an in-flight or failed facade
+            // whose private id was also supplied by the resolver.
+            if new_record {
+                record.status = ModuleRuntimeStatus::Evaluated;
+            }
         }
         Ok(value)
     }
@@ -40585,8 +40636,221 @@ impl InterpreterCore {
             NativeBuiltinModule::Url => self.url_core_module(),
             NativeBuiltinModule::Timers => self.timers_core_module(),
             NativeBuiltinModule::PerfHooks => self.perf_hooks_core_module(),
-            NativeBuiltinModule::Path | NativeBuiltinModule::PathWin32 => {
-                self.path_core_module(module, native)
+            NativeBuiltinModule::Path
+            | NativeBuiltinModule::PathPosix
+            | NativeBuiltinModule::PathWin32 => self.path_core_module(module, native),
+        }
+    }
+
+    /// Materialize one ESM namespace per native Path variant. Its default
+    /// export is the realm's CommonJS object; named exports snapshot the
+    /// supported properties only on the first ESM load. Resolution and policy
+    /// authorization have already run for this request, including cache hits.
+    /// Path and PathPosix share their default object but keep distinct facades.
+    fn load_native_path_namespace(
+        &mut self,
+        module: &Ir3Module,
+        source: &ResolutionOutcome,
+        native: NativeBuiltinModule,
+        import_bound: Option<&Label>,
+    ) -> Result<Value, InterpreterError> {
+        if import_bound.is_some() {
+            return Err(InterpreterError::ModuleLoweringFailed {
+                specifier: source.module.request_specifier.clone(),
+                error: "a native built-in is opaque to the bounded-imports contract".to_string(),
+            });
+        }
+        let specifier = match native {
+            NativeBuiltinModule::Path => PATH_ESM_MODULE_ID,
+            NativeBuiltinModule::PathPosix => PATH_POSIX_ESM_MODULE_ID,
+            NativeBuiltinModule::PathWin32 => PATH_WIN32_ESM_MODULE_ID,
+            _ => {
+                return Err(InterpreterError::InternalError {
+                    details: "non-Path provider reached a native Path namespace".to_string(),
+                });
+            }
+        };
+        let value = self.load_native_builtin_resolved(module, source, native)?;
+        let Value::Object(object) = value else {
+            return Err(InterpreterError::InternalError {
+                details: "native Path provider returned a non-object".to_string(),
+            });
+        };
+        let content_hash = native.record(specifier).canonical_hash();
+        if let Some(record) = self.module_state.modules.get(specifier) {
+            if record.resolved_source_hash != Some(content_hash) {
+                return Err(InterpreterError::ModuleLoweringFailed {
+                    specifier: source.module.request_specifier.clone(),
+                    error: "native Path namespace identity is already bound to another source"
+                        .to_string(),
+                });
+            }
+            match &record.status {
+                ModuleRuntimeStatus::Failed(_) => {
+                    let key = RuntimePropertyKey::String(JsString::from("error"));
+                    let cached = self.builtin_prototypes.get(specifier).copied().and_then(
+                        |carrier| {
+                            self.heap
+                                .get(carrier.0 as usize)
+                                .and_then(|object| object.own_runtime_property_value(&key))
+                                .map(|value| (carrier, value))
+                        },
+                    );
+                    if let Some((carrier, thrown)) = cached {
+                        let label = self.runtime_property_label(carrier, &key);
+                        self.replace_pending_abrupt_slots(Some((thrown, label)), None)?;
+                        return Err(InterpreterError::UncaughtException {
+                            value: "native Path namespace evaluation failed".to_string(),
+                        });
+                    }
+                    // A containment failure has no guest exception to replay.
+                    // Never turn it into a catchable module Error on a retry.
+                    return Err(InterpreterError::InternalError {
+                        details: "native Path namespace initialization was refused".to_string(),
+                    });
+                }
+                ModuleRuntimeStatus::Evaluating => {
+                    let namespace = record.namespace_object;
+                    // A getter may recursively import this facade. Its import
+                    // must wait for the outer initialization, including a
+                    // later throw, instead of exposing a partial namespace.
+                    let promise = self.ensure_module_evaluation_promise(specifier)?;
+                    self.pending_async_module_import = Some((specifier.to_string(), promise));
+                    return Ok(Value::Object(namespace));
+                }
+                ModuleRuntimeStatus::Evaluated
+                    if record.exports.contains_key(&JsString::from("default")) =>
+                {
+                    return Ok(Value::Object(record.namespace_object));
+                }
+                ModuleRuntimeStatus::AsyncEvaluating => {
+                    return Err(InterpreterError::InternalError {
+                        details: "a native Path namespace cannot evaluate asynchronously"
+                            .to_string(),
+                    });
+                }
+                ModuleRuntimeStatus::Evaluated => {}
+            }
+        }
+        let namespace = self.ensure_module_record(module, specifier)?;
+        if let Some(record) = self.module_state.modules.get_mut(specifier) {
+            record.resolved_source_hash = Some(content_hash);
+            record.status = ModuleRuntimeStatus::Evaluating;
+        }
+        let initialized = (|| -> Result<(), InterpreterError> {
+            // Native imports can run outside a hostcall observation scope.
+            // Track descriptor shape, getter effects and exceptional labels
+            // while preserving the caller's pending-result ownership.
+            let observation = self.begin_property_observation([])?;
+            let outcome = (|| -> Result<(), InterpreterError> {
+                for name in PATH_ESM_EXPORT_NAMES {
+                    let key = RuntimePropertyKey::String(JsString::from(name));
+                    let member = self.iterator_protocol_property(
+                        Some(module),
+                        object,
+                        &key,
+                        Value::Object(object),
+                    )?;
+                    let label = self.json_parse_context_label()?;
+                    self.publish_module_export(
+                        specifier,
+                        JsString::from(name),
+                        member,
+                        label.clone(),
+                        ExportPublication::Own,
+                        0,
+                    )?;
+                    self.set_own_runtime_property_label(namespace, &key, &label)?;
+                }
+                // Publish the completion marker last so a partial initialization
+                // can never be mistaken for a successfully cached namespace.
+                let key = RuntimePropertyKey::String(JsString::from("default"));
+                self.publish_module_export(
+                    specifier,
+                    JsString::from("default"),
+                    Value::Object(object),
+                    Label::Public,
+                    ExportPublication::Own,
+                    0,
+                )?;
+                self.set_own_runtime_property_label(namespace, &key, &Label::Public)?;
+                self.sort_module_namespace_keys(specifier)?;
+                Ok(())
+            })();
+            self.finish_property_write_observation(observation, outcome)
+        })();
+        match initialized {
+            Ok(()) => {
+                if let Some(promise) = self
+                    .module_state
+                    .modules
+                    .get(specifier)
+                    .and_then(|record| record.evaluation_promise)
+                {
+                    if let Err(error) = self.fulfill_promise(
+                        promise,
+                        Self::value_to_js_value(&Value::Object(namespace)),
+                        Label::Public,
+                    ) {
+                        self.fail_module_record(specifier, "native Path namespace initialization was refused");
+                        return Err(error);
+                    }
+                }
+                if let Some(record) = self.module_state.modules.get_mut(specifier) {
+                    record.status = ModuleRuntimeStatus::Evaluated;
+                }
+                Ok(Value::Object(namespace))
+            }
+            Err(error) => {
+                // Keep diagnostics independent of the thrown payload. The
+                // private rooted carrier retains its identity and IFC label;
+                // it is never added to the observable namespace or exports.
+                self.fail_module_record(specifier, "native Path namespace evaluation failed");
+                let guest_exception = if matches!(error, InterpreterError::UncaughtException { .. }) {
+                    self.pending_exception
+                        .clone()
+                        .map(|value| (value, self.pending_exception_label.clone()))
+                } else if Self::js_catchable_error_name(&error).is_some() {
+                    Some((
+                        self.native_error_to_thrown_value(&error)?,
+                        self.pending_hostcall_result_label
+                            .clone()
+                            .unwrap_or(Label::Public),
+                    ))
+                } else {
+                    None
+                };
+                let Some((thrown, label)) = guest_exception else {
+                    return Err(error);
+                };
+                self.replace_pending_abrupt_slots(Some((thrown.clone(), label.clone())), None)?;
+                self.run_pre_allocation_hook(module, AllocKind::Object, 0)?;
+                let carrier = self.alloc_object_with_prototype(None)?;
+                let key = RuntimePropertyKey::String(JsString::from("error"));
+                self.set_object_runtime_property(carrier, key.clone(), thrown.clone())?;
+                self.set_own_runtime_property_label(carrier, &key, &label)?;
+                self.mutate_builtin_prototypes(|prototypes| {
+                    prototypes.insert(specifier.to_string(), carrier);
+                });
+                if let Some(promise) = self
+                    .module_state
+                    .modules
+                    .get(specifier)
+                    .and_then(|record| record.evaluation_promise)
+                {
+                    // Only guest-facing import Promises report unhandled
+                    // rejection; this internal dependency is always observed.
+                    self.promise_store
+                        .mark_rejection_handled(promise)
+                        .map_err(|error| InterpreterError::InternalError {
+                            details: error.to_string(),
+                        })?;
+                    let reason = self.promise_value(&thrown)?;
+                    self.reject_promise(promise, reason, label)?;
+                }
+                Err(InterpreterError::UncaughtException {
+                    value: "native Path namespace evaluation failed".to_string(),
+                })
             }
         }
     }
@@ -71000,6 +71264,19 @@ impl InterpreterCore {
         if self.module_resolver.is_some() {
             let delivered = self.resolve_installed_module(specifier, ImportStyle::Import)?;
             let resolved = delivered.module.record.id.clone();
+            if let Some(
+                native @ (NativeBuiltinModule::Path
+                | NativeBuiltinModule::PathPosix
+                | NativeBuiltinModule::PathWin32),
+            ) = NativeBuiltinModule::from_record(&delivered.module.record)
+            {
+                return self.load_native_path_namespace(
+                    module,
+                    &delivered,
+                    native,
+                    import_bound.as_ref(),
+                );
+            }
             return self.load_module_resolved(
                 module,
                 &resolved,

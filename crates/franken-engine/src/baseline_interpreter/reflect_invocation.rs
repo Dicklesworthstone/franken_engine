@@ -32,10 +32,20 @@ impl InterpreterCore {
         key: u32,
         value: u32,
     ) -> Result<PropertyWriteObservation, InterpreterError> {
+        self.begin_property_observation([object, key, value])
+    }
+
+    /// Observe a native property operation that may have no register operands.
+    /// Its descriptor and callback observations use the same owned scope as a
+    /// direct property write, starting from the active execution context.
+    pub(super) fn begin_property_observation(
+        &mut self,
+        registers: impl IntoIterator<Item = u32>,
+    ) -> Result<PropertyWriteObservation, InterpreterError> {
         let mut context = self
             .active_execution_context_label()
             .unwrap_or(&Label::Public);
-        for register in [object, key, value] {
+        for register in registers {
             let label = self.get_register_label(register)?;
             if label > context {
                 context = label;

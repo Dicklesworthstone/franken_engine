@@ -34,6 +34,7 @@ enum Corruption {
     ForgeBuiltin,
     MalformedBuiltinMarker,
     ChangeBuiltinProvider,
+    ChangePathProvider,
     BuiltinAliasesEntry,
     Panic,
 }
@@ -79,13 +80,14 @@ impl OpaqueResolver {
             NativeBuiltinModule::Timers,
             NativeBuiltinModule::PerfHooks,
             NativeBuiltinModule::Path,
+            NativeBuiltinModule::PathPosix,
             NativeBuiltinModule::PathWin32,
         ] {
             let canonical = native.canonical_specifier();
-            let mut names = vec![canonical, canonical.strip_prefix("node:").expect("core prefix")];
-            if native == NativeBuiltinModule::Path {
-                names.extend(["path/posix", "node:path/posix"]);
-            }
+            let names = [
+                canonical,
+                canonical.strip_prefix("node:").expect("core prefix"),
+            ];
             for name in names {
                 let record = native.record(format!("builtin:{name}"));
                 self.inner
@@ -171,6 +173,11 @@ impl ModuleResolver for OpaqueResolver {
                 Corruption::ChangeBuiltinProvider if occurrence > 1 => {
                     outcome.module.record =
                         NativeBuiltinModule::Buffer.record(outcome.module.record.id.clone());
+                    outcome.module.content_hash = outcome.module.record.canonical_hash();
+                }
+                Corruption::ChangePathProvider if occurrence > 1 => {
+                    outcome.module.record =
+                        NativeBuiltinModule::PathWin32.record(outcome.module.record.id.clone());
                     outcome.module.content_hash = outcome.module.record.canonical_hash();
                 }
                 Corruption::BuiltinAliasesEntry => {
@@ -929,6 +936,340 @@ module.exports = {
                 .all(|(request, _)| !request.specifier.starts_with('\0')),
             "engine implementation must not request an uncaptured source route"
         );
+    }
+}
+
+#[test]
+fn delivered_path_esm_namespaces_share_the_native_commonjs_objects() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![
+                (
+                    "entry.mjs",
+                    definition(
+                        ModuleSyntax::EsModule,
+                        r#"
+import path, { join, win32 } from 'node:path';
+import * as namespace from 'path';
+import windows, { posix, join as windowsJoin } from 'path/win32';
+import * as canonical from 'path/posix';
+import * as prefixed from 'node:path/posix';
+import consumer from './consumer.cjs';
+console.log(path === consumer.path, windows === consumer.windows,
+    path.win32 === windows, windows.posix === path,
+    canonical === prefixed, canonical !== namespace);
+console.log(join('root', 'file.txt'), windowsJoin('C:\\root', '..', 'out'));
+console.log(win32 === windows, posix === path,
+    Object.getPrototypeOf(canonical) === null, Object.isExtensible(canonical));
+path.join = function() { return 'shared mutation'; };
+console.log(join('one', 'two'), path.join('ignored'), consumer.path.join('ignored'));
+import('path').then(function(again) {
+    console.log(again === namespace, again.default === path,
+        again.join === join, again !== canonical);
+});
+"#,
+                    )
+                    .with_dependency(ModuleDependency::new("./consumer.cjs", ImportStyle::Import)),
+                ),
+                (
+                    "consumer.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        "module.exports = { path: require('path'), windows: require('node:path/win32') };",
+                    ),
+                ),
+            ])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+        let policy = Arc::new(RecordingPolicy {
+            allow_native_builtins: true,
+            ..RecordingPolicy::default()
+        });
+        let installed =
+            ExecutionModuleResolver::new(&source.module.record.id, resolver, policy.clone());
+        let result = orchestrator(lane, ModuleSyntax::EsModule)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("native Path namespaces are shared across static, dynamic and CommonJS loads");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true true true true true",
+                "root/file.txt C:\\out",
+                "true true true false",
+                "one/two shared mutation shared mutation",
+                "true true true true",
+            ]
+        );
+        assert!(
+            policy
+                .requests
+                .lock()
+                .expect("policy log")
+                .iter()
+                .all(|(request, _)| !request.specifier.starts_with('\0')),
+            "namespace materialization must not request a new captured source route"
+        );
+    }
+}
+
+#[test]
+fn delivered_path_esm_snapshots_fixed_names_after_prior_commonjs_mutations() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![(
+                "entry.cjs",
+                definition(
+                    ModuleSyntax::CommonJs,
+                    r#"
+const path = require('path');
+const windows = require('path/win32');
+let getters = 0;
+path.join = function() { return 'before import'; };
+Object.defineProperty(path, 'basename', {
+    get: function() { getters++; return 'snapshot'; },
+    configurable: true, enumerable: true
+});
+delete path.dirname;
+path.added = 42;
+import('node:path').then(function(first) {
+    console.log(first.default === path, first.join === path.join,
+        first.basename, first.dirname === undefined, 'added' in first, getters);
+    path.join = function() { return 'after import'; };
+    console.log(first.join('x'), first.default.join('x'));
+    return import('path/posix').then(function(second) {
+        console.log(second === first, second.default === first.default,
+            second.join('x'), getters);
+        return import('node:path/posix').then(function(alias) {
+            console.log(alias === second, getters);
+            return import('path').then(function(cached) {
+                console.log(cached === first, cached.join('x'), getters);
+                return import('node:path/win32').then(function(win) {
+                    console.log(win.default === windows, win.posix === path,
+                        win.win32 === windows, win.resolve('C:\\base', '..', 'out'));
+                });
+            });
+        });
+    });
+});
+"#,
+                ),
+            )])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let result = orchestrator(lane, ModuleSyntax::CommonJs)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("each native Path facade snapshots the supported properties once");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true snapshot true false 1",
+                "before import after import",
+                "false true after import 2",
+                "true 2",
+                "true before import 2",
+                "true true true C:\\out",
+            ]
+        );
+    }
+}
+
+#[test]
+fn delivered_path_esm_failed_snapshot_preserves_the_thrown_object() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![(
+                "entry.cjs",
+                definition(
+                    ModuleSyntax::CommonJs,
+                    r#"
+const path = require('path');
+const originalBasename = path.basename;
+const marker = { message: 'namespace getter' };
+let getters = 0;
+Object.defineProperty(path, 'basename', {
+    get: function() { getters++; throw marker; },
+    configurable: true, enumerable: true
+});
+import('node:path').then(function() {
+    console.log('unexpected success');
+}, function(first) {
+    console.log('rejected', first === marker, getters, typeof require('path').join);
+    Object.defineProperty(path, 'basename', {
+        value: originalBasename,
+        writable: true, configurable: true, enumerable: true
+    });
+    return import('path').then(function() {
+        console.log('unexpected retry');
+    }, function(second) {
+        console.log('cached rejection', second === marker, second === first,
+            getters, require('node:path') === path);
+        return import('path/posix').then(function(posix) {
+            console.log(posix.default === path, posix.basename('/root/child'), getters);
+        });
+    });
+});
+"#,
+                ),
+            )])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let result = orchestrator(lane, ModuleSyntax::CommonJs)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("the failed native facade rethrows the original value without poisoning CJS or Posix");
+        assert_eq!(
+            lines(&result),
+            [
+                "rejected true 1 function",
+                "cached rejection true true 1 true",
+                "true child 1",
+            ]
+        );
+    }
+}
+
+#[test]
+fn delivered_path_esm_reentrant_imports_wait_for_the_initial_snapshot() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![(
+                "entry.cjs",
+                definition(
+                    ModuleSyntax::CommonJs,
+                    r#"
+const path = require('path');
+const originalBasename = path.basename;
+const marker = { message: 'recursive namespace getter' };
+let getters = 0;
+let nested;
+Object.defineProperty(path, 'basename', {
+    get: function() {
+        getters++;
+        nested = import('node:path');
+        return originalBasename;
+    },
+    configurable: true, enumerable: true
+});
+import('path').then(function(first) {
+    return nested.then(function(second) {
+        console.log(first === second, second.default === path,
+            second.basename === originalBasename, getters);
+        Object.defineProperty(path, 'basename', {
+            get: function() {
+                getters++;
+                nested = import('node:path/posix');
+                throw marker;
+            },
+            configurable: true, enumerable: true
+        });
+        return import('path/posix').then(function() {
+            console.log('unexpected outer success');
+        }, function(outerError) {
+            return nested.then(function() {
+                console.log('unexpected inner success');
+            }, function(innerError) {
+                console.log(outerError === marker, innerError === marker,
+                    innerError === outerError, getters);
+            });
+        });
+    });
+});
+"#,
+                ),
+            )])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let result = orchestrator(lane, ModuleSyntax::CommonJs)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("recursive native imports settle only after the original facade initializes");
+        assert_eq!(lines(&result), ["true true true 1", "true true true 2"]);
+    }
+}
+
+#[test]
+fn delivered_path_esm_cache_cannot_skip_authorization_or_provider_binding() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let source_text = "import('path').then(function(p) { console.log(p.default.sep); return import('path'); });";
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![(
+                "entry.cjs",
+                definition(ModuleSyntax::CommonJs, source_text),
+            )])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let policy = Arc::new(RecordingPolicy {
+            denied: Some(("path".to_string(), 2)),
+            allow_native_builtins: true,
+            ..RecordingPolicy::default()
+        });
+        let installed =
+            ExecutionModuleResolver::new(&source.module.record.id, resolver, policy.clone());
+        let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
+        let error = engine
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect_err("a cached native ESM namespace is not a cached policy grant");
+        assert!(
+            error
+                .to_string()
+                .contains("closed-world module resolution refused"),
+            "{error}"
+        );
+        assert_eq!(
+            policy
+                .requests
+                .lock()
+                .expect("policy log")
+                .iter()
+                .filter(|(request, _)| request.specifier == "path")
+                .count(),
+            2
+        );
+        for corruption in [
+            Corruption::ForgeBuiltin,
+            Corruption::MalformedBuiltinMarker,
+            Corruption::ChangeBuiltinProvider,
+            Corruption::ChangePathProvider,
+            Corruption::BuiltinAliasesEntry,
+        ] {
+            let mut resolver = OpaqueResolver::new(vec![(
+                "entry.cjs",
+                definition(ModuleSyntax::CommonJs, source_text),
+            )])
+            .with_native_builtins();
+            resolver.corruption = corruption;
+            let resolver = Arc::new(resolver);
+            let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+            let installed = ExecutionModuleResolver::new(
+                &source.module.record.id,
+                resolver,
+                Arc::new(AllowAllPolicy),
+            );
+            assert!(
+                orchestrator(lane, ModuleSyntax::CommonJs)
+                    .execute_resolved_entry_with_resolver(&package(), &source, installed)
+                    .is_err(),
+                "forged or substituted providers must not reach the native namespace cache"
+            );
+        }
     }
 }
 

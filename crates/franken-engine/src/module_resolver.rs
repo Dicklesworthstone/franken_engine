@@ -266,10 +266,10 @@ impl ModuleRecord {
 /// Native CommonJS objects implemented by the interpreter itself.
 ///
 /// This is deliberately narrower than Node's builtin name inventory. A
-/// resolver may deliver one of these source-free descriptors only for a
-/// captured require route. The interpreter rechecks the complete descriptor
-/// before dispatching the real realm object; no source text or filesystem
-/// fallback is used to manufacture a builtin.
+/// resolver may deliver one of these source-free descriptors for a captured
+/// require route, or an import route for the Path providers. The interpreter
+/// rechecks the complete descriptor before dispatching the real realm object;
+/// no source text or filesystem fallback is used to manufacture a builtin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeBuiltinModule {
     Buffer,
@@ -280,6 +280,7 @@ pub enum NativeBuiltinModule {
     Timers,
     PerfHooks,
     Path,
+    PathPosix,
     PathWin32,
 }
 
@@ -293,7 +294,8 @@ impl NativeBuiltinModule {
             "url" | "node:url" => Some(Self::Url),
             "timers" | "node:timers" => Some(Self::Timers),
             "perf_hooks" | "node:perf_hooks" => Some(Self::PerfHooks),
-            "path" | "node:path" | "path/posix" | "node:path/posix" => Some(Self::Path),
+            "path" | "node:path" => Some(Self::Path),
+            "path/posix" | "node:path/posix" => Some(Self::PathPosix),
             "path/win32" | "node:path/win32" => Some(Self::PathWin32),
             _ => None,
         }
@@ -309,6 +311,7 @@ impl NativeBuiltinModule {
             Self::Timers => "node:timers",
             Self::PerfHooks => "node:perf_hooks",
             Self::Path => "node:path",
+            Self::PathPosix => "node:path/posix",
             Self::PathWin32 => "node:path/win32",
         }
     }
@@ -2510,6 +2513,7 @@ mod tests {
             "path/win32",
         ] {
             let builtin = NativeBuiltinModule::from_specifier(name).unwrap();
+            assert_eq!(builtin.canonical_specifier(), format!("node:{name}"));
             assert_eq!(
                 NativeBuiltinModule::from_specifier(&format!("node:{name}")),
                 Some(builtin)

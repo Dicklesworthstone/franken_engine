@@ -413,7 +413,38 @@
   }
   property(D, 'fromWeb', duplexFromWeb); property(D, 'toWeb', duplexToWeb);
   const genericDuplexFrom = D.from;
-  function from(body) {
+  function from(body) { return fromValue(body, 0); }
+  function fromPair(body, depth) {
+    // Match the generic converter's nesting bound. Normalize only the pair's
+    // endpoints; the existing Duplex owner still implements all data movement,
+    // backpressure, finalization and destruction of both independent halves.
+    const originalRead = body.readable, originalWrite = body.writable;
+    let readable = originalRead, writable = originalWrite;
+    try {
+      if (readable != null && !nodeStage(readable)) readable = fromValue(readable, depth + 1);
+      if (writable != null && !nodeStage(writable)) writable = fromValue(writable, depth + 1);
+      const pair = create(null); pair.readable = readable; pair.writable = writable;
+      return apply(genericDuplexFrom, D, [pair]);
+    } catch (error) {
+      // Setup is synchronous, but acquired endpoints may own asynchronous Web
+      // cancellation. Observe their errors and start every owned cleanup before
+      // returning the original failure. Leave untouched Node endpoints alone.
+      for (let side = 0; side < 2; side++) {
+        const node = side === 0 ? readable : writable;
+        const original = side === 0 ? originalRead : originalWrite;
+        if (node != null && node !== original) {
+          try { apply(on, node, ['error', function () {}]); apply(destroyR, node, []); }
+          catch (cleanupError) { /* The inaccessible adapter cannot replace setup failure. */ }
+        }
+      }
+      throw error;
+    }
+  }
+  function fromValue(body, depth) {
+    if (depth > 32) {
+      const error = new Type('Duplex source nesting exceeds its limit');
+      error.code = 'ERR_INVALID_ARG_VALUE'; throw error;
+    }
     if (!(body instanceof R) && !(body instanceof W) && isBlob(body)) {
       // Node publishes a Blob as one ArrayBuffer in object mode, including
       // an empty Blob. Do not turn it into a byte iterator or split its record.
@@ -424,8 +455,16 @@
     // select these adapters; properties on a lookalike are not authority.
     if (body === null || typeof body !== 'object' || body instanceof R || body instanceof W ||
         (!('getReader' in body) && !('getWriter' in body) &&
-         !('readable' in body && 'writable' in body))) {
+         !('readable' in body) && !('writable' in body))) {
       return apply(genericDuplexFrom, D, [body]);
+    }
+    // A single-ended record cannot be a branded TransformStream. Keep the
+    // existing Node-only path lazy: adapting a Node readable/writable alone
+    // must not initialize the unrelated Web kernel.
+    if (!('getReader' in body) && !('getWriter' in body) &&
+        !('readable' in body && 'writable' in body) &&
+        !(Symbol.asyncIterator in body) && !(Symbol.iterator in body) && !('then' in body)) {
+      return fromPair(body, depth);
     }
     const a = api();
     let kind = 0;
@@ -438,7 +477,17 @@
       try {
         source = apply(a.transformReadable, body, []);
         destination = apply(a.transformWritable, body, []);
-      } catch (error) { return apply(genericDuplexFrom, D, [body]); }
+      } catch (error) {
+        // A plain pair is not a branded TransformStream. Delegate competing
+        // iterator/thenable protocols unchanged, including their getter order.
+        // For ordinary pairs, recursively reuse this same bridge on endpoints
+        // so Web/Blob inputs cannot bypass their canonical adapters.
+        if (('readable' in body || 'writable' in body) &&
+            !(Symbol.asyncIterator in body) && !(Symbol.iterator in body) && !('then' in body)) {
+          return fromPair(body, depth);
+        }
+        return apply(genericDuplexFrom, D, [body]);
+      }
       const pair = create(null); pair.readable = source; pair.writable = destination;
       return duplexFromWeb(pair);
     }

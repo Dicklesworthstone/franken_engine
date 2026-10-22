@@ -43042,6 +43042,33 @@ impl InterpreterCore {
         Ok(Value::Bool(is_array))
     }
 
+    /// Authority-bearing native function values that do not use
+    /// `call_static_hostcall`. Resolve the operation at invocation time so
+    /// aliases, bound functions, call/apply and callbacks retain the same
+    /// capability and live-hook boundary as direct HostCall instructions.
+    fn native_value_host_effect_tag(builtin: &BuiltinFunction) -> Option<Cow<'static, str>> {
+        let tag = match builtin.kind {
+            BuiltinFunctionKind::ConsoleLog => "console:log",
+            BuiltinFunctionKind::ConsoleError => "console:error",
+            BuiltinFunctionKind::ConsoleWarn => "console:warn",
+            BuiltinFunctionKind::ConsoleInfo => "console:info",
+            BuiltinFunctionKind::ConsoleMethod => {
+                return Some(Cow::Owned(format!("console:{}", builtin.display_name())));
+            }
+            BuiltinFunctionKind::SetTimeout => "builtin:SetTimeout",
+            BuiltinFunctionKind::ClearTimeout => "builtin:ClearTimeout",
+            BuiltinFunctionKind::SetInterval => "builtin:SetInterval",
+            BuiltinFunctionKind::ClearInterval => "builtin:ClearInterval",
+            BuiltinFunctionKind::SetImmediate => "builtin:SetImmediate",
+            BuiltinFunctionKind::ClearImmediate => "builtin:ClearImmediate",
+            BuiltinFunctionKind::QueueMicrotask => "builtin:QueueMicrotask",
+            // StaticHostcall already gates its exact tag. Direct HostCall
+            // dispatch does not enter this function and keeps its own gate.
+            _ => return None,
+        };
+        Some(Cow::Borrowed(tag))
+    }
+
     /// Keep the Writable lifecycle lane out of the monolithic builtin
     /// dispatcher.  Writable methods can synchronously drive user callbacks;
     /// retaining the large catch-all dispatch frame while those callbacks run
@@ -43057,6 +43084,10 @@ impl InterpreterCore {
         receiver: Option<Value>,
         receiver_register: Option<u32>,
     ) -> Result<Value, InterpreterError> {
+        if let Some(capability) = Self::native_value_host_effect_tag(builtin) {
+            let instruction_index = u32::try_from(self.ip).unwrap_or(u32::MAX);
+            check_hostcall_capability_gate(self, capability.as_ref(), instruction_index)?;
+        }
         let legacy_regexp_generation = self.legacy_regexp_generation;
         let receiver_given = receiver.is_some();
         let receiver_had_register = receiver_register.is_some();

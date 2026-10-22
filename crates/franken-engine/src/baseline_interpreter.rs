@@ -99,6 +99,8 @@ mod object_integrity;
 mod package_resolution;
 pub(crate) use package_resolution::is_node_core_module_specifier;
 mod primitive_conversion;
+#[cfg(test)]
+mod process_lifecycle_tests;
 mod promise_capability;
 mod prototype_getters;
 mod reflect_invocation;
@@ -18218,6 +18220,10 @@ impl InterpreterCore {
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let (_child, handle) = self.child_process_receiver(&receiver)?;
+        // Possession of a previously authorized handle does not authorize a
+        // later effect. Keep this outside the provider-error-to-false adapter:
+        // a containment request must stop execution, not become a false result.
+        check_hostcall_capability_gate(self, "process_spawn", self.ip as u32)?;
         let signal = match self.builtin_arg(args, 0)? {
             None | Some(Value::Null) | Some(Value::Undefined) => ProcessSignal::Terminate,
             Some(value @ Value::Str(_)) => {
@@ -18276,11 +18282,19 @@ impl InterpreterCore {
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let (_child, handle) = self.child_process_receiver(&receiver)?;
+        check_hostcall_capability_gate(self, "process_spawn", self.ip as u32)?;
         let chunk = self.builtin_arg(args, 0)?.unwrap_or(Value::str(""));
+        // The child handle is an engine-owned lifecycle identity, not bytes
+        // sent to the process. Preserve the actual payload's register and
+        // backing-storage provenance, including the active callback context.
+        // A Public alias of a Secret Buffer must not launder its stored bytes.
+        let request_label = self.writable_invocation_label(args)?.join(
+            &self.process_dynamic_value_label(&chunk, &mut BTreeSet::new()),
+        );
         let data = self.fs_value_bytes(&chunk)?;
         match self.perform_process_request(
             ProcessSpawnRequest::WriteStdin { handle, data },
-            &Label::Public,
+            &request_label,
         ) {
             Ok(_) => Ok(Value::Bool(true)),
             Err(error) => Err(error),
@@ -18291,6 +18305,7 @@ impl InterpreterCore {
     /// thread, delivering EOF to the child.
     fn child_process_stdin_end(&mut self, receiver: Value) -> Result<Value, InterpreterError> {
         let (_child, handle) = self.child_process_receiver(&receiver)?;
+        check_hostcall_capability_gate(self, "process_spawn", self.ip as u32)?;
         match self
             .perform_process_request(ProcessSpawnRequest::CloseStdin { handle }, &Label::Public)
         {

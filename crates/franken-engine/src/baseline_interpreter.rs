@@ -39614,6 +39614,9 @@ impl InterpreterCore {
                 return Err(error);
             }
         };
+        // A missing ordinary prototype link lazily inherits Object.prototype.
+        // Module namespaces instead have an explicit null [[Prototype]].
+        self.store_prototype_link(namespace_object, None);
         let compiled_module = retain_entry_program.then(|| Arc::new(module.clone()));
         self.module_state.modules.insert(
             specifier.to_string(),
@@ -151031,6 +151034,32 @@ mod function_prototype_call_apply_tests_current {
     }
 
     #[test]
+    fn module_namespace_prototype_is_null_without_changing_ordinary_objects() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        let ordinary = core.alloc_object_with_prototype(None).unwrap();
+        let ordinary_prototype = core.object_get_prototype(Some(&module), ordinary, 0).unwrap();
+        assert!(matches!(ordinary_prototype, Value::Object(_)));
+
+        let namespace = core.ensure_module_record(&module, "namespace-prototype.mjs").unwrap();
+        assert_eq!(
+            core.object_get_prototype(Some(&module), namespace, 0),
+            Ok(Value::Null)
+        );
+        assert_eq!(
+            core.ensure_module_record(&module, "namespace-prototype.mjs"),
+            Ok(namespace)
+        );
+        let handler = seed_object(&mut core, &[]);
+        let proxy = core.create_proxy_object(namespace, handler).unwrap();
+        assert_eq!(core.object_get_prototype(Some(&module), proxy, 0), Ok(Value::Null));
+        assert_eq!(
+            core.object_get_prototype(Some(&module), ordinary, 0),
+            Ok(ordinary_prototype)
+        );
+    }
+
+    #[test]
     fn native_perf_hooks_retains_classified_global_reference_labels() {
         for object_reference in [false, true] {
             for operation in [
@@ -151090,6 +151119,10 @@ mod function_prototype_call_apply_tests_current {
                 else {
                     panic!("namespace");
                 };
+                assert_eq!(
+                    core.object_get_prototype(Some(&module), namespace, 0),
+                    Ok(Value::Null)
+                );
                 let Value::Object(default) = core.perf_hooks_core_module().unwrap() else {
                     panic!("perf_hooks");
                 };

@@ -1468,6 +1468,8 @@ impl UncommittedEvidenceChainEvidence {
 pub struct PostCellFailure {
     pub primary_error: Box<OrchestratorError>,
     pub additional_errors: Vec<OrchestratorError>,
+    /// Exact signed denial batch appended after successful execution cleanup.
+    pub committed_evidence_chain: Option<EvidenceChainArtifact>,
     pub uncommitted_evidence_chain: Option<UncommittedEvidenceChainEvidence>,
     pub containment_saga_failure: Option<ContainmentSagaFailureEvidence>,
     pub cleanup: CellCleanupEvidence,
@@ -3282,6 +3284,7 @@ impl ExecutionOrchestrator {
                         PostCellFailure {
                             primary_error: Box::new(OrchestratorError::Ledger(ledger_error)),
                             additional_errors: Vec::new(),
+                            committed_evidence_chain: None,
                             uncommitted_evidence_chain: Some(uncommitted_evidence_chain),
                             containment_saga_failure: None,
                             cleanup,
@@ -3322,6 +3325,7 @@ impl ExecutionOrchestrator {
                     PostCellFailure {
                         primary_error: Box::new(OrchestratorError::Cell(close_error)),
                         additional_errors: Vec::new(),
+                        committed_evidence_chain: None,
                         uncommitted_evidence_chain: Some(uncommitted_evidence_chain),
                         containment_saga_failure: None,
                         cleanup,
@@ -3329,6 +3333,32 @@ impl ExecutionOrchestrator {
                 )))
             }
             (Err(mut failure), close_result) => {
+                let mut committed_evidence_chain = None;
+                // A capability stop is a completed membrane decision. Commit
+                // its signed batch only after recorder/cell cleanup succeeds;
+                // containment, recorder and commit failures retain the staged
+                // evidence and the original denial instead of certifying it.
+                if close_result.is_ok()
+                    && cell_execution_transcript.is_some()
+                    && failure.additional_errors.is_empty()
+                    && failure.containment_saga_failure.is_none()
+                    && matches!(
+                        failure.primary_error.as_ref(),
+                        OrchestratorError::Interpreter(InterpreterError::CapabilityDenied { .. })
+                    )
+                    && let Some(evidence) = failure.uncommitted_evidence_chain.as_ref()
+                {
+                    match self.commit_evidence_chain_batch(
+                        evidence.artifact.entries.clone(),
+                        evidence.artifact.receipt.clone(),
+                    ) {
+                        Ok(()) => {
+                            committed_evidence_chain = Some(evidence.artifact.clone());
+                            failure.uncommitted_evidence_chain = None;
+                        }
+                        Err(error) => failure.additional_errors.push(OrchestratorError::Ledger(error)),
+                    }
+                }
                 let (finalize_result, close_error) = match close_result {
                     Ok(finalize_result) => (Some(finalize_result), None),
                     Err(close_error) => {
@@ -3351,6 +3381,7 @@ impl ExecutionOrchestrator {
                     PostCellFailure {
                         primary_error: failure.primary_error,
                         additional_errors: failure.additional_errors,
+                        committed_evidence_chain,
                         uncommitted_evidence_chain: failure
                             .uncommitted_evidence_chain
                             .map(|evidence| *evidence),
@@ -6139,12 +6170,28 @@ mod tests {
             OrchestratorError::Interpreter(InterpreterError::CapabilityDenied { capability })
                 if capability == "net.write"
         ));
-        let evidence = error
-            .uncommitted_evidence_chain()
-            .expect("a capability denial must carry signed evidence");
-        let entries = &evidence.artifact.entries;
+        let lifecycle = error
+            .post_cell_failure()
+            .expect("denials are post-cell failures");
+        assert!(lifecycle.cleanup.close_succeeded());
+        assert!(lifecycle.additional_errors.is_empty());
+        assert!(error.uncommitted_evidence_chain().is_none());
+        assert_eq!(orchestrator.execution_count(), 0);
+        let committed = lifecycle.committed_evidence_chain.as_ref().expect("portable denial batch");
+        committed.verify_genesis(
+            &orchestrator.evidence_verification_identity(),
+            orchestrator.evidence_ledger_id(),
+            &lifecycle.cleanup.trace_id,
+        ).expect("committed batch retains its independently verifiable signed chain receipt");
+        let entries = orchestrator.ledger().entries();
         assert_eq!(entries.len(), 1);
+        assert_eq!(entries, committed.entries.as_slice());
+        assert_eq!(
+            orchestrator.ledger().evidence_chain_head(),
+            Some(committed.receipt.head_chain_hash.as_str())
+        );
         let entry = &entries[0];
+        assert_eq!(entry.trace_id, lifecycle.cleanup.trace_id);
         assert_eq!(
             entry.metadata.get("outcome").map(String::as_str),
             Some("capability_denied")
@@ -6157,19 +6204,29 @@ mod tests {
             entry.chosen_action.action_name,
             format!("{}", ContainmentAction::Terminate)
         );
-        let lifecycle = error
-            .post_cell_failure()
-            .expect("denials are post-cell failures");
-        evidence
-            .verify_with_context(
-                &orchestrator.evidence_verification_identity(),
-                orchestrator.evidence_chain_instance_id(),
-                orchestrator.evidence_ledger_id(),
-                &lifecycle.cleanup.trace_id,
-                orchestrator.ledger().evidence_chain_next_sequence(),
-                orchestrator.ledger().evidence_chain_head(),
-            )
-            .expect("denial evidence must verify against the orchestrator's identity and chain");
+        entry
+            .verify_with_trusted_identity(&orchestrator.evidence_verification_identity())
+            .expect("committed denial must retain its runtime signature");
+        let mut tampered = entry.clone();
+        tampered.metadata.insert("denied_capability".into(), "fs.read".into());
+        assert!(tampered.verify_with_trusted_identity(
+            &orchestrator.evidence_verification_identity()
+        ).is_err());
+        assert_eq!(orchestrator.ledger().evidence_chain_next_sequence(), 1);
+        let denial_head = orchestrator.ledger().evidence_chain_head().unwrap().to_string();
+        let follow_up = orchestrator.execute(&simple_package()).expect("follow-up run");
+        EvidenceChainArtifact::new(
+            follow_up.evidence_entries.clone(),
+            follow_up.evidence_chain_receipt.clone(),
+        )
+        .verify_with_context(
+            &orchestrator.evidence_verification_identity(),
+            orchestrator.evidence_ledger_id(),
+            &follow_up.trace_id,
+            1,
+            Some(&denial_head),
+        )
+        .expect("the next successful batch must extend the committed denial");
 
         // Failures that are not capability denials carry no denial evidence.
         let thrown = orchestrator
@@ -6180,6 +6237,50 @@ mod tests {
                 entry.metadata.get("outcome").map(String::as_str) != Some("capability_denied")
             })
         }));
+    }
+
+    #[test]
+    fn capability_denial_retains_uncommitted_evidence_when_close_or_commit_fails() {
+        for commit_failure in [false, true] {
+            let mut package = package_with_source(r#""hostcall<\"net.write\">";"#);
+            package.capabilities = execution_capabilities();
+            let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig {
+                cell_close_budget_ms: if commit_failure { 1000 } else { 1 },
+                ..OrchestratorConfig::default()
+            });
+            orchestrator.ledger_commit_failure_override = commit_failure;
+            let error = orchestrator.execute(&package).expect_err("denial remains a failure");
+            assert!(matches!(
+                error.primary_error(),
+                OrchestratorError::Interpreter(InterpreterError::CapabilityDenied { capability })
+                    if capability == "net.write"
+            ));
+            let failure = error.post_cell_failure().expect("cleanup evidence");
+            assert!(failure.committed_evidence_chain.is_none());
+            assert_eq!(failure.cleanup.close_succeeded(), commit_failure);
+            assert!(matches!(
+                failure.additional_errors.as_slice(),
+                [OrchestratorError::Ledger(_)] if commit_failure
+            ) || matches!(
+                failure.additional_errors.as_slice(),
+                [OrchestratorError::Cell(_)] if !commit_failure
+            ));
+            let evidence = error.uncommitted_evidence_chain().expect("exact staged batch");
+            evidence.verify_with_context(
+                &orchestrator.evidence_verification_identity(),
+                orchestrator.evidence_chain_instance_id(),
+                orchestrator.evidence_ledger_id(),
+                &failure.cleanup.trace_id,
+                0,
+                None,
+            ).expect("uncommitted denial retains its signature and unchanged chain position");
+            assert_eq!(evidence.artifact.entries.len(), 1);
+            assert_eq!(evidence.commit_state, EvidenceChainCommitState::Uncommitted);
+            assert!(orchestrator.ledger().is_empty());
+            assert_eq!(orchestrator.ledger().evidence_chain_next_sequence(), 0);
+            assert!(orchestrator.ledger().evidence_chain_head().is_none());
+            assert_eq!(orchestrator.execution_count(), 0);
+        }
     }
 
     fn package_with_source(source: &str) -> ExtensionPackage {

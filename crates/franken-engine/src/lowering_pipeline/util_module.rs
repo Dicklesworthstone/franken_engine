@@ -348,8 +348,9 @@ const BUILTIN_REQUIRE_SEARCH: Search = Search {
 /// The standard globals UTIL_SOURCE reads by name. A program that declares
 /// one at its top level would capture the module's reference, so the
 /// module reads those through `globalThis` instead.
-const MODULE_GLOBALS: [&str; 16] = [
+const MODULE_GLOBALS: [&str; 17] = [
     "Array",
+    "Buffer",
     "Error",
     "JSON",
     "Map",

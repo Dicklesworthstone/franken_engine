@@ -729,6 +729,9 @@
   var mapDelete = Map.prototype.delete;
   var mapSize = Object.getOwnPropertyDescriptor(Map.prototype, 'size').get;
   var collectionApply = Reflect.apply;
+  var ComparisonBytes = Uint8Array;
+  // Pure-ECMAScript embeddings may omit Buffer; retain the scalar fallback.
+  var compareBytes = typeof Buffer === 'undefined' ? undefined : Buffer.compare;
   var collectionIterator = Symbol.iterator;
   var ComparisonTypeError = TypeError;
   var comparisonCreate = Object.create;
@@ -863,15 +866,25 @@
     }
     return count === candidateCount;
   }
-  // Compare the visible range, not a view's entire backing store. Construct
-  // byte views only after checking lengths; indexed reads stay on the native
-  // typed-array path and use ordinary interpreter memory/work accounting.
-  function equalByteRanges(bufferA, offsetA, lengthA, bufferB, offsetB, lengthB) {
+  // Compare only the selected byte windows. Large, ordinary buffers use the
+  // existing native Buffer comparator rather than dispatching JavaScript for
+  // every byte. Views share their input storage; no payload-sized copy is made.
+  // Keep the scalar path for small or guest-coerced windows. Such coercion can
+  // resize/detach an earlier view, whose indexed-read behavior must not change.
+  function equalByteRanges(bufferA, offsetA, lengthA, bufferB, offsetB, lengthB, knownBuffers) {
     if (lengthA !== lengthB) {
       return false;
     }
-    var bytesA = new Uint8Array(bufferA, offsetA, lengthA);
-    var bytesB = new Uint8Array(bufferB, offsetB, lengthB);
+    var ordinary = compareBytes !== undefined && typeof lengthA === 'number' && lengthA >= 1024 &&
+      typeof offsetA === 'number' && typeof offsetB === 'number' &&
+      (knownBuffers || (typeTag(bufferA) === 'ArrayBuffer' && typeTag(bufferB) === 'ArrayBuffer'));
+    var bytesA = new ComparisonBytes(bufferA, offsetA, lengthA);
+    var bytesB = new ComparisonBytes(bufferB, offsetB, lengthB);
+    if (ordinary) {
+      // Preserve cheap rejection when the first byte already differs.
+      if (bytesA[0] !== bytesB[0]) { return false; }
+      return compareBytes(bytesA, bytesB) === 0;
+    }
     for (var i = 0; i < lengthA; i++) {
       if (bytesA[i] !== bytesB[i]) {
         return false;
@@ -906,7 +919,7 @@
       }
     }
     if (tag === 'ArrayBuffer' &&
-        !equalByteRanges(a, 0, a.byteLength, b, 0, b.byteLength)) {
+        !equalByteRanges(a, 0, a.byteLength, b, 0, b.byteLength, true)) {
       return false;
     }
     if (tag === 'DataView' &&

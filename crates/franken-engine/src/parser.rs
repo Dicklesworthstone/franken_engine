@@ -13593,6 +13593,9 @@ fn reject_parameter_lexical_conflicts(
     span: &SourceSpan,
     context: &ParseExecutionContext<'_>,
 ) -> ParseResult<()> {
+    if params.is_empty() {
+        return Ok(());
+    }
     let lexical = annex_b_lexical_names(body.iter(), false);
     if let Some(name) = params
         .iter()
@@ -17885,7 +17888,10 @@ mod tests {
         ] {
             let error = parser.parse(source, ParseGoal::Script).expect_err(source);
             assert_eq!(error.code, ParseErrorCode::InvalidSyntax, "{source}: {error:?}");
-            assert!(error.message.contains("redeclares a function parameter"), "{source}: {error:?}");
+            assert!(
+                error.message.contains("redeclares a function parameter"),
+                "{source}: {error:?}"
+            );
         }
         for source in [
             "function f(x) { var x; }",

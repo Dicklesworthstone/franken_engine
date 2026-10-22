@@ -457,8 +457,8 @@
   }
   if (typeof genericDuplexFrom === 'function') property(D, 'from', from);
   // Pipeline still owns scheduling, cancellation, function stages and Node
-  // teardown. This boundary only normalizes explicit Web stages to its
-  // existing adapters; it does not build another pump or collect input.
+  // teardown. This boundary normalizes explicit Web stages and promised
+  // sources through existing adapters; it builds no new pump or input buffer.
   // As at the explicit Node/Web boundary, null readable chunks are refused,
   // not interpreted as EOF. The writer lock has Node's retained ownership.
   const pipelineSlice = Array.prototype.slice;
@@ -559,8 +559,23 @@
       }
     };
   }
-  function adaptPipelineStage(value, shape, owner, modes) {
-    if (shape === undefined) return value;
+  function adaptPipelineStage(value, shape, owner, modes, sourceValue) {
+    if (shape === undefined) {
+      // The core source protocol accepts streams and iterables. A promised
+      // source must first pass through the EXISTING generic Duplex converter,
+      // which observes the producer now and owns cancellation/late delivery.
+      // Do not await it here: that would let a never-settling producer prevent
+      // the pipeline from acquiring its abort signal and closing its sinks.
+      if (sourceValue && value !== null && typeof value === 'object' &&
+          !nodeStage(value) && !iterableStage(value) && 'then' in value) {
+        const node = apply(genericDuplexFrom, D, [value]);
+        // A later setup failure can precede registration by the core. Keep
+        // this conversion-created source owned until teardown has completed.
+        owner.own(node, function () {});
+        return node;
+      }
+      return value;
+    }
     if (shape.blob !== undefined) {
       const node = from(shape.blob);
       // A later stage may fail before the core takes this source. The same
@@ -611,7 +626,7 @@
           return isBlob(result) ? result :
             adaptPipelineStage(result, webStage(result, 0, count), owner);
         };
-      } else normalized[i] = adaptPipelineStage(value, shapes[i], owner);
+      } else normalized[i] = adaptPipelineStage(value, shapes[i], owner, undefined, i === 0);
     }
     return { stages: normalized, destination: count ? stages[count - 1] : undefined,
       webDestination: count ? shapes[count - 1] !== undefined : false };

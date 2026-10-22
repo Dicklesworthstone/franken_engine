@@ -13576,11 +13576,37 @@ fn parse_function_body_statements(
 ) -> ParseResult<Vec<Statement>> {
     with_function_strict_mode(body_src, false, context, |context| {
         let mut body = parse_body_statements(body_src, goal, span, context)?;
+        reject_parameter_lexical_conflicts(params, &body, span, context)?;
         if !context.strict_mode {
             apply_annex_b_block_functions(&mut body, params);
         }
         Ok(body)
     })
+}
+
+/// A function body's top-level lexical names cannot redeclare a parameter
+/// (ES2020 14.1.1). Nested blocks may shadow it, and body-level function/var
+/// declarations share the parameter's variable environment instead.
+fn reject_parameter_lexical_conflicts(
+    params: &[FunctionParam],
+    body: &[Statement],
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<()> {
+    let lexical = annex_b_lexical_names(body.iter(), false);
+    if let Some(name) = params
+        .iter()
+        .flat_map(|parameter| parameter.pattern.binding_names())
+        .find(|name| lexical.contains(*name))
+    {
+        return Err(ParseError::new(
+            ParseErrorCode::InvalidSyntax,
+            format!("lexical declaration '{name}' redeclares a function parameter"),
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
+    Ok(())
 }
 
 fn with_function_strict_mode<T>(
@@ -16288,6 +16314,7 @@ fn parse_function_expression_with_super(
             reject_use_strict_with_non_simple_params(body_src, &params, span, context)?;
             reject_duplicate_params(&params, false, span, context)?;
             let mut body = parse_body_statements(body_src, goal, span, context)?;
+            reject_parameter_lexical_conflicts(&params, &body, span, context)?;
             if !context.strict_mode {
                 apply_annex_b_block_functions(&mut body, &params);
             }
@@ -17084,6 +17111,7 @@ fn parse_class_body_members(
                     reject_accessor_arity(kind == MethodKind::Get, &params, span, context)?;
                 }
                 let body = parse_body_statements(body_src, goal, span, context)?;
+                reject_parameter_lexical_conflicts(&params, &body, span, context)?;
                 Ok((params, body))
             })
         });
@@ -17809,6 +17837,7 @@ fn parse_function_declaration(
             reject_use_strict_with_non_simple_params(body_src, &params, &span, context)?;
             reject_duplicate_params(&params, false, &span, context)?;
             let mut body = parse_body_statements(body_src, goal, &span, context)?;
+            reject_parameter_lexical_conflicts(&params, &body, &span, context)?;
             if !context.strict_mode {
                 apply_annex_b_block_functions(&mut body, &params);
             }
@@ -17840,6 +17869,37 @@ mod tests {
     use std::io::Cursor;
 
     use super::*;
+
+    #[test]
+    fn function_parameters_reject_only_body_lexical_redeclarations() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "function f(x) { let x; }",
+            "(function(x) { const x = 1; });",
+            "(x) => { class x {} };",
+            "async function f({x}) { let x; }",
+            "function* f([x]) { const x = 1; }",
+            "({ method(x) { let x; } });",
+            "class C { method(x) { let x; } }",
+            "(function(exports, require, module, __filename, __dirname) { const module = 42; });",
+        ] {
+            let error = parser.parse(source, ParseGoal::Script).expect_err(source);
+            assert_eq!(error.code, ParseErrorCode::InvalidSyntax, "{source}: {error:?}");
+            assert!(error.message.contains("redeclares a function parameter"), "{source}: {error:?}");
+        }
+        for source in [
+            "function f(x) { var x; }",
+            "function f(x) { function x() {} }",
+            "function f(x) { { let x; } }",
+            "(x) => { { const x = 1; } };",
+            "function f(x) { function g() { let x; } }",
+            "function f({x}) { let y; }",
+            "class C { method(x) { { let x; } } }",
+            "(function(exports, require, module, __filename, __dirname) { module.exports = 42; return; });",
+        ] {
+            parser.parse(source, ParseGoal::Script).expect(source);
+        }
+    }
 
     #[test]
     fn template_quasi_cooks_surrogate_pair_escapes_into_code_point() {

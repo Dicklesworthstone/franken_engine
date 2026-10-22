@@ -12,6 +12,14 @@
   const Bytes = Uint8Array;
   const isBuffer = Buffer.isBuffer;
   const Type = TypeError;
+  // Authenticate binary payloads without invoking guest metadata getters.
+  // The actual read remains the public arrayBuffer method, as Duplex.from
+  // specifies; the existing generic converter owns its promise and lifetime.
+  const blobSize = typeof Blob === 'function' ? descriptor(Blob.prototype, 'size').get : undefined;
+  function isBlob(value) {
+    if (blobSize === undefined || value === null || typeof value !== 'object') return false;
+    try { apply(blobSize, value, []); return true; } catch (error) { return false; }
+  }
   const ErrorClass = Error;
   const R = stream.Readable, W = stream.Writable, D = stream.Duplex;
   const push = R.prototype.push, pause = R.prototype.pause, resume = R.prototype.resume;
@@ -406,6 +414,11 @@
   property(D, 'fromWeb', duplexFromWeb); property(D, 'toWeb', duplexToWeb);
   const genericDuplexFrom = D.from;
   function from(body) {
+    if (!(body instanceof R) && !(body instanceof W) && isBlob(body)) {
+      // Node publishes a Blob as one ArrayBuffer in object mode, including
+      // an empty Blob. Do not turn it into a byte iterator or split its record.
+      return apply(genericDuplexFrom, D, [body.arrayBuffer()]);
+    }
     // Keep the canonical generic converter for Node streams, iterables,
     // functions, promises and user-defined pairs. Only native Web brands
     // select these adapters; properties on a lookalike are not authority.
@@ -469,6 +482,10 @@
   }
   function webStage(value, index, count, openEnds) {
     if (value === null || typeof value !== 'object' || nodeStage(value) || pipelineIsArray(value)) return undefined;
+    if (isBlob(value)) {
+      if (index !== 0) throw fail('read-only Blob pipeline stage');
+      return { blob: value };
+    }
     // Hints do not grant a brand. They avoid loading the Web module for an
     // ordinary Node-only pipeline, iterable, or options dictionary. An own
     // replacement of getReader/getWriter is never invoked or trusted.
@@ -544,6 +561,13 @@
   }
   function adaptPipelineStage(value, shape, owner, modes) {
     if (shape === undefined) return value;
+    if (shape.blob !== undefined) {
+      const node = from(shape.blob);
+      // A later stage may fail before the core takes this source. The same
+      // pipeline owner suppresses late results and observes its teardown.
+      owner.own(node, function () {});
+      return node;
+    }
     const config = create(null);
     config.objectMode = true; config.highWaterMark = 1;
     config.decodeStrings = false; config.allowHalfOpen = true;
@@ -582,7 +606,10 @@
         // core-provided signal and return-value validation, including throws.
         normalized[i] = function (options) {
           const result = value(options);
-          return adaptPipelineStage(result, webStage(result, 0, count), owner);
+          // A function source must still return an iterable/Web stream. Node
+          // accepts Blob as an explicit stage, not as a factory return value.
+          return isBlob(result) ? result :
+            adaptPipelineStage(result, webStage(result, 0, count), owner);
         };
       } else normalized[i] = adaptPipelineStage(value, shapes[i], owner);
     }
@@ -615,7 +642,7 @@
         // A Web destination is not an options dictionary. Snapshot options
         // and validate the signal before adopting any endpoint.
         if (last && typeof last === 'object' && !nodeStage(last) && !iterableStage(last) &&
-            !('getReader' in last) && !('getWriter' in last) && !('readable' in last && 'writable' in last)) {
+            !isBlob(last) && !('getReader' in last) && !('getWriter' in last) && !('readable' in last && 'writable' in last)) {
           args.length--; config = create(null); config.end = last.end; config.signal = last.signal;
           if (config.signal !== undefined) apply(aborted, config.signal, []);
         }

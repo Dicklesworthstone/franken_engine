@@ -15,8 +15,8 @@ use super::super::{
 use super::super::super::with_statement::{Outcome, Walk, lexical_names, var_names};
 use crate::ast::{BindingPattern, Expression, Statement, SyntaxTree};
 
-const GLOBALS: [&str; 11] = [
-    "AbortSignal", "Array", "Buffer", "Error", "EventTarget", "Object", "Promise",
+const GLOBALS: [&str; 12] = [
+    "AbortSignal", "Array", "Blob", "Buffer", "Error", "EventTarget", "Object", "Promise",
     "Reflect", "Symbol", "TypeError", "Uint8Array",
 ];
 const SOURCE: &str = include_str!("stream_web_bridge.js");

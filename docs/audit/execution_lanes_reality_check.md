@@ -107,8 +107,22 @@ Six regression tests passed twice; final pre-commit artifacts are in
 Clock/command/event injection is harness validation only, not runtime security
 evidence. Bash syntax and `shellcheck -x` passed. UBS found no critical issues;
 strict JSON decoding in tests intentionally raises on malformed evidence.
-Linux execution and independent verification remain outstanding, and the bead
-stays in progress rather than being closed on this solo macOS result.
+Follow-through on 2026-10-22 re-executed the six regressions against committed
+revision `c8242627dd784d0fe8e27c22adbeba767d512a70` on both macOS arm64
+and Linux x64. Each platform completed two eight-step positive workflows and
+all five injected failure cases. Separate artifact inspection verified all
+seven file hashes, the directory-path hash and three bundle content hashes
+per positive workflow; strict replay completed. The official Linux v0.2.0
+archive matches published SHA256
+`5be29592ad68fd33900300b7234b5c118075683a0aa08a94d8f6282fd3d41311`.
+The five staged source/support files were checked against committed bytes.
+Bash syntax, shellcheck and UBS passed; UBS reports zero critical findings
+and seven strict JSON-decoding warnings in tests. Evidence is retained under
+`artifacts/reality_check/20261022T0027-JZjolY/linux-readme/`, including the
+Linux raw test artifacts and macOS command logs. This satisfies the harness
+bug's acceptance by explicitly labeled **solo re-execution**; `bd-9vouw.511`
+is closed. Independent verification and fresh-main Rust qualification are
+still absent. No runtime, security or performance claim is promoted.
 
 The three claim spans were rebound to the existing qualified README text:
 006 -> line 144, 008 -> line 2408, 009 -> line 150. No required substring,
@@ -223,18 +237,31 @@ is inferred. The root SQLite cache is schema 17 while installed `br` expects
 records, with exact semantic-diff and freshness checks before publication;
 the shared cache and unrelated edits are preserved.
 
-No Rust runtime source, runtime acceptance threshold, claim state or release
-was changed. Maintenance changed the smoke runner, added its real-binary
-regression target, and corrected three claim source bindings. No issues were
-closed. The filled session honesty/work worksheets are retained at
+The initial audit changed no Rust runtime source, runtime acceptance threshold,
+claim state or release. Maintenance changed the smoke runner, added its
+real-binary regression target, and corrected three claim source bindings. No
+issues were closed during that initial audit. The filled session honesty/work
+worksheets are retained at
 `artifacts/reality_check/20261022T0027-JZjolY/session-honesty-disposition.md`.
 Disposition: the observed zero-step green was repaired and disclosed;
 gate self-weakening and proof-class inflation were checked explicitly. The
 audit earns no runtime/performance capability credit. All verification here
 is solo re-execution, not independent review. Full main compilation/testing,
-Linux/Windows release execution, exhaustive package/React/Wasm compatibility,
+Windows release execution, exhaustive package/React/Wasm compatibility,
 live fleet/TEE campaigns, complete conformance and external reproduction
 remain explicitly unverified.
+
+The subsequent stream implementation under `bd-305gi.2` remains partial:
+mixed CJS routes share the existing module loader, and writable completion
+now preserves callback-scheduled nextTick order. Nine production-JavaScript
+tests pass beside live Node20/24/26; the previous source fails five of those
+nine. These are host tests, not native lowering proof. The four added Rust
+regressions and native capability/IFC/replay qualification remain unexecuted,
+and full CJS facade retirement remains open. Local disk admission still
+refuses heavy Cargo lanes. The released engine rejects the first-class
+EventEmitter import required to host the current factory as guest source;
+that attempted shortcut provides no current-main integration credit. No
+cache was deleted, gate weakened or peer process interrupted.
 
 ## Historical assessment — superseded, retained for provenance
 

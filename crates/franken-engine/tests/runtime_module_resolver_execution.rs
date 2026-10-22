@@ -940,6 +940,110 @@ module.exports = {
 }
 
 #[test]
+fn delivered_native_esm_imports_and_reexports_execute_shared_providers() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![
+                ("entry.mjs", definition(ModuleSyntax::EsModule, r#"
+import buffer, { Buffer as NativeBuffer } from 'buffer';
+import * as bufferNamespace from 'node:buffer';
+import events, { EventEmitter, once } from 'node:events';
+import os, { EOL } from 'os';
+import querystring, { stringify } from 'node:querystring';
+import url, { URL, URLSearchParams } from 'url';
+import timers, { setTimeout, clearTimeout } from 'node:timers';
+import perf, { performance } from 'perf_hooks';
+import { join, encode } from './barrel.mjs';
+import commonjs from './consumer.cjs';
+console.log(NativeBuffer.from('bridge').length, buffer.Buffer === NativeBuffer,
+    bufferNamespace.default === buffer, commonjs.buffer === buffer);
+console.log(events === EventEmitter, commonjs.events === events, typeof once);
+console.log(os.EOL === EOL, typeof EOL, querystring === commonjs.querystring);
+console.log(stringify({ a: 'x y' }), encode({ a: 1 }), join('root', 'file'));
+console.log(url.URL === URL, typeof URLSearchParams, new URL('https://example.com/a').pathname);
+console.log(timers.setTimeout === setTimeout, timers.clearTimeout === clearTimeout,
+    perf.performance === performance, typeof performance.now);
+import('buffer').then(function(again) {
+    console.log(again === bufferNamespace, again.Buffer === NativeBuffer);
+});
+"#)),
+                ("barrel.mjs", definition(ModuleSyntax::EsModule,
+                    "export { join } from 'node:path'; export { stringify as encode } from 'querystring';")),
+                ("consumer.cjs", definition(ModuleSyntax::CommonJs,
+                    "module.exports = { buffer: require('node:buffer'), events: require('events'), querystring: require('querystring') };")),
+            ]).with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+        let policy = Arc::new(RecordingPolicy {
+            allow_native_builtins: true,
+            ..RecordingPolicy::default()
+        });
+        let installed =
+            ExecutionModuleResolver::new(&source.module.record.id, resolver, policy.clone());
+        let result = orchestrator(lane, ModuleSyntax::EsModule)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("bounded static imports and reexports call the actual native providers");
+        assert_eq!(
+            lines(&result),
+            [
+                "6 true true true",
+                "true true function",
+                "true string true",
+                "a=x%20y a=1 root/file",
+                "true function /a",
+                "true true true function",
+                "true true",
+            ]
+        );
+        assert!(
+            policy
+                .requests
+                .lock()
+                .expect("policy log")
+                .iter()
+                .all(|(request, _)| !request.specifier.starts_with('\0'))
+        );
+    }
+}
+
+#[test]
+fn delivered_native_esm_snapshots_do_not_export_guest_added_names() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![(
+                "entry.cjs",
+                definition(
+                    ModuleSyntax::CommonJs,
+                    r#"
+const q = require('querystring');
+q.added = 42;
+const original = q.stringify;
+import('node:querystring').then(function(first) {
+    console.log(first.default === q, 'added' in first, first.stringify === original);
+    q.stringify = function() { return 'changed'; };
+    return import('querystring').then(function(second) {
+        console.log(second === first, second.stringify({ a: 1 }), second.default.stringify());
+    });
+});
+"#,
+                ),
+            )])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let result = orchestrator(lane, ModuleSyntax::CommonJs)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("named exports snapshot the fixed provider surface and default stays live");
+        assert_eq!(lines(&result), ["true false true", "true a=1 changed"]);
+    }
+}
+
+#[test]
 fn delivered_path_esm_namespaces_share_the_native_commonjs_objects() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         let resolver = Arc::new(

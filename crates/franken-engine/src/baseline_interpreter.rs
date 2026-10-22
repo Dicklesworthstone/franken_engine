@@ -39406,22 +39406,6 @@ impl InterpreterCore {
                         .to_string(),
                 });
             }
-            if style != ImportStyle::Require
-                && !matches!(
-                    NativeBuiltinModule::from_record(record),
-                    Some(
-                        NativeBuiltinModule::Path
-                            | NativeBuiltinModule::PathPosix
-                            | NativeBuiltinModule::PathWin32
-                    )
-                )
-            {
-                return Err(InterpreterError::ModuleLoweringFailed {
-                    specifier: specifier.to_string(),
-                    error: "native built-in providers currently require a CommonJS require edge"
-                        .to_string(),
-                });
-            }
         }
         Ok(resolved)
     }
@@ -40224,13 +40208,9 @@ impl InterpreterCore {
             && Self::unit_declares_bounded_imports(module))
         .then_some(crate::lowering_pipeline::IFC_BOUNDED_IMPORT_LABEL);
         if let Some(source) = delivered.as_ref()
-            && let Some(
-                native @ (NativeBuiltinModule::Path
-                | NativeBuiltinModule::PathPosix
-                | NativeBuiltinModule::PathWin32),
-            ) = NativeBuiltinModule::from_record(&source.module.record)
+            && let Some(native) = NativeBuiltinModule::from_record(&source.module.record)
         {
-            return self.load_native_path_namespace(module, source, native, import_bound.as_ref());
+            return self.load_native_builtin_namespace(module, source, native, import_bound.as_ref());
         }
         self.load_module_resolved(
             module,
@@ -40373,11 +40353,26 @@ impl InterpreterCore {
         if let Some(object) = self.builtin_prototypes.get(PERF_HOOKS_MODULE_KEY) {
             return Ok(Value::Object(*object));
         }
-        let performance = match self.resolve_runtime_name_binding("performance") {
-            Some(binding) => binding.state()?.value.clone(),
-            None => Value::Undefined,
+        let (performance, label) = match self.resolve_runtime_name_binding("performance") {
+            Some(binding) => {
+                let state = binding.state()?;
+                self.check_temporary_memory_budget(
+                    Self::estimate_value_bytes(&state.value)
+                        .saturating_add(Self::estimate_label_bytes(&state.label)),
+                )?;
+                (state.value.clone(), state.label.clone())
+            }
+            None => (Value::Undefined, Label::Public),
         };
         let object = self.alloc_object_with_properties(&[("performance", performance)])?;
+        // The mutable binding may carry provenance even when its value is a
+        // scalar or an otherwise Public object. Retain that reference label
+        // before caching the provider so neither CJS nor ESM can erase it.
+        self.set_own_runtime_property_label(
+            object,
+            &RuntimePropertyKey::String(JsString::from("performance")),
+            &label,
+        )?;
         self.mutate_builtin_prototypes(|prototypes| {
             prototypes.insert(PERF_HOOKS_MODULE_KEY.to_string(), object);
         });
@@ -40659,46 +40654,302 @@ impl InterpreterCore {
         }
     }
 
-    /// Materialize one ESM namespace per native Path variant. Its default
+    /// Keep named exports tied to the engine's supported provider surface.
+    /// CommonJS mutations change the values read on first ESM initialization,
+    /// but adding an arbitrary property cannot add a module export. Reuse the
+    /// facade inventories where the provider itself is table-driven.
+    fn native_builtin_export_names(native: NativeBuiltinModule) -> Vec<&'static str> {
+        match native {
+            NativeBuiltinModule::Buffer => vec![
+                "Buffer",
+                "Blob",
+                "atob",
+                "btoa",
+                "kMaxLength",
+                "kStringMaxLength",
+                "constants",
+                "INSPECT_MAX_BYTES",
+            ],
+            NativeBuiltinModule::Events => {
+                vec![
+                    "once",
+                    "EventEmitter",
+                    "defaultMaxListeners",
+                    "errorMonitor",
+                ]
+            }
+            NativeBuiltinModule::Os => crate::lowering_pipeline::OS_METHOD_NAMES
+                .into_iter()
+                .chain(["constants", "EOL", "devNull"])
+                .collect(),
+            NativeBuiltinModule::Querystring => {
+                crate::lowering_pipeline::QUERYSTRING_METHOD_NAMES.to_vec()
+            }
+            NativeBuiltinModule::Url => {
+                vec!["URL", "URLSearchParams", "fileURLToPath", "format", "parse"]
+            }
+            NativeBuiltinModule::Timers => Self::timer_global_kinds()
+                .into_iter()
+                .filter_map(|(name, _)| (name != "queueMicrotask").then_some(name))
+                .collect(),
+            NativeBuiltinModule::PerfHooks => vec!["performance"],
+            NativeBuiltinModule::Path
+            | NativeBuiltinModule::PathPosix
+            | NativeBuiltinModule::PathWin32 => PATH_ESM_EXPORT_NAMES.to_vec(),
+        }
+    }
+
+    /// Bound the mutable state reachable from a native export without calling
+    /// guest code. A descriptor authenticates the provider, not later guest
+    /// writes to its shared CommonJS object. Accessors, proxies and opaque
+    /// suspended values stay fail-high. Callable effects retain their ordinary
+    /// invocation checks; their existing property storage is visited here too.
+    /// The iterative walk charges every edge and reserves its guest-sized
+    /// worklist before growing it, including on cached namespace imports.
+    fn native_builtin_state_label(
+        &mut self,
+        module: &Ir3Module,
+        root: ObjectId,
+    ) -> Result<Label, InterpreterError> {
+        let mut pending = vec![root];
+        let mut visited = BTreeSet::new();
+        let mut label = Label::Internal;
+        while let Some(object_id) = pending.pop() {
+            self.charge_property_copy_work()?;
+            if visited.contains(&object_id) {
+                continue;
+            }
+            let object = self
+                .heap
+                .get(object_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+            let edges = object
+                .properties
+                .exact_len()
+                .saturating_add(object.properties.baseline_symbol_key_order().len());
+            let work = u64::try_from(edges).unwrap_or(u64::MAX).saturating_mul(3);
+            if work
+                > self
+                    .config
+                    .instruction_budget
+                    .saturating_sub(self.instructions_executed)
+            {
+                return Err(InterpreterError::BudgetExhausted {
+                    executed: self.instructions_executed,
+                    budget: self.config.instruction_budget,
+                });
+            }
+            // An accessor can contribute storage and receivers for two
+            // intrinsic functions. Include Vec's retained spare capacity.
+            let slots = pending
+                .len()
+                .saturating_add(edges.saturating_mul(4))
+                .saturating_add(1);
+            let capacity = pending.capacity().max(slots.saturating_mul(2));
+            let temporary_bytes = (visited.len().saturating_add(1) as u64)
+                .saturating_mul(64)
+                .saturating_add(
+                    (capacity as u64).saturating_mul(std::mem::size_of::<ObjectId>() as u64),
+                );
+            self.check_temporary_memory_budget(
+                temporary_bytes.saturating_add(Self::estimate_label_bytes(&label)),
+            )?;
+            visited.insert(object_id);
+            if object.brand() == Some(PROXY_TYPE_TAG)
+                || !object.private_elements.is_empty()
+                || object.primitive_value.is_some()
+                || object.blob.is_some()
+                || object.regexp.is_some()
+                || self.weakmap_storage.contains_key(&object_id)
+            {
+                // These payloads are not ordinary labeled property edges.
+                // Keep them opaque until their complete retained-state label
+                // contract is available to this bounded import path.
+                return Ok(Label::TopSecret);
+            }
+            for candidate in self
+                .object_mutation_labels
+                .get(&object_id)
+                .into_iter()
+                .chain(self.binary_storage_label_ref(object_id))
+                .chain(self.url_state_label_ref(object_id))
+                .chain(self.cluster_state_label_ref(object_id))
+                .chain(self.stream_state_label_ref(object_id))
+                .chain(object.property_labels.values_unordered())
+            {
+                self.check_temporary_memory_budget(
+                    temporary_bytes
+                        .saturating_add(Self::estimate_label_bytes(&label))
+                        .saturating_add(Self::estimate_label_bytes(candidate)),
+                )?;
+                label = self.join_owned_label_with_temporary_budget(label, candidate)?;
+            }
+            for (_, property) in object.property_labels.baseline_symbol_properties() {
+                if let BaselineSymbolProperty::Data(candidate) = property {
+                    self.check_temporary_memory_budget(
+                        temporary_bytes
+                            .saturating_add(Self::estimate_label_bytes(&label))
+                            .saturating_add(Self::estimate_label_bytes(candidate)),
+                    )?;
+                    label = self.join_owned_label_with_temporary_budget(label, candidate)?;
+                }
+            }
+            let mut opaque = false;
+            for value in object.properties.values_unordered() {
+                opaque |= self.queue_native_builtin_value(module, value, &mut pending)?;
+            }
+            for (_, property) in object.properties.baseline_symbol_properties() {
+                match property {
+                    BaselineSymbolProperty::Data(value) => {
+                        opaque |= self.queue_native_builtin_value(module, value, &mut pending)?;
+                    }
+                    BaselineSymbolProperty::Accessor { get, set } => {
+                        opaque |= self.queue_native_builtin_accessor(
+                            module,
+                            get.as_ref(),
+                            set.as_ref(),
+                            &mut pending,
+                        )?;
+                    }
+                }
+            }
+            if let Some(prototype) = self.observable_prototype_link(object, object_id) {
+                pending.push(prototype);
+            }
+            self.instructions_executed = self.instructions_executed.saturating_add(work);
+            if opaque {
+                return Ok(Label::TopSecret);
+            }
+        }
+        Ok(label)
+    }
+
+    fn queue_native_builtin_value(
+        &self,
+        module: &Ir3Module,
+        value: &Value,
+        pending: &mut Vec<ObjectId>,
+    ) -> Result<bool, InterpreterError> {
+        match value {
+            Value::Object(object) => pending.push(*object),
+            Value::Accessor { get, set } => {
+                return self.queue_native_builtin_accessor(
+                    module,
+                    get.as_deref(),
+                    set.as_deref(),
+                    pending,
+                );
+            }
+            Value::Promise(_)
+            | Value::Iterator(_)
+            | Value::Generator(_)
+            | Value::AsyncFunctionObject(_)
+            | Value::AsyncGeneratorObject(_) => return Ok(true),
+            function if function.is_callable() => {
+                if let Value::BuiltinFunction(builtin) = function {
+                    if builtin.kind == BuiltinFunctionKind::CallableProxy {
+                        return Ok(true);
+                    }
+                    if let Some(receiver) = builtin.bound_object {
+                        pending.push(ObjectId(receiver));
+                    }
+                }
+                if let Some(object) = self.function_own_property_object(module, function)? {
+                    pending.push(object);
+                }
+            }
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    fn queue_native_builtin_accessor(
+        &self,
+        module: &Ir3Module,
+        get: Option<&Value>,
+        set: Option<&Value>,
+        pending: &mut Vec<ObjectId>,
+    ) -> Result<bool, InterpreterError> {
+        // These canonical accessors only expose the receiver or its already
+        // visited prototype. Their identity cannot be forged by guest source.
+        // Keep arbitrary getters opaque, including guest replacements of an
+        // intrinsic accessor; descriptor/property labels are still joined.
+        for (function, setter) in [(get, false), (set, true)] {
+            let Some(function) = function else {
+                continue;
+            };
+            let Value::BuiltinFunction(builtin) = function else {
+                return Ok(true);
+            };
+            let inert = builtin.kind == BuiltinFunctionKind::ThrowTypeError
+                || (setter && builtin.kind == BuiltinFunctionKind::ObjectProtoSetter)
+                || (!setter
+                    && builtin.kind == BuiltinFunctionKind::PrototypeGetter
+                    && builtin
+                        .module_specifier
+                        .0
+                        .as_deref()
+                        .and_then(prototype_getters::prototype_getter_entry)
+                        .is_some_and(|(owner, key, _)| {
+                            (*owner == "Object" && *key == "__proto__")
+                                || *key == prototype_getters::SPECIES_GETTER_KEY
+                                || (*owner == "TypedArray"
+                                    && *key == prototype_getters::TYPED_ARRAY_TO_STRING_TAG)
+                        }));
+            if !inert || self.queue_native_builtin_value(module, function, pending)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Materialize one ESM namespace per authenticated native provider. Its default
     /// export is the realm's CommonJS object; named exports snapshot the
     /// supported properties only on the first ESM load. Resolution and policy
     /// authorization have already run for this request, including cache hits.
     /// Path and PathPosix share their default object but keep distinct facades.
-    fn load_native_path_namespace(
+    fn load_native_builtin_namespace(
         &mut self,
         module: &Ir3Module,
         source: &ResolutionOutcome,
         native: NativeBuiltinModule,
         import_bound: Option<&Label>,
     ) -> Result<Value, InterpreterError> {
-        if import_bound.is_some() {
-            return Err(InterpreterError::ModuleLoweringFailed {
-                specifier: source.module.request_specifier.clone(),
-                error: "a native built-in is opaque to the bounded-imports contract".to_string(),
-            });
-        }
         let specifier = match native {
+            NativeBuiltinModule::Buffer => "\0franken-engine/native-buffer/esm",
+            NativeBuiltinModule::Events => "\0franken-engine/native-events/esm",
+            NativeBuiltinModule::Os => "\0franken-engine/native-os/esm",
+            NativeBuiltinModule::Querystring => "\0franken-engine/native-querystring/esm",
+            NativeBuiltinModule::Url => "\0franken-engine/native-url/esm",
+            NativeBuiltinModule::Timers => "\0franken-engine/native-timers/esm",
+            NativeBuiltinModule::PerfHooks => "\0franken-engine/native-perf_hooks/esm",
             NativeBuiltinModule::Path => PATH_ESM_MODULE_ID,
             NativeBuiltinModule::PathPosix => PATH_POSIX_ESM_MODULE_ID,
             NativeBuiltinModule::PathWin32 => PATH_WIN32_ESM_MODULE_ID,
-            _ => {
-                return Err(InterpreterError::InternalError {
-                    details: "non-Path provider reached a native Path namespace".to_string(),
-                });
-            }
         };
         let value = self.load_native_builtin_resolved(module, source, native)?;
-        let Value::Object(object) = value else {
-            return Err(InterpreterError::InternalError {
-                details: "native Path provider returned a non-object".to_string(),
-            });
+        let object = match &value {
+            Value::Object(object) => *object,
+            function => self
+                .function_own_property_object(module, function)?
+                .ok_or_else(|| InterpreterError::InternalError {
+                    details: "native provider has no export property storage".to_string(),
+                })?,
         };
+        if import_bound.is_some() {
+            let ceiling = self.native_builtin_state_label(module, object)?;
+            Self::check_import_flow_bound(
+                &source.module.request_specifier,
+                &ceiling,
+                import_bound,
+            )?;
+        }
         let content_hash = native.record(specifier).canonical_hash();
         if let Some(record) = self.module_state.modules.get(specifier) {
             if record.resolved_source_hash != Some(content_hash) {
                 return Err(InterpreterError::ModuleLoweringFailed {
                     specifier: source.module.request_specifier.clone(),
-                    error: "native Path namespace identity is already bound to another source"
+                    error: "native namespace identity is already bound to another source"
                         .to_string(),
                 });
             }
@@ -40717,13 +40968,13 @@ impl InterpreterCore {
                         let label = self.runtime_property_label(carrier, &key);
                         self.replace_pending_abrupt_slots(Some((thrown, label)), None)?;
                         return Err(InterpreterError::UncaughtException {
-                            value: "native Path namespace evaluation failed".to_string(),
+                            value: "native namespace evaluation failed".to_string(),
                         });
                     }
                     // A containment failure has no guest exception to replay.
                     // Never turn it into a catchable module Error on a retry.
                     return Err(InterpreterError::InternalError {
-                        details: "native Path namespace initialization was refused".to_string(),
+                        details: "native namespace initialization was refused".to_string(),
                     });
                 }
                 ModuleRuntimeStatus::Evaluating => {
@@ -40738,11 +40989,18 @@ impl InterpreterCore {
                 ModuleRuntimeStatus::Evaluated
                     if record.exports.contains_key(&JsString::from("default")) =>
                 {
-                    return Ok(Value::Object(record.namespace_object));
+                    let namespace = record.namespace_object;
+                    if import_bound.is_some() {
+                        let ceiling = self.native_builtin_state_label(module, namespace)?;
+                        Self::check_import_flow_bound(
+                            &source.module.request_specifier, &ceiling, import_bound,
+                        )?;
+                    }
+                    return Ok(Value::Object(namespace));
                 }
                 ModuleRuntimeStatus::AsyncEvaluating => {
                     return Err(InterpreterError::InternalError {
-                        details: "a native Path namespace cannot evaluate asynchronously"
+                        details: "a native namespace cannot evaluate asynchronously"
                             .to_string(),
                     });
                 }
@@ -40760,13 +41018,13 @@ impl InterpreterCore {
             // while preserving the caller's pending-result ownership.
             let observation = self.begin_property_observation([])?;
             let outcome = (|| -> Result<(), InterpreterError> {
-                for name in PATH_ESM_EXPORT_NAMES {
+                for name in Self::native_builtin_export_names(native) {
                     let key = RuntimePropertyKey::String(JsString::from(name));
                     let member = self.iterator_protocol_property(
                         Some(module),
                         object,
                         &key,
-                        Value::Object(object),
+                        value.clone(),
                     )?;
                     let label = self.json_parse_context_label()?;
                     self.publish_module_export(
@@ -40782,16 +41040,26 @@ impl InterpreterCore {
                 // Publish the completion marker last so a partial initialization
                 // can never be mistaken for a successfully cached namespace.
                 let key = RuntimePropertyKey::String(JsString::from("default"));
+                let default_label = self.json_parse_context_label()?;
                 self.publish_module_export(
                     specifier,
                     JsString::from("default"),
-                    Value::Object(object),
-                    Label::Public,
+                    value.clone(),
+                    default_label.clone(),
                     ExportPublication::Own,
                     0,
                 )?;
-                self.set_own_runtime_property_label(namespace, &key, &Label::Public)?;
+                self.set_own_runtime_property_label(namespace, &key, &default_label)?;
                 self.sort_module_namespace_keys(specifier)?;
+                if import_bound.is_some() {
+                    let ceiling = self.native_builtin_state_label(module, namespace)?;
+                    Self::check_import_flow_bound(
+                        &source.module.request_specifier,
+                        &ceiling,
+                        import_bound,
+                    )?;
+                }
+                self.seal_object(namespace)?;
                 Ok(())
             })();
             self.finish_property_write_observation(observation, outcome)
@@ -40809,7 +41077,7 @@ impl InterpreterCore {
                         Self::value_to_js_value(&Value::Object(namespace)),
                         Label::Public,
                     ) {
-                        self.fail_module_record(specifier, "native Path namespace initialization was refused");
+                        self.fail_module_record(specifier, "native namespace initialization was refused");
                         return Err(error);
                     }
                 }
@@ -40822,7 +41090,7 @@ impl InterpreterCore {
                 // Keep diagnostics independent of the thrown payload. The
                 // private rooted carrier retains its identity and IFC label;
                 // it is never added to the observable namespace or exports.
-                self.fail_module_record(specifier, "native Path namespace evaluation failed");
+                self.fail_module_record(specifier, "native namespace evaluation failed");
                 let guest_exception = if matches!(error, InterpreterError::UncaughtException { .. }) {
                     self.pending_exception
                         .clone()
@@ -40866,7 +41134,7 @@ impl InterpreterCore {
                     self.reject_promise(promise, reason, label)?;
                 }
                 Err(InterpreterError::UncaughtException {
-                    value: "native Path namespace evaluation failed".to_string(),
+                    value: "native namespace evaluation failed".to_string(),
                 })
             }
         }
@@ -56290,11 +56558,18 @@ impl InterpreterCore {
                                         label_owner,
                                         &property_key,
                                     );
-                                    self.set_own_runtime_property_label(
-                                        label_owner,
-                                        &property_key,
-                                        &value_label,
-                                    )?;
+                                    // Native namespace writes never replace an export.
+                                    // A transparent proxy can accept a SameValue no-op;
+                                    // its equality check must observe the retained label.
+                                    let preserve_native_export_label =
+                                        self.is_native_module_namespace(label_owner);
+                                    if !preserve_native_export_label {
+                                        self.set_own_runtime_property_label(
+                                            label_owner,
+                                            &property_key,
+                                            &value_label,
+                                        )?;
+                                    }
                                     let set_result = self.proxy_aware_set_runtime_property(
                                         Some(module),
                                         oid,
@@ -56306,20 +56581,24 @@ impl InterpreterCore {
                                     let committed = match set_result {
                                         Ok(committed) => committed,
                                         Err(error) => {
+                                            if !preserve_native_export_label {
+                                                self.set_own_runtime_property_label(
+                                                    label_owner,
+                                                    &property_key,
+                                                    &previous_label,
+                                                )?;
+                                            }
+                                            return Err(error);
+                                        }
+                                    };
+                                    if !committed && strict {
+                                        if !preserve_native_export_label {
                                             self.set_own_runtime_property_label(
                                                 label_owner,
                                                 &property_key,
                                                 &previous_label,
                                             )?;
-                                            return Err(error);
                                         }
-                                    };
-                                    if !committed && strict {
-                                        self.set_own_runtime_property_label(
-                                            label_owner,
-                                            &property_key,
-                                            &previous_label,
-                                        )?;
                                         return Err(
                                             self.rejected_strict_set_error(oid, &property_key)
                                         );
@@ -56333,7 +56612,7 @@ impl InterpreterCore {
                                             },
                                         );
                                     // ([[Set]] itself grows an array's length.)
-                                    if !owns_property {
+                                    if !owns_property && !preserve_native_export_label {
                                         // Prototype accessors and successful traps
                                         // need not create an own data property.
                                         self.set_own_runtime_property_label(
@@ -67414,6 +67693,42 @@ impl InterpreterCore {
         Ok(blocking.map(|index| i64::from(index) + 1))
     }
 
+    /// Native module namespaces retain writable data descriptors for ESM
+    /// reflection, but their exotic [[Set]] and [[DefineOwnProperty]] methods
+    /// do not let guests replace exports. Authenticate the heap identity
+    /// against the private runtime records; a forged @@toStringTag is not a
+    /// namespace. The tag check keeps ordinary property stores on their fast
+    /// path, and the fixed provider inventory bounds even a forged-tag lookup.
+    fn is_native_module_namespace(&self, object_id: ObjectId) -> bool {
+        let tag = RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id());
+        if !matches!(
+            self.heap.get(object_id.0 as usize)
+                .and_then(|object| object.own_runtime_property_value(&tag)),
+            Some(Value::Str(value)) if value.as_str() == Some("Module")
+        ) {
+            return false;
+        }
+        [
+            "\0franken-engine/native-buffer/esm",
+            "\0franken-engine/native-events/esm",
+            "\0franken-engine/native-os/esm",
+            "\0franken-engine/native-querystring/esm",
+            "\0franken-engine/native-url/esm",
+            "\0franken-engine/native-timers/esm",
+            "\0franken-engine/native-perf_hooks/esm",
+            PATH_ESM_MODULE_ID,
+            PATH_POSIX_ESM_MODULE_ID,
+            PATH_WIN32_ESM_MODULE_ID,
+        ]
+        .into_iter()
+        .any(|specifier| {
+            self.module_state
+                .modules
+                .get(specifier)
+                .is_some_and(|record| record.namespace_object == object_id)
+        })
+    }
+
     /// When `[[Set]]` of `key` on `object_id` (its own receiver) takes the
     /// ordinary path with nothing to observe: the number of objects
     /// `reflect_observe_selected_property` visits, else `None` (bd-9vouw.504).
@@ -67458,7 +67773,8 @@ impl InterpreterCore {
                 || object.typed_array.is_some()
                 || object.data_view.is_some()
                 || object.brand() == Some(PROXY_TYPE_TAG)
-                || self.object_mutation_labels.contains_key(&id))
+                || self.object_mutation_labels.contains_key(&id)
+                || self.is_native_module_namespace(id))
         };
         let receiver = self.heap.get(object_id.0 as usize)?;
         if !ordinary(receiver, object_id)
@@ -67515,6 +67831,16 @@ impl InterpreterCore {
         receiver: Value,
         depth: u32,
     ) -> Result<bool, InterpreterError> {
+        // A namespace is never its own writable receiver, including for a
+        // missing key. Node permits writes onto a distinct ordinary Reflect
+        // receiver or inheriting object; those take the descriptor path below.
+        // Check before the shortcut, whose writable-descriptor test alone is
+        // insufficient for native namespace exports.
+        if matches!(&receiver, Value::Object(id) if *id == object_id)
+            && self.is_native_module_namespace(object_id)
+        {
+            return Ok(false);
+        }
         // bd-9vouw.504: the ordinary store with nothing to observe. Its
         // effects other than the write: without a context, none; in a Public
         // one, a budget check of the unchanged state (first made by
@@ -67620,6 +67946,7 @@ impl InterpreterCore {
                     // (ES2024 10.4.5.5).
                     if owner != object_id
                         && (self.proxy_record(owner)?.is_some()
+                            || self.is_native_module_namespace(owner)
                             || self
                                 .heap
                                 .get(owner.0 as usize)
@@ -67711,6 +68038,24 @@ impl InterpreterCore {
             let Some(receiver_id) = receiver_id else {
                 return Ok(false);
             };
+            if self.is_native_module_namespace(receiver_id) {
+                // A transparent Proxy receiver forwards an unchanged data
+                // value through [[DefineOwnProperty]], as Node does. A bare
+                // namespace receiver still rejects even a SameValue write.
+                if key.string().is_some()
+                    && matches!(&receiver, Value::Object(id) if *id != receiver_id)
+                {
+                    return self.define_own_property_from_descriptor(
+                        receiver_id,
+                        key.clone(),
+                        PropertyDescriptorFields {
+                            value: Some(value),
+                            ..PropertyDescriptorFields::default()
+                        },
+                    );
+                }
+                return Ok(false);
+            }
             if self.active_inline_callback_context_label.is_some() {
                 self.reflect_admit_mutation_label(receiver_id)?;
             }
@@ -68534,7 +68879,11 @@ impl InterpreterCore {
             )
             .join(&self.clone_active_execution_context_label()?);
         self.join_object_mutation_label(target_id, &label)?;
-        self.set_own_runtime_property_label(target_id, &key, &label)?;
+        // Object.assign uses [[Set]], which cannot replace a native export.
+        // Preserve the export's provenance even when the caller catches refusal.
+        if !use_target_set || !self.is_native_module_namespace(target_id) {
+            self.set_own_runtime_property_label(target_id, &key, &label)?;
+        }
         if use_target_set {
             if !self.proxy_aware_set_runtime_property(
                 module,
@@ -71502,13 +71851,9 @@ impl InterpreterCore {
         if self.module_resolver.is_some() {
             let delivered = self.resolve_installed_module(specifier, ImportStyle::Import)?;
             let resolved = delivered.module.record.id.clone();
-            if let Some(
-                native @ (NativeBuiltinModule::Path
-                | NativeBuiltinModule::PathPosix
-                | NativeBuiltinModule::PathWin32),
-            ) = NativeBuiltinModule::from_record(&delivered.module.record)
+            if let Some(native) = NativeBuiltinModule::from_record(&delivered.module.record)
             {
-                return self.load_native_path_namespace(
+                return self.load_native_builtin_namespace(
                     module,
                     &delivered,
                     native,
@@ -86877,6 +87222,25 @@ impl InterpreterCore {
         key: RuntimePropertyKey,
         descriptor: PropertyDescriptorFields,
     ) -> Result<bool, InterpreterError> {
+        if key.string().is_some() && self.is_native_module_namespace(obj_id) {
+            // SameValue exposes the retained export through a success boolean
+            // (or a caught refusal), including through Reflect and proxies.
+            self.reflect_observe_selected_property(obj_id, &key)?;
+            let current = self
+                .heap
+                .get(obj_id.0 as usize)
+                .and_then(|object| object.own_runtime_property_value(&key));
+            return Ok(current.is_some_and(|current| {
+                descriptor.configurable != Some(true)
+                    && descriptor.enumerable != Some(false)
+                    && descriptor.writable != Some(false)
+                    && !descriptor.is_accessor()
+                    && descriptor
+                        .value
+                        .as_ref()
+                        .is_none_or(|value| Self::same_value(value, &current))
+            }));
+        }
         // A canonical prototype's virtual property is the current one.
         self.materialize_virtual_own_property(obj_id, &key)?;
         let object = self
@@ -96064,6 +96428,12 @@ impl InterpreterCore {
                 }
                 match obj_val {
                     Value::Object(obj_id) => {
+                        if self.is_native_module_namespace(obj_id) {
+                            return Err(InterpreterError::TypeError {
+                                expected: "an object Object.freeze can freeze".to_string(),
+                                got: "module namespace exports cannot become non-writable".to_string(),
+                            });
+                        }
                         // ES2020 9.4.5.3: a typed array's elements cannot be
                         // made non-writable, so freezing one with elements is
                         // a TypeError (V8: "Cannot freeze array buffer views
@@ -150453,6 +150823,399 @@ mod function_prototype_call_apply_tests_current {
     }
 
     #[test]
+    fn native_namespace_callable_keeps_secret_capture_labels_at_invocation() {
+        let mut owner = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadName {
+                    dst: 0,
+                    name_pool_index: 0,
+                    allow_missing: false,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 1,
+                name: Some("native_export_secret_capture".into()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        owner.header.source_label = "native-export-owner.mjs".into();
+        owner.constant_pool.push("captured".into());
+        let caller = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        core.ensure_module_record(&owner, &owner.header.source_label)
+            .unwrap();
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: vec![ScopeFrame::from_bindings(BTreeMap::from([(
+                "captured".into(),
+                ScopeBinding::with_labeled_state(
+                    BindingKind::Const,
+                    Value::Int(37),
+                    Label::Secret,
+                    true,
+                ),
+            )]))],
+        });
+        core.closure_module_origins
+            .insert(0, owner.header.source_label.clone());
+        let Value::Object(object) = core.querystring_core_module().unwrap() else {
+            panic!("querystring");
+        };
+        core.set_object_property(object, "stringify".into(), Value::Closure(0))
+            .unwrap();
+        let record = NativeBuiltinModule::Querystring.record("captured:closure-querystring");
+        let source = ResolutionOutcome {
+            module: ResolvedModule {
+                request_specifier: "querystring".into(),
+                canonical_specifier: record.id.clone(),
+                content_hash: record.canonical_hash(),
+                record,
+                probe_sequence: Vec::new(),
+            },
+            event: crate::module_resolver::ResolutionEvent {
+                trace_id: "capture".into(),
+                decision_id: "capture".into(),
+                policy_id: "capture".into(),
+                component: "module_resolver".into(),
+                event: "resolved".into(),
+                outcome: "allowed".into(),
+                error_code: String::new(),
+            },
+        };
+        let Value::Object(namespace) = core
+            .load_native_builtin_namespace(
+                &caller,
+                &source,
+                NativeBuiltinModule::Querystring,
+                Some(&Label::Internal),
+            )
+            .expect("a public callable reference does not evaluate its captured code")
+        else {
+            panic!("namespace");
+        };
+        for holder in [namespace, object] {
+            let function = core.prototype_chain_get(holder, "stringify").unwrap();
+            core.write_reg(0, function).unwrap();
+            core.write_reg(1, Value::Undefined).unwrap();
+            let result = core
+                .dispatch_builtin_hostcall(
+                    "builtin:FunctionPrototypeCall",
+                    RegRange { start: 0, count: 2 },
+                    Some(&caller),
+                )
+                .expect("retained owner executes the real captured function");
+            assert_eq!(result, Value::Int(37));
+            assert_eq!(
+                core.take_pending_hostcall_result_label(),
+                Some(Label::Secret),
+                "neither named nor default native exports may lower the invocation result label"
+            );
+        }
+    }
+
+    #[test]
+    fn native_perf_hooks_retains_classified_global_reference_labels() {
+        for object_reference in [false, true] {
+            for operation in [
+                "direct",
+                "proxy_same",
+                "proxy_changed",
+                "assign",
+                "define_same",
+                "define_changed",
+                "proxy_define_same",
+                "proxy_define_changed",
+            ] {
+                let module = test_module_with_functions(Vec::new(), Vec::new());
+                let mut core = test_interpreter();
+                let performance = if object_reference {
+                    Value::Object(seed_object(&mut core, &[("public", Value::Int(73))]))
+                } else {
+                    Value::Int(73)
+                };
+                core.scope_chain.current_mut().unwrap().insert_binding(
+                    "performance".to_string(),
+                    ScopeBinding::with_labeled_state(
+                        BindingKind::Var,
+                        performance.clone(),
+                        Label::Secret,
+                        true,
+                    ),
+                );
+                core.sync_estimated_memory_bytes().unwrap();
+                let record = NativeBuiltinModule::PerfHooks.record("captured:classified-perf");
+                let source = ResolutionOutcome {
+                    module: ResolvedModule {
+                        request_specifier: "perf_hooks".into(),
+                        canonical_specifier: record.id.clone(),
+                        content_hash: record.canonical_hash(),
+                        record,
+                        probe_sequence: Vec::new(),
+                    },
+                    event: crate::module_resolver::ResolutionEvent {
+                        trace_id: "native-perf-label".into(),
+                        decision_id: "native-perf-label".into(),
+                        policy_id: "native-perf-label".into(),
+                        component: "module_resolver".into(),
+                        event: "resolved".into(),
+                        outcome: "allowed".into(),
+                        error_code: String::new(),
+                    },
+                };
+                let Value::Object(namespace) = core
+                    .load_native_builtin_namespace(
+                        &module,
+                        &source,
+                        NativeBuiltinModule::PerfHooks,
+                        None,
+                    )
+                    .expect("unbounded imports preserve the classified reference")
+                else {
+                    panic!("namespace");
+                };
+                let Value::Object(default) = core.perf_hooks_core_module().unwrap() else {
+                    panic!("perf_hooks");
+                };
+                let key = RuntimePropertyKey::String(JsString::from("performance"));
+                for holder in [namespace, default] {
+                    assert_eq!(
+                        core.prototype_chain_get(holder, "performance").unwrap(),
+                        performance
+                    );
+                    assert_eq!(core.runtime_property_label(holder, &key), Label::Secret);
+                }
+                // Public guesses must neither relabel an unchanged export nor
+                // expose its classified value through a SameValue success probe.
+                assert_eq!(core.json_parse_context_label().unwrap(), Label::Public);
+                let target = if operation.starts_with("proxy") {
+                    let handler = seed_object(&mut core, &[]);
+                    core.create_proxy_object(namespace, handler).unwrap()
+                } else {
+                    namespace
+                };
+                let proposed = if operation.ends_with("changed") || operation == "assign" {
+                    Value::Int(74)
+                } else {
+                    performance.clone()
+                };
+                core.write_reg_with_label(0, Value::Object(target), Label::Public)
+                    .unwrap();
+                core.write_reg_with_label(1, Value::str("performance"), Label::Public)
+                    .unwrap();
+                core.write_reg_with_label(2, proposed.clone(), Label::Public)
+                    .unwrap();
+                let instruction = if operation.contains("define") {
+                    let descriptor = seed_object(&mut core, &[("value", proposed)]);
+                    core.write_reg_with_label(2, Value::Object(descriptor), Label::Public)
+                        .unwrap();
+                    Ir3Instruction::HostCall {
+                        capability: CapabilityTag("builtin:ReflectDefineProperty".to_string()),
+                        args: RegRange { start: 0, count: 3 },
+                        dst: 3,
+                    }
+                } else if operation == "assign" {
+                    let source = seed_object(&mut core, &[("performance", proposed)]);
+                    core.write_reg_with_label(1, Value::Object(source), Label::Public)
+                        .unwrap();
+                    Ir3Instruction::HostCall {
+                        capability: CapabilityTag("builtin:ObjectAssign".to_string()),
+                        args: RegRange { start: 0, count: 2 },
+                        dst: 3,
+                    }
+                } else {
+                    Ir3Instruction::SetProperty {
+                        obj: 0,
+                        key: 1,
+                        val: 2,
+                    }
+                };
+                let write_module =
+                    test_module_with_functions(vec![instruction, Ir3Instruction::Halt], Vec::new());
+                let outcome = core.run_loop(&write_module);
+                if matches!(operation, "direct" | "proxy_changed" | "assign") {
+                    assert!(
+                        matches!(outcome, Err(InterpreterError::TypeError { .. })),
+                        "{operation}: {outcome:?}"
+                    );
+                } else {
+                    assert_eq!(outcome, Err(InterpreterError::Halted), "{operation}");
+                }
+                if operation.contains("define") {
+                    assert_eq!(
+                        core.read_reg(3).unwrap(),
+                        Value::Bool(operation.ends_with("same")),
+                        "{operation}"
+                    );
+                    assert_eq!(
+                        core.get_register_label(3),
+                        Ok(&Label::Secret),
+                        "{operation}"
+                    );
+                } else if operation == "proxy_changed" {
+                    assert_eq!(core.json_parse_context_label().unwrap(), Label::Secret);
+                }
+                for holder in [namespace, default] {
+                    assert_eq!(
+                        core.prototype_chain_get(holder, "performance").unwrap(),
+                        performance,
+                        "{operation} must retain the original value"
+                    );
+                    assert_eq!(
+                        core.own_stored_runtime_property_label(holder, &key),
+                        Label::Secret,
+                        "{operation} must retain the original export label"
+                    );
+                }
+                assert!(matches!(
+                    core.load_native_builtin_namespace(
+                        &module,
+                        &source,
+                        NativeBuiltinModule::PerfHooks,
+                        Some(&Label::Internal),
+                    ),
+                    Err(InterpreterError::ModuleLoweringFailed { .. })
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn native_namespace_state_walk_handles_reflected_buffer_and_bounds_work() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        core.ensure_function_own_property_object(
+            &module,
+            &Value::BuiltinFunction(BuiltinFunction::standard_constructor("Buffer")),
+        )
+        .expect("constructor reflection materializes intrinsic prototype accessors");
+        let Value::Object(object) = core.buffer_core_module().unwrap() else {
+            panic!("buffer");
+        };
+        core.set_object_property(object, "cycle".into(), Value::Object(object))
+            .unwrap();
+        assert_eq!(
+            core.native_builtin_state_label(&module, object).unwrap(),
+            Label::Internal
+        );
+        core.config.instruction_budget = core.instructions_executed + 1;
+        assert!(matches!(
+            core.native_builtin_state_label(&module, object),
+            Err(InterpreterError::BudgetExhausted { .. })
+        ));
+    }
+
+    #[test]
+    fn native_namespace_bounds_recheck_live_defaults_snapshots_and_intrinsic_prototypes() {
+        for cached in [false, true] {
+            for poison in [
+                "property",
+                "nested",
+                "prototype",
+                "symbol",
+                "getter",
+                "namespace",
+            ] {
+                let module = test_module_with_functions(Vec::new(), Vec::new());
+                let mut core = test_interpreter();
+                core.ensure_builtin_prototype("Object")
+                    .expect("canonical prototype");
+                core.ensure_builtin_prototype("Function")
+                    .expect("canonical thrower accessors");
+                let Value::Object(object) = core.querystring_core_module().unwrap() else {
+                    panic!("querystring must be an object");
+                };
+                let record = NativeBuiltinModule::Querystring.record("captured:querystring");
+                let source = ResolutionOutcome {
+                    module: ResolvedModule {
+                        request_specifier: "querystring".into(),
+                        canonical_specifier: record.id.clone(),
+                        content_hash: record.canonical_hash(),
+                        record,
+                        probe_sequence: Vec::new(),
+                    },
+                    event: crate::module_resolver::ResolutionEvent {
+                        trace_id: "native-bound".into(),
+                        decision_id: "native-bound".into(),
+                        policy_id: "native-bound".into(),
+                        component: "module_resolver".into(),
+                        event: "resolved".into(),
+                        outcome: "allowed".into(),
+                        error_code: String::new(),
+                    },
+                };
+                let namespace = if cached || poison == "namespace" {
+                    let value = core
+                        .load_native_builtin_namespace(
+                            &module,
+                            &source,
+                            NativeBuiltinModule::Querystring,
+                            Some(&Label::Internal),
+                        )
+                        .expect("pristine native objects and intrinsic prototypes are bounded");
+                    let Value::Object(namespace) = value else {
+                        panic!("namespace");
+                    };
+                    Some(namespace)
+                } else {
+                    None
+                };
+                let key = RuntimePropertyKey::String(JsString::from("stringify"));
+                match poison {
+                    "property" => core
+                        .set_own_runtime_property_label(object, &key, &Label::Secret)
+                        .unwrap(),
+                    "nested" => {
+                        let nested = core.alloc_object_with_prototype(None).unwrap();
+                        core.set_object_property(nested, "cycle".into(), Value::Object(object))
+                            .unwrap();
+                        core.set_object_property(object, "added".into(), Value::Object(nested))
+                            .unwrap();
+                        core.join_object_mutation_label(nested, &Label::Secret)
+                            .unwrap();
+                    }
+                    "prototype" => {
+                        let prototype = core.builtin_prototypes["Object"];
+                        core.join_object_mutation_label(prototype, &Label::Secret)
+                            .unwrap();
+                    }
+                    "symbol" => {
+                        let key = RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id());
+                        core.set_object_runtime_property(object, key.clone(), Value::str("hidden"))
+                            .unwrap();
+                        core.set_own_runtime_property_label(object, &key, &Label::Secret)
+                            .unwrap();
+                    }
+                    "getter" => core
+                        .set_object_runtime_property(
+                            object,
+                            key,
+                            Value::Accessor {
+                                get: Some(Arc::new(Value::Function(0))),
+                                set: None,
+                            },
+                        )
+                        .unwrap(),
+                    "namespace" => core
+                        .set_own_runtime_property_label(namespace.unwrap(), &key, &Label::Secret)
+                        .unwrap(),
+                    _ => unreachable!(),
+                }
+                let error = core.load_native_builtin_namespace(
+                    &module, &source, NativeBuiltinModule::Querystring, Some(&Label::Internal),
+                ).expect_err("neither a cached facade nor a native descriptor grants a mutable value a lower label");
+                assert!(
+                    matches!(error, InterpreterError::ModuleLoweringFailed { .. }),
+                    "cached={cached} poison={poison}: {error}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn native_path_namespace_retains_shape_labels_and_cached_throw_labels() {
         for throws in [false, true] {
             let mut module = test_module_with_functions(
@@ -150513,7 +151276,7 @@ mod function_prototype_call_apply_tests_current {
             if throws {
                 for _ in 0..2 {
                     let error = core
-                        .load_native_path_namespace(&module, &source, NativeBuiltinModule::Path, None)
+                        .load_native_builtin_namespace(&module, &source, NativeBuiltinModule::Path, None)
                         .expect_err("the first and cached import must throw");
                     assert!(matches!(error, InterpreterError::UncaughtException { .. }));
                     assert_eq!(
@@ -150524,7 +151287,7 @@ mod function_prototype_call_apply_tests_current {
                 }
             } else {
                 let namespace = core
-                    .load_native_path_namespace(&module, &source, NativeBuiltinModule::Path, None)
+                    .load_native_builtin_namespace(&module, &source, NativeBuiltinModule::Path, None)
                     .expect("snapshot the public value selected through a secret shape");
                 let Value::Object(namespace) = namespace else {
                     panic!("native Path import must return a namespace");

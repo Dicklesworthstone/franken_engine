@@ -267,7 +267,7 @@ impl ModuleRecord {
 ///
 /// This is deliberately narrower than Node's builtin name inventory. A
 /// resolver may deliver one of these source-free descriptors for a captured
-/// require route, or an import route for the Path providers. The interpreter
+/// require or import route. The interpreter
 /// rechecks the complete descriptor before dispatching the real realm object;
 /// no source text or filesystem fallback is used to manufacture a builtin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

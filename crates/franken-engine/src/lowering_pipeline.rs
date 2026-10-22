@@ -35757,13 +35757,15 @@ pub(crate) fn is_local_module_specifier(specifier: &str) -> bool {
     specifier.starts_with("./") || specifier.starts_with("../") || specifier.starts_with('/')
 }
 
-/// A specifier the bounded-imports contract covers (bd-j8f7q): a local file
-/// or a package (a bare name that is not a Node core module, bd-mgfhs). The
-/// interpreter loads, lowers and checks such a module before running it; a
-/// core module has no module code to check and stays opaque.
+/// A specifier the bounded-imports contract covers (bd-j8f7q): a local file,
+/// a package, or an engine-owned native provider. Source modules are lowered
+/// and checked before execution. Native providers must authenticate their
+/// exact descriptor and check their live exported state on every import;
+/// all other core modules remain opaque.
 pub(crate) fn is_bounded_import_specifier(specifier: &str) -> bool {
     is_local_module_specifier(specifier)
         || !crate::baseline_interpreter::is_node_core_module_specifier(specifier)
+        || crate::module_resolver::NativeBuiltinModule::from_specifier(specifier).is_some()
 }
 
 fn ops_assume_bounded_imports(ops: &[Ir2Op]) -> bool {
@@ -42629,6 +42631,21 @@ mod tests {
         assert!(is_bounded_import_specifier("@scope/pkg"));
         assert!(!is_bounded_import_specifier("node:fs"));
         assert!(!is_bounded_import_specifier("fs"));
+        for name in ["node:buffer", "events", "path", "node:path/posix"] {
+            let source = format!("import value from '{name}'; console.log(typeof value);");
+            let tree = crate::parser_api_stability::parse_module(&source).unwrap();
+            let output = lower_ir0_to_ir3(
+                &Ir0Module::from_syntax_tree(tree, "native-bounded.mjs"),
+                &LoweringContext::new("native", "native", "native")
+                    .with_preserved_runtime_module_loads(),
+            )
+            .expect("authenticated native imports have a checked runtime bound");
+            assert!(has_contract(&output), "{name}");
+            assert_eq!(
+                lowered_unit_flow_label_ceiling(&output.ir2, HostIoExceptionProvenance::Unknown,),
+                Label::Internal
+            );
+        }
     }
 
     #[test]

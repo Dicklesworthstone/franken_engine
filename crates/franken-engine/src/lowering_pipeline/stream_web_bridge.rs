@@ -12,15 +12,35 @@ use super::super::{
     ModuleRenamer, NativeModuleSource, PureModule, STREAM_MODULE_BINDING,
     WEB_STREAMS_BINDING, module_source,
 };
-use super::super::super::with_statement::{Outcome, Walk, lexical_names, var_names};
+use super::super::super::with_statement::{Outcome, Walk, lexical_names, var_names, walk_expression};
 use crate::ast::{BindingPattern, Expression, Statement, SyntaxTree};
 
-const GLOBALS: [&str; 12] = [
-    "AbortSignal", "Array", "Blob", "Buffer", "Error", "EventTarget", "Object", "Promise",
+const GLOBALS: [&str; 13] = [
+    "AbortController", "AbortSignal", "Array", "Blob", "Buffer", "Error", "EventTarget", "Object", "Promise",
     "Reflect", "Symbol", "TypeError", "Uint8Array",
 ];
-const SOURCE: &str = include_str!("stream_web_bridge.js");
+// Both adapters and completion observation share the SAME lazy Web instance.
+const SOURCE: &str = concat!(
+    "(function (stream, loadWeb) { return (",
+    include_str!("stream_finished.js"),
+    ")((",
+    include_str!("stream_web_bridge.js"),
+    ")(stream, loadWeb), loadWeb); })",
+);
+const TICK: &str = "__franken_stream_web_tick";
 static INSTALLER: NativeModuleSource = NativeModuleSource::new("franken:stream/web-bridge", SOURCE);
+
+struct CompletionTick;
+
+impl Walk for CompletionTick {
+    fn expression(&mut self, expression: &mut Expression) -> Outcome {
+        if matches!(expression, Expression::Identifier(name) if name == TICK) {
+            *expression = Expression::Identifier("%StreamNextTick".into());
+            return Ok(());
+        }
+        walk_expression(self, expression)
+    }
+}
 
 pub(super) fn compose(tree: &mut SyntaxTree, bindings: &BTreeSet<String>) -> Outcome {
     if !bindings.contains(STREAM_MODULE_BINDING) {
@@ -44,6 +64,7 @@ pub(super) fn compose(tree: &mut SyntaxTree, bindings: &BTreeSet<String>) -> Out
     };
     let dependency = super::deferred(dependency)?;
     let mut installer = INSTALLER.expression()?;
+    CompletionTick.expression(&mut installer)?;
     ModuleRenamer {
         through_global_object: GLOBALS.iter()
             .filter(|name| names.contains(**name))
@@ -72,7 +93,6 @@ mod tests {
     use super::super::super::{is_module_declaration, rewrite_util_requires, rewrite_module_objects};
     use crate::ast::ParseGoal;
     use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
-    use super::super::super::super::with_statement::walk_expression;
 
     fn parse(source: &str) -> SyntaxTree {
         CanonicalEs2020Parser.parse_with_options(
@@ -85,14 +105,19 @@ mod tests {
     fn installer_has_only_declared_realm_helpers_and_uses_pristine_cached_syntax() {
         let mut source = INSTALLER.expression().expect("canonical parser accepts installer");
         let expected: BTreeSet<String> = GLOBALS.iter().map(|s| (*s).into()).collect();
-        assert_eq!(super::super::super::tests::free_names(&mut source), expected);
+        let mut free = expected.clone();
+        free.insert(TICK.into());
+        assert_eq!(super::super::super::tests::free_names(&mut source), free);
         let pristine = source.clone();
+        CompletionTick.expression(&mut source).unwrap();
         ModuleRenamer { through_global_object: expected }.expression(&mut source).unwrap();
         assert_eq!(
             super::super::super::tests::free_names(&mut source),
-            BTreeSet::from(["globalThis".into()]),
+            BTreeSet::from(["globalThis".into(), "%StreamNextTick".into()]),
         );
         assert_eq!(INSTALLER.expression().unwrap(), pristine);
+        assert_eq!(super::super::super::intrinsic_capability("%StreamNextTick"),
+            Some("builtin:ProcessNextTick"));
     }
 
     #[test]

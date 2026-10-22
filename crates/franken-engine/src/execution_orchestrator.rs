@@ -1534,6 +1534,7 @@ struct EvidenceCompressionAttempt {
 struct GuardplaneHookReport {
     summary: GuardplaneExecutionSummary,
     decisions: Vec<GuardplaneDecisionRecord>,
+    instruction_hooks_enabled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -3910,10 +3911,7 @@ impl ExecutionOrchestrator {
             timer_effect_authority,
         } = dispatch;
         let guardplane_adapter = self.guardplane_adapter_for_package(package);
-        let hook = guardplane_adapter.as_ref().map(|adapter| {
-            let hook: Arc<dyn InterpreterHook> = adapter.clone();
-            hook
-        });
+        let hook: Arc<dyn InterpreterHook> = guardplane_adapter.clone();
         // Package capabilities remain user-scoped; the orchestrator adds only
         // the minimal VM capabilities needed to run the already-lowered module.
         let widest_frame = ir3
@@ -3954,17 +3952,16 @@ impl ExecutionOrchestrator {
                 ir3,
                 trace_id,
                 adaptive_routing_decision.execution_force_lane(),
-                hook,
+                Some(hook),
                 compact_tier1.as_ref(),
             )
             .map_err(OrchestratorError::Interpreter)?;
-        let report = guardplane_adapter
-            .as_ref()
-            .map(|adapter| GuardplaneHookReport {
-                summary: adapter.summary(),
-                decisions: adapter.decision_records(),
-            });
-        Ok((routed, report))
+        let report = GuardplaneHookReport {
+            summary: guardplane_adapter.summary(),
+            decisions: guardplane_adapter.decision_records(),
+            instruction_hooks_enabled: guardplane_adapter.instruction_hooks_enabled(),
+        };
+        Ok((routed, Some(report)))
     }
 
     /// Seal the post-execution IR4 witness (bd-drb55): bind the interpreter's
@@ -4021,26 +4018,27 @@ impl ExecutionOrchestrator {
         Ok(witness)
     }
 
-    fn guardplane_adapter_for_package(
-        &self,
-        package: &ExtensionPackage,
-    ) -> Option<Arc<GuardplaneAdapter>> {
-        // ExtensionPackage does not yet carry a first-class capability witness,
-        // so instruction-level guardplane context is derived from metadata.
+    fn guardplane_adapter_for_package(&self, package: &ExtensionPackage) -> Arc<GuardplaneAdapter> {
+        // Every package gets live host-effect monitoring. Metadata selects only
+        // the additional instruction heuristics; it cannot opt a package out of
+        // observing the capability membrane before an external effect.
         let context = GuardplaneExtensionContext::new(
             package.extension_id.clone(),
             package.capabilities.iter().cloned().collect(),
             package.metadata.clone(),
         );
-        if !context.instruction_hooks_enabled() {
-            return None;
-        }
-        Some(Arc::new(GuardplaneAdapter::from_runtime_config(
+        let instruction_hooks_enabled = context.instruction_hooks_enabled();
+        let constructor = if instruction_hooks_enabled {
+            GuardplaneAdapter::from_runtime_config
+        } else {
+            GuardplaneAdapter::host_effects_from_runtime_config
+        };
+        Arc::new(constructor(
             context,
             self.config.loss_matrix_preset.to_loss_matrix(),
             &self.runtime_config,
             self.config.epoch,
-        )))
+        ))
     }
 
     /// Data-contract ingress guard (bd-fqlfw.8.2, E8.T2).
@@ -4544,6 +4542,15 @@ impl ExecutionOrchestrator {
         if let Some(summary) = guardplane_summary {
             builder = builder.meta("guardplane_hook_enabled".to_string(), "true".to_string());
             builder = builder.meta(
+                "guardplane_hook_scope".to_string(),
+                if guardplane_report.is_some_and(|report| report.instruction_hooks_enabled) {
+                    "instructions_and_host_effects"
+                } else {
+                    "host_effects"
+                }
+                .to_string(),
+            );
+            builder = builder.meta(
                 "guardplane_hook_decisions".to_string(),
                 summary.decision_count.to_string(),
             );
@@ -4586,7 +4593,14 @@ impl ExecutionOrchestrator {
             if let Some(posterior) = &summary.last_posterior {
                 builder = builder.witness(Witness {
                     witness_id: format!("{trace_id}:guardplane"),
-                    witness_type: "guardplane_instruction_risk".to_string(),
+                    witness_type: if guardplane_report
+                        .is_some_and(|report| report.instruction_hooks_enabled)
+                    {
+                        "guardplane_instruction_risk"
+                    } else {
+                        "guardplane_host_effect_risk"
+                    }
+                    .to_string(),
                     value: format!(
                         "decisions={} benign={} anomalous={} malicious={} unknown={}",
                         summary.decision_count,

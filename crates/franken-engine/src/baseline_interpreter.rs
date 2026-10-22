@@ -12390,6 +12390,14 @@ mod evidence_log_signing_key_tests {
 /// `pre_import` is part of the stable hook contract and is invoked on
 /// `ImportModule` during module loading.
 pub trait InterpreterHook: Send + Sync {
+    /// Whether this hook observes guest instruction activity in addition to
+    /// live hostcall decisions. Existing hooks retain their full contract.
+    /// Effects-only hooks skip instruction callbacks and their legacy key ABI;
+    /// this never suppresses the capability membrane or `pre_hostcall`.
+    fn instruction_hooks_enabled(&self) -> bool {
+        true
+    }
+
     /// Frozen compatibility callback for well-formed string property keys.
     ///
     /// New implementations that need exact strings or Symbols should override
@@ -41438,7 +41446,11 @@ impl InterpreterCore {
         // path (`Function(src)`, `new Function(src)`, `.call`, Reflect) ends
         // here, so it reports as a call named "Function"; `u32::MAX` marks
         // "no IR3 function".
-        if let Some(hook) = self.hook.as_ref() {
+        if let Some(hook) = self
+            .hook
+            .as_ref()
+            .filter(|hook| hook.instruction_hooks_enabled())
+        {
             let mut arguments = Vec::with_capacity(args.count as usize);
             for index in 0..args.count {
                 arguments.push(self.builtin_arg(args, index)?.unwrap_or(Value::Undefined));
@@ -50571,7 +50583,11 @@ impl InterpreterCore {
         &self,
         key: &RuntimePropertyKey,
     ) -> Result<(), InterpreterError> {
-        if self.hook.is_none() {
+        if !self
+            .hook
+            .as_ref()
+            .is_some_and(|hook| hook.instruction_hooks_enabled())
+        {
             return Ok(());
         }
         let hook_key = match key {
@@ -50591,7 +50607,11 @@ impl InterpreterCore {
         key: &RuntimePropertyKey,
     ) -> Result<(), InterpreterError> {
         self.validate_executable_property_key(key)?;
-        let Some(hook) = self.hook.as_ref() else {
+        let Some(hook) = self
+            .hook
+            .as_ref()
+            .filter(|hook| hook.instruction_hooks_enabled())
+        else {
             return Ok(());
         };
         let ctx = self.hook_context(module);
@@ -50612,7 +50632,11 @@ impl InterpreterCore {
         function_index: u32,
         args: &[Value],
     ) -> Result<(), InterpreterError> {
-        let Some(hook) = self.hook.as_ref() else {
+        let Some(hook) = self
+            .hook
+            .as_ref()
+            .filter(|hook| hook.instruction_hooks_enabled())
+        else {
             return Ok(());
         };
         let ctx = self.hook_context(module);
@@ -51029,7 +51053,11 @@ impl InterpreterCore {
         if self.preparing_execution {
             return Ok(());
         }
-        let Some(hook) = self.hook.as_ref() else {
+        let Some(hook) = self
+            .hook
+            .as_ref()
+            .filter(|hook| hook.instruction_hooks_enabled())
+        else {
             return Ok(());
         };
         let ctx = self.hook_context(module);
@@ -51041,7 +51069,11 @@ impl InterpreterCore {
         module: &Ir3Module,
         specifier: &str,
     ) -> Result<(), InterpreterError> {
-        let Some(hook) = self.hook.as_ref() else {
+        let Some(hook) = self
+            .hook
+            .as_ref()
+            .filter(|hook| hook.instruction_hooks_enabled())
+        else {
             return Ok(());
         };
         let ctx = self.hook_context(module);

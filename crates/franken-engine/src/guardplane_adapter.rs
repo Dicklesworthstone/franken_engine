@@ -1,4 +1,4 @@
-//! Instruction-level Probabilistic Guardplane adapter.
+//! Live host-effect and optional instruction-level Probabilistic Guardplane adapter.
 //!
 //! This module bridges the baseline interpreter hook surface to the existing
 //! Bayesian posterior updater, expected-loss selector, and containment
@@ -233,6 +233,8 @@ impl GuardplaneExtensionContext {
         }
     }
 
+    /// Whether to add speculative instruction observations to the live host-effect
+    /// guard. This metadata never disables host-effect monitoring in the orchestrator.
     pub fn instruction_hooks_enabled(&self) -> bool {
         if metadata_lookup(
             &self.metadata,
@@ -479,6 +481,7 @@ struct GuardplaneAdapterState {
 pub struct GuardplaneAdapter {
     context: GuardplaneExtensionContext,
     epoch: SecurityEpoch,
+    instruction_hooks_enabled: bool,
     state: Mutex<GuardplaneAdapterState>,
 }
 
@@ -488,6 +491,33 @@ impl GuardplaneAdapter {
         loss_matrix: LossMatrix,
         runtime_config: &RuntimeConfig,
         epoch: SecurityEpoch,
+    ) -> Self {
+        Self::from_runtime_config_with_instruction_hooks(
+            context, loss_matrix, runtime_config, epoch, true,
+        )
+    }
+
+    /// Monitor live hostcall decisions using the configured prior. Instruction
+    /// heuristics and unauthenticated static trust/capability-breadth metadata
+    /// are not observations in this mode. An authorized host effect is not
+    /// evidence of abuse merely because a package declares many capabilities.
+    pub fn host_effects_from_runtime_config(
+        context: GuardplaneExtensionContext,
+        loss_matrix: LossMatrix,
+        runtime_config: &RuntimeConfig,
+        epoch: SecurityEpoch,
+    ) -> Self {
+        Self::from_runtime_config_with_instruction_hooks(
+            context, loss_matrix, runtime_config, epoch, false,
+        )
+    }
+
+    fn from_runtime_config_with_instruction_hooks(
+        context: GuardplaneExtensionContext,
+        loss_matrix: LossMatrix,
+        runtime_config: &RuntimeConfig,
+        epoch: SecurityEpoch,
+        instruction_hooks_enabled: bool,
     ) -> Self {
         let mut updater = BayesianPosteriorUpdater::new(
             Posterior::from_prior_config(&runtime_config.guardplane.priors),
@@ -499,7 +529,9 @@ impl GuardplaneAdapter {
         // extension, folded into the prior before any operation. Feeding it
         // into every hooked operation counted the same metadata as fresh
         // evidence each time (bd-9vouw.60).
-        updater.update(&context_evidence(&context, epoch));
+        if instruction_hooks_enabled {
+            updater.update(&context_evidence(&context, epoch));
+        }
         let mut selector = ExpectedLossSelector::new(loss_matrix);
         selector.set_epoch(epoch);
 
@@ -541,6 +573,7 @@ impl GuardplaneAdapter {
         Self {
             context,
             epoch,
+            instruction_hooks_enabled,
             state: Mutex::new(GuardplaneAdapterState {
                 updater,
                 selector,
@@ -552,6 +585,10 @@ impl GuardplaneAdapter {
                 diagnostics: Vec::new(),
             }),
         }
+    }
+
+    pub fn instruction_hooks_enabled(&self) -> bool {
+        self.instruction_hooks_enabled
     }
 
     fn lock_state(&self, operation: &'static str) -> MutexGuard<'_, GuardplaneAdapterState> {
@@ -819,12 +856,19 @@ fn context_evidence(context: &GuardplaneExtensionContext, epoch: SecurityEpoch) 
 }
 
 impl InterpreterHook for GuardplaneAdapter {
+    fn instruction_hooks_enabled(&self) -> bool {
+        self.instruction_hooks_enabled
+    }
+
     fn pre_property_access(
         &self,
         ctx: &HookContext,
         _target: &ObjectRef,
         key: &PropertyKey,
     ) -> HookAction {
+        if !self.instruction_hooks_enabled {
+            return HookAction::Allow;
+        }
         self.evaluate_operation(
             ctx,
             GuardplaneOperation::PropertyAccess { key: key.clone() },
@@ -841,6 +885,11 @@ impl InterpreterHook for GuardplaneAdapter {
         target: &ObjectRef,
         key: &HookPropertyKey,
     ) -> Result<HookAction, HookPropertyKeyCompatibilityError> {
+        // Effects-only monitoring must not impose a legacy string-key ABI on
+        // guest property operations, including Symbols and lone surrogates.
+        if !self.instruction_hooks_enabled {
+            return Ok(HookAction::Allow);
+        }
         match key {
             HookPropertyKey::Symbol(symbol) => Ok(self.evaluate_operation(
                 ctx,
@@ -856,6 +905,9 @@ impl InterpreterHook for GuardplaneAdapter {
     }
 
     fn pre_call(&self, ctx: &HookContext, callee: &FunctionRef, args: &[Value]) -> HookAction {
+        if !self.instruction_hooks_enabled {
+            return HookAction::Allow;
+        }
         let callee_name = match callee {
             FunctionRef::Function { name, .. } | FunctionRef::Closure { name, .. } => name.clone(),
         };
@@ -869,10 +921,16 @@ impl InterpreterHook for GuardplaneAdapter {
     }
 
     fn pre_allocation(&self, ctx: &HookContext, kind: AllocKind, size_hint: usize) -> HookAction {
+        if !self.instruction_hooks_enabled {
+            return HookAction::Allow;
+        }
         self.evaluate_operation(ctx, GuardplaneOperation::Allocation { kind, size_hint })
     }
 
     fn pre_import(&self, ctx: &HookContext, specifier: &str) -> HookAction {
+        if !self.instruction_hooks_enabled {
+            return HookAction::Allow;
+        }
         self.evaluate_operation(
             ctx,
             GuardplaneOperation::Import {

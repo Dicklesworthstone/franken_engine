@@ -21,6 +21,8 @@ use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 mod stream_web_bridge;
 #[path = "readline_cursor.rs"]
 mod readline_cursor;
+#[path = "util_mime.rs"]
+mod util_mime;
 
 const SOURCE: &str = include_str!("native_module_loader.js");
 // One immutable template for every builtin wrapper, including bridge-private
@@ -72,6 +74,7 @@ pub(super) fn defer_modules(tree: &mut SyntaxTree) -> Outcome {
     }
     stream_web_bridge::compose(tree, &bindings)?;
     readline_cursor::compose(tree, &bindings)?;
+    util_mime::compose(tree, &bindings)?;
     ModuleReferences(&bindings).statements(&mut tree.body)?;
     for index in declarations {
         let Statement::VariableDeclaration(declaration) = &mut tree.body[index] else {

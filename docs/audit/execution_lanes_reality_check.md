@@ -135,11 +135,13 @@ report's span/wording verdict is `pass` in both modes; release rejection is the
 subsequent process freshness verdict. Consumers must not mistake that JSON
 field alone for release authorization.
 
-One further documentation boundary remains under the existing docs-truth
-owner: this smoke calls its SHA-256 links `link_signature` / `signed_link`,
-but those are unkeyed content hashes, not Ed25519 manifest authentication.
-Runtime-signed evidence inside a run report does not authenticate the outer
-shell bundle. The maintenance fix does not promote that signature claim.
+The README's outer-bundle authentication wording is corrected under the
+existing docs-truth owner: this smoke calls its SHA-256 links `link_signature`
+/ `signed_link`, but those are unkeyed content hashes, not Ed25519 manifest
+authentication. Four README statements now distinguish those bindings from
+runtime-signed inner evidence. All command strings and 2,548 lines are retained;
+the six real-binary smoke regressions pass again on macOS. This is a user-facing
+documentation correction, not implementation of outer-manifest signing.
 
 ## Vision-to-implementation and work coverage
 
@@ -303,6 +305,28 @@ the two changed JavaScript files reports zero critical findings and two
 pre-existing synchronous fixture-read warnings. Full CJS facade retirement,
 native authority/IFC/GC qualification and independent verification remain open.
 No cache was deleted, gate weakened or peer process interrupted.
+
+Further continuation checked the named oracle rather than changing its
+assertions: official Node22.2.0, archive SHA256
+`3544eee9cb1414d6e9003efd56bc807ffb0f4445d2fc383e1df04c3e5e72c91b`,
+matches all 40 original stream programs in the first invocation. It gives
+p03's frozen error-first order; Node22.22.1 gives the reverse independent-callback order. An attempted
+no-op iterator-cleanup change fixes p03 but introduces a native f01 finished
+ordering regression; its full guest-factory corpus is 38/40, not green.
+Preserving the success boundary experimentally loses p03 again. Both runtime
+and test experiments were fully reverted to committed `25664c0c7`; no runtime
+increment or compatibility gain is claimed. Raw inputs/results remain under
+`stream-routing/native-linux/` and `/var/tmp/fe-native-stream-bf2.jF2mrU/iterator-close/`.
+The util failure is caused by lowering the dormant parseArgs default-argv
+reader, not an eager read: ordinary JavaScript laziness cannot repair this
+static authority boundary. A proper capability-checked runtime seam and the
+original full migration/qualification remain open; no permission was widened.
+Direct native CLI imports of both `util.format` and `assert.strictEqual` also
+reproduce that same denial. A control run of committed `25664c0c7`'s factory
+is 38/40 native guest; the live Node control is 39/40 because c01's real timer
+order differs from its first invocation. This timer-sensitive oracle result
+is retained, not retried into green. Restored-source host regressions pass
+116/116. None of these guest runs replaces an embedded-module rebuild.
 
 ## Historical assessment — superseded, retained for provenance
 

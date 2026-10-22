@@ -96,7 +96,7 @@ Then run the end-to-end smoke that exercises `compile` → `verify` → `run`:
 FRANKENCTL_BIN=./target/release/frankenctl ./scripts/e2e/readme_cli_workflow_smoke.sh
 ```
 
-Artifacts land under `artifacts/readme_cli_workflow_smoke/<timestamp>/` with a signed manifest, structured events, command transcript, and the emitted compile/run/replay payloads.
+Artifacts land under `artifacts/readme_cli_workflow_smoke/<timestamp>/` with a content-hash manifest, structured events, command transcript, and the emitted compile/run/replay payloads. The outer manifest and `link_signature`/`signed_link` fields use unkeyed SHA-256 bindings; authentication of runtime-signed inner evidence is a separate check.
 
 The workspace exposes ten member crates; the operator-facing ones and their binaries:
 
@@ -1515,7 +1515,7 @@ The `frankenctl` CLI is the primary operator surface. 33 subcommands ship in tot
 
 ### Quick Reference Card
 
-If you only learn these seven, you can produce a complete signed artifact bundle and verify it end-to-end:
+These seven cover binary checks, compile/run artifacts, strict replay, and diagnostic reports:
 
 | Command | One-liner |
 |---|---|
@@ -1525,7 +1525,7 @@ If you only learn these seven, you can produce a complete signed artifact bundle
 | `frankenctl run --input <file> --extension-id <id> --out <path>` | Execute source through the orchestrator and emit an execution report. |
 | `frankenctl replay run --trace <path> --mode strict` | Replay a captured nondeterminism trace and abort on first divergence. |
 | `frankenctl doctor --input <runtime_input.json> --summary` | Preflight + incident-window triage on a runtime-input bundle. |
-| `FRANKENCTL_BIN=./target/release/frankenctl ./scripts/e2e/readme_cli_workflow_smoke.sh` | End-to-end smoke (compile → verify → run → replay) with signed-bundle output. |
+| `FRANKENCTL_BIN=./target/release/frankenctl ./scripts/e2e/readme_cli_workflow_smoke.sh` | End-to-end smoke (compile → verify → run → replay) with a content-hash bundle. |
 
 ### Full Surface
 
@@ -2308,7 +2308,7 @@ Project-specific jargon, defined once.
 | **`SchemaId`** | Stable identifier for an in-tree serde schema (`SchemaId::from_definition(&[u8])`, `SchemaId::from_bytes([u8; 32])`). Used to detect schema drift between recorded and replayed artifacts. |
 | **SecurityEpoch** | A monotonic time-of-policy primitive. Replay artifacts are anchored to a specific epoch; `from_raw(u64)` / `as_u64()` are the entry points. |
 | **Shadow daemon** | The advisory-only-mode automation surface (`docs/SHADOW_DAEMON_PROOF_STATE.md`). Can preview recommended mutations but cannot apply them in production until adoption gates promote. |
-| **Signed manifest** | `run_manifest.json` is the Ed25519-anchored declaration that ships with each gate bundle; the signing/verification primitives live in `signature_preimage.rs`, `signature_drift_gate.rs`, and `threshold_signing.rs`. |
+| **Signed manifest** | An Ed25519-signed declaration requires an emitted signature and a trusted verification key. The README smoke's `run_manifest.json` is a content-hash manifest; names such as `signed_link` do not authenticate its origin. Signing primitives live in `signature_preimage.rs`, `signature_drift_gate.rs`, and `threshold_signing.rs`. |
 | **TARGETED** | A matrix state meaning a design goal/SLO is documented but observed proof has not been linked yet. Required wording includes the qualifier. |
 | **Test262** | The official ECMAScript conformance test suite. Run via `frankenctl test test262`. |
 | **Transparency log** | An append-only Merkle log (RFC-6962-style MMR) for decision receipts; inclusion/consistency proofs are OBSERVED (`FE-CLAIM-004`, `bd-cixqu.1.2`). The TEE-attestation binding remains HYPOTHESIS (`FE-CLAIM-004-TEE`). |

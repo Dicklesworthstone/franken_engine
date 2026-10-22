@@ -776,17 +776,26 @@
     }
     return result;
   }
-  function snapshotCollection(value, isMap, primitive, candidates) {
+  function snapshotCollection(value, isMap, snapshot) {
     var iterate = isMap ? mapEntries : setValues;
-    var count = 0;
+    var primitive, candidates, count = 0;
     for (var candidate of collectionApply(iterate, value, [])) {
       var key = isMap ? candidate[0] : candidate;
       if (key === null || typeof key !== 'object') {
+        // Object-only collections need no primitive-key index. Keep the
+        // iteration count separately: a replaced iterator can repeat a key.
+        if (primitive === undefined) { primitive = new MapClass(); }
         collectionApply(mapSet, primitive, [key, isMap ? candidate[1] : true]);
-      } else { candidates.push(candidate); }
+      } else {
+        if (candidates === undefined) { candidates = []; }
+        candidates.push(candidate);
+      }
       count++;
     }
-    return count;
+    // Publish once, keeping per-entry work in locals rather than heap fields.
+    snapshot.primitive = primitive;
+    snapshot.candidates = candidates;
+    snapshot.candidateCount = count;
   }
   function unorderedEqual(a, b, seen, isMap) {
     var iterate = isMap ? mapEntries : setValues;
@@ -797,9 +806,10 @@
     // for Maps whose structurally equal keys may carry different values.
     // Snapshot values as well as keys: a value getter in a nested comparison
     // must not rewrite a later candidate through the original Map.
-    var primitive = new MapClass();
-    var candidates = [];
-    var candidateCount = snapshotCollection(b, isMap, primitive, candidates);
+    var snapshot = { primitive: undefined, candidates: undefined, candidateCount: 0 };
+    snapshotCollection(b, isMap, snapshot);
+    var primitive = snapshot.primitive, candidates = snapshot.candidates;
+    var candidateCount = snapshot.candidateCount;
     // Start at the first still-available object candidate. Ordered matches
     // need no consumed flags; only out-of-order matches allocate a private
     // null-prototype table, never exposing bookkeeping to indexed setters.
@@ -808,7 +818,7 @@
     for (var entry of collectionApply(iterate, a, [])) {
       var entryKey = isMap ? entry[0] : entry;
       if (entryKey === null || typeof entryKey !== 'object') {
-        if (!collectionApply(mapHas, primitive, [entryKey]) ||
+        if (primitive === undefined || !collectionApply(mapHas, primitive, [entryKey]) ||
             (isMap && !deepEqual(entry[1], collectionApply(mapGet, primitive, [entryKey]), seen))) {
           return false;
         }
@@ -818,6 +828,7 @@
         count++;
         continue;
       }
+      if (candidates === undefined) { return false; }
       var found = false;
       for (var i = first; i < candidates.length; i++) {
         if (matched !== undefined && matched[i]) {
@@ -837,6 +848,10 @@
             if (matched === undefined) { matched = comparisonCreate(null); }
             matched[i] = true;
           }
+          // A consumed right entry can never match again. Release its
+          // snapshot reference before the next left entry can run guest code.
+          candidates[i] = undefined;
+          other = undefined;
           count++;
           found = true;
           break;
@@ -930,12 +945,12 @@
   function indexedCollection(frame) {
     var isMap = frame.tag === 'Map';
     var iterate = isMap ? mapEntries : setValues;
-    var state = { primitive: new MapClass(), candidates: [], matched: undefined, first: 0,
+    var state = { primitive: undefined, candidates: undefined, matched: undefined, first: 0,
       candidateCount: 0, count: 0, isMap: isMap, open: false, iterator: undefined,
       next: undefined, entry: undefined, key: undefined, index: 0, other: undefined };
     // Keep the existing right snapshot / live left iteration contract. No
     // getter in a nested value comparison can rewrite a snapshot candidate.
-    state.candidateCount = snapshotCollection(frame.right, isMap, state.primitive, state.candidates);
+    snapshotCollection(frame.right, isMap, state);
     var iterable = collectionApply(iterate, frame.left, []);
     state.iterator = collectionApply(iterable[collectionIterator], iterable, []);
     if (!iteratorObject(state.iterator)) { throw new ComparisonTypeError('Iterator must be an object'); }
@@ -1035,7 +1050,7 @@
           state.open = true;
           state.key = state.isMap ? state.entry[0] : state.entry;
           if (state.key === null || typeof state.key !== 'object') {
-            if (!collectionApply(mapHas, state.primitive, [state.key])) {
+            if (state.primitive === undefined || !collectionApply(mapHas, state.primitive, [state.key])) {
               finishIndexedFrame(work, seen, false); continue;
             }
             frame.phase = 6;
@@ -1043,6 +1058,7 @@
               collectionApply(mapGet, state.primitive, [state.key]), seen, work);
             continue;
           }
+          if (state.candidates === undefined) { finishIndexedFrame(work, seen, false); continue; }
           state.index = state.first;
           frame.phase = 7;
         }
@@ -1077,6 +1093,8 @@
             if (state.matched === undefined) { state.matched = comparisonCreate(null); }
             state.matched[state.index] = true;
           }
+          state.candidates[state.index] = undefined;
+          state.other = undefined;
           state.count++;
           frame.phase = 5;
         } else { state.index++; frame.phase = 7; }

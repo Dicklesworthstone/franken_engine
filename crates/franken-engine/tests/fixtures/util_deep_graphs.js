@@ -153,5 +153,15 @@ function verifyUtilCollectionCursor(eq) {
     check(eq(nest(left, deep), nest(right, deep)), 'duplicate keys retain distinct values');
     check(!eq(nest(wrong, deep), nest(right, deep)), 'matched value cannot be reused');
   }
+  // A missing primitive-key index is a normal mismatch in both walkers.
+  // Mixing primitives and objects must still preserve one-to-one matches.
+  for (const deep of [false, true]) {
+    check(!eq(nest(new Set([1]), deep), nest(new Set([{ rank: 1 }]), deep)), 'primitive versus object');
+    check(!eq(nest(new Map([[undefined, 1]]), deep), nest(new Map([[{}, 1]]), deep)), 'undefined key versus object');
+    const symbol = Symbol('snapshot');
+    const a = new Map([[undefined, 2], [{ rank: 0 }, false], [symbol, 3], [{ rank: 1 }, true]]);
+    const b = new Map([[{ rank: 1 }, true], [symbol, 3], [{ rank: 0 }, false], [undefined, 2]]);
+    check(eq(nest(a, deep), nest(b, deep)), 'mixed snapshot keys');
+  }
   return 'util collection cursor: ordered, rotated, duplicate keys, one-to-one';
 }

@@ -368,8 +368,10 @@ const MODULE_GLOBALS: [&str; 17] = [
     "process",
 ];
 
-const TIMERS_GLOBALS: [&str; 7] = [
+const TIMERS_GLOBALS: [&str; 9] = [
     "Object",
+    "Symbol",
+    "TypeError",
     "setTimeout",
     "clearTimeout",
     "setImmediate",

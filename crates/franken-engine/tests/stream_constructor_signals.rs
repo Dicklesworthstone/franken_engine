@@ -5,15 +5,36 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use frankenengine_engine::baseline_interpreter::LaneChoice;
+use frankenengine_engine::baseline_interpreter::{InterpreterError, LaneChoice};
 use frankenengine_engine::execution_orchestrator::{
-    ExecutionOrchestrator, ExtensionPackage, LabFixtureExecutionOrchestratorExt, OrchestratorConfig,
+    ExecutionOrchestrator, ExtensionPackage, LabFixtureExecutionOrchestratorExt,
+    OrchestratorConfig, OrchestratorError, OrchestratorResult,
 };
 use frankenengine_extension_host::host_io::{
     HostIoRecorder, InMemoryHostIoTranscript, SandboxedHostIo,
 };
 
 fn run(source: &str, lane: LaneChoice) -> (tempfile::TempDir, Vec<String>) {
+    let (root, result) = execute_with_timer_authority(source, lane, true);
+    let result = result.expect("native stream cancellation completes");
+    (
+        root,
+        result
+            .console_output
+            .into_iter()
+            .map(|entry| entry.message)
+            .collect(),
+    )
+}
+
+fn execute_with_timer_authority(
+    source: &str,
+    lane: LaneChoice,
+    grant_timer: bool,
+) -> (
+    tempfile::TempDir,
+    Result<OrchestratorResult, OrchestratorError>,
+) {
     let root = tempfile::tempdir().expect("sandbox root");
     let provider = Arc::new(SandboxedHostIo::with_root(root.path()).expect("host provider"));
     let recorder: Arc<dyn HostIoRecorder> = Arc::new(InMemoryHostIoTranscript::recording());
@@ -22,18 +43,58 @@ fn run(source: &str, lane: LaneChoice) -> (tempfile::TempDir, Vec<String>) {
         ..OrchestratorConfig::default()
     });
     runtime.set_host_io(provider, Some(recorder));
+    let mut capabilities: Vec<String> = [
+        "vm_dispatch",
+        "heap_allocate",
+        "builtin",
+        "console",
+        "fs_read",
+        "fs_write",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect();
+    if grant_timer {
+        capabilities.push("timer".into());
+    }
     let package = ExtensionPackage {
         extension_id: "stream-constructor-signals".into(),
         source: source.into(),
         source_file: None,
         module_root: None,
-        capabilities: ["vm_dispatch", "heap_allocate", "builtin", "console", "fs_read", "fs_write"]
-            .into_iter().map(str::to_string).collect(),
+        capabilities,
         version: "1.0.0".into(),
         metadata: BTreeMap::new(),
     };
-    let result = runtime.execute(&package).expect("native stream cancellation completes");
-    (root, result.console_output.into_iter().map(|entry| entry.message).collect())
+    (root, runtime.execute(&package))
+}
+
+#[test]
+fn stream_next_tick_scheduling_requires_explicit_timer_authority() {
+    let source = "const {Readable} = require('stream'); \
+                  const stream = new Readable({read(){this.push(null);}}); \
+                  stream.on('end', () => console.log('ended')); stream.resume();";
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for grant_timer in [false, true] {
+            let (_, result) = execute_with_timer_authority(source, lane, grant_timer);
+            if grant_timer {
+                let result = result.expect("explicit Timer grant permits stream scheduling");
+                assert_eq!(
+                    result
+                        .console_output
+                        .iter()
+                        .map(|entry| entry.message.as_str())
+                        .collect::<Vec<_>>(),
+                    ["ended"]
+                );
+            } else {
+                let error = result.expect_err("Builtin alone cannot schedule a next-tick job");
+                assert!(matches!(error.primary_error(),
+                    OrchestratorError::Interpreter(InterpreterError::CapabilityDenied { capability })
+                        if capability == "builtin:ProcessNextTick"));
+            }
+        }
+    }
 }
 
 #[test]

@@ -200,6 +200,293 @@ mod tests {
     }
 
     #[test]
+    fn generic_mutators_preserve_consumed_argument_and_source_labels_bd_ojvo1() {
+        use BuiltinFunctionKind as K;
+        let tree = crate::parser_api_stability::parse_script("0").unwrap();
+        let module = crate::lowering_pipeline::lower_ir0_to_ir3(
+            &crate::ir_contract::Ir0Module::from_syntax_tree(tree, "generic-mutation-labels.js"),
+            &crate::lowering_pipeline::LoweringContext::new("mutate", "labels", "builtin-only"),
+        )
+        .unwrap()
+        .ir3;
+        for throughput in [false, true] {
+            for label in [Label::Public, Label::Secret] {
+                for kind in [
+                    K::ArrayUnshift,
+                    K::ArrayFill,
+                    K::ArraySplice,
+                    K::ArrayShift,
+                    K::ArrayCopyWithin,
+                ] {
+                    let mut config = if throughput {
+                        InterpreterConfig::v8_defaults()
+                    } else {
+                        InterpreterConfig::quickjs_defaults()
+                    };
+                    config.granted_capabilities = [
+                        RuntimeCapability::VmDispatch,
+                        RuntimeCapability::HeapAllocate,
+                        RuntimeCapability::Builtin,
+                    ]
+                    .into_iter()
+                    .collect();
+                    let mut core = InterpreterCore::new(config, "generic-mutation-labels");
+                    let object = core.alloc_object_with_prototype(None).unwrap();
+                    let length = match kind {
+                        K::ArrayFill => 1,
+                        K::ArrayShift | K::ArrayCopyWithin => 2,
+                        _ => 0,
+                    };
+                    core.set_object_property(object, "length".into(), Value::Int(length))
+                        .unwrap();
+                    for index in 0..length {
+                        core.set_object_property(object, index.to_string(), Value::Int(9))
+                            .unwrap();
+                    }
+                    let (builtin, values, stored_index) = match kind {
+                        K::ArrayUnshift => (
+                            BuiltinFunction::array_unshift(),
+                            vec![(7, label.clone())],
+                            0,
+                        ),
+                        K::ArrayFill => {
+                            (BuiltinFunction::array_fill(), vec![(7, label.clone())], 0)
+                        }
+                        K::ArraySplice => (
+                            BuiltinFunction::array_splice(),
+                            vec![(0, Label::Public), (0, Label::Public), (7, label.clone())],
+                            0,
+                        ),
+                        K::ArrayShift | K::ArrayCopyWithin => {
+                            let source_index = if kind == K::ArrayShift { "1" } else { "0" };
+                            core.set_object_property(object, source_index.into(), Value::Int(7))
+                                .unwrap();
+                            core.set_own_property_label(object, source_index, &label)
+                                .unwrap();
+                            if kind == K::ArrayShift {
+                                (BuiltinFunction::array_shift(), Vec::new(), 0)
+                            } else {
+                                (
+                                    BuiltinFunction::array_copy_within(),
+                                    vec![
+                                        (1, Label::Public),
+                                        (0, Label::Public),
+                                        (1, Label::Public),
+                                    ],
+                                    1,
+                                )
+                            }
+                        }
+                        _ => unreachable!(),
+                    };
+                    let args = RegRange {
+                        start: 0,
+                        count: values.len() as u32,
+                    };
+                    for (register, (value, label)) in (0..).zip(values) {
+                        core.write_reg_with_label(register, Value::Int(value), label)
+                            .unwrap();
+                    }
+                    assert_eq!(
+                        core.generic_array_receiver(
+                            &module,
+                            kind,
+                            false,
+                            Some(&Value::Object(object)),
+                            args
+                        )
+                        .unwrap(),
+                        Some(object)
+                    );
+                    let result = core
+                        .dispatch_builtin_function(
+                            &module,
+                            &builtin,
+                            args,
+                            Some(Value::Object(object)),
+                            None,
+                        )
+                        .unwrap();
+                    match kind {
+                        K::ArrayUnshift => assert_eq!(result, Value::Int(1)),
+                        K::ArrayShift => assert_eq!(result, Value::Int(9)),
+                        K::ArraySplice => {
+                            let Value::Object(removed) = result else {
+                                panic!("removed array");
+                            };
+                            assert_ne!(removed, object);
+                            assert_eq!(
+                                core.heap[removed.0 as usize].properties.get("length"),
+                                Some(&Value::Int(0))
+                            );
+                        }
+                        _ => assert_eq!(result, Value::Object(object)),
+                    }
+                    assert_eq!(
+                        core.heap[object.0 as usize]
+                            .properties
+                            .get_index(stored_index),
+                        Some(&Value::Int(7))
+                    );
+                    assert_eq!(
+                        core.own_property_label(object, &stored_index.to_string()),
+                        label,
+                        "{kind:?}"
+                    );
+                    assert_eq!(core.json_parse_temporary_bytes, 0);
+                    assert_eq!(
+                        core.estimated_memory_bytes(),
+                        core.recompute_estimated_memory_bytes()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn generic_hole_moves_retain_deletion_control_provenance_on_public_aliases() {
+        for label in [Label::Public, Label::Secret] {
+            let mut config = InterpreterConfig::quickjs_defaults();
+            config
+                .granted_capabilities
+                .insert(RuntimeCapability::HeapAllocate);
+            let mut core = InterpreterCore::new(config, "generic-hole-labels");
+            let object = core.alloc_object_with_prototype(None).unwrap();
+            core.set_object_property(object, "1".into(), Value::Int(9))
+                .unwrap();
+            core.write_reg_with_label(0, Value::Object(object), Label::Public)
+                .unwrap();
+            // A sensitive HasProperty/length observation can leave this
+            // scoped floor even when no source value exists to be copied.
+            core.generic_species_scope(|core| {
+                core.json_observe_label(label.clone())?;
+                core.generic_move(None, object, 0, 1)
+            })
+            .unwrap();
+            assert_eq!(core.read_reg(0).unwrap(), Value::Object(object));
+            assert_eq!(core.get_register_label(0).unwrap(), &Label::Public);
+            assert_eq!(core.heap[object.0 as usize].properties.get_index(1), None);
+            // A deleted property has no stored value label. Read its absence
+            // in a fresh operation so only the retained shape provenance can
+            // protect this public alias, without a leftover result label.
+            core.replace_pending_hostcall_result_label(None).unwrap();
+            let observed = core
+                .generic_species_scope(|core| {
+                    assert_eq!(
+                        core.generic_get(None, object, &InterpreterCore::generic_index_key(1))?,
+                        Value::Undefined
+                    );
+                    core.json_parse_context_label()
+                })
+                .unwrap();
+            assert_eq!(observed, label);
+            assert_eq!(core.json_parse_temporary_bytes, 0);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn generic_push_preserves_argument_labels_and_preflights_custom_names_bd_ojvo1() {
+        let tree = crate::parser_api_stability::parse_script("0").unwrap();
+        let module = crate::lowering_pipeline::lower_ir0_to_ir3(
+            &crate::ir_contract::Ir0Module::from_syntax_tree(tree, "generic-push-labels.js"),
+            &crate::lowering_pipeline::LoweringContext::new("push", "labels", "builtin-only"),
+        )
+        .unwrap()
+        .ir3;
+        for throughput in [false, true] {
+            for is_array in [false, true] {
+                for label in [
+                    Label::Public,
+                    Label::Secret,
+                    Label::Custom {
+                        name: "push-input".repeat(512),
+                        level: 6,
+                    },
+                ] {
+                    for allow_headroom in [false, true] {
+                        if !allow_headroom && !matches!(&label, Label::Custom { .. }) {
+                            continue;
+                        }
+                        let mut config = if throughput {
+                            InterpreterConfig::v8_defaults()
+                        } else {
+                            InterpreterConfig::quickjs_defaults()
+                        };
+                        config.granted_capabilities = [
+                            RuntimeCapability::VmDispatch,
+                            RuntimeCapability::HeapAllocate,
+                            RuntimeCapability::Builtin,
+                        ]
+                        .into_iter()
+                        .collect();
+                        let mut core = InterpreterCore::new(config, "generic-push-labels");
+                        let object = if is_array {
+                            // The low-level allocator leaves length absent,
+                            // selecting the same generic path as array-likes.
+                            core.alloc_array_with_prototype(None).unwrap()
+                        } else {
+                            let object = core.alloc_object_with_prototype(None).unwrap();
+                            core.set_object_property(object, "length".into(), Value::Int(0))
+                                .unwrap();
+                            object
+                        };
+                        core.write_reg_with_label(0, Value::Int(7), label.clone())
+                            .unwrap();
+                        let args = RegRange { start: 0, count: 1 };
+                        assert_eq!(
+                            core.generic_array_receiver(
+                                &module,
+                                BuiltinFunctionKind::ArrayPush,
+                                false,
+                                Some(&Value::Object(object)),
+                                args,
+                            )
+                            .unwrap(),
+                            Some(object)
+                        );
+                        let before = core.estimated_memory_bytes();
+                        if !allow_headroom {
+                            core.config.max_total_memory_bytes =
+                                before + InterpreterCore::estimate_label_bytes(&label) - 1;
+                        }
+                        let result = core.dispatch_builtin_function(
+                            &module,
+                            &BuiltinFunction::array_push(),
+                            args,
+                            Some(Value::Object(object)),
+                            None,
+                        );
+                        if allow_headroom {
+                            assert_eq!(result.unwrap(), Value::Int(1));
+                            assert_eq!(
+                                core.heap[object.0 as usize].properties.get_index(0),
+                                Some(&Value::Int(7))
+                            );
+                            assert_eq!(core.own_property_label(object, "0"), label);
+                        } else {
+                            assert!(matches!(
+                                result,
+                                Err(InterpreterError::MemoryBudgetExceeded { .. })
+                            ));
+                            assert_eq!(core.heap[object.0 as usize].properties.get_index(0), None);
+                            assert_eq!(core.estimated_memory_bytes(), before);
+                        }
+                        assert_eq!(core.json_parse_temporary_bytes, 0);
+                        assert_eq!(
+                            core.estimated_memory_bytes(),
+                            core.recompute_estimated_memory_bytes()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn tail_checks_do_not_require_dense_or_writable_preceding_elements() {
         let mut object = array(80_000);
         // No preceding elements at all. Only the last element matters to pop.

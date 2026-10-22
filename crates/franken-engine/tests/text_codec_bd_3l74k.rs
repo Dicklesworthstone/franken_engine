@@ -24,6 +24,14 @@ const PROGRAM: &str = "var te = new TextEncoder();\nvar r = [];\nr.push(te.encod
 const NODE_OUTPUT: &str = "utf-8|65,66|195,169,226,130,172,240,157,132,158|239,191,189,120|0|53|[object Uint8Array]|0|function|TextEncoder|0|2|2|4|97,226,130,172|utf-8|false|false|Hi|A|true||\u{1d11e}|TypeError|AB|windows-1252|\u{e9}\u{20ac}|RangeError|2|ok|bc|true";
 
 fn console_output(source: &str) -> Result<String, String> {
+    console_output_with_config(source, InterpreterConfig::quickjs_defaults(), None)
+}
+
+fn console_output_with_config(
+    source: &str,
+    mut config: InterpreterConfig,
+    stress: Option<u64>,
+) -> Result<String, String> {
     let tree = CanonicalEs2020Parser
         .parse_with_options(
             ParserSource {
@@ -40,7 +48,6 @@ fn console_output(source: &str) -> Result<String, String> {
     )
     .map_err(|error| format!("lower: {error:?}"))?
     .ir3;
-    let mut config = InterpreterConfig::quickjs_defaults();
     config.granted_capabilities = [
         RuntimeCapability::VmDispatch,
         RuntimeCapability::HeapAllocate,
@@ -50,6 +57,7 @@ fn console_output(source: &str) -> Result<String, String> {
     .into_iter()
     .collect();
     let mut core = InterpreterCore::new(config, "codec");
+    core.set_gc_stress_interval(stress);
     let result = core.execute(&module);
     assert_eq!(
         core.estimated_memory_bytes(),
@@ -68,4 +76,42 @@ fn console_output(source: &str) -> Result<String, String> {
 #[test]
 fn text_encoder_and_decoder_match_node() {
     assert_eq!(console_output(PROGRAM).as_deref(), Ok(NODE_OUTPUT));
+}
+
+#[test]
+fn prototype_codec_methods_are_callable_and_keep_receiver_validation() {
+    let source = r#"
+const encode = TextEncoder.prototype.encode;
+const encodeInto = TextEncoder.prototype.encodeInto;
+const decode = TextDecoder.prototype.decode;
+const descriptor = Object.getOwnPropertyDescriptor(TextDecoder.prototype, 'decode');
+console.log(typeof encode, typeof encodeInto, typeof decode,
+  descriptor.value === decode, descriptor.writable, descriptor.configurable);
+const encoder = new TextEncoder(), decoder = new TextDecoder();
+console.log(encode.call(encoder, 'é').join(','));
+const target = new Uint8Array(3), result = encodeInto.call(encoder, '€', target);
+console.log(result.read, result.written, decode.call(decoder, target));
+let refused = 0;
+for (const method of [encode, encodeInto, decode]) {
+  try { method.call({}); } catch (error) { if (error.name === 'TypeError') refused++; }
+}
+console.log(refused);
+delete TextDecoder.prototype.decode;
+console.log(typeof TextDecoder.prototype.decode, typeof decoder.decode, typeof decode);
+TextDecoder.prototype.decode = decode;
+console.log(decoder.decode(new Uint8Array([65])));
+"#;
+    let expected = "function function function true true true\n195,169\n1 3 €\n3\nundefined undefined function\nA";
+    for config in [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ] {
+        for stress in [None, Some(1), Some(7)] {
+            assert_eq!(
+                console_output_with_config(source, config.clone(), stress).as_deref(),
+                Ok(expected),
+                "GC={stress:?}"
+            );
+        }
+    }
 }

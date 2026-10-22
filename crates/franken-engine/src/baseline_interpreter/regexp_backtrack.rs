@@ -213,7 +213,7 @@ impl PreparedInput {
                     widths.push(width_word);
                 }
             }
-            if count % OFFSET_BLOCK_SCALARS != 0 {
+            if !count.is_multiple_of(OFFSET_BLOCK_SCALARS) {
                 widths.push(width_word);
             }
             Self {

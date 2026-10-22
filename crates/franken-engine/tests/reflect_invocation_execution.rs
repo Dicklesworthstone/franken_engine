@@ -69,6 +69,72 @@ fn assert_output(source: &str, expected: &[&str]) {
 }
 
 #[test]
+fn nested_direct_and_saved_reflect_calls_fit_the_existing_native_stack() {
+    assert_output(
+        r#"
+        const apply = Reflect.apply, construct = Reflect.construct;
+        let directCalls = 0, savedCalls = 0, constructorCalls = 0;
+        function direct(n) {
+            directCalls++;
+            return n === 0 ? 'direct' : Reflect.apply(direct, null, [n - 1]);
+        }
+        function saved(n) {
+            savedCalls++;
+            return n === 0 ? 'saved' : apply(saved, null, [n - 1]);
+        }
+        function Node(n) {
+            constructorCalls++;
+            this.depth = n;
+            if (n !== 0) this.child = construct(Node, [n - 1]);
+        }
+        log(direct(8), directCalls, saved(8), savedCalls);
+        const root = Reflect.construct(Node, [4]);
+        log(root.depth, root.child.child.child.child.depth, constructorCalls);
+        "#,
+        &["direct 9 saved 9", "4 0 5"],
+    );
+}
+
+#[test]
+fn direct_and_saved_reflect_invocations_require_builtin_authority() {
+    for source in [
+        "Reflect.apply(function(){log('target');}, null, []);",
+        "Reflect.construct(function(){log('target');}, []);",
+        "const apply = Reflect.apply; apply(function(){log('target');}, null, []);",
+        "const construct = Reflect.construct; construct(function(){log('target');}, []);",
+    ] {
+        let module = lower(source);
+        for mut config in [
+            InterpreterConfig::quickjs_defaults(),
+            InterpreterConfig::v8_defaults(),
+        ] {
+            config.granted_capabilities = [
+                RuntimeCapability::VmDispatch,
+                RuntimeCapability::HeapAllocate,
+                RuntimeCapability::Console,
+            ]
+            .into_iter()
+            .collect();
+            let mut core = InterpreterCore::new(config, "reflect-authority");
+            let result = core.execute(&module);
+            assert!(
+                matches!(
+                    &result,
+                    Err(InterpreterError::CapabilityDenied { capability })
+                        if capability.starts_with("builtin:")
+                ),
+                "Reflect authority control for {source}: {result:?}"
+            );
+            assert!(core.console_output().is_empty());
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+}
+
+#[test]
 fn reflect_apply_reads_length_then_live_indices_before_calling_target() {
     assert_output(
         r#"

@@ -437,8 +437,15 @@ impl InterpreterCore {
                 }
                 for index in 0..args.count {
                     self.charge_native_hole_read()?;
+                    // Unlike an element read, taking an argument does not
+                    // install its stored register label in the scoped floor.
+                    // Preserve it before a destination setter can run.
+                    self.observe_generic_array_argument(args, index)?;
                     let item = arg(self, index)?;
-                    self.generic_set(m, o, &Self::generic_index_key(len), item)?;
+                    let key = Self::generic_index_key(len);
+                    self.generic_species_output_write(o, &key, |core| {
+                        core.generic_set(m, o, &key, item)
+                    })?;
                     len += 1;
                 }
                 let length = Self::generic_length_value(len);
@@ -494,8 +501,12 @@ impl InterpreterCore {
                     self.generic_move_range(m, o, 0, count, len, true)?;
                     for index in 0..args.count {
                         self.charge_native_hole_read()?;
+                        self.observe_generic_array_argument(args, index)?;
                         let item = arg(self, index)?;
-                        self.generic_set(m, o, &Self::generic_index_key(u64::from(index)), item)?;
+                        let key = Self::generic_index_key(u64::from(index));
+                        self.generic_species_output_write(o, &key, |core| {
+                            core.generic_set(m, o, &key, item)
+                        })?;
                         self.observe_scoped_callback_result()?;
                     }
                 }
@@ -634,21 +645,21 @@ impl InterpreterCore {
             K::ArrayJoin => {
                 let len = self.generic_length(m, o)?;
                 let separator = match arg(self, 0)? {
-                    Value::Undefined => ",".to_string(),
-                    other => self.generic_to_string(m, other)?,
+                    Value::Undefined => JsString::from(","),
+                    other => self.generic_to_js_string(m, other)?,
                 };
-                let mut out = String::new();
+                let mut out = ArrayJoinBuffer::default();
                 for k in 0..len {
                     if k > 0 {
-                        out.push_str(&separator);
+                        out.push(&separator);
                     }
                     let element = self.generic_get(m, o, &Self::generic_index_key(k))?;
                     if !element.is_nullish() {
-                        out.push_str(&self.generic_to_string(m, element)?);
+                        out.push(&self.generic_to_js_string(m, element)?);
                     }
-                    self.check_temporary_memory_budget(out.len() as u64)?;
+                    self.check_temporary_memory_budget(out.bytes())?;
                 }
-                Value::str(out)
+                Value::Str(out.finish())
             }
             K::ArrayToString => {
                 let join =
@@ -691,9 +702,15 @@ impl InterpreterCore {
                 let value = arg(self, 0)?;
                 let start = self.generic_relative_index(m, arg(self, 1)?, len, 0)?;
                 let end = self.generic_relative_index(m, arg(self, 2)?, len, len)?;
+                if start < end {
+                    self.observe_generic_array_argument(args, 0)?;
+                }
                 for k in start..end.max(start) {
                     self.charge_native_hole_read()?;
-                    self.generic_set(m, o, &Self::generic_index_key(k), value.clone())?;
+                    let key = Self::generic_index_key(k);
+                    self.generic_species_output_write(o, &key, |core| {
+                        core.generic_set(m, o, &key, value.clone())
+                    })?;
                 }
                 self.generic_object_value(o)
             }
@@ -776,9 +793,8 @@ impl InterpreterCore {
                         // rooted while a callback's nested run loop collects.
                         // Passing the accumulator as an argument roots it in
                         // the callee; explicitly pin the enclosing receiver.
-                        accumulator = self.with_gc_nested_request(
-                            vec![Value::Object(o)],
-                            |core| {
+                        accumulator =
+                            self.with_gc_nested_request(vec![Value::Object(o)], |core| {
                                 core.invoke_inline_method_call(
                                     m,
                                     callback.clone(),
@@ -790,8 +806,7 @@ impl InterpreterCore {
                                         core.generic_object_value(o),
                                     ],
                                 )
-                            },
-                        )?;
+                            })?;
                         self.observe_scoped_callback_result()?;
                     }
                 }
@@ -910,6 +925,27 @@ impl InterpreterCore {
         Ok(Some(value))
     }
 
+    /// Retain the label of an actually consumed argument without treating a
+    /// missing argument's default `undefined` as an out-of-bounds register.
+    fn observe_generic_array_argument(
+        &mut self,
+        args: RegRange,
+        index: u32,
+    ) -> Result<(), InterpreterError> {
+        if index >= args.count {
+            return Ok(());
+        }
+        let register =
+            args.start
+                .checked_add(index)
+                .ok_or(InterpreterError::RegisterOutOfBounds {
+                    register: args.start,
+                    max: self.config.max_registers,
+                })?;
+        let label = self.clone_register_label_with_temporary_budget(register)?;
+        self.json_observe_label(label)
+    }
+
     /// ES2020 23.1.3.28 Array.prototype.splice over [[Get]]/[[Set]]/[[Delete]].
     fn generic_splice(
         &mut self,
@@ -970,12 +1006,19 @@ impl InterpreterCore {
         } else if item_count > delete_count {
             self.generic_move_range(m, o, start + delete_count, start + item_count, tail, true)?;
         }
-        for (offset, item) in items.into_iter().enumerate() {
+        for (index, item) in (2..args.count).zip(items) {
             self.charge_native_hole_read()?;
-            self.generic_set(m, o, &Self::generic_index_key(start + offset as u64), item)?;
+            self.observe_generic_array_argument(args, index)?;
+            let key = Self::generic_index_key(start + u64::from(index - 2));
+            self.generic_species_output_write(o, &key, |core| core.generic_set(m, o, &key, item))?;
             self.observe_scoped_callback_result()?;
         }
-        self.generic_set(m, o, &Self::generic_length_key(), Self::generic_length_value(new_len))?;
+        self.generic_set(
+            m,
+            o,
+            &Self::generic_length_key(),
+            Self::generic_length_value(new_len),
+        )?;
         Ok(Value::Object(removed))
     }
 
@@ -1390,9 +1433,13 @@ impl InterpreterCore {
         if present {
             let value = self.generic_get(m, o, &from_key)?;
             self.observe_scoped_callback_result()?;
-            self.generic_set(m, o, &to_key, value)?;
+            self.generic_species_output_write(o, &to_key, |core| {
+                core.generic_set(m, o, &to_key, value)
+            })?;
         } else {
-            self.generic_delete(m, o, &to_key)?;
+            self.generic_species_output_write(o, &to_key, |core| {
+                core.generic_delete(m, o, &to_key)
+            })?;
         }
         self.observe_scoped_callback_result()?;
         Ok(())
@@ -1480,6 +1527,15 @@ impl InterpreterCore {
         m: Option<&Ir3Module>,
         value: Value,
     ) -> Result<String, InterpreterError> {
+        self.generic_to_js_string(m, value)
+            .map(|text| text.to_string())
+    }
+
+    fn generic_to_js_string(
+        &mut self,
+        m: Option<&Ir3Module>,
+        value: Value,
+    ) -> Result<JsString, InterpreterError> {
         let primitive = if value.is_object_like() {
             self.coerce_runtime_primitive(m, value, true)?
         } else {
@@ -1488,7 +1544,10 @@ impl InterpreterCore {
         if matches!(primitive, Value::Symbol(_)) {
             return Err(Self::symbol_to_string_error());
         }
-        Ok(self.value_to_string(&primitive))
+        Ok(match primitive {
+            Value::Str(text) => text,
+            other => JsString::from(self.value_to_string(&other)),
+        })
     }
 
     /// Array.prototype.toLocaleString (ES2020 22.1.3.27; %TypedArray%'s,

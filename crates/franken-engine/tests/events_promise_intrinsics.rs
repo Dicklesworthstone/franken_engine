@@ -32,7 +32,9 @@ fn check(source: &str, expected: &str) {
             .collect();
             let mut core = InterpreterCore::new(config, "events-promises");
             core.set_gc_stress_interval(stress);
-            let result = core.execute(&lowered.ir3).expect("event fixture executes");
+            let result = core.execute(&lowered.ir3).unwrap_or_else(|error| {
+                panic!("event fixture executes: throughput={throughput}, GC={stress:?}: {error}")
+            });
             assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
             let actual = result.console_output.iter()
                 .map(|entry| entry.message.as_str()).collect::<Vec<_>>().join("\n");

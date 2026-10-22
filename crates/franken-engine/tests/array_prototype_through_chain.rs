@@ -137,6 +137,14 @@ const CASES: &[(&str, &str, &str)] = &[
     ),
 ];
 fn console_output(source: &str) -> Result<String, String> {
+    console_output_with_config(source, InterpreterConfig::quickjs_defaults(), None)
+}
+
+fn console_output_with_config(
+    source: &str,
+    mut config: InterpreterConfig,
+    stress: Option<u64>,
+) -> Result<String, String> {
     let tree = CanonicalEs2020Parser
         .parse_with_options(
             ParserSource {
@@ -157,7 +165,6 @@ fn console_output(source: &str) -> Result<String, String> {
     )
     .map_err(|error| format!("lower: {error:?}"))?
     .ir3;
-    let mut config = InterpreterConfig::quickjs_defaults();
     config.granted_capabilities = [
         RuntimeCapability::VmDispatch,
         RuntimeCapability::HeapAllocate,
@@ -167,6 +174,7 @@ fn console_output(source: &str) -> Result<String, String> {
     .into_iter()
     .collect();
     let mut core = InterpreterCore::new(config, "arrayproto");
+    core.set_gc_stress_interval(stress);
     let result = core.execute(&module);
     assert_eq!(
         core.estimated_memory_bytes(),
@@ -198,6 +206,52 @@ fn array_prototype_through_the_chain_matches_node() {
         CASES.len(),
         mismatches.join("\n")
     );
+}
+
+#[test]
+fn ordinary_and_borrowed_join_preserve_exact_units_and_observable_order() {
+    let source = r#"
+function units(text) {
+  let output = '';
+  for (let i = 0; i < text.length; i++) {
+    if (i !== 0) output += ',';
+    output += text.charCodeAt(i);
+  }
+  return output;
+}
+const high = '\ud800', low = '\udc00';
+console.log(units(['a', 'é' + high + '🚀'].join('')));
+console.log(units(Array.prototype.join.call({0:'a', 1:'é' + high + '🚀', length:2}, '')));
+console.log(units([high, low].join('')), units([high, low].join('\udfff')));
+console.log(units([[high], [low]].join('')), units([high, null, undefined, low].join('')));
+console.log(units(String([high])));
+const cycle = [high]; cycle.push(cycle, null);
+console.log(units(cycle.join('')));
+const order = [], token = {};
+const source = {length:3,
+  get 0() {order.push('0'); return high;},
+  get 1() {order.push('1'); throw token;},
+  get 2() {order.push('2'); return low;}};
+let caught = false;
+try { Array.prototype.join.call(source, {toString() {order.push('S'); return low;}}); }
+catch (error) {caught = error === token;}
+console.log(caught, order.join(''));
+const converted = [{toString() {return high;}}, {toString() {return low;}}];
+console.log(units(converted.join({toString() {return '';}})));
+"#;
+    let expected = "97,233,55296,55357,56960\n97,233,55296,55357,56960\n55296,56320 55296,57343,56320\n55296,56320 55296,56320\n55296\n55296\ntrue S01\n55296,56320";
+    for config in [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ] {
+        for stress in [None, Some(1), Some(7)] {
+            assert_eq!(
+                console_output_with_config(source, config.clone(), stress).as_deref(),
+                Ok(expected),
+                "GC={stress:?}"
+            );
+        }
+    }
 }
 
 /// An array-like's length is guest-chosen, up to 2^53 - 1. Methods that

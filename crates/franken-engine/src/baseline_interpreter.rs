@@ -496,13 +496,49 @@ const ARRAY_JOIN_MAX_DEPTH: usize = 10_000;
 /// sub-arrays render as `""` rather than risk stack exhaustion (bd-sxh8o.3).
 const ARRAY_STRING_FALLBACK_MAX_DEPTH: usize = 128;
 
+/// Append exact string units in linear space. Well-formed output keeps the
+/// ordinary UTF-8 buffer; the first lone surrogate switches it to UTF-16.
+#[derive(Default)]
+struct ArrayJoinBuffer {
+    text: String,
+    units: Option<Vec<u16>>,
+}
+
+impl ArrayJoinBuffer {
+    fn push(&mut self, value: &JsString) {
+        if let Some(units) = &mut self.units {
+            units.extend(value.encode_utf16());
+        } else if let Some(text) = value.as_str() {
+            self.text.push_str(text);
+        } else {
+            let mut units: Vec<u16> = self.text.encode_utf16().collect();
+            units.extend(value.encode_utf16());
+            self.text = String::new();
+            self.units = Some(units);
+        }
+    }
+
+    fn bytes(&self) -> u64 {
+        self.units.as_ref().map_or(self.text.len() as u64, |units| {
+            (units.len() as u64).saturating_mul(2)
+        })
+    }
+
+    fn finish(self) -> JsString {
+        self.units.map_or_else(
+            || JsString::from(self.text),
+            |units| JsString::from_code_units(&units),
+        )
+    }
+}
+
 /// One array of an Array.prototype.join in progress: its length, the next
-/// element to render, and the elements rendered so far.
+/// element to render, and the exact string assembled so far.
 struct ArrayJoinFrame {
     array_id: ObjectId,
     len: usize,
     index: usize,
-    parts: Vec<String>,
+    output: ArrayJoinBuffer,
 }
 
 impl ArrayJoinFrame {
@@ -511,7 +547,7 @@ impl ArrayJoinFrame {
             array_id,
             len,
             index: 0,
-            parts: Vec::with_capacity(len.min(4096)),
+            output: ArrayJoinBuffer::default(),
         }
     }
 }
@@ -42364,6 +42400,17 @@ impl InterpreterCore {
         // another builtin's Rust frame never arms a nested loop.
         self.gc_enter_builtin();
         let result = match builtin.kind {
+            // Reflect invocation reenters the VM. Keep its saved function
+            // values out of the broad builtin dispatcher's large Rust frame;
+            // call_static_hostcall retains tag validation and authority gates.
+            BuiltinFunctionKind::StaticHostcall
+                if matches!(
+                    &*builtin.module_specifier,
+                    "builtin:ReflectApply" | "builtin:ReflectConstruct"
+                ) =>
+            {
+                self.call_static_hostcall(module, builtin, args)
+            }
             BuiltinFunctionKind::AsyncGeneratorNext
             | BuiltinFunctionKind::AsyncGeneratorReturn
             | BuiltinFunctionKind::AsyncGeneratorThrow => self.dispatch_async_generator_resume(
@@ -43953,10 +44000,11 @@ impl InterpreterCore {
                     return self.typed_array_join(module, arr_id, &view, args);
                 }
                 let separator = match self.builtin_arg(args, 0)? {
-                    None | Some(Value::Undefined) => ",".to_string(),
-                    Some(value) => self.value_to_string(&value),
+                    None | Some(Value::Undefined) => JsString::from(","),
+                    Some(Value::Str(text)) => text,
+                    Some(value) => JsString::from(self.value_to_string(&value)),
                 };
-                Ok(Value::str(self.array_join_observable(
+                Ok(Value::Str(self.array_join_observable(
                     module,
                     arr_id,
                     &separator,
@@ -43995,7 +44043,11 @@ impl InterpreterCore {
                                     .brand()
                                     .is_some_and(|tag| TypedArrayKind::from_type_name(tag).is_some())
                         }) {
-                            Ok(Value::str(self.array_join_observable(module, arr_id, ",")?))
+                            Ok(Value::Str(self.array_join_observable(
+                                module,
+                                arr_id,
+                                &JsString::from(","),
+                            )?))
                         } else {
                             Ok(self.object_prototype_to_string_value(&Value::Object(arr_id)))
                         }
@@ -68263,8 +68315,9 @@ impl InterpreterCore {
             .get(object_id.0 as usize)
             .is_some_and(|object| object.is_array)
         {
-            let joined = self.array_join_observable(module, object_id, ",")?;
-            return Ok(Value::Str(JsString::from(joined)));
+            return self
+                .array_join_observable(module, object_id, &JsString::from(","))
+                .map(Value::Str);
         }
         Ok(Value::Str(JsString::from(
             self.object_to_coerced_string(object_id),
@@ -92411,6 +92464,11 @@ impl InterpreterCore {
         }
         self.gc_enter_builtin();
         let outcome = match cap {
+            // These already have narrow helpers and can invoke nested guest
+            // callbacks. Avoid reserving the broad handler's stack frame at
+            // every Reflect reentry; keep GC and telemetry in this wrapper.
+            "builtin:ReflectApply" => self.reflect_invocation_builtin(module, args, false),
+            "builtin:ReflectConstruct" => self.reflect_invocation_builtin(module, args, true),
             "builtin:DestructureIteratorInit"
             | "builtin:DestructureIteratorNext"
             | "builtin:DestructureIteratorElide"
@@ -102763,8 +102821,8 @@ impl InterpreterCore {
         &mut self,
         module: &Ir3Module,
         array_id: ObjectId,
-        separator: &str,
-    ) -> Result<String, InterpreterError> {
+        separator: &JsString,
+    ) -> Result<JsString, InterpreterError> {
         // The ancestor chain is the interpreter's join stack, not a set owned
         // by one call: an element's guest toString may re-enter here, and a
         // fresh set per entry never saw a cycle (`a.push(a); a.join()`
@@ -102772,7 +102830,7 @@ impl InterpreterCore {
         // bd-9vouw.481). Every array this join puts on the stack comes off
         // again, however it ends.
         if !self.array_join_stack.insert(array_id.0) {
-            return Ok(String::new());
+            return Ok(JsString::from(""));
         }
         let mut nested = Vec::new();
         let joined = self.array_join_observable_frames(module, array_id, separator, &mut nested);
@@ -102790,33 +102848,39 @@ impl InterpreterCore {
         &mut self,
         module: &Ir3Module,
         array_id: ObjectId,
-        separator: &str,
+        separator: &JsString,
         nested: &mut Vec<ArrayJoinFrame>,
-    ) -> Result<String, InterpreterError> {
+    ) -> Result<JsString, InterpreterError> {
         let len = self.array_like_length(array_id)?;
         let mut root = ArrayJoinFrame::new(array_id, len);
+        let comma = JsString::from(",");
         loop {
+            let separator = if nested.is_empty() { separator } else { &comma };
             let frame = nested.last_mut().unwrap_or(&mut root);
             if frame.index == frame.len {
                 let Some(done) = nested.pop() else {
-                    return Ok(root.parts.join(separator));
+                    return Ok(root.output.finish());
                 };
                 self.array_join_stack.remove(&done.array_id.0);
                 nested
                     .last_mut()
                     .unwrap_or(&mut root)
-                    .parts
-                    .push(done.parts.join(","));
+                    .output
+                    .push(&done.output.finish());
                 continue;
             }
             let (current, index) = (frame.array_id, frame.index);
             frame.index += 1;
+            if index > 0 {
+                frame.output.push(separator);
+            }
             let element = self
                 .array_index_get(Some(module), current, index)?
                 .unwrap_or(Value::Undefined);
             self.join_element_stored_label(current, index as u64)?;
             let rendered = match element {
-                Value::Undefined | Value::Null => String::new(),
+                Value::Undefined | Value::Null => JsString::from(""),
+                Value::Str(text) => text,
                 Value::Object(nested_id)
                     if self
                         .heap
@@ -102827,7 +102891,7 @@ impl InterpreterCore {
                     // An array already being joined renders "" (the cycle
                     // guard); a nested one is joined as its own frame.
                     if !self.array_join_stack.insert(nested_id.0) {
-                        String::new()
+                        JsString::from("")
                     } else if self.array_join_stack.len() > ARRAY_JOIN_MAX_DEPTH {
                         self.array_join_stack.remove(&nested_id.0);
                         // Deeper nesting fails loudly, as Node does once its
@@ -102858,15 +102922,20 @@ impl InterpreterCore {
                         // ToString of a Symbol (a Symbol wrapper converts to
                         // its symbol, bd-9vouw.239) is a TypeError.
                         Value::Symbol(_) => return Err(Self::symbol_to_string_error()),
-                        primitive => self.value_to_string(&primitive),
+                        Value::Str(text) => text,
+                        primitive => JsString::from(self.value_to_string(&primitive)),
                     }
                 }
                 Value::Symbol(_) => {
                     return Err(Self::symbol_to_string_error());
                 }
-                other => self.value_to_string(&other),
+                other => JsString::from(self.value_to_string(&other)),
             };
-            nested.last_mut().unwrap_or(&mut root).parts.push(rendered);
+            nested
+                .last_mut()
+                .unwrap_or(&mut root)
+                .output
+                .push(&rendered);
         }
     }
 
@@ -113132,7 +113201,9 @@ impl InterpreterCore {
             | "ArrayBuffer"
             | "SharedArrayBuffer"
             | "WeakRef"
-            | "FinalizationRegistry" => {
+            | "FinalizationRegistry"
+            | "TextEncoder"
+            | "TextDecoder" => {
                 Self::collection_prototype_method(name, key).map(Value::BuiltinFunction)
             }
             // The shared typed array methods are element-type agnostic.
@@ -125048,13 +125119,15 @@ mod async_runtime_tests_current {
         // reg0 = URL, reg1 = the response callback closure, exactly as the
         // `http.get(url, cb)` lowering forwards them (url + trailing closure).
         let url = format!("http://{addr}/");
-        core.mutate_registers(|r| {
-            if r.len() < 2 {
-                r.resize(2, Value::Undefined);
-            }
-            r[0] = Value::Str(JsString::from(url.as_str()));
-            r[1] = Value::Closure(0);
-        });
+        core.write_reg_with_label(0, Value::Str(JsString::from(url.as_str())), Label::Public)
+            .expect("account for the request URL");
+        core.write_reg_with_label(1, Value::Closure(0), Label::Public)
+            .expect("account for the response callback");
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "request inputs must be accounted before egress"
+        );
 
         let result = core
             .dispatch_host_io_hostcall("net:request", RegRange { start: 0, count: 2 })

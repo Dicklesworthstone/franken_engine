@@ -267,12 +267,33 @@ fn entry(resolver: &OpaqueResolver, name: &str, syntax: ModuleSyntax) -> Resolut
     };
     resolver
         .resolve(
-            &ModuleRequest::new(format!("./{name}"), style)
+            &ModuleRequest::new(format!("{ROOT}/{name}"), style)
                 .with_compatibility_mode(CompatibilityMode::NodeCompat),
             &ResolutionContext::new("admission", "admission-decision", "admission-policy"),
             &AllowAllPolicy,
         )
         .expect("authorized source entry")
+}
+
+#[test]
+fn relative_entry_without_referrer_still_fails_before_source_execution() {
+    let resolver = OpaqueResolver::new(vec![(
+        "entry.cjs",
+        definition(
+            ModuleSyntax::CommonJs,
+            "throw new Error('must not execute');",
+        ),
+    )]);
+    let error = resolver
+        .resolve(
+            &ModuleRequest::new("./entry.cjs", ImportStyle::Require)
+                .with_compatibility_mode(CompatibilityMode::NodeCompat),
+            &ResolutionContext::new("admission", "admission-decision", "admission-policy"),
+            &AllowAllPolicy,
+        )
+        .expect_err("relative entry admission needs an authenticated referrer");
+    assert_eq!(error.code, ResolutionErrorCode::InvalidReferrer);
+    assert!(error.probe_sequence.is_empty());
 }
 
 fn package() -> ExtensionPackage {

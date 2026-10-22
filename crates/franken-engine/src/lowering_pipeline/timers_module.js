@@ -24,6 +24,32 @@
       return __franken_timers_interval(delay, value, arguments[2]);
     }
   };
+  var scheduler = {
+    wait: function (delay, options) {
+      return __franken_timers_timeout(delay, undefined, options);
+    },
+    yield: function () {
+      return __franken_timers_immediate(undefined, undefined);
+    }
+  };
+  Object.defineProperty(promises, 'scheduler', {
+    value: scheduler,
+    enumerable: true,
+    configurable: true,
+    writable: true
+  });
+  var custom = Symbol.for('nodejs.util.promisify.custom');
+  function installCustom(timer, promise) {
+    if (Object.getOwnPropertyDescriptor(timer, custom) !== undefined) return;
+    Object.defineProperty(timer, custom, {
+      value: promise,
+      enumerable: true,
+      configurable: false,
+      writable: false
+    });
+  }
+  installCustom(timers.setTimeout, promises.setTimeout);
+  installCustom(timers.setImmediate, promises.setImmediate);
   Object.defineProperty(timers, 'promises', {
     enumerable: true,
     configurable: true,

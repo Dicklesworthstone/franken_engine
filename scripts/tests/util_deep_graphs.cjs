@@ -351,3 +351,238 @@ test('special-payload failure does not strand a scheduled property frame', () =>
   assert.equal(c.api.isDeepStrictEqual(chain(4096, new Date(1)), chain(4096, new Date(2))), false);
   clean(c);
 });
+
+function payloadGraph(depth, kind, leaf = { value: 1 }) {
+  let value = leaf;
+  for (let i = 0; i < depth; i++) {
+    const next = kind === 'mixed' ? ['object', 'array', 'map', 'key', 'set', 'cause', 'errors'][i % 7] : kind;
+    if (next === 'map') value = new Map([['next', value]]);
+    else if (next === 'key') value = new Map([[value, i]]);
+    else if (next === 'set') value = new Set([value]);
+    else if (next === 'cause') value = new Error('payload', { cause: value });
+    else if (next === 'errors') {
+      const error = new Error('payload');
+      Object.defineProperty(error, 'errors', { value: [value] });
+      value = error;
+    } else if (next === 'array') value = [value, i];
+    else value = { next: value, rank: i };
+  }
+  return value;
+}
+test('special payloads agree with live Node across the promotion boundary', () => {
+  for (const kind of ['map', 'key', 'set', 'cause', 'errors', 'mixed']) {
+    for (const depth of [0, 1, 63, 64, 65, 96, 128]) {
+      const a = payloadGraph(depth, kind), b = payloadGraph(depth, kind);
+      const wrong = payloadGraph(depth, kind, { value: 2 });
+      parity(a, b); parity(b, a); parity(a, wrong); parity(wrong, a);
+    }
+  }
+});
+test('20000-level special payloads compare without a host recursion limit', () => {
+  // Beyond the incumbent's stack limit these have structural expectations,
+  // not a fabricated equality result substituted for its RangeError.
+  for (const kind of ['map', 'key', 'set', 'cause', 'errors']) {
+    const a = payloadGraph(20000, kind), b = payloadGraph(20000, kind);
+    const wrong = payloadGraph(20000, kind, { value: 2 });
+    assert.equal(eq(a, b), true, kind);
+    assert.equal(eq(a, wrong), false, kind);
+  }
+});
+test('mixed payload and property continuations keep cyclic partner tracking', () => {
+  for (const depth of [96, 8192]) {
+    const leafA = {}, leafB = {};
+    const a = payloadGraph(depth, 'mixed', leafA), b = payloadGraph(depth, 'mixed', leafB);
+    leafA.next = a; leafB.next = b;
+    assert.equal(eq(a, b), true);
+    leafB.extra = 1;
+    assert.equal(eq(a, b), false);
+    assert.equal(eq(b, a), false);
+  }
+});
+test('deep collection candidate failures retry without leaking active pairs', () => {
+  for (const map of [false, true]) {
+    const c = candidate(true);
+    const a = [payloadGraph(2048, 'mixed', { rank: 1 }), payloadGraph(2048, 'mixed', { rank: 2 })];
+    const b = [payloadGraph(2048, 'mixed', { rank: 2 }), payloadGraph(2048, 'mixed', { rank: 1 })];
+    const left = map ? new Map(a.map(value => [value, value])) : new Set(a);
+    const right = map ? new Map(b.map(value => [value, value])) : new Set(b);
+    assert.equal(c.api.isDeepStrictEqual(chain(80, left), chain(80, right)), true);
+    assert.equal(c.maps[0].size, 0, 'primary pair index unwound');
+    // Snapshot indexes have primitive keys. All object-key entries belong to
+    // active-pair indexes and must be gone, including after a failed candidate.
+    for (const index of c.maps) for (const key of index.keys()) {
+      assert.ok(key === null || typeof key !== 'object', 'no inactive pair');
+    }
+  }
+});
+test('cause, errors and ordinary properties retain depth-first getter ordering', () => {
+  function run(compare) {
+    const log = [], left = new Error('payload'), right = new Error('payload');
+    Object.defineProperty(left, 'cause', { get() {
+      log.push('cause-a'); return { get value() {
+        log.push('child-a'); right.later = 2; return 1;
+      } };
+    } });
+    Object.defineProperty(right, 'cause', { get() {
+      log.push('cause-b'); return { get value() { log.push('child-b'); return 1; } };
+    } });
+    Object.defineProperty(left, 'errors', { get() { log.push('errors-a'); return [1]; } });
+    Object.defineProperty(right, 'errors', { get() { log.push('errors-b'); return [1]; } });
+    left.later = 2; right.later = 0;
+    return { equal: compare(chain(80, left), chain(80, right)), log };
+  }
+  const got = run(eq);
+  assert.equal(got.equal, true);
+  assert.deepEqual(got.log, ['cause-a', 'cause-b', 'child-a', 'child-b', 'errors-a', 'errors-b']);
+  // Node reads Error payload fields differently; the trace above preserves
+  // the engine's pre-existing order, rather than claiming trace parity.
+  assert.equal(run(util.isDeepStrictEqual).equal, true);
+  const a = new Error('payload'), b = new Error('payload');
+  Object.defineProperty(a, 'cause', { value: undefined });
+  assert.equal(eq(chain(80, a), chain(80, b)), false, 'absent differs from own undefined');
+});
+test('enumerable Error payloads are compared again as ordinary properties', () => {
+  let reads = 0;
+  const a = new Error('payload'), b = new Error('payload');
+  Object.defineProperty(a, 'cause', { enumerable: true, get() { return ++reads; } });
+  Object.defineProperty(b, 'cause', { enumerable: true, value: 1 });
+  assert.equal(eq(chain(80, a), chain(80, b)), false);
+  assert.equal(reads, 2, 'completed payload equality is not memoized');
+});
+test('iterative collections retain right snapshots and live left reinsertion checks', () => {
+  const left = new Map(), right = new Map();
+  const value = { get value() { right.set('later', 9); return 1; } };
+  left.set('first', value); left.set('later', 2);
+  right.set('first', { value: 1 }); right.set('later', 2);
+  assert.equal(eq(chain(80, left), chain(80, right)), true, 'right values were snapshotted before the getter');
+  let reinsert = true;
+  const item = { get value() {
+    if (reinsert) { reinsert = false; left.delete('first'); left.set('first', item); }
+    return 1;
+  } };
+  left.set('first', item); right.set('later', 2);
+  assert.equal(eq(chain(80, left), chain(80, right)), false, 'consumed primitive key cannot match twice');
+  assert.equal(eq(chain(80, left), chain(80, right)), true);
+});
+test('thrown values unwind mixed payload pairs and permit independent reentry', () => {
+  for (const reason of [undefined, null, 0, false, Symbol('throw'), {}]) {
+    const c = candidate(true), compare = c.api.isDeepStrictEqual;
+    let caught = false;
+    try {
+      compare(chain(80, payloadGraph(512, 'mixed', { get value() { throw reason; } })),
+        chain(80, payloadGraph(512, 'mixed')));
+    } catch (error) { caught = true; assert.equal(error, reason); }
+    assert.equal(caught, true);
+    assert.equal(c.maps[0].size, 0);
+    const a = { get value() {
+      assert.equal(compare(payloadGraph(128, 'mixed'), payloadGraph(128, 'mixed')), true);
+      return 1;
+    } };
+    assert.equal(compare(payloadGraph(128, 'mixed', a), payloadGraph(128, 'mixed')), true);
+  }
+});
+
+function iteratorScenario(stage, completion, closing, kind) {
+  const vm = require('node:vm');
+  const realm = vm.createContext({ __franken_util_type_tag: typeTag, TextEncoder, TextDecoder,
+    stage, completion, closing, kind });
+  vm.runInContext(`
+    var log=[], thrown={}, closingError={}, escaped, result, caught=false;
+    var a={get value(){log.push('compare');if(completion==='throw')throw thrown;return 1;}};
+    var b={value:completion==='false'?2:1};
+    var left=kind==='Map'?new Map([['x',a]]):new Set([a]);
+    var right=kind==='Map'?new Map([['x',b]]):new Set([b]);
+    var Type=kind==='Map'?Map:Set, name=kind==='Map'?'entries':'values';
+    var native=Type.prototype[name], labels=new WeakMap();
+    Type.prototype[name]=function(){var i=Reflect.apply(native,this,[]);labels.set(i,this===left?'L':'R');return i;};
+    var proto=Object.getPrototypeOf(Reflect.apply(native,left,[])), nativeNext=proto.next;
+    function nest(value){for(var i=0;i<80;i++)value={child:value};return value;}
+  `, realm);
+  vm.runInContext('var api=' + source + ';', realm);
+  vm.runInContext(`
+    Type.prototype[name]=native;
+    Object.defineProperty(proto,Symbol.iterator,{configurable:true,get(){
+      var label=labels.get(this);log.push(label+':iterator-get');
+      return function(){log.push(label+':iterator');return this;};}});
+    Object.defineProperty(proto,'next',{configurable:true,get(){
+      var label=labels.get(this);log.push(label+':next-get');return function(){
+        log.push(label+':next');if(label==='L'&&stage==='next')throw thrown;
+        var item=Reflect.apply(nativeNext,this,[]);
+        if(label==='L'&&stage==='result')return null;
+        return {get done(){log.push(label+':done');if(label==='L'&&stage==='done')throw thrown;return item.done;},
+          get value(){log.push(label+':value');if(label==='L'&&stage==='value')throw thrown;return item.value;}};
+      };}});
+    Object.defineProperty(proto,'return',{configurable:true,get(){
+      var label=labels.get(this);log.push(label+':return-get');
+      if(closing==='getter-throws')throw closingError;if(closing==='null')return null;if(closing==='noncallable')return 1;
+      return function(){log.push(label+':return');if(closing==='throws')throw closingError;
+        return closing==='primitive'?1:closing==='function'?function(){}:{};};}});
+    try{result=api.isDeepStrictEqual(nest(left),nest(right));}
+    catch(e){caught=true;escaped=e===thrown?'original':e===closingError?'closing':e.name;}
+  `, realm);
+  return JSON.parse(vm.runInContext('JSON.stringify({result,caught,escaped,log})', realm));
+}
+test('iterative early mismatch closes Map and Set iterators with normal-completion rules', () => {
+  for (const kind of ['Map', 'Set']) for (const closing of ['object', 'function', 'primitive', 'throws', 'getter-throws', 'null', 'noncallable']) {
+    const got = iteratorScenario('body', 'false', closing, kind);
+    const failure = closing === 'primitive' || closing === 'noncallable' ? 'TypeError'
+      : closing === 'throws' || closing === 'getter-throws' ? 'closing' : undefined;
+    assert.equal(got.escaped, failure, `${kind} ${closing}`);
+    assert.equal(got.caught, failure !== undefined);
+    if (!got.caught) assert.equal(got.result, false);
+    assert.equal(got.log.filter(x => x === 'L:return-get').length, 1);
+    assert.equal(got.log.filter(x => x === 'R:return-get').length, 0);
+    assert.equal(got.log.filter(x => x === 'L:next-get').length, 1);
+  }
+});
+test('iteration failures do not close the failing iterator and body throws win over close errors', () => {
+  for (const kind of ['Map', 'Set']) for (const closing of ['primitive', 'throws', 'getter-throws', 'noncallable', 'object']) {
+    for (const stage of ['next', 'done', 'value', 'result', 'body']) {
+      const got = iteratorScenario(stage, 'throw', closing, kind);
+      assert.equal(got.escaped, stage === 'result' ? 'TypeError' : 'original');
+      assert.equal(got.log.filter(x => x === 'L:return-get').length, stage === 'body' ? 1 : 0);
+    }
+  }
+});
+test('exhausting the live iterator never consults its return method', () => {
+  for (const kind of ['Map', 'Set']) {
+    const got = iteratorScenario('body', 'true', 'getter-throws', kind);
+    assert.equal(got.result, true);
+    assert.equal(got.caught, false);
+    assert.equal(got.log.filter(x => x.includes('return')).length, 0);
+    assert.equal(got.log.filter(x => x === 'L:next-get').length, 1);
+  }
+});
+test('private collection continuation fields do not invoke inherited named setters', () => {
+  const vm = require('node:vm');
+  const realm = vm.createContext({ __franken_util_type_tag: typeTag, TextEncoder, TextDecoder });
+  vm.runInContext('var api=' + source + ';', realm);
+  vm.runInContext(`
+    var left=new Map([['x',new Set([{value:1}])]]), right=new Map([['x',new Set([{value:1}])]]);
+    for(var i=0;i<80;i++){left={child:left};right={child:right};}
+    for(const key of ['iterator','next','entry','key','index','other','collection','phase']){
+      Object.defineProperty(Object.prototype,key,{configurable:true,
+        get(){throw new Error('private read '+key);},set(){throw new Error('private write '+key);}});
+    }
+    if(!api.isDeepStrictEqual(left,right))throw new Error('wrong comparison');
+  `, realm);
+});
+test('mixed payload graph traversal has bounded host call-stack depth', () => {
+  const saved = Error.stackTraceLimit;
+  Error.stackTraceLimit = Infinity;
+  const frames = [];
+  try {
+    for (const depth of [256, 2048, 8192]) {
+      const leaf = { get value() { frames.push(new Error().stack.split('\n').length); return 1; } };
+      assert.equal(eq(payloadGraph(depth, 'mixed', leaf), payloadGraph(depth, 'mixed')), true);
+    }
+  } finally { Error.stackTraceLimit = saved; }
+  assert.ok(Math.max(...frames) - Math.min(...frames) < 20, JSON.stringify(frames));
+  assert.ok(Math.max(...frames) < 512, 'payload depth must not become call depth');
+  console.log(JSON.stringify({ payloadDepths: [256, 2048, 8192], hostStackFrames: frames }));
+});
+test('shared public payload fixture agrees with live Node at a portable depth', () => {
+  const run = new Function(fixture + ';return verifyUtilPayloadWalk;')();
+  assert.equal(run(eq, 96), 'util payload walk: collections, errors, retries, mutation, cycles');
+  assert.equal(run(util.isDeepStrictEqual, 96), 'util payload walk: collections, errors, retries, mutation, cycles');
+});

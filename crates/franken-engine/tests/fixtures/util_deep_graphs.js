@@ -81,3 +81,49 @@ function verifyUtilPropertyWalk(eq, depth) {
   check(caught && eq(nest({ value: 1 }), nest({ value: 1 })), 'deep retry');
   return 'util property walk: depth, mixed arrays, cycles, getter order, failure cleanup';
 }
+
+function verifyUtilPayloadWalk(eq, depth) {
+  function check(value, message) { if (!value) throw new Error(message); }
+  function nest(leaf, kind) {
+    let value = leaf;
+    for (let i = 0; i < depth; i++) {
+      if (kind === 0) value = new Map([['next', value]]);
+      else if (kind === 1) value = new Map([[value, i]]);
+      else if (kind === 2) value = new Set([value]);
+      else {
+        const error = new Error('payload');
+        Object.defineProperty(error, kind === 3 ? 'cause' : 'errors', {
+          value: kind === 3 ? value : [value], configurable: true
+        });
+        value = error;
+      }
+    }
+    return value;
+  }
+  for (let kind = 0; kind < 5; kind++) {
+    check(eq(nest({ value: 1 }, kind), nest({ value: 1 }, kind)), 'equal special payload');
+    check(!eq(nest({ value: 1 }, kind), nest({ value: 2 }, kind)), 'unequal special payload');
+  }
+  const selfA = new Set(), selfB = new Set();
+  selfA.add(selfA); selfB.add(selfB);
+  check(eq(nest(selfA, 0), nest(selfB, 0)), 'nested collection cycles');
+  const first = { key: 1 }, second = { key: 1 };
+  check(eq(nest(new Map([[first, 1], [second, 2]]), 2),
+    nest(new Map([[{ key: 1 }, 2], [{ key: 1 }, 1]]), 2)), 'failed values retry equivalent keys');
+  check(!eq(nest(new Map([[{ key: 1 }, 1], [{ key: 1 }, 1]]), 2),
+    nest(new Map([[{ key: 1 }, 1], [{ key: 1 }, 2]]), 2)), 'equal keys do not hide unequal Map values');
+  check(!eq(nest(new Set([{ key: 1 }, { key: 1 }]), 2),
+    nest(new Set([{ key: 1 }, { key: 2 }]), 2)), 'one-to-one candidate matching');
+  const reason = { marker: 'payload throw' };
+  let caught = false;
+  try { eq(nest({ get value() { throw reason; } }, 0), nest({ value: 1 }, 0)); }
+  catch (error) { caught = true; check(error === reason, 'exact thrown payload'); }
+  check(caught && eq(nest({ value: 1 }, 0), nest({ value: 1 }, 0)), 'retry after payload throw');
+  const right = new Error('payload');
+  const left = new Error('payload');
+  Object.defineProperty(left, 'cause', { get() { return { get value() { right.extra = 2; return 1; } }; } });
+  Object.defineProperty(right, 'cause', { value: { value: 1 } });
+  left.extra = 2; right.extra = 0;
+  check(eq(nest(left, 2), nest(right, 2)), 'payload getter precedes ordinary properties');
+  return 'util payload walk: collections, errors, retries, mutation, cycles';
+}

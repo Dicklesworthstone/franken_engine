@@ -729,6 +729,8 @@
   var mapDelete = Map.prototype.delete;
   var mapSize = Object.getOwnPropertyDescriptor(Map.prototype, 'size').get;
   var collectionApply = Reflect.apply;
+  var collectionIterator = Symbol.iterator;
+  var ComparisonTypeError = TypeError;
   // Small comparisons keep their short ancestor scan. Deep comparisons index
   // ACTIVE ordered pairs, never completed results: getters and failed unordered
   // candidates must still be evaluated again. The common, distinct-left path
@@ -773,6 +775,18 @@
     }
     return result;
   }
+  function snapshotCollection(value, isMap, primitive, candidates) {
+    var iterate = isMap ? mapEntries : setValues;
+    var count = 0;
+    for (var candidate of collectionApply(iterate, value, [])) {
+      var key = isMap ? candidate[0] : candidate;
+      if (key === null || typeof key !== 'object') {
+        collectionApply(mapSet, primitive, [key, isMap ? candidate[1] : true]);
+      } else { candidates.push(candidate); }
+      count++;
+    }
+    return count;
+  }
   function unorderedEqual(a, b, seen, isMap) {
     var iterate = isMap ? mapEntries : setValues;
     // Primitive keys (including symbols, NaN and function identities) can
@@ -784,16 +798,7 @@
     // must not rewrite a later candidate through the original Map.
     var primitive = new MapClass();
     var candidates = [];
-    var candidateCount = 0;
-    for (var candidate of collectionApply(iterate, b, [])) {
-      var key = isMap ? candidate[0] : candidate;
-      if (key === null || typeof key !== 'object') {
-        collectionApply(mapSet, primitive, [key, isMap ? candidate[1] : true]);
-      } else {
-        candidates.push(candidate);
-      }
-      candidateCount++;
-    }
+    var candidateCount = snapshotCollection(b, isMap, primitive, candidates);
     var matched = [];
     var count = 0;
     for (var entry of collectionApply(iterate, a, [])) {
@@ -849,7 +854,14 @@
     }
     return true;
   }
+  function equalErrorShape(a, b) {
+    if (a.message !== b.message || a.name !== b.name) { return -1; }
+    var causeA = Object.prototype.hasOwnProperty.call(a, 'cause');
+    var causeB = Object.prototype.hasOwnProperty.call(b, 'cause');
+    return causeA !== causeB ? -1 : causeA ? 1 : 0;
+  }
   function equalObject(a, b, tag, seen, stateOnly) {
+    if (!stateOnly && seen[0] !== undefined) { return equalIndexedGraph(a, b, tag, seen); }
     // Node 22 does not equate distinct invalid dates (NaN time values).
     if (tag === 'Date' && a.getTime() !== b.getTime()) {
       return false;
@@ -862,12 +874,8 @@
       return false;
     }
     if (tag === 'Error') {
-      if (a.message !== b.message || a.name !== b.name) {
-        return false;
-      }
-      var causeA = Object.prototype.hasOwnProperty.call(a, 'cause');
-      var causeB = Object.prototype.hasOwnProperty.call(b, 'cause');
-      if (causeA !== causeB || (causeA && !deepEqual(a.cause, b.cause, seen)) ||
+      var shape = equalErrorShape(a, b);
+      if (shape < 0 || (shape === 1 && !deepEqual(a.cause, b.cause, seen)) ||
           !deepEqual(a.errors, b.errors, seen)) {
         return false;
       }
@@ -889,10 +897,10 @@
         return false;
       }
     }
-    // Indexed property frames share these exact special-payload checks, but
-    // schedule their own property traversal. Shallow calls keep the old loop.
+    // Shallow payload comparisons can promote the shared index. Their own
+    // payload is already complete; continue with properties without rerunning it.
     if (stateOnly) { return true; }
-    if (seen[0] !== undefined) { return equalIndexedProperties(a, b, seen); }
+    if (seen[0] !== undefined) { return equalIndexedGraph(a, b, null, seen); }
     var keysA = enumerableKeys(a);
     var keysB = enumerableKeys(b);
     if (keysA.length !== keysB.length) {
@@ -906,48 +914,164 @@
     }
     return true;
   }
-  // Once ancestor pairs are indexed, traverse enumerable properties with an
-  // explicit continuation rather than another guest call frame per child.
-  // A frame records only the current keys and cursor. Read each value just
-  // before comparing it: getters can mutate later siblings or reenter util.
-  // Special payloads (Map/Set entries and Error causes) keep the same shared
-  // checker; this removes property-depth recursion, not all possible nesting.
-  function equalIndexedProperties(a, b, seen) {
-    // Named own fields keep the private work list out of Array's inherited
-    // numeric setters. The root's pair belongs to deepEqual's outer finally.
-    var work = { top: { left: a, right: b, tag: null, keys: null, index: 0, parent: null } };
+  // Iterative frames cover properties AND special payloads. An unordered
+  // candidate's false result belongs to its collection, not the entire graph:
+  // unwind the candidate before trying the next one, without memoizing failure.
+  function indexedCollection(frame) {
+    var isMap = frame.tag === 'Map';
+    var iterate = isMap ? mapEntries : setValues;
+    var state = { primitive: new MapClass(), candidates: [], matched: [],
+      candidateCount: 0, count: 0, isMap: isMap, open: false, iterator: undefined,
+      next: undefined, entry: undefined, key: undefined, index: 0, other: undefined };
+    // Keep the existing right snapshot / live left iteration contract. No
+    // getter in a nested value comparison can rewrite a snapshot candidate.
+    state.candidateCount = snapshotCollection(frame.right, isMap, state.primitive, state.candidates);
+    var iterable = collectionApply(iterate, frame.left, []);
+    state.iterator = collectionApply(iterable[collectionIterator], iterable, []);
+    if (!iteratorObject(state.iterator)) { throw new ComparisonTypeError('Iterator must be an object'); }
+    state.next = state.iterator.next;
+    return state;
+  }
+  function iteratorObject(value) {
+    return value !== null && (typeof value === 'object' || typeof value === 'function');
+  }
+  function closeIndexedCollection(state, throwing) {
+    if (state === undefined || !state.open) { return; }
+    state.open = false;
+    // Like for-of, close on an early body return/throw, not on a failed next,
+    // done or value read. A pending throw takes precedence over close errors.
+    try {
+      var finish = state.iterator.return;
+      if (finish !== undefined && finish !== null) {
+        var result = collectionApply(finish, state.iterator, []);
+        if (!iteratorObject(result)) { throw new ComparisonTypeError('Iterator result must be an object'); }
+      }
+    } catch (error) { if (!throwing) { throw error; } }
+  }
+  function finishIndexedFrame(work, seen, equal) {
+    var frame = work.top;
+    if (!equal) { closeIndexedCollection(frame.collection, false); }
+    work.top = frame.parent;
+    if (frame.parent !== null) { leaveIndexedPair(seen, frame.left, frame.right); }
+    work.equal = equal;
+  }
+  function equalIndexedGraph(a, b, tag, seen) {
+    // The root pair belongs to deepEqual's finally. Each other frame owns
+    // exactly one active pair. Values are read only at their comparison turn.
+    var work = { top: { left: a, right: b, tag: tag, phase: tag === null ? 3 : 0,
+      keys: null, index: 0, collection: undefined, parent: null }, equal: true };
     try {
       while (work.top !== null) {
         var frame = work.top;
-        if (frame.keys === null) {
-          if (frame.tag !== null &&
-              !equalObject(frame.left, frame.right, frame.tag, seen, true)) {
-            return false;
+        var left = frame.left, right = frame.right;
+        if (frame.phase === 0) {
+          if (frame.tag === 'Error') {
+            var shape = equalErrorShape(left, right);
+            if (shape < 0) { finishIndexedFrame(work, seen, false); continue; }
+            frame.phase = 1;
+            work.equal = shape === 0 || deepEqual(left.cause, right.cause, seen, work);
+            continue;
           }
-          frame.keys = enumerableKeys(frame.left);
-          if (frame.keys.length !== enumerableKeys(frame.right).length) {
-            return false;
+          if (frame.tag === 'Map' || frame.tag === 'Set') {
+            if (left.size !== right.size) { finishIndexedFrame(work, seen, false); continue; }
+            frame.collection = indexedCollection(frame);
+            frame.phase = 5;
+            continue;
           }
+          if (!equalObject(left, right, frame.tag, seen, true)) {
+            finishIndexedFrame(work, seen, false); continue;
+          }
+          frame.phase = 3;
         }
-        if (frame.index === frame.keys.length) {
-          work.top = frame.parent;
-          if (frame.tag !== null) { leaveIndexedPair(seen, frame.left, frame.right); }
+        if (frame.phase === 1) { // Error cause completed; errors is read AFTER it.
+          if (!work.equal) { finishIndexedFrame(work, seen, false); continue; }
+          frame.phase = 2;
+          work.equal = deepEqual(left.errors, right.errors, seen, work);
           continue;
         }
-        var key = frame.keys[frame.index++];
-        if (!Object.prototype.propertyIsEnumerable.call(frame.right, key) ||
-            !deepEqual(frame.left[key], frame.right[key], seen, work)) {
-          return false;
+        if (frame.phase === 2) {
+          if (!work.equal) { finishIndexedFrame(work, seen, false); continue; }
+          frame.phase = 3;
         }
+        if (frame.phase === 3) {
+          frame.keys = enumerableKeys(left);
+          if (frame.keys.length !== enumerableKeys(right).length) {
+            finishIndexedFrame(work, seen, false); continue;
+          }
+          frame.phase = 4;
+          work.equal = true;
+        }
+        if (frame.phase === 4) {
+          if (!work.equal) { finishIndexedFrame(work, seen, false); continue; }
+          if (frame.index === frame.keys.length) {
+            finishIndexedFrame(work, seen, true); continue;
+          }
+          var property = frame.keys[frame.index++];
+          work.equal = Object.prototype.propertyIsEnumerable.call(right, property) &&
+            deepEqual(left[property], right[property], seen, work);
+          continue;
+        }
+        var state = frame.collection;
+        if (frame.phase === 5) { // Advance the live left iterator once.
+          state.open = false;
+          var step = collectionApply(state.next, state.iterator, []);
+          if (!iteratorObject(step)) { throw new ComparisonTypeError('Iterator result must be an object'); }
+          if (step.done) {
+            if (state.count !== state.candidateCount) { finishIndexedFrame(work, seen, false); }
+            else { frame.collection = undefined; frame.phase = 3; }
+            continue;
+          }
+          state.entry = step.value;
+          state.open = true;
+          state.key = state.isMap ? state.entry[0] : state.entry;
+          if (state.key === null || typeof state.key !== 'object') {
+            if (!collectionApply(mapHas, state.primitive, [state.key])) {
+              finishIndexedFrame(work, seen, false); continue;
+            }
+            frame.phase = 6;
+            work.equal = !state.isMap || deepEqual(state.entry[1],
+              collectionApply(mapGet, state.primitive, [state.key]), seen, work);
+            continue;
+          }
+          state.index = 0;
+          frame.phase = 7;
+        }
+        if (frame.phase === 6) { // A primitive key's value completed.
+          if (!work.equal) { finishIndexedFrame(work, seen, false); continue; }
+          collectionApply(mapDelete, state.primitive, [state.key]);
+          state.count++;
+          frame.phase = 5;
+          continue;
+        }
+        if (frame.phase === 7) { // Try unmatched object candidates in original order.
+          while (state.index < state.candidates.length && state.matched[state.index]) { state.index++; }
+          if (state.index === state.candidates.length) { finishIndexedFrame(work, seen, false); continue; }
+          state.other = state.candidates[state.index];
+          frame.phase = 8;
+          work.equal = deepEqual(state.isMap ? state.entry[0] : state.entry,
+            state.isMap ? state.other[0] : state.other, seen, work);
+          continue;
+        }
+        if (frame.phase === 8 && work.equal && state.isMap) {
+          frame.phase = 9; // A Map value is compared only AFTER its key succeeds.
+          work.equal = deepEqual(state.entry[1], state.other[1], seen, work);
+          continue;
+        }
+        // A failed key/value releases its own pairs before retrying. A
+        // successful candidate is consumed once, even if later keys are equal.
+        if (work.equal) {
+          state.matched[state.index] = true;
+          state.count++;
+          frame.phase = 5;
+        } else { state.index++; frame.phase = 7; }
       }
-      return true;
+      return work.equal;
     } finally {
-      // On refusal or a guest exception, all scheduled children must unwind.
-      // Do not remove the root here: its caller owns that active pair.
-      while (work.top !== null && work.top.parent !== null) {
+      while (work.top !== null) {
         var pending = work.top;
         work.top = pending.parent;
-        leaveIndexedPair(seen, pending.left, pending.right);
+        closeIndexedCollection(pending.collection, true);
+        if (pending.parent !== null) { leaveIndexedPair(seen, pending.left, pending.right); }
       }
     }
   }
@@ -1000,7 +1124,8 @@
     if (work !== undefined) {
       // The explicit walker now owns this pair until its frame completes or
       // unwinds. No metadata/getter work may happen before ownership is saved.
-      work.top = { left: a, right: b, tag: tag, keys: null, index: 0, parent: work.top };
+      work.top = { left: a, right: b, tag: tag, phase: 0, keys: null, index: 0,
+        collection: undefined, parent: work.top };
       return true;
     }
     // Only active ancestors break cycles. A failed unordered candidate must

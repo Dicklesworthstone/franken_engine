@@ -10,7 +10,7 @@ use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserS
 
 fn run(goal: ParseGoal, imports: &str) {
     let source = format!(
-        "{imports}\n{}\nverifyUtilPropertyWalk(__equal, 512);\nconsole.log(verifyUtilDeepGraphs(__equal));",
+        "{imports}\n{}\nverifyUtilPropertyWalk(__equal, 512);\nverifyUtilPayloadWalk(__equal, 96);\nconsole.log(verifyUtilDeepGraphs(__equal));",
         include_str!("fixtures/util_deep_graphs.js"),
     );
     let tree = CanonicalEs2020Parser

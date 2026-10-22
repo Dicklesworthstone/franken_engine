@@ -732,7 +732,7 @@
   // Small comparisons keep their short ancestor scan. Deep comparisons index
   // ACTIVE ordered pairs, never completed results: getters and failed unordered
   // candidates must still be evaluated again. The common, distinct-left path
-  // needs one Map and no per-level pair allocation after promotion. Only a
+  // needs one Map and no per-level partner-set allocation after promotion. A
   // repeated left object with a different right needs a secondary pair set.
   function indexedPair(seen, a, b) {
     var first = collectionApply(mapGet, seen[0], [a]);
@@ -849,7 +849,7 @@
     }
     return true;
   }
-  function equalObject(a, b, tag, seen) {
+  function equalObject(a, b, tag, seen, stateOnly) {
     // Node 22 does not equate distinct invalid dates (NaN time values).
     if (tag === 'Date' && a.getTime() !== b.getTime()) {
       return false;
@@ -889,6 +889,10 @@
         return false;
       }
     }
+    // Indexed property frames share these exact special-payload checks, but
+    // schedule their own property traversal. Shallow calls keep the old loop.
+    if (stateOnly) { return true; }
+    if (seen[0] !== undefined) { return equalIndexedProperties(a, b, seen); }
     var keysA = enumerableKeys(a);
     var keysB = enumerableKeys(b);
     if (keysA.length !== keysB.length) {
@@ -902,7 +906,52 @@
     }
     return true;
   }
-  function deepEqual(a, b, seen) {
+  // Once ancestor pairs are indexed, traverse enumerable properties with an
+  // explicit continuation rather than another guest call frame per child.
+  // A frame records only the current keys and cursor. Read each value just
+  // before comparing it: getters can mutate later siblings or reenter util.
+  // Special payloads (Map/Set entries and Error causes) keep the same shared
+  // checker; this removes property-depth recursion, not all possible nesting.
+  function equalIndexedProperties(a, b, seen) {
+    // Named own fields keep the private work list out of Array's inherited
+    // numeric setters. The root's pair belongs to deepEqual's outer finally.
+    var work = { top: { left: a, right: b, tag: null, keys: null, index: 0, parent: null } };
+    try {
+      while (work.top !== null) {
+        var frame = work.top;
+        if (frame.keys === null) {
+          if (frame.tag !== null &&
+              !equalObject(frame.left, frame.right, frame.tag, seen, true)) {
+            return false;
+          }
+          frame.keys = enumerableKeys(frame.left);
+          if (frame.keys.length !== enumerableKeys(frame.right).length) {
+            return false;
+          }
+        }
+        if (frame.index === frame.keys.length) {
+          work.top = frame.parent;
+          if (frame.tag !== null) { leaveIndexedPair(seen, frame.left, frame.right); }
+          continue;
+        }
+        var key = frame.keys[frame.index++];
+        if (!Object.prototype.propertyIsEnumerable.call(frame.right, key) ||
+            !deepEqual(frame.left[key], frame.right[key], seen, work)) {
+          return false;
+        }
+      }
+      return true;
+    } finally {
+      // On refusal or a guest exception, all scheduled children must unwind.
+      // Do not remove the root here: its caller owns that active pair.
+      while (work.top !== null && work.top.parent !== null) {
+        var pending = work.top;
+        work.top = pending.parent;
+        leaveIndexedPair(seen, pending.left, pending.right);
+      }
+    }
+  }
+  function deepEqual(a, b, seen, work) {
     if (Object.is(a, b)) {
       return true;
     }
@@ -948,6 +997,12 @@
       }
     }
     if (indexedPair(seen, a, b)) { return true; }
+    if (work !== undefined) {
+      // The explicit walker now owns this pair until its frame completes or
+      // unwinds. No metadata/getter work may happen before ownership is saved.
+      work.top = { left: a, right: b, tag: tag, keys: null, index: 0, parent: work.top };
+      return true;
+    }
     // Only active ancestors break cycles. A failed unordered candidate must
     // not leave "equal" pairs behind for the next candidate or sibling.
     try {

@@ -50,3 +50,34 @@ function verifyUtilDeepGraphs(eq) {
   check(eq(chain(72, nested), chain(72, { value: 1 })) && reentered === 1, 'outer state survives reentry');
   return 'util deep graphs: chains, cycles, partners, rollback, getters, exceptions, reentry';
 }
+
+function verifyUtilPropertyWalk(eq, depth) {
+  function check(value, message) { if (!value) throw new Error(message); }
+  function nest(leaf) {
+    let value = leaf;
+    for (let i = 0; i < depth; i++) {
+      value = i % 2 === 0 ? { next: value, rank: i } : [value, i];
+    }
+    return value;
+  }
+  check(eq(nest({ value: 1 }), nest({ value: 1 })), 'deep properties compare');
+  check(!eq(nest({ value: 1 }), nest({ value: 2 })), 'deep property mismatch');
+  const first = {}, second = {};
+  first.self = first; second.self = second;
+  check(eq(nest(first), nest(second)), 'deep property cycle');
+  const reads = [];
+  const left = { get first() { reads.push('left-first'); return { get value() {
+    reads.push('left-child'); right.last = 2; return 1;
+  } }; }, last: 2 };
+  const right = { get first() { reads.push('right-first'); return { get value() {
+    reads.push('right-child'); return 1;
+  } }; }, last: 0 };
+  check(eq(nest(left), nest(right)), 'later sibling read stays lazy');
+  check(reads.join('|') === 'left-first|right-first|left-child|right-child', 'depth-first reads');
+  const reason = { marker: 'deep property exception' };
+  let caught = false;
+  try { eq(nest({ get value() { throw reason; } }), nest({ value: 1 })); }
+  catch (error) { caught = true; check(error === reason, 'deep exception identity'); }
+  check(caught && eq(nest({ value: 1 }), nest({ value: 1 })), 'deep retry');
+  return 'util property walk: depth, mixed arrays, cycles, getter order, failure cleanup';
+}

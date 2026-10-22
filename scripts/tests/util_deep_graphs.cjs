@@ -244,3 +244,110 @@ test('special objects, sparse arrays, symbol keys and signed zero keep their sem
     [new Set([NaN, -0]), new Set([0, NaN])],
   ]) parity(chain(80, a), chain(80, b));
 });
+
+test('shared property-walk fixture runs through candidate and live Node at ordinary depth', () => {
+  const run = new Function(fixture + '; return verifyUtilPropertyWalk;')();
+  const expected = 'util property walk: depth, mixed arrays, cycles, getter order, failure cleanup';
+  assert.equal(run(eq, 96), expected);
+  assert.equal(run(util.isDeepStrictEqual, 96), expected);
+  // Beyond the incumbent's host call-stack bound, check the same explicit
+  // expectations; do not label Node's RangeError as an equality result.
+  assert.equal(run(eq, 4096), expected);
+});
+test('twenty-thousand property levels do not require twenty-thousand JS calls', () => {
+  const c = candidate(true);
+  assert.equal(c.api.isDeepStrictEqual(chain(20000), chain(20000)), true);
+  assert.equal(c.api.isDeepStrictEqual(chain(20000), chain(20000, { value: 2 })), false);
+  clean(c);
+});
+test('getter-observed host stack depth stays bounded after promotion', () => {
+  const saved = Error.stackTraceLimit;
+  Error.stackTraceLimit = Infinity;
+  try {
+    function sample(depth) {
+      let frames = 0;
+      const leaf = { get value() { frames = new Error().stack.split('\n').length; return 1; } };
+      assert.equal(eq(chain(depth, leaf), chain(depth, { value: 1 })), true);
+      return frames;
+    }
+    const shallow = sample(128), deep = sample(1024);
+    assert.ok(shallow > 0);
+    assert.ok(deep <= shallow + 8, `property depth grew the host stack: ${shallow} -> ${deep}`);
+  } finally { Error.stackTraceLimit = saved; }
+});
+test('deep mixed arrays and objects retain sparse holes, key order and signed zero', () => {
+  function nest(n, leaf) {
+    for (let i = 0; i < n; i++) leaf = i % 2 ? [leaf, i] : { first: leaf, order: i };
+    return leaf;
+  }
+  for (const [a, b, expected] of [[new Array(2), [undefined, undefined], false],
+    [{ a: 1, b: 2 }, { b: 2, a: 1 }, true], [{ zero: -0 }, { zero: 0 }, false]]) {
+    assert.equal(eq(nest(8192, a), nest(8192, b)), expected);
+    assert.equal(eq(nest(96, a), nest(96, b)), util.isDeepStrictEqual(nest(96, a), nest(96, b)));
+  }
+});
+test('property walker leaves sibling values unread until previous descendants finish', () => {
+  function run(compare, depth) {
+    const trace = [], a = {}, b = {};
+    Object.defineProperty(a, 'first', { enumerable: true, get() {
+      trace.push('a.first'); return { get child() { trace.push('a.child'); b.last = 9; return 1; } };
+    } });
+    Object.defineProperty(b, 'first', { enumerable: true, get() {
+      trace.push('b.first'); return { get child() { trace.push('b.child'); return 1; } };
+    } });
+    a.last = 9; b.last = 0;
+    return { result: compare(chain(depth, a), chain(depth, b)), trace };
+  }
+  const expected = { result: true, trace: ['a.first', 'b.first', 'a.child', 'b.child'] };
+  assert.deepEqual(run(eq, 4096), expected);
+  assert.deepEqual(run(util.isDeepStrictEqual, 96), expected);
+});
+test('deletion of a later sibling and abrupt enumeration release every indexed child', () => {
+  const c = candidate(true);
+  const b = { first: { x: 1 }, later: 1 };
+  const a = { first: { get x() { delete b.later; return 1; } }, later: 1 };
+  assert.equal(c.api.isDeepStrictEqual(chain(4096, a), chain(4096, b)), false);
+  clean(c);
+  const reason = {};
+  const bad = new Proxy({}, { ownKeys() { throw reason; } });
+  assert.throws(() => c.api.isDeepStrictEqual(chain(4096, bad), chain(4096, new Proxy({}, {}))),
+    error => error === reason);
+  clean(c);
+});
+test('special payloads inside property walks retain independent unordered candidate cleanup', () => {
+  const c = candidate(true);
+  const left = new Set([{ value: 1, order: 1 }, { value: 1, order: 2 }]);
+  const right = new Set([{ value: 1, order: 2 }, { value: 1, order: 1 }]);
+  assert.equal(c.api.isDeepStrictEqual(chain(4096, left), chain(4096, right)), true);
+  const bad = new Set([{ value: 1, order: 1 }, { value: 1, order: 1 }]);
+  assert.equal(c.api.isDeepStrictEqual(chain(4096, bad), chain(4096, right)), false);
+  // Snapshot maps for unordered matching are not ancestor indexes. Check
+  // exact retry/results here; index-only cleanup is covered separately.
+  const a = new Error('x', { cause: chain(1024) }), b = new Error('x', { cause: chain(1024) });
+  assert.equal(eq(chain(4096, a), chain(4096, b)), true);
+  b.cause = chain(1024, { value: 2 });
+  assert.equal(eq(chain(4096, a), chain(4096, b)), false);
+});
+test('deep property cycles with asymmetric partners and root backedges terminate', () => {
+  const c = candidate(true), a = {}, b = {};
+  let aa = a, bb = b;
+  for (let i = 0; i < 8192; i++) { aa.next = {}; aa = aa.next; bb.next = {}; bb = bb.next; }
+  aa.next = a; bb.next = b;
+  assert.equal(c.api.isDeepStrictEqual(a, b), true);
+  clean(c);
+  const self = {}; self.next = self;
+  assert.equal(c.api.isDeepStrictEqual(self, b), true);
+  clean(c);
+  bb.extra = 1;
+  assert.equal(c.api.isDeepStrictEqual(self, b), false);
+  clean(c);
+});
+test('special-payload failure does not strand a scheduled property frame', () => {
+  const c = candidate(true), reason = {};
+  const a = new Date(1), b = new Date(1);
+  Object.defineProperty(a, 'getTime', { value() { throw reason; } });
+  assert.throws(() => c.api.isDeepStrictEqual(chain(4096, a), chain(4096, b)), error => error === reason);
+  clean(c);
+  assert.equal(c.api.isDeepStrictEqual(chain(4096, new Date(1)), chain(4096, new Date(2))), false);
+  clean(c);
+});

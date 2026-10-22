@@ -78,6 +78,7 @@ use zeroize::Zeroizing;
 
 mod array_from;
 mod array_generic;
+mod array_reduce;
 mod async_generator;
 mod atomics;
 mod bigint_ops;
@@ -45211,7 +45212,7 @@ impl InterpreterCore {
                 args,
                 false,
                 Self::is_typed_array_prototype_builtin(builtin),
-                "Array.prototype.reduce",
+                receiver_register,
             ),
             BuiltinFunctionKind::ArrayReduceRight => self.array_reduce_receiver(
                 module,
@@ -45219,7 +45220,7 @@ impl InterpreterCore {
                 args,
                 true,
                 Self::is_typed_array_prototype_builtin(builtin),
-                "Array.prototype.reduceRight",
+                receiver_register,
             ),
             BuiltinFunctionKind::ArraySort => {
                 // ES2020 23.1.3.27: in-place sort. With a comparator, order by
@@ -79242,10 +79243,7 @@ impl InterpreterCore {
             }
         };
 
-        if !matches!(
-            callback,
-            Value::Function(_) | Value::Closure(_) | Value::BuiltinFunction(_)
-        ) {
+        if !callback.is_callable() {
             return Err(InterpreterError::TypeError {
                 expected: "function".to_string(),
                 got: callback.type_name().to_string(),
@@ -79343,6 +79341,16 @@ impl InterpreterCore {
         args: RegRange,
         module: Option<&Ir3Module>,
     ) -> Result<Value, InterpreterError> {
+        self.with_array_reduction_observation(args, None, |core| {
+            core.array_prototype_reduce_inner(args, module)
+        })
+    }
+
+    fn array_prototype_reduce_inner(
+        &mut self,
+        args: RegRange,
+        module: Option<&Ir3Module>,
+    ) -> Result<Value, InterpreterError> {
         self.validate_array_callback_args(args, "Array.prototype.reduce")?;
 
         let array_id = match self.read_reg(args.start)? {
@@ -79355,6 +79363,7 @@ impl InterpreterCore {
             }
         };
         let callback = self.read_reg(args.start + 1)?;
+        self.observe_array_reduction_length(array_id, false)?;
         let length = self.array_like_length(array_id)?;
         let mut next_index = 0usize;
         let mut accumulator = if args.count > 2 {
@@ -79362,7 +79371,7 @@ impl InterpreterCore {
         } else {
             let mut first_present = None;
             for element_index in 0..length {
-                if let Some(value) = self.array_index_get(module, array_id, element_index)? {
+                if let Some(value) = self.array_reduction_element(module, array_id, element_index, false)? {
                     first_present = Some((element_index, value));
                     break;
                 }
@@ -79378,7 +79387,7 @@ impl InterpreterCore {
         };
 
         for element_index in next_index..length {
-            let Some(current_value) = self.array_index_get(module, array_id, element_index)? else {
+            let Some(current_value) = self.array_reduction_element(module, array_id, element_index, false)? else {
                 continue;
             };
             accumulator = self.invoke_simple_reduce_callback(
@@ -79399,6 +79408,16 @@ impl InterpreterCore {
         args: RegRange,
         module: Option<&Ir3Module>,
     ) -> Result<Value, InterpreterError> {
+        self.with_array_reduction_observation(args, None, |core| {
+            core.array_prototype_reduce_right_inner(args, module)
+        })
+    }
+
+    fn array_prototype_reduce_right_inner(
+        &mut self,
+        args: RegRange,
+        module: Option<&Ir3Module>,
+    ) -> Result<Value, InterpreterError> {
         self.validate_array_callback_args(args, "Array.prototype.reduceRight")?;
 
         let array_id = match self.read_reg(args.start)? {
@@ -79411,6 +79430,7 @@ impl InterpreterCore {
             }
         };
         let callback = self.read_reg(args.start + 1)?;
+        self.observe_array_reduction_length(array_id, false)?;
         let length = self.array_like_length(array_id)?;
         let mut next_index_exclusive = length;
         let mut accumulator = if args.count > 2 {
@@ -79418,7 +79438,7 @@ impl InterpreterCore {
         } else {
             let mut first_present = None;
             for element_index in (0..length).rev() {
-                if let Some(value) = self.array_index_get(module, array_id, element_index)? {
+                if let Some(value) = self.array_reduction_element(module, array_id, element_index, false)? {
                     first_present = Some((element_index, value));
                     break;
                 }
@@ -79434,7 +79454,7 @@ impl InterpreterCore {
         };
 
         for element_index in (0..next_index_exclusive).rev() {
-            let Some(current_value) = self.array_index_get(module, array_id, element_index)? else {
+            let Some(current_value) = self.array_reduction_element(module, array_id, element_index, false)? else {
                 continue;
             };
             accumulator = self.invoke_simple_reduce_callback(
@@ -80773,6 +80793,27 @@ impl InterpreterCore {
         args: RegRange,
         reverse: bool,
         typed_array_method: bool,
+        receiver_register: Option<u32>,
+    ) -> Result<Value, InterpreterError> {
+        let method = if reverse {
+            "Array.prototype.reduceRight"
+        } else {
+            "Array.prototype.reduce"
+        };
+        self.with_array_reduction_observation(args, receiver_register, |core| {
+            core.array_reduce_receiver_inner(
+                module, receiver, args, reverse, typed_array_method, method,
+            )
+        })
+    }
+
+    fn array_reduce_receiver_inner(
+        &mut self,
+        module: &Ir3Module,
+        receiver: Option<Value>,
+        args: RegRange,
+        reverse: bool,
+        typed_array_method: bool,
         method: &str,
     ) -> Result<Value, InterpreterError> {
         let receiver = receiver.unwrap_or(Value::Undefined);
@@ -80783,6 +80824,7 @@ impl InterpreterCore {
             });
         };
         let callback = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        self.observe_array_reduction_length(arr_id, typed_array_method)?;
         let length = self.array_method_length(arr_id, typed_array_method)?;
         if !callback.is_callable() {
             return Err(InterpreterError::TypeError {
@@ -80791,19 +80833,22 @@ impl InterpreterCore {
             });
         }
         let has_initial = args.count > 1;
-        let order: Vec<usize> = if reverse {
-            (0..length).rev().collect()
-        } else {
-            (0..length).collect()
-        };
-        let mut iter = order.into_iter();
+        // Guest-selected sparse lengths must not allocate an index vector
+        // before the first bounded property observation.
+        let mut iter = (0..length).map(|offset| {
+            if reverse {
+                length - 1 - offset
+            } else {
+                offset
+            }
+        });
         let mut accumulator = if has_initial {
             self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined)
         } else {
             let mut seed = None;
             for idx in iter.by_ref() {
                 if let Some(value) =
-                    self.array_loop_element(Some(module), arr_id, idx, typed_array_method)?
+                    self.array_reduction_element(Some(module), arr_id, idx, typed_array_method)?
                 {
                     seed = Some(value);
                     break;
@@ -80821,7 +80866,7 @@ impl InterpreterCore {
         };
         for idx in iter {
             let Some(current) =
-                self.array_loop_element(Some(module), arr_id, idx, typed_array_method)?
+                self.array_reduction_element(Some(module), arr_id, idx, typed_array_method)?
             else {
                 continue;
             };
@@ -84728,6 +84773,26 @@ impl InterpreterCore {
             let Some(instruction) = module.instructions.get(ip) else {
                 return false;
             };
+            // The fourth reducer argument is always an object. Its reads
+            // require canonical coercion and identity/label transport even
+            // when the accumulator and current element are primitives.
+            // Reject reads conservatively, including after an overwrite;
+            // checking before execution avoids replaying callback work.
+            let reads_array_argument = match instruction {
+                Ir3Instruction::Move { src, .. }
+                | Ir3Instruction::Inc { src, .. }
+                | Ir3Instruction::Dec { src, .. } => *src == 3,
+                Ir3Instruction::Add { lhs, rhs, .. }
+                | Ir3Instruction::Sub { lhs, rhs, .. }
+                | Ir3Instruction::Mul { lhs, rhs, .. }
+                | Ir3Instruction::Div { lhs, rhs, .. } => *lhs == 3 || *rhs == 3,
+                Ir3Instruction::JumpIf { cond, .. } => *cond == 3,
+                Ir3Instruction::Return { value } | Ir3Instruction::Throw { value } => *value == 3,
+                _ => false,
+            };
+            if reads_array_argument {
+                return false;
+            }
             match instruction {
                 Ir3Instruction::Return { .. }
                 | Ir3Instruction::Halt
@@ -84751,12 +84816,9 @@ impl InterpreterCore {
                 | Ir3Instruction::Inc { .. }
                 | Ir3Instruction::Dec { .. }
                 | Ir3Instruction::Mul { .. }
-                | Ir3Instruction::Div { .. }
-                | Ir3Instruction::GetProperty { .. }
-                | Ir3Instruction::LoadName { .. }
-                | Ir3Instruction::PutName { .. }
-                | Ir3Instruction::ResolveNameStatus { .. }
-                | Ir3Instruction::PutNameWithStatus { .. } => pending.push(ip + 1),
+                | Ir3Instruction::Div { .. } => pending.push(ip + 1),
+                // Heap/name access needs canonical live property, cell,
+                // callback and abrupt-label transport.
                 // A property write takes the ordinary path (bd-9vouw.175):
                 // [[Set]] calls setters and Proxy traps, refuses read-only and
                 // non-extensible targets per the write's strictness, and joins
@@ -84787,17 +84849,16 @@ impl InterpreterCore {
             })?;
         let function_index = match callback {
             Value::Function(index) => *index,
-            Value::Closure(closure_id) => {
-                self.closures
-                    .get(*closure_id as usize)
-                    .ok_or_else(|| InterpreterError::TypeError {
-                        expected: "valid reducer closure".to_string(),
-                        got: format!("closure#{closure_id} not found"),
-                    })?
-                    .function_index
-            }
-            Value::BuiltinFunction(_) => {
-                return self.invoke_inline_method_call(
+            Value::Closure(_)
+            | Value::GeneratorFunction(_)
+            | Value::AsyncFunction(_)
+            | Value::AsyncGeneratorFunction(_)
+            | Value::BuiltinFunction(_) => {
+                // A closure's function index belongs to its defining module,
+                // and its captures/realm may differ from the reducer caller.
+                // The canonical boundary restores that execution provenance
+                // and the activation semantics of generators/async functions.
+                return self.invoke_labeled_reduce_callback(
                     Some(module),
                     callback.clone(),
                     Value::Undefined,
@@ -84822,12 +84883,15 @@ impl InterpreterCore {
                 table_size: module.function_table.len() as u32,
             },
         )?;
-        if !Self::simple_reduce_lane_supports(module, function.entry as usize) {
-            // Calls, comparisons, allocation or block scopes: the ordinary
-            // callback path, chosen before the callback starts so no side
-            // effect is replayed (`(a, b) => a.concat(b)`, group-by and
-            // `if (...) { let ... }` reducers used to throw here).
-            return self.invoke_inline_method_call(
+        if function.is_generator
+            || function.rest_param_index.is_some()
+            || accumulator.is_object_like()
+            || current_value.is_object_like()
+            || !Self::simple_reduce_lane_supports(module, function.entry as usize)
+        {
+            // Select the canonical callback before execution, so heap/name
+            // access, coercion and user effects are never replayed.
+            return self.invoke_labeled_reduce_callback(
                 Some(module),
                 callback.clone(),
                 Value::Undefined,
@@ -84857,6 +84921,9 @@ impl InterpreterCore {
 
             let mut instruction_pointer = function.entry as usize;
             for _step in 0..self.config.instruction_budget {
+                // Share the run's remaining budget and cancellation boundary;
+                // a reducer must not receive a fresh allowance per element.
+                self.json_charge_work()?;
                 self.simple_callback_temporary_bytes = previous_callback_temporary_bytes
                     .saturating_add(Self::simple_callback_register_bytes(&local_registers));
                 let instruction_ref = module.instructions.get(instruction_pointer).ok_or(
@@ -85072,13 +85139,13 @@ impl InterpreterCore {
                         // `CallMethod` builtin dispatch that ran this reducer then
                         // routes it through `route_isolated_explicit_throw` into the
                         // caller's catch frames, re-raising the preserved value. This
-                        // legacy mini-lane tracks no per-register labels, so the
-                        // escaping value's confidentiality is re-established (as a
-                        // sound upper bound) by the receiver+args label join on the
-                        // dispatch site's throw path.
+                        // pure mini-lane's inputs are bounded by the reduction's
+                        // live observation context, including earlier accumulator
+                        // and element observations.
                         let thrown = Self::read_local_register(&local_registers, value)?;
+                        let label = self.json_parse_context_label()?;
                         self.replace_pending_abrupt_slots(
-                            Some((thrown.clone(), Label::Public)),
+                            Some((thrown.clone(), label)),
                             None,
                         )?;
                         return Err(InterpreterError::UncaughtException {

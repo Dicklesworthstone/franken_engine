@@ -8,6 +8,12 @@
   var typedBuffer = Object.getOwnPropertyDescriptor(typedPrototype, 'buffer').get;
   var typedOffset = Object.getOwnPropertyDescriptor(typedPrototype, 'byteOffset').get;
   var typedLength = Object.getOwnPropertyDescriptor(typedPrototype, 'byteLength').get;
+  var arrayBufferLength = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'byteLength').get;
+  var isView = ArrayBuffer.isView;
+  var ByteView = Uint8Array;
+  var apply = Reflect.apply;
+  var NativeError = Error;
+  var NativeTypeError = TypeError;
   function invalidArgument(name, value) {
     var error = new TypeError('The "' + name + '" argument must be an instance of ' +
       'Buffer, TypedArray, or ArrayBuffer. Received ' + (value === null ? 'null' : typeof value));
@@ -15,13 +21,30 @@
     return error;
   }
   function bytesOf(name, input) {
-    if (input instanceof ArrayBuffer) {
-      return new Uint8Array(input);
+    var buffer, offset = 0, length;
+    if (isView(input)) {
+      // Only typed arrays (including Buffers), not DataViews. Authenticate
+      // their backing window without invoking replaceable guest metadata.
+      try { buffer = apply(typedBuffer, input, []); }
+      catch (error) { throw invalidArgument(name, input); }
+      offset = apply(typedOffset, input, []);
+      length = apply(typedLength, input, []);
+    } else {
+      // A branded accessor accepts foreign-realm ArrayBuffers and rejects
+      // forged prototypes without consulting @@hasInstance or @@toStringTag.
+      try { length = apply(arrayBufferLength, input, []); }
+      catch (error) { throw invalidArgument(name, input); }
+      buffer = input;
     }
-    if (ArrayBuffer.isView(input)) {
-      return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+    try { return new ByteView(buffer, offset, length); }
+    catch (cause) {
+      // Unavailable storage is not valid empty text. Do not turn allocation
+      // or other non-TypeError failures into a successful validation result.
+      if (!(cause instanceof NativeTypeError)) throw cause;
+      var error = new NativeError('Cannot validate detached buffer storage');
+      error.code = 'ERR_INVALID_STATE'; error.cause = cause;
+      throw error;
     }
-    throw invalidArgument(name, input);
   }
   function SlowBuffer(size) {
     return Buffer.alloc(size);
@@ -114,20 +137,45 @@
   }
   function isUtf8(input) {
     var bytes = bytesOf('input', input);
-    try {
-      new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-      return true;
-    } catch (error) {
-      return false;
+    var length = apply(typedLength, bytes, []);
+    var index = 0;
+    // Validate bytes directly: no decoder, input-sized string or replacement
+    // characters. UTF-8 encodes scalar values only, in their shortest form.
+    while (index < length) {
+      var first = bytes[index++];
+      if (first <= 0x7f) {
+        // Common ASCII runs need no per-byte sequence-state transitions.
+        while (index + 4 <= length &&
+            ((bytes[index] | bytes[index + 1] | bytes[index + 2] | bytes[index + 3]) & 0x80) === 0) {
+          index += 4;
+        }
+        continue;
+      }
+      if (first < 0xc2 || first > 0xf4 || index === length) return false;
+      var second = bytes[index++];
+      if (second < 0x80 || second > 0xbf) return false;
+      if (first <= 0xdf) continue;
+      if ((first === 0xe0 && second < 0xa0) ||
+          (first === 0xed && second > 0x9f) ||
+          (first === 0xf0 && second < 0x90) ||
+          (first === 0xf4 && second > 0x8f) || index === length) return false;
+      var third = bytes[index++];
+      if (third < 0x80 || third > 0xbf) return false;
+      if (first <= 0xef) continue;
+      if (index === length) return false;
+      var fourth = bytes[index++];
+      if (fourth < 0x80 || fourth > 0xbf) return false;
     }
+    return true;
   }
   function isAscii(input) {
     var bytes = bytesOf('input', input);
-    for (var index = 0; index < bytes.length; index++) {
-      if (bytes[index] > 0x7f) {
-        return false;
-      }
+    var length = apply(typedLength, bytes, []);
+    var index = 0;
+    for (; index + 4 <= length; index += 4) {
+      if (((bytes[index] | bytes[index + 1] | bytes[index + 2] | bytes[index + 3]) & 0x80) !== 0) return false;
     }
+    for (; index < length; index++) if (bytes[index] > 0x7f) return false;
     return true;
   }
   function resolveObjectURL() {

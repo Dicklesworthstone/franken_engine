@@ -11,6 +11,11 @@
   var arrayBufferLength = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'byteLength').get;
   var isView = ArrayBuffer.isView;
   var ByteView = Uint8Array;
+  var WordView = DataView;
+  var readWord = DataView.prototype.getUint32;
+  var defineWord = Object.defineProperty;
+  var wordDescriptor = Object.create(null);
+  wordDescriptor.value = readWord;
   var apply = Reflect.apply;
   var NativeError = Error;
   var NativeTypeError = TypeError;
@@ -45,6 +50,17 @@
       error.code = 'ERR_INVALID_STATE'; error.cause = cause;
       throw error;
     }
+  }
+  // Promote only sustained ASCII runs. A private own method keeps the captured
+  // word operation callable without per-word argument arrays or mutable public
+  // prototype lookup. The high-bit mask is independent of byte order.
+  // No decoded text or payload copy is created. Short/non-ASCII inputs stay
+  // on the existing byte path and allocate no DataView.
+  function wordReader(bytes, length) {
+    var view = new WordView(apply(typedBuffer, bytes, []),
+      apply(typedOffset, bytes, []), length);
+    defineWord(view, 'read', wordDescriptor);
+    return view;
   }
   function SlowBuffer(size) {
     return Buffer.alloc(size);
@@ -139,15 +155,26 @@
     var bytes = bytesOf('input', input);
     var length = apply(typedLength, bytes, []);
     var index = 0;
+    var words;
     // Validate bytes directly: no decoder, input-sized string or replacement
     // characters. UTF-8 encodes scalar values only, in their shortest form.
     while (index < length) {
       var first = bytes[index++];
       if (first <= 0x7f) {
-        // Common ASCII runs need no per-byte sequence-state transitions.
+        // Establish an ASCII run before paying for the word reader. Reuse it
+        // across later runs, but never skip a word containing any high bit.
+        var start = index;
         while (index + 4 <= length &&
             ((bytes[index] | bytes[index + 1] | bytes[index + 2] | bytes[index + 3]) & 0x80) === 0) {
           index += 4;
+          if (index - start >= 32 && index + 16 <= length) {
+            if (words === undefined) words = wordReader(bytes, length);
+            while (index + 16 <= length &&
+                ((words.read(index) | words.read(index + 4) | words.read(index + 8) | words.read(index + 12)) & 0x80808080) === 0) {
+              index += 16;
+            }
+            break;
+          }
         }
         continue;
       }
@@ -172,6 +199,17 @@
     var bytes = bytesOf('input', input);
     var length = apply(typedLength, bytes, []);
     var index = 0;
+    // Check a short prefix first: invalid prefixes and tiny inputs need no
+    // word-reader allocation, regardless of the full backing-buffer size.
+    for (; index < 32 && index + 4 <= length; index += 4) {
+      if (((bytes[index] | bytes[index + 1] | bytes[index + 2] | bytes[index + 3]) & 0x80) !== 0) return false;
+    }
+    if (index + 16 <= length) {
+      var words = wordReader(bytes, length);
+      for (; index + 16 <= length; index += 16) {
+        if (((words.read(index) | words.read(index + 4) | words.read(index + 8) | words.read(index + 12)) & 0x80808080) !== 0) return false;
+      }
+    }
     for (; index + 4 <= length; index += 4) {
       if (((bytes[index] | bytes[index + 1] | bytes[index + 2] | bytes[index + 3]) & 0x80) !== 0) return false;
     }

@@ -60,3 +60,42 @@ console.log('BUFFER_ALIAS_COMPLETE');
 "#);
     assert_eq!(lines, ["true true", "true true", "false false", "BUFFER_ALIAS_COMPLETE"]);
 }
+
+#[test]
+fn long_ascii_runs_keep_exact_unaligned_windows_and_utf8_boundaries() {
+    let lines = run(r#"
+const {isUtf8,isAscii}=require('node:buffer');
+const backing=Buffer.alloc(1041,255);backing.fill(65,3,1034);
+const view=new Uint8Array(backing.buffer,backing.byteOffset+3,1031);
+console.log(isUtf8(view),isAscii(view));
+let rejected=0;
+for(let at=32;at<96;at++){
+  view[at]=255;
+  if(!isUtf8(view)&&!isAscii(view))rejected++;
+  view[at]=65;
+}
+console.log(rejected);
+view[64]=240;view[65]=159;view[66]=152;view[67]=128;
+console.log(isUtf8(view),isAscii(view));
+console.log(isUtf8(new Uint8Array(view.buffer,view.byteOffset,67)));
+console.log('WORD_BOUNDARIES_COMPLETE');
+"#);
+    assert_eq!(lines, ["true true", "64", "true false", "false", "WORD_BOUNDARIES_COMPLETE"]);
+}
+
+#[test]
+fn long_validation_keeps_captured_word_operations_and_protected_globals() {
+    let lines = run(r#"
+const buffer=require('node:buffer');
+const DataView='guest',Object='guest';
+const bytes=buffer.Buffer.alloc(8192,65);
+console.log(buffer.isUtf8(bytes),buffer.isAscii(bytes));
+const saved=globalThis.DataView.prototype.getUint32;
+globalThis.DataView.prototype.getUint32=function(){return 0;};
+bytes[4097]=255;
+console.log(buffer.isUtf8(bytes),buffer.isAscii(bytes));
+globalThis.DataView.prototype.getUint32=saved;
+console.log('WORD_INTRINSICS_COMPLETE');
+"#);
+    assert_eq!(lines, ["true true", "false false", "WORD_INTRINSICS_COMPLETE"]);
+}

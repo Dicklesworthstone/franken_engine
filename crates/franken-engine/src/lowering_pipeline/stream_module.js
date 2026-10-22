@@ -2458,7 +2458,9 @@
         });
       }
     }
-    removeAbort = cancellation.listen(function () { finishImpl(cancellation.error()); });
+    // Aborting our own scope echoes the primary failure synchronously. Keep
+    // that failure instead of replacing a premature close with its AbortError.
+    removeAbort = cancellation.listen(function () { finishImpl(error || cancellation.error()); });
     if (setController !== undefined) {
       setController(finishImpl, cancellation, function () { return error; });
     }

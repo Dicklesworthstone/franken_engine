@@ -55,6 +55,50 @@ test('mixed CJS constructors, event order and shadowed require match live Node',
   console.log(expected.join('\n'));
 });
 
+function prematureClose(module) {
+  return new Promise(resolve => {
+    let callbacks = 0;
+    const source = new module.PassThrough();
+    const destination = new module.Writable({ write(chunk, encoding, callback) { callback(); } });
+    module.pipeline(source, destination, error => {
+      callbacks++;
+      setImmediate(() => resolve([
+        error && error.code, callbacks, source.destroyed, destination.destroyed,
+      ]));
+    });
+    source.write('x');
+    setTimeout(() => destination.destroy(), 0);
+  });
+}
+
+test('premature close preserves its cause through pipeline cancellation', { timeout: 1000 }, async () => {
+  const candidate = factory(events.EventEmitter, decoder, process.nextTick);
+  const [actual, expected] = await Promise.all([prematureClose(candidate), prematureClose(native)]);
+  assert.deepEqual(expected, ['ERR_STREAM_PREMATURE_CLOSE', 1, true, true]);
+  assert.deepEqual(actual, expected);
+});
+
+test('external pipeline cancellation retains AbortError and the caller reason', { timeout: 1000 }, async () => {
+  async function cancel(module) {
+    const controller = new AbortController();
+    const reason = { marker: 'external cancellation' };
+    const source = new module.PassThrough();
+    const destination = new module.Writable({ write(chunk, encoding, callback) { callback(); } });
+    const completion = module.promises.pipeline(source, destination, { signal: controller.signal });
+    controller.abort(reason);
+    await assert.rejects(completion, error => {
+      assert.equal(error.name, 'AbortError');
+      assert.equal(error.code, 'ABORT_ERR');
+      assert.equal(error.cause, reason);
+      return true;
+    });
+    assert.equal(source.destroyed, true);
+    assert.equal(destination.destroyed, true);
+  }
+  const candidate = factory(events.EventEmitter, decoder, process.nextTick);
+  await Promise.all([cancel(candidate), cancel(native)]);
+});
+
 function writeTrace(module, completion, destroyFromCallback = false) {
   return new Promise((resolve, reject) => {
     const log = [];

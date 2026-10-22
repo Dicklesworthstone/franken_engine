@@ -253,15 +253,56 @@ remain explicitly unverified.
 
 The subsequent stream implementation under `bd-305gi.2` remains partial:
 mixed CJS routes share the existing module loader, and writable completion
-now preserves callback-scheduled nextTick order. Nine production-JavaScript
-tests pass beside live Node20/24/26; the previous source fails five of those
-nine. These are host tests, not native lowering proof. The four added Rust
-regressions and native capability/IFC/replay qualification remain unexecuted,
-and full CJS facade retirement remains open. Local disk admission still
-refuses heavy Cargo lanes. The released engine rejects the first-class
-EventEmitter import required to host the current factory as guest source;
-that attempted shortcut provides no current-main integration credit. No
-cache was deleted, gate weakened or peer process interrupted.
+preserves callback-scheduled nextTick order. The original nine host tests pass
+beside live Node20/22/24/26; the previous source fails five of those nine.
+
+Linux native follow-through uses clean revision
+`bf2c00fa8688ab5cbf861d6bf40943a8662d92c4`, pinned
+`nightly-2026-09-21`, no default features, one build slot and debug information
+disabled. A private RCH dispatcher and worker are colocated; this is native
+correctness evidence, not a physical-offload or performance claim. The built
+41-test stream executable was run directly with its inventory and source
+hashes checked: **38 pass, three fail, none ignored or filtered**. The new
+mixed-route constructor identity, shadowing and event-order regression passes.
+The failures are premature-close error replacement, pipeline callback ordering,
+and `util.inherits`' module path requiring ambient `process.execArgv` access.
+The callback trace matches live Node22.22.1 in a separate same-invocation host
+comparison but differs from the frozen Node22.2.0 assertion; that assertion is
+retained pending exact-version investigation. No ambient permission was added.
+
+The premature-close failure also reproduces beside live Node: internal
+cancellation overwrites `ERR_STREAM_PREMATURE_CLOSE` with `ABORT_ERR`. The
+listener now preserves the pipeline's existing failure. Two added host tests
+check this error, single callback/destruction and genuine external cancellation
+with its caller-owned cause. Before/after results are 10/11 then 11/11 on both
+Node22.22.1 and Node26.8.1; 73 constructor/cancellation regressions also pass on
+Node22. The same compiled native CLI executes the before and after production
+factories as guest source with real engine events/decoder dependencies and
+prints the respective incorrect/correct errors. Strict reexecution of the
+fixed guest passes, including its one recorded nondeterminism event. This is
+native execution of the modified JavaScript, **not a rebuilt embedded module**.
+An initial guest attempt left private dependency placeholders unresolved and
+failed; it earns no verification credit.
+
+The native CLI also compiles, verifies, runs and strictly reexecutes the actual
+mixed-route fixture. Source/output/decision/transcript checks match. Corrupting
+the actual compile hash is rejected with exit25; changing a recorded console
+message is rejected by strict replay with exit2. Logs, source bindings, binary
+hashes and run/replay reports are retained under `stream-routing/native-linux/`.
+All verification is solo reexecution, not independent review.
+
+The enclosing Cargo command exceeds its one-hour build deadline, exits137 and
+acknowledges termination; the private dispatcher stops normally. This command
+is not a passing Cargo test run. The default-feature attempt was separately
+cancelled before tests. A fresh Linux disk preflight refuses further Cargo at
+13.37% free against 14%; Mac admission also remains critical. Full check,
+Clippy, three added AST tests, the rebuilt-module regression and default/full
+qualification remain open. Pinned `cargo fmt --check` emits existing diffs and
+a rustfmt allocation failure despite returning0; it is **not green**. UBS on
+the two changed JavaScript files reports zero critical findings and two
+pre-existing synchronous fixture-read warnings. Full CJS facade retirement,
+native authority/IFC/GC qualification and independent verification remain open.
+No cache was deleted, gate weakened or peer process interrupted.
 
 ## Historical assessment — superseded, retained for provenance
 

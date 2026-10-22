@@ -4,7 +4,7 @@
 //! CommonJS `require` semantics, with capability-aware policy checks at
 //! resolution time.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -1966,13 +1966,39 @@ impl DeterministicModuleResolver {
     }
 }
 
-impl ModuleResolver for DeterministicModuleResolver {
-    fn resolve(
+// Borrow registered source until every graph edge has passed the ordinary
+// resolver and policy checks. This is per-call work, not an authorization or
+// content cache: duplicate edges still resolve and authorize independently.
+#[derive(Debug)]
+struct AuthorizedModuleCandidate<'a> {
+    request_specifier: String,
+    canonical_specifier: String,
+    record: &'a ModuleRecord,
+    probe_sequence: Vec<String>,
+}
+
+impl AuthorizedModuleCandidate<'_> {
+    fn into_outcome(self, context: &ResolutionContext) -> ResolutionOutcome {
+        ResolutionOutcome {
+            module: ResolvedModule {
+                request_specifier: self.request_specifier,
+                canonical_specifier: self.canonical_specifier,
+                record: self.record.clone(),
+                content_hash: self.record.canonical_hash(),
+                probe_sequence: self.probe_sequence,
+            },
+            event: success_event(context),
+        }
+    }
+}
+
+impl DeterministicModuleResolver {
+    fn resolve_authorized(
         &self,
         request: &ModuleRequest,
         context: &ResolutionContext,
         policy: &dyn ModulePolicyHook,
-    ) -> ResolutionResult<ResolutionOutcome> {
+    ) -> ResolutionResult<AuthorizedModuleCandidate<'_>> {
         let (canonical_specifier, record, probe_sequence) =
             self.resolve_candidate(request, context)?;
         if request.style == ImportStyle::Require && record.syntax == ModuleSyntax::Wasm {
@@ -2025,18 +2051,58 @@ impl ModuleResolver for DeterministicModuleResolver {
                 ))
             })?;
 
-        let resolved = ResolvedModule {
+        Ok(AuthorizedModuleCandidate {
             request_specifier: request.specifier.clone(),
             canonical_specifier,
-            record: record.clone(),
-            content_hash: record.canonical_hash(),
+            record,
             probe_sequence,
-        };
-
-        Ok(ResolutionOutcome {
-            module: resolved,
-            event: success_event(context),
         })
+    }
+
+    fn resolve_chain_records(
+        &self,
+        entry_request: &ModuleRequest,
+        context: &ResolutionContext,
+        policy: &dyn ModulePolicyHook,
+    ) -> ResolutionResult<Vec<AuthorizedModuleCandidate<'_>>> {
+        let entry = self.resolve_authorized(entry_request, context, policy)?;
+        let mut visited = BTreeSet::from([entry.record.id.as_str()]);
+        let mut outcomes = vec![entry];
+        let mut parent_index = 0;
+
+        // First-discovery order is already a breadth-first parent queue. Scan
+        // each borrowed dependency slice directly instead of eagerly cloning
+        // every outgoing edge into a second request queue.
+        while parent_index < outcomes.len() {
+            let parent = outcomes[parent_index].record;
+            parent_index += 1;
+            for dependency in &parent.dependencies {
+                let request =
+                    ModuleRequest::new(dependency.specifier.clone(), dependency.style)
+                        .with_referrer(parent.id.as_str())
+                        .with_compatibility_mode(entry_request.compatibility_mode);
+                // Duplicate edges, cycles and differently styled aliases still
+                // perform their complete lookup, format and policy checks.
+                let outcome = self.resolve_authorized(&request, context, policy)?;
+                if visited.insert(outcome.record.id.as_str()) {
+                    outcomes.push(outcome);
+                }
+            }
+        }
+        Ok(outcomes)
+    }
+}
+
+impl ModuleResolver for DeterministicModuleResolver {
+    fn resolve(
+        &self,
+        request: &ModuleRequest,
+        context: &ResolutionContext,
+        policy: &dyn ModulePolicyHook,
+    ) -> ResolutionResult<ResolutionOutcome> {
+        Ok(self
+            .resolve_authorized(request, context, policy)?
+            .into_outcome(context))
     }
 
     fn resolve_chain(
@@ -2045,31 +2111,14 @@ impl ModuleResolver for DeterministicModuleResolver {
         context: &ResolutionContext,
         policy: &dyn ModulePolicyHook,
     ) -> ResolutionResult<Vec<ResolutionOutcome>> {
-        let mut queue = VecDeque::new();
-        queue.push_back(entry_request.clone());
-
-        let mut outcomes = Vec::new();
-        let mut visited = BTreeSet::new();
-
-        while let Some(request) = queue.pop_front() {
-            let outcome = self.resolve(&request, context, policy)?;
-            let module_id = outcome.module.record.id.clone();
-            if !visited.insert(module_id.clone()) {
-                continue;
-            }
-
-            for dependency in &outcome.module.record.dependencies {
-                queue.push_back(
-                    ModuleRequest::new(dependency.specifier.clone(), dependency.style)
-                        .with_referrer(module_id.clone())
-                        .with_compatibility_mode(request.compatibility_mode),
-                );
-            }
-
-            outcomes.push(outcome);
-        }
-
-        Ok(outcomes)
+        // Materialize and hash only distinct records after the complete graph
+        // is admitted. A later denial returns no partial graph and performs no
+        // source cloning or hashing for earlier candidates.
+        Ok(self
+            .resolve_chain_records(entry_request, context, policy)?
+            .into_iter()
+            .map(|candidate| candidate.into_outcome(context))
+            .collect())
     }
 }
 

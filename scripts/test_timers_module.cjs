@@ -113,7 +113,22 @@ async function main() {
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout.trim(), 'true true\nesm\ntick');
   console.log('PASS ESM fixture (Node reference only)');
+
+  // Scheduler and promisification share the existing native Promise operations.
+  let schedulerContracts = 0;
+  const scheduled = candidate(vm.createContext({}));
+  assert.equal(typeof scheduled.promises.scheduler.wait, 'function');
+  assert.equal(typeof scheduled.promises.scheduler.yield, 'function');
+  assert.equal(promisify(scheduled.setTimeout), scheduled.promises.setTimeout);
+  assert.equal(promisify(scheduled.setImmediate), scheduled.promises.setImmediate);
+  const payload2 = { value: 'café' };
+  assert.equal(await scheduled.promises.scheduler.wait(1), undefined);
+  assert.equal(await scheduled.promises.scheduler.yield(), undefined);
+  assert.equal(await promisify(scheduled.setTimeout)(1, payload2), payload2);
+  assert.equal(await promisify(scheduled.setImmediate)(payload2), payload2);
+  schedulerContracts += 8;
+  console.log('PASS scheduler/promisify contracts');
   console.log(JSON.stringify({ node: process.version, differentialFixtures: differential,
-    bridgeContracts: bridge, esmReferenceOnly: 1, nativeRustExecuted: false }));
+    bridgeContracts: bridge, schedulerContracts, esmReferenceOnly: 1, nativeRustExecuted: false }));
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

@@ -568,13 +568,15 @@ fn rewrite_module_objects(
         scopes: vec![root.clone()],
         modules: BTreeSet::new(),
     };
-    // The stream facade keeps the declarations it claims: the rewrite does
-    // not see their initializers.
-    let mut claimed = if root.contains("require") {
+    // Keep an isolated facade program on its existing path. If this same
+    // program also needs a first-class stream module, every stream binding
+    // must use that module's constructors and queues (bd-305gi.2).
+    let stream_claimed = if root.contains("require") {
         BTreeSet::new()
     } else {
         facade_claimed_stream_declarators(&tree.body)
     };
+    let mut claimed = stream_claimed.clone();
     if !root.contains("require") {
         claimed.extend(facade_claimed_events_declarators(&tree.body));
         claimed.extend(zlib_module::claimed_declarators(&tree.body));
@@ -584,6 +586,20 @@ fn rewrite_module_objects(
         let outcome = rewriter.statement(statement);
         restore_claimed_initializers(statement, held);
         outcome?;
+    }
+    if rewriter.modules.contains(&PureModule::Stream) && !stream_claimed.is_empty() {
+        // The first pass discovers module uses with the normal lexical-scope
+        // checks. Revisit only the withheld stream initializers; other native
+        // facades keep their authenticated call shapes. These are top-level
+        // declarators, so the rewriter's root scope is the correct scope.
+        for (index, statement) in rewritten.body.iter_mut().enumerate() {
+            let mut held = take_claimed_initializers(statement, index, &stream_claimed);
+            let outcome = held
+                .iter_mut()
+                .try_for_each(|(_, initializer)| rewriter.expression(initializer));
+            restore_claimed_initializers(statement, held);
+            outcome?;
+        }
     }
     // The final loader pass also defers these private dependencies. Their
     // declarations precede the dependent loader, but initialization is on use.
@@ -1517,6 +1533,87 @@ mod events_tests {
                 "{source}"
             );
         }
+    }
+
+    #[test]
+    fn mixed_stream_forms_share_the_module_initializer_bd_305gi_2() {
+        for (direct, namespace) in [("stream", "node:stream"), ("node:stream", "stream")] {
+            let source = format!(
+                "const {{ Readable, Writable }} = require('{direct}'); \
+                 new Readable({{ read() {{}} }}); new Writable({{ write(c, e, cb) {{ cb(); }} }}); \
+                 const stream = require('{namespace}');"
+            );
+            let tree = parse(&source, ParseGoal::Script);
+            let rewritten = rewrite_util_requires(&tree)
+                .expect("rewrite")
+                .expect("stream module");
+            let initializers: Vec<_> = rewritten
+                .body
+                .iter()
+                .filter_map(|statement| {
+                    let Statement::VariableDeclaration(declaration) = statement else {
+                        return None;
+                    };
+                    let [declarator] = declaration.declarations.as_slice() else {
+                        return None;
+                    };
+                    (!is_module_declaration(statement)).then_some(declarator.initializer.as_ref())
+                })
+                .collect();
+            assert_eq!(initializers.len(), 2);
+            for initializer in initializers {
+                assert!(
+                    matches!(initializer,
+                    Some(Expression::Call { callee, arguments, .. })
+                        if arguments.is_empty() && matches!(callee.as_ref(),
+                            Expression::Identifier(name) if name == STREAM_MODULE_BINDING)),
+                    "both CJS forms must load the same module: {source}"
+                );
+            }
+            assert!(
+                rewrite_util_requires(&rewritten)
+                    .expect("idempotent")
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn shadowed_stream_require_does_not_change_the_outer_route_bd_305gi_2() {
+        let tree = parse(
+            "const { Readable } = require('stream'); Readable.from(['a']); \
+             function local(require) { return require('node:stream'); }",
+            ParseGoal::Script,
+        );
+        assert!(rewrite_util_requires(&tree).expect("rewrite").is_none());
+    }
+
+    #[test]
+    fn mixed_stream_reroute_preserves_other_facade_initializers_bd_305gi_2() {
+        let tree = parse(
+            "const { EventEmitter } = require('events'); new EventEmitter(); \
+             const { Readable } = require('stream'); Readable.from(['a']); \
+             const stream = require('node:stream');",
+            ParseGoal::Script,
+        );
+        let rewritten = rewrite_util_requires(&tree)
+            .expect("rewrite")
+            .expect("stream module");
+        let events = rewritten
+            .body
+            .iter()
+            .find_map(|statement| {
+                let Statement::VariableDeclaration(declaration) = statement else {
+                    return None;
+                };
+                declaration
+                    .declarations
+                    .iter()
+                    .find(|declarator| declarator.pattern.binding_names().contains(&"EventEmitter"))
+            })
+            .expect("user EventEmitter declaration");
+        assert!(matches!(events.initializer.as_ref(),
+            Some(expression) if builtin_require_member(expression) == Some((PureModule::Events, None))));
     }
 
     /// Every other `require('stream')` gets the module, declared after the

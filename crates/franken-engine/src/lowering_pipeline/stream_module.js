@@ -1641,7 +1641,10 @@
       callback(null);
     }
     if (state.destroyed) errorBuffer(state);
-    finishMaybe(stream, state);
+    // Completion after a write callback still crosses a nextTick boundary.
+    // Emitting finish here can overtake readable end and callback-scheduled
+    // work, even when _write itself completed asynchronously (bd-305gi.2).
+    if (state.ending) finishMaybe(stream, state, true);
   }
   function errorBuffer(state) {
     if (state.writing) return;

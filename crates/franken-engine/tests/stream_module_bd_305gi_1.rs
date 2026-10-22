@@ -23,13 +23,26 @@ const INSTRUCTION_BUDGET: u64 = 200_000_000;
 fn console_line(source: &str) -> String {
     let outcome = HybridRouter::default()
         .eval_with_instruction_budget(source, INSTRUCTION_BUDGET)
-        .unwrap_or_else(|error| panic!("stream probe failed: {error}"));
+        .expect("stream probe executes without engine error");
     outcome
         .console_output
         .iter()
         .map(|entry| entry.message.clone())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[test]
+fn mixed_cjs_forms_share_constructor_identity_and_event_order_bd_305gi_2() {
+    // The direct destructure is facade-eligible in isolation. Namespace use
+    // must route both bindings to the same module, without rewriting local's
+    // shadowed require. The expected trace is also run against live Node by
+    // scripts/tests/stream_mixed_routes.cjs.
+    let source = include_str!("fixtures/stream_mixed_routes.js");
+    assert_eq!(
+        console_line(source),
+        "identity:true,true\nshadow:local\norder:write:a,data:x,written,end,ended,finish,microtask"
+    );
 }
 
 #[test]

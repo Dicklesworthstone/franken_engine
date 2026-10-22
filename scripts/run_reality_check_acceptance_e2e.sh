@@ -16,9 +16,15 @@ DEFAULT_OUT_DIR="$PROJECT_ROOT/artifacts/reality_check_acceptance/$DEFAULT_TIMES
 TIMESTAMP="${RC_ACCEPTANCE_TIMESTAMP:-$DEFAULT_TIMESTAMP}"
 OUT_DIR="${RC_ACCEPTANCE_OUT_DIR:-$DEFAULT_OUT_DIR}"
 RCH_BIN="${RCH_BIN:-rch}"
-RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-nightly}"
+RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-}"
+if [[ -z "$RUSTUP_TOOLCHAIN" ]]; then
+    RUSTUP_TOOLCHAIN="$(awk -F '"' '/^[[:space:]]*channel[[:space:]]*=/ { print $2; exit }' "$PROJECT_ROOT/rust-toolchain.toml")"
+    if [[ -z "$RUSTUP_TOOLCHAIN" ]]; then
+        echo "error: rust-toolchain.toml must declare a quoted channel" >&2
+        exit 2
+    fi
+fi
 CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
-CARGO_TARGET_DIR="${RC_ACCEPTANCE_CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_reality_acceptance_${TIMESTAMP}_$$}"
 
 mkdir -p "$OUT_DIR"
 mkdir -p "$OUT_DIR/execution_evidence"
@@ -117,12 +123,11 @@ run_rch_acceptance_command() {
 
     local artifact_path="$OUT_DIR/$evidence_path"
     mkdir -p "$(dirname "$artifact_path")"
-    echo "Command: $RCH_BIN exec -- env RUSTUP_TOOLCHAIN=$RUSTUP_TOOLCHAIN CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS CARGO_TARGET_DIR=$CARGO_TARGET_DIR $*" | tee -a "$COMMANDS_LOG"
+    echo "Command: RCH_REQUIRE_REMOTE=1 RCH_NO_SELF_HEALING=1 $RCH_BIN exec -- env RUSTUP_TOOLCHAIN=$RUSTUP_TOOLCHAIN CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS $*" | tee -a "$COMMANDS_LOG"
 
-    if "$RCH_BIN" exec -- env \
+    if RCH_REQUIRE_REMOTE=1 RCH_NO_SELF_HEALING=1 "$RCH_BIN" exec -- env \
         "RUSTUP_TOOLCHAIN=$RUSTUP_TOOLCHAIN" \
         "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS" \
-        "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" \
         "$@" > "$artifact_path" 2>&1; then
         if grep -Eiq 'falling back to local|local fallback|running locally|\[RCH\] local \(|Dependency preflight blocked remote execution|RCH-E326' "$artifact_path"; then
             log_test_result "$goal" "FAIL" "$evidence_path" "rch local fallback detected; refusing local execution"

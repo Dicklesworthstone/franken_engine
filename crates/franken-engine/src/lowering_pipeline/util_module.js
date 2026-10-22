@@ -731,6 +731,7 @@
   var collectionApply = Reflect.apply;
   var collectionIterator = Symbol.iterator;
   var ComparisonTypeError = TypeError;
+  var comparisonCreate = Object.create;
   // Small comparisons keep their short ancestor scan. Deep comparisons index
   // ACTIVE ordered pairs, never completed results: getters and failed unordered
   // candidates must still be evaluated again. The common, distinct-left path
@@ -799,7 +800,10 @@
     var primitive = new MapClass();
     var candidates = [];
     var candidateCount = snapshotCollection(b, isMap, primitive, candidates);
-    var matched = [];
+    // Start at the first still-available object candidate. Ordered matches
+    // need no consumed flags; only out-of-order matches allocate a private
+    // null-prototype table, never exposing bookkeeping to indexed setters.
+    var matched, first = 0;
     var count = 0;
     for (var entry of collectionApply(iterate, a, [])) {
       var entryKey = isMap ? entry[0] : entry;
@@ -815,8 +819,8 @@
         continue;
       }
       var found = false;
-      for (var i = 0; i < candidates.length; i++) {
-        if (matched[i]) {
+      for (var i = first; i < candidates.length; i++) {
+        if (matched !== undefined && matched[i]) {
           continue;
         }
         var other = candidates[i];
@@ -826,7 +830,13 @@
         if (equal) {
           // Distinct object identities can be structurally equal; every
           // right-hand entry may nevertheless satisfy only one left entry.
-          matched[i] = true;
+          if (i === first) {
+            first++;
+            while (matched !== undefined && matched[first]) { delete matched[first++]; }
+          } else {
+            if (matched === undefined) { matched = comparisonCreate(null); }
+            matched[i] = true;
+          }
           count++;
           found = true;
           break;
@@ -920,7 +930,7 @@
   function indexedCollection(frame) {
     var isMap = frame.tag === 'Map';
     var iterate = isMap ? mapEntries : setValues;
-    var state = { primitive: new MapClass(), candidates: [], matched: [],
+    var state = { primitive: new MapClass(), candidates: [], matched: undefined, first: 0,
       candidateCount: 0, count: 0, isMap: isMap, open: false, iterator: undefined,
       next: undefined, entry: undefined, key: undefined, index: 0, other: undefined };
     // Keep the existing right snapshot / live left iteration contract. No
@@ -1033,7 +1043,7 @@
               collectionApply(mapGet, state.primitive, [state.key]), seen, work);
             continue;
           }
-          state.index = 0;
+          state.index = state.first;
           frame.phase = 7;
         }
         if (frame.phase === 6) { // A primitive key's value completed.
@@ -1044,7 +1054,7 @@
           continue;
         }
         if (frame.phase === 7) { // Try unmatched object candidates in original order.
-          while (state.index < state.candidates.length && state.matched[state.index]) { state.index++; }
+          while (state.index < state.candidates.length && state.matched !== undefined && state.matched[state.index]) { state.index++; }
           if (state.index === state.candidates.length) { finishIndexedFrame(work, seen, false); continue; }
           state.other = state.candidates[state.index];
           frame.phase = 8;
@@ -1060,7 +1070,13 @@
         // A failed key/value releases its own pairs before retrying. A
         // successful candidate is consumed once, even if later keys are equal.
         if (work.equal) {
-          state.matched[state.index] = true;
+          if (state.index === state.first) {
+            state.first++;
+            while (state.matched !== undefined && state.matched[state.first]) { delete state.matched[state.first++]; }
+          } else {
+            if (state.matched === undefined) { state.matched = comparisonCreate(null); }
+            state.matched[state.index] = true;
+          }
           state.count++;
           frame.phase = 5;
         } else { state.index++; frame.phase = 7; }

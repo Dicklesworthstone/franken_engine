@@ -31,6 +31,20 @@ require_tool() {
   fi
 }
 
+monotonic_milliseconds() {
+  local value
+  if ! value="$(python3 -c 'import time; print(time.monotonic_ns() // 1000000)')"; then
+    echo "README workflow smoke could not read the monotonic clock" >&2
+    return 1
+  fi
+  # Bound the decimal before shell arithmetic, which uses signed integers.
+  if ! [[ "$value" =~ ^[0-9]+$ ]] || [[ "${#value}" -gt 18 ]]; then
+    echo "README workflow smoke received an invalid monotonic clock value" >&2
+    return 1
+  fi
+  printf '%s\n' "$value"
+}
+
 sha256_file() {
   local path="$1"
   if command -v sha256sum >/dev/null 2>&1; then
@@ -308,16 +322,20 @@ run_step() {
     printf '\n'
   } >>"$commands_path"
 
-  start_ms="$(date +%s%3N)"
+  start_ms="$(monotonic_milliseconds)" || return 1
   set +e
   (
-    cd "$workspace_dir"
+    cd "$workspace_dir" || exit 1
     "$executable" "${exec_args[@]}"
   ) >"$stdout_path" 2>"$stderr_path"
   exit_code=$?
   set -e
-  end_ms="$(date +%s%3N)"
-  duration_ms=$((end_ms - start_ms))
+  end_ms="$(monotonic_milliseconds)" || return 1
+  if ((10#$end_ms < 10#$start_ms)); then
+    echo "README workflow smoke monotonic clock regressed at step ${step_name}" >&2
+    return 1
+  fi
+  duration_ms=$((10#$end_ms - 10#$start_ms))
 
   if [[ "$exit_code" -ne "$expected_exit_code" ]]; then
     decision="failed"
@@ -372,6 +390,20 @@ run_step() {
 }
 
 write_manifest() {
+  # A command can execute without its evidence being recorded. Refuse a green
+  # bundle unless the exact workflow completed and every step has valid data.
+  if ! jq -se --argjson expected_steps \
+    '["version","setup_artifacts_dir","setup_demo_source","compile","verify_compile_artifact","run","stage_replay_fixture","replay_run"]' \
+    'map(.step_name) == $expected_steps
+     and all(.[];
+       .decision == "passed"
+       and .exit_code == .expected_exit_code
+       and (.duration_ms | type == "number" and . >= 0)
+       and (.artifact_sha256 | type == "string" and length > 0)
+     )' "$events_path" >/dev/null; then
+    echo "README workflow smoke has incomplete or invalid step evidence" >&2
+    return 1
+  fi
   # shellcheck disable=SC2094
   jq -n \
     --arg schema_version "$manifest_schema" \
@@ -425,6 +457,7 @@ write_manifest() {
 
 require_tool jq
 require_tool awk
+require_tool python3
 if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
   require_tool openssl
 fi

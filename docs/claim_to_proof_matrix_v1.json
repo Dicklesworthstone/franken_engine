@@ -144,9 +144,9 @@
       "reason": "Promoted to OBSERVED under bd-cixqu.3.5 after C.1 (effect-set IR2 annotation), C.2 (lowering-side ambient-authority rejection), C.3 (17-scenario red-team negative corpus extending tests/red_team_scenarios/), and C.4 (run_rgc_capability_typed_compile_time.sh + replay wrapper). Reproducibility bundle at docs/evidence/FE-CLAIM-006/ self-attests via env.json + manifest.json + repro.lock per docs/REPRODUCIBILITY_CONTRACT.md; gate selftest passes 17/17 manifest-shape compliance.",
       "source_path": "README.md",
       "source_span": {
-        "end_line": 141,
+        "end_line": 144,
         "must_contain": "ambient-authority rejection",
-        "start_line": 141
+        "start_line": 144
       },
       "verification_command": "./scripts/run_rgc_capability_typed_compile_time.sh ci"
     },
@@ -208,9 +208,9 @@
       "reason": "The support boundary is a documentation policy claim and the source span is validated by this gate.",
       "source_path": "README.md",
       "source_span": {
-        "end_line": 2403,
+        "end_line": 2408,
         "must_contain": "Unsupported-surface usage voids reproduction assistance",
-        "start_line": 2403
+        "start_line": 2408
       },
       "verification_command": "./scripts/run_claim_to_proof_matrix_gate.sh ci"
     },
@@ -229,9 +229,9 @@
       "reason": "When invoked, the gate fails closed on a missing repro.lock partner for an OBSERVED row. The gate is not wired into the current GitHub workflows and does not re-execute every evidence producer, so the observed claim is bounded to invocation-time validation.",
       "source_path": "README.md",
       "source_span": {
-        "end_line": 215,
+        "end_line": 150,
         "must_contain": "No artifact, no claim.",
-        "start_line": 215
+        "start_line": 150
       },
       "verification_command": "./scripts/run_claim_to_proof_matrix_gate.sh ci"
     },

@@ -328,6 +328,56 @@ order differs from its first invocation. This timer-sensitive oracle result
 is retained, not retried into green. Restored-source host regressions pass
 116/116. None of these guest runs replaces an embedded-module rebuild.
 
+### Utility authority and build-graph continuation
+
+The isolated `bd-9vouw.109` candidate is based on
+`748f3f23c907d516720f64e7dea866d70ba38bb5`, preserving peer changes.
+It replaces the dormant raw process read with a private runtime HostCall over
+the serialized `InterpreterConfig.process_argv` launch snapshot. The registry
+requires `EnvRead` and floors its result at `Secret`; pure imports and explicit
+parse arguments do not invoke it. Eight new Rust regressions cover pure
+util/assert imports, delayed denial, configured/fresh snapshots, registry
+authority, raw-process negatives, confidentiality, string limits and arity.
+They remain **unexecuted**. No host argv, ambient grant or empty-success fallback
+was introduced. The candidate is not published or qualified as delivered.
+
+The five existing Node22.22.1 host test files pass 100/100 on this candidate's
+production JavaScript factory. This checks the selected utility methods, not
+the new Rust HostCall. An earlier Node26.8.1 cohort was 74/83 for both original
+and candidate source, with the same nine failures; those reds are retained.
+
+The first strict-RCH utility attempt exceeded its 3600s compilation lease
+(remote137, outer1, zero executed tests). During that attempt this agent
+refreshed its dispatcher checkout, causing 24 final source-barrier deltas.
+That invalid source pairing earns no native pass or receipt credit. The
+documented recovery command acknowledged terminal137 without replay, and
+the private daemon stopped normally. The replacement attempt keeps its
+caller checkout frozen and separates a 7200s **compile-only** lease from the
+planned 300s native-test execution limit. The full utility-lowering selection
+is predeclared 40 tests, including the eight new tests and existing mixed-route
+AST coverage. As of 19:12 UTC it is still compiling the ordinary engine library;
+no new native tests have executed. Repository gates and VM budgets are unchanged.
+Pinned whole-repository formatting still emits diffs and a bounded allocation
+failure; Cargo's exit0 does not make that check green. Check, Clippy, default
+tests, rebuilt CLI/parseArgs/stream acceptance and independent review remain open.
+
+A separate `bd-9vouw.15` maintenance prototype removes the engine self
+dev-dependency by assigning the unchanged eleven-test fleet-quarantine source
+to the existing control-plane integration-test package. Both E2E consumers
+are rebound, and standalone/CI still run the fleet target and reject its
+failure. Locked/offline Cargo unit graphs remove the extra ordinary engine
+library from focused lib-test compilation (293 to 292 units); workspace target
+inventory and production mock-feature exclusion were checked. This is graph
+evidence, **not measured compilation speedup or native test execution**.
+The actual shell gate rejects an injected fleet-command failure with exit1
+and blocked readiness. Skip-mode CI records 13 lanes and `not_verified`, never
+native success. The RCH protocol double is only a wrapper rejection test.
+ShellCheck and pinned formatting of the changed gate test pass. The new fleet
+lane explicitly uses the test package's Asupersync/mock-TEE features; no real
+attestation is claimed. Native fleet/compiler/default/downstream verification
+and the original extraction/timing acceptance remain open. Both candidates
+and their granular remaining TODOs are retained in the existing Beads owners.
+
 ## Historical assessment — superseded, retained for provenance
 
 The following earlier assessment used old lane terminology and asserted full

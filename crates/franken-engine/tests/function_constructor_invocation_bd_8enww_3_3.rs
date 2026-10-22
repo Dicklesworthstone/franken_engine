@@ -6,8 +6,8 @@
 //! actually run: the body executes in **global scope** (it cannot capture
 //! construction-site or call-site locals — both nonstandard and a containment
 //! leak), with positional argument binding, return values, builtin/global calls,
-//! and a plain-call `this` of `undefined`. `new f(...)` on a generated function
-//! is deliberately refused in v1 (AC#4).
+//! and constructor calls with fresh instances, `new.target`, prototype lookup,
+//! and the ordinary return-object-or-this rule.
 //!
 //! Containment note: generated code replaces the caller's capability envelope
 //! with the engine-local `VmDispatch`/`HeapAllocate` baseline plus exactly the
@@ -20,7 +20,9 @@
 //! The driving vector is BotGuard's G-2: `var f=new Function("x","return x*2");
 //! f(21)` must return `42` through `HybridRouter::eval`.
 
-use frankenengine_engine::{HybridRouter, JsEngine, QuickJsInspiredNativeEngine};
+use frankenengine_engine::{
+    HybridRouter, JsEngine, QuickJsInspiredNativeEngine, V8InspiredNativeEngine,
+};
 
 /// Evaluate through the direct native engine (isolates engine semantics from
 /// HybridRouter routing).
@@ -47,6 +49,18 @@ fn eval_error(source: &str) -> String {
         .eval(source)
         .expect_err("source should fail deterministically")
         .to_string()
+}
+
+/// Constructor semantics must agree in both native lanes and routed execution.
+fn assert_constructor_value(source: &str, expected: &str) {
+    assert_eq!(eval_value(source), expected, "QuickJS-inspired native lane");
+    let mut engine = V8InspiredNativeEngine;
+    assert_eq!(
+        engine.eval(source).expect("V8-inspired native lane").value,
+        expected,
+        "V8-inspired native lane"
+    );
+    assert_eq!(eval_value_hybrid(source), expected, "hybrid router");
 }
 
 // --- AC#1: the exact G-2 vector returns 42 -----------------------------------
@@ -155,16 +169,230 @@ fn generated_function_unbound_reference_fails_closed() {
     let _err = eval_error(r#"new Function("return someUndeclaredGlobalXyz + 1;")();"#);
 }
 
-// --- AC#4: `new f(...)` on a generated function fails deterministically -------
+// --- Generated-function [[Construct]] ---------------------------------------
 
 #[test]
-fn constructing_a_generated_function_fails_deterministically() {
-    let err = eval_error(r#"var f = new Function("return 1;"); new f();"#);
-    assert!(err.contains("bd-8enww.3.3"), "{err}");
-    assert!(
-        err.contains("construct") || err.contains("unsupported"),
-        "{err}"
+fn generated_constructor_initializes_fresh_instances_and_new_target() {
+    assert_constructor_value(
+        r#"
+        var F = new Function("x", "this.value = x; this.target = new.target;");
+        var first = new F(42);
+        var second = new F(7);
+        [first.value, second.value, first !== second,
+         Object.getPrototypeOf(first) === F.prototype,
+         F.prototype.constructor === F, first.target === F,
+         first instanceof F].join(":");
+    "#,
+        "42:7:true:true:true:true:true",
     );
+}
+
+#[test]
+fn generated_constructor_uses_return_object_or_this_and_retains_returned_closures() {
+    assert_constructor_value(
+        r#"
+        var Primitive = new Function("this.value = 42; return 9;");
+        var Empty = new Function("this.value = 7;");
+        var ObjectResult = new Function("this.ignored = true; return { value: 19 };");
+        var CallableResult = new Function("return function () { return 23; };");
+        var explicit = new ObjectResult();
+        var callable = new CallableResult();
+        [(new Primitive()).value, (new Empty()).value, explicit.value,
+         typeof explicit.ignored, callable(),
+         explicit instanceof ObjectResult, typeof callable].join(":");
+    "#,
+        "42:7:19:undefined:23:false:function",
+    );
+}
+
+#[test]
+fn generated_constructor_reflect_construct_preserves_caller_new_target() {
+    assert_constructor_value(
+        r#"
+        function Decoy() {}
+        function Custom() {}
+        Custom.prototype.marker = 17;
+        var F = new Function("x", "this.value = x; this.target = new.target; this.name = new.target.name;");
+        var instance = Reflect.construct(F, [42], Custom);
+        [instance.value, instance.marker, instance.target === Custom,
+         instance.name, Object.getPrototypeOf(instance) === Custom.prototype,
+         instance instanceof Custom, instance instanceof F].join(":");
+    "#,
+        "42:17:true:Custom:true:true:false",
+    );
+}
+
+#[test]
+fn generated_constructor_supports_bound_targets_and_distinct_bound_new_targets() {
+    assert_constructor_value(
+        r#"
+        var F = new Function("a", "b", "this.sum = a + b; this.target = new.target;");
+        var ignoredThis = {};
+        var Bound = F.bind(ignoredThis, 10);
+        var first = new Bound(11);
+        function Custom() {}
+        var BoundTarget = Custom.bind(null);
+        BoundTarget.prototype = { marker: 5 };
+        var second = Reflect.construct(Bound, [5], BoundTarget);
+        var BareBoundTarget = Custom.bind(null);
+        var third = Reflect.construct(F, [2, 3], BareBoundTarget);
+        [first.sum, first.target === F, first instanceof F,
+         first instanceof Bound, typeof ignoredThis.sum === "undefined",
+         second.sum, second.target === BoundTarget,
+         Object.getPrototypeOf(second) === BoundTarget.prototype,
+         Object.getPrototypeOf(third) === Object.prototype].join(":");
+    "#,
+        "21:true:true:true:true:15:true:true:true",
+    );
+}
+
+#[test]
+fn generated_constructor_supports_explicit_and_implicit_derived_constructors() {
+    assert_constructor_value(
+        r#"
+        var Parent = new Function("x", "this.value = x; this.target = new.target;");
+        class Child extends Parent {
+            extra = 2;
+            constructor(x) { super(x); this.value += this.extra; }
+        }
+        class Implicit extends Parent {}
+        var child = new Child(40);
+        var implicit = new Implicit(9);
+        [child.value, child.target === Child, child instanceof Child,
+         child instanceof Parent, Object.getPrototypeOf(child) === Child.prototype,
+         implicit.value, implicit.target === Implicit].join(":");
+    "#,
+        "42:true:true:true:true:9:true",
+    );
+}
+
+#[test]
+fn generated_constructor_prototype_descriptors_support_reassignment_and_freeze() {
+    assert_constructor_value(
+        r#"
+        var F = new Function("this.value = 42;");
+        var original = F.prototype;
+        var descriptor = Object.getOwnPropertyDescriptor(F, "prototype");
+        var constructorDescriptor = Object.getOwnPropertyDescriptor(original, "constructor");
+        var replacement = { marker: 7 };
+        F.prototype = replacement;
+        var instance = new F();
+        Object.freeze(F);
+        F.prototype = { marker: 99 };
+        var frozen = Object.getOwnPropertyDescriptor(F, "prototype");
+        [descriptor.writable, descriptor.enumerable, descriptor.configurable,
+         constructorDescriptor.value === F, constructorDescriptor.writable,
+         constructorDescriptor.enumerable, constructorDescriptor.configurable,
+         Object.getPrototypeOf(original) === Object.prototype,
+         Object.getPrototypeOf(instance) === replacement, instance.marker,
+         frozen.writable, F.prototype === replacement,
+         F.propertyIsEnumerable("prototype"), delete F.prototype,
+         Reflect.defineProperty(F, "prototype", { value: original })].join(":");
+    "#,
+        "true:false:false:true:true:false:true:true:true:7:false:true:false:false:false",
+    );
+}
+
+#[test]
+fn generated_constructor_prototypes_are_per_artifact_and_instanceof_reads_actual_value() {
+    assert_constructor_value(
+        r#"
+        var F = new Function("");
+        var G = new Function("");
+        var distinct = F.prototype !== G.prototype;
+        F.prototype = 3;
+        var instance = new F();
+        var error = "";
+        try { instance instanceof F; } catch (caught) { error = caught.name; }
+        Object.defineProperty(F, Symbol.hasInstance, {
+            value: function (candidate) { return candidate.marker === 42; }
+        });
+        [distinct, Object.getPrototypeOf(instance) === Object.prototype,
+         error, { marker: 42 } instanceof F, { marker: 0 } instanceof F].join(":");
+    "#,
+        "true:true:TypeError:true:false",
+    );
+}
+
+#[test]
+fn generated_constructor_observes_new_target_getter_once_before_running_body() {
+    assert_constructor_value(
+        r#"
+        var log = [];
+        var Target = (function Target() {}).bind(null);
+        var chosen = {};
+        Object.defineProperty(Target, "prototype", {
+            get: function () { log.push("prototype"); return chosen; }
+        });
+        var F = new Function("log", "log.push('body'); this.target = new.target;");
+        var instance = Reflect.construct(F, [log], Target);
+        var Throwing = (function Throwing() {}).bind(null);
+        Object.defineProperty(Throwing, "prototype", {
+            get: function () { log.push("throw"); throw "sentinel"; }
+        });
+        var caught = "";
+        try { Reflect.construct(F, [log], Throwing); } catch (error) { caught = error; }
+        [log.join(","), caught, Object.getPrototypeOf(instance) === chosen,
+         instance.target === Target].join(":");
+    "#,
+        "prototype,body,throw:sentinel:true:true",
+    );
+}
+
+#[test]
+fn generated_constructor_arguments_callee_keeps_authenticated_artifact_identity() {
+    assert_constructor_value(
+        r#"
+        var F = new Function("n", "this.callee = arguments.callee; this.target = new.target; this.value = n; if (n > 0) this.child = new arguments.callee(n - 1);");
+        var first = new F(2);
+        var escaped = first.callee;
+        var second = new escaped(0);
+        [first.callee === F, first.child.callee === F,
+         first.child.target === F, first.child.child.value,
+         second.callee === F, second instanceof F].join(":");
+    "#,
+        "true:true:true:0:true:true",
+    );
+}
+
+#[test]
+fn generated_constructor_throw_restores_caller_for_following_construction() {
+    assert_constructor_value(
+        r#"
+        var Throwing = new Function("throw 'ctor-failed';");
+        var Following = new Function("this.value = 42;");
+        var caught = "";
+        try { new Throwing(); } catch (error) { caught = error; }
+        caught + ":" + (new Following()).value;
+    "#,
+        "ctor-failed:42",
+    );
+}
+
+#[test]
+fn generated_constructor_keeps_global_only_scope_and_ambient_authority_restrictions() {
+    assert_constructor_value(
+        r#"
+        var F = new Function("this.observed = typeof callerLocal;");
+        function caller() { var callerLocal = 42; return new F(); }
+        caller().observed;
+        "#,
+        "undefined",
+    );
+    let error = eval_error(r#"var F = new Function("this.leak = process;"); new F();"#);
+    assert!(error.contains("ambient authority violation"), "{error}");
+}
+
+#[test]
+fn generated_constructor_consumes_shared_instruction_budget() {
+    let error = HybridRouter::default()
+        .eval_with_instruction_budget(
+            r#"var F = new Function("while (true) {}"); try { new F(); } catch (_) { 42; }"#,
+            2_000,
+        )
+        .expect_err("constructor loops must exhaust the shared budget")
+        .to_string();
+    assert!(error.contains("budget exhausted"), "{error}");
 }
 
 // --- Determinism: identical source ⇒ identical observable result --------------

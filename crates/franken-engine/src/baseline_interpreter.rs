@@ -3867,6 +3867,7 @@ impl BuiltinFunctionKind {
         matches!(
             self,
             Self::FunctionConstructor
+                | Self::GeneratedFunction
                 | Self::DateConstructor
                 | Self::EventEmitterConstructor
                 | Self::PromiseConstructor
@@ -10095,6 +10096,14 @@ struct GeneratedFunctionArtifact {
 struct GeneratedFunctionArtifactHandle {
     owner_program_id: ContentHash,
     artifact_id: ContentHash,
+}
+
+/// Resolve the observable new.target prototype in the caller's module before
+/// entering the generated artifact's isolated program and capability envelope.
+struct GeneratedFunctionConstruction {
+    new_target: Value,
+    new_target_label: Label,
+    prototype: ObjectId,
 }
 
 /// What a grant swap replaced, for its restore (bd-9vouw.189).
@@ -42300,6 +42309,68 @@ impl InterpreterCore {
         receiver: Option<Value>,
         receiver_register: Option<u32>,
     ) -> Result<(Value, Label), InterpreterError> {
+        self.invoke_generated_function_artifact(builtin, args, receiver, receiver_register, None)
+    }
+
+    fn construct_generated_function_artifact(
+        &mut self,
+        module: &Ir3Module,
+        builtin: &BuiltinFunction,
+        args: RegRange,
+        new_target: Value,
+        mut new_target_label: Label,
+    ) -> Result<(Value, Label), InterpreterError> {
+        let (owner_program_id, artifact_id) = Self::parse_generated_function_handle(builtin)?;
+        // Refuse a stale/forged artifact before invoking an observable getter.
+        self.resolve_generated_function_artifact(owner_program_id, artifact_id)?;
+        if let Some((_, label)) = self.constructor_prototype_override(module, &new_target)? {
+            new_target_label =
+                self.join_owned_label_with_temporary_budget(new_target_label, &label)?;
+        }
+        let observation = self.begin_property_observation([])?;
+        let mut prototype_value = None;
+        let outcome = (|| -> Result<(), InterpreterError> {
+            self.check_temporary_memory_budget(Self::estimate_label_bytes(&new_target_label))?;
+            self.json_observe_label(new_target_label.clone())?;
+            let value = self.get_v(
+                module,
+                &new_target,
+                &RuntimePropertyKey::String(JsString::from("prototype")),
+            )?;
+            // Retain success observations before closing the scope. The same
+            // guard seals getter failures into their exception/result labels.
+            let observed = self.json_parse_context_label()?;
+            new_target_label =
+                self.join_owned_label_with_temporary_budget(observed, &new_target_label)?;
+            prototype_value = Some(value);
+            Ok(())
+        })();
+        self.finish_property_write_observation(observation, outcome)?;
+        let prototype = self.constructed_prototype_link(
+            module,
+            prototype_value.expect("a successful prototype read supplied its value"),
+        )?;
+        self.invoke_generated_function_artifact(
+            builtin,
+            args,
+            None,
+            None,
+            Some(GeneratedFunctionConstruction {
+                new_target,
+                new_target_label,
+                prototype,
+            }),
+        )
+    }
+
+    fn invoke_generated_function_artifact(
+        &mut self,
+        builtin: &BuiltinFunction,
+        args: RegRange,
+        receiver: Option<Value>,
+        receiver_register: Option<u32>,
+        construction: Option<GeneratedFunctionConstruction>,
+    ) -> Result<(Value, Label), InterpreterError> {
         let (owner_program_id, artifact_id) = Self::parse_generated_function_handle(builtin)?;
         let artifact_handle = GeneratedFunctionArtifactHandle {
             owner_program_id,
@@ -42312,6 +42383,10 @@ impl InterpreterCore {
                 Self::estimate_generated_function_provenance_bytes(&artifact.provenance),
             );
         let owner_specifier_bytes = Self::estimate_string_bytes(&artifact.owner_specifier);
+        let construction_bytes = construction.as_ref().map_or(0, |construction| {
+            Self::estimate_value_bytes(&construction.new_target)
+                .saturating_add(Self::estimate_label_bytes(&construction.new_target_label))
+        });
         let arg_count = args.count;
         // A method-form call reserves r0 for the receiver and r1 for the
         // generated callee; a plain call needs only the callee in r0.
@@ -42353,6 +42428,7 @@ impl InterpreterCore {
         self.check_temporary_memory_budget(
             transient_artifact_bytes
                 .saturating_add(owner_specifier_bytes)
+                .saturating_add(construction_bytes)
                 .saturating_add(projected_argument_transport_bytes)
                 .saturating_add(projected_label_transport_bytes)
                 .saturating_add(projected_generated_scope_bytes)
@@ -42384,6 +42460,7 @@ impl InterpreterCore {
             Self::isolated_call_label_transport_bytes(&call_labels, arguments.len());
         let transient_execution_bytes = transient_artifact_bytes
             .saturating_add(owner_specifier_bytes)
+            .saturating_add(construction_bytes)
             .saturating_add(argument_transport_bytes)
             .saturating_add(remaining_label_transport_bytes);
         self.apply_memory_component_delta(0, transient_execution_bytes)?;
@@ -42404,7 +42481,9 @@ impl InterpreterCore {
                 }
             };
         let wrapper_start = wrapper.instructions.len();
-        if receiver.is_some() {
+        if construction.is_some() {
+            // The real constructor frame below returns to this wrapper.
+        } else if receiver.is_some() {
             wrapper.instructions.push(Ir3Instruction::CallMethod {
                 receiver: 0,
                 callee: 1,
@@ -42486,6 +42565,7 @@ impl InterpreterCore {
         let mut wrapper_memory_committed = false;
         let previous_granted_capabilities =
             self.replace_with_contained_codegen_grant(Some(effective_generated_grant));
+        let previous_reentrant_depth = self.module_reentrant_call_depth;
         let result = (|| -> Result<Value, InterpreterError> {
             self.call_stack.clear(&mut self.closures.cold_cells);
             self.ip = wrapper_start;
@@ -42538,14 +42618,37 @@ impl InterpreterCore {
                 &mut remaining_label_transport_bytes,
                 "generated-function argument register",
             )?;
-            let previous_reentrant_depth = self.module_reentrant_call_depth;
             self.module_reentrant_call_depth = generated_hidden_call_depth;
-            let result = self.run_loop(&wrapper);
-            self.module_reentrant_call_depth = previous_reentrant_depth;
-            result
+            if let Some(construction) = &construction {
+                self.enter_constructor_call_with_prototype(
+                    &wrapper,
+                    Value::Function(function_index),
+                    Label::Public,
+                    RegRange {
+                        start: argument_start,
+                        count: arg_count,
+                    },
+                    wrapper_start,
+                    0,
+                    construction.new_target.clone(),
+                    construction.new_target_label.clone(),
+                    false,
+                    None,
+                    Some(construction.prototype),
+                )?;
+            }
+            self.run_loop(&wrapper)
         })();
+        self.module_reentrant_call_depth = previous_reentrant_depth;
         let result_label = if result.is_ok() {
             self.clone_register_label_with_temporary_budget(0)
+                .and_then(|label| match &construction {
+                    Some(construction) => self.join_owned_label_with_temporary_budget(
+                        label,
+                        &construction.new_target_label,
+                    ),
+                    None => Ok(label),
+                })
         } else {
             Ok(Label::Public)
         };
@@ -42560,9 +42663,11 @@ impl InterpreterCore {
             _ => None,
         };
         drop(wrapper);
+        drop(construction);
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(
             transient_artifact_bytes
                 .saturating_add(owner_specifier_bytes)
+                .saturating_add(construction_bytes)
                 .saturating_add(argument_transport_bytes)
                 .saturating_add(remaining_label_transport_bytes),
         );
@@ -50525,11 +50630,44 @@ impl InterpreterCore {
         return_ip: usize,
         return_reg: u32,
         new_target_value: Value,
-        mut new_target_label: Label,
+        new_target_label: Label,
         initialize_derived_this_on_return: bool,
         compact_tier1: Option<&CompactTier1Program>,
     ) -> Result<(), InterpreterError> {
-        if let Some((_, label)) = self.constructor_prototype_override(module, &new_target_value)? {
+        self.enter_constructor_call_with_prototype(
+            module,
+            callee_value,
+            callee_label,
+            args,
+            return_ip,
+            return_reg,
+            new_target_value,
+            new_target_label,
+            initialize_derived_this_on_return,
+            compact_tier1,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn enter_constructor_call_with_prototype(
+        &mut self,
+        module: &Ir3Module,
+        callee_value: Value,
+        callee_label: Label,
+        args: RegRange,
+        return_ip: usize,
+        return_reg: u32,
+        new_target_value: Value,
+        mut new_target_label: Label,
+        initialize_derived_this_on_return: bool,
+        compact_tier1: Option<&CompactTier1Program>,
+        resolved_prototype: Option<ObjectId>,
+    ) -> Result<(), InterpreterError> {
+        if resolved_prototype.is_none()
+            && let Some((_, label)) =
+                self.constructor_prototype_override(module, &new_target_value)?
+        {
             new_target_label =
                 self.join_owned_label_with_temporary_budget(new_target_label, &label)?;
         }
@@ -50621,6 +50759,21 @@ impl InterpreterCore {
         // (bd-9vouw.203).
         let (builtin_parent_object, foreign_parent_label) = match builtin_parent_object {
             Some(result) => (Some(result), None),
+            None if matches!(&active_callee, Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::GeneratedFunction) =>
+            {
+                let Value::BuiltinFunction(builtin) = &active_callee else {
+                    unreachable!("generated constructor matched above");
+                };
+                let (result, label) = self.construct_generated_function_artifact(
+                    module,
+                    builtin,
+                    args,
+                    new_target_value.clone(),
+                    new_target_label.clone(),
+                )?;
+                (Some(result), Some(label))
+            }
             None if matches!(active_callee, Value::Closure(_))
                 && self
                     .foreign_closure_module(&active_callee, module)?
@@ -50717,7 +50870,10 @@ impl InterpreterCore {
         let (this_value, construct_this, this_initialized) = if derived_constructor {
             (Value::Undefined, None, false)
         } else {
-            let prototype = self.constructor_prototype_for_value(module, &new_target_value)?;
+            let prototype = match resolved_prototype {
+                Some(prototype) => prototype,
+                None => self.constructor_prototype_for_value(module, &new_target_value)?,
+            };
             let builtin_parent = self.builtin_subclass_ancestor_name(prototype)?;
             // ES2020 9.1.13 OrdinaryCreateFromConstructor: `new F()` makes an
             // ordinary object even when F.prototype inherits from
@@ -55497,7 +55653,11 @@ impl InterpreterCore {
                                 }
                             }
                             Value::BuiltinFunction(builtin) => {
-                                if builtin.kind == BuiltinFunctionKind::BoundFunction
+                                if builtin.kind == BuiltinFunctionKind::GeneratedFunction
+                                    && property_key.as_str() == Some("prototype")
+                                {
+                                    Value::Object(self.ensure_generated_function_prototype(&builtin)?)
+                                } else if builtin.kind == BuiltinFunctionKind::BoundFunction
                                     && let Some(key) = property_key.as_str()
                                     && let Some(value) =
                                         self.bound_function_property(&builtin, key)?
@@ -57025,6 +57185,29 @@ impl InterpreterCore {
                         });
                     }
 
+                    if let Value::BuiltinFunction(builtin) = &callee_value
+                        && builtin.kind == BuiltinFunctionKind::GeneratedFunction
+                    {
+                        let (result, result_label) = match self.construct_generated_function_artifact(
+                            module,
+                            builtin,
+                            args,
+                            new_target_value,
+                            new_target_label,
+                        ) {
+                            Ok(result) => result,
+                            Err(error) => match self.route_isolated_explicit_throw(module, error)? {
+                                None => continue,
+                                Some(error) => return Err(error),
+                            },
+                        };
+                        let result_label =
+                            self.join_owned_label_with_temporary_budget(result_label, &callee_label)?;
+                        self.write_reg_with_label(dst, result, result_label)?;
+                        self.ip += 1;
+                        continue;
+                    }
+
                     if self
                         .foreign_closure_module(&callee_value, module)?
                         .is_some()
@@ -57168,27 +57351,25 @@ impl InterpreterCore {
                         }
                     }
 
-                    // `new f(...)` where `f` was produced by the `Function`
-                    // constructor (bd-8enww.3.3 AC#4). v1 deliberately refuses
-                    // [[Construct]] on generated functions deterministically:
-                    // generated functions are invocable only via a plain call
-                    // (which binds `this = undefined` and returns the body's
-                    // completion value). Full [[Construct]] semantics (fresh
-                    // `this` object + the return-object-or-this rule) for
-                    // dynamically generated functions are deferred to a later
-                    // slice rather than approximated by a plain call, which
-                    // would be nonstandard. BotGuard (the driving consumer)
-                    // never constructs generated functions.
                     if let Value::BuiltinFunction(builtin) = &callee_val
                         && builtin.kind == BuiltinFunctionKind::GeneratedFunction
                     {
-                        return Err(InterpreterError::TypeError {
-                            expected: "plain call of a Function-constructor-generated function"
-                                .to_string(),
-                            got: "construct (new f(...)) on a generated function is unsupported \
-                                  in v1 (bd-8enww.3.3): invoke it as a plain call instead"
-                                .to_string(),
-                        });
+                        let (result, result_label) = match self.construct_generated_function_artifact(
+                            module,
+                            builtin,
+                            args,
+                            callee_val.clone(),
+                            callee_label.clone(),
+                        ) {
+                            Ok(result) => result,
+                            Err(error) => match self.route_isolated_explicit_throw(module, error)? {
+                                None => continue,
+                                Some(error) => return Err(error),
+                            },
+                        };
+                        self.write_reg_with_label(dst, result, result_label)?;
+                        self.ip += 1;
+                        continue;
                     }
 
                     if let Value::BuiltinFunction(builtin) = &callee_val
@@ -59859,6 +60040,11 @@ impl InterpreterCore {
             | Value::AsyncGeneratorFunction(_) => {
                 self.function_own_property_object(module, target)?
             }
+            Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::GeneratedFunction =>
+            {
+                self.function_own_property_object(module, target)?
+            }
             _ => None,
         };
         let Some(backing) = backing else {
@@ -59899,6 +60085,8 @@ impl InterpreterCore {
         // an object (an arrow's undefined) is a TypeError.
         let prototype = if Self::is_callable_proxy(&constructor)
             || !self.is_constructible_value(&constructor)
+            || matches!(&constructor, Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::GeneratedFunction)
         {
             let key = RuntimePropertyKey::String(JsString::from("prototype"));
             match self.get_v(module, &constructor, &key)? {
@@ -65654,7 +65842,11 @@ impl InterpreterCore {
     /// (ordinary functions, classes, generators, constructors) as opposed to
     /// one a program defined on it.
     fn function_has_intrinsic_prototype(&self, function: &Value) -> bool {
-        self.object_own_property_contains(function, &Value::str("prototype"))
+        // Generated functions own an ordinary descriptor on their backing
+        // object, so writes, defineProperty and freeze use that authority.
+        !matches!(function, Value::BuiltinFunction(builtin)
+            if builtin.kind == BuiltinFunctionKind::GeneratedFunction)
+            && self.object_own_property_contains(function, &Value::str("prototype"))
     }
 
     fn object_own_property_contains(&self, receiver: &Value, property: &Value) -> bool {
@@ -65685,6 +65877,9 @@ impl InterpreterCore {
                 // bd-9vouw.17: every standard constructor but Proxy has an own
                 // `prototype` (ES2020 26.2.2), as do Date and Promise.
                 Value::BuiltinFunction(builtin) if key == "prototype" => {
+                    if builtin.kind == BuiltinFunctionKind::GeneratedFunction {
+                        return true;
+                    }
                     if Self::materialized_global_prototype_name(builtin).is_some() {
                         return true;
                     }
@@ -65730,6 +65925,12 @@ impl InterpreterCore {
     }
 
     fn object_own_property_is_enumerable(&self, receiver: &Value, property: &Value) -> bool {
+        if matches!(receiver, Value::BuiltinFunction(builtin)
+            if builtin.kind == BuiltinFunctionKind::GeneratedFunction)
+            && matches!(property, Value::Str(name) if name.as_str() == Some("prototype"))
+        {
+            return false;
+        }
         if matches!(receiver, Value::Function(_) | Value::Closure(_)) {
             // Function `name`/`prototype` are virtual non-enumerable own
             // properties; concise methods expose only `name`.
@@ -69178,6 +69379,11 @@ impl InterpreterCore {
                     *closure_id,
                     name,
                 )?
+            }
+            Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::GeneratedFunction && name == "prototype" =>
+            {
+                Value::Object(self.ensure_generated_function_prototype(builtin)?)
             }
             Value::BuiltinFunction(builtin)
                 if builtin.kind == BuiltinFunctionKind::BoundFunction =>
@@ -109106,6 +109312,27 @@ impl InterpreterCore {
         }
     }
 
+    /// One default prototype per generated construction occurrence. This
+    /// registry participates in realm snapshots, memory accounting and GC roots.
+    fn ensure_generated_function_prototype(
+        &mut self,
+        builtin: &BuiltinFunction,
+    ) -> Result<ObjectId, InterpreterError> {
+        let (owner_program_id, artifact_id) = Self::parse_generated_function_handle(builtin)?;
+        self.resolve_generated_function_artifact(owner_program_id, artifact_id)?;
+        let mut digest = Sha256::new();
+        digest.update(b"FrankenEngine.GeneratedFunctionPrototype.v1");
+        digest.update(artifact_id.as_bytes());
+        let key = (ContentHash::from_bytes(digest.finalize().into()), 0);
+        if let Some(prototype) = self.function_prototypes.get(&key) {
+            return Ok(*prototype);
+        }
+        let prototype = self.alloc_object_with_prototype(None)?;
+        self.mutate_function_prototypes(|prototypes| prototypes.insert(key, prototype));
+        self.install_prototype_constructor(prototype, Value::BuiltinFunction(builtin.clone()))?;
+        Ok(prototype)
+    }
+
     /// [[Construct]] of a builtin constructor with an explicit new.target
     /// (`Reflect.construct(B, args, F)`, or `B` as a class's parent): the
     /// builtin's own construction, then new.target's prototype. `Number`,
@@ -109725,7 +109952,11 @@ impl InterpreterCore {
         // A callable proxy newTarget (bd-9vouw.132): GetPrototypeFromConstructor
         // reads its `prototype` through [[Get]], so its get trap or its target
         // answers. `new P(...)` of a trapless proxy over a proxy passes P on.
-        if Self::is_callable_proxy(value) {
+        if Self::is_callable_proxy(value)
+            || matches!(value, Value::BuiltinFunction(builtin)
+                if matches!(builtin.kind,
+                    BuiltinFunctionKind::GeneratedFunction | BuiltinFunctionKind::BoundFunction))
+        {
             let key = RuntimePropertyKey::String(JsString::from("prototype"));
             let prototype = self.get_v(module, value, &key)?;
             return self.constructed_prototype_link(module, prototype).map(Some);
@@ -109771,6 +110002,11 @@ impl InterpreterCore {
                 if !self.closure_method_metadata.contains_key(closure_id) =>
             {
                 self.ensure_closure_prototype(owner_module, *closure_id)
+            }
+            Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::GeneratedFunction =>
+            {
+                self.ensure_generated_function_prototype(builtin)
             }
             Value::BuiltinFunction(builtin) if builtin.kind.is_constructible() => {
                 self.ensure_builtin_prototype(builtin.display_name())
@@ -111451,7 +111687,29 @@ impl InterpreterCore {
         // a `callee` data property (CreateMappedArgumentsObject), any other
         // function the %ThrowTypeError% accessor.
         let callee = match module.sloppy_functions.get(&function_index) {
-            Some(true) => ArgumentsCallee::Function(callee.clone()),
+            Some(true) => {
+                // The trampoline's raw index is private to the generated
+                // module. Exposing it through arguments.callee would let it
+                // escape into the caller's unrelated function table.
+                let value = match (self.active_generated_function_artifact, callee) {
+                    (Some(handle), Value::Function(index))
+                        if self.resolve_generated_function_artifact(
+                            handle.owner_program_id,
+                            handle.artifact_id,
+                        )?.function_index == *index =>
+                    {
+                        self.check_temporary_memory_budget(
+                            Self::generated_function_handle_peak_bytes(),
+                        )?;
+                        Value::BuiltinFunction(BuiltinFunction::generated_function(
+                            handle.owner_program_id,
+                            handle.artifact_id,
+                        ))
+                    }
+                    _ => callee.clone(),
+                };
+                ArgumentsCallee::Function(value)
+            }
             _ => ArgumentsCallee::ThrowTypeError,
         };
         let object = self.alloc_arguments_object(&values, callee)?;
@@ -112399,6 +112657,22 @@ impl InterpreterCore {
                 self.set_object_runtime_property(backing, key.clone(), value)?;
                 self.set_own_property_attributes(backing, &key, FUNCTION_NAME_LENGTH_ATTRIBUTES)?;
             }
+        }
+        if let Value::BuiltinFunction(builtin) = function
+            && builtin.kind == BuiltinFunctionKind::GeneratedFunction
+        {
+            let prototype = self.ensure_generated_function_prototype(builtin)?;
+            let key = RuntimePropertyKey::String(JsString::from("prototype"));
+            self.set_object_runtime_property(backing, key.clone(), Value::Object(prototype))?;
+            self.set_own_property_attributes(
+                backing,
+                &key,
+                PropertyAttributes {
+                    writable: true,
+                    enumerable: false,
+                    configurable: false,
+                },
+            )?;
         }
         // A standard constructor's backing object also starts with its
         // `prototype` and static members, so the reflection built-ins see
@@ -149976,6 +150250,268 @@ mod function_prototype_call_apply_tests_current {
             parse_failure.estimated_memory_bytes(),
             parse_failure.recompute_estimated_memory_bytes()
         );
+    }
+
+    #[test]
+    fn generated_constructor_prototype_failure_retains_selection_label() {
+        for (native_failure, classify_target) in
+            [(false, false), (true, false), (false, true), (true, true)]
+        {
+            let getter_instructions = if native_failure {
+                vec![
+                    Ir3Instruction::LoadUndefined { dst: 0 },
+                    Ir3Instruction::LoadInt { dst: 1, value: 0 },
+                    Ir3Instruction::GetProperty { obj: 0, key: 1, dst: 0 },
+                    Ir3Instruction::Return { value: 0 },
+                ]
+            } else {
+                vec![
+                    Ir3Instruction::LoadInt { dst: 0, value: 73 },
+                    Ir3Instruction::Throw { value: 0 },
+                ]
+            };
+            let mut owner = test_module_with_functions(
+                getter_instructions,
+                vec![Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 0,
+                    frame_size: 2,
+                    name: Some("throwing_constructor_prototype_getter".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            );
+            owner.header.source_label = "generated-constructor-throw-owner.mjs".to_string();
+            let generated = test_module_with_functions(
+                vec![
+                    Ir3Instruction::LoadInt { dst: 0, value: 7 },
+                    Ir3Instruction::Return { value: 0 },
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("unreached_generated_constructor_body".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            );
+            let mut core = test_interpreter();
+            core.ensure_module_record(&owner, &owner.header.source_label)
+                .expect("retain constructor getter owner");
+            let (builtin, _, _) =
+                retain_generated_test_artifact(&mut core, &owner, generated, 0, "return 7;");
+            let target = core
+                .function_prototype_bind(
+                    &owner,
+                    Value::BuiltinFunction(builtin.clone()),
+                    None,
+                    RegRange { start: 0, count: 0 },
+                )
+                .expect("constructible bound newTarget");
+            let backing = core
+                .ensure_function_own_property_object(&owner, &target)
+                .expect("newTarget property backing")
+                .expect("bound function property storage");
+            core.set_object_runtime_property(
+                backing,
+                RuntimePropertyKey::String(JsString::from("prototype")),
+                Value::Accessor {
+                    get: Some(Arc::new(Value::Function(0))),
+                    set: None,
+                },
+            )
+            .expect("install observable prototype getter");
+            if !classify_target {
+                core.join_object_mutation_label(backing, &Label::Secret)
+                    .expect("classify getter selection");
+            }
+            core.sync_estimated_memory_bytes()
+                .expect("getter failure fixture memory baseline");
+            let error = core
+                .construct_generated_function_artifact(
+                    &owner,
+                    &builtin,
+                    RegRange { start: 0, count: 0 },
+                    target,
+                    if classify_target { Label::Secret } else { Label::Public },
+                )
+                .expect_err("prototype getter must fail before generated execution");
+            assert!(
+                matches!(error, InterpreterError::UncaughtException { .. })
+                    || InterpreterCore::js_catchable_error_name(&error).is_some()
+            );
+            if core.pending_exception.is_some() {
+                assert_eq!(core.pending_exception_label, Label::Secret);
+            } else {
+                assert_eq!(core.pending_hostcall_result_label, Some(Label::Secret));
+            }
+            if !native_failure {
+                assert_eq!(core.pending_exception, Some(Value::Int(73)));
+            }
+            assert_eq!(core.active_inline_callback_context_label, None);
+            assert_eq!(core.active_generated_function_artifact, None);
+            assert_eq!(core.module_reentrant_call_depth, 0);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn generated_constructor_preserves_prototype_shape_label_and_accounting() {
+        let mut owner = test_module_with_functions(Vec::new(), Vec::new());
+        owner.header.source_label = "generated-constructor-label-owner.mjs".to_string();
+        let generated = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 7 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 1,
+                name: Some("generated_constructor_label_body".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = test_interpreter();
+        core.ensure_module_record(&owner, &owner.header.source_label)
+            .expect("retain generated constructor owner");
+        let (builtin, _, _) =
+            retain_generated_test_artifact(&mut core, &owner, generated, 0, "return 7;");
+        let target = Value::BuiltinFunction(builtin.clone());
+        let prototype = core
+            .ensure_generated_function_prototype(&builtin)
+            .expect("generated constructor prototype");
+        let backing = core
+            .ensure_function_own_property_object(&owner, &target)
+            .expect("generated constructor property backing")
+            .expect("generated functions own property storage");
+        core.join_object_mutation_label(backing, &Label::Secret)
+            .expect("classify the prototype descriptor's shape");
+        core.sync_estimated_memory_bytes()
+            .expect("constructor fixture memory baseline");
+        let caller_grants = core.config.granted_capabilities.clone();
+
+        let (instance, label) = core
+            .construct_generated_function_artifact(
+                &owner,
+                &builtin,
+                RegRange { start: 0, count: 0 },
+                target,
+                Label::Public,
+            )
+            .expect("generated constructor returns its allocated instance");
+        let Value::Object(instance) = instance else {
+            panic!("primitive return must preserve the constructor instance");
+        };
+        assert_eq!(core.heap[instance.0 as usize].prototype, Some(prototype));
+        assert_eq!(label, Label::Secret);
+        assert_eq!(core.active_inline_callback_context_label, None);
+        assert_eq!(core.active_generated_function_artifact, None);
+        assert_eq!(core.module_reentrant_call_depth, 0);
+        assert_eq!(core.config.granted_capabilities, caller_grants);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn native_path_namespace_retains_shape_labels_and_cached_throw_labels() {
+        for throws in [false, true] {
+            let mut module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::LoadInt { dst: 0, value: 7 },
+                    Ir3Instruction::Throw { value: 0 },
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("path_namespace_throwing_getter".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            );
+            module.header.source_label = "path-namespace-label-owner.mjs".to_string();
+            let mut core = test_interpreter();
+            core.ensure_module_record(&module, &module.header.source_label)
+                .expect("retain the getter's owning module");
+            let path = core.alloc_object_with_prototype(None).expect("Path object");
+            let resolve = if throws {
+                Value::Accessor {
+                    get: Some(Arc::new(Value::Function(0))),
+                    set: None,
+                }
+            } else {
+                Value::Int(7)
+            };
+            core.set_object_property(path, "resolve".to_string(), resolve)
+                .expect("public Path property");
+            core.join_object_mutation_label(path, &Label::Secret)
+                .expect("secret descriptor shape");
+            core.mutate_builtin_prototypes(|prototypes| {
+                prototypes.insert(PATH_MODULE_KEY.to_string(), path);
+            });
+            let record = NativeBuiltinModule::Path.record("captured:native-path-label");
+            let source = ResolutionOutcome {
+                module: ResolvedModule {
+                    request_specifier: "node:path".to_string(),
+                    canonical_specifier: record.id.clone(),
+                    content_hash: record.canonical_hash(),
+                    record,
+                    probe_sequence: Vec::new(),
+                },
+                event: crate::module_resolver::ResolutionEvent {
+                    trace_id: "path-label-test".to_string(),
+                    decision_id: "path-label-test".to_string(),
+                    policy_id: "path-label-test".to_string(),
+                    component: "module_resolver".to_string(),
+                    event: "resolved".to_string(),
+                    outcome: "allowed".to_string(),
+                    error_code: String::new(),
+                },
+            };
+            core.sync_estimated_memory_bytes().expect("fixture accounting");
+
+            if throws {
+                for _ in 0..2 {
+                    let error = core
+                        .load_native_path_namespace(&module, &source, NativeBuiltinModule::Path, None)
+                        .expect_err("the first and cached import must throw");
+                    assert!(matches!(error, InterpreterError::UncaughtException { .. }));
+                    assert_eq!(
+                        core.take_pending_exception_slot(),
+                        Some((Value::Int(7), Label::Secret)),
+                        "descriptor selection must label the original and replayed exception"
+                    );
+                }
+            } else {
+                let namespace = core
+                    .load_native_path_namespace(&module, &source, NativeBuiltinModule::Path, None)
+                    .expect("snapshot the public value selected through a secret shape");
+                let Value::Object(namespace) = namespace else {
+                    panic!("native Path import must return a namespace");
+                };
+                assert_eq!(
+                    core.runtime_property_label(
+                        namespace,
+                        &RuntimePropertyKey::String(JsString::from("resolve")),
+                    ),
+                    Label::Secret,
+                );
+            }
+            assert_eq!(core.active_inline_callback_context_label, None);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes(),
+                "native facade initialization and cached throws retain exact ownership charges"
+            );
+        }
     }
 
     #[test]

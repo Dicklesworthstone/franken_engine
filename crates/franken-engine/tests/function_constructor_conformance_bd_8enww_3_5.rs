@@ -246,6 +246,26 @@ fn behavior_vectors() -> Vec<JsConformanceVector> {
             r#"var c = "uncaught"; try { new Function("throw new TypeError('nope');")(); } catch (e) { c = e.name; } c;"#,
             "TypeError",
         ),
+        // Generated functions implement ordinary [[Construct]], including
+        // prototype ownership and an independently supplied new.target.
+        JsConformanceVector::value(
+            "fc-construct-instance-and-new-target",
+            CATEGORY,
+            r#"var F = new Function("x", "this.value = x; this.target = new.target;"); var x = new F(42); [x.value, x.target === F, x instanceof F].join(":");"#,
+            "42:true:true",
+        ),
+        JsConformanceVector::value(
+            "fc-construct-object-return",
+            CATEGORY,
+            r#"var F = new Function("return { value: 42 };"); var x = new F(); [x.value, x instanceof F].join(":");"#,
+            "42:false",
+        ),
+        JsConformanceVector::value(
+            "fc-reflect-construct-distinct-new-target",
+            CATEGORY,
+            r#"function T() {} var F = new Function("this.target = new.target;"); var x = Reflect.construct(F, [], T); [x.target === T, Object.getPrototypeOf(x) === T.prototype, x instanceof T].join(":");"#,
+            "true:true:true",
+        ),
         // -- AC#4: typed-array interaction (Track B landed) ------------------
         JsConformanceVector::value(
             "fc-ta-uint8-set-get",
@@ -364,13 +384,21 @@ fn adversarial_vectors() -> Vec<JsConformanceVector> {
             "eval.runtime.fault",
             Some("uncaught exception"),
         ),
-        // -- AC#4 of bd-8enww.3.3: `new f(...)` on a generated function refused
+        // Construction uses the same contained grant and shared budget as
+        // ordinary invocation; gaining [[Construct]] grants no new authority.
         JsConformanceVector::engine_error(
-            "fc-adv-construct-generated-function-refused",
+            "fc-adv-construct-ambient-process-refused",
             CATEGORY_ADVERSARIAL,
-            r#"var f = new Function("return 1;"); new f();"#,
+            r#"var F = new Function("this.leak = process;"); new F();"#,
             "eval.runtime.fault",
-            Some("bd-8enww.3.3"),
+            Some("ambient authority violation"),
+        ),
+        JsConformanceVector::engine_error(
+            "fc-adv-construct-budget-exhaustion",
+            CATEGORY_ADVERSARIAL,
+            r#"var F = new Function("while (true) {}"); new F();"#,
+            "eval.runtime.fault",
+            Some("budget exhausted"),
         ),
     ]
 }
@@ -513,6 +541,44 @@ fn ac2_audit_trail_names_generated_source_and_records_budget() {
         "expected non-zero budget spend, got {}",
         invoked.instructions_consumed
     );
+}
+
+#[test]
+fn generated_constructor_audit_preserves_source_budget_and_safe_grants() {
+    let outcome = eval_outcome(
+        r#"
+        var F = new Function("x", "this.value = Math.max(0, x);");
+        var first = new F(42);
+        var second = Reflect.construct(F, [7]);
+        first.value + second.value;
+        "#,
+    );
+    assert_eq!(outcome.value, "49");
+    let constructed = outcome
+        .generated_code_audit
+        .iter()
+        .find(|entry| entry.kind == GeneratedCodeEventKind::Constructed)
+        .expect("generated source construction event");
+    let invoked: Vec<_> = outcome
+        .generated_code_audit
+        .iter()
+        .filter(|entry| entry.kind == GeneratedCodeEventKind::Invoked)
+        .collect();
+    assert_eq!(invoked.len(), 2, "new and Reflect.construct are both audited");
+    for entry in invoked {
+        assert_eq!(entry.source_id, constructed.source_id);
+        assert_eq!(entry.source_hash, constructed.source_hash);
+        assert_eq!(entry.outcome, "completed");
+        assert!(entry.instructions_consumed > 0);
+        assert!(entry.instructions_consumed <= outcome.instructions_executed);
+        assert!(entry.granted_capabilities.iter().any(|grant| grant == "builtin"));
+        for forbidden in ["fs_read", "fs_write", "process_spawn", "network_egress"] {
+            assert!(
+                !entry.granted_capabilities.iter().any(|grant| grant == forbidden),
+                "generated construction must never be granted {forbidden}"
+            );
+        }
+    }
 }
 
 #[test]

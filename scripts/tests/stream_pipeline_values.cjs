@@ -11,7 +11,7 @@ const events = require('node:events');
 const decoder = require('node:string_decoder');
 const reference = require('node:stream');
 const sources = path.resolve(__dirname, '../../crates/franken-engine/src/lowering_pipeline');
-function load() {
+function load(webOverride) {
   const core = fs.readFileSync(process.env.STREAM_SOURCE || path.join(sources, 'stream_module.js'), 'utf8');
   const stream = new Function('__franken_stream_events', '__franken_stream_string_decoder',
     '__franken_stream_next_tick', 'return ' + core)(events, decoder, cb => process.nextTick(cb));
@@ -36,7 +36,7 @@ function load() {
   stream.Duplex.from=function(value){conversions++;return Reflect.apply(convert,this,[value]);};
   const bridge = fs.readFileSync(process.env.STREAM_BRIDGE_SOURCE || path.join(sources, 'stream_web_bridge.js'), 'utf8');
   let loads=0;
-  const web = process.env.PIPELINE_ENGINE_WEB === '1' ?
+  const web = webOverride !== undefined ? webOverride : process.env.PIPELINE_ENGINE_WEB === '1' ?
     new Function('return '+fs.readFileSync(path.join(sources,'web_stream_module.js'),'utf8'))() : require('node:stream/web');
   new Function('return '+bridge)()(stream, () => {loads++; return web;});
   return {stream, web, loads:()=>loads, conversions:()=>conversions};

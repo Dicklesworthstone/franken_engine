@@ -19,6 +19,7 @@
   const iteratorKey = Symbol.iterator;
   const asyncIteratorKey = Symbol.asyncIterator;
   const tagKey = Symbol.toStringTag;
+  const closedPromiseKey = Symbol.for('nodejs.webstream.isClosedPromise');
   const Abort = AbortController;
   const abortController = AbortController.prototype.abort;
   const controllerSignal = Object.getOwnPropertyDescriptor(AbortController.prototype, 'signal').get;
@@ -139,6 +140,33 @@
   }
   function result(value, done) { return { value: value, done: done }; }
 
+  // Node's completion protocol observes the stream, not a reader/writer lock.
+  // Allocate it only when observed. Never publish resolve/reject functions or
+  // the mutable state record; the branded getter also ignores own decoy slots.
+  function closedRecord(s) {
+    if (s.completion === undefined) {
+      s.completion = deferred(true);
+      const record = create(null), descriptor = create(null);
+      descriptor.value = s.completion.promise;
+      define(record, 'promise', descriptor);
+      s.completionRecord = record;
+      if (s.completionDone) settleCompletion(s);
+    }
+    return s.completionRecord;
+  }
+  function settleCompletion(s) {
+    s.completionDone = true;
+    if (s.completion !== undefined) {
+      if (s.state === 'errored') s.completion.reject(s.error);
+      else s.completion.resolve();
+    }
+  }
+  function completionGetter(prototype, states, name) {
+    const descriptor = create(null);
+    descriptor.get = function () { return closedRecord(get(states, this, name)); };
+    define(prototype, closedPromiseKey, descriptor);
+  }
+
   function releaseSource(s) { s.source = undefined; s.pull = undefined; s.cancel = undefined; s.size = undefined; }
   function closeReadable(s) {
     s.state = 'closed';
@@ -148,6 +176,7 @@
       r.closed.resolve();
       if (!r.byob) while (r.requests.length !== 0) shift(r.requests).resolve(result(undefined, true));
     }
+    settleCompletion(s);
   }
   function errorReadable(s, error) {
     if (s.state !== 'readable') return;
@@ -158,6 +187,7 @@
       r.closed.reject(error);
       while (r.requests.length !== 0) shift(r.requests).reject(error);
     }
+    settleCompletion(s);
   }
   function canEnqueue(s) { return s.state === 'readable' && !s.closeRequested; }
   function needsPull(s) {
@@ -806,6 +836,7 @@
         }
       }
       const s = { state: 'readable', error: undefined, reader: undefined,
+        completion: undefined, completionRecord: undefined, completionDone: false,
         queue: queue(), closeRequested: false, started: false, pulling: false,
         pullAgain: false, disturbed: false, source: source, cancel: cancel,
         pull: pullAlgorithm, size: config.size, highWaterMark: config.highWaterMark,
@@ -913,6 +944,7 @@
   }
   const readableValues = ReadableStream.prototype.values;
   property(ReadableStream.prototype, asyncIteratorKey, readableValues);
+  completionGetter(ReadableStream.prototype, streams, 'ReadableStream');
 
   // A queued write remains counted while its sink callback is in flight.
   // Only one callback is active; erroring waits for it (and start) before
@@ -936,6 +968,7 @@
     if (s.closeRequest !== undefined) { s.closeRequest.reject(s.error); s.closeRequest = undefined; }
     const w = writerState(s);
     if (w !== undefined) w.closed.reject(s.error);
+    settleCompletion(s);
   }
   function finishErroring(s) {
     if (s.state !== 'erroring' || !s.started || s.inflight !== undefined) return;
@@ -985,6 +1018,7 @@
         if (s.pendingAbort !== undefined) { s.pendingAbort.done.resolve(); s.pendingAbort = undefined; }
         const w = writerState(s);
         if (w !== undefined) w.closed.resolve();
+        settleCompletion(s);
       }, function (error) {
         shift(s.queue); s.inflight = undefined; request.done.reject(error);
         if (s.pendingAbort !== undefined) { s.pendingAbort.done.reject(error); s.pendingAbort = undefined; }
@@ -1100,6 +1134,7 @@
       if (sink.type !== undefined) throw new NativeRangeError('Typed writable sinks are not supported');
       const config = strategy(queuingStrategy, 1);
       const s = { state: 'writable', error: undefined, writer: undefined, started: false,
+        completion: undefined, completionRecord: undefined, completionDone: false,
         queue: queue(), inflight: undefined, closing: false, closeRequest: undefined,
         pendingAbort: undefined, sink: sink, write: writeAlgorithm, close: close, abort: abort,
         size: config.size, highWaterMark: config.highWaterMark, backpressure: config.highWaterMark === 0,
@@ -1127,6 +1162,8 @@
       } catch (error) { return rejected(error); }
     }
   }
+
+  completionGetter(WritableStream.prototype, sinks, 'WritableStream');
 
   function pipeOptions(value) {
     const options = dictionary(value, 'options');

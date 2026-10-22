@@ -204,3 +204,75 @@ fn partial_pair_setup_releases_acquired_reader_without_aborting_locked_writer() 
         assert_eq!(lines, ["true 1 0 true"]);
     }
 }
+
+#[test]
+fn web_finished_observes_locked_streams_without_consuming_or_releasing_them() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let (_, lines) = run(
+            r#"const S=require('stream');const W=require('stream/web');
+            (async function(){let controller;
+              const source=new W.ReadableStream({start(c){controller=c;}},{highWaterMark:0});
+              const reader=source.getReader();const complete=S.promises.finished(source,{cleanup:true});
+              controller.enqueue('café');controller.close();
+              const item=await reader.read();await complete;
+              console.log('finished',item.value,source.locked);reader.releaseLock();
+              console.log('released',source.locked);
+            })();"#,
+            lane,
+        );
+        assert_eq!(lines, ["finished café true", "released false"]);
+    }
+}
+
+#[test]
+fn web_finished_callback_waits_for_sink_cleanup_and_preserves_receiver() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let (_, lines) = run(
+            r#"const S=require('node:stream');const W=require('node:stream/web');
+            (async function(){let closed=false,calls=0;const sink=new W.WritableStream({
+              close(){return new Promise(resolve=>queueMicrotask(()=>{closed=true;resolve();}));}});
+              const writer=sink.getWriter();
+              const complete=new Promise((resolve,reject)=>S.finished(sink,function(error){
+                if(error){reject(error);return;}calls++;console.log('callback',this===sink,closed,sink.locked);resolve();}));
+              await writer.close();await complete;writer.releaseLock();console.log('calls',calls);
+            })();"#,
+            lane,
+        );
+        assert_eq!(lines, ["callback true true true", "calls 1"]);
+    }
+}
+
+#[test]
+fn cancelling_web_completion_does_not_cancel_the_resource() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let (_, lines) = run(
+            r#"const S=require('stream');const W=require('stream/web');
+            (async function(){let controller,cancelled=false;
+              const source=new W.ReadableStream({start(c){controller=c;},cancel(){cancelled=true;}});
+              const stop=new AbortController();const task=S.promises.finished(source,{signal:stop.signal});
+              stop.abort(false);try{await task;}catch(error){console.log(error.code,error.cause,cancelled,source.locked);}
+              const done=S.promises.finished(source);const reader=source.getReader();controller.enqueue('kept');controller.close();
+              const value=await reader.read();await done;reader.releaseLock();console.log('available',value.value,cancelled);
+            })();"#,
+            lane,
+        );
+        assert_eq!(lines, ["ABORT_ERR false false false", "available kept false"]);
+    }
+}
+
+#[test]
+fn web_completion_reuses_the_same_shared_pipeline_module() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let (_, lines) = run(
+            r#"const S=require('node:stream');const W=require('node:stream/web');
+            (async function(){let text='';const source=new W.ReadableStream({start(c){c.enqueue('a');c.enqueue('b');c.close();}});
+              const sink=new W.WritableStream({write(value){text+=value.toString();}});
+              const wait=Promise.all([S.promises.finished(source),S.promises.finished(sink)]);
+              const transform=new S.Transform({transform(value,encoding,done){done(null,value.toString().toUpperCase());}});
+              await S.promises.pipeline(source,transform,sink);await wait;console.log('pipeline',text,source.locked,sink.locked);
+            })();"#,
+            lane,
+        );
+        assert_eq!(lines, ["pipeline AB false true"]);
+    }
+}

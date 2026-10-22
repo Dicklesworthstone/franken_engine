@@ -55,5 +55,24 @@ function verifyUtilBinaryRanges(eq) {
   check(eq(x, y), 'iterative graph path uses the same binary comparison');
   check(eq(new Float64Array([NaN, -0]), new Float64Array([NaN, -0])), 'float values unchanged');
   check(!eq(new Float64Array([0]), new Float64Array([-0])), 'signed zero is not byte-coerced');
+  for (const Type of [Int8Array, Uint8Array, Uint8ClampedArray, Int16Array,
+    Uint16Array, Int32Array, Uint32Array, BigInt64Array, BigUint64Array]) {
+    const count = 1024 / Type.BYTES_PER_ELEMENT;
+    const left = new Type(count), right = new Type(count);
+    check(eq(left, right), 'equal integer typed payload');
+    right[count - 1] = Type === BigInt64Array || Type === BigUint64Array ? 1n : 1;
+    check(!eq(left, right), 'unequal integer typed payload');
+    right[count - 1] = Type === BigInt64Array || Type === BigUint64Array ? 0n : 0;
+    left.note = { value: 1 }; right.note = { value: 2 };
+    check(!eq(left, right), 'integer payload does not hide metadata');
+    right.note.value = 1;
+    left.self = left; right.self = right;
+    check(eq(left, right), 'typed metadata cycles');
+    let a = left, b = right;
+    for (let i = 0; i < 80; i++) { a = { next: a }; b = { next: b }; }
+    check(eq(a, b), 'integer payload inside indexed graph');
+    right.note.value = 2;
+    check(!eq(a, b), 'indexed typed metadata mismatch');
+  }
   return 'util binary ranges: windows, payloads, metadata, ordering, exceptions, deep graphs';
 }

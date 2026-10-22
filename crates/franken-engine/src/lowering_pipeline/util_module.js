@@ -732,6 +732,13 @@
   var ComparisonBytes = Uint8Array;
   // Pure-ECMAScript embeddings may omit Buffer; retain the scalar fallback.
   var compareBytes = typeof Buffer === 'undefined' ? undefined : Buffer.compare;
+  var comparisonTypedPrototype = Object.getPrototypeOf(ComparisonBytes.prototype);
+  var comparisonTypedLength = Object.getOwnPropertyDescriptor(comparisonTypedPrototype, 'length').get;
+  var comparisonTypedBuffer = Object.getOwnPropertyDescriptor(comparisonTypedPrototype, 'buffer').get;
+  var comparisonTypedOffset = Object.getOwnPropertyDescriptor(comparisonTypedPrototype, 'byteOffset').get;
+  var comparisonTypedBytes = Object.getOwnPropertyDescriptor(comparisonTypedPrototype, 'byteLength').get;
+  var comparisonOwnKeys = Reflect.ownKeys;
+  var comparisonEnumerable = Object.prototype.propertyIsEnumerable;
   var collectionIterator = Symbol.iterator;
   var ComparisonTypeError = TypeError;
   var comparisonCreate = Object.create;
@@ -892,6 +899,47 @@
     }
     return true;
   }
+  // Integer elements have one canonical byte representation. Floats do not:
+  // distinct NaN payloads compare equal, while +0 and -0 remain distinct.
+  // Return the number of proved-equal indexed keys, zero for the scalar path,
+  // or -1 for an unequal payload. Never trust own length/buffer/offset fields.
+  function equalIntegerElements(a, b, tag) {
+    if (compareBytes === undefined) { return 0; }
+    switch (tag) {
+      case 'Int8Array': case 'Uint8Array': case 'Uint8ClampedArray':
+      case 'Int16Array': case 'Uint16Array': case 'Int32Array': case 'Uint32Array':
+      case 'BigInt64Array': case 'BigUint64Array': break;
+      default: return 0;
+    }
+    var byteLength = collectionApply(comparisonTypedBytes, a, []);
+    if (byteLength < 1024) { return 0; }
+    var bufferA = collectionApply(comparisonTypedBuffer, a, []);
+    var bufferB = collectionApply(comparisonTypedBuffer, b, []);
+    // A shared buffer can change while individual elements are being read.
+    // Keep its old scalar ordering, and detached/out-of-bounds short views.
+    if (typeTag(bufferA) !== 'ArrayBuffer' || typeTag(bufferB) !== 'ArrayBuffer') { return 0; }
+    if (byteLength !== collectionApply(comparisonTypedBytes, b, [])) { return -1; }
+    if (a[0] !== b[0]) { return -1; }
+    var offsetA = collectionApply(comparisonTypedOffset, a, []);
+    var offsetB = collectionApply(comparisonTypedOffset, b, []);
+    if (!equalByteRanges(bufferA, offsetA, byteLength, bufferB, offsetB, byteLength, true)) {
+      return -1;
+    }
+    return collectionApply(comparisonTypedLength, a, []);
+  }
+  function enumerableAfterElements(value, count) {
+    // Integer-indexed own keys start with 0..length-1. Their contents were
+    // compared as one payload and cannot be accessors. Enumerate the remaining
+    // strings/symbols normally; metadata can still contain getters and cycles.
+    // ownKeys still allocates the full native key list: this is not O(1)
+    // memory or a native non-index-key enumeration primitive.
+    var keys = collectionApply(comparisonOwnKeys, Reflect, [value]);
+    var result = [];
+    for (var i = count; i < keys.length; i++) {
+      if (collectionApply(comparisonEnumerable, value, [keys[i]])) { result.push(keys[i]); }
+    }
+    return result;
+  }
   function equalErrorShape(a, b) {
     if (a.message !== b.message || a.name !== b.name) { return -1; }
     var causeA = Object.prototype.hasOwnProperty.call(a, 'cause');
@@ -937,10 +985,12 @@
     }
     // Shallow payload comparisons can promote the shared index. Their own
     // payload is already complete; continue with properties without rerunning it.
-    if (stateOnly) { return true; }
+    var elements = equalIntegerElements(a, b, tag);
+    if (elements < 0) { return false; }
+    if (stateOnly) { stateOnly.elements = elements; return true; }
     if (seen[0] !== undefined) { return equalIndexedGraph(a, b, null, seen); }
-    var keysA = enumerableKeys(a);
-    var keysB = enumerableKeys(b);
+    var keysA = elements ? enumerableAfterElements(a, elements) : enumerableKeys(a);
+    var keysB = elements ? enumerableAfterElements(b, elements) : enumerableKeys(b);
     if (keysA.length !== keysB.length) {
       return false;
     }
@@ -954,7 +1004,7 @@
   }
   // Iterative frames cover properties AND special payloads. An unordered
   // candidate's false result belongs to its collection, not the entire graph:
-  // unwind the candidate before trying the next one, without memoizing failure.
+  // unwind the candidate before trying the next candidate, without memoizing failure.
   function indexedCollection(frame) {
     var isMap = frame.tag === 'Map';
     var iterate = isMap ? mapEntries : setValues;
@@ -997,7 +1047,7 @@
     // The root pair belongs to deepEqual's finally. Each other frame owns
     // exactly one active pair. Values are read only at their comparison turn.
     var work = { top: { left: a, right: b, tag: tag, phase: tag === null ? 3 : 0,
-      keys: null, index: 0, collection: undefined, parent: null }, equal: true };
+      keys: null, index: 0, elements: 0, collection: undefined, parent: null }, equal: true };
     try {
       while (work.top !== null) {
         var frame = work.top;
@@ -1016,7 +1066,7 @@
             frame.phase = 5;
             continue;
           }
-          if (!equalObject(left, right, frame.tag, seen, true)) {
+          if (!equalObject(left, right, frame.tag, seen, frame)) {
             finishIndexedFrame(work, seen, false); continue;
           }
           frame.phase = 3;
@@ -1032,8 +1082,9 @@
           frame.phase = 3;
         }
         if (frame.phase === 3) {
-          frame.keys = enumerableKeys(left);
-          if (frame.keys.length !== enumerableKeys(right).length) {
+          frame.keys = frame.elements ? enumerableAfterElements(left, frame.elements) : enumerableKeys(left);
+          var rightKeys = frame.elements ? enumerableAfterElements(right, frame.elements) : enumerableKeys(right);
+          if (frame.keys.length !== rightKeys.length) {
             finishIndexedFrame(work, seen, false); continue;
           }
           frame.phase = 4;
@@ -1172,7 +1223,7 @@
       // The explicit walker now owns this pair until its frame completes or
       // unwinds. No metadata/getter work may happen before ownership is saved.
       work.top = { left: a, right: b, tag: tag, phase: 0, keys: null, index: 0,
-        collection: undefined, parent: work.top };
+        elements: 0, collection: undefined, parent: work.top };
       return true;
     }
     // Only active ancestors break cycles. A failed unordered candidate must

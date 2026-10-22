@@ -586,3 +586,147 @@ test('shared public payload fixture agrees with live Node at a portable depth', 
   assert.equal(run(eq, 96), 'util payload walk: collections, errors, retries, mutation, cycles');
   assert.equal(run(util.isDeepStrictEqual, 96), 'util payload walk: collections, errors, retries, mutation, cycles');
 });
+
+function collectionOrder(order, map, change = false) {
+  return map ? new Map(order.map(i => [{ rank: i }, { value: change && i === 0 ? -1 : i }]))
+    : new Set(order.map(i => ({ rank: change && i === 0 ? -1 : i })));
+}
+function permutations(items) {
+  if (items.length === 0) return [[]];
+  return items.flatMap((item, index) => permutations(items.filter((_, i) => i !== index))
+    .map(tail => [item, ...tail]));
+}
+test('every small object-key permutation preserves the earliest unmatched candidate', () => {
+  const orders = permutations([0, 1, 2, 3]);
+  for (const map of [false, true]) for (const depth of [0, 80]) {
+    for (const a of orders) for (const b of orders) {
+      const left = chain(depth, collectionOrder(a, map));
+      const right = chain(depth, collectionOrder(b, map));
+      assert.equal(eq(left, right), true);
+      assert.equal(eq(left, right), util.isDeepStrictEqual(left, right));
+    }
+    for (const b of orders) {
+      const left = chain(depth, collectionOrder([0, 1, 2, 3], map));
+      const right = chain(depth, collectionOrder(b, map, true));
+      assert.equal(eq(left, right), false);
+      assert.equal(eq(left, right), util.isDeepStrictEqual(left, right));
+    }
+  }
+});
+test('duplicate structural keys with permuted values remain one-to-one', () => {
+  for (const depth of [0, 80]) for (const order of permutations([0, 1, 2, 3])) {
+    const left = new Map([0, 1, 2, 3].map(value => [{ key: 1 }, { value }]));
+    const right = new Map(order.map(value => [{ key: 1 }, { value }]));
+    assert.equal(eq(chain(depth, left), chain(depth, right)), true);
+    const wrong = new Map(order.map(value => [{ key: 1 }, { value: value === 3 ? 2 : value }]));
+    assert.equal(eq(chain(depth, left), chain(depth, wrong)), false);
+    assert.equal(eq(chain(depth, wrong), chain(depth, left)), false, 'duplicate left values cannot reuse a right entry');
+    parity(chain(depth, wrong), chain(depth, left));
+    parity(chain(depth, left), chain(depth, right));
+    parity(chain(depth, left), chain(depth, wrong));
+  }
+});
+test('consumed-prefix cursor does not revisit matched entries in ordered collections', () => {
+  const probes = { shallow: 0, deep: 0 };
+  const shallow = /for \(var i = (?:0|first); i < candidates\.length; i\+\+\) \{/g;
+  const deep = 'state.index < state.candidates.length';
+  assert.equal([...source.matchAll(shallow)].length, 1, 'instrument the actual candidate loop');
+  assert.equal(source.split(deep).length - 1, 1, 'instrument the actual consumed-flag scan');
+  const instrumented = source.replace(shallow, match => match + ' probes.shallow++;')
+    .replace(deep, '(probes.deep++, state.index < state.candidates.length)');
+  const observed = new Function('__franken_util_type_tag', 'probes', 'return ' + instrumented)(typeTag, probes);
+  for (const n of [64, 256, 1024]) for (const map of [false, true]) for (const depth of [0, 80]) {
+    probes.shallow = probes.deep = 0;
+    const order = Array.from({ length: n }, (_, i) => i);
+    assert.equal(observed.isDeepStrictEqual(chain(depth, collectionOrder(order, map)),
+      chain(depth, collectionOrder(order, map))), true);
+    assert.equal(probes.shallow, depth === 0 ? n : 0, 'shallow scan touches each candidate once');
+    assert.equal(probes.deep, depth === 0 ? 0 : n, 'iterative scan touches each candidate once');
+  }
+});
+test('ordered matches allocate no consumed table and out-of-order flags retire when crossed', () => {
+  const vm = require('node:vm');
+  for (const map of [false, true]) for (const depth of [0, 80]) {
+    const tables = [];
+    const realm = vm.createContext({ __franken_util_type_tag: typeTag, TextEncoder, TextDecoder,
+      record(table) { tables.push(table); } });
+    vm.runInContext(`
+      const original = Object.create;
+      Object.create = function(proto) {
+        const table = original(proto);
+        if (proto === null) record(table);
+        return table;
+      };
+    `, realm);
+    vm.runInContext('var api=' + source + ';', realm);
+    const start = tables.length;
+    const order = [0, 1, 2, 3, 4, 5];
+    realm.left = chain(depth, collectionOrder(order, map));
+    realm.right = chain(depth, collectionOrder(order, map));
+    assert.equal(vm.runInContext('api.isDeepStrictEqual(left, right)', realm), true);
+    assert.equal(tables.length, start, 'ordered entries need no matched bitmap or dictionary');
+    realm.right = chain(depth, collectionOrder([1, 2, 3, 4, 5, 0], map));
+    assert.equal(vm.runInContext('api.isDeepStrictEqual(left, right)', realm), true);
+    assert.equal(tables.length, start + 1, 'one lazy dictionary for out-of-order entries');
+    assert.equal(Object.getPrototypeOf(tables.at(-1)), null);
+    assert.equal(Object.keys(tables.at(-1)).length, 0, 'consumed-prefix flags are discarded');
+    vm.runInContext('Object.create = function() { throw new Error("late replacement"); };', realm);
+    assert.equal(vm.runInContext('api.isDeepStrictEqual(left, right)', realm), true,
+      'private allocation uses captured intrinsic');
+  }
+});
+test('late inherited numeric flags cannot suppress unmatched collection candidates', () => {
+  const vm = require('node:vm');
+  for (const depth of [0, 80]) for (const rotate of [false, true]) {
+    const realm = vm.createContext({ __franken_util_type_tag: typeTag, TextEncoder, TextDecoder, depth, rotate });
+    vm.runInContext('var api=' + source + ';', realm);
+    const result = vm.runInContext(`(function() {
+      var poisoned = false;
+      var left = new Set(), right = new Set();
+      var firstRank = rotate ? 64 : 0;
+      // All snapshot slots exist before the first nested comparison. Only
+      // the private match bookkeeping could consult this inherited flag.
+      for (var i = 0; i < 65; i++) {
+        left.add({rank: (i + firstRank) % 65}); right.add({rank: i});
+      }
+      var first = left.values().next().value;
+      Object.defineProperty(first, 'rank', { enumerable: true, get: function() {
+        if (!poisoned) {
+          poisoned = true;
+          Object.defineProperty(Array.prototype, '63', { configurable: true, get: function() {
+            return true;
+          } });
+        }
+        return firstRank;
+      } });
+      for (var i = 0; i < depth; i++) { left = {next:left}; right = {next:right}; }
+      try { return api.isDeepStrictEqual(left, right); }
+      finally { delete Array.prototype[63]; }
+    })()`, realm);
+    assert.equal(result, true);
+  }
+});
+test('candidate cursor preserves getter evaluation order and live object reinsertion', () => {
+  for (const depth of [0, 80]) {
+    const trace = [], left = new Set(), right = new Set();
+    for (const rank of [2, 0, 3, 1]) left.add({ get rank() { trace.push('L' + rank); return rank; } });
+    for (const rank of [0, 1, 2, 3]) right.add({ get rank() { trace.push('R' + rank); return rank; } });
+    assert.equal(eq(chain(depth, left), chain(depth, right)), true);
+    assert.deepEqual(trace, ['L2','R0','L2','R1','L2','R2','L0','R0','L3','R1','L3','R3','L1','R1']);
+    const a = new Set(), b = new Set();
+    let reinsert = true;
+    const first = { get value() {
+      if (reinsert) { reinsert = false; a.delete(first); a.add(first); }
+      return 1;
+    } };
+    a.add(first); a.add({value:2}); b.add({value:1}); b.add({value:2});
+    assert.equal(eq(chain(depth, a), chain(depth, b)), false, 'reinsertion cannot reuse a consumed object');
+    assert.equal(eq(chain(depth, a), chain(depth, b)), true, 'the next public comparison has fresh state');
+  }
+});
+test('shared cursor fixture passes the candidate and live Node', () => {
+  const run = new Function(fixture + ';return verifyUtilCollectionCursor;')();
+  const expected = 'util collection cursor: ordered, rotated, duplicate keys, one-to-one';
+  assert.equal(run(eq), expected);
+  assert.equal(run(util.isDeepStrictEqual), expected);
+});

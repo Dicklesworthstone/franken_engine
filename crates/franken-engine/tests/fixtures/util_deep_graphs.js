@@ -127,3 +127,31 @@ function verifyUtilPayloadWalk(eq, depth) {
   check(eq(nest(left, 2), nest(right, 2)), 'payload getter precedes ordinary properties');
   return 'util payload walk: collections, errors, retries, mutation, cycles';
 }
+
+function verifyUtilCollectionCursor(eq) {
+  function check(value, message) { if (!value) throw new Error(message); }
+  function nest(value, deep) {
+    if (deep) for (let i = 0; i < 80; i++) value = { next: value };
+    return value;
+  }
+  for (const deep of [false, true]) for (const map of [false, true]) {
+    const ordered = [], rotated = [];
+    for (let i = 0; i < 16; i++) { ordered.push(i); rotated.push((i + 3) % 16); }
+    function collection(order) {
+      const result = map ? new Map() : new Set();
+      for (const rank of order) {
+        if (map) result.set({ rank: rank }, { value: rank });
+        else result.add({ rank: rank });
+      }
+      return result;
+    }
+    check(eq(nest(collection(ordered), deep), nest(collection(ordered), deep)), 'ordered collection');
+    check(eq(nest(collection(ordered), deep), nest(collection(rotated), deep)), 'early unmatched candidates remain available');
+    const left = new Map([[{ key: 1 }, 1], [{ key: 1 }, 2], [{ key: 1 }, 3]]);
+    const right = new Map([[{ key: 1 }, 3], [{ key: 1 }, 1], [{ key: 1 }, 2]]);
+    const wrong = new Map([[{ key: 1 }, 1], [{ key: 1 }, 1], [{ key: 1 }, 3]]);
+    check(eq(nest(left, deep), nest(right, deep)), 'duplicate keys retain distinct values');
+    check(!eq(nest(wrong, deep), nest(right, deep)), 'matched value cannot be reused');
+  }
+  return 'util collection cursor: ordered, rotated, duplicate keys, one-to-one';
+}

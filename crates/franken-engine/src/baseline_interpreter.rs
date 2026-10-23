@@ -56623,9 +56623,11 @@ impl InterpreterCore {
                                         label_owner,
                                         &property_key,
                                     );
-                                    // Native namespace writes never replace an export.
-                                    // A transparent proxy can accept a SameValue no-op;
-                                    // its equality check must observe the retained label.
+                                    // Native namespace writes never replace an export,
+                                    // including through a transparent Proxy. Preserve
+                                    // export labels on refused writes; SameValue checks
+                                    // belong to [[DefineOwnProperty]] and observe the
+                                    // retained label there.
                                     let preserve_native_export_label =
                                         self.is_native_module_namespace(label_owner);
                                     if !preserve_native_export_label {
@@ -67896,14 +67898,12 @@ impl InterpreterCore {
         receiver: Value,
         depth: u32,
     ) -> Result<bool, InterpreterError> {
-        // A namespace is never its own writable receiver, including for a
-        // missing key. Node permits writes onto a distinct ordinary Reflect
-        // receiver or inheriting object; those take the descriptor path below.
-        // Check before the shortcut, whose writable-descriptor test alone is
-        // insufficient for native namespace exports.
-        if matches!(&receiver, Value::Object(id) if *id == object_id)
-            && self.is_native_module_namespace(object_id)
-        {
+        // ECMA-262 10.4.6.9: namespace [[Set]] always refuses, without
+        // inspecting Receiver, including a distinct object, inheritance or
+        // transparent Proxy forwarding. Writable export descriptors support
+        // reflection and do not authorize the ordinary descriptor path.
+        // [[DefineOwnProperty]] retains its separate SameValue behavior.
+        if self.is_native_module_namespace(object_id) {
             return Ok(false);
         }
         // bd-9vouw.504: the ordinary store with nothing to observe. Its

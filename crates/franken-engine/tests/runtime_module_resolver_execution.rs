@@ -36,6 +36,7 @@ enum Corruption {
     ChangeBuiltinProvider,
     ChangePathProvider,
     BuiltinAliasesEntry,
+    BuiltinAliasesFactory(&'static str),
     Panic,
 }
 
@@ -82,6 +83,11 @@ impl OpaqueResolver {
             NativeBuiltinModule::Path,
             NativeBuiltinModule::PathPosix,
             NativeBuiltinModule::PathWin32,
+            NativeBuiltinModule::Util,
+            NativeBuiltinModule::UtilTypes,
+            NativeBuiltinModule::Assert,
+            NativeBuiltinModule::AssertStrict,
+            NativeBuiltinModule::StringDecoder,
         ] {
             let canonical = native.canonical_specifier();
             let names = [
@@ -183,6 +189,11 @@ impl ModuleResolver for OpaqueResolver {
                 Corruption::BuiltinAliasesEntry => {
                     outcome.module.record.id = format!("{ID_PREFIX}{ROOT}/entry.cjs");
                     outcome.module.canonical_specifier = outcome.module.record.id.clone();
+                    outcome.module.content_hash = outcome.module.record.canonical_hash();
+                }
+                Corruption::BuiltinAliasesFactory(id) => {
+                    outcome.module.record.id = id.into();
+                    outcome.module.canonical_specifier = id.into();
                     outcome.module.content_hash = outcome.module.record.canonical_hash();
                 }
                 _ => {}
@@ -861,6 +872,334 @@ console.log(require.resolve('querystring'), require.resolve('node:querystring'))
 }
 
 #[test]
+fn delivered_source_factories_preserve_cross_module_closures_aliases_and_submodules() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![
+                (
+                    "entry.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        r#"
+const util = require('util');
+const types = require('node:util/types');
+const strict = require('assert/strict');
+const assert = require('node:assert');
+const decoder = require('string_decoder');
+const child = require('./child.cjs');
+console.log(util === child.util, types === util.types,
+    strict === assert.strict, decoder.StringDecoder === child.Decoder);
+console.log(child.format('answer', 42), types.isMap(new Map()));
+assert.deepStrictEqual({a: [1, 2]}, {a: [1, 2]});
+try { strict.equal(1, '1'); } catch (error) { console.log(error.code, error.operator); }
+const d = new child.Decoder('utf8');
+console.log(d.write(Buffer.from([226, 130])) === '', d.end(Buffer.from([172])));
+util.marker = 17;
+console.log(child.util.marker, new util.MIMEType('Text/Plain; charset=utf-8').essence);
+console.log(require('node:util') === util, require('node:assert/strict') === strict);
+util.types = {};
+assert.strict = {};
+console.log(require('util/types') === types, require('assert/strict') === strict);
+"#,
+                    )
+                    .with_dependency(ModuleDependency::new("./child.cjs", ImportStyle::Require)),
+                ),
+                (
+                    "child.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        r#"
+const util = require('node:util');
+const Decoder = require('node:string_decoder').StringDecoder;
+module.exports = {
+    util: util, Decoder: Decoder,
+    format: function(name, value) { return util.format('%s=%d', name, value); }
+};
+"#,
+                    ),
+                ),
+            ])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let policy = Arc::new(RecordingPolicy {
+            allow_native_builtins: true,
+            ..RecordingPolicy::default()
+        });
+        let installed = ExecutionModuleResolver::new(&source.module.record.id, resolver, policy);
+        let result = orchestrator(lane, ModuleSyntax::CommonJs)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("captured modules execute retained canonical builtin factories");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true true true",
+                "answer=42 true",
+                "ERR_ASSERTION strictEqual",
+                "true €",
+                "17 text/plain",
+                "true true",
+                "true true",
+            ]
+        );
+    }
+}
+
+#[test]
+fn delivered_builtin_submodules_keep_node_initialization_and_cache_identity() {
+    let resolver = Arc::new(
+        OpaqueResolver::new(vec![(
+            "entry.cjs",
+            definition(
+                ModuleSyntax::CommonJs,
+                r#"
+const util = require('util');
+const originalTypes = util.types;
+util.types = {};
+console.log(require('node:util/types') === originalTypes);
+const assert = require('assert');
+const replacement = function () { return 17; };
+assert.strict = replacement;
+console.log(require('assert/strict') === replacement);
+assert.strict = undefined;
+console.log(require('node:assert/strict') === replacement);
+"#,
+            ),
+        )])
+        .with_native_builtins(),
+    );
+    let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+    let installed =
+        ExecutionModuleResolver::new(&source.module.record.id, resolver, Arc::new(AllowAllPolicy));
+    let result = orchestrator(LaneChoice::QuickJs, ModuleSyntax::CommonJs)
+        .execute_resolved_entry_with_resolver(&package(), &source, installed)
+        .expect("native submodule identity is independent of later parent property writes");
+    assert_eq!(lines(&result), ["true", "true", "true"]);
+}
+
+#[test]
+fn delivered_source_factories_share_esm_namespaces_with_commonjs_values() {
+    let resolver = Arc::new(OpaqueResolver::new(vec![
+        ("entry.mjs", definition(ModuleSyntax::EsModule, r#"
+import util, {format, MIMEType} from 'node:util';
+import types, {isSet} from 'util/types';
+import assert, {strictEqual} from 'assert';
+import strict from 'node:assert/strict';
+import {StringDecoder} from 'node:string_decoder';
+import * as utilNamespace from 'util';
+import * as typesNamespace from 'util/types';
+import * as assertNamespace from 'assert';
+import * as strictNamespace from 'assert/strict';
+import * as decoderNamespace from 'string_decoder';
+import child from './child.cjs';
+strictEqual(child.util, util);
+for (const namespace of [utilNamespace, typesNamespace, assertNamespace, strictNamespace, decoderNamespace]) {
+    const original = namespace.default;
+    strictEqual(Reflect.set(namespace, 'default', null), false);
+    strictEqual(Reflect.defineProperty(namespace, 'default', {value: null}), false);
+    strictEqual(namespace.default, original);
+    strictEqual(Object.getOwnPropertyDescriptor(namespace, 'default').writable, true);
+}
+console.log(format('%s:%d', 'esm', 7), isSet(new Set()), types === util.types);
+console.log(strict === assert.strict, StringDecoder === child.Decoder,
+    new MIMEType('Application/JSON').essence);
+const decoder = new StringDecoder('utf8');
+decoder.write(Buffer.from([226]));
+console.log(decoder.lastNeed, decoder.end(Buffer.from([130, 172])));
+import('util').then(function(ns) { console.log(ns.default === util, ns.format === format); });
+"#).with_dependency(ModuleDependency::new("./child.cjs", ImportStyle::Import))),
+        ("child.cjs", definition(ModuleSyntax::CommonJs,
+            "module.exports = {util: require('util'), Decoder: require('string_decoder').StringDecoder};")),
+    ]).with_native_builtins());
+    let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+    let installed =
+        ExecutionModuleResolver::new(&source.module.record.id, resolver, Arc::new(AllowAllPolicy));
+    let result = orchestrator(LaneChoice::QuickJs, ModuleSyntax::EsModule)
+        .execute_resolved_entry_with_resolver(&package(), &source, installed)
+        .expect("native source providers supply real ESM named and default exports");
+    assert_eq!(
+        lines(&result),
+        [
+            "esm:7 true true",
+            "true true application/json",
+            "2 €",
+            "true true"
+        ]
+    );
+}
+
+#[test]
+fn delivered_source_factory_esm_does_not_admit_guest_or_snapshot_getters() {
+    for mutation in [
+        "Object.defineProperty(util.inspect.colors, 'gray', { get: function () { console.log('guest getter ran'); return [1, 2]; } });",
+        "const wrapped = util.deprecate(function () { console.log('wrapped getter ran'); return [1, 2]; }); Object.defineProperty(wrapped, 'name', {value: 'get'}); Object.defineProperty(util.inspect.colors, 'gray', { get: wrapped });",
+        "const get = Object.getOwnPropertyDescriptor(util.inspect.colors, 'grey').get; Object.defineProperty(util, 'format', { get: get });",
+        "const get = Object.getOwnPropertyDescriptor(util.inspect.colors, 'grey').get; const proto = {}; Object.defineProperty(proto, 'format', { get: get }); delete util.format; Object.setPrototypeOf(util, proto);",
+    ] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![
+                (
+                    "entry.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        &format!("const util = require('util'); {mutation} require('./consumer.mjs');"),
+                    )
+                    .with_dependency(ModuleDependency::new("./consumer.mjs", ImportStyle::Require)),
+                ),
+                (
+                    "consumer.mjs",
+                    definition(
+                        ModuleSyntax::EsModule,
+                        "import {format} from 'node:util'; console.log(format('%s', 'must not run'));",
+                    ),
+                ),
+            ])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let mut engine = orchestrator(LaneChoice::QuickJs, ModuleSyntax::CommonJs);
+        let error = engine
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect_err("only deferred, authenticated accessor code is admitted");
+        assert!(
+            error.to_string().contains("bounded-import contract"),
+            "{mutation}: {error}"
+        );
+        assert!(engine.last_failed_console_output().is_empty(), "{mutation}");
+    }
+}
+
+#[test]
+fn delivered_strict_alias_bounds_first_getter_but_keeps_cached_identity() {
+    for cached in [false, true] {
+        let initialize_alias = if cached {
+            "require('assert/strict');"
+        } else {
+            ""
+        };
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![
+                (
+                    "entry.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        &format!(
+                            "const assert = require('assert'); const original = assert.strict; \
+                             {initialize_alias} \
+                             Object.defineProperty(assert, 'strict', {{ get: function () {{ \
+                                 console.log('strict getter ran'); return original; \
+                             }} }}); require('./consumer.mjs');"
+                        ),
+                    )
+                    .with_dependency(ModuleDependency::new("./consumer.mjs", ImportStyle::Require)),
+                ),
+                (
+                    "consumer.mjs",
+                    definition(
+                        ModuleSyntax::EsModule,
+                        "import strict from 'node:assert/strict'; strict.equal(7, 7); console.log(typeof strict);",
+                    ),
+                ),
+            ])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let mut engine = orchestrator(LaneChoice::QuickJs, ModuleSyntax::CommonJs);
+        let outcome = engine.execute_resolved_entry_with_resolver(&package(), &source, installed);
+        if cached {
+            let result = outcome.expect("a cached alias never rereads the mutable parent property");
+            assert_eq!(lines(&result), ["function"]);
+        } else {
+            let error = outcome.expect_err("bound admission precedes the first strict getter");
+            assert!(
+                error.to_string().contains("bounded-import contract"),
+                "{error}"
+            );
+            assert!(engine.last_failed_console_output().is_empty());
+        }
+    }
+}
+
+#[test]
+fn delivered_builtin_submodule_cannot_rebind_its_initializing_factory() {
+    for (specifier, factory) in [
+        ("util/types", "\0franken-engine/native-util"),
+        ("assert/strict", "\0franken-engine/native-assert"),
+    ] {
+        let mut resolver = OpaqueResolver::new(vec![(
+            "entry.cjs",
+            definition(
+                ModuleSyntax::CommonJs,
+                &format!("require('{specifier}'); console.log('must not run');"),
+            ),
+        )])
+        .with_native_builtins();
+        resolver.corruption = Corruption::BuiltinAliasesFactory(factory);
+        let resolver = Arc::new(resolver);
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let mut engine = orchestrator(LaneChoice::QuickJs, ModuleSyntax::CommonJs);
+        let error = engine
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect_err("a new private factory record cannot be rebound by the outer descriptor");
+        assert!(
+            error
+                .to_string()
+                .contains("changed during native provider initialization"),
+            "{specifier}: {error}"
+        );
+        assert!(engine.last_failed_console_output().is_empty());
+    }
+}
+
+#[test]
+fn delivered_source_factory_alias_cannot_bypass_policy_after_initialization() {
+    let resolver = Arc::new(OpaqueResolver::new(vec![
+        ("entry.cjs", definition(ModuleSyntax::CommonJs,
+            "console.log(require('util').format('%s', 'allowed')); try { require('node:util'); } catch (_) { console.log('caught'); }")),
+    ]).with_native_builtins());
+    let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+    let policy = Arc::new(RecordingPolicy {
+        denied: Some(("node:util".to_string(), 1)),
+        allow_native_builtins: true,
+        ..RecordingPolicy::default()
+    });
+    let installed = ExecutionModuleResolver::new(&source.module.record.id, resolver, policy);
+    let mut engine = orchestrator(LaneChoice::QuickJs, ModuleSyntax::CommonJs);
+    let error = engine
+        .execute_resolved_entry_with_resolver(&package(), &source, installed)
+        .expect_err("native factory cache is not a grant to an alias route");
+    assert!(
+        error
+            .to_string()
+            .contains("closed-world module resolution refused"),
+        "{error}"
+    );
+    assert_eq!(
+        engine
+            .last_failed_console_output()
+            .iter()
+            .map(|entry| entry.message.as_str())
+            .collect::<Vec<_>>(),
+        ["allowed"]
+    );
+}
+
+#[test]
 fn delivered_path_modules_reuse_complete_namespaces_across_package_boundaries() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         let resolver = Arc::new(
@@ -1485,7 +1824,17 @@ fn delivered_native_builtin_cache_cannot_bypass_policy_in_nested_source() {
 
 #[test]
 fn delivered_native_descriptors_reject_forgery_and_cached_provider_substitution() {
-    for (builtin, corruption) in ["querystring", "path"].into_iter().flat_map(|builtin| {
+    for (builtin, corruption) in [
+        "querystring",
+        "path",
+        "util",
+        "util/types",
+        "assert",
+        "assert/strict",
+        "string_decoder",
+    ]
+    .into_iter()
+    .flat_map(|builtin| {
         [
             Corruption::ForgeBuiltin,
             Corruption::MalformedBuiltinMarker,

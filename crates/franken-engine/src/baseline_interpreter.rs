@@ -39970,15 +39970,20 @@ impl InterpreterCore {
         }
 
         let source_is_delivered = delivered.is_some();
-        let native_path = delivered.as_ref().is_some_and(|source| {
-            matches!(
-                NativeBuiltinModule::from_record(&source.record),
-                Some(
-                    NativeBuiltinModule::Path
-                        | NativeBuiltinModule::PathPosix
-                        | NativeBuiltinModule::PathWin32
-                )
+        let native_provider = delivered
+            .as_ref()
+            .and_then(|source| NativeBuiltinModule::from_record(&source.record));
+        let native_path = matches!(
+            native_provider,
+            Some(
+                NativeBuiltinModule::Path
+                    | NativeBuiltinModule::PathPosix
+                    | NativeBuiltinModule::PathWin32
             )
+        );
+        let native_factory = native_provider.and_then(|native| {
+            crate::lowering_pipeline::native_runtime_module_source_bytes(native)
+                .map(|bytes| (native, bytes))
         });
         let declared_goal = match delivered.as_ref() {
             Some(delivered) => Some(if delivered.record.syntax == ModuleSyntax::CommonJs {
@@ -40094,7 +40099,7 @@ impl InterpreterCore {
         // throws for `require` and rejects `import()` with (bd-9vouw.389);
         // its record fails, so importing it again fails again. Unsupported
         // syntax and every policy refusal stay uncatchable.
-        let syntax_tree = match parsed {
+        let syntax_tree = match (native_factory, parsed) {
             _ if native_path => {
                 self.check_temporary_memory_budget(
                     crate::lowering_pipeline::path_module::RUNTIME_SOURCE_BYTES as u64,
@@ -40108,17 +40113,30 @@ impl InterpreterCore {
                     }
                 })?
             }
-            Ok(syntax_tree) => syntax_tree,
+            (Some((native, source_bytes)), _) => {
+                self.check_temporary_memory_budget(source_bytes as u64)
+                    .inspect_err(|error| self.fail_module_record(resolved, &error.to_string()))?;
+                crate::lowering_pipeline::native_runtime_module_tree(native).map_err(|error| {
+                    self.fail_module_record(resolved, &error.to_string());
+                    InterpreterError::ModuleLoweringFailed {
+                        specifier: resolved.to_string(),
+                        error: error.to_string(),
+                    }
+                })?
+            }
+            (None, Ok(syntax_tree)) => syntax_tree,
             // An empty file, or one holding only comments, white space or
             // TypeScript declarations, is a module with no code and no
             // exports, which Node and Bun load (bd-9vouw.430); the parser
             // reports it as an empty source.
-            Err(error) if error.code == ParseErrorCode::EmptySource => crate::ast::SyntaxTree {
-                goal: parse_goal,
-                body: Vec::new(),
-                span: crate::ast::SourceSpan::new(0, 0, 1, 1, 1, 1),
-            },
-            Err(error) => {
+            (None, Err(error)) if error.code == ParseErrorCode::EmptySource => {
+                crate::ast::SyntaxTree {
+                    goal: parse_goal,
+                    body: Vec::new(),
+                    span: crate::ast::SourceSpan::new(0, 0, 1, 1, 1, 1),
+                }
+            }
+            (None, Err(error)) => {
                 return Err(
                     // InvalidGoal: an import or export declaration in a
                     // CommonJS (script) module, a SyntaxError in Node too.
@@ -40606,7 +40624,7 @@ impl InterpreterCore {
         if self.module_resolver.is_none()
             && let Some(native) = NativeBuiltinModule::from_specifier(specifier)
         {
-            return self.native_builtin_module(module, native);
+            return self.native_builtin_module(module, native, None);
         }
         let delivered = self
             .module_resolver
@@ -40620,7 +40638,7 @@ impl InterpreterCore {
         if let Some(source) = delivered.as_ref()
             && let Some(native) = NativeBuiltinModule::from_record(&source.module.record)
         {
-            return self.load_native_builtin_resolved(module, source, native);
+            return self.load_native_builtin_resolved(module, source, native, None);
         }
         let is_json = delivered.is_none()
             && Path::new(&resolved)
@@ -40666,6 +40684,7 @@ impl InterpreterCore {
         module: &Ir3Module,
         source: &ResolutionOutcome,
         native: NativeBuiltinModule,
+        import_bound: Option<&Label>,
     ) -> Result<Value, InterpreterError> {
         let resolved = &source.module.record.id;
         if let Some(record) = self.module_state.modules.get(resolved)
@@ -40676,8 +40695,19 @@ impl InterpreterCore {
                 error: "resolved module changed after its first authorized load".to_string(),
             });
         }
+        let value = self.native_builtin_module(module, native, import_bound)?;
+        // A source provider can create its private retained module while it
+        // initializes. A resolver-supplied id must not overwrite that new
+        // module's authenticated identity with a different provider hash.
+        if let Some(record) = self.module_state.modules.get(resolved)
+            && record.resolved_source_hash != Some(source.module.content_hash)
+        {
+            return Err(InterpreterError::ModuleLoweringFailed {
+                specifier: resolved.clone(),
+                error: "resolved module changed during native provider initialization".to_string(),
+            });
+        }
         let new_record = !self.module_state.modules.contains_key(resolved);
-        let value = self.native_builtin_module(module, native)?;
         self.ensure_module_record(module, resolved)?;
         if let Some(record) = self.module_state.modules.get_mut(resolved) {
             record.resolved_source_hash = Some(source.module.content_hash);
@@ -40698,6 +40728,7 @@ impl InterpreterCore {
         &mut self,
         module: &Ir3Module,
         native: NativeBuiltinModule,
+        import_bound: Option<&Label>,
     ) -> Result<Value, InterpreterError> {
         match native {
             NativeBuiltinModule::Buffer => self.buffer_core_module(),
@@ -40710,10 +40741,17 @@ impl InterpreterCore {
             NativeBuiltinModule::Path
             | NativeBuiltinModule::PathPosix
             | NativeBuiltinModule::PathWin32 => self.path_core_module(module, native),
+            NativeBuiltinModule::Util
+            | NativeBuiltinModule::UtilTypes
+            | NativeBuiltinModule::Assert
+            | NativeBuiltinModule::AssertStrict
+            | NativeBuiltinModule::StringDecoder => {
+                self.source_builtin_module(module, native, import_bound)
+            }
         }
     }
 
-    /// Keep named exports tied to the engine's supported provider surface.
+/// Keep named exports tied to the engine's supported provider surface.
     /// CommonJS mutations change the values read on first ESM initialization,
     /// but adding an arbitrary property cannot add a module export. Reuse the
     /// facade inventories where the provider itself is table-driven.
@@ -40755,13 +40793,37 @@ impl InterpreterCore {
             NativeBuiltinModule::Path
             | NativeBuiltinModule::PathPosix
             | NativeBuiltinModule::PathWin32 => PATH_ESM_EXPORT_NAMES.to_vec(),
+            NativeBuiltinModule::Util => vec![
+                "format", "formatWithOptions", "inspect", "inherits", "promisify",
+                "callbackify", "deprecate", "debuglog", "debug", "isDeepStrictEqual",
+                "parseArgs", "parseEnv", "styleText", "stripVTControlCharacters",
+                "toUSVString", "types", "isArray", "TextEncoder", "TextDecoder",
+                "MIMEType", "MIMEParams",
+            ],
+            NativeBuiltinModule::UtilTypes => vec![
+                "isDate", "isRegExp", "isMap", "isSet", "isWeakMap", "isWeakSet",
+                "isPromise", "isArrayBuffer", "isAnyArrayBuffer", "isDataView",
+                "isNativeError", "isProxy", "isGeneratorFunction", "isAsyncFunction",
+                "isGeneratorObject", "isNumberObject", "isStringObject", "isBooleanObject",
+                "isBigIntObject", "isSymbolObject", "isBoxedPrimitive", "isTypedArray",
+                "isArrayBufferView", "isInt8Array", "isUint8Array", "isUint8ClampedArray",
+                "isInt16Array", "isUint16Array", "isInt32Array", "isUint32Array",
+                "isFloat32Array", "isFloat64Array", "isBigInt64Array", "isBigUint64Array",
+            ],
+            NativeBuiltinModule::Assert | NativeBuiltinModule::AssertStrict => vec![
+                "AssertionError", "fail", "ok", "equal", "notEqual", "deepEqual",
+                "notDeepEqual", "strictEqual", "notStrictEqual", "deepStrictEqual",
+                "notDeepStrictEqual", "match", "doesNotMatch", "ifError", "throws",
+                "doesNotThrow", "rejects", "doesNotReject", "strict",
+            ],
+            NativeBuiltinModule::StringDecoder => vec!["StringDecoder"],
         }
     }
 
     /// Bound the mutable state reachable from a native export without calling
     /// guest code. A descriptor authenticates the provider, not later guest
-    /// writes to its shared CommonJS object. Accessors, proxies and opaque
-    /// suspended values stay fail-high. Callable effects retain their ordinary
+    /// writes to its shared CommonJS object. Unknown accessors, proxies and
+    /// opaque suspended values stay fail-high. Callable effects retain their ordinary
     /// invocation checks; their existing property storage is visited here too.
     /// The iterative walk charges every edge and reserves its guest-sized
     /// worklist before growing it, including on cached namespace imports.
@@ -40770,12 +40832,15 @@ impl InterpreterCore {
         module: &Ir3Module,
         root: ObjectId,
     ) -> Result<Label, InterpreterError> {
-        let mut pending = vec![root];
+        // Only the root and its prototype chain can supply properties read
+        // during the namespace snapshot. Nested accessors remain deferred
+        // code, like methods, but only audited native factory code is admitted.
+        let mut pending = vec![(root, true)];
         let mut visited = BTreeSet::new();
         let mut label = Label::Internal;
-        while let Some(object_id) = pending.pop() {
+        while let Some((object_id, snapshot_lookup)) = pending.pop() {
             self.charge_property_copy_work()?;
-            if visited.contains(&object_id) {
+            if visited.contains(&(object_id, snapshot_lookup)) {
                 continue;
             }
             let object = self
@@ -40808,12 +40873,13 @@ impl InterpreterCore {
             let temporary_bytes = (visited.len().saturating_add(1) as u64)
                 .saturating_mul(64)
                 .saturating_add(
-                    (capacity as u64).saturating_mul(std::mem::size_of::<ObjectId>() as u64),
+                    (capacity as u64)
+                        .saturating_mul(std::mem::size_of::<(ObjectId, bool)>() as u64),
                 );
             self.check_temporary_memory_budget(
                 temporary_bytes.saturating_add(Self::estimate_label_bytes(&label)),
             )?;
-            visited.insert(object_id);
+            visited.insert((object_id, snapshot_lookup));
             if object.brand() == Some(PROXY_TYPE_TAG)
                 || !object.private_elements.is_empty()
                 || object.primitive_value.is_some()
@@ -40855,25 +40921,32 @@ impl InterpreterCore {
             }
             let mut opaque = false;
             for value in object.properties.values_unordered() {
-                opaque |= self.queue_native_builtin_value(module, value, &mut pending)?;
+                opaque |=
+                    self.queue_native_builtin_value(module, value, !snapshot_lookup, &mut pending)?;
             }
             for (_, property) in object.properties.baseline_symbol_properties() {
                 match property {
                     BaselineSymbolProperty::Data(value) => {
-                        opaque |= self.queue_native_builtin_value(module, value, &mut pending)?;
+                        opaque |= self.queue_native_builtin_value(
+                            module,
+                            value,
+                            !snapshot_lookup,
+                            &mut pending,
+                        )?;
                     }
                     BaselineSymbolProperty::Accessor { get, set } => {
                         opaque |= self.queue_native_builtin_accessor(
                             module,
                             get.as_ref(),
                             set.as_ref(),
+                            !snapshot_lookup,
                             &mut pending,
                         )?;
                     }
                 }
             }
             if let Some(prototype) = self.observable_prototype_link(object, object_id) {
-                pending.push(prototype);
+                pending.push((prototype, snapshot_lookup));
             }
             self.instructions_executed = self.instructions_executed.saturating_add(work);
             if opaque {
@@ -40887,15 +40960,17 @@ impl InterpreterCore {
         &self,
         module: &Ir3Module,
         value: &Value,
-        pending: &mut Vec<ObjectId>,
+        allow_deferred_factory_accessor: bool,
+        pending: &mut Vec<(ObjectId, bool)>,
     ) -> Result<bool, InterpreterError> {
         match value {
-            Value::Object(object) => pending.push(*object),
+            Value::Object(object) => pending.push((*object, false)),
             Value::Accessor { get, set } => {
                 return self.queue_native_builtin_accessor(
                     module,
                     get.as_deref(),
                     set.as_deref(),
+                    allow_deferred_factory_accessor,
                     pending,
                 );
             }
@@ -40910,11 +40985,11 @@ impl InterpreterCore {
                         return Ok(true);
                     }
                     if let Some(receiver) = builtin.bound_object {
-                        pending.push(ObjectId(receiver));
+                        pending.push((ObjectId(receiver), false));
                     }
                 }
                 if let Some(object) = self.function_own_property_object(module, function)? {
-                    pending.push(object);
+                    pending.push((object, false));
                 }
             }
             _ => {}
@@ -40922,12 +40997,82 @@ impl InterpreterCore {
         Ok(false)
     }
 
+    /// Identify the narrowly audited deferred accessors in immutable native
+    /// factory programs. The guest-visible function name is not authority.
+    /// In particular, util.promisify/deprecate create closures in the same
+    /// program that capture guest callbacks; their code is not an accessor.
+    fn is_deferred_native_factory_accessor(&self, function: &Value, setter: bool) -> bool {
+        let Value::Closure(closure_id) = function else {
+            return false;
+        };
+        if self
+            .closure_generated_function_artifacts
+            .get(closure_id)
+            .is_some()
+        {
+            return false;
+        }
+        let Some(origin) = self.closure_module_origins.get(closure_id) else {
+            return false;
+        };
+        let provider = match origin.as_str() {
+            "\0franken-engine/native-util" => 0,
+            "\0franken-engine/native-string_decoder" => 1,
+            _ => return false,
+        };
+        static FACTORY_HASHES: OnceLock<[ContentHash; 2]> = OnceLock::new();
+        let hashes = FACTORY_HASHES.get_or_init(|| {
+            [
+                NativeBuiltinModule::Util
+                    .record("\0franken-engine/native-util")
+                    .canonical_hash(),
+                NativeBuiltinModule::StringDecoder
+                    .record("\0franken-engine/native-string_decoder")
+                    .canonical_hash(),
+            ]
+        });
+        let Some(record) = self.module_state.modules.get(origin) else {
+            return false;
+        };
+        if record.resolved_source_hash != Some(hashes[provider])
+            || !matches!(record.status, ModuleRuntimeStatus::Evaluated)
+        {
+            return false;
+        }
+        let Some(program) = record.compiled_module.as_ref() else {
+            return false;
+        };
+        if program.header.source_label != *origin {
+            return false;
+        }
+        let Some(closure) = self.closures.get(*closure_id as usize) else {
+            return false;
+        };
+        let Some(code) = program.function_table.get(closure.function_index as usize) else {
+            return false;
+        };
+        if code.is_generator || code.rest_param_index.is_some() {
+            return false;
+        }
+        matches!(
+            (provider, setter, code.name.as_deref(), code.arity),
+            (
+                0,
+                false,
+                Some("get" | "type" | "subtype" | "essence" | "params"),
+                0
+            ) | (0, true, Some("set" | "type" | "subtype"), 1)
+                | (1, false, Some("get"), 0)
+        )
+    }
+
     fn queue_native_builtin_accessor(
         &self,
         module: &Ir3Module,
         get: Option<&Value>,
         set: Option<&Value>,
-        pending: &mut Vec<ObjectId>,
+        allow_deferred_factory_accessor: bool,
+        pending: &mut Vec<(ObjectId, bool)>,
     ) -> Result<bool, InterpreterError> {
         // These canonical accessors only expose the receiver or its already
         // visited prototype. Their identity cannot be forged by guest source.
@@ -40937,6 +41082,14 @@ impl InterpreterCore {
             let Some(function) = function else {
                 continue;
             };
+            if allow_deferred_factory_accessor
+                && self.is_deferred_native_factory_accessor(function, setter)
+            {
+                if self.queue_native_builtin_value(module, function, true, pending)? {
+                    return Ok(true);
+                }
+                continue;
+            }
             let Value::BuiltinFunction(builtin) = function else {
                 return Ok(true);
             };
@@ -40955,7 +41108,7 @@ impl InterpreterCore {
                                 || (*owner == "TypedArray"
                                     && *key == prototype_getters::TYPED_ARRAY_TO_STRING_TAG)
                         }));
-            if !inert || self.queue_native_builtin_value(module, function, pending)? {
+            if !inert || self.queue_native_builtin_value(module, function, true, pending)? {
                 return Ok(true);
             }
         }
@@ -40985,8 +41138,13 @@ impl InterpreterCore {
             NativeBuiltinModule::Path => PATH_ESM_MODULE_ID,
             NativeBuiltinModule::PathPosix => PATH_POSIX_ESM_MODULE_ID,
             NativeBuiltinModule::PathWin32 => PATH_WIN32_ESM_MODULE_ID,
+            NativeBuiltinModule::Util => "\0franken-engine/native-util/esm",
+            NativeBuiltinModule::UtilTypes => "\0franken-engine/native-util/types/esm",
+            NativeBuiltinModule::Assert => "\0franken-engine/native-assert/esm",
+            NativeBuiltinModule::AssertStrict => "\0franken-engine/native-assert/strict/esm",
+            NativeBuiltinModule::StringDecoder => "\0franken-engine/native-string_decoder/esm",
         };
-        let value = self.load_native_builtin_resolved(module, source, native)?;
+        let value = self.load_native_builtin_resolved(module, source, native, import_bound)?;
         let object = match &value {
             Value::Object(object) => *object,
             function => self
@@ -40996,6 +41154,15 @@ impl InterpreterCore {
                 })?,
         };
         if import_bound.is_some() {
+            // A submodule can cache a classified reference to an otherwise
+            // public function. Its selection label is independent of the
+            // mutable state reachable from that function's property storage.
+            let selected_label = self.json_parse_context_label()?;
+            Self::check_import_flow_bound(
+                &source.module.request_specifier,
+                &selected_label,
+                import_bound,
+            )?;
             let ceiling = self.native_builtin_state_label(module, object)?;
             Self::check_import_flow_bound(
                 &source.module.request_specifier,
@@ -41015,14 +41182,16 @@ impl InterpreterCore {
             match &record.status {
                 ModuleRuntimeStatus::Failed(_) => {
                     let key = RuntimePropertyKey::String(JsString::from("error"));
-                    let cached = self.builtin_prototypes.get(specifier).copied().and_then(
-                        |carrier| {
-                            self.heap
-                                .get(carrier.0 as usize)
-                                .and_then(|object| object.own_runtime_property_value(&key))
-                                .map(|value| (carrier, value))
-                        },
-                    );
+                    let cached =
+                        self.builtin_prototypes
+                            .get(specifier)
+                            .copied()
+                            .and_then(|carrier| {
+                                self.heap
+                                    .get(carrier.0 as usize)
+                                    .and_then(|object| object.own_runtime_property_value(&key))
+                                    .map(|value| (carrier, value))
+                            });
                     if let Some((carrier, thrown)) = cached {
                         let label = self.runtime_property_label(carrier, &key);
                         self.replace_pending_abrupt_slots(Some((thrown, label)), None)?;
@@ -41052,15 +41221,16 @@ impl InterpreterCore {
                     if import_bound.is_some() {
                         let ceiling = self.native_builtin_state_label(module, namespace)?;
                         Self::check_import_flow_bound(
-                            &source.module.request_specifier, &ceiling, import_bound,
+                            &source.module.request_specifier,
+                            &ceiling,
+                            import_bound,
                         )?;
                     }
                     return Ok(Value::Object(namespace));
                 }
                 ModuleRuntimeStatus::AsyncEvaluating => {
                     return Err(InterpreterError::InternalError {
-                        details: "a native namespace cannot evaluate asynchronously"
-                            .to_string(),
+                        details: "a native namespace cannot evaluate asynchronously".to_string(),
                     });
                 }
                 ModuleRuntimeStatus::Evaluated => {}
@@ -41075,16 +41245,20 @@ impl InterpreterCore {
             // Native imports can run outside a hostcall observation scope.
             // Track descriptor shape, getter effects and exceptional labels
             // while preserving the caller's pending-result ownership.
-            let observation = self.begin_property_observation([])?;
+            let selected_label = self.json_parse_context_label()?;
+            let selected_bytes = Self::estimate_label_bytes(&selected_label);
+            self.json_reserve_temporary(selected_bytes)?;
+            let observation = self.begin_property_observation([]);
+            self.json_release_temporary(selected_bytes);
+            let observation = observation?;
             let outcome = (|| -> Result<(), InterpreterError> {
+                // Opening the scope saved and cleared the pending result.
+                // The provider reference still labels every published export.
+                self.json_observe_label(selected_label)?;
                 for name in Self::native_builtin_export_names(native) {
                     let key = RuntimePropertyKey::String(JsString::from(name));
-                    let member = self.iterator_protocol_property(
-                        Some(module),
-                        object,
-                        &key,
-                        value.clone(),
-                    )?;
+                    let member =
+                        self.iterator_protocol_property(Some(module), object, &key, value.clone())?;
                     let label = self.json_parse_context_label()?;
                     self.publish_module_export(
                         specifier,
@@ -41262,6 +41436,159 @@ impl InterpreterCore {
         } else {
             posix
         }))
+    }
+
+    /// Execute the existing engine-owned factories as retained CommonJS
+    /// modules. Their closures keep their defining module across captured
+    /// package boundaries; aliases and submodules share the parent instance.
+    /// The authenticated descriptor is checked before this private cache.
+    fn source_builtin_module(
+        &mut self,
+        module: &Ir3Module,
+        native: NativeBuiltinModule,
+        import_bound: Option<&Label>,
+    ) -> Result<Value, InterpreterError> {
+        // A first submodule selection may observe a guest getter or a
+        // classified prototype/shape. Keep those observations on its private
+        // cached reference, including calls without an outer hostcall scope.
+        let selected_label = self.json_parse_context_label()?;
+        let selected_bytes = Self::estimate_label_bytes(&selected_label);
+        self.json_reserve_temporary(selected_bytes)?;
+        let observation = self.begin_property_observation([]);
+        self.json_release_temporary(selected_bytes);
+        let observation = observation?;
+        let outcome = (|| {
+            self.json_observe_label(selected_label)?;
+            self.source_builtin_module_inner(module, native, import_bound)
+        })();
+        self.finish_property_read_observation(observation, outcome)
+    }
+
+    fn source_builtin_module_inner(
+        &mut self,
+        module: &Ir3Module,
+        native: NativeBuiltinModule,
+        import_bound: Option<&Label>,
+    ) -> Result<Value, InterpreterError> {
+        let (factory, id, member) = match native {
+            NativeBuiltinModule::Util => (
+                NativeBuiltinModule::Util,
+                "\0franken-engine/native-util",
+                None,
+            ),
+            NativeBuiltinModule::UtilTypes => (
+                NativeBuiltinModule::Util,
+                "\0franken-engine/native-util",
+                Some("types"),
+            ),
+            NativeBuiltinModule::Assert => (
+                NativeBuiltinModule::Assert,
+                "\0franken-engine/native-assert",
+                None,
+            ),
+            NativeBuiltinModule::AssertStrict => (
+                NativeBuiltinModule::Assert,
+                "\0franken-engine/native-assert",
+                Some("strict"),
+            ),
+            NativeBuiltinModule::StringDecoder => (
+                NativeBuiltinModule::StringDecoder,
+                "\0franken-engine/native-string_decoder",
+                None,
+            ),
+            _ => {
+                return Err(InterpreterError::InternalError {
+                    details: "native provider has no engine-owned source factory".to_string(),
+                });
+            }
+        };
+        let carrier = match self.builtin_prototypes.get(id).copied() {
+            Some(carrier) => carrier,
+            None => {
+                let record = factory.record(id);
+                let source = ResolvedModule {
+                    request_specifier: factory.canonical_specifier().to_string(),
+                    canonical_specifier: id.to_string(),
+                    content_hash: record.canonical_hash(),
+                    record,
+                    probe_sequence: Vec::new(),
+                };
+                self.load_module_resolved(module, id, ModuleLoadKind::Require, None, Some(source))?;
+                let module_object = self
+                    .module_state
+                    .modules
+                    .get(id)
+                    .and_then(|record| record.cjs_module_object)
+                    .ok_or_else(|| InterpreterError::ModuleEvaluationFailed {
+                        specifier: factory.canonical_specifier().to_string(),
+                        reason: "native factory did not initialize its CommonJS exports"
+                            .to_string(),
+                    })?;
+                let value = self.iterator_protocol_property(
+                    Some(module),
+                    module_object,
+                    &RuntimePropertyKey::String(JsString::from("exports")),
+                    Value::Object(module_object),
+                )?;
+                self.run_pre_allocation_hook(module, AllocKind::Object, 0)?;
+                let carrier = self.alloc_object_with_prototype(None)?;
+                self.json_store_parsed_property(carrier, JsString::from("exports"), value.clone())?;
+                // Node's util/types is the original shared types object, even
+                // if a package replaces util.types before requiring the alias.
+                if factory == NativeBuiltinModule::Util {
+                    let types = self.get_v(
+                        module,
+                        &value,
+                        &RuntimePropertyKey::String(JsString::from("types")),
+                    )?;
+                    self.json_store_parsed_property(carrier, JsString::from("types"), types)?;
+                }
+                self.mutate_builtin_prototypes(|prototypes| {
+                    prototypes.insert(id.to_string(), carrier);
+                });
+                carrier
+            }
+        };
+        let name = member.unwrap_or("exports");
+        let key = RuntimePropertyKey::String(JsString::from(name));
+        if member == Some("strict")
+            && self
+                .heap
+                .get(carrier.0 as usize)
+                .and_then(|object| object.own_runtime_property_value(&key))
+                .is_none()
+        {
+            // assert/strict snapshots assert.strict on its first load. Keep
+            // that value and its observed label in a private rooted carrier,
+            // including when a package supplied an accessor or undefined.
+            let value = self.iterator_protocol_property(
+                Some(module),
+                carrier,
+                &RuntimePropertyKey::String(JsString::from("exports")),
+                Value::Object(carrier),
+            )?;
+            let backing = match &value {
+                Value::Object(object) => *object,
+                function => self
+                    .function_own_property_object(module, function)?
+                    .ok_or_else(|| InterpreterError::InternalError {
+                        details: "native assert factory has no export property storage".to_string(),
+                    })?,
+            };
+            if import_bound.is_some() {
+                // Selection itself can run a guest getter. Admit the parent
+                // state before Get, only while this alias is still uncached.
+                let ceiling = self.native_builtin_state_label(module, backing)?;
+                Self::check_import_flow_bound(
+                    native.canonical_specifier(),
+                    &ceiling,
+                    import_bound,
+                )?;
+            }
+            let strict = self.iterator_protocol_property(Some(module), backing, &key, value)?;
+            self.json_store_parsed_property(carrier, JsString::from(name), strict)?;
+        }
+        self.iterator_protocol_property(Some(module), carrier, &key, Value::Object(carrier))
     }
 
     /// Read a dependency once and charge its raw bytes before decoding or
@@ -67809,6 +68136,11 @@ impl InterpreterCore {
             PATH_ESM_MODULE_ID,
             PATH_POSIX_ESM_MODULE_ID,
             PATH_WIN32_ESM_MODULE_ID,
+            "\0franken-engine/native-util/esm",
+            "\0franken-engine/native-util/types/esm",
+            "\0franken-engine/native-assert/esm",
+            "\0franken-engine/native-assert/strict/esm",
+            "\0franken-engine/native-string_decoder/esm",
         ]
         .into_iter()
         .any(|specifier| {
@@ -151198,6 +151530,182 @@ mod function_prototype_call_apply_tests_current {
                 Some(Label::Secret),
                 "neither named nor default native exports may lower the invocation result label"
             );
+        }
+    }
+
+    #[test]
+    fn native_strict_alias_retains_selected_and_cached_reference_labels() {
+        let caller = test_module_with_functions(Vec::new(), Vec::new());
+        for (cached, label_shape) in [false, true]
+            .into_iter()
+            .flat_map(|cached| [(cached, false), (cached, true)])
+        {
+            let mut core = test_interpreter();
+            let assertion = core
+                .source_builtin_module(&caller, NativeBuiltinModule::Assert, None)
+                .expect("execute the real assert factory");
+            let holder = if cached {
+                core.source_builtin_module(&caller, NativeBuiltinModule::AssertStrict, None)
+                    .expect("initialize strict alias before classifying its cached reference");
+                core.builtin_prototypes["\0franken-engine/native-assert"]
+            } else {
+                core.function_own_property_object(&caller, &assertion)
+                    .unwrap()
+                    .expect("assert property storage")
+            };
+            let strict_key = RuntimePropertyKey::String(JsString::from("strict"));
+            if label_shape {
+                core.join_object_mutation_label(holder, &Label::Secret)
+                    .unwrap();
+            } else {
+                core.set_own_runtime_property_label(holder, &strict_key, &Label::Secret)
+                    .unwrap();
+            }
+            core.clear_pending_hostcall_result_label();
+            core.source_builtin_module(&caller, NativeBuiltinModule::AssertStrict, None)
+                .expect("unbounded CommonJS selection retains property and shape provenance");
+            assert_eq!(
+                core.take_pending_hostcall_result_label(),
+                Some(Label::Secret),
+                "cached={cached}, shape={label_shape}: first CJS read"
+            );
+            core.clear_pending_hostcall_result_label();
+            let record = NativeBuiltinModule::AssertStrict.record("captured:classified-strict");
+            let source = ResolutionOutcome {
+                module: ResolvedModule {
+                    request_specifier: "assert/strict".into(),
+                    canonical_specifier: record.id.clone(),
+                    content_hash: record.canonical_hash(),
+                    record,
+                    probe_sequence: Vec::new(),
+                },
+                event: crate::module_resolver::ResolutionEvent {
+                    trace_id: "strict-reference-label".into(),
+                    decision_id: "strict-reference-label".into(),
+                    policy_id: "strict-reference-label".into(),
+                    component: "module_resolver".into(),
+                    event: "resolved".into(),
+                    outcome: "allowed".into(),
+                    error_code: String::new(),
+                },
+            };
+            assert!(matches!(
+                core.load_native_builtin_namespace(
+                    &caller,
+                    &source,
+                    NativeBuiltinModule::AssertStrict,
+                    Some(&Label::Internal),
+                ),
+                Err(InterpreterError::ModuleLoweringFailed { .. })
+            ));
+            core.clear_pending_hostcall_result_label();
+            let Value::Object(namespace) = core
+                .load_native_builtin_namespace(
+                    &caller,
+                    &source,
+                    NativeBuiltinModule::AssertStrict,
+                    None,
+                )
+                .expect("unbounded namespace retains selection provenance")
+            else {
+                panic!("strict namespace");
+            };
+            for name in ["default", "strictEqual"] {
+                assert_eq!(
+                    core.runtime_property_label(
+                        namespace,
+                        &RuntimePropertyKey::String(JsString::from(name)),
+                    ),
+                    Label::Secret,
+                    "cached={cached}, shape={label_shape}: {name} must retain the classified reference"
+                );
+            }
+            core.clear_pending_hostcall_result_label();
+            core.source_builtin_module(&caller, NativeBuiltinModule::AssertStrict, None)
+                .expect("cached CommonJS alias");
+            assert_eq!(
+                core.take_pending_hostcall_result_label(),
+                Some(Label::Secret)
+            );
+            assert!(core.active_inline_callback_context_label.is_none());
+            assert_eq!(core.json_parse_temporary_bytes, 0);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn native_factory_deferred_accessors_retain_nested_labels() {
+        let caller = test_module_with_functions(Vec::new(), Vec::new());
+        for native in [
+            NativeBuiltinModule::Util,
+            NativeBuiltinModule::StringDecoder,
+        ] {
+            let mut core = test_interpreter();
+            let Value::Object(exports) = core
+                .source_builtin_module(&caller, native, None)
+                .expect("execute the actual authenticated native factory")
+            else {
+                panic!("these providers export objects");
+            };
+            let (nested, property) = if native == NativeBuiltinModule::Util {
+                let inspect = core.prototype_chain_get(exports, "inspect").unwrap();
+                let Value::Object(colors) = core
+                    .get_v(
+                        &caller,
+                        &inspect,
+                        &RuntimePropertyKey::String(JsString::from("colors")),
+                    )
+                    .unwrap()
+                else {
+                    panic!("util.inspect.colors");
+                };
+                (colors, "gray")
+            } else {
+                let decoder = core.prototype_chain_get(exports, "StringDecoder").unwrap();
+                let Value::Object(prototype) = core
+                    .get_v(
+                        &caller,
+                        &decoder,
+                        &RuntimePropertyKey::String(JsString::from("prototype")),
+                    )
+                    .unwrap()
+                else {
+                    panic!("StringDecoder.prototype");
+                };
+                (prototype, "lastNeed")
+            };
+            assert_eq!(
+                core.native_builtin_state_label(&caller, exports).unwrap(),
+                Label::Internal,
+                "canonical deferred accessors do not execute at namespace creation"
+            );
+            core.set_own_runtime_property_label(
+                nested,
+                &RuntimePropertyKey::String(JsString::from(property)),
+                &Label::Secret,
+            )
+            .unwrap();
+            assert_eq!(
+                core.native_builtin_state_label(&caller, exports).unwrap(),
+                Label::Secret,
+                "admitting exact accessor code must not erase its live state labels"
+            );
+            if native == NativeBuiltinModule::Util {
+                let _ = core.take_pending_hostcall_result_label();
+                core.get_v(
+                    &caller,
+                    &Value::Object(nested),
+                    &RuntimePropertyKey::String(JsString::from("grey")),
+                )
+                .expect("the canonical alias getter remains callable later");
+                assert_eq!(
+                    core.take_pending_hostcall_result_label(),
+                    Some(Label::Secret)
+                );
+            }
         }
     }
 

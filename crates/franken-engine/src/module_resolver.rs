@@ -282,6 +282,11 @@ pub enum NativeBuiltinModule {
     Path,
     PathPosix,
     PathWin32,
+    Util,
+    UtilTypes,
+    Assert,
+    AssertStrict,
+    StringDecoder,
 }
 
 impl NativeBuiltinModule {
@@ -297,6 +302,11 @@ impl NativeBuiltinModule {
             "path" | "node:path" => Some(Self::Path),
             "path/posix" | "node:path/posix" => Some(Self::PathPosix),
             "path/win32" | "node:path/win32" => Some(Self::PathWin32),
+            "util" | "node:util" => Some(Self::Util),
+            "util/types" | "node:util/types" => Some(Self::UtilTypes),
+            "assert" | "node:assert" => Some(Self::Assert),
+            "assert/strict" | "node:assert/strict" => Some(Self::AssertStrict),
+            "string_decoder" | "node:string_decoder" => Some(Self::StringDecoder),
             _ => None,
         }
     }
@@ -313,6 +323,11 @@ impl NativeBuiltinModule {
             Self::Path => "node:path",
             Self::PathPosix => "node:path/posix",
             Self::PathWin32 => "node:path/win32",
+            Self::Util => "node:util",
+            Self::UtilTypes => "node:util/types",
+            Self::Assert => "node:assert",
+            Self::AssertStrict => "node:assert/strict",
+            Self::StringDecoder => "node:string_decoder",
         }
     }
 
@@ -2560,6 +2575,11 @@ mod tests {
             "path",
             "path/posix",
             "path/win32",
+            "util",
+            "util/types",
+            "assert",
+            "assert/strict",
+            "string_decoder",
         ] {
             let builtin = NativeBuiltinModule::from_specifier(name).unwrap();
             assert_eq!(builtin.canonical_specifier(), format!("node:{name}"));

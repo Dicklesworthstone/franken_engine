@@ -82,6 +82,7 @@ mod native_module_source;
 pub(crate) mod path_module;
 mod util_module;
 pub(crate) use util_module::has_ambient_fs_require;
+pub(crate) use util_module::{native_runtime_module_source_bytes, native_runtime_module_tree};
 mod with_statement;
 
 const COMPONENT: &str = "lowering_pipeline";

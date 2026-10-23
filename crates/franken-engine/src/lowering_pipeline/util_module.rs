@@ -74,13 +74,12 @@ use super::with_statement::{
     FunctionBody, FunctionParts, Outcome, Search, Walk, lexical_names, var_names, walk_class,
     walk_expression, walk_function, walk_statement, walk_switch_cases,
 };
-use crate::ast::{
-    BindingPattern, CatchClause, Expression, MethodDefinition, SourceSpan, Statement,
-    SwitchCase, SyntaxTree, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
-};
-#[cfg(test)]
 use crate::ast::ParseGoal;
-#[cfg(test)]
+use crate::ast::{
+    BindingPattern, CatchClause, Expression, MethodDefinition, SourceSpan, Statement, SwitchCase,
+    SyntaxTree, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
+};
+use crate::module_resolver::NativeBuiltinModule;
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
 /// `util.inspect(value, { depth })`: the console formatter at a depth.
@@ -557,9 +556,55 @@ pub(super) fn rewrite_util_requires(
     Ok(Some(rewritten))
 }
 
-fn rewrite_module_objects(
-    tree: &SyntaxTree,
-) -> Result<Option<SyntaxTree>, LoweringPipelineError> {
+/// Fixed engine-owned entrypoints for the authenticated runtime provider.
+/// Reuse the ordinary factory, dependency and first-use loader transforms;
+/// captured guest source never enters this function. Submodules select a
+/// property of the same retained parent module in the interpreter.
+fn native_runtime_wrapper(native: NativeBuiltinModule) -> Option<(&'static str, usize)> {
+    let loader_bytes = include_str!("native_module_loader.js").len();
+    let util_bytes = UTIL_SOURCE.len() + include_str!("util_mime.js").len() + loader_bytes;
+    match native {
+        NativeBuiltinModule::Util | NativeBuiltinModule::UtilTypes => {
+            Some(("module.exports = require('util');", util_bytes))
+        }
+        NativeBuiltinModule::Assert | NativeBuiltinModule::AssertStrict => Some((
+            "module.exports = require('assert');",
+            ASSERT_SOURCE.len() + loader_bytes + util_bytes,
+        )),
+        NativeBuiltinModule::StringDecoder => Some((
+            "module.exports = require('string_decoder');",
+            STRING_DECODER_SOURCE.len() + loader_bytes,
+        )),
+        _ => None,
+    }
+}
+
+/// Charge the complete embedded implementation before materializing its AST.
+pub(crate) fn native_runtime_module_source_bytes(native: NativeBuiltinModule) -> Option<usize> {
+    native_runtime_wrapper(native).map(|(wrapper, source_bytes)| wrapper.len() + source_bytes)
+}
+
+pub(crate) fn native_runtime_module_tree(
+    native: NativeBuiltinModule,
+) -> Result<SyntaxTree, LoweringPipelineError> {
+    let invalid = || LoweringPipelineError::InvariantViolation {
+        detail: "the engine's native builtin module wrapper is invalid",
+    };
+    let (wrapper, _) = native_runtime_wrapper(native).ok_or_else(invalid)?;
+    let tree = CanonicalEs2020Parser
+        .parse_with_options(
+            ParserSource {
+                label: native.canonical_specifier().into(),
+                text: wrapper.into(),
+            },
+            ParseGoal::Script,
+            &ParserOptions::default(),
+        )
+        .map_err(|_| invalid())?;
+    rewrite_util_requires(&tree)?.ok_or_else(invalid)
+}
+
+fn rewrite_module_objects(tree: &SyntaxTree) -> Result<Option<SyntaxTree>, LoweringPipelineError> {
     let fs_rewritten = fs_module::rewrite_fs_requires(tree)?;
     let tree = fs_rewritten.as_ref().unwrap_or(tree);
     if !tree

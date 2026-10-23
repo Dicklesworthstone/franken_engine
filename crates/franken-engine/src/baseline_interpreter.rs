@@ -17561,12 +17561,27 @@ impl InterpreterCore {
             });
         };
         if args_label != &Label::Public {
-            let outcome = Err(ProcessSpawnError::FlowPolicyBlocked);
-            journal
-                .record_process_spawn(&request, &outcome)
-                .map_err(|error| InterpreterError::InternalError {
-                    details: format!("failed to journal process IFC denial: {error}"),
-                })?;
+            let failure = ProcessSpawnError::FlowPolicyBlocked;
+            // The current IFC refusal remains authoritative during replay.
+            // Consume its exact recorded request and denial before returning;
+            // a replay journal cannot append or dispatch a live provider call.
+            match journal.replay_process_spawn_preparation_failure(&request, &failure) {
+                Some(Err(ProcessSpawnError::FlowPolicyBlocked)) => {}
+                Some(_) => {
+                    return Err(InterpreterError::InternalError {
+                        details: "recorded process IFC denial differs from the current refusal"
+                            .to_string(),
+                    });
+                }
+                None => {
+                    let outcome = Err(failure);
+                    journal
+                        .record_process_spawn(&request, &outcome)
+                        .map_err(|error| InterpreterError::InternalError {
+                            details: format!("failed to journal process IFC denial: {error}"),
+                        })?;
+                }
+            }
             return Err(InterpreterError::HostProcess {
                 code: "EACCES".to_string(),
                 message: "process spawn denied: FLOW_POLICY_BLOCKED".to_string(),
@@ -151038,10 +151053,14 @@ mod function_prototype_call_apply_tests_current {
         let module = test_module_with_functions(Vec::new(), Vec::new());
         let mut core = test_interpreter();
         let ordinary = core.alloc_object_with_prototype(None).unwrap();
-        let ordinary_prototype = core.object_get_prototype(Some(&module), ordinary, 0).unwrap();
+        let ordinary_prototype = core
+            .object_get_prototype(Some(&module), ordinary, 0)
+            .unwrap();
         assert!(matches!(ordinary_prototype, Value::Object(_)));
 
-        let namespace = core.ensure_module_record(&module, "namespace-prototype.mjs").unwrap();
+        let namespace = core
+            .ensure_module_record(&module, "namespace-prototype.mjs")
+            .unwrap();
         assert_eq!(
             core.object_get_prototype(Some(&module), namespace, 0),
             Ok(Value::Null)
@@ -151052,7 +151071,10 @@ mod function_prototype_call_apply_tests_current {
         );
         let handler = seed_object(&mut core, &[]);
         let proxy = core.create_proxy_object(namespace, handler).unwrap();
-        assert_eq!(core.object_get_prototype(Some(&module), proxy, 0), Ok(Value::Null));
+        assert_eq!(
+            core.object_get_prototype(Some(&module), proxy, 0),
+            Ok(Value::Null)
+        );
         assert_eq!(
             core.object_get_prototype(Some(&module), ordinary, 0),
             Ok(ordinary_prototype)

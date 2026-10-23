@@ -40,7 +40,8 @@ use crate::capability::RuntimeCapability;
 use crate::effect_set::EffectKind;
 use crate::ir_contract::{Ir0Module, Ir2Module};
 use crate::lowering_pipeline::{
-    Ir2FlowProofArtifact, LoweringContext, LoweringPipelineError, lower_ir0_to_ir3,
+    Ir2FlowProofArtifact, LoweringContext, LoweringPipelineError, has_ambient_fs_require,
+    lower_ir0_to_ir3,
 };
 use crate::parser::{CanonicalEs2020Parser, ParserOptions};
 use crate::ts_normalization::{CapabilityIntent, prepare_source_entry_for_public_entrypoints};
@@ -463,6 +464,27 @@ pub fn analyze_authority_footprint(
         Err(error) => return fail_closed(format!("parse failed: {error}")),
     };
 
+    // First-class fs module objects are a runtime facade, but the static check
+    // historically reports their free CommonJS loader as the bounded ambient
+    // authority edge. Ask the same scope-aware rewriter used by execution so
+    // shadowed/dynamic loaders are never misclassified. Direct fs calls stay
+    // on normal lowering and therefore keep precise FsRead/FsWrite operation
+    // capabilities instead of being collapsed to this compatibility finding.
+    match has_ambient_fs_require(&syntax_tree) {
+        Ok(true) => {
+            return report_from_ambient_violation(
+                base(true),
+                EffectKind::FsRead,
+                "require".to_string(),
+                None,
+            );
+        }
+        Ok(false) => {}
+        Err(error) => {
+            return fail_closed(format!("native module analysis failed: {error}"));
+        }
+    }
+
     let ir0 = Ir0Module::from_syntax_tree(syntax_tree, source_label);
     let context = LoweringContext::new(
         CHECK_TRACE_ID.to_string(),
@@ -732,6 +754,30 @@ mod tests {
             .find(|f| f.kind == CheckFindingKind::AmbientAuthorityViolation)
             .expect("require is an ambient-authority access");
         assert_eq!(finding.implied_capability, Some(RuntimeCapability::FsRead));
+    }
+
+    #[test]
+    fn direct_fs_write_keeps_operation_specific_authority() {
+        let report = analyze_authority_footprint(
+            "require('fs').writeFileSync('output', 'bytes');",
+            "write.js",
+            ParseGoal::Script,
+        );
+        assert!(report.analyzable);
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|finding| finding.kind != CheckFindingKind::AmbientAuthorityViolation),
+            "the direct fs operation must not be reclassified as a raw module load"
+        );
+        assert!(
+            report
+                .required_capabilities
+                .iter()
+                .any(|requirement| requirement.capability == Some(RuntimeCapability::FsWrite)),
+            "the operation-specific write capability must survive"
+        );
     }
 
     #[test]

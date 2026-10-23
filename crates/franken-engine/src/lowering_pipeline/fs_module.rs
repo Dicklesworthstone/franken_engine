@@ -101,6 +101,26 @@ pub(super) fn is_module_declaration(statement: &Statement) -> bool {
                 if name == MODULE_BINDING))
 }
 
+pub(super) fn has_ambient_fs_require(
+    tree: &SyntaxTree,
+) -> Result<bool, LoweringPipelineError> {
+    if !tree
+        .body
+        .iter()
+        .any(|statement| SEARCH.in_statement(statement))
+    {
+        return Ok(false);
+    }
+    // Call-only synchronous uses are already converted to the exact protected
+    // fs operation and retain their operation-specific capability. Only the
+    // remaining first-class module-object path should surface the legacy raw
+    // require boundary to static authority analysis.
+    if direct_fs_calls(tree)?.is_some() {
+        return Ok(false);
+    }
+    Ok(rewrite_fs_requires(tree)?.is_some())
+}
+
 pub(super) fn rewrite_fs_requires(
     tree: &SyntaxTree,
 ) -> Result<Option<SyntaxTree>, LoweringPipelineError> {
@@ -809,6 +829,26 @@ mod tests {
             panic!("direct call expression");
         };
         assert_eq!(callee.as_ref(), &Expression::Identifier("%FsRead".into()));
+    }
+
+    #[test]
+    fn authority_probe_distinguishes_module_values_from_mediated_calls() {
+        assert!(
+            has_ambient_fs_require(&parse("const fs = require('fs'); console.log(fs);"))
+                .expect("scope-aware probe")
+        );
+        for source in [
+            "require('fs').readFileSync('input');",
+            "const fs = require('node:fs'); fs.writeFileSync('output', 'bytes');",
+            "function f(require) { return require('fs'); }",
+            "const require = loader; require('fs');",
+            "require(name);",
+        ] {
+            assert!(
+                !has_ambient_fs_require(&parse(source)).expect("scope-aware probe"),
+                "{source}"
+            );
+        }
     }
 
     #[test]

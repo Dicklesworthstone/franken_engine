@@ -151082,6 +151082,129 @@ mod function_prototype_call_apply_tests_current {
     }
 
     #[test]
+    fn native_namespace_set_refuses_distinct_and_inherited_receivers() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        let record = NativeBuiltinModule::Path.record("captured:namespace-set-receivers");
+        let source = ResolutionOutcome {
+            module: ResolvedModule {
+                request_specifier: "node:path".into(),
+                canonical_specifier: record.id.clone(),
+                content_hash: record.canonical_hash(),
+                record,
+                probe_sequence: Vec::new(),
+            },
+            event: crate::module_resolver::ResolutionEvent {
+                trace_id: "namespace-set-receivers".into(),
+                decision_id: "namespace-set-receivers".into(),
+                policy_id: "namespace-set-receivers".into(),
+                component: "module_resolver".into(),
+                event: "resolved".into(),
+                outcome: "allowed".into(),
+                error_code: String::new(),
+            },
+        };
+        let Value::Object(namespace) = core
+            .load_native_builtin_namespace(&module, &source, NativeBuiltinModule::Path, None)
+            .expect("load the real native Path namespace")
+        else {
+            panic!("native Path must return a namespace");
+        };
+        let original = core.prototype_chain_get(namespace, "join").unwrap();
+        let receiver = core.alloc_object_with_prototype(None).unwrap();
+        let inherited = core.alloc_object_with_prototype(Some(namespace)).unwrap();
+        let handler = seed_object(&mut core, &[]);
+        let proxy = core.create_proxy_object(namespace, handler).unwrap();
+        let export = RuntimePropertyKey::String(JsString::from("join"));
+        let missing = RuntimePropertyKey::String(JsString::from("missing"));
+
+        // An ordinary target must still write its own public properties. A
+        // transparent Proxy used only as receiver may still define the same
+        // value on a namespace, through [[DefineOwnProperty]] rather than [[Set]].
+        let ordinary = core.alloc_object_with_prototype(None).unwrap();
+        assert_eq!(
+            core.proxy_aware_set_runtime_property(
+                Some(&module),
+                ordinary,
+                &missing,
+                Value::Int(7),
+                Value::Object(ordinary),
+                0,
+            ),
+            Ok(true)
+        );
+        assert_eq!(
+            core.prototype_chain_get(ordinary, "missing"),
+            Ok(Value::Int(7))
+        );
+        assert_eq!(
+            core.proxy_aware_set_runtime_property(
+                Some(&module),
+                ordinary,
+                &export,
+                original.clone(),
+                Value::Object(proxy),
+                0,
+            ),
+            Ok(true)
+        );
+
+        // ECMA-262 10.4.6.9 never consults Receiver: an export, a missing string
+        // and a missing Symbol all refuse, even for another ordinary object.
+        // Node 26 agrees; Node 22/24 permit distinct/inherited receivers here.
+        let keys = [
+            export.clone(),
+            missing.clone(),
+            RuntimePropertyKey::Symbol(WellKnownSymbol::Iterator.id()),
+        ];
+        let receivers = [
+            Value::Object(namespace),
+            Value::Object(receiver),
+            Value::Int(8),
+            Value::Object(proxy),
+        ];
+        let mut observed = Vec::new();
+        for key in &keys {
+            for receiver in &receivers {
+                observed.push(core.proxy_aware_set_runtime_property(
+                    Some(&module),
+                    namespace,
+                    key,
+                    original.clone(),
+                    receiver.clone(),
+                    0,
+                ));
+            }
+        }
+        for target in [inherited, proxy] {
+            for key in [&export, &missing] {
+                observed.push(core.proxy_aware_set_runtime_property(
+                    Some(&module),
+                    target,
+                    key,
+                    original.clone(),
+                    Value::Object(target),
+                    0,
+                ));
+            }
+        }
+        assert_eq!(observed, vec![Ok(false); 16]);
+        assert_eq!(
+            core.prototype_chain_get(receiver, "join"),
+            Ok(Value::Undefined)
+        );
+        assert_eq!(
+            core.prototype_chain_get(receiver, "missing"),
+            Ok(Value::Undefined)
+        );
+        assert_eq!(
+            core.prototype_chain_get(inherited, "join"),
+            Ok(original.clone())
+        );
+        assert_eq!(core.prototype_chain_get(namespace, "join"), Ok(original));
+    }
+
+    #[test]
     fn native_perf_hooks_retains_classified_global_reference_labels() {
         for object_reference in [false, true] {
             for operation in [

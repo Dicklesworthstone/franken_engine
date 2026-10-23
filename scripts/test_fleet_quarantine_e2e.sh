@@ -4,14 +4,25 @@ set -euo pipefail
 # Fleet Quarantine Propagation E2E Test Script - RC-5.5
 # Tests end-to-end fleet quarantine with SLO proof and TEE attestation
 
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$PROJECT_ROOT"
+RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-}"
+if [[ -z "$RUSTUP_TOOLCHAIN" ]]; then
+    RUSTUP_TOOLCHAIN="$(awk -F '"' '/^[[:space:]]*channel[[:space:]]*=/ { print $2; exit }' "$PROJECT_ROOT/rust-toolchain.toml")"
+    if [[ -z "$RUSTUP_TOOLCHAIN" ]]; then
+        echo "error: rust-toolchain.toml must declare a quoted channel" >&2
+        exit 2
+    fi
+fi
+
+TIMESTAMP="$(date +%Y%m%d_%H%M%S)_$$"
 LOG="artifacts/test_fleet_quarantine_${TIMESTAMP}.jsonl"
 ARTIFACTS="artifacts/fleet_evidence/${TIMESTAMP}"
 TEST_OUTPUT_DIR="$ARTIFACTS/test_output"
 CONVERGENCE_SOURCE="$ARTIFACTS/convergence_metrics_sources.jsonl"
 TEE_SOURCE="$ARTIFACTS/tee_verification_sources.jsonl"
 RCH_BIN="${RCH_BIN:-rch}"
-CARGO_TARGET_DIR="${FLEET_QUARANTINE_E2E_CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_fleet_quarantine_${TIMESTAMP}}"
 CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
 CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
 mkdir -p "$(dirname "$LOG")"
@@ -29,7 +40,8 @@ echo "=== Fleet Quarantine Propagation E2E Test ==="
 echo "Timestamp: $TIMESTAMP"
 echo "Artifacts: $ARTIFACTS"
 echo "Log: $LOG"
-echo "RCH target dir: $CARGO_TARGET_DIR"
+echo "Rust toolchain: $RUSTUP_TOOLCHAIN"
+echo "RCH manages remote target and cache paths"
 
 # Initialize test log
 cat > "$LOG" << EOF
@@ -48,11 +60,19 @@ extract_test_markers() {
 }
 
 run_rch_cargo_test() {
-    "$RCH_BIN" exec -- env \
+    RCH_REQUIRE_REMOTE=1 RCH_NO_SELF_HEALING=1 "$RCH_BIN" exec -- env \
+        "RUSTUP_TOOLCHAIN=$RUSTUP_TOOLCHAIN" \
         "CARGO_INCREMENTAL=$CARGO_INCREMENTAL" \
         "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS" \
-        "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" \
         cargo test "$@"
+}
+
+require_remote_result() {
+    if grep -Eiq 'falling back to local|local fallback|running locally|\[RCH\] local \(|Dependency preflight blocked remote execution|RCH-E326' "$1"; then
+        echo "rch local fallback detected; refusing local execution" >&2
+        return 1
+    fi
+    return 0
 }
 
 # Test execution helper
@@ -66,7 +86,7 @@ run_fleet_quarantine_test() {
     local test_exit=0
 
     # Run cargo test for specific fleet quarantine test through rch.
-    if run_rch_cargo_test --test fleet_quarantine_integration "$test_name" -- --nocapture 2>&1 | tee "$output_file"; then
+    if run_rch_cargo_test --test fleet_quarantine_integration "$test_name" -- --nocapture 2>&1 | tee "$output_file" && require_remote_result "$output_file"; then
         test_exit=0
     else
         test_exit=1
@@ -136,7 +156,7 @@ echo "=== Full Fleet Simulation ==="
 # Test 10: Complete fleet quarantine simulation
 echo "Running complete fleet quarantine simulation..."
 full_output_file="$TEST_OUTPUT_DIR/full_fleet_simulation.log"
-if run_rch_cargo_test --test fleet_quarantine_integration -- --nocapture 2>&1 | tee "$full_output_file"; then
+if run_rch_cargo_test --test fleet_quarantine_integration -- --nocapture 2>&1 | tee "$full_output_file" && require_remote_result "$full_output_file"; then
     test10_exit=0
 else
     test10_exit=1

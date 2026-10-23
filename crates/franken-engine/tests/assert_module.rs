@@ -13,6 +13,10 @@ use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3}
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
 fn assert_output(source: &str, expected: &str) {
+    assert_output_with_config(source, expected, InterpreterConfig::quickjs_defaults());
+}
+
+fn assert_output_with_config(source: &str, expected: &str, mut config: InterpreterConfig) {
     let tree = CanonicalEs2020Parser
         .parse_with_options(
             ParserSource {
@@ -29,7 +33,6 @@ fn assert_output(source: &str, expected: &str) {
     )
     .expect("assertion module lowers without filesystem authority")
     .ir3;
-    let mut config = InterpreterConfig::quickjs_defaults();
     config.granted_capabilities = [
         RuntimeCapability::VmDispatch,
         RuntimeCapability::HeapAllocate,
@@ -121,6 +124,76 @@ console.log('structural');
 #[test]
 fn nested_collections_cycles_and_binary_values() {
     assert_output(STRUCTURAL, "structural");
+}
+
+const COLLECTION_RESERVATIONS: &str = r#"
+const assert = require('assert');
+const symbol = Symbol('shared');
+function shared() {}
+const pairs = [
+  [new Map([[false, 1], [0, 2]]), new Map([[false, '1'], ['', '2']]), true],
+  [new Map([[true, 0], [1, 0]]), new Map([[true, 0], ['1', 0]]), true],
+  [new Map([[false, 0], [0, 0]]), new Map([[false, 0], ['', 0]]), true],
+  [new Map([[1, {n: 1}], [true, {n: 1}]]),
+    new Map([[1, {n: '1'}], ['1', {n: '1'}]]), true],
+  [new Map([[0n, 1], [0, 2]]), new Map([[0n, '1'], ['', '2']]), true],
+  [new Map([[null, 1]]), new Map([[undefined, '1']]), true],
+  [new Map([[null, 0], [undefined, 1]]),
+    new Map([[null, 1], [undefined, 0]]), false],
+  [new Map([[null, 0], [undefined, 1]]),
+    new Map([[null, '0'], [undefined, '1']]), true],
+  [new Set([symbol, 0]), new Set([symbol, '0']), true],
+  [new Set([shared, false]), new Set([shared, '']), true],
+  [new Set([Symbol('distinct'), 0]), new Set([Symbol('distinct'), '0']), false],
+  [new Map([[false, 1], [0, 2]]), new Map([[false, 1], ['', 1]]), false],
+  [new Set([{n: 1}, {n: 2}]), new Set([{n: '2'}, {n: '1'}]), true],
+  [new Set([{n: 1}, {n: 1}]), new Set([{n: '1'}, {n: '2'}]), false],
+];
+let checked = 0;
+function verify(left, right, expected) {
+  let equal = true;
+  let unequal = true;
+  try { assert.deepEqual(left, right); }
+  catch (error) { if (error.code !== 'ERR_ASSERTION') throw error; equal = false; }
+  try { assert.notDeepEqual(left, right); }
+  catch (error) { if (error.code !== 'ERR_ASSERTION') throw error; unequal = false; }
+  if (equal !== expected || unequal === expected) throw new Error('collection comparison');
+  checked++;
+}
+for (const pair of pairs) {
+  verify(pair[0], pair[1], pair[2]);
+  verify(pair[1], pair[0], pair[2]);
+}
+const left = {n: 1}; left.self = left;
+const right = {n: '1'}; right.self = right;
+verify(new Map([[false, left], [0, left]]),
+  new Map([[false, right], ['', right]]), true);
+const reason = {marker: 'getter exception'};
+let caught = false;
+try {
+  assert.deepEqual(new Map([[false, {get n() {throw reason;}}], [0, 1]]),
+    new Map([[false, {n: 1}], ['', 1]]));
+} catch (error) { caught = error === reason; }
+if (!caught) throw new Error('exception identity');
+verify(new Map([[false, 0], [0, 0]]), new Map([[false, 0], ['', 0]]), true);
+const reads = [];
+function observed(name) {
+  return {get n() {reads.push(name); return 1;}};
+}
+assert.deepEqual(new Map([[false, observed('a')], [0, observed('c')]]),
+  new Map([[false, observed('b')], ['', observed('d')]]));
+assert.strictEqual(reads.join(''), 'ababcd');
+console.log('collection reservations', checked);
+"#;
+
+#[test]
+fn loose_collections_reserve_exact_primitive_matches() {
+    assert_output(COLLECTION_RESERVATIONS, "collection reservations 30");
+    assert_output_with_config(
+        COLLECTION_RESERVATIONS,
+        "collection reservations 30",
+        InterpreterConfig::v8_defaults(),
+    );
 }
 
 const FAILURES: &str = r#"

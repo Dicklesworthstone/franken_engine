@@ -575,6 +575,10 @@ fn native_runtime_wrapper(native: NativeBuiltinModule) -> Option<(&'static str, 
             "module.exports = require('string_decoder');",
             STRING_DECODER_SOURCE.len() + loader_bytes,
         )),
+        NativeBuiltinModule::TimersPromises => Some((
+            "module.exports = require('timers/promises');",
+            TIMERS_SOURCE.len() + loader_bytes,
+        )),
         _ => None,
     }
 }

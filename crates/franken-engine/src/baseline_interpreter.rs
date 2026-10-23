@@ -3865,6 +3865,10 @@ pub enum BuiltinFunctionKind {
     /// function that returns undefined. Its bound object is the realm's
     /// canonical Function prototype property storage (bd-9vouw.346).
     FunctionPrototype,
+    /// The timers.promises getter reads the exports of its private native
+    /// factory carrier. It never calls guest code; the bound holder retains
+    /// both the returned reference label and the collector edge. Append only.
+    NativeTimerPromisesGetter,
 }
 
 /// Annex B B.2.2.2-14: each String HTML method's tag and attribute name.
@@ -5304,6 +5308,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::RequireResolve => "resolve",
             BuiltinFunctionKind::FunctionConstructor => "Function",
             BuiltinFunctionKind::FunctionPrototype => "",
+            BuiltinFunctionKind::NativeTimerPromisesGetter => "get",
             BuiltinFunctionKind::GeneratedFunction => "anonymous",
             BuiltinFunctionKind::IteratorNext
             | BuiltinFunctionKind::GeneratorNext
@@ -6133,6 +6138,7 @@ impl BuiltinFunction {
             | K::ProxyRevoke
             | K::PrototypeGetter
             | K::FunctionPrototype
+            | K::NativeTimerPromisesGetter
             | K::ThrowTypeError => Some(0),
             _ => None,
         };
@@ -40475,13 +40481,22 @@ impl InterpreterCore {
     /// timer functions are the realm's own. xml2js reads
     /// `require('timers').setImmediate`; the timers facade lowers only the
     /// calls it recognizes on a confirmed alias, so the require reached the
-    /// runtime and found no module. Not provided: `promises`, `active`,
-    /// `unenroll`, `enroll`.
-    fn timers_core_module(&mut self) -> Result<Value, InterpreterError> {
+    /// runtime and found no module. The promises property and direct
+    /// timers/promises imports share one retained native factory. Loading
+    /// either module initializes wrappers without scheduling any timer.
+    fn timers_core_module(&mut self, module: &Ir3Module) -> Result<Value, InterpreterError> {
         if let Some(object) = self.builtin_prototypes.get(TIMERS_MODULE_KEY) {
             return Ok(Value::Object(*object));
         }
-        let members = Self::timer_global_kinds()
+        self.source_builtin_module(module, NativeBuiltinModule::TimersPromises, None)?;
+        let carrier = self
+            .builtin_prototypes
+            .get("\0franken-engine/native-timers/promises")
+            .copied()
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "native timer promises factory has no export carrier".to_string(),
+            })?;
+        let mut members = Self::timer_global_kinds()
             .into_iter()
             .filter(|(name, _)| *name != "queueMicrotask")
             .map(|(name, kind)| {
@@ -40491,6 +40506,16 @@ impl InterpreterCore {
                 )
             })
             .collect::<Vec<_>>();
+        members.push((
+            "promises",
+            Value::Accessor {
+                get: Some(Arc::new(Value::BuiltinFunction(BuiltinFunction::bound_to(
+                    BuiltinFunctionKind::NativeTimerPromisesGetter,
+                    carrier,
+                )))),
+                set: None,
+            },
+        ));
         let object = self.alloc_object_with_properties(&members)?;
         self.mutate_builtin_prototypes(|prototypes| {
             prototypes.insert(TIMERS_MODULE_KEY.to_string(), object);
@@ -40814,7 +40839,7 @@ impl InterpreterCore {
             NativeBuiltinModule::Os => self.os_core_module(),
             NativeBuiltinModule::Querystring => self.querystring_core_module(),
             NativeBuiltinModule::Url => self.url_core_module(),
-            NativeBuiltinModule::Timers => self.timers_core_module(),
+            NativeBuiltinModule::Timers => self.timers_core_module(module),
             NativeBuiltinModule::PerfHooks => self.perf_hooks_core_module(),
             NativeBuiltinModule::Path
             | NativeBuiltinModule::PathPosix
@@ -40823,7 +40848,8 @@ impl InterpreterCore {
             | NativeBuiltinModule::UtilTypes
             | NativeBuiltinModule::Assert
             | NativeBuiltinModule::AssertStrict
-            | NativeBuiltinModule::StringDecoder => {
+            | NativeBuiltinModule::StringDecoder
+            | NativeBuiltinModule::TimersPromises => {
                 self.source_builtin_module(module, native, import_bound)
             }
         }
@@ -40866,6 +40892,7 @@ impl InterpreterCore {
             NativeBuiltinModule::Timers => Self::timer_global_kinds()
                 .into_iter()
                 .filter_map(|(name, _)| (name != "queueMicrotask").then_some(name))
+                .chain(std::iter::once("promises"))
                 .collect(),
             NativeBuiltinModule::PerfHooks => vec!["performance"],
             NativeBuiltinModule::Path
@@ -40895,6 +40922,9 @@ impl InterpreterCore {
                 "doesNotThrow", "rejects", "doesNotReject", "strict",
             ],
             NativeBuiltinModule::StringDecoder => vec!["StringDecoder"],
+            NativeBuiltinModule::TimersPromises => {
+                vec!["setTimeout", "setImmediate", "setInterval", "scheduler"]
+            }
         }
     }
 
@@ -41096,9 +41126,10 @@ impl InterpreterCore {
         let provider = match origin.as_str() {
             "\0franken-engine/native-util" => 0,
             "\0franken-engine/native-string_decoder" => 1,
+            "\0franken-engine/native-timers/promises" => 2,
             _ => return false,
         };
-        static FACTORY_HASHES: OnceLock<[ContentHash; 2]> = OnceLock::new();
+        static FACTORY_HASHES: OnceLock<[ContentHash; 3]> = OnceLock::new();
         let hashes = FACTORY_HASHES.get_or_init(|| {
             [
                 NativeBuiltinModule::Util
@@ -41106,6 +41137,9 @@ impl InterpreterCore {
                     .canonical_hash(),
                 NativeBuiltinModule::StringDecoder
                     .record("\0franken-engine/native-string_decoder")
+                    .canonical_hash(),
+                NativeBuiltinModule::TimersPromises
+                    .record("\0franken-engine/native-timers/promises")
                     .canonical_hash(),
             ]
         });
@@ -41140,7 +41174,7 @@ impl InterpreterCore {
                 Some("get" | "type" | "subtype" | "essence" | "params"),
                 0
             ) | (0, true, Some("set" | "type" | "subtype"), 1)
-                | (1, false, Some("get"), 0)
+                | (1 | 2, false, Some("get"), 0)
         )
     }
 
@@ -41172,6 +41206,13 @@ impl InterpreterCore {
                 return Ok(true);
             };
             let inert = builtin.kind == BuiltinFunctionKind::ThrowTypeError
+                || (!setter
+                    && builtin.kind == BuiltinFunctionKind::NativeTimerPromisesGetter
+                    && builtin.bound_object.is_some_and(|holder| {
+                        self.builtin_prototypes
+                            .get("\0franken-engine/native-timers/promises")
+                            == Some(&ObjectId(holder))
+                    }))
                 || (setter && builtin.kind == BuiltinFunctionKind::ObjectProtoSetter)
                 || (!setter
                     && builtin.kind == BuiltinFunctionKind::PrototypeGetter
@@ -41221,6 +41262,7 @@ impl InterpreterCore {
             NativeBuiltinModule::Assert => "\0franken-engine/native-assert/esm",
             NativeBuiltinModule::AssertStrict => "\0franken-engine/native-assert/strict/esm",
             NativeBuiltinModule::StringDecoder => "\0franken-engine/native-string_decoder/esm",
+            NativeBuiltinModule::TimersPromises => "\0franken-engine/native-timers/promises/esm",
         };
         let value = self.load_native_builtin_resolved(module, source, native, import_bound)?;
         let object = match &value {
@@ -41572,6 +41614,11 @@ impl InterpreterCore {
             NativeBuiltinModule::StringDecoder => (
                 NativeBuiltinModule::StringDecoder,
                 "\0franken-engine/native-string_decoder",
+                None,
+            ),
+            NativeBuiltinModule::TimersPromises => (
+                NativeBuiltinModule::TimersPromises,
+                "\0franken-engine/native-timers/promises",
                 None,
             ),
             _ => {
@@ -43794,6 +43841,26 @@ impl InterpreterCore {
         }
         match builtin.kind {
             BuiltinFunctionKind::FunctionPrototype => Ok(Value::Undefined),
+            BuiltinFunctionKind::NativeTimerPromisesGetter => {
+                let holder = builtin
+                    .bound_object
+                    .map(ObjectId)
+                    .filter(|holder| {
+                        self.builtin_prototypes
+                            .get("\0franken-engine/native-timers/promises")
+                            == Some(holder)
+                    })
+                    .ok_or_else(|| InterpreterError::InternalError {
+                        details: "native timer promises getter has no authenticated export carrier"
+                            .to_string(),
+                    })?;
+                self.iterator_protocol_property(
+                    Some(module),
+                    holder,
+                    &RuntimePropertyKey::String(JsString::from("exports")),
+                    Value::Object(holder),
+                )
+            }
             BuiltinFunctionKind::AsyncGeneratorNext
             | BuiltinFunctionKind::AsyncGeneratorReturn
             | BuiltinFunctionKind::AsyncGeneratorThrow => self.dispatch_async_generator_resume(
@@ -68219,6 +68286,7 @@ impl InterpreterCore {
             "\0franken-engine/native-assert/esm",
             "\0franken-engine/native-assert/strict/esm",
             "\0franken-engine/native-string_decoder/esm",
+            "\0franken-engine/native-timers/promises/esm",
         ]
         .into_iter()
         .any(|specifier| {
@@ -151719,6 +151787,241 @@ mod function_prototype_call_apply_tests_current {
                 core.recompute_estimated_memory_bytes()
             );
         }
+    }
+
+    #[test]
+    fn native_timer_promises_getter_retains_private_reference_labels() {
+        let caller = test_module_with_functions(Vec::new(), Vec::new());
+        for cached in [false, true] {
+            let mut core = test_interpreter();
+            core.config.granted_capabilities.extend([
+                RuntimeCapability::Builtin,
+                RuntimeCapability::ModuleLoad,
+                RuntimeCapability::Timer,
+            ]);
+            let promises = core
+                .source_builtin_module(&caller, NativeBuiltinModule::TimersPromises, None)
+                .expect("execute the actual timer promises factory");
+            let Value::Object(promises_object) = promises else {
+                panic!("timer promises exports an object");
+            };
+            let Value::Object(timers) = core.timers_core_module(&caller).unwrap() else {
+                panic!("timers exports an object");
+            };
+            assert!(!core.event_loop.has_pending_work());
+            assert!(core.next_tick_queue.is_empty());
+            core.clear_pending_hostcall_result_label();
+            assert_eq!(
+                core.native_builtin_state_label(&caller, timers).unwrap(),
+                Label::Internal,
+                "the exact bound getter is safe to inspect without running it"
+            );
+            let record = NativeBuiltinModule::Timers.record("captured:timer-reference-label");
+            let source = ResolutionOutcome {
+                module: ResolvedModule {
+                    request_specifier: "node:timers".into(),
+                    canonical_specifier: record.id.clone(),
+                    content_hash: record.canonical_hash(),
+                    record,
+                    probe_sequence: Vec::new(),
+                },
+                event: crate::module_resolver::ResolutionEvent {
+                    trace_id: "timer-reference-label".into(),
+                    decision_id: "timer-reference-label".into(),
+                    policy_id: "timer-reference-label".into(),
+                    component: "module_resolver".into(),
+                    event: "resolved".into(),
+                    outcome: "allowed".into(),
+                    error_code: String::new(),
+                },
+            };
+            if cached {
+                core.load_native_builtin_namespace(
+                    &caller,
+                    &source,
+                    NativeBuiltinModule::Timers,
+                    Some(&Label::Internal),
+                )
+                .expect("initialize the public namespace before classifying its carrier");
+            }
+            let carrier = core.builtin_prototypes["\0franken-engine/native-timers/promises"];
+            let exports = RuntimePropertyKey::String(JsString::from("exports"));
+            core.set_own_runtime_property_label(carrier, &exports, &Label::Secret)
+                .unwrap();
+            core.clear_pending_hostcall_result_label();
+            assert_eq!(
+                core.native_builtin_state_label(&caller, promises_object)
+                    .unwrap(),
+                Label::Internal,
+                "only the private reference is classified, not the returned object's properties"
+            );
+            assert_eq!(
+                core.native_builtin_state_label(&caller, timers).unwrap(),
+                Label::Secret,
+                "the bound carrier must participate in import admission"
+            );
+            assert!(matches!(
+                core.load_native_builtin_namespace(
+                    &caller,
+                    &source,
+                    NativeBuiltinModule::Timers,
+                    Some(&Label::Internal),
+                ),
+                Err(InterpreterError::ModuleLoweringFailed { .. })
+            ));
+            core.clear_pending_hostcall_result_label();
+            let Value::Object(namespace) = core
+                .load_native_builtin_namespace(
+                    &caller,
+                    &source,
+                    NativeBuiltinModule::Timers,
+                    None,
+                )
+                .expect("unbounded namespace still exposes the same module")
+            else {
+                panic!("timers namespace");
+            };
+            assert_eq!(
+                core.native_builtin_state_label(&caller, namespace).unwrap(),
+                Label::Secret,
+                "cached={cached}: namespace defaults must retain the live carrier edge"
+            );
+            core.clear_pending_hostcall_result_label();
+            assert_eq!(
+                core.iterator_protocol_property(
+                    Some(&caller),
+                    timers,
+                    &RuntimePropertyKey::String(JsString::from("promises")),
+                    Value::Object(timers),
+                )
+                .expect("the native getter reads its private carrier"),
+                Value::Object(promises_object)
+            );
+            assert_eq!(
+                core.take_pending_hostcall_result_label(),
+                Some(Label::Secret),
+                "cached={cached}: getter invocation must retain the reference label"
+            );
+            assert_eq!(
+                core.source_builtin_module(&caller, NativeBuiltinModule::TimersPromises, None)
+                    .expect("the direct alias uses the same private carrier"),
+                Value::Object(promises_object)
+            );
+            assert_eq!(
+                core.take_pending_hostcall_result_label(),
+                Some(Label::Secret)
+            );
+            assert!(!core.event_loop.has_pending_work());
+            assert!(core.next_tick_queue.is_empty());
+            assert!(core.active_inline_callback_context_label.is_none());
+            assert_eq!(core.json_parse_temporary_bytes, 0);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn native_timer_namespace_does_not_execute_replacement_promises_getter() {
+        let caller = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        core.config.granted_capabilities.extend([
+            RuntimeCapability::Builtin,
+            RuntimeCapability::ModuleLoad,
+            RuntimeCapability::Timer,
+        ]);
+        let Value::Object(timers) = core.timers_core_module(&caller).unwrap() else {
+            panic!("timers exports an object");
+        };
+        let mut owner = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadName {
+                    dst: 0,
+                    name_pool_index: 0,
+                    allow_missing: false,
+                },
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 1,
+                },
+                Ir3Instruction::LoadInt { dst: 2, value: 1 },
+                Ir3Instruction::SetProperty {
+                    obj: 0,
+                    key: 1,
+                    val: 2,
+                },
+                Ir3Instruction::Return { value: 2 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 3,
+                name: Some("get".into()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        owner.header.source_label = "guest-timer-getter.mjs".into();
+        owner.constant_pool = vec!["probe".into(), "hits".into()];
+        core.ensure_module_record(&owner, &owner.header.source_label)
+            .unwrap();
+        let probe = seed_object(&mut core, &[("hits", Value::Int(0))]);
+        let closure = u32::try_from(core.closures.len()).unwrap();
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: vec![ScopeFrame::from_bindings(BTreeMap::from([(
+                "probe".into(),
+                ScopeBinding::with_labeled_state(
+                    BindingKind::Const,
+                    Value::Object(probe),
+                    Label::Public,
+                    true,
+                ),
+            )]))],
+        });
+        core.closure_module_origins
+            .insert(closure, owner.header.source_label.clone());
+        let key = RuntimePropertyKey::String(JsString::from("promises"));
+        core.set_object_runtime_property(
+            timers,
+            key.clone(),
+            Value::Accessor {
+                get: Some(Arc::new(Value::Closure(closure))),
+                set: None,
+            },
+        )
+        .unwrap();
+        core.sync_estimated_memory_bytes().unwrap();
+        core.clear_pending_hostcall_result_label();
+        assert_eq!(
+            core.native_builtin_state_label(&caller, timers).unwrap(),
+            Label::TopSecret,
+            "a guest function named get is not the authenticated bound getter"
+        );
+        assert_eq!(
+            core.prototype_chain_get(probe, "hits").unwrap(),
+            Value::Int(0),
+            "state admission must not execute the replacement getter"
+        );
+        assert_eq!(
+            core.iterator_protocol_property(Some(&caller), timers, &key, Value::Object(timers))
+                .expect("an ordinary later property read runs the guest getter"),
+            Value::Int(1)
+        );
+        assert_eq!(
+            core.prototype_chain_get(probe, "hits").unwrap(),
+            Value::Int(1),
+            "the refusal check must use an actually executable getter"
+        );
+        core.clear_pending_hostcall_result_label();
+        assert!(!core.event_loop.has_pending_work());
+        assert!(core.active_inline_callback_context_label.is_none());
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]

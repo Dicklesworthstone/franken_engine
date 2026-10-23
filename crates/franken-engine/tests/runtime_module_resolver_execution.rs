@@ -88,6 +88,7 @@ impl OpaqueResolver {
             NativeBuiltinModule::Assert,
             NativeBuiltinModule::AssertStrict,
             NativeBuiltinModule::StringDecoder,
+            NativeBuiltinModule::TimersPromises,
         ] {
             let canonical = native.canonical_specifier();
             let names = [
@@ -1832,6 +1833,7 @@ fn delivered_native_descriptors_reject_forgery_and_cached_provider_substitution(
         "assert",
         "assert/strict",
         "string_decoder",
+        "timers/promises",
     ]
     .into_iter()
     .flat_map(|builtin| {
@@ -1947,4 +1949,253 @@ fn delivered_unknown_native_alias_cannot_use_an_already_cached_provider() {
             .collect::<Vec<_>>(),
         ["a=x"]
     );
+}
+
+#[test]
+fn delivered_timer_promises_share_parent_aliases_and_retained_closures() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for first in ["timers", "timers/promises"] {
+            let source_text = r#"
+const load = require;
+load('__FIRST__');
+const promises = load('node:timers/promises');
+const timers = load('node:timers');
+const util = load('util');
+const child = load('./timer-child.cjs');
+console.log(promises === load('timers/promises'), timers.promises === promises,
+    child.promises === promises, child.timers === timers,
+    timers.setTimeout === setTimeout, timers.setImmediate === setImmediate);
+const parentDescriptor = Object.getOwnPropertyDescriptor(timers, 'promises');
+console.log(parentDescriptor.get.name, parentDescriptor.get.length,
+    parentDescriptor.enumerable, parentDescriptor.configurable,
+    parentDescriptor.set === undefined, parentDescriptor.get.call(null) === promises,
+    Object.keys(parentDescriptor.get).length === 0);
+const descriptor = Object.getOwnPropertyDescriptor(timers.setTimeout, util.promisify.custom);
+console.log(descriptor.get.name, descriptor.get.length, descriptor.enumerable,
+    descriptor.configurable, descriptor.set === undefined,
+    descriptor.get() === promises.setTimeout);
+console.log(util.promisify(timers.setTimeout) === promises.setTimeout,
+    util.promisify(timers.setImmediate) === promises.setImmediate,
+    timers.setInterval[util.promisify.custom] === undefined);
+promises.setTimeout = function changedTimeout() { return 'shared'; };
+console.log(child.promises.setTimeout(), timers.setTimeout[util.promisify.custom] === promises.setTimeout,
+    timers.promises.setTimeout === promises.setTimeout);
+"#
+            .replace("__FIRST__", first);
+            let resolver = Arc::new(
+                OpaqueResolver::new(vec![
+                    (
+                        "entry.cjs",
+                        definition(ModuleSyntax::CommonJs, &source_text).with_dependency(
+                            ModuleDependency::new("./timer-child.cjs", ImportStyle::Require),
+                        ),
+                    ),
+                    (
+                        "timer-child.cjs",
+                        definition(
+                            ModuleSyntax::CommonJs,
+                            "module.exports = { promises: require('timers/promises'), timers: require('timers') };",
+                        ),
+                    ),
+                ])
+                .with_native_builtins(),
+            );
+            let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+            let policy = Arc::new(RecordingPolicy {
+                allow_native_builtins: true,
+                ..RecordingPolicy::default()
+            });
+            let installed =
+                ExecutionModuleResolver::new(&source.module.record.id, resolver, policy.clone());
+            let result = orchestrator(lane, ModuleSyntax::CommonJs)
+                .execute_resolved_entry_with_resolver(&package(), &source, installed)
+                .unwrap_or_else(|error| panic!("first={first}, lane={lane:?}: {error}"));
+            assert_eq!(
+                lines(&result),
+                [
+                    "true true true true true true",
+                    "get 0 true true true true true",
+                    "get 0 true false true true",
+                    "true true true",
+                    "shared true true",
+                ]
+            );
+            assert!(
+                policy
+                    .requests
+                    .lock()
+                    .expect("policy log")
+                    .iter()
+                    .all(|(request, _)| !request.specifier.starts_with('\0')),
+                "the private timer factory is not a new captured source route"
+            );
+        }
+    }
+}
+
+#[test]
+fn delivered_timer_promises_esm_runs_timers_scheduler_and_interval_return() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![(
+                "entry.mjs",
+                definition(
+                    ModuleSyntax::EsModule,
+                    r#"
+import promises, { setTimeout as delay, setImmediate as immediate,
+    setInterval as interval, scheduler } from 'node:timers/promises';
+import * as namespace from 'timers/promises';
+import timers, { promises as parentPromises } from 'node:timers';
+console.log(namespace.default === promises, parentPromises === promises,
+    timers.promises === promises, namespace.setTimeout === delay,
+    namespace.scheduler === scheduler);
+let readonly = false;
+try { namespace.setTimeout = function() {}; } catch (error) { readonly = error instanceof TypeError; }
+console.log(Object.getPrototypeOf(namespace) === null, Object.isExtensible(namespace), readonly);
+delay(1, 'timeout').then(async function(value) {
+    console.log(value, await immediate('immediate'));
+    const ticks = interval(1, 'tick');
+    const first = await ticks.next();
+    const stopped = await ticks.return();
+    const done = await ticks.next();
+    console.log(first.value, first.done, stopped.done, done.done);
+    console.log((await scheduler.yield()) === undefined, (await scheduler.wait(1)) === undefined);
+    promises.added = true;
+    promises.setTimeout = function replacement() { return 'changed'; };
+    const again = await import('node:timers/promises');
+    console.log(again === namespace, again.setTimeout === delay,
+        again.default.setTimeout(), 'added' in again);
+});
+"#,
+                ),
+            )])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(RecordingPolicy {
+                allow_native_builtins: true,
+                ..RecordingPolicy::default()
+            }),
+        );
+        let result = orchestrator(lane, ModuleSyntax::EsModule)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("delivered ESM timer methods execute their retained native factory");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true true true true",
+                "true false true",
+                "timeout immediate",
+                "tick false true true",
+                "true true",
+                "true true changed false",
+            ]
+        );
+    }
+}
+
+#[test]
+fn delivered_timer_promises_requires_timer_authority_at_policy_and_runtime() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for deny_in_policy in [false, true] {
+            let resolver = Arc::new(
+                OpaqueResolver::new(vec![(
+                    "entry.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        "const load = require; console.log('before'); load('timers/promises'); console.log('after');",
+                    ),
+                )])
+                .with_native_builtins(),
+            );
+            let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+            let mut grants =
+                BTreeSet::from([RuntimeCapability::ModuleLoad, RuntimeCapability::Builtin]);
+            let mut extension = package();
+            // Exercise resolver policy and runtime authority independently.
+            if !deny_in_policy {
+                grants.insert(RuntimeCapability::Timer);
+                extension.capabilities.retain(|grant| grant != "timer");
+            }
+            let installed = ExecutionModuleResolver::new(
+                &source.module.record.id,
+                resolver,
+                Arc::new(CapabilityPolicyHook::new(grants)),
+            );
+            let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
+            let error = engine
+                .execute_resolved_entry_with_resolver(&extension, &source, installed)
+                .expect_err("a source-free descriptor does not confer Timer authority");
+            assert!(
+                error.to_string().to_ascii_lowercase().contains("timer"),
+                "policy={deny_in_policy}: {error}"
+            );
+            assert_eq!(
+                engine
+                    .last_failed_console_output()
+                    .iter()
+                    .map(|entry| entry.message.as_str())
+                    .collect::<Vec<_>>(),
+                ["before"],
+                "native initialization must not run past the denied load"
+            );
+        }
+    }
+}
+
+#[test]
+fn delivered_timer_promises_cache_reauthorizes_commonjs_and_esm_requests() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for source_text in [
+            "const load = require; const p = load('timers/promises'); console.log(typeof p.scheduler.wait); load('timers/promises');",
+            "import('timers/promises').then(function(p) { console.log(typeof p.scheduler.wait); return import('timers/promises'); });",
+        ] {
+            let resolver = Arc::new(
+                OpaqueResolver::new(vec![(
+                    "entry.cjs",
+                    definition(ModuleSyntax::CommonJs, source_text),
+                )])
+                .with_native_builtins(),
+            );
+            let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+            let policy = Arc::new(RecordingPolicy {
+                denied: Some(("timers/promises".to_string(), 2)),
+                allow_native_builtins: true,
+                ..RecordingPolicy::default()
+            });
+            let installed =
+                ExecutionModuleResolver::new(&source.module.record.id, resolver, policy.clone());
+            let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
+            let error = engine
+                .execute_resolved_entry_with_resolver(&package(), &source, installed)
+                .expect_err("timer singleton and ESM namespace caches cannot cache authorization");
+            assert!(
+                error
+                    .to_string()
+                    .contains("closed-world module resolution refused"),
+                "{error}"
+            );
+            assert_eq!(
+                engine
+                    .last_failed_console_output()
+                    .iter()
+                    .map(|entry| entry.message.as_str())
+                    .collect::<Vec<_>>(),
+                ["function"]
+            );
+            assert_eq!(
+                policy
+                    .requests
+                    .lock()
+                    .expect("policy log")
+                    .iter()
+                    .filter(|(request, _)| request.specifier == "timers/promises")
+                    .count(),
+                2
+            );
+        }
+    }
 }

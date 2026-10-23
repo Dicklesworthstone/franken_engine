@@ -287,6 +287,7 @@ pub enum NativeBuiltinModule {
     Assert,
     AssertStrict,
     StringDecoder,
+    TimersPromises,
 }
 
 impl NativeBuiltinModule {
@@ -307,6 +308,7 @@ impl NativeBuiltinModule {
             "assert" | "node:assert" => Some(Self::Assert),
             "assert/strict" | "node:assert/strict" => Some(Self::AssertStrict),
             "string_decoder" | "node:string_decoder" => Some(Self::StringDecoder),
+            "timers/promises" | "node:timers/promises" => Some(Self::TimersPromises),
             _ => None,
         }
     }
@@ -328,6 +330,7 @@ impl NativeBuiltinModule {
             Self::Assert => "node:assert",
             Self::AssertStrict => "node:assert/strict",
             Self::StringDecoder => "node:string_decoder",
+            Self::TimersPromises => "node:timers/promises",
         }
     }
 
@@ -336,7 +339,7 @@ impl NativeBuiltinModule {
     pub fn record(self, id: impl Into<String>) -> ModuleRecord {
         let mut required_capabilities =
             BTreeSet::from([RuntimeCapability::ModuleLoad, RuntimeCapability::Builtin]);
-        if self == Self::Timers {
+        if matches!(self, Self::Timers | Self::TimersPromises) {
             required_capabilities.insert(RuntimeCapability::Timer);
         }
         ModuleRecord {
@@ -2580,6 +2583,7 @@ mod tests {
             "assert",
             "assert/strict",
             "string_decoder",
+            "timers/promises",
         ] {
             let builtin = NativeBuiltinModule::from_specifier(name).unwrap();
             assert_eq!(builtin.canonical_specifier(), format!("node:{name}"));
@@ -2606,7 +2610,7 @@ mod tests {
                 record
                     .required_capabilities
                     .contains(&RuntimeCapability::Timer),
-                name == "timers"
+                matches!(name, "timers" | "timers/promises")
             );
             let request = ModuleRequest::new(name, ImportStyle::Require);
             let denied = CapabilityPolicyHook::new(BTreeSet::from([RuntimeCapability::ModuleLoad]));

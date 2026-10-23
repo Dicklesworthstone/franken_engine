@@ -44,3 +44,71 @@ fn key_for_unregistered_is_undefined() {
 fn registered_symbol_is_a_symbol() {
     assert_eq!(eval("typeof Symbol.for('t');"), "symbol");
 }
+
+#[test]
+fn mixed_symbol_population_preserves_registry_identity() {
+    // Same source returns true in Node. Private symbols with equal descriptions
+    // must never enter the registry, regardless of their allocation order.
+    assert_eq!(
+        eval(
+            r#"
+            const saved = [];
+            for (let i = 0; i < 512; i++) {
+                Symbol('key-' + i);
+                saved.push(Symbol.for('key-' + i));
+                Symbol('key-' + i);
+            }
+            let valid = true;
+            for (let i = saved.length - 1; i >= 0; i--) {
+                valid = valid && saved[i] === Symbol.for('key-' + i);
+                valid = valid && Symbol.keyFor(saved[i]) === 'key-' + i;
+                valid = valid && saved[i] !== Symbol('key-' + i);
+            }
+            valid;
+            "#,
+        ),
+        "true"
+    );
+}
+
+#[test]
+fn registry_keys_preserve_lone_surrogates_and_replacement_characters() {
+    assert_eq!(
+        eval(
+            r#"
+            const high = Symbol.for('\ud800');
+            const other = Symbol.for('\ud801');
+            const low = Symbol.for('\udc00');
+            const replacement = Symbol.for('\ufffd');
+            high !== other && high !== replacement && other !== replacement
+                && low !== high && low !== other && low !== replacement
+                && high === Symbol.for('\ud800')
+                && other === Symbol.for('\ud801')
+                && low === Symbol.for('\udc00')
+                && Symbol.keyFor(high).charCodeAt(0) === 55296
+                && Symbol.keyFor(other).charCodeAt(0) === 55297
+                && Symbol.keyFor(low).charCodeAt(0) === 56320;
+            "#,
+        ),
+        "true"
+    );
+}
+
+#[test]
+fn equivalent_rope_and_flat_registry_keys_share_identity() {
+    assert_eq!(
+        eval(
+            r#"
+            let key = '';
+            for (let i = 0; i < 64; i++) key += 'prefix-';
+            const first = Symbol.for(key + 'a');
+            const second = Symbol.for(key + 'b');
+            first !== second
+                && first === Symbol.for('prefix-'.repeat(64) + 'a')
+                && second === Symbol.for('prefix-'.repeat(64) + 'b')
+                && Symbol.keyFor(first) === key + 'a';
+            "#,
+        ),
+        "true"
+    );
+}

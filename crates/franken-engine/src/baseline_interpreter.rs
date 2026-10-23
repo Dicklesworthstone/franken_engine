@@ -2625,6 +2625,10 @@ where
 pub struct RuntimeSymbolState {
     next_symbol_id: u32,
     symbols: BTreeMap<SymbolId, RuntimeSymbolRecord>,
+    // Derived lookup index, deliberately absent from the stable wire format.
+    // Private Symbols and class-private names must not affect Symbol.for's
+    // lookup cost. JsString preserves exact UTF-16 keys, including surrogates.
+    global_symbols: BTreeMap<JsString, SymbolId>,
 }
 
 impl Default for RuntimeSymbolState {
@@ -2632,6 +2636,7 @@ impl Default for RuntimeSymbolState {
         Self {
             next_symbol_id: FIRST_DYNAMIC_SYMBOL_ID,
             symbols: BTreeMap::new(),
+            global_symbols: BTreeMap::new(),
         }
     }
 }
@@ -2743,11 +2748,24 @@ impl<'de> Deserialize<'de> for RuntimeSymbolState {
                 return Err(D::Error::custom("duplicate dynamic Symbol id"));
             }
         }
-        let state = Self {
+        let mut state = Self {
             next_symbol_id: wire.next_symbol_id,
             symbols,
+            global_symbols: BTreeMap::new(),
         };
         state.validate().map_err(D::Error::custom)?;
+        // Validate before indexing: a hostile duplicate key must be rejected,
+        // not silently replaced by BTreeMap::collect's last-writer behavior.
+        state.global_symbols = state
+            .symbols
+            .values()
+            .filter_map(|record| {
+                record
+                    .registry_key
+                    .as_ref()
+                    .map(|key| (key.clone(), record.symbol_id))
+            })
+            .collect();
         Ok(state)
     }
 }
@@ -2809,11 +2827,7 @@ impl RuntimeSymbolState {
     }
 
     fn global_symbol(&self, key: &JsString) -> Option<SymbolId> {
-        self.symbols.values().find_map(|record| {
-            (matches!(record.kind, RuntimeSymbolKind::Global)
-                && record.registry_key.as_ref() == Some(key))
-            .then_some(record.symbol_id)
-        })
+        self.global_symbols.get(key).copied()
     }
 
     fn allocate(
@@ -2830,6 +2844,9 @@ impl RuntimeSymbolState {
         }
         let symbol_id = SymbolId(self.next_symbol_id);
         self.next_symbol_id += 1;
+        if let Some(key) = &registry_key {
+            self.global_symbols.insert(key.clone(), symbol_id);
+        }
         self.symbols.insert(
             symbol_id,
             RuntimeSymbolRecord {
@@ -105568,7 +105585,9 @@ impl InterpreterCore {
         }))
     }
 
-    /// One dynamic symbol record's term of [`Self::estimate_symbol_state_bytes`].
+    /// One dynamic symbol record and its derived registry index entry's term
+    /// of [`Self::estimate_symbol_state_bytes`]. Including the index here makes
+    /// eager budget admission, full walks, and execution seeds agree.
     fn estimate_symbol_record_bytes(
         description: Option<&JsString>,
         registry_key: Option<&JsString>,
@@ -105577,7 +105596,12 @@ impl InterpreterCore {
             .saturating_add(description.map(Self::estimate_js_string_bytes).unwrap_or(0))
             .saturating_add(
                 registry_key
-                    .map(Self::estimate_js_string_bytes)
+                    .map(|key| {
+                        Self::estimate_js_string_bytes(key)
+                            .saturating_mul(2)
+                            .saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES)
+                            .saturating_add(std::mem::size_of::<SymbolId>() as u64)
+                    })
                     .unwrap_or(0),
             )
     }
@@ -162093,6 +162117,95 @@ mod tests {
         ));
         assert_eq!(core.symbol_state.value, before_state);
         assert_eq!(core.estimated_memory_bytes(), before_memory);
+    }
+
+    #[test]
+    fn symbol_registry_index_restores_exact_keys_without_changing_wire() {
+        let mut state = RuntimeSymbolState::default();
+        let keys = [
+            JsString::from("shared"),
+            JsString::from_code_units(&[0xD800]),
+            JsString::from_code_units(&[0xD801]),
+            JsString::from_code_units(&[0xDC00]),
+            JsString::from("\u{FFFD}"),
+        ];
+        for key in &keys {
+            state
+                .allocate(RuntimeSymbolKind::Private, Some(key.clone()), None)
+                .unwrap();
+            state
+                .allocate(
+                    RuntimeSymbolKind::Global,
+                    Some(key.clone()),
+                    Some(key.clone()),
+                )
+                .unwrap();
+        }
+        let wire = serde_json::to_string(&state).unwrap();
+        assert!(!wire.contains("global_symbols"));
+        let restored: RuntimeSymbolState = serde_json::from_str(&wire).unwrap();
+        assert_eq!(restored, state);
+        assert_eq!(serde_json::to_string(&restored).unwrap(), wire);
+        for (index, key) in keys.iter().enumerate() {
+            assert_eq!(
+                restored.global_symbol(key),
+                Some(SymbolId(FIRST_DYNAMIC_SYMBOL_ID + index as u32 * 2 + 1))
+            );
+        }
+        assert_eq!(restored.global_symbol(&JsString::from("absent")), None);
+
+        // Rebuilding the derived index must not hide a duplicate in the wire.
+        let duplicate = r#"{"well_known_schema":"es2020-symbol-ids-1-13-v1","next_symbol_id":16,"symbols":[{"symbol_id":14,"kind":"global","description":"x","registry_key":"x"},{"symbol_id":15,"kind":"global","description":"x","registry_key":"x"}]}"#;
+        let error = serde_json::from_str::<RuntimeSymbolState>(duplicate).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate global Symbol registry key")
+        );
+    }
+
+    #[test]
+    fn symbol_registry_index_is_admitted_before_allocation_and_rolls_back() {
+        let mut core = quickjs_test_core();
+        let key = JsString::from("budgeted registry key");
+        let before = core.symbol_state.value.clone();
+        let before_memory = core.estimated_memory_bytes();
+        let charge = InterpreterCore::estimate_symbol_record_bytes(Some(&key), Some(&key));
+        let old_record_charge =
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES + InterpreterCore::estimate_js_string_bytes(&key) * 2;
+        assert!(
+            charge > old_record_charge,
+            "the lookup index must be charged"
+        );
+        core.config.max_total_memory_bytes = before_memory + charge - 1;
+        assert!(matches!(
+            core.intern_global_symbol(key.clone()),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.symbol_state.value, before);
+        assert_eq!(core.estimated_memory_bytes(), before_memory);
+        core.config.max_total_memory_bytes = before_memory + charge;
+        let id = core.intern_global_symbol(key.clone()).unwrap();
+        assert_eq!(core.estimated_memory_bytes(), before_memory + charge);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        assert_eq!(core.intern_global_symbol(key.clone()).unwrap(), id);
+
+        // Exhausting identities after memory admission must undo the charge
+        // without adding a dangling key to the derived index.
+        core.config.max_total_memory_bytes = u64::MAX;
+        core.symbol_state.value.next_symbol_id = u32::MAX;
+        let before = core.symbol_state.value.clone();
+        let before_memory = core.estimated_memory_bytes();
+        assert!(matches!(
+            core.intern_global_symbol(JsString::from("overflow")),
+            Err(InterpreterError::TypeError { .. })
+        ));
+        assert_eq!(core.symbol_state.value, before);
+        assert_eq!(core.estimated_memory_bytes(), before_memory);
+        assert_eq!(core.intern_global_symbol(key).unwrap(), id);
     }
 
     #[test]

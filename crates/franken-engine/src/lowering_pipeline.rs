@@ -81,6 +81,7 @@ mod esm_core_imports;
 mod native_module_source;
 pub(crate) mod path_module;
 mod util_module;
+pub(crate) use util_module::has_ambient_fs_require;
 mod with_statement;
 
 const COMPONENT: &str = "lowering_pipeline";

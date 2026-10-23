@@ -239,3 +239,52 @@ fn first_class_invocation_does_not_grant_timer_authority() {
         );
     }
 }
+
+#[test]
+fn scheduler_exports_share_native_timer_operations() {
+    check(
+        r#"
+const timers = require('node:timers');
+const promises = require('node:timers/promises');
+const custom = Symbol.for('nodejs.util.promisify.custom');
+(async () => {
+  console.log(promises.scheduler === timers.promises.scheduler);
+  console.log(timers.setTimeout[custom] === promises.setTimeout,
+    timers.setImmediate[custom] === promises.setImmediate,
+    timers.setInterval[custom] === undefined);
+  const payload = { answer: 42 };
+  console.log((await timers.setTimeout[custom](1, payload)) === payload);
+  console.log((await timers.setImmediate[custom](payload)) === payload);
+  console.log((await promises.scheduler.wait(1)) === undefined);
+  console.log((await promises.scheduler.yield()) === undefined);
+})()
+"#,
+        "true\ntrue true true\ntrue\ntrue\ntrue\ntrue",
+    );
+}
+
+#[test]
+fn scheduler_invocation_retains_timer_capability_boundary() {
+    let shape = r#"
+const timers = require('timers');
+const custom = Symbol.for('nodejs.util.promisify.custom');
+console.log(typeof timers.promises.scheduler.wait,
+  typeof timers.promises.scheduler.yield,
+  typeof timers.setTimeout[custom],
+  typeof timers.setImmediate[custom]);
+"#;
+    assert_eq!(
+        execute(shape, ParseGoal::Script, false).as_deref(),
+        Ok("function function function function")
+    );
+    for source in [
+        "require('timers/promises').scheduler.wait(1);",
+        "require('timers/promises').scheduler.yield();",
+        "require('timers').setTimeout[Symbol.for('nodejs.util.promisify.custom')](1);",
+        "require('timers').setImmediate[Symbol.for('nodejs.util.promisify.custom')]();",
+    ] {
+        let error = execute(source, ParseGoal::Script, false)
+            .expect_err("timer authority remains required");
+        assert!(error.to_lowercase().contains("capability"), "{source}: {error}");
+    }
+}

@@ -39717,16 +39717,11 @@ impl InterpreterCore {
             .saturating_add(Self::estimate_string_bytes(specifier))
     }
 
-    /// Transient bytes of an isolated call's synthetic call site: a private
-    /// copy of the module for an async callee (which may park its activation
-    /// on it), otherwise the two trampoline instructions. Charging the module
-    /// walked every instruction on every callback.
-    fn isolated_call_site_bytes(module: &Ir3Module, callee_is_async: bool) -> u64 {
-        if callee_is_async {
-            Self::transient_module_wrapper_bytes(module)
-        } else {
-            2u64.saturating_mul(std::mem::size_of::<Ir3Instruction>() as u64)
-        }
+    /// Transient bytes of an isolated call's two-instruction trampoline.
+    /// Async continuations retain their original owner program and their own
+    /// activation; they do not retain or copy this temporary call site.
+    fn isolated_call_site_bytes() -> u64 {
+        2u64.saturating_mul(std::mem::size_of::<Ir3Instruction>() as u64)
     }
 
     fn transient_module_wrapper_bytes(module: &Ir3Module) -> u64 {
@@ -85295,9 +85290,10 @@ impl InterpreterCore {
             expected: "module-backed Function.prototype.call/apply dispatch".to_string(),
             got: "missing module context".to_string(),
         })?;
-        let foreign_module = self.foreign_closure_module(callee, caller_module)?;
+        // Preserve owner validation before admitting callback state even
+        // though the borrowed call site no longer depends on program size.
+        self.foreign_closure_module(callee, caller_module)?;
         self.check_module_reentrant_call_depth()?;
-        let module = foreign_module.as_deref().unwrap_or(caller_module);
         let arg_count = u32::try_from(argument_count).map_err(|_| InterpreterError::TypeError {
             expected: "u32-bounded Function.prototype.call/apply argument count".to_string(),
             got: format!("{argument_count} arguments"),
@@ -85326,9 +85322,8 @@ impl InterpreterCore {
             });
         }
 
-        let transient_execution_bytes =
-            Self::isolated_call_site_bytes(module, matches!(callee, Value::AsyncFunction(_)))
-                .saturating_add(self.module_execution_snapshot_memory_bytes());
+        let transient_execution_bytes = Self::isolated_call_site_bytes()
+            .saturating_add(self.module_execution_snapshot_memory_bytes());
         let callback_context_label = match (
             self.active_inline_callback_context_label.as_ref(),
             argument_label,
@@ -85480,7 +85475,7 @@ impl InterpreterCore {
             });
         }
 
-        let transient_wrapper_bytes = Self::isolated_call_site_bytes(module, isolated_async_call);
+        let transient_wrapper_bytes = Self::isolated_call_site_bytes();
         let transient_execution_bytes = transient_wrapper_bytes;
         let mut remaining_label_transport_bytes = call_labels
             .as_ref()
@@ -85555,10 +85550,12 @@ impl InterpreterCore {
             );
             return outcome;
         }
-        // The synthetic call site runs as a trampoline past the end of the
-        // module rather than on a clone of the module with it appended, which
-        // cost O(module) per call. An async callee may leave its activation
-        // parked on the call site, so it keeps a private copy.
+        // The synthetic call site runs past the end of the immutable owner
+        // program. This applies to async callees too: suspension retains the
+        // activation and the owner's Arc, not this borrowed trampoline. On
+        // resumption the async frame returns past the owner's instruction
+        // stream, whose normal end-of-stream completion releases the wrapper.
+        // Copying the whole program here made every async call O(module size).
         let wrapper_instructions = [
             Ir3Instruction::CallMethod {
                 receiver: 0,
@@ -85571,13 +85568,6 @@ impl InterpreterCore {
             },
             Ir3Instruction::Return { value: 0 },
         ];
-        let wrapper = isolated_async_call.then(|| {
-            let mut wrapper = module.clone();
-            wrapper
-                .instructions
-                .extend(wrapper_instructions.iter().cloned());
-            wrapper
-        });
         let wrapper_start = module.instructions.len();
 
         let setup_previous_register_bytes = self.registers_memory_bytes();
@@ -85588,7 +85578,6 @@ impl InterpreterCore {
         let snapshot = match self.isolate_module_execution() {
             Ok(snapshot) => snapshot,
             Err(error) => {
-                drop(wrapper);
                 self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(
                     transient_execution_bytes.saturating_add(remaining_label_transport_bytes),
                 );
@@ -85677,10 +85666,7 @@ impl InterpreterCore {
                     previous_foreign_call_depth.saturating_add(1);
             }
             self.isolated_async_entry_pending = isolated_async_call;
-            let result = match &wrapper {
-                Some(wrapper) => self.run_loop(wrapper),
-                None => self.run_loop_with_trampoline(module, &wrapper_instructions),
-            };
+            let result = self.run_loop_with_trampoline(module, &wrapper_instructions);
             self.isolated_async_entry_pending = false;
             self.module_reentrant_call_depth = previous_reentrant_depth;
             self.active_foreign_module_call_depth = previous_foreign_call_depth;
@@ -85761,7 +85747,6 @@ impl InterpreterCore {
                 .map(|v| (v, self.pending_exception_label.clone())),
             _ => None,
         };
-        drop(wrapper);
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(
             transient_execution_bytes.saturating_add(remaining_label_transport_bytes),
         );
@@ -86116,7 +86101,7 @@ impl InterpreterCore {
             });
         }
 
-        let transient_wrapper_bytes = Self::isolated_call_site_bytes(module, false);
+        let transient_wrapper_bytes = Self::isolated_call_site_bytes();
         let transient_execution_bytes = transient_wrapper_bytes;
         let mut remaining_label_transport_bytes = call_labels
             .as_ref()
@@ -147934,6 +147919,112 @@ mod function_prototype_call_apply_tests_current {
     }
 
     #[test]
+    fn async_call_site_memory_is_independent_of_retained_program_size() {
+        // A package may retain a large program while having little execution
+        // headroom left. Calling a tiny async function must not require a
+        // second copy of that program, including when it suspends and resumes
+        // after the initiating callback has returned.
+        const CALL_HEADROOM: u64 = 1024 * 1024;
+        for foreign in [false, true] {
+            let mut owner = test_module_with_functions(
+                vec![
+                    Ir3Instruction::AwaitValue { promise_reg: 0 },
+                    Ir3Instruction::LoadInt { dst: 1, value: 40 },
+                    Ir3Instruction::Add {
+                        dst: 0,
+                        lhs: 0,
+                        rhs: 1,
+                    },
+                    Ir3Instruction::AsyncReturn { value_reg: 0 },
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 1,
+                    frame_size: 2,
+                    name: Some("bounded_async_call".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            );
+            owner.header.source_label = "large-async-owner.mjs".to_string();
+            owner.instructions.resize(32_768, Ir3Instruction::Halt);
+            assert!(InterpreterCore::transient_module_wrapper_bytes(&owner) > CALL_HEADROOM);
+            let caller = test_module_with_functions(vec![Ir3Instruction::Halt], Vec::new());
+            let caller_module = if foreign { &caller } else { &owner };
+            let mut core = test_interpreter();
+            core.ensure_module_record(&owner, &owner.header.source_label)
+                .expect("large owner program should be retained once");
+            core.closures.push(ClosureValue {
+                function_index: 0,
+                captured_env: core.scope_chain.snapshot(),
+            });
+            core.closure_module_origins
+                .insert(0, owner.header.source_label.clone());
+            let awaited = core.promise_store.create();
+            core.write_reg_with_label(7, Value::str("caller-sentinel"), Label::Internal)
+                .expect("caller sentinel");
+            let baseline = core
+                .sync_estimated_memory_bytes()
+                .expect("large owner fixture accounting");
+            core.config.max_total_memory_bytes = baseline + CALL_HEADROOM;
+
+            let (result, result_label) = core
+                .invoke_inline_method_call_with_argument_label(
+                    Some(caller_module),
+                    Value::AsyncFunction(0),
+                    Value::Undefined,
+                    vec![Value::Promise(awaited.0)],
+                    Some(Label::Confidential),
+                )
+                .expect("a retained large program must not be copied for an async call");
+            let Value::Promise(result_handle) = result else {
+                panic!("async callback must publish its Promise");
+            };
+            assert_eq!(result_label, Label::Confidential);
+            let suspended = &core.async_functions[0];
+            assert_eq!(suspended.phase, AsyncFunctionPhase::SuspendedAwait);
+            assert!(suspended.isolated_execution.is_some());
+            let retained_owner = core.module_state.modules[&owner.header.source_label]
+                .compiled_module
+                .as_ref()
+                .expect("retained original program");
+            assert!(Arc::ptr_eq(&suspended.owner_module, retained_owner));
+            assert_eq!(retained_owner.instructions.len(), owner.instructions.len());
+            assert_eq!(core.read_reg(7).unwrap(), Value::str("caller-sentinel"));
+            assert_eq!(core.get_register_label(7).unwrap(), &Label::Internal);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+
+            core.fulfill_promise(awaited, crate::object_model::JsValue::Int(2), Label::Secret)
+                .expect("settle awaited input within the same memory ceiling");
+            core.drain_microtasks(Some(caller_module))
+                .expect("resume without a retained trampoline copy");
+            let result = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(result_handle))
+                .expect("published Promise remains live");
+            assert_eq!(
+                result.state,
+                crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Int(
+                    42
+                ))
+            );
+            assert_eq!(result.label, Label::Secret);
+            assert_eq!(core.async_functions[0].phase, AsyncFunctionPhase::Completed);
+            assert!(core.async_functions[0].isolated_execution.is_none());
+            assert_eq!(core.read_reg(7).unwrap(), Value::str("caller-sentinel"));
+            assert_eq!(core.get_register_label(7).unwrap(), &Label::Internal);
+            assert!(core.estimated_memory_bytes() <= baseline + CALL_HEADROOM);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
     fn deferred_foreign_async_resume_retains_owner_activation_bd_fw7zd_6() {
         let mut owner = test_module_with_functions(
             vec![
@@ -154378,7 +154469,7 @@ mod tests {
         // The preflight charges the synthetic call site (two trampoline
         // instructions since fc0428914, not a module copy) plus the caller
         // snapshot.
-        let callback_temporary_bytes = InterpreterCore::isolated_call_site_bytes(module, false)
+        let callback_temporary_bytes = InterpreterCore::isolated_call_site_bytes()
             .saturating_add(compact_core.module_execution_snapshot_memory_bytes());
         let one_byte_short = compact_core
             .estimated_memory_bytes()

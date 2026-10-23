@@ -94,6 +94,16 @@ const AWAIT_CASES: &[Case] = &[
         "Promise.resolve(1).then(async v=>{ await null; console.log('cb', v) }); console.log('s');",
         &["s", "cb 1"],
     ),
+    (
+        "async_return_and_rejection_suspend_inside_finally",
+        "const log=[]; async function task(name,promise){ try { log.push(name+':start'); return await promise } catch(e) { log.push(name+':'+e.message); throw e } finally { await 0; log.push(name+':finally') } } const error=new Error('no'); const first=task('ok',Promise.resolve(7)).then(v=>log.push('ok:'+v)); const second=task('bad',Promise.reject(error)).catch(e=>log.push('bad:'+(e===error))); log.push('sync'); Promise.all([first,second]).then(()=>console.log(log.join('|')));",
+        &["ok:start|bad:start|sync|bad:no|ok:finally|bad:finally|ok:7|bad:true"],
+    ),
+    (
+        "async_call_apply_and_bound_receivers_survive_two_suspensions",
+        "const receiver={value:40}; async function f(x){ try { return this.value+(await x) } finally { await 0 } } Promise.all([f.call(receiver,2),f.apply(receiver,[3]),Reflect.apply(f,receiver,[4]),f.bind(receiver)(5)]).then(v=>console.log(v.join(','))); console.log('sync');",
+        &["sync", "42,43,44,45"],
+    ),
 ];
 
 const TIMER_CASES: &[Case] = &[

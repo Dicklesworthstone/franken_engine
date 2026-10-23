@@ -21923,7 +21923,9 @@ impl InterpreterCore {
         self.loopback_task_in_flight_bytes = self
             .loopback_task_in_flight_bytes
             .saturating_add(retained_bytes);
+        let gc_pins = self.gc_pin_loopback_task(&task);
         let result = self.drive_pending_loopback_task(task, module);
+        self.gc_unpin_network_values(gc_pins);
         self.loopback_task_in_flight_bytes = self
             .loopback_task_in_flight_bytes
             .saturating_sub(retained_bytes);
@@ -24434,7 +24436,9 @@ impl InterpreterCore {
         self.http_task_in_flight_bytes = self
             .http_task_in_flight_bytes
             .saturating_add(retained_bytes);
+        let gc_pins = self.gc_pin_http_task(&task);
         let result = self.drive_pending_http_task(task, module);
+        self.gc_unpin_network_values(gc_pins);
         self.http_task_in_flight_bytes = self
             .http_task_in_flight_bytes
             .saturating_sub(retained_bytes);
@@ -24648,13 +24652,15 @@ impl InterpreterCore {
                 };
                 let publication = (|| {
                     if let (Some(module), Some(callback)) = (module, response_callback) {
-                        self.invoke_inline_method_call_with_argument_label(
-                            Some(module),
-                            Value::Closure(callback),
-                            Value::Undefined,
-                            vec![Value::Object(message)],
-                            Some(response_label.clone()),
-                        )?;
+                        self.with_event_job_gc_request(Vec::new(), |core| {
+                            core.invoke_inline_method_call_with_argument_label(
+                                Some(module),
+                                Value::Closure(callback),
+                                Value::Undefined,
+                                vec![Value::Object(message)],
+                                Some(response_label.clone()),
+                            )
+                        })?;
                     }
                     let _ = self.emit_loopback_event(
                         module,
@@ -24696,13 +24702,15 @@ impl InterpreterCore {
                     response_label.clone(),
                 )?;
                 if let (Some(module), Some(callback)) = (module, response_callback) {
-                    self.invoke_inline_method_call_with_argument_label(
-                        Some(module),
-                        Value::Closure(callback),
-                        Value::Undefined,
-                        vec![Value::Object(response)],
-                        Some(response_label.clone()),
-                    )?;
+                    self.with_event_job_gc_request(Vec::new(), |core| {
+                        core.invoke_inline_method_call_with_argument_label(
+                            Some(module),
+                            Value::Closure(callback),
+                            Value::Undefined,
+                            vec![Value::Object(response)],
+                            Some(response_label.clone()),
+                        )
+                    })?;
                 }
                 let _ = self.emit_loopback_event(
                     module,
@@ -24854,18 +24862,30 @@ impl InterpreterCore {
             } => {
                 if let Some(module) = module {
                     let records = self.event_listener_records_for(target, &event);
-                    if let Some(callback) = leading_callback {
-                        self.invoke_inline_method_call_with_argument_label(
-                            Some(module),
-                            Value::Closure(callback),
-                            Value::Object(target),
-                            arguments.clone(),
-                            Some(label.clone()),
-                        )?;
-                    }
-                    let _ = self.emit_event_listener_snapshot(
-                        module, target, &event, arguments, label, records,
-                    )?;
+                    // A leading callback may remove listeners before their
+                    // captured snapshot runs. Keep that snapshot alive even
+                    // when no live EventEmitter registration names it.
+                    let gc_pins = self.gc_pin_network_values(
+                        records.iter().map(|record| record.listener.clone()),
+                    );
+                    let emission = (|| {
+                        if let Some(callback) = leading_callback {
+                            self.with_event_job_gc_request(Vec::new(), |core| {
+                                core.invoke_inline_method_call_with_argument_label(
+                                    Some(module),
+                                    Value::Closure(callback),
+                                    Value::Object(target),
+                                    arguments.clone(),
+                                    Some(label.clone()),
+                                )
+                            })?;
+                        }
+                        self.emit_event_listener_snapshot(
+                            module, target, &event, arguments, label, records,
+                        )
+                    })();
+                    self.gc_unpin_network_values(gc_pins);
+                    let _ = emission?;
                 }
             }
         }
@@ -26072,14 +26092,23 @@ impl InterpreterCore {
         };
         state.fired = true;
 
-        let (result, result_label) = self
-            .invoke_inline_method_call_with_argument_label_preflighted(
+        let invoke = |core: &mut Self| {
+            core.invoke_inline_method_call_with_argument_label_preflighted(
                 Some(module),
                 original_listener,
                 Value::Object(target),
                 arguments,
                 Some(argument_label),
-            )?;
+            )
+        };
+        // An armed network event may enter through a once wrapper's builtin
+        // frame. Its original listener gets the same collection boundary;
+        // the nested-call guard still rejects unaudited enclosing builtins.
+        let (result, result_label) = if self.gc_network_task_active() {
+            self.with_gc_nested_request(Vec::new(), invoke)
+        } else {
+            invoke(self)
+        }?;
         self.replace_pending_hostcall_result_label(Some(result_label))?;
         Ok(result)
     }
@@ -26121,6 +26150,31 @@ impl InterpreterCore {
         records: Vec<EventListenerRecord>,
     ) -> Result<bool, InterpreterError> {
         let event = event.into();
+        let gc_pins = (self.gc_network_task_active() && self.gc_in_event_loop_phase()).then(|| {
+            self.gc_pin_network_values(
+                std::iter::once(Value::Object(target_id))
+                    .chain(arguments.iter().cloned())
+                    .chain(records.iter().map(|record| record.listener.clone())),
+            )
+        });
+        let emission = self.dispatch_event_listener_snapshot(
+            module, target_id, event, arguments, emission_label, records,
+        );
+        if let Some(checkpoint) = gc_pins {
+            self.gc_unpin_network_values(checkpoint);
+        }
+        emission
+    }
+
+    fn dispatch_event_listener_snapshot(
+        &mut self,
+        module: &Ir3Module,
+        target_id: ObjectId,
+        event: RuntimePropertyKey,
+        arguments: Vec<Value>,
+        emission_label: Label,
+        records: Vec<EventListenerRecord>,
+    ) -> Result<bool, InterpreterError> {
         let settled_waiter =
             self.settle_event_promise_waiters(target_id, &event, &arguments, &emission_label)?;
         if records.is_empty() {
@@ -26165,13 +26219,20 @@ impl InterpreterCore {
                 // not registrations made through EventEmitter.once().
                 let _ = self.remove_once_event_listener(target_id, &event, &record.listener);
             }
-            self.invoke_inline_method_call_with_argument_label(
-                Some(module),
-                record.listener,
-                Value::Object(target_id),
-                arguments.clone(),
-                Some(emission_label.clone()),
-            )?;
+            let invoke = |core: &mut Self| {
+                core.invoke_inline_method_call_with_argument_label(
+                    Some(module),
+                    record.listener,
+                    Value::Object(target_id),
+                    arguments.clone(),
+                    Some(emission_label.clone()),
+                )
+            };
+            if self.gc_network_task_active() {
+                self.with_event_job_gc_request(Vec::new(), invoke)?;
+            } else {
+                invoke(self)?;
+            }
         }
         Ok(true)
     }

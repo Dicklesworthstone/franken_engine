@@ -8,7 +8,9 @@
 
 #![forbid(unsafe_code)]
 
-use crate::host_io::{HostIoError, HostIoExceptionProvenance, HostIoOutcome, HostIoRequest};
+use crate::host_io::{
+    HostIoError, HostIoExceptionProvenance, HostIoOutcome, HostIoRecorder, HostIoRequest,
+};
 use crate::process_spawn::{
     ProcessSpawnError, ProcessSpawnOutcome, ProcessSpawnRequest, process_spawn_request_digest,
 };
@@ -285,6 +287,7 @@ pub struct HostEffectJournalReservation {
 #[derive(Debug)]
 pub struct InMemoryHostEffectJournal {
     mode: HostEffectJournalMode,
+    replay_exception_provenance: HostIoExceptionProvenance,
     entries: Mutex<Vec<JournalSlot>>,
     state: Mutex<JournalState>,
     // Number of contiguous completed/consumed slots in the current attempt.
@@ -305,6 +308,7 @@ impl InMemoryHostEffectJournal {
     pub fn recording_with_limits(limits: HostEffectJournalLimits) -> Self {
         Self {
             mode: HostEffectJournalMode::Record,
+            replay_exception_provenance: HostIoExceptionProvenance::Unknown,
             entries: Mutex::new(Vec::new()),
             state: Mutex::new(JournalState::Idle),
             attempt_prefix_len: Mutex::new(0),
@@ -347,6 +351,7 @@ impl InMemoryHostEffectJournal {
         slots.extend(entries.into_iter().map(JournalSlot::Completed));
         Ok(Self {
             mode: HostEffectJournalMode::Replay,
+            replay_exception_provenance: HostIoExceptionProvenance::Unknown,
             entries: Mutex::new(slots),
             state: Mutex::new(JournalState::Idle),
             attempt_prefix_len: Mutex::new(0),
@@ -354,6 +359,81 @@ impl InMemoryHostEffectJournal {
             reservation_scope: Arc::new(()),
             budget: Mutex::new(budget),
         })
+    }
+
+    /// Materialize replay I/O from an explicit recorder, binding every outcome
+    /// to the journal's exact I/O projection before exposing the journal.
+    ///
+    /// The source must replay, finalize one exact execution, and agree on every
+    /// request and outcome. A recording-only source, changed result, missing
+    /// entry, unused suffix or failed finalization cannot confer provenance.
+    /// No live provider fallback exists. Source callbacks run during construction,
+    /// outside journal locks; subsequent execution uses only the bounded copy.
+    ///
+    /// The recorder's provenance declaration has the same trust boundary as a
+    /// HostIoProvider declaration. Unknown sources remain Unknown. Authentication
+    /// and the bounded provider contract belong to the product supplying it;
+    /// merely authenticating an arbitrary journal does not qualify its errors.
+    pub fn replaying_from_host_io_source(
+        entries: Vec<HostEffectJournalEntry>,
+        limits: HostEffectJournalLimits,
+        source: &dyn HostIoRecorder,
+    ) -> Result<Self, HostEffectJournalError> {
+        // Bound all supplied data before invoking a potentially custom source.
+        let mut journal = Self::replaying_with_limits(entries, limits)?;
+        let provenance = source.filesystem_exception_provenance();
+        source
+            .begin_execution()
+            .map_err(|_| HostEffectJournalError::Lifecycle {
+                detail: "host I/O replay source setup failed".to_string(),
+            })?;
+        let materialized = (|| {
+            let mut projected = Vec::new();
+            for slot in journal
+                .entries
+                .get_mut()
+                .expect("new journal entries mutex")
+            {
+                let JournalSlot::Completed(HostEffectJournalEntry::HostIo { request, outcome }) =
+                    slot
+                else {
+                    continue;
+                };
+                let supplied =
+                    source
+                        .replay(request)
+                        .ok_or_else(|| HostEffectJournalError::Lifecycle {
+                            detail: "host I/O replay source did not supply a recorded outcome"
+                                .to_string(),
+                        })?;
+                if supplied != *outcome {
+                    return Err(HostEffectJournalError::Lifecycle {
+                        detail: "host I/O replay source differs from the ordered journal"
+                            .to_string(),
+                    });
+                }
+                // Retain the source's actual result, rather than using its
+                // declaration to relabel an otherwise unused transcript.
+                *outcome = supplied;
+                projected.push((request.clone(), outcome.clone()));
+            }
+            Ok(projected)
+        })();
+        // Finalize even after a source mismatch. Never publish partial data or
+        // leave a successfully begun recorder reusable as an uncertified suffix.
+        let finalized = source.finish_execution();
+        let projected = materialized?;
+        let finalized = finalized.map_err(|_| HostEffectJournalError::Lifecycle {
+            detail: "host I/O replay source finalization failed".to_string(),
+        })?;
+        if finalized != projected {
+            return Err(HostEffectJournalError::Lifecycle {
+                detail: "host I/O replay source finalized a different execution".to_string(),
+            });
+        }
+        journal.replay_exception_provenance =
+            provenance.combine(source.filesystem_exception_provenance());
+        Ok(journal)
     }
 
     /// Encoded bytes retained as reserved requests or completed entries. This
@@ -380,15 +460,15 @@ impl InMemoryHostEffectJournal {
     }
 
     /// Provenance floor for filesystem outcomes supplied by this journal.
-    /// Recording mode is transparent to the live provider. Replay entries are
-    /// caller-supplied evidence and therefore remain fail-high here; product
-    /// authentication of an enclosing receipt must not silently relabel guest
-    /// data inside the engine.
+    /// Recording mode is transparent to the live provider. Caller-supplied
+    /// replay entries remain fail-high. An explicit source-bound constructor
+    /// derives this floor from the recorder that actually supplied and finalized
+    /// every I/O outcome, never from an enclosing receipt's authentication alone.
     #[must_use]
     pub const fn filesystem_exception_provenance(&self) -> HostIoExceptionProvenance {
         match self.mode {
             HostEffectJournalMode::Record => HostIoExceptionProvenance::ProviderInternal,
-            HostEffectJournalMode::Replay => HostIoExceptionProvenance::Unknown,
+            HostEffectJournalMode::Replay => self.replay_exception_provenance,
         }
     }
 
@@ -1115,11 +1195,12 @@ fn hex_digest(digest: &[u8; 32]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::host_io::{HostIoCapability, HostIoResponse};
+    use crate::host_io::{HostIoCapability, HostIoResponse, InMemoryHostIoTranscript};
     use crate::process_spawn::{
         ProcessExit, ProcessLaunch, ProcessSpawnCapability, ProcessSpawnResponse, ProcessStdio,
     };
     use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn fs_request() -> HostIoRequest {
         HostIoRequest::FsRead {
@@ -1172,6 +1253,234 @@ mod tests {
             HostIoExceptionProvenance::Unknown,
             "caller-supplied replay outcomes require fail-high provenance"
         );
+    }
+
+    #[derive(Debug)]
+    struct ReplaySource {
+        transcript: InMemoryHostIoTranscript,
+        provenance: HostIoExceptionProvenance,
+        replay_calls: AtomicUsize,
+        finish_calls: AtomicUsize,
+        omit_outcome: bool,
+        wrong_finalization: bool,
+        fail_finalization: bool,
+    }
+
+    impl ReplaySource {
+        fn new(entries: Vec<(HostIoRequest, HostIoOutcome)>) -> Self {
+            Self {
+                transcript: InMemoryHostIoTranscript::replaying(entries),
+                provenance: HostIoExceptionProvenance::ProviderInternal,
+                replay_calls: AtomicUsize::new(0),
+                finish_calls: AtomicUsize::new(0),
+                omit_outcome: false,
+                wrong_finalization: false,
+                fail_finalization: false,
+            }
+        }
+    }
+
+    impl HostIoRecorder for ReplaySource {
+        fn filesystem_exception_provenance(&self) -> HostIoExceptionProvenance {
+            self.provenance
+        }
+
+        fn begin_execution(&self) -> Result<(), HostIoError> {
+            self.transcript.begin_execution()
+        }
+
+        fn replay(&self, request: &HostIoRequest) -> Option<HostIoOutcome> {
+            self.replay_calls.fetch_add(1, Ordering::SeqCst);
+            if self.omit_outcome {
+                None
+            } else {
+                self.transcript.replay(request)
+            }
+        }
+
+        fn record(&self, _: &HostIoRequest, _: &HostIoOutcome) {
+            panic!("source binding must never record or invoke a live fallback");
+        }
+
+        fn finish_execution(&self) -> Result<Vec<(HostIoRequest, HostIoOutcome)>, HostIoError> {
+            self.finish_calls.fetch_add(1, Ordering::SeqCst);
+            let entries = self.transcript.finish_execution()?;
+            if self.fail_finalization {
+                return Err(HostIoError::Denied {
+                    reason: "source finalization refused".to_string(),
+                });
+            }
+            Ok(if self.wrong_finalization {
+                Vec::new()
+            } else {
+                entries
+            })
+        }
+    }
+
+    #[test]
+    fn source_bound_replay_uses_exact_source_outcomes_and_global_order() {
+        for outcome in [
+            fs_outcome(),
+            Err(HostIoError::Fs {
+                code: "ENOENT".to_string(),
+                detail: "bounded missing file".to_string(),
+            }),
+        ] {
+            let io = HostEffectJournalEntry::HostIo {
+                request: fs_request(),
+                outcome: outcome.clone(),
+            };
+            let entries = vec![
+                io.clone(),
+                HostEffectJournalEntry::ProcessSpawn {
+                    request: process_request(),
+                    outcome: process_outcome(),
+                },
+                io,
+            ];
+            let source = ReplaySource::new(vec![
+                (fs_request(), outcome.clone()),
+                (fs_request(), outcome.clone()),
+            ]);
+            let journal = InMemoryHostEffectJournal::replaying_from_host_io_source(
+                entries.clone(),
+                HostEffectJournalLimits::default(),
+                &source,
+            )
+            .unwrap();
+            assert_eq!(source.replay_calls.load(Ordering::SeqCst), 2);
+            assert_eq!(source.finish_calls.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                journal.filesystem_exception_provenance(),
+                HostIoExceptionProvenance::ProviderInternal
+            );
+            journal.begin_execution().unwrap();
+            assert_eq!(journal.replay_host_io(&fs_request()), Some(outcome.clone()));
+            assert_eq!(
+                journal.replay_process_spawn(&process_request()),
+                Some(process_outcome())
+            );
+            assert_eq!(journal.replay_host_io(&fs_request()), Some(outcome));
+            assert_eq!(journal.finish_execution().unwrap(), entries);
+            assert!(journal.begin_execution().is_err());
+            assert!(
+                InMemoryHostEffectJournal::replaying_from_host_io_source(
+                    entries,
+                    HostEffectJournalLimits::default(),
+                    &source,
+                )
+                .is_err(),
+                "a finalized source cannot certify another attempt"
+            );
+        }
+        let source = ReplaySource::new(vec![(fs_request(), fs_outcome())]);
+        let journal = InMemoryHostEffectJournal::replaying_from_host_io_source(
+            vec![HostEffectJournalEntry::HostIo {
+                request: fs_request(),
+                outcome: fs_outcome(),
+            }],
+            HostEffectJournalLimits::default(),
+            &source,
+        )
+        .unwrap();
+        journal.begin_execution().unwrap();
+        assert!(matches!(
+            journal.replay_process_spawn(&process_request()),
+            Some(Err(ProcessSpawnError::ReplayDivergence { index: 0, .. }))
+        ));
+        assert!(journal.finish_execution().is_err());
+    }
+
+    #[test]
+    fn source_binding_rejects_altered_missing_extra_and_unfinalized_io() {
+        let entry = HostEffectJournalEntry::HostIo {
+            request: fs_request(),
+            outcome: fs_outcome(),
+        };
+        let changed_request = HostIoRequest::FsRead {
+            path: "other.txt".to_string(),
+        };
+        for source_entries in [
+            Vec::new(),
+            vec![(changed_request, fs_outcome())],
+            vec![(
+                fs_request(),
+                Err(HostIoError::Denied {
+                    reason: "changed".to_string(),
+                }),
+            )],
+            vec![(fs_request(), fs_outcome()), (fs_request(), fs_outcome())],
+        ] {
+            let source = ReplaySource::new(source_entries);
+            assert!(
+                InMemoryHostEffectJournal::replaying_from_host_io_source(
+                    vec![entry.clone()],
+                    HostEffectJournalLimits::default(),
+                    &source,
+                )
+                .is_err()
+            );
+            assert_eq!(
+                source.finish_calls.load(Ordering::SeqCst),
+                1,
+                "a mismatching source must still finalize its begun attempt"
+            );
+        }
+        for fault in 0..3 {
+            let mut source = ReplaySource::new(vec![(fs_request(), fs_outcome())]);
+            source.omit_outcome = fault == 0;
+            source.wrong_finalization = fault == 1;
+            source.fail_finalization = fault == 2;
+            assert!(
+                InMemoryHostEffectJournal::replaying_from_host_io_source(
+                    vec![entry.clone()],
+                    HostEffectJournalLimits::default(),
+                    &source,
+                )
+                .is_err()
+            );
+            assert_eq!(source.finish_calls.load(Ordering::SeqCst), 1);
+        }
+        assert!(
+            InMemoryHostEffectJournal::replaying_from_host_io_source(
+                vec![entry],
+                HostEffectJournalLimits::default(),
+                &InMemoryHostIoTranscript::recording(),
+            )
+            .is_err(),
+            "a transparent recording declaration cannot relabel replay data"
+        );
+    }
+
+    #[test]
+    fn source_binding_preserves_unknown_and_checks_bounds_before_source_calls() {
+        let entry = HostEffectJournalEntry::HostIo {
+            request: fs_request(),
+            outcome: fs_outcome(),
+        };
+        let mut source = ReplaySource::new(vec![(fs_request(), fs_outcome())]);
+        source.provenance = HostIoExceptionProvenance::Unknown;
+        let journal = InMemoryHostEffectJournal::replaying_from_host_io_source(
+            vec![entry.clone()],
+            HostEffectJournalLimits::default(),
+            &source,
+        )
+        .unwrap();
+        assert_eq!(
+            journal.filesystem_exception_provenance(),
+            HostIoExceptionProvenance::Unknown
+        );
+        let bounded = ReplaySource::new(vec![(fs_request(), fs_outcome())]);
+        let limits = HostEffectJournalLimits {
+            max_entries: 0,
+            ..HostEffectJournalLimits::default()
+        };
+        assert!(InMemoryHostEffectJournal::replaying_from_host_io_source(
+            vec![entry], limits, &bounded,
+        ).is_err());
+        assert_eq!(bounded.replay_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(bounded.finish_calls.load(Ordering::SeqCst), 0);
     }
 
     #[test]

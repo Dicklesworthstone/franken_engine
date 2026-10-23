@@ -2045,8 +2045,10 @@ fn generated_code_fault_code(err: &InterpreterError) -> &'static str {
 /// `Builtin` (a computation over guest values) or none. Its grant carries
 /// nothing beyond the decision itself, so repeats of it can be folded.
 fn hostcall_is_effect_free(tag: &str) -> bool {
-    hostcall_registry_row(tag)
-        .is_some_and(|row| matches!(row.authority, None | Some(RuntimeCapability::Builtin)))
+    tag != crate::capability::UTIL_PROCESS_ARGV_CAPABILITY
+        && tag != crate::capability::UTIL_PROCESS_EXEC_ARGV_CAPABILITY
+        && hostcall_registry_row(tag)
+            .is_some_and(|row| matches!(row.authority, None | Some(RuntimeCapability::Builtin)))
 }
 
 /// Shared capability gate logic for both Call and HostCall instructions.
@@ -2074,14 +2076,21 @@ fn check_hostcall_capability_gate(
     // classification (fail-closed per-call fallback). Only the allow/deny
     // bit is precomputed — every witness and decision-record emission below
     // is identical on both paths.
-    let capability_denied = match interpreter
-        .pruned_hostcall_dispatch
-        .as_ref()
-        .and_then(|table| table.lookup(capability_tag))
-    {
-        Some(allowed) => !allowed,
-        None => !live_hostcall_decision(capability_tag, &interpreter.config.granted_capabilities),
-    };
+    let capability_denied = (matches!(
+        operation_tag,
+        crate::capability::UTIL_PROCESS_ARGV_CAPABILITY
+            | crate::capability::UTIL_PROCESS_EXEC_ARGV_CAPABILITY
+    ) && !interpreter.config.process_shape_read_allowed)
+        || match interpreter
+            .pruned_hostcall_dispatch
+            .as_ref()
+            .and_then(|table| table.lookup(capability_tag))
+        {
+            Some(allowed) => !allowed,
+            None => {
+                !live_hostcall_decision(capability_tag, &interpreter.config.granted_capabilities)
+            }
+        };
 
     // bd-hxukn: cap the tag length at the recording sites so an attacker
     // who controls the `HostCall` capability string cannot inflate the
@@ -12807,6 +12816,11 @@ pub struct InterpreterConfig {
     /// unless the embedder supplies it.
     #[serde(default)]
     pub process_argv: Vec<String>,
+    /// Explicit embedder authority for private native-util argument readers.
+    /// This is the runtime counterpart of TrustedProcessShape lowering; a
+    /// Builtin grant alone must not authorize access to invocation inputs.
+    #[serde(default)]
+    pub process_shape_read_allowed: bool,
 }
 
 impl PartialEq for InterpreterConfig {
@@ -12826,6 +12840,7 @@ impl PartialEq for InterpreterConfig {
             && self.checkpoint_density == other.checkpoint_density
             && self.module_parser_options == other.module_parser_options
             && self.process_argv == other.process_argv
+            && self.process_shape_read_allowed == other.process_shape_read_allowed
         // Note: cancellation_token is intentionally excluded from comparison
     }
 }
@@ -12850,6 +12865,7 @@ impl InterpreterConfig {
             commonjs_entry: false,
             module_parser_options: ParserOptions::default(),
             process_argv: Vec::new(),
+            process_shape_read_allowed: false,
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
             cancellation_token: None,
@@ -12874,6 +12890,7 @@ impl InterpreterConfig {
             commonjs_entry: false,
             module_parser_options: ParserOptions::default(),
             process_argv: Vec::new(),
+            process_shape_read_allowed: false,
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
             cancellation_token: None,
@@ -12904,6 +12921,7 @@ impl InterpreterConfig {
             commonjs_entry: false,
             module_parser_options: ParserOptions::default(),
             process_argv: Vec::new(),
+            process_shape_read_allowed: false,
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
             cancellation_token: None,
@@ -12934,6 +12952,7 @@ impl InterpreterConfig {
             commonjs_entry: false,
             module_parser_options: ParserOptions::default(),
             process_argv: Vec::new(),
+            process_shape_read_allowed: false,
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
             cancellation_token: None,
@@ -15753,6 +15772,10 @@ pub struct InterpreterCore {
     /// no binding resolves reads and writes its properties, own or inherited,
     /// as a global environment's object record does. Cleared with the realm.
     realm_global_object: Option<ObjectId>,
+    /// The authority-bearing process object stays outside the public global
+    /// object and is shared by module scopes. This root also lets the private
+    /// util argv reader ignore guest bindings named `process`.
+    process_global_object: Option<ObjectId>,
     /// Engine-owned sanitized outer environment for `Function`-constructor
     /// artifacts. Binding cells persist for one top-level realm, while every
     /// invocation receives fresh frame structure that shares only these
@@ -16986,6 +17009,7 @@ impl InterpreterCore {
             scope_chain,
             realm_dynamic_globals: BTreeMap::new(),
             realm_global_object: None,
+            process_global_object: None,
             generated_function_realm_globals: None,
             generated_function_realm_generation: 0,
             runtime_name_references: Vec::new(),
@@ -38514,6 +38538,7 @@ impl InterpreterCore {
         // reset. Keeping their binding cells here would retain stale ObjectIds.
         self.realm_dynamic_globals.clear();
         self.realm_global_object = None;
+        self.process_global_object = None;
         self.generated_function_realm_generation = next_generation;
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
         Ok(())
@@ -38609,10 +38634,27 @@ impl InterpreterCore {
         {
             self.realm_global_object = None;
         }
+        if self
+            .process_global_object
+            .is_some_and(|process| process.0 as usize >= heap_checkpoint)
+        {
+            self.process_global_object = None;
+        }
         self.estimated_memory_bytes = memory_checkpoint;
     }
 
     fn inject_runtime_globals_inner(&mut self) -> Result<(), InterpreterError> {
+        let process = if let Some(process) = self.process_global_object {
+            Value::Object(process)
+        } else {
+            let process = self.alloc_process_global()?;
+            self.process_global_object = Some(process);
+            Value::Object(process)
+        };
+        self.inject_non_process_runtime_globals(process)
+    }
+
+    fn alloc_process_global(&mut self) -> Result<ObjectId, InterpreterError> {
         // bd-my9hk: the argv the embedder launched the program with; empty
         // when it supplied none.
         let argv_values: Vec<Value> = self
@@ -38630,12 +38672,15 @@ impl InterpreterCore {
         // a positive synthetic sentinel, never the nondeterministic host PID.
         // No env VALUES are exposed (env stays empty and env reads stay denied
         // at lowering).
-        let process = Value::Object(self.alloc_object_with_properties(&[
+        self.alloc_object_with_properties(&[
             ("argv", argv),
             ("env", env),
             ("platform", Value::str(NODE_OS_PLATFORM)),
             ("pid", Value::Int(1)),
-        ])?);
+        ])
+    }
+
+    fn inject_non_process_runtime_globals(&mut self, process: Value) -> Result<(), InterpreterError> {
         // The modules of a program share one `console`, `performance`,
         // `JSON`, `Reflect` and `Atomics` (bd-9vouw.297): a later module binds
         // the realm global object's own property, so a member one module adds
@@ -95228,6 +95273,38 @@ impl InterpreterCore {
             "builtin:UtilTypeTag" => {
                 let value = self.arg_or_undefined(args, 0)?;
                 Ok(Value::str(self.util_type_tag(&value)?))
+            }
+            crate::capability::UTIL_PROCESS_ARGV_CAPABILITY
+            | crate::capability::UTIL_PROCESS_EXEC_ARGV_CAPABILITY => {
+                // The shared capability gate checked process_shape_read_allowed
+                // before recording this read. Use the engine-owned realm
+                // object, never a source binding or the host's ambient argv.
+                let process =
+                    self.process_global_object
+                        .ok_or_else(|| InterpreterError::InternalError {
+                            details: "native util argv read has no runtime process object"
+                                .to_string(),
+                        })?;
+                let observation = self.begin_property_observation([])?;
+                let outcome = (|| {
+                    let field = if cap == crate::capability::UTIL_PROCESS_ARGV_CAPABILITY {
+                        "argv"
+                    } else {
+                        "execArgv"
+                    };
+                    let key = RuntimePropertyKey::String(field.into());
+                    if let Some(module) = module {
+                        self.run_pre_runtime_property_access_hook(module, process, &key)?;
+                    }
+                    self.proxy_aware_get_runtime_property(
+                        module,
+                        process,
+                        &key,
+                        Value::Object(process),
+                        0,
+                    )
+                })();
+                self.finish_property_read_observation(observation, outcome)
             }
             "builtin:ClassMembersNonEnumerable" => {
                 // ES2020 14.6.13: class methods and accessors are

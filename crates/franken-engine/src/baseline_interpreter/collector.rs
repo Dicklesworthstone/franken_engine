@@ -1800,6 +1800,7 @@ impl InterpreterCore {
             scope_chain,
             realm_dynamic_globals,
             realm_global_object,
+            process_global_object,
             generated_function_realm_globals,
             generated_function_realm_generation: _,
             runtime_name_references,
@@ -1992,6 +1993,9 @@ impl InterpreterCore {
                 .for_each(|binding| m.binding(binding));
             if let Some(global) = realm_global_object {
                 m.object(*global);
+            }
+            if let Some(process) = process_global_object {
+                m.object(*process);
             }
         }
         if let Some((_, value, _)) = pending_arguments_object {
@@ -2477,6 +2481,37 @@ mod tests {
             "var keep = { v: 7 }; for (let i = 0; i < 50; i++) { const g = { i }; } keep.v";
         assert_eq!(execute(source, false), format!("{:?}", Value::Int(7)));
         assert_ne!(execute(source, true), format!("{:?}", Value::Int(7)));
+    }
+
+    /// The private native-util reader retains its realm process even when no
+    /// source-visible process binding is in the active module's scope.
+    #[test]
+    fn private_process_root_keeps_argv_alive_without_a_guest_binding() {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = [RuntimeCapability::HeapAllocate].into_iter().collect();
+        config.process_argv = vec!["runtime".into(), "app.cjs".into(), "--mode=live".into()];
+        let mut core = InterpreterCore::new(config, "gc-process-root");
+        let process = core.alloc_process_global().expect("process allocation");
+        let Some(Value::Object(argv)) = core.heap[process.0 as usize].properties.get("argv") else {
+            panic!("process owns argv");
+        };
+        let argv = *argv;
+        // A lexical process shadow must not make the private util reader's
+        // actual process object collectible. No register or binding owns it.
+        core.process_global_object = Some(process);
+        let garbage = core.alloc_object_with_prototype(None).expect("garbage");
+        core.collect_garbage().expect("collection runs");
+        assert!(core.heap.get(process.0 as usize).is_some());
+        assert!(core.heap.get(argv.0 as usize).is_some());
+        assert!(core.heap.is_reclaimed(garbage.0 as usize));
+        assert_eq!(
+            core.heap[argv.0 as usize].properties.get("2"),
+            Some(&Value::str("--mode=live"))
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     /// Symbol-keyed properties and exact-only (lone-surrogate) string keys

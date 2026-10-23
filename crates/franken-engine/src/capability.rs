@@ -293,6 +293,14 @@ pub const GENERATOR_PROLOGUE_CAPABILITY: &str = "generator:prologue";
 /// and returns a promise for its namespace instead of the namespace itself.
 pub const DYNAMIC_IMPORT_CAPABILITY: &str = "module:dynamic_import";
 
+/// Private native-util reads of the current realm's host-supplied arguments.
+/// The runtime additionally requires its explicit process-shape grant; a
+/// generic Builtin grant alone never permits these input reads.
+pub const UTIL_PROCESS_ARGV_CAPABILITY: &str = "builtin:UtilProcessArgv";
+/// Private native-util read of optional realm launch flags. An absent field
+/// retains the embedder's ordinary `[runtime, script, ...arguments]` layout.
+pub const UTIL_PROCESS_EXEC_ARGV_CAPABILITY: &str = "builtin:UtilProcessExecArgv";
+
 /// Resolve one exact HostCall tag to its authority, IFC result contract, and
 /// production dispatcher. Unknown tags return `None`, which makes both the
 /// capability gate and provenance analysis fail high.
@@ -354,6 +362,11 @@ pub fn hostcall_registry_row(tag: &str) -> Option<HostcallRegistryRow<'_>> {
             Some(RuntimeCapability::EnvRead),
             result_contract_for_authority(RuntimeCapability::EnvRead),
             HostcallDispatchBinding::HostIo,
+        ),
+        UTIL_PROCESS_ARGV_CAPABILITY | UTIL_PROCESS_EXEC_ARGV_CAPABILITY => (
+            Some(RuntimeCapability::Builtin),
+            HostcallResultContract::SourceFloor(Label::Internal),
+            HostcallDispatchBinding::Builtin,
         ),
         "net:client_request" => (
             Some(RuntimeCapability::NetworkEgress),

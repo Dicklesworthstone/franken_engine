@@ -21,6 +21,9 @@
 //! engine's own object model: builtin:UtilInspect, builtin:UtilFormat and
 //! builtin:UtilTypeTag. Everything else is ordinary JavaScript over the
 //! engine's builtins, so labels and authority work as for user code.
+//! Omitted `parseArgs` arguments use private process-argument hostcalls:
+//! reading them requires the embedder's explicit process-shape grant at
+//! invocation, never at module initialization or when `args` is supplied.
 //!
 //! A `require` the program declares in an enclosing scope (a parameter, a
 //! local function) is its own and is called as written. The same pure-module
@@ -90,6 +93,8 @@ pub(super) const UTIL_TYPE_TAG_CAPABILITY: &str = "builtin:UtilTypeTag";
 const INSPECT_INTRINSIC: &str = "%UtilInspect";
 const FORMAT_INTRINSIC: &str = "%UtilFormat";
 const TYPE_TAG_INTRINSIC: &str = "%UtilTypeTag";
+const PROCESS_ARGV_INTRINSIC: &str = "%UtilProcessArgv";
+const PROCESS_EXEC_ARGV_INTRINSIC: &str = "%UtilProcessExecArgv";
 
 /// The program binding that caches the module object.
 const MODULE_BINDING: &str = "%util_module";
@@ -148,10 +153,15 @@ impl PureModule {
 
 /// UTIL_SOURCE spells the intrinsics with these names, which the parser
 /// accepts, and the rewrite renames them to their `%` forms.
-const PLACEHOLDERS: [(&str, &str); 3] = [
+const PLACEHOLDERS: [(&str, &str); 5] = [
     ("__franken_util_inspect", INSPECT_INTRINSIC),
     ("__franken_util_format", FORMAT_INTRINSIC),
     ("__franken_util_type_tag", TYPE_TAG_INTRINSIC),
+    ("__franken_util_process_argv", PROCESS_ARGV_INTRINSIC),
+    (
+        "__franken_util_process_exec_argv",
+        PROCESS_EXEC_ARGV_INTRINSIC,
+    ),
 ];
 
 pub(super) fn intrinsic_capability(name: &str) -> Option<&'static str> {
@@ -159,6 +169,8 @@ pub(super) fn intrinsic_capability(name: &str) -> Option<&'static str> {
         INSPECT_INTRINSIC => Some(UTIL_INSPECT_CAPABILITY),
         FORMAT_INTRINSIC => Some(UTIL_FORMAT_CAPABILITY),
         TYPE_TAG_INTRINSIC => Some(UTIL_TYPE_TAG_CAPABILITY),
+        PROCESS_ARGV_INTRINSIC => Some(crate::capability::UTIL_PROCESS_ARGV_CAPABILITY),
+        PROCESS_EXEC_ARGV_INTRINSIC => Some(crate::capability::UTIL_PROCESS_EXEC_ARGV_CAPABILITY),
         "%EventsConstructorRef" => Some("builtin:EventEmitterConstructorRef"),
         "%EventsOnce" => Some("builtin:EventsOnce"),
         "%TimersPromisesSetTimeout" => Some("builtin:TimersPromisesSetTimeout"),
@@ -348,7 +360,7 @@ const BUILTIN_REQUIRE_SEARCH: Search = Search {
 /// The standard globals UTIL_SOURCE reads by name. A program that declares
 /// one at its top level would capture the module's reference, so the
 /// module reads those through `globalThis` instead.
-const MODULE_GLOBALS: [&str; 17] = [
+const MODULE_GLOBALS: [&str; 16] = [
     "Array",
     "Buffer",
     "Error",
@@ -365,7 +377,6 @@ const MODULE_GLOBALS: [&str; 17] = [
     "TextEncoder",
     "TypeError",
     "Uint8Array",
-    "process",
 ];
 
 const TIMERS_GLOBALS: [&str; 9] = [

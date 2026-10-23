@@ -3810,6 +3810,8 @@ impl ExecutionOrchestrator {
         // budgets) as the entry, not the parser's built-in defaults.
         quickjs_config.module_parser_options = self.config.parser_options.clone();
         quickjs_config.process_argv = self.process_argv.clone();
+        quickjs_config.process_shape_read_allowed =
+            self.ambient_authority_grant == AmbientAuthorityGrant::TrustedProcessShape;
         if let Some((root, canonical_root)) = module_root.as_ref() {
             quickjs_config.module_root = Some(root.clone());
             quickjs_config.canonical_module_root = canonical_root.clone();
@@ -3826,6 +3828,8 @@ impl ExecutionOrchestrator {
         v8_config.commonjs_entry = self.commonjs_entry();
         v8_config.module_parser_options = self.config.parser_options.clone();
         v8_config.process_argv = self.process_argv.clone();
+        v8_config.process_shape_read_allowed =
+            self.ambient_authority_grant == AmbientAuthorityGrant::TrustedProcessShape;
         if let Some((root, canonical_root)) = module_root {
             v8_config.module_root = Some(root);
             v8_config.canonical_module_root = canonical_root;

@@ -2442,8 +2442,10 @@ fn eval_lane_router_for_ir3(
 
     let mut quickjs_config = InterpreterConfig::quickjs_defaults();
     quickjs_config.granted_capabilities = granted_capabilities.clone();
+    quickjs_config.process_shape_read_allowed = true;
     let mut v8_config = InterpreterConfig::v8_defaults();
     v8_config.granted_capabilities = granted_capabilities;
+    v8_config.process_shape_read_allowed = true;
     if let Some(budget) = budgets.instruction_budget {
         quickjs_config.instruction_budget = budget;
         v8_config.instruction_budget = budget;

@@ -1,5 +1,5 @@
-//! Source-to-runtime regression coverage for standard Object, JSON, Array,
-//! String, Number, and Reflect members (bd-9a8cz.2, bd-9vouw.366).
+//! Source-to-runtime regression coverage for mutable standard constructor and
+//! namespace members (bd-9a8cz.2, bd-9vouw.293, bd-9vouw.366).
 //!
 //! These globals own ordinary mutable properties. Calls and reads resolve
 //! their live values, preserve the receiver and evaluate the member before
@@ -123,6 +123,189 @@ console.log(JSON.parse(1), Array.isArray([]), String.fromCharCode(65),
             "true:called",
             "parse:1 array string number reflect",
         ],
+    );
+}
+
+#[test]
+fn symbol_proxy_map_and_array_buffer_members_are_live_values() {
+    check_console(
+        r#"
+const symbolFor = function (value) { return (this === Symbol) + ':' + value; };
+Symbol.for = symbolFor;
+Symbol.keyFor = function () { return 'key'; };
+Proxy.revocable = function (value) { return (this === Proxy) + ':' + value; };
+ArrayBuffer.isView = function (value) { return (this === ArrayBuffer) + ':' + value; };
+Map.groupBy = function (value) { return (this === Map) + ':' + value; };
+console.log(Symbol.for === symbolFor, Symbol['for'] === symbolFor);
+console.log(Symbol.for('direct'), Symbol['for']('computed'), Symbol.keyFor(1));
+console.log(Proxy.revocable('proxy'), ArrayBuffer.isView('view'), Map.groupBy('map'));
+"#,
+        &[
+            "true true",
+            "true:direct true:computed key",
+            "true:proxy true:view true:map",
+        ],
+    );
+}
+
+#[test]
+fn saved_symbol_proxy_map_and_array_buffer_intrinsics_keep_their_behavior() {
+    check_console(
+        r#"
+const symbolFor = Symbol.for;
+const symbolKeyFor = Symbol.keyFor;
+const revocable = Proxy.revocable;
+const isView = ArrayBuffer.isView;
+const groupBy = Map.groupBy;
+Symbol.for = function () { return 'replacement'; };
+Symbol.keyFor = function () { return 'replacement'; };
+Proxy.revocable = function () { return 'replacement'; };
+ArrayBuffer.isView = function () { return 'replacement'; };
+Map.groupBy = function () { return 'replacement'; };
+console.log(symbolKeyFor(symbolFor('native')), isView(new Uint8Array(1)),
+    groupBy([1, 2, 3], value => value % 2).get(1).join(','));
+const pair = revocable({ value: 7 }, {});
+console.log(pair.proxy.value);
+pair.revoke();
+try { pair.proxy.value; } catch (error) { console.log(error instanceof TypeError); }
+console.log(Symbol.for('x'), Symbol.keyFor(1), Proxy.revocable({}, {}),
+    ArrayBuffer.isView({}), Map.groupBy([]));
+"#,
+        &[
+            "native true 1,3",
+            "7",
+            "true",
+            "replacement replacement replacement replacement replacement",
+        ],
+    );
+}
+
+#[test]
+fn additional_static_getters_preserve_receiver_and_evaluation_order() {
+    check_console(
+        r#"
+const events = [];
+function install(owner, name, label) {
+    Object.defineProperty(owner, name, {
+        configurable: true,
+        get() {
+            events.push(label + ':get:' + (this === owner));
+            return function (value) {
+                events.push(label + ':call:' + (this === owner));
+                return value;
+            };
+        }
+    });
+}
+function argument(value) { events.push('arg:' + value); return value; }
+install(Symbol, 'for', 'symbol');
+install(Proxy, 'revocable', 'proxy');
+install(Map, 'groupBy', 'map');
+install(ArrayBuffer, 'isView', 'buffer');
+console.log(Symbol.for(argument(1)), Proxy.revocable(argument(2)),
+    Map.groupBy(argument(3)), ArrayBuffer.isView(argument(4)));
+console.log(events.join(','));
+"#,
+        &[
+            "1 2 3 4",
+            "symbol:get:true,arg:1,symbol:call:true,proxy:get:true,arg:2,proxy:call:true,map:get:true,arg:3,map:call:true,buffer:get:true,arg:4,buffer:call:true",
+        ],
+    );
+}
+
+#[test]
+fn additional_static_members_capture_the_callee_before_spread_arguments() {
+    check_console(
+        r#"
+function first(value) { return 'first:' + value; }
+function second(value) { return 'second:' + value; }
+Symbol.for = first;
+Proxy.revocable = first;
+Map.groupBy = first;
+ArrayBuffer.isView = first;
+function replace(owner, key, value) { owner[key] = second; return [value]; }
+function run() {
+    return [
+        Symbol.for(...replace(Symbol, 'for', 1)),
+        Proxy.revocable(...replace(Proxy, 'revocable', 2)),
+        Map.groupBy(...replace(Map, 'groupBy', 3)),
+        ArrayBuffer.isView(...replace(ArrayBuffer, 'isView', 4))
+    ].join(',');
+}
+console.log(run());
+console.log(Symbol.for(1), Proxy.revocable(2), Map.groupBy(3), ArrayBuffer.isView(4));
+Map.groupBy = function (left, right) { return (this === Map) + ':' + left + ':' + right; };
+console.log(Map.groupBy?.(...[5, 6]));
+"#,
+        &[
+            "first:1,first:2,first:3,first:4",
+            "second:1 second:2 second:3 second:4",
+            "true:5:6",
+        ],
+    );
+}
+
+#[test]
+fn additional_static_members_honor_deletion_and_inheritance() {
+    check_console(
+        r#"
+console.log(delete Symbol.for, typeof Symbol.for,
+    delete Proxy.revocable, typeof Proxy.revocable,
+    delete Map.groupBy, typeof Map.groupBy,
+    delete ArrayBuffer.isView, typeof ArrayBuffer.isView);
+Object.setPrototypeOf(Symbol, { for(value) { return (this === Symbol) + ':' + value; } });
+Object.setPrototypeOf(Proxy, { revocable(value) { return (this === Proxy) + ':' + value; } });
+Object.setPrototypeOf(Map, { groupBy(value) { return (this === Map) + ':' + value; } });
+Object.setPrototypeOf(ArrayBuffer, { isView(value) { return (this === ArrayBuffer) + ':' + value; } });
+console.log(Symbol.for('symbol'), Proxy.revocable('proxy'),
+    Map.groupBy('map'), ArrayBuffer.isView('buffer'));
+"#,
+        &[
+            "true undefined true undefined true undefined true undefined",
+            "true:symbol true:proxy true:map true:buffer",
+        ],
+    );
+}
+
+#[test]
+fn additional_static_getter_and_noncallable_errors_keep_argument_order() {
+    check_console(
+        r#"
+let ran = false;
+const token = {};
+Object.defineProperty(Symbol, 'for', { configurable: true, get() { throw token; } });
+try { Symbol.for((ran = true)); }
+catch (error) { console.log(error === token, ran); }
+Proxy.revocable = 1;
+try { Proxy.revocable((ran = true)); }
+catch (error) { console.log(error instanceof TypeError, ran); }
+ran = false;
+delete Map.groupBy;
+try { Map.groupBy((ran = true)); }
+catch (error) { console.log(error instanceof TypeError, ran); }
+Object.defineProperty(ArrayBuffer, 'isView', { value: 2, writable: false });
+function strictWrite() { 'use strict'; ArrayBuffer.isView = 3; }
+try { strictWrite(); }
+catch (error) { console.log(error instanceof TypeError, ArrayBuffer.isView); }
+"#,
+        &["true false", "true true", "true true", "true 2"],
+    );
+}
+
+#[test]
+fn additional_static_constructor_shadows_remain_ordinary_user_objects() {
+    check_console(
+        r#"
+function run(Symbol, Proxy, Map, ArrayBuffer) {
+    return [Symbol.for(1), Proxy.revocable(2), Map.groupBy(3), ArrayBuffer.isView(4)].join(',');
+}
+const Symbol = { for(value) { return this.prefix + value; }, prefix: 's' };
+const Proxy = { revocable(value) { return this.prefix + value; }, prefix: 'p' };
+const Map = { groupBy(value) { return this.prefix + value; }, prefix: 'm' };
+const ArrayBuffer = { isView(value) { return this.prefix + value; }, prefix: 'a' };
+console.log(run(Symbol, Proxy, Map, ArrayBuffer));
+"#,
+        &["s1,p2,m3,a4"],
     );
 }
 
@@ -309,6 +492,11 @@ fn static_member_loads_declare_builtin_authority_from_the_final_constant_pool() 
         "Number.isInteger(1);",
         "function check() { return Number.isInteger(1); } check();",
         "const keys = Object.keys; keys({ value: 1 });",
+        "Symbol.for('native');",
+        "function check() { return Symbol.keyFor(Symbol.for('native')); } check();",
+        "const revocable = Proxy.revocable; revocable({}, {});",
+        "function check() { return Map.groupBy([], value => value); } check();",
+        "ArrayBuffer.isView({});",
     ] {
         let tree = parse_script(source).expect("standard builtin source parses");
         let ir0 = Ir0Module::from_syntax_tree(tree, "mutable_static_authority.js");
@@ -321,6 +509,81 @@ fn static_member_loads_declare_builtin_authority_from_the_final_constant_pool() 
                 .iter()
                 .any(|tag| tag.0 == "builtin"),
             "runtime builtin value must declare its authority: {source}"
+        );
+    }
+}
+
+#[test]
+fn mutable_constructor_native_calls_still_require_builtin_authority() {
+    use frankenengine_engine::baseline_interpreter::{
+        InterpreterConfig, InterpreterError, QuickJsLane,
+    };
+    use frankenengine_engine::capability::RuntimeCapability;
+    use frankenengine_engine::ir_contract::Ir0Module;
+    use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+    use frankenengine_engine::parser_api_stability::parse_script;
+
+    for (source, expected_capability) in [
+        ("Symbol.for('native');", "builtin:SymbolFor"),
+        ("Symbol.keyFor(undefined);", "builtin:SymbolKeyFor"),
+        ("Proxy.revocable({}, {});", "builtin:ProxyRevocable"),
+        ("Map.groupBy([], value => value);", "builtin:MapGroupBy"),
+        ("ArrayBuffer.isView({});", "builtin:ArrayBufferIsView"),
+    ] {
+        let tree = parse_script(source).expect("native constructor member source parses");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "mutable_native_authority.js");
+        let context = LoweringContext::new("native-authority", "native-call", "builtin-policy");
+        let lowered = lower_ir0_to_ir3(&ir0, &context).expect("native member source lowers");
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+        ]
+        .into_iter()
+        .collect();
+        let error = QuickJsLane::with_config(config)
+            .execute(&lowered.ir3, "native-authority")
+            .expect_err("a live native member must still enforce its invocation authority");
+        assert!(
+            matches!(error, InterpreterError::CapabilityDenied { ref capability }
+                if capability == expected_capability),
+            "{source}: expected denial of {expected_capability}, got {error:?}"
+        );
+    }
+}
+
+#[test]
+fn replaced_constructor_members_do_not_hide_sensitive_callback_results() {
+    use frankenengine_engine::ifc_artifacts::Label;
+    use frankenengine_engine::ir_contract::Ir0Module;
+    use frankenengine_engine::lowering_pipeline::{
+        LoweringContext, LoweringPipelineError, lower_ir0_to_ir3,
+    };
+    use frankenengine_engine::parser_api_stability::parse_script;
+
+    for member in [
+        "Symbol.for",
+        "Symbol.keyFor",
+        "Proxy.revocable",
+        "Map.groupBy",
+        "ArrayBuffer.isView",
+    ] {
+        let source = format!(
+            "const secret = hostcall('random_read'); \
+             {member} = function () {{ return secret; }}; console.log({member}('input'));"
+        );
+        let tree = parse_script(&source).expect("sensitive replacement source parses");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "mutable_static_sensitive_result.js");
+        let context = LoweringContext::new("static-flow", "patched-call", "secret-policy");
+        let error = lower_ir0_to_ir3(&ir0, &context)
+            .expect_err("a replaced member can return its captured sensitive value");
+        assert!(
+            matches!(error, LoweringPipelineError::UnauthorizedFlow {
+                ref source_label,
+                sink_clearance: Label::Internal,
+                ..
+            } if *source_label >= Label::Secret),
+            "{member}: expected a sensitive callback result to be denied, got {error:?}"
         );
     }
 }

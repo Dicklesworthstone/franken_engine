@@ -30673,7 +30673,16 @@ pub(crate) const STATIC_VALUE_CAPABILITY_PREFIX: &str = "builtin:static-value:";
 fn has_mutable_static_builtins(name: &str) -> bool {
     matches!(
         name,
-        "Object" | "Array" | "String" | "Number" | "JSON" | "Reflect"
+        "Object"
+            | "Array"
+            | "String"
+            | "Number"
+            | "JSON"
+            | "Reflect"
+            | "Symbol"
+            | "Proxy"
+            | "Map"
+            | "ArrayBuffer"
     )
 }
 

@@ -1378,7 +1378,7 @@ fn delivered_strict_alias_bounds_first_getter_but_keeps_cached_identity() {
                     "entry.mjs",
                     definition(
                         ModuleSyntax::EsModule,
-                        "import './mutator.cjs'; import strict from 'node:assert/strict'; strict.equal(7, 7); console.log(typeof strict);",
+                        "import './mutator.cjs'; import strict from 'node:assert/strict'; console.log(strict.equal(7, 7) || typeof strict);",
                     )
                     .with_dependency(ModuleDependency::new("./mutator.cjs", ImportStyle::Import)),
                 ),
@@ -1386,8 +1386,11 @@ fn delivered_strict_alias_bounds_first_getter_but_keeps_cached_identity() {
                     "mutator.cjs",
                     definition(
                         ModuleSyntax::CommonJs,
+                        // Isolate cached alias selection from the mutable parent
+                        // that the strict export normally exposes through `.ok`.
                         &format!(
                             "const assert = require('assert'); const original = assert.strict; \
+                             original.ok = original; \
                              {initialize_alias} \
                              Object.defineProperty(assert, 'strict', {{ get: function () {{ \
                                  console.log('strict getter ran'); return original; \
@@ -2384,8 +2387,8 @@ fn delivered_timer_esm_imports_refuse_guest_promisify_getters_with_native_names(
                     "entry.mjs",
                     definition(
                         ModuleSyntax::EsModule,
-                        "import './mutate.cjs'; import {setTimeout} from 'node:timers'; \
-                         console.log(typeof setTimeout);",
+                        "import './mutate.cjs'; import {setTimeout as schedule} from 'node:timers'; \
+                         console.log(schedule());",
                     )
                     .with_dependency(ModuleDependency::new("./mutate.cjs", ImportStyle::Import)),
                 ),
@@ -2395,7 +2398,7 @@ fn delivered_timer_esm_imports_refuse_guest_promisify_getters_with_native_names(
                         ModuleSyntax::CommonJs,
                         r#"
 const timers = require('timers');
-const fake = function setTimeout() {};
+const fake = function setTimeout() { return 'guest timer result'; };
 Object.defineProperty(fake, Symbol.for('nodejs.util.promisify.custom'), {
     get: function get() { console.log('guest getter ran'); return function () {}; },
     enumerable: true,
@@ -2423,6 +2426,10 @@ timers.setTimeout = fake;
             .expect_err("the name get does not give a guest closure native accessor authority");
         assert!(
             error.to_string().contains("bounded-import contract"),
+            "lane={lane:?}: {error}"
+        );
+        assert!(
+            error.to_string().contains("'node:timers'"),
             "lane={lane:?}: {error}"
         );
         assert!(engine.last_failed_console_output().is_empty());

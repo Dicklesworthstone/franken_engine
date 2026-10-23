@@ -24,6 +24,11 @@ mod readline_cursor;
 #[path = "util_mime.rs"]
 mod util_mime;
 
+/// Include the complete bridge composition wrapper in native source admission.
+pub(super) fn stream_bridge_source_bytes() -> usize {
+    stream_web_bridge::SOURCE.len()
+}
+
 const SOURCE: &str = include_str!("native_module_loader.js");
 // One immutable template for every builtin wrapper, including bridge-private
 // dependencies. Cache syntax BEFORE inserting a program's initializer; each

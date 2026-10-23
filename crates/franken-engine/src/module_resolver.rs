@@ -288,6 +288,8 @@ pub enum NativeBuiltinModule {
     AssertStrict,
     StringDecoder,
     TimersPromises,
+    Stream,
+    StreamPromises,
 }
 
 impl NativeBuiltinModule {
@@ -309,6 +311,8 @@ impl NativeBuiltinModule {
             "assert/strict" | "node:assert/strict" => Some(Self::AssertStrict),
             "string_decoder" | "node:string_decoder" => Some(Self::StringDecoder),
             "timers/promises" | "node:timers/promises" => Some(Self::TimersPromises),
+            "stream" | "node:stream" => Some(Self::Stream),
+            "stream/promises" | "node:stream/promises" => Some(Self::StreamPromises),
             _ => None,
         }
     }
@@ -331,6 +335,8 @@ impl NativeBuiltinModule {
             Self::AssertStrict => "node:assert/strict",
             Self::StringDecoder => "node:string_decoder",
             Self::TimersPromises => "node:timers/promises",
+            Self::Stream => "node:stream",
+            Self::StreamPromises => "node:stream/promises",
         }
     }
 
@@ -339,7 +345,12 @@ impl NativeBuiltinModule {
     pub fn record(self, id: impl Into<String>) -> ModuleRecord {
         let mut required_capabilities =
             BTreeSet::from([RuntimeCapability::ModuleLoad, RuntimeCapability::Builtin]);
-        if matches!(self, Self::Timers | Self::TimersPromises) {
+        // Stream completion, backpressure and cancellation use the native
+        // nextTick queue, whose scheduling authority is Timer.
+        if matches!(
+            self,
+            Self::Timers | Self::TimersPromises | Self::Stream | Self::StreamPromises
+        ) {
             required_capabilities.insert(RuntimeCapability::Timer);
         }
         ModuleRecord {
@@ -2584,6 +2595,8 @@ mod tests {
             "assert/strict",
             "string_decoder",
             "timers/promises",
+            "stream",
+            "stream/promises",
         ] {
             let builtin = NativeBuiltinModule::from_specifier(name).unwrap();
             assert_eq!(builtin.canonical_specifier(), format!("node:{name}"));
@@ -2610,7 +2623,7 @@ mod tests {
                 record
                     .required_capabilities
                     .contains(&RuntimeCapability::Timer),
-                matches!(name, "timers" | "timers/promises")
+                matches!(name, "timers" | "timers/promises" | "stream" | "stream/promises")
             );
             let request = ModuleRequest::new(name, ImportStyle::Require);
             let denied = CapabilityPolicyHook::new(BTreeSet::from([RuntimeCapability::ModuleLoad]));

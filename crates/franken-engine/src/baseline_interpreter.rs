@@ -40849,7 +40849,9 @@ impl InterpreterCore {
             | NativeBuiltinModule::Assert
             | NativeBuiltinModule::AssertStrict
             | NativeBuiltinModule::StringDecoder
-            | NativeBuiltinModule::TimersPromises => {
+            | NativeBuiltinModule::TimersPromises
+            | NativeBuiltinModule::Stream
+            | NativeBuiltinModule::StreamPromises => {
                 self.source_builtin_module(module, native, import_bound)
             }
         }
@@ -40925,6 +40927,29 @@ impl InterpreterCore {
             NativeBuiltinModule::TimersPromises => {
                 vec!["setTimeout", "setImmediate", "setInterval", "scheduler"]
             }
+            NativeBuiltinModule::Stream => vec![
+                "Stream",
+                "Readable",
+                "Writable",
+                "Duplex",
+                "Transform",
+                "PassThrough",
+                "pipeline",
+                "finished",
+                "compose",
+                "destroy",
+                "isReadable",
+                "isWritable",
+                "isErrored",
+                "isDisturbed",
+                "isDestroyed",
+                "addAbortSignal",
+                "duplexPair",
+                "promises",
+                "_isUint8Array",
+                "_uint8ArrayToBuffer",
+            ],
+            NativeBuiltinModule::StreamPromises => vec!["pipeline", "finished"],
         }
     }
 
@@ -41127,9 +41152,10 @@ impl InterpreterCore {
             "\0franken-engine/native-util" => 0,
             "\0franken-engine/native-string_decoder" => 1,
             "\0franken-engine/native-timers/promises" => 2,
+            "\0franken-engine/native-stream" => 3,
             _ => return false,
         };
-        static FACTORY_HASHES: OnceLock<[ContentHash; 3]> = OnceLock::new();
+        static FACTORY_HASHES: OnceLock<[ContentHash; 4]> = OnceLock::new();
         let hashes = FACTORY_HASHES.get_or_init(|| {
             [
                 NativeBuiltinModule::Util
@@ -41140,6 +41166,9 @@ impl InterpreterCore {
                     .canonical_hash(),
                 NativeBuiltinModule::TimersPromises
                     .record("\0franken-engine/native-timers/promises")
+                    .canonical_hash(),
+                NativeBuiltinModule::Stream
+                    .record("\0franken-engine/native-stream")
                     .canonical_hash(),
             ]
         });
@@ -41165,6 +41194,56 @@ impl InterpreterCore {
         };
         if code.is_generator || code.rest_param_index.is_some() {
             return false;
+        }
+        if provider == 3 {
+            // Only stream's receiver-owned state accessors are deferred here.
+            // The same retained program contains the lazy Web factory, whose
+            // class getters can have identical names and arities (notably
+            // "closed") while reading captured maps and promise state.
+            // Immutable source distinguishes object methods from class
+            // accessors and decoder function expressions; guest .name writes
+            // cannot supply this identity.
+            let Some(name) = code.name.as_deref() else {
+                return false;
+            };
+            let Some(source) = program.function_sources.get(&closure.function_index) else {
+                return false;
+            };
+            if !source
+                .as_str()
+                .trim_start()
+                .strip_prefix(name)
+                .is_some_and(|tail| tail.starts_with('('))
+            {
+                return false;
+            }
+            return matches!(
+                (setter, name, code.arity),
+                (
+                    false,
+                    "get"
+                        | "readableDidRead"
+                        | "readableAborted"
+                        | "readableHighWaterMark"
+                        | "readableBuffer"
+                        | "readableLength"
+                        | "readableObjectMode"
+                        | "readableEncoding"
+                        | "errored"
+                        | "closed"
+                        | "readableEnded"
+                        | "writableFinished"
+                        | "writableObjectMode"
+                        | "writableBuffer"
+                        | "writableEnded"
+                        | "writableNeedDrain"
+                        | "writableHighWaterMark"
+                        | "writableCorked"
+                        | "writableLength"
+                        | "writableAborted",
+                    0
+                ) | (true, "set", 1)
+            );
         }
         matches!(
             (provider, setter, code.name.as_deref(), code.arity),
@@ -41263,6 +41342,8 @@ impl InterpreterCore {
             NativeBuiltinModule::AssertStrict => "\0franken-engine/native-assert/strict/esm",
             NativeBuiltinModule::StringDecoder => "\0franken-engine/native-string_decoder/esm",
             NativeBuiltinModule::TimersPromises => "\0franken-engine/native-timers/promises/esm",
+            NativeBuiltinModule::Stream => "\0franken-engine/native-stream/esm",
+            NativeBuiltinModule::StreamPromises => "\0franken-engine/native-stream/promises/esm",
         };
         let value = self.load_native_builtin_resolved(module, source, native, import_bound)?;
         let object = match &value {
@@ -41621,6 +41702,16 @@ impl InterpreterCore {
                 "\0franken-engine/native-timers/promises",
                 None,
             ),
+            NativeBuiltinModule::Stream => (
+                NativeBuiltinModule::Stream,
+                "\0franken-engine/native-stream",
+                None,
+            ),
+            NativeBuiltinModule::StreamPromises => (
+                NativeBuiltinModule::Stream,
+                "\0franken-engine/native-stream",
+                Some("promises"),
+            ),
             _ => {
                 return Err(InterpreterError::InternalError {
                     details: "native provider has no engine-owned source factory".to_string(),
@@ -41658,15 +41749,22 @@ impl InterpreterCore {
                 self.run_pre_allocation_hook(module, AllocKind::Object, 0)?;
                 let carrier = self.alloc_object_with_prototype(None)?;
                 self.json_store_parsed_property(carrier, JsString::from("exports"), value.clone())?;
-                // Node's util/types is the original shared types object, even
-                // if a package replaces util.types before requiring the alias.
-                if factory == NativeBuiltinModule::Util {
-                    let types = self.get_v(
+                // These submodules retain their original objects even when
+                // a package replaces the parent's property before the first
+                // submodule load. Capture only during factory initialization;
+                // a later require must neither select nor invoke guest code.
+                let stable_member = match factory {
+                    NativeBuiltinModule::Util => Some("types"),
+                    NativeBuiltinModule::Stream => Some("promises"),
+                    _ => None,
+                };
+                if let Some(name) = stable_member {
+                    let selected = self.get_v(
                         module,
                         &value,
-                        &RuntimePropertyKey::String(JsString::from("types")),
+                        &RuntimePropertyKey::String(JsString::from(name)),
                     )?;
-                    self.json_store_parsed_property(carrier, JsString::from("types"), types)?;
+                    self.json_store_parsed_property(carrier, JsString::from(name), selected)?;
                 }
                 self.mutate_builtin_prototypes(|prototypes| {
                     prototypes.insert(id.to_string(), carrier);
@@ -97470,6 +97568,25 @@ impl InterpreterCore {
             // stringify/escape/unescape, shared by first-class querystring
             // module methods and direct hostcalls. No host effect;
             // semantics pinned against bun 1.3.14.
+            // Canonical dependencies of the retained native Stream factory.
+            // These private calls share public module state and retain normal
+            // runtime observation labels; they are not pure fresh aggregates.
+            "builtin:NativeEventsModule" | "builtin:NativeStringDecoderModule" => {
+                if args.count != 0 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "zero native module dependency arguments".to_string(),
+                        got: format!("{} argument(s)", args.count),
+                    });
+                }
+                let module = module.ok_or_else(|| InterpreterError::InternalError {
+                    details: "native module dependency requires an executable caller".to_string(),
+                })?;
+                if cap == "builtin:NativeEventsModule" {
+                    self.events_core_module(module)
+                } else {
+                    self.source_builtin_module(module, NativeBuiltinModule::StringDecoder, None)
+                }
+            }
             "builtin:QuerystringModule" => {
                 if args.count != 0 {
                     return Err(InterpreterError::TypeError {
@@ -152022,6 +152139,284 @@ mod function_prototype_call_apply_tests_current {
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
         );
+    }
+
+    #[test]
+    fn native_stream_accessor_admission_keeps_origins_and_nested_labels() {
+        let stack_bytes = interpreter_execution_stack_bytes(
+            test_config().max_call_depth.min(MAX_NATIVE_RUN_LOOP_DEPTH),
+        )
+        .expect("production native execution stack");
+        std::thread::Builder::new()
+            .name("native-stream-accessor-regression".into())
+            .stack_size(stack_bytes)
+            .spawn(|| {
+                const STREAM_FACTORY: &str = "\0franken-engine/native-stream";
+                let caller = test_module_with_functions(Vec::new(), Vec::new());
+                let mut core = test_interpreter();
+                core.config.instruction_budget = DEFAULT_V8_BUDGET;
+                core.config
+                    .granted_capabilities
+                    .extend([RuntimeCapability::ModuleLoad, RuntimeCapability::Timer]);
+                let stream = core
+                    .source_builtin_module(&caller, NativeBuiltinModule::Stream, None)
+                    .expect("execute the authenticated Stream factory");
+                let exports = core
+                    .function_own_property_object(&caller, &stream)
+                    .unwrap()
+                    .expect("Stream constructor property storage");
+                let readable = core.prototype_chain_get(exports, "Readable").unwrap();
+                let Value::Object(prototype) = core
+                    .get_v(
+                        &caller,
+                        &readable,
+                        &RuntimePropertyKey::String(JsString::from("prototype")),
+                    )
+                    .unwrap()
+                else {
+                    panic!("Readable.prototype");
+                };
+                let closed = RuntimePropertyKey::String(JsString::from("closed"));
+                let Some(Value::Accessor {
+                    get: Some(getter), ..
+                }) = core.heap[prototype.0 as usize].own_runtime_property_value(&closed)
+                else {
+                    panic!("the actual deferred Readable.closed getter");
+                };
+                assert!(core.is_deferred_native_factory_accessor(getter.as_ref(), false));
+                assert_eq!(
+                    core.native_builtin_state_label(&caller, exports).unwrap(),
+                    Label::Internal,
+                    "canonical receiver accessors are admitted without executing them"
+                );
+                core.set_own_runtime_property_label(prototype, &closed, &Label::Secret)
+                    .unwrap();
+                assert_eq!(
+                    core.native_builtin_state_label(&caller, exports).unwrap(),
+                    Label::Secret,
+                    "admitting immutable getter code must retain its descriptor label"
+                );
+
+                // The same compiled factory also contains the lazy Web module.
+                // Its class getter has identical diagnostic name and arity,
+                // but reads a captured WeakMap and returns a Promise. It must
+                // stay opaque. This test-only closure is never invoked.
+                let web_function_index = {
+                    let program = core.module_state.modules[STREAM_FACTORY]
+                        .compiled_module
+                        .as_ref()
+                        .expect("retained Stream program");
+                    program
+                        .function_table
+                        .iter()
+                        .enumerate()
+                        .find_map(|(index, code)| {
+                            let index = u32::try_from(index).expect("factory function index");
+                            (code.name.as_deref() == Some("closed")
+                                && code.arity == 0
+                                && program.function_sources.get(&index).is_some_and(|source| {
+                                    source.as_str().starts_with("get closed(")
+                                }))
+                            .then_some(index)
+                        })
+                        .expect("same-program Web writer closed getter")
+                };
+                let web_id = u32::try_from(core.closures.len()).unwrap();
+                core.closures.push(ClosureValue {
+                    function_index: web_function_index,
+                    captured_env: Vec::new(),
+                });
+                core.closure_module_origins
+                    .insert(web_id, STREAM_FACTORY.to_string());
+                core.sync_estimated_memory_bytes().unwrap();
+                let web_getter = Value::Closure(web_id);
+                assert!(
+                    !core.is_deferred_native_factory_accessor(&web_getter, false),
+                    "factory identity, name and arity alone do not authenticate Web accessors"
+                );
+                core.set_object_runtime_property(
+                    prototype,
+                    closed.clone(),
+                    Value::Accessor {
+                        get: Some(Arc::new(web_getter)),
+                        set: None,
+                    },
+                )
+                .unwrap();
+                assert_eq!(
+                    core.native_builtin_state_label(&caller, exports).unwrap(),
+                    Label::TopSecret,
+                    "a same-program but unaudited accessor keeps the namespace opaque"
+                );
+
+                // A guest method has both an allowed immutable code name and
+                // the same source-prefix form. Its separate origin still
+                // prevents it from acquiring native accessor authority.
+                let mut guest = test_module_with_functions(
+                    vec![
+                        Ir3Instruction::LoadInt { dst: 0, value: 7 },
+                        Ir3Instruction::Return { value: 0 },
+                    ],
+                    vec![Ir3FunctionDesc {
+                        entry: 0,
+                        arity: 0,
+                        frame_size: 1,
+                        name: Some("closed".into()),
+                        is_generator: false,
+                        rest_param_index: None,
+                    }],
+                );
+                guest.header.source_label = "guest-stream-getter.js".into();
+                guest
+                    .function_sources
+                    .insert(0, "closed() { return 7; }".into());
+                core.ensure_module_record(&guest, &guest.header.source_label)
+                    .unwrap();
+                core.module_state
+                    .modules
+                    .get_mut(&guest.header.source_label)
+                    .unwrap()
+                    .status = ModuleRuntimeStatus::Evaluated;
+                let guest_id = u32::try_from(core.closures.len()).unwrap();
+                core.closures.push(ClosureValue {
+                    function_index: 0,
+                    captured_env: Vec::new(),
+                });
+                core.closure_module_origins
+                    .insert(guest_id, guest.header.source_label.clone());
+                core.sync_estimated_memory_bytes().unwrap();
+                let guest_getter = Value::Closure(guest_id);
+                assert!(!core.is_deferred_native_factory_accessor(&guest_getter, false));
+                core.set_object_runtime_property(
+                    prototype,
+                    closed,
+                    Value::Accessor {
+                        get: Some(Arc::new(guest_getter)),
+                        set: None,
+                    },
+                )
+                .unwrap();
+                assert_eq!(
+                    core.native_builtin_state_label(&caller, exports).unwrap(),
+                    Label::TopSecret,
+                    "guest replacement methods do not inherit the native property's admission"
+                );
+            })
+            .expect("spawn native accessor regression")
+            .join()
+            .expect("native accessor regression");
+    }
+
+    #[test]
+    fn native_string_decoder_intrinsic_shares_carrier_and_observes_reference_labels() {
+        let stack_bytes = interpreter_execution_stack_bytes(
+            test_config().max_call_depth.min(MAX_NATIVE_RUN_LOOP_DEPTH),
+        )
+        .expect("production native execution stack");
+        std::thread::Builder::new()
+            .name("native-decoder-carrier-regression".into())
+            .stack_size(stack_bytes)
+            .spawn(|| {
+                const INTRINSIC: &str = "builtin:NativeStringDecoderModule";
+                let caller = test_module_with_functions(Vec::new(), Vec::new());
+                for intrinsic_first in [false, true] {
+                    for classify_shape in [false, true] {
+                        let mut core = test_interpreter();
+                        core.config
+                            .granted_capabilities
+                            .insert(RuntimeCapability::ModuleLoad);
+                        let first = if intrinsic_first {
+                            core.dispatch_builtin_hostcall(
+                                INTRINSIC,
+                                RegRange { start: 0, count: 0 },
+                                Some(&caller),
+                            )
+                        } else {
+                            core.source_builtin_module(
+                                &caller,
+                                NativeBuiltinModule::StringDecoder,
+                                None,
+                            )
+                        }
+                        .expect("first canonical decoder load");
+                        let second = if intrinsic_first {
+                            core.source_builtin_module(
+                                &caller,
+                                NativeBuiltinModule::StringDecoder,
+                                None,
+                            )
+                        } else {
+                            core.dispatch_builtin_hostcall(
+                                INTRINSIC,
+                                RegRange { start: 0, count: 0 },
+                                Some(&caller),
+                            )
+                        }
+                        .expect("second canonical decoder load");
+                        assert_eq!(
+                            first, second,
+                            "the private dependency and public provider share one decoder class"
+                        );
+                        let carrier =
+                            core.builtin_prototypes["\0franken-engine/native-string_decoder"];
+                        if classify_shape {
+                            core.join_object_mutation_label(carrier, &Label::Secret)
+                                .unwrap();
+                        } else {
+                            core.set_own_runtime_property_label(
+                                carrier,
+                                &RuntimePropertyKey::String(JsString::from("exports")),
+                                &Label::Secret,
+                            )
+                            .unwrap();
+                        }
+                        core.clear_pending_hostcall_result_label();
+                        assert_eq!(
+                            core.dispatch_builtin_hostcall(
+                                INTRINSIC,
+                                RegRange { start: 0, count: 0 },
+                                Some(&caller),
+                            )
+                            .expect("classified cached reference remains selectable"),
+                            first
+                        );
+                        assert_eq!(
+                            core.take_pending_hostcall_result_label(),
+                            Some(Label::Secret),
+                            "intrinsic_first={intrinsic_first}, shape={classify_shape}"
+                        );
+
+                        // Exercise actual HostCall publication too: zero
+                        // operands do not erase the private carrier's label.
+                        let invocation = test_module_with_functions(
+                            vec![
+                                Ir3Instruction::HostCall {
+                                    capability: CapabilityTag(INTRINSIC.into()),
+                                    args: RegRange { start: 0, count: 0 },
+                                    dst: 0,
+                                },
+                                Ir3Instruction::Halt,
+                            ],
+                            Vec::new(),
+                        );
+                        core.ip = 0;
+                        core.write_reg_with_label(0, Value::Undefined, Label::Public)
+                            .unwrap();
+                        assert_eq!(core.run_loop(&invocation), Err(InterpreterError::Halted));
+                        assert_eq!(core.read_reg(0).unwrap(), first);
+                        assert_eq!(core.get_register_label(0), Ok(&Label::Secret));
+                        assert!(core.active_inline_callback_context_label.is_none());
+                        assert_eq!(core.json_parse_temporary_bytes, 0);
+                        assert_eq!(
+                            core.estimated_memory_bytes(),
+                            core.recompute_estimated_memory_bytes()
+                        );
+                    }
+                }
+            })
+            .expect("spawn decoder carrier regression")
+            .join()
+            .expect("decoder carrier regression");
     }
 
     #[test]

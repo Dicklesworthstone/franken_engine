@@ -177,6 +177,8 @@ pub(super) fn intrinsic_capability(name: &str) -> Option<&'static str> {
         "%TimersPromisesSetInterval" => Some("builtin:TimersPromisesSetInterval"),
         "%StreamNextTick" => Some("builtin:ProcessNextTick"),
         "%QuerystringModule" => Some("builtin:QuerystringModule"),
+        "%NativeEventsModule" => Some("builtin:NativeEventsModule"),
+        "%NativeStringDecoderModule" => Some("builtin:NativeStringDecoderModule"),
         _ => fs_module::intrinsic_capability(name)
             .or_else(|| zlib_module::intrinsic_capability(name)),
     }
@@ -579,6 +581,20 @@ fn native_runtime_wrapper(native: NativeBuiltinModule) -> Option<(&'static str, 
             "module.exports = require('timers/promises');",
             TIMERS_SOURCE.len() + loader_bytes,
         )),
+        NativeBuiltinModule::Stream | NativeBuiltinModule::StreamPromises => Some((
+            "module.exports = require('stream');",
+            // The ordinary module-object rewrite also installs collection
+            // operators, Node/Web adapters and completion observation. Their
+            // Web dependency is lazy at execution, but its syntax is still
+            // parsed/lowered. Include all four private loaders and every
+            // embedded source before admitting this retained factory.
+            STREAM_SOURCE.len()
+                + EVENTS_SOURCE.len()
+                + STRING_DECODER_SOURCE.len()
+                + WEB_STREAMS_SOURCE.len()
+                + native_module_loader::stream_bridge_source_bytes()
+                + loader_bytes * 4,
+        )),
         _ => None,
     }
 }
@@ -605,7 +621,51 @@ pub(crate) fn native_runtime_module_tree(
             &ParserOptions::default(),
         )
         .map_err(|_| invalid())?;
-    rewrite_util_requires(&tree)?.ok_or_else(invalid)
+    let mut rewritten = rewrite_module_objects(&tree)?.ok_or_else(invalid)?;
+    if matches!(
+        native,
+        NativeBuiltinModule::Stream | NativeBuiltinModule::StreamPromises
+    ) {
+        // The runtime provider shares its dependencies with public native
+        // imports. Re-running the legacy Events initializer would reset
+        // package-visible settings and methods; a private decoder factory
+        // would create a different constructor and incompatible hidden state.
+        // Restrict the substitution to this fixed engine-owned wrapper.
+        for (binding, intrinsic) in [
+            (EVENTS_MODULE_BINDING, "%NativeEventsModule"),
+            (STRING_DECODER_MODULE_BINDING, "%NativeStringDecoderModule"),
+        ] {
+            let mut replaced = false;
+            for statement in &mut rewritten.body {
+                let Statement::VariableDeclaration(declaration) = statement else {
+                    continue;
+                };
+                for declarator in &mut declaration.declarations {
+                    if !matches!(&declarator.pattern, BindingPattern::Identifier(name) if name == binding)
+                    {
+                        continue;
+                    }
+                    if replaced
+                        || declaration.kind != VariableDeclarationKind::Const
+                        || declarator.initializer.is_none()
+                    {
+                        return Err(invalid());
+                    }
+                    declarator.initializer = Some(Expression::Call {
+                        callee: Box::new(Expression::Identifier(intrinsic.into())),
+                        arguments: Vec::new(),
+                        span: Some(declarator.span),
+                    });
+                    replaced = true;
+                }
+            }
+            if !replaced {
+                return Err(invalid());
+            }
+        }
+    }
+    native_module_loader::defer_modules(&mut rewritten)?;
+    Ok(rewritten)
 }
 
 fn rewrite_module_objects(tree: &SyntaxTree) -> Result<Option<SyntaxTree>, LoweringPipelineError> {

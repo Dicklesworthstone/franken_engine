@@ -69,7 +69,9 @@
     var timer = timers[name];
     if (Object.getOwnPropertyDescriptor(timer, custom) !== undefined) return;
     var descriptor = Object.create(null);
-    descriptor.get = function () { return promises[name]; };
+    // Property assignment does not infer a name. Keep Node's observable name
+    // and the immutable factory's audited accessor identity.
+    descriptor.get = function get() { return promises[name]; };
     descriptor.enumerable = true;
     descriptor.configurable = false;
     Object.defineProperty(timer, custom, descriptor);

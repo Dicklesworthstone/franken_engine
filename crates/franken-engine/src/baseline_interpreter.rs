@@ -68407,6 +68407,7 @@ impl InterpreterCore {
         }
         [
             "\0franken-engine/native-buffer/esm",
+            "\0franken-engine/native-module/esm",
             "\0franken-engine/native-events/esm",
             "\0franken-engine/native-os/esm",
             "\0franken-engine/native-querystring/esm",
@@ -68422,6 +68423,8 @@ impl InterpreterCore {
             "\0franken-engine/native-assert/strict/esm",
             "\0franken-engine/native-string_decoder/esm",
             "\0franken-engine/native-timers/promises/esm",
+            "\0franken-engine/native-stream/esm",
+            "\0franken-engine/native-stream/promises/esm",
         ]
         .into_iter()
         .any(|specifier| {

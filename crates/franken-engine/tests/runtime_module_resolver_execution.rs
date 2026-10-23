@@ -1328,30 +1328,30 @@ fn delivered_source_factory_esm_does_not_admit_guest_or_snapshot_getters() {
         let resolver = Arc::new(
             OpaqueResolver::new(vec![
                 (
-                    "entry.cjs",
-                    definition(
-                        ModuleSyntax::CommonJs,
-                        &format!("const util = require('util'); {mutation} require('./consumer.mjs');"),
-                    )
-                    .with_dependency(ModuleDependency::new("./consumer.mjs", ImportStyle::Require)),
-                ),
-                (
-                    "consumer.mjs",
+                    "entry.mjs",
                     definition(
                         ModuleSyntax::EsModule,
-                        "import {format} from 'node:util'; console.log(format('%s', 'must not run'));",
+                        "import './mutator.cjs'; import {format} from 'node:util'; console.log(format('%s', 'must not run'));",
+                    )
+                    .with_dependency(ModuleDependency::new("./mutator.cjs", ImportStyle::Import)),
+                ),
+                (
+                    "mutator.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        &format!("const util = require('util'); {mutation}"),
                     ),
                 ),
             ])
             .with_native_builtins(),
         );
-        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
         let installed = ExecutionModuleResolver::new(
             &source.module.record.id,
             resolver,
             Arc::new(AllowAllPolicy),
         );
-        let mut engine = orchestrator(LaneChoice::QuickJs, ModuleSyntax::CommonJs);
+        let mut engine = orchestrator(LaneChoice::QuickJs, ModuleSyntax::EsModule);
         let error = engine
             .execute_resolved_entry_with_resolver(&package(), &source, installed)
             .expect_err("only deferred, authenticated accessor code is admitted");
@@ -1359,6 +1359,7 @@ fn delivered_source_factory_esm_does_not_admit_guest_or_snapshot_getters() {
             error.to_string().contains("bounded-import contract"),
             "{mutation}: {error}"
         );
+        assert!(error.to_string().contains("'node:util'"), "{mutation}: {error}");
         assert!(engine.last_failed_console_output().is_empty(), "{mutation}");
     }
 }
@@ -1374,7 +1375,15 @@ fn delivered_strict_alias_bounds_first_getter_but_keeps_cached_identity() {
         let resolver = Arc::new(
             OpaqueResolver::new(vec![
                 (
-                    "entry.cjs",
+                    "entry.mjs",
+                    definition(
+                        ModuleSyntax::EsModule,
+                        "import './mutator.cjs'; import strict from 'node:assert/strict'; strict.equal(7, 7); console.log(typeof strict);",
+                    )
+                    .with_dependency(ModuleDependency::new("./mutator.cjs", ImportStyle::Import)),
+                ),
+                (
+                    "mutator.cjs",
                     definition(
                         ModuleSyntax::CommonJs,
                         &format!(
@@ -1382,28 +1391,20 @@ fn delivered_strict_alias_bounds_first_getter_but_keeps_cached_identity() {
                              {initialize_alias} \
                              Object.defineProperty(assert, 'strict', {{ get: function () {{ \
                                  console.log('strict getter ran'); return original; \
-                             }} }}); require('./consumer.mjs');"
+                             }} }});"
                         ),
-                    )
-                    .with_dependency(ModuleDependency::new("./consumer.mjs", ImportStyle::Require)),
-                ),
-                (
-                    "consumer.mjs",
-                    definition(
-                        ModuleSyntax::EsModule,
-                        "import strict from 'node:assert/strict'; strict.equal(7, 7); console.log(typeof strict);",
                     ),
                 ),
             ])
             .with_native_builtins(),
         );
-        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
         let installed = ExecutionModuleResolver::new(
             &source.module.record.id,
             resolver,
             Arc::new(AllowAllPolicy),
         );
-        let mut engine = orchestrator(LaneChoice::QuickJs, ModuleSyntax::CommonJs);
+        let mut engine = orchestrator(LaneChoice::QuickJs, ModuleSyntax::EsModule);
         let outcome = engine.execute_resolved_entry_with_resolver(&package(), &source, installed);
         if cached {
             let result = outcome.expect("a cached alias never rereads the mutable parent property");
@@ -1414,6 +1415,7 @@ fn delivered_strict_alias_bounds_first_getter_but_keeps_cached_identity() {
                 error.to_string().contains("bounded-import contract"),
                 "{error}"
             );
+            assert!(error.to_string().contains("'node:assert/strict'"), "{error}");
             assert!(engine.last_failed_console_output().is_empty());
         }
     }
@@ -2325,6 +2327,109 @@ console.log(child.promises.setTimeout(), timers.setTimeout[util.promisify.custom
 }
 
 #[test]
+fn delivered_timer_esm_imports_preserve_promisify_getter_identity() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![(
+                "entry.mjs",
+                definition(
+                    ModuleSyntax::EsModule,
+                    r#"
+import timers, { setTimeout, setImmediate } from 'node:timers';
+import promises, { setTimeout as delay, setImmediate as immediate } from 'timers/promises';
+import util, { promisify } from 'node:util';
+console.log(timers.setTimeout === setTimeout, timers.setImmediate === setImmediate,
+    timers.promises === promises, util.promisify === promisify);
+for (const pair of [[setTimeout, delay], [setImmediate, immediate]]) {
+    const descriptor = Object.getOwnPropertyDescriptor(pair[0], promisify.custom);
+    console.log(descriptor.get.name, descriptor.get.length, descriptor.enumerable,
+        descriptor.configurable, descriptor.set === undefined,
+        descriptor.get.call(null) === pair[1], promisify(pair[0]) === pair[1]);
+}
+"#,
+                ),
+            )])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(RecordingPolicy {
+                allow_native_builtins: true,
+                ..RecordingPolicy::default()
+            }),
+        );
+        let result = orchestrator(lane, ModuleSyntax::EsModule)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("bounded timer imports admit the canonical factory's deferred getters");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true true true",
+                "get 0 true false true true true",
+                "get 0 true false true true true",
+            ],
+            "lane={lane:?}"
+        );
+    }
+}
+
+#[test]
+fn delivered_timer_esm_imports_refuse_guest_promisify_getters_with_native_names() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![
+                (
+                    "entry.mjs",
+                    definition(
+                        ModuleSyntax::EsModule,
+                        "import './mutate.cjs'; import {setTimeout} from 'node:timers'; \
+                         console.log(typeof setTimeout);",
+                    )
+                    .with_dependency(ModuleDependency::new("./mutate.cjs", ImportStyle::Import)),
+                ),
+                (
+                    "mutate.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        r#"
+const timers = require('timers');
+const fake = function setTimeout() {};
+Object.defineProperty(fake, Symbol.for('nodejs.util.promisify.custom'), {
+    get: function get() { console.log('guest getter ran'); return function () {}; },
+    enumerable: true,
+    configurable: false
+});
+timers.setTimeout = fake;
+"#,
+                    ),
+                ),
+            ])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(RecordingPolicy {
+                allow_native_builtins: true,
+                ..RecordingPolicy::default()
+            }),
+        );
+        let mut engine = orchestrator(lane, ModuleSyntax::EsModule);
+        let error = engine
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect_err("the name get does not give a guest closure native accessor authority");
+        assert!(
+            error.to_string().contains("bounded-import contract"),
+            "lane={lane:?}: {error}"
+        );
+        assert!(engine.last_failed_console_output().is_empty());
+    }
+}
+
+#[test]
 fn delivered_timer_promises_esm_runs_timers_scheduler_and_interval_return() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         let resolver = Arc::new(
@@ -2656,6 +2761,60 @@ promises.pipeline([20, 22], new stream.Writable({
             ["true true 0", "true true", "20,22 0"],
             "lane={lane:?}"
         );
+    }
+}
+
+#[test]
+fn delivered_module_and_stream_namespaces_reject_export_replacement() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for (alias, key) in [
+            ("module", "createRequire"),
+            ("stream", "Readable"),
+            ("stream/promises", "pipeline"),
+        ] {
+            let source_text = format!(
+                r#"
+import * as namespace from '{alias}';
+import * as nativeNamespace from 'node:{alias}';
+const key = '{key}';
+const original = namespace[key];
+const replacement = function replacement() {{ return 'guest'; }};
+let readonly = false;
+try {{ namespace[key] = replacement; }} catch (error) {{ readonly = error instanceof TypeError; }}
+console.log(readonly, Reflect.set(namespace, key, replacement),
+    Reflect.defineProperty(namespace, key, {{value: replacement}}),
+    namespace[key] === original, nativeNamespace === namespace,
+    Object.getOwnPropertyDescriptor(namespace, key).writable);
+const fake = {{}};
+fake[Symbol.toStringTag] = 'Module';
+fake[key] = original;
+fake[key] = replacement;
+console.log(fake[key] === replacement, Reflect.set(fake, key, original),
+    Reflect.defineProperty(fake, key, {{value: replacement}}), fake[key] === replacement);
+"#
+            );
+            let resolver = Arc::new(
+                OpaqueResolver::new(vec![(
+                    "entry.mjs",
+                    definition(ModuleSyntax::EsModule, &source_text),
+                )])
+                .with_native_builtins(),
+            );
+            let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+            let installed = ExecutionModuleResolver::new(
+                &source.module.record.id,
+                resolver,
+                Arc::new(AllowAllPolicy),
+            );
+            let result = orchestrator(lane, ModuleSyntax::EsModule)
+                .execute_resolved_entry_with_resolver(&package(), &source, installed)
+                .expect("native module namespaces reject export replacement without trusting a tag");
+            assert_eq!(
+                lines(&result),
+                ["true false false true true true", "true true true true"],
+                "lane={lane:?}, alias={alias}"
+            );
+        }
     }
 }
 

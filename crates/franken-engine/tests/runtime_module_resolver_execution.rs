@@ -74,6 +74,7 @@ impl OpaqueResolver {
     fn with_native_builtins(mut self) -> Self {
         for native in [
             NativeBuiltinModule::Buffer,
+            NativeBuiltinModule::Module,
             NativeBuiltinModule::Events,
             NativeBuiltinModule::Os,
             NativeBuiltinModule::Querystring,
@@ -494,6 +495,291 @@ fn delivered_commonjs_metadata_and_require_resolve_use_captured_origin() {
         ]
     );
     assert_eq!(policy.requests.lock().expect("policy log").len(), 2);
+}
+
+#[test]
+fn delivered_create_require_retains_origin_and_shared_native_provider() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![
+                (
+                    "entry.mjs",
+                    definition(
+                        ModuleSyntax::EsModule,
+                        r#"
+                        import bare, { createRequire as make } from 'module';
+                        import native from 'node:module';
+                        import { requireHere, resolveHere, factory } from './nested/loader.mjs';
+                        const rootRequire = factory(import.meta.url);
+                        console.log(bare === native, make === native.createRequire, make.name, make.length);
+                        console.log(rootRequire('./dep.cjs').value, requireHere('./dep.cjs').value);
+                        console.log(resolveHere('./throw.cjs'));
+                        console.log(requireHere.resolve('./throw.cjs'));
+                        console.log(rootRequire('./dep.cjs').value);
+                        "#,
+                    ),
+                ),
+                (
+                    "nested/loader.mjs",
+                    definition(
+                        ModuleSyntax::EsModule,
+                        r#"
+                        import { createRequire } from 'node:module';
+                        export const requireHere = createRequire(import.meta.url);
+                        export const resolveHere = requireHere.resolve;
+                        export const factory = createRequire;
+                        "#,
+                    ),
+                ),
+                (
+                    "dep.cjs",
+                    definition(ModuleSyntax::CommonJs, "exports.value = 'root';"),
+                ),
+                (
+                    "nested/dep.cjs",
+                    definition(ModuleSyntax::CommonJs, "exports.value = 'nested';"),
+                ),
+                (
+                    "nested/throw.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        "throw new Error('resolve must not evaluate this source');",
+                    ),
+                ),
+            ])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+        let policy = Arc::new(RecordingPolicy {
+            allow_native_builtins: true,
+            ..RecordingPolicy::default()
+        });
+        let mut locations: BTreeMap<_, _> = [
+            "entry.mjs",
+            "nested/loader.mjs",
+            "dep.cjs",
+            "nested/dep.cjs",
+            "nested/throw.cjs",
+        ]
+        .into_iter()
+        .map(|name| {
+            (
+                format!("{ID_PREFIX}{ROOT}/{name}"),
+                ModuleSourceLocation {
+                    filename: PathBuf::from(format!("/original project/{name}")),
+                    url: format!("file:///original%20project/{name}"),
+                },
+            )
+        })
+        .collect();
+        locations
+            .get_mut(&format!("{ID_PREFIX}{ROOT}/nested/loader.mjs"))
+            .unwrap()
+            .url
+            .push_str("?instance=2#kept");
+        let installed =
+            ExecutionModuleResolver::new(&source.module.record.id, resolver, policy.clone())
+                .with_source_locations(locations);
+        let result = orchestrator(lane, ModuleSyntax::EsModule)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("created require and resolve retain the creator's captured identity");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true createRequire 1",
+                "root nested",
+                "/original project/nested/throw.cjs",
+                "/original project/nested/throw.cjs",
+                "root",
+            ]
+        );
+        let calls = policy.requests.lock().expect("policy log");
+        let dependency_calls: Vec<_> = calls
+            .iter()
+            .filter(|(request, _)| request.specifier == "./dep.cjs")
+            .map(|(request, _)| {
+                assert_eq!(request.style, ImportStyle::Require);
+                request.referrer.as_deref().unwrap()
+            })
+            .collect();
+        assert_eq!(
+            dependency_calls,
+            [
+                format!("{ID_PREFIX}{ROOT}/entry.mjs"),
+                format!("{ID_PREFIX}{ROOT}/nested/loader.mjs"),
+                format!("{ID_PREFIX}{ROOT}/entry.mjs"),
+            ]
+        );
+        let resolve_calls: Vec<_> = calls
+            .iter()
+            .filter(|(request, _)| request.specifier == "./throw.cjs")
+            .collect();
+        assert_eq!(resolve_calls.len(), 2);
+        assert!(resolve_calls.iter().all(|(request, _)| {
+            request.style == ImportStyle::Require
+                && request.referrer.as_deref()
+                    == Some(format!("{ID_PREFIX}{ROOT}/nested/loader.mjs").as_str())
+        }));
+    }
+}
+
+#[test]
+fn delivered_create_require_validates_every_origin_without_coercion_or_foreign_routes() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![
+                (
+                    "entry.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        r#"
+                        const { createRequire } = require('node:module');
+                        const req = createRequire(__filename);
+                        const other = createRequire(__filename);
+                        const ordinary = require;
+                        const resolve = req.resolve;
+                        req.marker = 'first';
+                        resolve.marker = 'first resolve';
+                        console.log(req !== other, req.resolve !== other.resolve,
+                            req.resolve === resolve, other.marker === undefined,
+                            other.resolve.marker === undefined, require.marker === undefined,
+                            req !== require, require.resolve === require.resolve,
+                            ordinary === require);
+                        console.log(req('./dep.cjs').answer);
+                        const origins = [undefined, null, 3, './entry.cjs',
+                            '/original/foreign.cjs', 'file:///original/foreign.cjs',
+                            'file:///original/entry.cjs?changed', '\ud800',
+                            { toString() { throw new Error('must not coerce'); } }];
+                        for (const origin of origins) {
+                            try { createRequire(origin); console.log('unexpected origin'); }
+                            catch (error) { console.log(error instanceof TypeError); }
+                        }
+                        console.log(req.resolve('./dep.cjs'));
+                        "#,
+                    ),
+                ),
+                (
+                    "dep.cjs",
+                    definition(ModuleSyntax::CommonJs, "exports.answer = 42;"),
+                ),
+                (
+                    "foreign.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        "throw new Error('foreign origin must not execute');",
+                    ),
+                ),
+            ])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let policy = Arc::new(RecordingPolicy {
+            allow_native_builtins: true,
+            ..RecordingPolicy::default()
+        });
+        let locations = ["entry.cjs", "dep.cjs", "foreign.cjs"]
+            .into_iter()
+            .map(|name| {
+                (
+                    format!("{ID_PREFIX}{ROOT}/{name}"),
+                    ModuleSourceLocation {
+                        filename: PathBuf::from(format!("/original/{name}")),
+                        url: format!("file:///original/{name}"),
+                    },
+                )
+            })
+            .collect();
+        let installed =
+            ExecutionModuleResolver::new(&source.module.record.id, resolver, policy.clone())
+                .with_source_locations(locations);
+        let result = orchestrator(lane, ModuleSyntax::CommonJs)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("invalid createRequire bases are catchable TypeErrors");
+        let mut expected = vec!["true true true true true true true true true", "42"];
+        expected.extend(["true"; 9]);
+        expected.push("/original/dep.cjs");
+        assert_eq!(lines(&result), expected);
+        let calls = policy.requests.lock().expect("policy log");
+        assert_eq!(
+            calls
+                .iter()
+                .map(|(request, _)| request.specifier.as_str())
+                .collect::<Vec<_>>(),
+            ["node:module", "./dep.cjs", "./dep.cjs"],
+            "invalid bases must not resolve or gain another module's routes"
+        );
+    }
+}
+
+#[test]
+fn delivered_create_require_and_resolve_reauthorize_after_policy_revocation() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for (operation, first_output) in [
+            ("req('./dep.cjs').answer", "42"),
+            ("req.resolve('./dep.cjs')", "/original/dep.cjs"),
+        ] {
+            let entry_source = format!(
+                "const {{ createRequire }} = require('module'); \
+                 const req = createRequire(__filename); \
+                 console.log({operation}); \
+                 try {{ console.log({operation}); }} \
+                 catch (error) {{ console.log('policy denial escaped'); }}"
+            );
+            let resolver = Arc::new(
+                OpaqueResolver::new(vec![
+                    (
+                        "entry.cjs",
+                        definition(ModuleSyntax::CommonJs, &entry_source),
+                    ),
+                    (
+                        "dep.cjs",
+                        definition(ModuleSyntax::CommonJs, "exports.answer = 42;"),
+                    ),
+                ])
+                .with_native_builtins(),
+            );
+            let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+            let policy = Arc::new(RecordingPolicy {
+                allow_native_builtins: true,
+                denied: Some(("./dep.cjs".to_string(), 2)),
+                ..RecordingPolicy::default()
+            });
+            let locations = ["entry.cjs", "dep.cjs"]
+                .into_iter()
+                .map(|name| {
+                    (
+                        format!("{ID_PREFIX}{ROOT}/{name}"),
+                        ModuleSourceLocation {
+                            filename: PathBuf::from(format!("/original/{name}")),
+                            url: format!("file:///original/{name}"),
+                        },
+                    )
+                })
+                .collect();
+            let installed =
+                ExecutionModuleResolver::new(&source.module.record.id, resolver, policy.clone())
+                    .with_source_locations(locations);
+            let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
+            let error = engine
+                .execute_resolved_entry_with_resolver(&package(), &source, installed)
+                .expect_err("created require cannot retain a revoked route grant");
+            assert!(
+                error
+                    .to_string()
+                    .contains("closed-world module resolution refused"),
+                "{operation}: {error}"
+            );
+            assert_eq!(
+                engine
+                    .last_failed_console_output()
+                    .iter()
+                    .map(|entry| entry.message.as_str())
+                    .collect::<Vec<_>>(),
+                [first_output]
+            );
+            assert_eq!(policy.requests.lock().expect("policy log").len(), 3);
+        }
+    }
 }
 
 #[test]

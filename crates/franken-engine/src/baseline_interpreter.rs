@@ -3869,6 +3869,9 @@ pub enum BuiltinFunctionKind {
     /// factory carrier. It never calls guest code; the bound holder retains
     /// both the returned reference label and the collector edge. Append only.
     NativeTimerPromisesGetter,
+    /// `node:module.createRequire` for the executing captured origin. The
+    /// returned require retains the opaque module id. Append only.
+    ModuleCreateRequire,
 }
 
 /// Annex B B.2.2.2-14: each String HTML method's tag and attribute name.
@@ -4057,7 +4060,7 @@ impl BuiltinFunction {
             kind: BuiltinFunctionKind::RequireResolve,
             module_specifier: require.module_specifier.clone(),
             iterator_handle: None,
-            bound_object: None,
+            bound_object: require.bound_object,
         }
     }
 
@@ -5305,6 +5308,7 @@ impl BuiltinFunction {
     fn display_name(&self) -> &'static str {
         match self.kind {
             BuiltinFunctionKind::Require => "require",
+            BuiltinFunctionKind::ModuleCreateRequire => "createRequire",
             BuiltinFunctionKind::RequireResolve => "resolve",
             BuiltinFunctionKind::FunctionConstructor => "Function",
             BuiltinFunctionKind::FunctionPrototype => "",
@@ -6126,6 +6130,7 @@ impl BuiltinFunction {
             | K::PromiseAllSettledResolveElement
             | K::PromiseAllSettledRejectElement
             | K::PromiseAnyRejectElement
+            | K::ModuleCreateRequire
             | K::ObjectProtoSetter => Some(1),
             K::PromiseCapabilityExecutor => Some(2),
             K::IteratorNext
@@ -6468,6 +6473,9 @@ const GENERATED_REALM_OBJECT_GLOBALS: [&str; 8] = [
 /// Seed-tracked slot (in `builtin_prototypes`) of the `require('buffer')`
 /// module object (bd-9vouw.193), so every require returns the same object.
 const BUFFER_MODULE_KEY: &str = "<module buffer>";
+
+/// Retained native `module` provider shared by bare and `node:` aliases.
+const MODULE_MODULE_KEY: &str = "<module module>";
 
 /// Seed-tracked slot of the `require('os')` module object (bd-9vouw.204).
 const OS_MODULE_KEY: &str = "<module os>";
@@ -40477,6 +40485,25 @@ impl InterpreterCore {
         Ok(Value::Object(object))
     }
 
+    /// The captured-graph `node:module` surface. `createRequire` itself is
+    /// unbound: each call validates the executing module's trusted origin,
+    /// then returns the ordinary require value bound to that opaque id.
+    fn module_core_module(&mut self) -> Result<Value, InterpreterError> {
+        if let Some(object) = self.builtin_prototypes.get(MODULE_MODULE_KEY) {
+            return Ok(Value::Object(*object));
+        }
+        let object = self.alloc_object_with_properties(&[(
+            "createRequire",
+            Value::BuiltinFunction(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::ModuleCreateRequire,
+            )),
+        )])?;
+        self.mutate_builtin_prototypes(|prototypes| {
+            prototypes.insert(MODULE_MODULE_KEY.to_string(), object);
+        });
+        Ok(Value::Object(object))
+    }
+
     /// `require('timers')` (bd-9vouw.231): Node's timers module, whose six
     /// timer functions are the realm's own. xml2js reads
     /// `require('timers').setImmediate`; the timers facade lowers only the
@@ -40835,6 +40862,7 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         match native {
             NativeBuiltinModule::Buffer => self.buffer_core_module(),
+            NativeBuiltinModule::Module => self.module_core_module(),
             NativeBuiltinModule::Events => self.events_core_module(module),
             NativeBuiltinModule::Os => self.os_core_module(),
             NativeBuiltinModule::Querystring => self.querystring_core_module(),
@@ -40863,6 +40891,7 @@ impl InterpreterCore {
     /// facade inventories where the provider itself is table-driven.
     fn native_builtin_export_names(native: NativeBuiltinModule) -> Vec<&'static str> {
         match native {
+            NativeBuiltinModule::Module => vec!["createRequire"],
             NativeBuiltinModule::Buffer => vec![
                 "Buffer",
                 "Blob",
@@ -41327,6 +41356,7 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let specifier = match native {
             NativeBuiltinModule::Buffer => "\0franken-engine/native-buffer/esm",
+            NativeBuiltinModule::Module => "\0franken-engine/native-module/esm",
             NativeBuiltinModule::Events => "\0franken-engine/native-events/esm",
             NativeBuiltinModule::Os => "\0franken-engine/native-os/esm",
             NativeBuiltinModule::Querystring => "\0franken-engine/native-querystring/esm",
@@ -44245,6 +44275,13 @@ impl InterpreterCore {
                     significant,
                     exponential,
                 )))
+            }
+            BuiltinFunctionKind::ModuleCreateRequire => {
+                check_hostcall_capability_gate(self, "module_load", self.ip as u32)?;
+                let args_label = self.join_arg_range_label(args)?;
+                let result = self.create_require(module, args)?;
+                self.replace_pending_hostcall_result_label(Some(args_label))?;
+                Ok(result)
             }
             BuiltinFunctionKind::Require => {
                 check_hostcall_capability_gate(self, "module_load", self.ip as u32)?;
@@ -72291,6 +72328,53 @@ impl InterpreterCore {
         let timestamp_ns = self.instructions_executed;
         self.record_hostcall_telemetry("module:require", args, timestamp_ns, args_hash, &outcome);
         outcome
+    }
+
+    /// Create a require value for the executing captured module only. Node's
+    /// arbitrary virtual bases and URL objects need an explicitly captured
+    /// route contract; accepting them here would confer another referrer's
+    /// authority or fall back to the host filesystem. Exact string metadata
+    /// covers `import.meta.url` (including query/fragment) and `__filename`.
+    fn create_require(
+        &mut self,
+        module: &Ir3Module,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let origin = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let Value::Str(origin) = origin else {
+            return Err(InterpreterError::TypeError {
+                expected: "createRequire origin string for the current captured module".to_string(),
+                got: origin.type_name().to_string(),
+            });
+        };
+        let origin = origin.as_str().ok_or_else(|| InterpreterError::TypeError {
+            expected: "well-formed createRequire origin string".to_string(),
+            got: "unpaired UTF-16 surrogate".to_string(),
+        })?;
+        let referrer = self
+            .current_module_specifier
+            .as_deref()
+            .filter(|id| {
+                self.module_resolver
+                    .as_ref()
+                    .and_then(|installed| installed.resolver.source_location(id))
+                    .is_some_and(|location| location.matches_create_require_origin(origin))
+            })
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected:
+                    "createRequire origin equal to the current captured URL or absolute filename"
+                        .to_string(),
+                got: "unregistered or different module origin".to_string(),
+            })?;
+        // Each factory call is a distinct function, including its .resolve
+        // and user-defined properties. The existing builtin identity and GC
+        // traversal already include bound_object; dispatch still uses only
+        // the captured module_specifier. Ordinary CJS require keeps None.
+        let holder_bytes = Self::estimate_heap_object_bytes(&HeapObject::new());
+        let mut require = self.construct_require_builtin(referrer, holder_bytes)?;
+        self.run_pre_allocation_hook(module, AllocKind::Function, referrer.len())?;
+        require.bound_object = Some(self.alloc_object_with_prototype(None)?.0);
+        Ok(Value::BuiltinFunction(require))
     }
 
     /// `require.resolve(request)` (bd-9vouw.199): the filename `require` would

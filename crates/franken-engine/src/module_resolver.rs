@@ -290,12 +290,14 @@ pub enum NativeBuiltinModule {
     TimersPromises,
     Stream,
     StreamPromises,
+    Module,
 }
 
 impl NativeBuiltinModule {
     pub fn from_specifier(specifier: &str) -> Option<Self> {
         match specifier {
             "buffer" | "node:buffer" => Some(Self::Buffer),
+            "module" | "node:module" => Some(Self::Module),
             "events" | "node:events" => Some(Self::Events),
             "os" | "node:os" => Some(Self::Os),
             "querystring" | "node:querystring" => Some(Self::Querystring),
@@ -320,6 +322,7 @@ impl NativeBuiltinModule {
     pub fn canonical_specifier(self) -> &'static str {
         match self {
             Self::Buffer => "node:buffer",
+            Self::Module => "node:module",
             Self::Events => "node:events",
             Self::Os => "node:os",
             Self::Querystring => "node:querystring",
@@ -1309,6 +1312,18 @@ impl ModulePolicyHook for ExecutionModulePolicy<'_> {
 pub struct ModuleSourceLocation {
     pub filename: PathBuf,
     pub url: String,
+}
+
+impl ModuleSourceLocation {
+    /// Recognize the current module's trusted `createRequire` base without
+    /// interpreting guest input as a path or looking up another module.
+    /// The caller must select this location using its current opaque id;
+    /// matching metadata never grants a different module's resolution routes.
+    pub fn matches_create_require_origin(&self, origin: &str) -> bool {
+        self.filename.is_absolute()
+            && ((origin.starts_with("file://") && origin == self.url)
+                || self.filename.to_str() == Some(origin))
+    }
 }
 
 impl ExecutionModuleResolver {
@@ -2577,9 +2592,48 @@ mod tests {
     }
 
     #[test]
+    fn create_require_origin_matches_exact_trusted_file_metadata() {
+        let location = ModuleSourceLocation {
+            filename: PathBuf::from("/original project/nested/entry.mjs"),
+            url: "file:///original%20project/nested/entry.mjs?instance=2#kept".into(),
+        };
+        assert!(location.matches_create_require_origin(&location.url));
+        assert!(location.matches_create_require_origin("/original project/nested/entry.mjs"));
+        for origin in [
+            "",
+            "./entry.mjs",
+            "/original project/entry.mjs",
+            "file:///original%20project/nested/entry.mjs",
+            "file:///original%20project/nested/entry.mjs?instance=1#kept",
+            "file:///original%20project/nested/entry.mjs?instance=2#changed",
+            "file:///original project/nested/entry.mjs?instance=2#kept",
+            "captured:graph:entry",
+        ] {
+            assert!(!location.matches_create_require_origin(origin), "{origin}");
+        }
+        let non_file = ModuleSourceLocation {
+            filename: PathBuf::from("/original/entry.mjs"),
+            url: "https://example.test/entry.mjs".into(),
+        };
+        assert!(!non_file.matches_create_require_origin(&non_file.url));
+        let relative_file = ModuleSourceLocation {
+            filename: PathBuf::from("relative/entry.mjs"),
+            url: "file:///relative/entry.mjs".into(),
+        };
+        assert!(!relative_file.matches_create_require_origin(&relative_file.url));
+        assert!(!relative_file.matches_create_require_origin("relative/entry.mjs"));
+        let empty_url = ModuleSourceLocation {
+            filename: PathBuf::from("/original/entry.mjs"),
+            url: String::new(),
+        };
+        assert!(!empty_url.matches_create_require_origin(""));
+    }
+
+    #[test]
     fn native_builtin_descriptors_bind_exact_provider_and_capabilities() {
         for name in [
             "buffer",
+            "module",
             "events",
             "os",
             "querystring",

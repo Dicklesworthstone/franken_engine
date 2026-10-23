@@ -7,10 +7,12 @@
 // Run from the engine repository root. An optional source path permits a
 // baseline-versus-candidate experiment without changing the test expectations.
 const assert = require('node:assert/strict');
+const childProcess = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const util = require('node:util');
+const v8 = require('node:v8');
 
 const sourcePath = process.argv[2] ||
   'crates/franken-engine/src/lowering_pipeline/util_module.js';
@@ -62,6 +64,21 @@ function outcome(parse, config) {
 }
 
 function oracle(argv, execArgv, config) {
+  if (execArgv.some(flag => ['-e', '--eval', '-p', '--print'].includes(flag))) {
+    // Node selects its eval layout from internal launch options. Assigning
+    // process.execArgv in this file does not turn a file entry into eval.
+    // Launch the actual incumbent in eval mode instead. These cases use
+    // JSON-representable option configurations.
+    const program = 'const util = require("node:util");\n' +
+      'process.argv = ' + JSON.stringify(argv) + ';\n' +
+      'process.execArgv = ' + JSON.stringify(execArgv) + ';\n' +
+      'process.stdout.write(require("node:v8").serialize((' + outcome.toString() +
+      ')(util.parseArgs, ' + JSON.stringify(config) + ')));\n';
+    // JSON would drop own undefined token fields and weaken the comparison.
+    return v8.deserialize(childProcess.execFileSync(process.execPath, ['--eval', program], {
+      timeout: 10000,
+    }));
+  }
   const originalArgv = process.argv;
   const originalExecArgv = process.execArgv;
   try {

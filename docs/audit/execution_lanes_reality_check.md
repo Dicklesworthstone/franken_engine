@@ -132,21 +132,56 @@ The first optimization candidate reuses `ColdBindingCells::holds_frame` to skip
 maps whose cells are already retained and charged. The existing full-walk path
 already uses this shortcut. Three new tests cover identity/COW/last-capture
 transitions, saturation and ordinary/derived/async/throwing returns. Independent
-Node/Bun reference reexecution and changed-range formatting pass, but candidate
-native execution and old/new/Node speed qualification are **UNRUN**. The public
-Buffer-alias admission repair (`bd-9vouw.166`) is also uncompiled. Current
-baseline probes reproduce three Buffer-alias failures; Object, Reflect and Math
-aliases already work and receive no new capability credit. Existing P0
-`bd-9vouw.31` and the alias bead have implementation work awaiting native checks.
-**0/100 optimization passes are qualified.** Both beads are now explicitly **blocked on native verification**
-by the disk admission condition below; their source changes are preserved.
+Node/Bun reference reexecution and changed-range formatting pass. Native
+verification has now advanced to **40 passing selected tests** on source
+`735e29cc7441ed26df8375209be678d93812064f` plus the sole `lib.rs` overlay
+`3603e8e7275f3fc23bddc82a8c5af608f52fd5426c71baac69e9923a4b83efbb`.
+Commit `07025731194b72952eb5fcbff0459694668ac7a2` contains exactly that final
+test correction; both pre-existing dirty runtime files were excluded.
 
-The prerequisite fixture-only all-target check passed through RCH; it does not
-verify these uncommitted repairs. The fresh full formatting gate remains red
-(2,001 diff sections across 229 files), and required native tests/Clippy/checks
-remain pending. New heavy Cargo lanes are stopped by the ancestor AGENTS disk
-preflight rule: `sbh check --need 20G` is nonzero. No cleanup permission was
-received, no files were deleted and the gate was not lowered.
+The selected denominator is 19 unit tests plus 21 public integration tests:
+all 16 shared-binding accounting tests, the Reflect accessor-label regression,
+two builtin-authority tests, eight Buffer tests, eight environment-hostcall
+tests and five existing scaling tests. Strict RCH confirms remote exit 0 and
+terminal acknowledgement. These runs use pinned nightly/default features with
+debug symbols omitted; debug assertions and overflow checks explicitly remain
+enabled. Supplied environment providers establish capability/IFC/replay behavior,
+not a live external-service result. This selection does not replace the separate
+stream-consumer/timer qualification or the full workspace suite.
+
+The Buffer tests exercise the public alias repair (`bd-9vouw.166`) across
+HybridRouter, both native lanes and repeated prepared execution. Three Buffer
+alias forms previously failed; Object, Reflect and Math already worked and
+receive no new capability credit. Explicit authority negatives preserve filesystem,
+network, environment, process, module and randomness denials. The original
+authority-test attempt was 18/19, because its expected environment denial used
+the raw operation name. The correction names canonical denial identities
+explicitly and adds `env:has`; no production gate or assertion was weakened.
+
+Existing debug scaling from 250 to 2,000 operations passes its unchanged 24x
+bound: closures 1.6x, generators 2.6x, await 3.9x, async reactions 3.1x and timers
+7.9x. Timers remain slow in this debug configuration but scale linearly here.
+These results do **not** establish the original `.31` requirement at
+100/200/400/800 with at most 2.3x per doubling against the closure-free twin.
+That stricter acceptance and production old/new/live-Node qualification remain
+unrun. **0/100 optimization passes are qualified; no candidate speedup has
+been measured.**
+
+Final-source all-target Clippy passes under the pinned toolchain, default profile
+and default features. Clean pre-correction source also passed all-target check;
+the final-source check on `hz3` timed out after 3,630 seconds and recovered as
+exit 137 with terminal acknowledgement. It is not a pass; a normally admitted
+retry remains pending. The full formatting gate stays red (2,001 sections across
+229 files), and full workspace tests remain unrun after transport failures.
+Raw logs are retained in `artifacts/optimization-100x-ss6_54xg/` as
+`current-native-accounting-tests.log`,
+`current-native-public-integration-tests.log`,
+`current-native-all-targets-clippy.log` and `current-native-check-recovery.json`.
+The owner authorized scoped worker-only validation and affirmed the proposed
+worker-only candidate build/comparison despite the Mac's failing disk preflight.
+During these scoped lanes, compiler outputs stayed on workers; no local
+compilation, manual cleanup or global policy change was used. Both implementation
+beads remain in progress.
 
 ### Numbered vision checklist and bridge ownership
 

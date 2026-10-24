@@ -476,9 +476,9 @@ The shipped invariant tests (`cargo test -p frankenengine-engine --lib ifc_latti
 
 1. Explicit prohibitions deny first (even if `s <= k`).
 2. Explicit allow-entries permit named exceptions.
-3. Lattice-legal flows permit (`s <= k`).
-4. Declassification routes return `RequiredDeclassification`.
-5. Everything else denies (fail-closed default).
+3. Exact declassification routes return `DeclassificationRequired`, including lattice-legal pairs.
+4. Only explicitly selected `FlowPolicyEnforcement::LatticeOpen` permits otherwise lattice-legal flows (`s <= k`).
+5. Everything else denies; `AllowlistOnly` is the default, including when the serialized enforcement mode is absent.
 
 Declassification is mediated by signed receipts (`bd-dpfvh`, demo: `examples/live_ifc_declassification_example.rs`); the runtime records each declassification with its authorizing capability witness, source/sink labels, content binding, and timestamp bounds (added Apr 2026 via `feat(ifc): Add timestamp bounds to declassification receipts`).
 
@@ -572,7 +572,7 @@ sequenceDiagram
     Cap-->>BI: FsRead<br/>(unknown tag ⇒ REJECT)
     BI->>Cap: profile subsumes {FsRead}?
     Cap-->>BI: yes / REJECT
-    BI->>IFC: is_flow_allowed(source, sink)<br/>prohibitions > allows > lattice ><br/>declassification > deny
+    BI->>IFC: is_flow_allowed(source, sink)<br/>prohibitions > allows > declassification ><br/>lattice (LatticeOpen only) > deny
     IFC-->>BI: permit / REJECT
     BI->>Budget: decrement AARA certificate
     Budget-->>BI: ok / escalation (bd-g61cl)

@@ -1,4 +1,255 @@
-# FrankenEngine Reality Check — 2026-10-21
+# FrankenEngine Reality Check — 2026-10-23 refresh
+
+**Verdict: useful native runtime and released CLI; the complete program remains
+undelivered.** The next decisive work is current-source qualification and G0
+measurement/conformance, followed by executable vertical slices and real security,
+fleet, hardware and external results. Task closure and contract validation cannot
+substitute for these outcomes.
+
+This refresh serves the project owner's requested comprehensive reality check.
+Its concrete consumer is the owner selecting the next BRIDGE/release work; the
+feature it gates is qualification of the current engine for downstream use. The
+observed defect classes are stale claim evidence, incomplete conformance oracles,
+unqualified current-source changes and documentation describing the wrong IFC
+authorization order. Supersede this section when a newer revision-bound review
+rechecks these findings. It creates no runtime or performance capability credit.
+
+### Source, reading and evidence boundaries
+
+- Inspected main: `5129eba9ccbcfa4c9993a0c074618c74b1cfbfef`. Existing changes to
+  `execution_orchestrator.rs`, `baseline_interpreter/process_lifecycle_tests.rs`
+  and the tracker were present before this refresh and preserved.
+- Read root `AGENTS.md` in full, all 2,548 README lines, both canonical plan files
+  (including all 2,606 lines of the main plan), the reality-check skill and its
+  gap/bridge/ambition guidance. Additional reading covered the charter, formal
+  security model, architecture, split contract, claim ledger, shadow proof state,
+  current implementation seams and selected tests/producers. This does not claim
+  a line-by-line audit of all 506 specialist Markdown documents or all tests.
+- `/data/projects/AGENTS.md` is absent on this Mac. Local ancestor instructions
+  and the exact path on configured RCH worker `trj` were read. The worker copy
+  lacks the named reward-hacking/work-graph sections; their rules quoted in root
+  guidance remain binding. No missing section was invented.
+- Fresh runtime probes below use the published **v0.2.0 macOS arm64 binary**,
+  not current-main machine code. A live GitHub API lookup still reports v0.2.0
+  (2026-10-04) as latest and issue #6 as open. Its retained archive SHA256 is
+  `c6524725336ea0c14214589ba8f117cd837e4e0322250adf2b2c0bfe081a2744`;
+  the archive member matches executable SHA256
+  `522745f5197647f70248d31488296932d860da9dfcf66ad39ea542e3f3b574bc`.
+- Local raw evidence is retained under
+  `artifacts/reality_check/20261023T2230-Pa0MIP/`, with the supplied smoke's
+  artifacts under `artifacts/readme_cli_workflow_smoke_tests/real-binary-q3svp3gl/`.
+  These ignored local files are not a published or independently verified bundle.
+
+### Fresh observations
+
+| Probe and denominator | Result | Interpretation |
+|---|---|---|
+| Nine preselected release programs, each beside Node v26.8.1 and Bun 1.4.0 | 9/9 console outputs equal; all 27 runtime invocations exit 0 | Arithmetic/numeric edges, callbacks, descriptors, inheritance, Promise ordering, exceptions, RegExp and typed-array examples work on these inputs. No full-language or performance claim. |
+| Existing real-binary README regression target | 6/6 pass, including two real eight-step workflows and five injected failure classes | Bounded compile/verify/run/replay workflow plus clock, command, artifact and lost-event rejection. Injection tests establish wrapper behavior. |
+| Direct strict replay of this refresh's arithmetic run report | Exit 0, `replay_kind=reexecution`, IR3/content/randomness/decision matches | Reexecutes the actual run report; its nondeterminism event count is zero, so this alone does not establish host-effect replay. |
+| Change that run report's recorded console result from 42 to 43 | Exit 2, unsigned execution-content divergence | Concrete outcome corruption is rejected; an external origin trust anchor is a separate question. |
+| Claim matrix `ci` / `release` | Exit 0 / exit 1 | Wording passes; **13/13 OBSERVED rows are provisional**, with source/environment drift. The report's `verdict=pass` is not the final release process verdict. |
+| Formal claim promotion | Exit 0; `STAY_HYPOTHESIS`, 0/6 qualifying bundles | Correct refusal to promote FE-CLAIM-016 through 021; no theorem-backed compiler was demonstrated. |
+| Pinned `cargo fmt --check` on the working tree | Exit 1; 2,001 diff sections, 1,746,874 log bytes | Repository formatting gate is red. Sections are not files or distinct defects; no mass formatter rewrite was attempted. |
+| Clean-base RCH `cargo check --all-targets` | Terminal exit 101; E0308 at `baseline_interpreter/reflect_invocation.rs:1704` | Engine lib-test fixture supplies `Box<Value>` where `Arc<Value>` is required. Exact committed main, excluding the two pre-existing runtime edits; this is not a claim that every production target fails. |
+| Clean-base RCH extension-host `environment_snapshot` test target | Terminal exit 0; 3 passed, 0 failed, 0 ignored, 0 filtered | Actual provider code tested with supplied snapshot maps: capability denial, absent/empty values, redaction, bounds and cancellation. No live OS environment or whole-engine inference. |
+| Authoritative JSONL census before / after refinement | 5,091 unique issues; closed 3,934 / 3,931; open 665 / 668; in progress 437, blocked 45, deferred 10 unchanged | Three existing scientific-report records reopened. Counts describe work state, not delivered capability. `br stats` dependency-blocked/ready counts have different meanings. |
+| All active BRIDGE records | 459; none with empty description, missing referenced issue, or absent acceptance text | Structural coverage only. This does not establish logical sufficiency or execution of every acceptance requirement. |
+| Active dependency cycles | `br --no-db dep cycles --json`: 0 | Three archived closed cycles are separately reported and preserved. |
+| `bv` triage, insights and forecast | All exit 0, but displayed census is 5,030 versus authoritative 5,091; cycle computation explicitly skipped above 2,000 nodes | Treat its recommendations as a partial view and use canonical JSONL/`br` for coverage and cycles. Forecast confidence averages about 0.45; its dates are not a delivery promise. |
+
+### Numbered vision checklist and bridge ownership
+
+`WORKING` below applies only to the named released probes. `PARTIAL` identifies
+real mechanisms with missing breadth/integration; `UNPROVEN` means the required
+outcome was not established. A bounded stub is named explicitly, without calling
+the whole engine a stub. BRIDGE numbers refer to the existing
+`bd-performance-conformance-bridge-tu32j` graph; suffixes are recorded in the
+previous table and current tracker, not new parallel workstreams.
+
+| # | Testable promise and authority | Reality and implementing seam | Existing route to the required outcome |
+|---|---|---|---|
+| 1 | Native core ownership, plan 4/8 | PARTIAL overall; real Rust parser/lowering/interpreter and bounded released execution; inspected core has no binding-led JS backend | BRIDGE-01/13/14/15/17; preserve single canonical semantics and exact downstream consumer |
+| 2 | Complete ES2020, plan 9A/17/18.9–10 | PARTIAL; `test262_harness` line-parses metadata; `test262_conformance_runner::execute_test` skips assertion/includes/phase/constructor validation | BRIDGE-12, `bd-9vouw.4/.17`, then 13–17; HARNESS-ORACLE and exact full variant manifest before any semantic percentage |
+| 3 | JS/TS normalization and modules, plan 8.7/10.4 | PARTIAL; real lowering/resolver/import execution, restricted eval and incomplete ecosystem contract | BRIDGE-14/17/22, `bd-7fhp3`, `bd-305gi`; execute packages through public and orchestrated entrypoints with namespace/policy/cycle negatives |
+| 4 | Core ownership without duplicated semantics, plan 18.2 | PARTIAL; engine and extracted core coexist; ownership/cutover is not proved by both compiling | BRIDGE-01; assign each core family and require parity at its actual cutover |
+| 5 | Fast generated interpreter, plan 18.4 | PARTIAL; `CompactTier1Program` creates real compact cells, unsupported cells retain baseline dispatch, orchestrator actually supplies the plan | BRIDGE-03/04; exact effects/labels/budgets/fallback plus workload-weighted measurement |
+| 6 | Executable JIT/AOT with exact deopt, plan 18.4 | PARTIAL foundation, general tiers undelivered; `native_capsule_fixed_probe` is opt-in non-JS u64 code; `aot_entrygraph_compiler` explicitly simulates planning | BRIDGE-05–08; actual bytes/disassembly/dispatch/GC/OSR/deopt evidence, not input-derived identities |
+| 7 | Safe native trust boundary, plan 18.2/ADR-0010 | PARTIAL; signed acceptance record unresolved. Owner already said “Approve now” on 2026-09-22 (`bd-9vouw.11`); JSON remains proposed | Complete the existing externally anchored acceptance procedure or owner-approved amendment; never ask the same architecture question or forge a signature |
+| 8 | Compact values, exact objects, GC and resource tails, plan 18.5/10.3 | PARTIAL; native runtime mechanisms and compact paths exist; representation/GC/tail contracts remain unqualified here | BRIDGE-03/04/13/15/17; descriptor/order/proxy/weak-root/forced-GC and cancellation coverage before fast-path promotion |
+| 9 | >=3x secure transactions versus both incumbents, plan 14 | UNPROVEN; historical June ratios are dirty/asymmetric/unweighted and correctness-lock-only | BRIDGE-02/19; freeze five families × S/M/L, equal-work lifecycle, raw samples, weights, p99/RSS and equivalence; do not reuse a self-speedup as the win |
+| 10 | Hardware specialization and high-core scaling, plan 18.7 | UNPROVEN here; architecture/planning machinery is not a native-tier or scaling result | BRIDGE-10/11; named hardware, generic fallback, per-cell scaling/overload and NUMA/PMU evidence |
+| 11 | Capability/IFC and static authority intake, plan 6.9/8.7 | PARTIAL; real capability, flow-policy and inference code; all ambient constructs and arbitrary-program noninterference remain unproved | `bd-7fhp3`, BRIDGE-09/13/14/17; source-to-sink positives and adversarial aliases/getters/async/exception labels |
+| 12 | Real guest effects with least authority, plan 10.5 and host-I/O plan | PARTIAL; orchestrator installs HostIo/process/timer seams; default refusal and provider existence are not end-to-end host service proof | Existing host-I/O / `bd-305gi` and BRIDGE-17/25 owners; real sandboxed effect, denied escape, cancellation, journal commit and replay |
+| 13 | Signed evidence and deterministic incident/counterfactual replay, plan 8.6/11 | WORKING bounded release reexecution/corruption probes; PARTIAL full current-source qualification. `evidence_ledger` has real signing/chain primitives | BRIDGE-18/19/21 and current signing/replay owners; effect-bearing traces, durable trust roots, rotation, failure prefixes and independent challenge |
+| 14 | Probabilistic defense with >=10x compromise suppression, plan 3/6 | PARTIAL mechanisms, comparative result UNPROVEN; posterior/expected-loss actioning and v2 campaign machinery do not equal a current linked real campaign | `bd-0lim8`, BRIDGE-09/18/21; ten real scenarios × pinned three runtimes × 100 repetitions, scoped replay/verdict and benign false-positive countermetric |
+| 15 | <=250ms effective containment, plan 3/13 | UNPROVEN; action selection is not observation that the effect stopped | `bd-pgzo7`, BRIDGE-09/21; timestamp signal and actual prevented/completed effect under declared load, retain benign controls |
+| 16 | Fleet immunity, revocation/fork resistance and anti-entropy, plan 9F/10.11/13 | PARTIAL primitives; fleet `ci` validates contracts/references without running a topology or retaining measured percentiles | BRIDGE-23 and BRIDGE-21.31; real signed multi-host fault/partition/replay campaign with durable freshness and measured tails |
+| 17 | >=95% hardware-attested receipts, plan 13 | STUB at real SDK seam: `tee-real-sdk` returns typed failure; default explicitly returns simulated quotes | BRIDGE-24 and BRIDGE-21.32; genuine quote/collateral/nonce/key/image binding, expiry/revocation negatives and deployment denominator |
+| 18 | Formal policy/compiler and proof-guided default optimization, plan 9C/9F/13 | UNPROVEN; Z3/Lean/helper components are not a product-driven end-to-end proof; fresh gate finds 0/6 qualifying bundles | Existing formal tracks plus BRIDGE-09/18/21; actual transform/witness consumer, invalidation and exact fallback; closed helper beads do not promote claims |
+| 19 | Durable sibling persistence and integration, plan 8.4–5/10.14 | PARTIAL qualification; real SQLModel/FrankenConnection seam and default feature families. Manifest presence is not crash/durability proof | BRIDGE-21/25, `bd-9vouw.3`; default/standalone/all-feature builds, durable reopen/recovery and exact downstream contract |
+| 20 | React/FRX, Wasm, Intl and exposed CLI preservation, README feature sections | PARTIAL, not comprehensively executed here; distinct entrypoints and compile/fallback contracts must retain their own proof | BRIDGE-25/26 and their verification packs; positive shipped workflows, typed blocked paths and cross-mode/platform regressions |
+| 21 | Production PLAS metrics, plan 13 | UNPROVEN deployment outcome: >=90% cohort coverage, <=1.10 over-privilege, >=70% authoring-time reduction and <=0.5% false deny | `bd-11ua` and existing PLAS tracks; real cohorts and independently derived required authority, receipts, escrow/expiry and burn-in |
+| 22 | Continuous private fleet learning and improved reputation, plan 13 | UNPROVEN production outcome; secure aggregation/privacy/reputation components alone cannot establish it | `bd-1rju` and children, `bd-twz2`; budget durability/composition failure, signed snapshot rollback, local-only comparator and measured compromise window |
+| 23 | Autonomous operations and portfolio control, plan 9I/13 | PARTIAL; shadow proof state explicitly remains advisory-only even though historical adoption gates are green | Existing shadow/governor and BRIDGE-25 owners; separately authorized promotion, real lifecycle/fault/burn-in and signed decisions; this audit enables no mutations |
+| 24 | Three production differentiators, practical franken_node and GA, plan 3/9D–E/13 | UNPROVEN full exit; fixture-only demos are labeled, feature #3 depends on unproved comparative security; v0.3.0 issue #6 remains open | `bd-three-feature-floor-owner-2fjbh`, `bd-15w28`, BRIDGE-25; immutable candidate, all workload-dependent gates, install/upgrade/recovery and real product use |
+| 25 | Four reproducible scientific reports, two independent reproductions and external standard adoption, plan 13/16 | UNPROVEN here; renderer/catalog closure did not establish four actual report bundles; internal reruns do not supply independence or adoption | Restored `bd-2501.1` and aggregates; existing BRIDGE-21.25 verification now depends on it. BRIDGE-19.5/.19.17 retain external replication/adoption; require actual returned artifacts, maintained external use and honest negative outcomes |
+
+### Bridge plan: preserve ambition, order work by decisive evidence
+
+1. **Restore a qualified current source cut.** `bd-9vouw.3`, `bd-15w28` and
+   `bd-9vouw.15` own the build/regression/compile-wall boundary. Retain failed
+   gates and exact source/feature/toolchain identities. Exit only with the
+   required compiler/lint/format/default tests and downstream release-regression
+   checks, including failed-run/cancellation/evidence behavior. The release
+   binary's 9/9 examples cannot close this step. Complexity: large validation
+   and defect repair; depends on legitimately admitted capacity.
+2. **Finish G0 while retaining separate measurement axes.** BRIDGE-12 owns YAML,
+   includes, strict/module/async variants, negative phases/constructors, $262,
+   exact ES2020 selection and reference-runner agreement; `.13.8` owns the full
+   canonical Tier-R baseline. BRIDGE-02 independently owns cold/warm/steady and
+   production-security cost decomposition. Exit with reconciled terminal counts,
+   complete pass/fail sets, seeded harness-rule failures and raw comparable
+   measurements. Corrected runner observations then order semantic work; no
+   old percentage is relabeled. Complexity: large; no native capsule needed.
+3. **Deliver shared-semantics vertical execution slices.** BRIDGE-01/03/04
+   establishes ownership, compact runtime and exact fallback; BRIDGE-05–08 then
+   carries the twelve-opcode slice and useful package through real native
+   dispatch, guarded optimization, deopt and AOT. Existing BRIDGE-21 test packs
+   challenge every tier's effects, exception points, labels, budgets, roots and
+   rollback. Keep the approved architecture intent, complete its actual signed
+   record, and preserve the unsafe boundary. Complexity: very large; governed
+   native execution depends on the existing acceptance prerequisites.
+4. **Measure security and fleet/hardware outcomes through real effects.** The
+   comparison/containment owners and BRIDGE-23/24 retain real comparator,
+   benign-control, partition, replay and attestation tests. Runtime primitives,
+   contract green and lab fixtures cannot satisfy deployment exits. Profile
+   security-check elision only after its exact soundness prerequisites pass.
+   Complexity: large, with explicit hardware/deployment prerequisites.
+5. **Qualify the full consumer and obtain external outcomes.** BRIDGE-19/25/26,
+   PLAS/privacy/reputation/shadow owners preserve all existing surfaces and
+   produce immutable released-consumer evidence. Test install, upgrade, crash,
+   recovery, signing-key transitions, unsupported modes and rollback. Two
+   independent reproductions, external standard adoption and production cohort
+   metrics remain real-world outcomes, not agent-generated certificates.
+
+Before refinement, completing the active work was insufficient to establish
+every audited outcome: no active description/acceptance owned the Section-16
+four-report delivery requirement. The closed `bd-2501.1` cited a technical report
+renderer, its closed aggregate `bd-2501` cited a scorecard/registry, and the
+catalog lists candidate operator documents and `<timestamp>` paths. The existing
+scientific-contribution readiness consumer checks closed beads, document
+existence and declared command/path strings (`run_scientific_contribution_targets.sh:247–286`),
+not four actual reproduced report packages. That is a concrete risk of
+**proof-class inflation**; the catalog companion itself cautions that it does
+not establish four publishable reports.
+
+Reopened `bd-2501.1`, `bd-2501` and `bd-esst` instead of creating duplicate
+epics. The report leaf now carries detailed delivery, real-result, source/input,
+reproduction and negative-control requirements in an additive comment. Its
+existing BRIDGE-21.25 verification companion receives the independent report
+challenge and a blocking dependency on the report outcome. Original assignees
+and historical implementation are preserved. A supported negative result can
+form a scientific report; it cannot promote a losing benchmark to a win.
+The leaf's preclosure producer-distinct challenge and the verification pack's
+subsequent immutable-handoff rerun are separate phases: the leaf does not wait
+for completion of the pack that depends on it. This retains independent
+challenge without introducing a mutual closure wait.
+
+The PLAS owner `bd-11ua` already explicitly requires all four KPI denominators,
+so consolidated closed leaves for authoring time, over-privilege and false
+denial did not justify another task. Its evidence comment now makes those
+retained obligations explicit. The precise IFC prose defect belongs to the
+already active `bd-9vouw.10` owner. After this correction, the active contracts
+cover the audited goal groups on paper. Actually meeting them, including
+production, hardware and external outcomes, is still required; closing their
+records is insufficient.
+
+### Ambition and five refinement passes
+
+The skill's frozen bead-generation and refinement instructions were applied to
+the existing graph; no source functionality or target was removed. Three
+ambition passes tested (1) whether a released bounded workflow could grow through
+G0 into a representative package, (2) whether one semantics contract could carry
+Tier I/native/deopt/security instead of disconnected models, and (3) whether
+security-proof specialization and hardware scaling could improve the full
+equal-work frontier without lowering safety or the >=3x/10x/250ms/full-ES2020
+exits. These are refinements of the adopted Section 18 program, not additional
+capability claims or unmeasured optimization recommendations.
+
+Five refinement passes checked:
+
+1. **Coverage:** all 28 claim rows and the plan's success-criterion families were
+   mapped to the checklist; active bridge records have descriptions, acceptance
+   text and resolvable dependencies. Closed proof-helper and score-gate owners
+   were not mistaken for completed outcomes.
+2. **Dependency/ownership:** `br` reports no active cycles; canonical Tier-R
+   baseline prerequisites and existing BRIDGE-21 verification companions remain
+   explicit. The earlier native owner approval was recovered from its actual
+   bead rather than requested again.
+3. **Positive and negative proof:** reran real release workflows and console
+   comparisons, direct replay and actual corruption; inspected current runner,
+   real TEE refusal, compact dispatch, evidence signing and storage seams. Keyword
+   and AST checks on selected suspicious files found no `todo!` implementation;
+   policy-only/constant-output behavior still required behavioral inspection.
+4. **Failure, deployment and claim boundaries:** separated release/current main,
+   harness/runtime, hash coherence/authenticity, execution coverage/conformance,
+   contract/fleet measurements and simulated/hardware quotes. Found the README's
+   stale IFC precedence and corrected its three numbered lines and hostcall
+   diagram to match `ifc_artifacts.rs:723` and the formal security model. The deeper closed-owner
+   check found the four-report active-coverage gap; it was restored in the
+   existing leaf/aggregates with a real verification dependency.
+5. **Convergence:** reviewed the revised route against the existing independent
+   verification, release, external-reproduction and adoption leaves. No further
+   distinct backlog addition was supported by this bounded review. Remaining
+   outcomes stay open; the graph was not simplified to manufacture readiness.
+
+Changes in this refresh are documentation, nine evidence/refinement comments
+(plus the three automatic reopening-reason comments), reopening the
+three scientific-report outcome/aggregate records, and one verification
+dependency. No runtime source, threshold, waiver, golden, claim state or assignee
+is changed. The shared tracker cache is schema 17 while `br` requires 19; even
+the attempted `--no-db` mutation correctly refused. Mutations used a new
+isolated cache imported from all 5,091 authoritative JSONL rows and published
+only through `br`, with a byte-freshness guard and semantic delta review. The
+guarded shared database, WAL, WAL certificate and migration state are unchanged.
+This is solo reexecution and review, not independent verification.
+
+### Final qualification and actionable handoff
+
+The all-target check ran on the pinned toolchain through strict RCH build
+`30078269650894870` on `hz3`, with a clean checkout of the exact inspected
+revision. RCH acknowledged exit 101 after 2,405,349 ms. The failure is the
+accessor fixture type mismatch described above, retained in
+`cargo-check-head.log` and on the existing `bd-9vouw.3` owner. Repair its actual
+ownership/type seam, then repeat the unchanged all-target check and full gates;
+this audit changed no Rust source. The separate snapshot-provider target on
+`trj` completed with native exit 0 and retrieval acknowledgement at the same
+base; `environment-snapshot-native.log` retains its 3/3 result.
+
+The README's corrected policy prose and diagram passed the unmodified claim
+matrix CI wording gate again. Release qualification still fails for all 13
+provisional OBSERVED claims; no claim state, freshness window or evidence receipt
+was promoted. Exact-base GitHub Actions lookup returned zero runs, so no fresh
+green-main CI result is claimed. Full all-target Clippy, full default tests,
+all-feature/standalone/downstream builds, exhaustive ES2020 variants, real
+security/performance campaigns, live fleet/TEE and production/external acceptance
+were not run here. The failed all-target compiler check and formatting gate stay
+red. They are required next work, not waived because the released CLI works.
+The precommit UBS invocation on the three changed documentation/tracker paths
+returned exit 3, explicitly reporting no supported source language and nothing
+scanned. It supplies no static-analysis pass; no no-scan override was used.
+
+All 5,091 tracker identities, prior comments and assignees are retained. The
+refinement changes nine existing records, reopens exactly three, adds exactly
+one dependency and closes none. Final canonical `br` cycle validation reports
+zero active cycles; three archived closed cycles remain separate. Final `bv`
+triage still reads only 5,030 records and cannot certify this full graph. The
+next useful unit of work is a
+qualified current-source cut, followed by the corrected G0 oracle and equal-work
+measurement; further process documents alone do not advance those exits.
+
+## Previous assessment — 2026-10-21 (retained with its original evidence scope)
 
 This assessment supersedes the historical lane assessment retained below.
 Its consumer is the project owner requesting an end-to-end reality check; it

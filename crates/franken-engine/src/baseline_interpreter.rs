@@ -151216,6 +151216,8 @@ mod function_prototype_call_apply_tests_current {
                 "define_changed",
                 "proxy_define_same",
                 "proxy_define_changed",
+                "receiver_same",
+                "receiver_changed",
             ] {
                 let module = test_module_with_functions(Vec::new(), Vec::new());
                 let mut core = test_interpreter();
@@ -151282,7 +151284,9 @@ mod function_prototype_call_apply_tests_current {
                 // Public guesses must neither relabel an unchanged export nor
                 // expose its classified value through a SameValue success probe.
                 assert_eq!(core.json_parse_context_label().unwrap(), Label::Public);
-                let target = if operation.starts_with("proxy") {
+                let target = if operation.starts_with("receiver_") {
+                    seed_object(&mut core, &[])
+                } else if operation.starts_with("proxy") {
                     let handler = seed_object(&mut core, &[]);
                     core.create_proxy_object(namespace, handler).unwrap()
                 } else {
@@ -151317,6 +151321,19 @@ mod function_prototype_call_apply_tests_current {
                         args: RegRange { start: 0, count: 2 },
                         dst: 3,
                     }
+                } else if operation.starts_with("receiver_") {
+                    // An ordinary target delegates to the namespace receiver's
+                    // DefineOwnProperty. Its SameValue result depends on the
+                    // classified export, unlike a namespace target's Set.
+                    let handler = seed_object(&mut core, &[]);
+                    let receiver = core.create_proxy_object(namespace, handler).unwrap();
+                    core.write_reg_with_label(3, Value::Object(receiver), Label::Public)
+                        .unwrap();
+                    Ir3Instruction::HostCall {
+                        capability: CapabilityTag("builtin:ReflectSet".to_string()),
+                        args: RegRange { start: 0, count: 4 },
+                        dst: 4,
+                    }
                 } else {
                     Ir3Instruction::SetProperty {
                         obj: 0,
@@ -151327,7 +151344,10 @@ mod function_prototype_call_apply_tests_current {
                 let write_module =
                     test_module_with_functions(vec![instruction, Ir3Instruction::Halt], Vec::new());
                 let outcome = core.run_loop(&write_module);
-                if matches!(operation, "direct" | "proxy_changed" | "assign") {
+                if matches!(
+                    operation,
+                    "direct" | "proxy_same" | "proxy_changed" | "assign"
+                ) {
                     assert!(
                         matches!(outcome, Err(InterpreterError::TypeError { .. })),
                         "{operation}: {outcome:?}"
@@ -151335,19 +151355,27 @@ mod function_prototype_call_apply_tests_current {
                 } else {
                     assert_eq!(outcome, Err(InterpreterError::Halted), "{operation}");
                 }
-                if operation.contains("define") {
+                if operation.contains("define") || operation.starts_with("receiver_") {
+                    let result_register = if operation.starts_with("receiver_") {
+                        4
+                    } else {
+                        3
+                    };
                     assert_eq!(
-                        core.read_reg(3).unwrap(),
+                        core.read_reg(result_register).unwrap(),
                         Value::Bool(operation.ends_with("same")),
                         "{operation}"
                     );
                     assert_eq!(
-                        core.get_register_label(3),
+                        core.get_register_label(result_register),
                         Ok(&Label::Secret),
                         "{operation}"
                     );
                 } else if operation == "proxy_changed" {
-                    assert_eq!(core.json_parse_context_label().unwrap(), Label::Secret);
+                    // Namespace [[Set]] refuses without reading the export.
+                    // The data-dependent Secret result is exercised by the
+                    // receiver and DefineProperty controls above.
+                    assert_eq!(core.json_parse_context_label().unwrap(), Label::Public);
                 }
                 for holder in [namespace, default] {
                     assert_eq!(

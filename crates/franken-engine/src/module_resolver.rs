@@ -282,12 +282,22 @@ pub enum NativeBuiltinModule {
     Path,
     PathPosix,
     PathWin32,
+    Util,
+    UtilTypes,
+    Assert,
+    AssertStrict,
+    StringDecoder,
+    TimersPromises,
+    Stream,
+    StreamPromises,
+    Module,
 }
 
 impl NativeBuiltinModule {
     pub fn from_specifier(specifier: &str) -> Option<Self> {
         match specifier {
             "buffer" | "node:buffer" => Some(Self::Buffer),
+            "module" | "node:module" => Some(Self::Module),
             "events" | "node:events" => Some(Self::Events),
             "os" | "node:os" => Some(Self::Os),
             "querystring" | "node:querystring" => Some(Self::Querystring),
@@ -297,6 +307,14 @@ impl NativeBuiltinModule {
             "path" | "node:path" => Some(Self::Path),
             "path/posix" | "node:path/posix" => Some(Self::PathPosix),
             "path/win32" | "node:path/win32" => Some(Self::PathWin32),
+            "util" | "node:util" => Some(Self::Util),
+            "util/types" | "node:util/types" => Some(Self::UtilTypes),
+            "assert" | "node:assert" => Some(Self::Assert),
+            "assert/strict" | "node:assert/strict" => Some(Self::AssertStrict),
+            "string_decoder" | "node:string_decoder" => Some(Self::StringDecoder),
+            "timers/promises" | "node:timers/promises" => Some(Self::TimersPromises),
+            "stream" | "node:stream" => Some(Self::Stream),
+            "stream/promises" | "node:stream/promises" => Some(Self::StreamPromises),
             _ => None,
         }
     }
@@ -304,6 +322,7 @@ impl NativeBuiltinModule {
     pub fn canonical_specifier(self) -> &'static str {
         match self {
             Self::Buffer => "node:buffer",
+            Self::Module => "node:module",
             Self::Events => "node:events",
             Self::Os => "node:os",
             Self::Querystring => "node:querystring",
@@ -313,6 +332,14 @@ impl NativeBuiltinModule {
             Self::Path => "node:path",
             Self::PathPosix => "node:path/posix",
             Self::PathWin32 => "node:path/win32",
+            Self::Util => "node:util",
+            Self::UtilTypes => "node:util/types",
+            Self::Assert => "node:assert",
+            Self::AssertStrict => "node:assert/strict",
+            Self::StringDecoder => "node:string_decoder",
+            Self::TimersPromises => "node:timers/promises",
+            Self::Stream => "node:stream",
+            Self::StreamPromises => "node:stream/promises",
         }
     }
 
@@ -321,7 +348,12 @@ impl NativeBuiltinModule {
     pub fn record(self, id: impl Into<String>) -> ModuleRecord {
         let mut required_capabilities =
             BTreeSet::from([RuntimeCapability::ModuleLoad, RuntimeCapability::Builtin]);
-        if self == Self::Timers {
+        // Stream completion, backpressure and cancellation use the native
+        // nextTick queue, whose scheduling authority is Timer.
+        if matches!(
+            self,
+            Self::Timers | Self::TimersPromises | Self::Stream | Self::StreamPromises
+        ) {
             required_capabilities.insert(RuntimeCapability::Timer);
         }
         ModuleRecord {
@@ -1280,6 +1312,18 @@ impl ModulePolicyHook for ExecutionModulePolicy<'_> {
 pub struct ModuleSourceLocation {
     pub filename: PathBuf,
     pub url: String,
+}
+
+impl ModuleSourceLocation {
+    /// Recognize the current module's trusted `createRequire` base without
+    /// interpreting guest input as a path or looking up another module.
+    /// The caller must select this location using its current opaque id;
+    /// matching metadata never grants a different module's resolution routes.
+    pub fn matches_create_require_origin(&self, origin: &str) -> bool {
+        self.filename.is_absolute()
+            && ((origin.starts_with("file://") && origin == self.url)
+                || self.filename.to_str() == Some(origin))
+    }
 }
 
 impl ExecutionModuleResolver {
@@ -2548,9 +2592,48 @@ mod tests {
     }
 
     #[test]
+    fn create_require_origin_matches_exact_trusted_file_metadata() {
+        let location = ModuleSourceLocation {
+            filename: PathBuf::from("/original project/nested/entry.mjs"),
+            url: "file:///original%20project/nested/entry.mjs?instance=2#kept".into(),
+        };
+        assert!(location.matches_create_require_origin(&location.url));
+        assert!(location.matches_create_require_origin("/original project/nested/entry.mjs"));
+        for origin in [
+            "",
+            "./entry.mjs",
+            "/original project/entry.mjs",
+            "file:///original%20project/nested/entry.mjs",
+            "file:///original%20project/nested/entry.mjs?instance=1#kept",
+            "file:///original%20project/nested/entry.mjs?instance=2#changed",
+            "file:///original project/nested/entry.mjs?instance=2#kept",
+            "captured:graph:entry",
+        ] {
+            assert!(!location.matches_create_require_origin(origin), "{origin}");
+        }
+        let non_file = ModuleSourceLocation {
+            filename: PathBuf::from("/original/entry.mjs"),
+            url: "https://example.test/entry.mjs".into(),
+        };
+        assert!(!non_file.matches_create_require_origin(&non_file.url));
+        let relative_file = ModuleSourceLocation {
+            filename: PathBuf::from("relative/entry.mjs"),
+            url: "file:///relative/entry.mjs".into(),
+        };
+        assert!(!relative_file.matches_create_require_origin(&relative_file.url));
+        assert!(!relative_file.matches_create_require_origin("relative/entry.mjs"));
+        let empty_url = ModuleSourceLocation {
+            filename: PathBuf::from("/original/entry.mjs"),
+            url: String::new(),
+        };
+        assert!(!empty_url.matches_create_require_origin(""));
+    }
+
+    #[test]
     fn native_builtin_descriptors_bind_exact_provider_and_capabilities() {
         for name in [
             "buffer",
+            "module",
             "events",
             "os",
             "querystring",
@@ -2560,6 +2643,14 @@ mod tests {
             "path",
             "path/posix",
             "path/win32",
+            "util",
+            "util/types",
+            "assert",
+            "assert/strict",
+            "string_decoder",
+            "timers/promises",
+            "stream",
+            "stream/promises",
         ] {
             let builtin = NativeBuiltinModule::from_specifier(name).unwrap();
             assert_eq!(builtin.canonical_specifier(), format!("node:{name}"));
@@ -2586,7 +2677,7 @@ mod tests {
                 record
                     .required_capabilities
                     .contains(&RuntimeCapability::Timer),
-                name == "timers"
+                matches!(name, "timers" | "timers/promises" | "stream" | "stream/promises")
             );
             let request = ModuleRequest::new(name, ImportStyle::Require);
             let denied = CapabilityPolicyHook::new(BTreeSet::from([RuntimeCapability::ModuleLoad]));

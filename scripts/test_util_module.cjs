@@ -25,8 +25,10 @@ function typeTag(value) {
   return Object.prototype.toString.call(value).slice(8, -1);
 }
 const candidate = new Function('__franken_util_inspect', '__franken_util_format',
-  '__franken_util_type_tag', 'return ' + source)(
-  util.inspect, args => util.format(...args), typeTag);
+  '__franken_util_type_tag', '__franken_util_process_argv',
+  '__franken_util_process_exec_argv', 'return ' + source)(
+  util.inspect, args => util.format(...args), typeTag,
+  () => process.argv, () => process.execArgv);
 let passed = 0;
 function test(name, body) {
   body();
@@ -47,6 +49,40 @@ const options = {
   output: { type: 'string', short: 'o', multiple: true },
   verbose: { type: 'boolean', short: 'v' },
 };
+
+test('omitted argv is read lazily and observes live invocation inputs', () => {
+  let reads = 0;
+  let granted = false;
+  let argv = ['runtime', 'app.cjs', '--mode=original'];
+  function read(field) {
+    reads++;
+    if (!granted) throw new Error('process shape authority denied');
+    return field === 'argv' ? argv : [];
+  }
+  const withArgv = new Function('__franken_util_inspect', '__franken_util_format',
+    '__franken_util_type_tag', '__franken_util_process_argv',
+    '__franken_util_process_exec_argv', 'return ' + source)(
+    util.inspect, args => util.format(...args), typeTag,
+    () => read('argv'), () => read('execArgv'));
+  assert.equal(reads, 0);
+  assert.equal(withArgv.format('%s:%d', 'ready', 42), 'ready:42');
+  const config = { options: { mode: { type: 'string' } } };
+  assert.equal(withArgv.parseArgs({ ...config, args: ['--mode=explicit'] }).values.mode,
+    'explicit');
+  assert.equal(reads, 0);
+  assert.throws(() => withArgv.parseArgs(config), /process shape authority denied/);
+  assert.throws(() => withArgv.parseArgs({ ...config, args: undefined }),
+    /process shape authority denied/);
+  granted = true;
+  const first = withArgv.parseArgs(config);
+  assert.deepEqual(first, util.parseArgs({ ...config, args: argv.slice(2) }));
+  argv[2] = '--mode=changed';
+  assert.equal(withArgv.parseArgs(config).values.mode, 'changed');
+  assert.equal(first.values.mode, 'original');
+  argv = ['runtime', 'replacement.cjs', '--mode=replaced'];
+  assert.equal(withArgv.parseArgs(config).values.mode, 'replaced');
+  assert.equal(reads, 8);
+});
 
 test('boolean negation, repetition and normalized token names match Node', () => {
   for (const args of [[], ['--no-color'], ['--color', '--no-color', '-c'],

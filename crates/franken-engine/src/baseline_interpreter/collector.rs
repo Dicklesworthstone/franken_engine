@@ -27,9 +27,9 @@
 //!   on a stack for the duration. Builtins that call guest callbacks while
 //!   holding values only in Rust locals (map's result array, sort's element
 //!   vector) never arm, so no collection runs inside those callbacks.
-//! - Collection is also skipped while host I/O subsystems (streams, sockets,
-//!   http, child processes, URL/crypto objects) hold state. The allocation
-//!   budget then fails exactly as before.
+//! - Child-process host state is not traced yet and still blocks collection.
+//!   Streams, loopback sockets, HTTP, URL and crypto state are traced; dead
+//!   host-object records release their memory charge with their heap owner.
 //! - Triggers are deterministic: live-object and live-byte thresholds derived
 //!   from the configured budgets, so replay reproduces every collection.
 //! - `roots` destructures `InterpreterCore` exhaustively. Adding a field does
@@ -67,6 +67,7 @@ use crate::object_model::JsValue;
 use crate::promise_model::PromiseEdge;
 
 mod ephemerons;
+mod network;
 
 /// Collection totals over one interpreter's lifetime.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -126,6 +127,9 @@ pub(super) struct GcState {
     /// One entry per armed nested run loop (bd-9vouw.77): what its callers
     /// hold in Rust locals. Roots.
     nested_pins: Vec<NestedPins>,
+    /// Network tasks leave their queues before calling guest code. Keep the
+    /// task and listener-snapshot values rooted until dispatch returns.
+    network_task_pins: Vec<Value>,
     /// Builtin dispatches active in the current run loop. A builtin whose
     /// Rust frame calls another builtin's dispatch holds its own locals
     /// across it, so only the outermost one may arm a nested loop.
@@ -178,7 +182,7 @@ pub(super) struct NestedGcArm {
 /// Why a due collection did not run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum GcSkip {
-    /// Host I/O state (streams, sockets, http, ...) is live and not traced.
+    /// Child-process host state is live and not traced.
     HostState,
 }
 
@@ -1323,6 +1327,7 @@ impl InterpreterCore {
             }
             live
         });
+        released_state_bytes = released_state_bytes.saturating_add(self.gc_sweep_network_state());
         self.estimated_memory_bytes = self
             .estimated_memory_bytes
             .saturating_sub(released_state_bytes);
@@ -1588,6 +1593,7 @@ impl InterpreterCore {
             let Some(object) = self.heap.get(index as usize) else {
                 continue;
             };
+            self.gc_trace_network_object(marker, ObjectId(index));
             let HeapObject {
                 properties,
                 property_labels: _,
@@ -1800,6 +1806,7 @@ impl InterpreterCore {
             scope_chain,
             realm_dynamic_globals,
             realm_global_object,
+            process_global_object,
             generated_function_realm_globals,
             generated_function_realm_generation: _,
             runtime_name_references,
@@ -1871,19 +1878,21 @@ impl InterpreterCore {
             readable_pipe_links,
             readable_pipe_sources,
             next_readable_pipe_token: _,
-            loopback_servers,
-            loopback_sockets,
-            loopback_ports,
-            pending_loopback_tasks,
+            // Network tables are traced by gc_mark_network_roots and by
+            // their reachable heap owners in gc_trace_network_object.
+            loopback_servers: _,
+            loopback_sockets: _,
+            loopback_ports: _,
+            pending_loopback_tasks: _,
             loopback_task_in_flight_bytes: _,
             next_loopback_port: _,
             next_loopback_listener_generation: _,
-            http_servers,
-            http_client_requests,
-            http_incoming_messages,
-            http_server_responses,
-            http_agents,
-            pending_http_tasks,
+            http_servers: _,
+            http_client_requests: _,
+            http_incoming_messages: _,
+            http_server_responses: _,
+            http_agents: _,
+            pending_http_tasks: _,
             http_task_in_flight_bytes: _,
             writable_streams,
             writable_terminal_states,
@@ -1950,9 +1959,8 @@ impl InterpreterCore {
             gc: _,
         } = self;
 
-        // Host I/O state is not traced yet: refuse to collect while any of it
-        // is live.
-        let host_state: [(&'static str, bool); 14] = [
+        // Child-process state is not traced yet: keep its existing guard.
+        let host_state: [(&'static str, bool); 4] = [
             (
                 "pending_child_process_tasks",
                 pending_child_process_tasks.is_empty(),
@@ -1963,20 +1971,11 @@ impl InterpreterCore {
             ),
             ("child_process_streams", child_process_streams.is_empty()),
             ("child_process_handles", child_process_handles.is_empty()),
-            ("loopback_servers", loopback_servers.is_empty()),
-            ("loopback_sockets", loopback_sockets.is_empty()),
-            ("loopback_ports", loopback_ports.is_empty()),
-            ("pending_loopback_tasks", pending_loopback_tasks.is_empty()),
-            ("http_servers", http_servers.is_empty()),
-            ("http_client_requests", http_client_requests.is_empty()),
-            ("http_incoming_messages", http_incoming_messages.is_empty()),
-            ("http_server_responses", http_server_responses.is_empty()),
-            ("http_agents", http_agents.is_empty()),
-            ("pending_http_tasks", pending_http_tasks.is_empty()),
         ];
         if host_state.iter().any(|(_, idle)| !idle) {
             return Err(GcSkip::HostState);
         }
+        self.gc_mark_network_roots(m);
 
         // Execution state.
         #[cfg(test)]
@@ -1992,6 +1991,9 @@ impl InterpreterCore {
                 .for_each(|binding| m.binding(binding));
             if let Some(global) = realm_global_object {
                 m.object(*global);
+            }
+            if let Some(process) = process_global_object {
+                m.object(*process);
             }
         }
         if let Some((_, value, _)) = pending_arguments_object {
@@ -2477,6 +2479,37 @@ mod tests {
             "var keep = { v: 7 }; for (let i = 0; i < 50; i++) { const g = { i }; } keep.v";
         assert_eq!(execute(source, false), format!("{:?}", Value::Int(7)));
         assert_ne!(execute(source, true), format!("{:?}", Value::Int(7)));
+    }
+
+    /// The private native-util reader retains its realm process even when no
+    /// source-visible process binding is in the active module's scope.
+    #[test]
+    fn private_process_root_keeps_argv_alive_without_a_guest_binding() {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = [RuntimeCapability::HeapAllocate].into_iter().collect();
+        config.process_argv = vec!["runtime".into(), "app.cjs".into(), "--mode=live".into()];
+        let mut core = InterpreterCore::new(config, "gc-process-root");
+        let process = core.alloc_process_global().expect("process allocation");
+        let Some(Value::Object(argv)) = core.heap[process.0 as usize].properties.get("argv") else {
+            panic!("process owns argv");
+        };
+        let argv = *argv;
+        // A lexical process shadow must not make the private util reader's
+        // actual process object collectible. No register or binding owns it.
+        core.process_global_object = Some(process);
+        let garbage = core.alloc_object_with_prototype(None).expect("garbage");
+        core.collect_garbage().expect("collection runs");
+        assert!(core.heap.get(process.0 as usize).is_some());
+        assert!(core.heap.get(argv.0 as usize).is_some());
+        assert!(core.heap.is_reclaimed(garbage.0 as usize));
+        assert_eq!(
+            core.heap[argv.0 as usize].properties.get("2"),
+            Some(&Value::str("--mode=live"))
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     /// Symbol-keyed properties and exact-only (lone-surrogate) string keys

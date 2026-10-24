@@ -40,6 +40,13 @@ function load(processDescriptor) {
     Object.defineProperty(sandbox, 'process', processDescriptor);
   }
   const context = vm.createContext(sandbox);
+  // Adapt the engine's private lazy readers to this test realm. Keep the
+  // actual property reads here so missing globals, getters and live updates
+  // retain their ordinary behavior; no host command line is substituted.
+  vm.runInContext(`
+    function __franken_util_process_argv() { return process.argv; }
+    function __franken_util_process_exec_argv() { return process.execArgv; }
+  `, context);
   return { context, candidate: vm.runInContext(source, context, { filename: sourcePath }) };
 }
 

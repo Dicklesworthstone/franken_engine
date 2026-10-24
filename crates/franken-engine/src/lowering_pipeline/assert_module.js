@@ -159,12 +159,28 @@
       if (key !== null && typeof key === 'object' ||
           !apply(has, b, [key]) ||
           isMap && !looseDeep(entry[1], apply(Map.prototype.get, b, [key]), seen)) {
+        // Null and undefined Map keys may replace each other only when
+        // neither side also contains the other key. Existing exact nil
+        // keys retain their own values instead of swapping by coercion.
+        if (isMap && (key === null || key === undefined) &&
+            (apply(has, b, [key]) || apply(has, a, [key === null ? undefined : null]))) {
+          return false;
+        }
         pending.push(entry);
       }
     }
     var matched = [];
     var remaining = pending.length;
     for (var other of apply(iterate, b, [])) {
+      var otherKey = isMap ? other[0] : other;
+      // Exact primitive Map keys with equal values were excluded from
+      // pending on the left. Preserve those matches before a coercively
+      // equal pending key can consume this entry and strand a later one.
+      if (isMap && (otherKey === null || typeof otherKey !== 'object') &&
+          apply(has, a, [otherKey]) &&
+          looseDeep(apply(Map.prototype.get, a, [otherKey]), other[1], seen)) {
+        continue;
+      }
       var found = false;
       for (var i = 0; i < pending.length; i++) {
         if (matched[i]) { continue; }
@@ -179,12 +195,12 @@
         }
       }
       if (found) { continue; }
-      var otherKey = isMap ? other[0] : other;
-      if (otherKey !== null && typeof otherKey === 'object' ||
-          !apply(has, a, [otherKey]) ||
-          isMap && !looseDeep(apply(Map.prototype.get, a, [otherKey]), other[1], seen)) {
-        return false;
+      // Sets retain their existing candidate-first matching order.
+      if (!isMap && (otherKey === null || typeof otherKey !== 'object') &&
+          apply(has, a, [otherKey])) {
+        continue;
       }
+      return false;
     }
     return remaining === 0;
   }

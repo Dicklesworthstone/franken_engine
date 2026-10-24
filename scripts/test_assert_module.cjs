@@ -69,6 +69,75 @@ for (const method of ['equal', 'notEqual', 'strictEqual', 'notStrictEqual']) {
     compare(method + ' arguments', outcome(candidate, method, args), outcome(oracle, method, args));
   }
 }
+// Exact primitive Map matches stay reserved while the remaining entries
+// search for coercively equal keys. Exercise overlaps, non-transitive ==
+// classes, nil alternates, Map values and both assertion polarities.
+let collectionCases = 0;
+function compareCollections(label, a, b) {
+  for (const method of ['deepEqual', 'notDeepEqual']) {
+    compare(method + ' ' + label + ' ' + util.inspect([a, b]), outcome(candidate, method, [a, b]),
+      outcome(oracle, method, [a, b]));
+  }
+  collectionCases++;
+}
+const keyFamilies = [
+  [null, undefined],
+  [false, 0, '', '0', 0n],
+  [true, 1, '1', 1n],
+  [null, undefined, 'null', 'undefined'],
+  [NaN, Infinity, 'Infinity', Symbol.for('assert-collection-key')],
+];
+for (const family of keyFamilies) {
+  const keyPairs = [];
+  for (let i = 0; i < family.length; i++) {
+    for (let j = i + 1; j < family.length; j++) keyPairs.push([family[i], family[j]]);
+  }
+  for (const left of keyPairs) for (const right of keyPairs) {
+    for (let mask = 0; mask < 16; mask++) {
+      compareCollections('coercive Map keys and values',
+        new Map([[left[0], mask & 1], [left[1], (mask >> 1) & 1]]),
+        new Map([[right[0], (mask >> 2) & 1], [right[1], (mask >> 3) & 1]]));
+    }
+  }
+}
+for (const keys of [[false, 0, ''], [true, 1, '1'], [0n, 0, '0']]) {
+  const left = new Map([[keys[0], { n: 1 }], [keys[1], { n: 1 }]]);
+  const right = new Map([[keys[0], { n: '1' }], [keys[2], { n: '1' }]]);
+  compareCollections('nested values, exact key first', left, right);
+  compareCollections('nested values, reverse direction', right, left);
+  compareCollections('nested values, reversed iteration',
+    new Map([...left].reverse()), new Map([...right].reverse()));
+}
+
+// A mixed Map revisits its exact primitive match before matching the
+// coercive remainder. Getters and mutations must remain observable in that
+// order, including when a comparison fails after the mutation.
+function observeMixedMap(module, mutateAt) {
+  const reads = [];
+  let right;
+  function value(name) {
+    let count = 0;
+    return { get n() {
+      reads.push(name + ':' + (++count));
+      if (name === 'a' && count === mutateAt) right.set('', { n: 9 });
+      return 1;
+    } };
+  }
+  const left = new Map([[false, value('a')], [0, value('c')]]);
+  right = new Map([[false, value('b')], ['', value('d')]]);
+  let result = 'returned';
+  try { module.deepEqual(left, right, 'Map observation'); }
+  catch (error) {
+    if (error.code !== 'ERR_ASSERTION') throw error;
+    result = error.operator;
+  }
+  return { result, reads };
+}
+for (const mutateAt of [0, 1, 2]) {
+  compare('mixed Map getter and mutation order ' + mutateAt,
+    observeMixedMap(candidate, mutateAt), observeMixedMap(oracle, mutateAt));
+}
+
 const pairs = [
   [{n:1},{n:'1'}], [[1,2],['1',2]], [new Set([{n:1}, {n:2}]),new Set([{n:'2'}, {n:'1'}])],
   [new Map([[{id:1}, {n:2}]]),new Map([[{id:'1'}, {n:'2'}]])],
@@ -183,5 +252,5 @@ for (const [,name,source] of programs) {
   }
 }
 
-console.log(JSON.stringify({host:process.version, scope:'host adapters, not native Rust execution', checks, failures}));
+console.log(JSON.stringify({host:process.version, scope:'host adapters, not native Rust execution', checks, collectionCases, failures}));
 process.exitCode = failures ? 1 : 0;

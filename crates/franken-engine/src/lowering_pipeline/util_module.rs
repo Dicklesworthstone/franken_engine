@@ -21,6 +21,9 @@
 //! engine's own object model: builtin:UtilInspect, builtin:UtilFormat and
 //! builtin:UtilTypeTag. Everything else is ordinary JavaScript over the
 //! engine's builtins, so labels and authority work as for user code.
+//! Omitted `parseArgs` arguments use private process-argument hostcalls:
+//! reading them requires the embedder's explicit process-shape grant at
+//! invocation, never at module initialization or when `args` is supplied.
 //!
 //! A `require` the program declares in an enclosing scope (a parameter, a
 //! local function) is its own and is called as written. The same pure-module
@@ -71,13 +74,12 @@ use super::with_statement::{
     FunctionBody, FunctionParts, Outcome, Search, Walk, lexical_names, var_names, walk_class,
     walk_expression, walk_function, walk_statement, walk_switch_cases,
 };
-use crate::ast::{
-    BindingPattern, CatchClause, Expression, MethodDefinition, SourceSpan, Statement,
-    SwitchCase, SyntaxTree, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
-};
-#[cfg(test)]
 use crate::ast::ParseGoal;
-#[cfg(test)]
+use crate::ast::{
+    BindingPattern, CatchClause, Expression, MethodDefinition, SourceSpan, Statement, SwitchCase,
+    SyntaxTree, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
+};
+use crate::module_resolver::NativeBuiltinModule;
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
 /// `util.inspect(value, { depth })`: the console formatter at a depth.
@@ -90,6 +92,8 @@ pub(super) const UTIL_TYPE_TAG_CAPABILITY: &str = "builtin:UtilTypeTag";
 const INSPECT_INTRINSIC: &str = "%UtilInspect";
 const FORMAT_INTRINSIC: &str = "%UtilFormat";
 const TYPE_TAG_INTRINSIC: &str = "%UtilTypeTag";
+const PROCESS_ARGV_INTRINSIC: &str = "%UtilProcessArgv";
+const PROCESS_EXEC_ARGV_INTRINSIC: &str = "%UtilProcessExecArgv";
 
 /// The program binding that caches the module object.
 const MODULE_BINDING: &str = "%util_module";
@@ -148,10 +152,15 @@ impl PureModule {
 
 /// UTIL_SOURCE spells the intrinsics with these names, which the parser
 /// accepts, and the rewrite renames them to their `%` forms.
-const PLACEHOLDERS: [(&str, &str); 3] = [
+const PLACEHOLDERS: [(&str, &str); 5] = [
     ("__franken_util_inspect", INSPECT_INTRINSIC),
     ("__franken_util_format", FORMAT_INTRINSIC),
     ("__franken_util_type_tag", TYPE_TAG_INTRINSIC),
+    ("__franken_util_process_argv", PROCESS_ARGV_INTRINSIC),
+    (
+        "__franken_util_process_exec_argv",
+        PROCESS_EXEC_ARGV_INTRINSIC,
+    ),
 ];
 
 pub(super) fn intrinsic_capability(name: &str) -> Option<&'static str> {
@@ -159,6 +168,8 @@ pub(super) fn intrinsic_capability(name: &str) -> Option<&'static str> {
         INSPECT_INTRINSIC => Some(UTIL_INSPECT_CAPABILITY),
         FORMAT_INTRINSIC => Some(UTIL_FORMAT_CAPABILITY),
         TYPE_TAG_INTRINSIC => Some(UTIL_TYPE_TAG_CAPABILITY),
+        PROCESS_ARGV_INTRINSIC => Some(crate::capability::UTIL_PROCESS_ARGV_CAPABILITY),
+        PROCESS_EXEC_ARGV_INTRINSIC => Some(crate::capability::UTIL_PROCESS_EXEC_ARGV_CAPABILITY),
         "%EventsConstructorRef" => Some("builtin:EventEmitterConstructorRef"),
         "%EventsOnce" => Some("builtin:EventsOnce"),
         "%TimersPromisesSetTimeout" => Some("builtin:TimersPromisesSetTimeout"),
@@ -166,6 +177,8 @@ pub(super) fn intrinsic_capability(name: &str) -> Option<&'static str> {
         "%TimersPromisesSetInterval" => Some("builtin:TimersPromisesSetInterval"),
         "%StreamNextTick" => Some("builtin:ProcessNextTick"),
         "%QuerystringModule" => Some("builtin:QuerystringModule"),
+        "%NativeEventsModule" => Some("builtin:NativeEventsModule"),
+        "%NativeStringDecoderModule" => Some("builtin:NativeStringDecoderModule"),
         _ => fs_module::intrinsic_capability(name)
             .or_else(|| zlib_module::intrinsic_capability(name)),
     }
@@ -348,7 +361,7 @@ const BUILTIN_REQUIRE_SEARCH: Search = Search {
 /// The standard globals UTIL_SOURCE reads by name. A program that declares
 /// one at its top level would capture the module's reference, so the
 /// module reads those through `globalThis` instead.
-const MODULE_GLOBALS: [&str; 17] = [
+const MODULE_GLOBALS: [&str; 16] = [
     "Array",
     "Buffer",
     "Error",
@@ -365,7 +378,6 @@ const MODULE_GLOBALS: [&str; 17] = [
     "TextEncoder",
     "TypeError",
     "Uint8Array",
-    "process",
 ];
 
 const TIMERS_GLOBALS: [&str; 9] = [
@@ -546,9 +558,117 @@ pub(super) fn rewrite_util_requires(
     Ok(Some(rewritten))
 }
 
-fn rewrite_module_objects(
-    tree: &SyntaxTree,
-) -> Result<Option<SyntaxTree>, LoweringPipelineError> {
+/// Fixed engine-owned entrypoints for the authenticated runtime provider.
+/// Reuse the ordinary factory, dependency and first-use loader transforms;
+/// captured guest source never enters this function. Submodules select a
+/// property of the same retained parent module in the interpreter.
+fn native_runtime_wrapper(native: NativeBuiltinModule) -> Option<(&'static str, usize)> {
+    let loader_bytes = include_str!("native_module_loader.js").len();
+    let util_bytes = UTIL_SOURCE.len() + include_str!("util_mime.js").len() + loader_bytes;
+    match native {
+        NativeBuiltinModule::Util | NativeBuiltinModule::UtilTypes => {
+            Some(("module.exports = require('util');", util_bytes))
+        }
+        NativeBuiltinModule::Assert | NativeBuiltinModule::AssertStrict => Some((
+            "module.exports = require('assert');",
+            ASSERT_SOURCE.len() + loader_bytes + util_bytes,
+        )),
+        NativeBuiltinModule::StringDecoder => Some((
+            "module.exports = require('string_decoder');",
+            STRING_DECODER_SOURCE.len() + loader_bytes,
+        )),
+        NativeBuiltinModule::TimersPromises => Some((
+            "module.exports = require('timers/promises');",
+            TIMERS_SOURCE.len() + loader_bytes,
+        )),
+        NativeBuiltinModule::Stream | NativeBuiltinModule::StreamPromises => Some((
+            "module.exports = require('stream');",
+            // The ordinary module-object rewrite also installs collection
+            // operators, Node/Web adapters and completion observation. Their
+            // Web dependency is lazy at execution, but its syntax is still
+            // parsed/lowered. Include all four private loaders and every
+            // embedded source before admitting this retained factory.
+            STREAM_SOURCE.len()
+                + EVENTS_SOURCE.len()
+                + STRING_DECODER_SOURCE.len()
+                + WEB_STREAMS_SOURCE.len()
+                + native_module_loader::stream_bridge_source_bytes()
+                + loader_bytes * 4,
+        )),
+        _ => None,
+    }
+}
+
+/// Charge the complete embedded implementation before materializing its AST.
+pub(crate) fn native_runtime_module_source_bytes(native: NativeBuiltinModule) -> Option<usize> {
+    native_runtime_wrapper(native).map(|(wrapper, source_bytes)| wrapper.len() + source_bytes)
+}
+
+pub(crate) fn native_runtime_module_tree(
+    native: NativeBuiltinModule,
+) -> Result<SyntaxTree, LoweringPipelineError> {
+    let invalid = || LoweringPipelineError::InvariantViolation {
+        detail: "the engine's native builtin module wrapper is invalid",
+    };
+    let (wrapper, _) = native_runtime_wrapper(native).ok_or_else(invalid)?;
+    let tree = CanonicalEs2020Parser
+        .parse_with_options(
+            ParserSource {
+                label: native.canonical_specifier().into(),
+                text: wrapper.into(),
+            },
+            ParseGoal::Script,
+            &ParserOptions::default(),
+        )
+        .map_err(|_| invalid())?;
+    let mut rewritten = rewrite_module_objects(&tree)?.ok_or_else(invalid)?;
+    if matches!(
+        native,
+        NativeBuiltinModule::Stream | NativeBuiltinModule::StreamPromises
+    ) {
+        // The runtime provider shares its dependencies with public native
+        // imports. Re-running the legacy Events initializer would reset
+        // package-visible settings and methods; a private decoder factory
+        // would create a different constructor and incompatible hidden state.
+        // Restrict the substitution to this fixed engine-owned wrapper.
+        for (binding, intrinsic) in [
+            (EVENTS_MODULE_BINDING, "%NativeEventsModule"),
+            (STRING_DECODER_MODULE_BINDING, "%NativeStringDecoderModule"),
+        ] {
+            let mut replaced = false;
+            for statement in &mut rewritten.body {
+                let Statement::VariableDeclaration(declaration) = statement else {
+                    continue;
+                };
+                for declarator in &mut declaration.declarations {
+                    if !matches!(&declarator.pattern, BindingPattern::Identifier(name) if name == binding)
+                    {
+                        continue;
+                    }
+                    if replaced
+                        || declaration.kind != VariableDeclarationKind::Const
+                        || declarator.initializer.is_none()
+                    {
+                        return Err(invalid());
+                    }
+                    declarator.initializer = Some(Expression::Call {
+                        callee: Box::new(Expression::Identifier(intrinsic.into())),
+                        arguments: Vec::new(),
+                        span: Some(declarator.span),
+                    });
+                    replaced = true;
+                }
+            }
+            if !replaced {
+                return Err(invalid());
+            }
+        }
+    }
+    native_module_loader::defer_modules(&mut rewritten)?;
+    Ok(rewritten)
+}
+
+fn rewrite_module_objects(tree: &SyntaxTree) -> Result<Option<SyntaxTree>, LoweringPipelineError> {
     let fs_rewritten = fs_module::rewrite_fs_requires(tree)?;
     let tree = fs_rewritten.as_ref().unwrap_or(tree);
     if !tree

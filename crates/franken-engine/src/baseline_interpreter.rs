@@ -2045,8 +2045,10 @@ fn generated_code_fault_code(err: &InterpreterError) -> &'static str {
 /// `Builtin` (a computation over guest values) or none. Its grant carries
 /// nothing beyond the decision itself, so repeats of it can be folded.
 fn hostcall_is_effect_free(tag: &str) -> bool {
-    hostcall_registry_row(tag)
-        .is_some_and(|row| matches!(row.authority, None | Some(RuntimeCapability::Builtin)))
+    tag != crate::capability::UTIL_PROCESS_ARGV_CAPABILITY
+        && tag != crate::capability::UTIL_PROCESS_EXEC_ARGV_CAPABILITY
+        && hostcall_registry_row(tag)
+            .is_some_and(|row| matches!(row.authority, None | Some(RuntimeCapability::Builtin)))
 }
 
 /// Shared capability gate logic for both Call and HostCall instructions.
@@ -2074,14 +2076,21 @@ fn check_hostcall_capability_gate(
     // classification (fail-closed per-call fallback). Only the allow/deny
     // bit is precomputed — every witness and decision-record emission below
     // is identical on both paths.
-    let capability_denied = match interpreter
-        .pruned_hostcall_dispatch
-        .as_ref()
-        .and_then(|table| table.lookup(capability_tag))
-    {
-        Some(allowed) => !allowed,
-        None => !live_hostcall_decision(capability_tag, &interpreter.config.granted_capabilities),
-    };
+    let capability_denied = (matches!(
+        operation_tag,
+        crate::capability::UTIL_PROCESS_ARGV_CAPABILITY
+            | crate::capability::UTIL_PROCESS_EXEC_ARGV_CAPABILITY
+    ) && !interpreter.config.process_shape_read_allowed)
+        || match interpreter
+            .pruned_hostcall_dispatch
+            .as_ref()
+            .and_then(|table| table.lookup(capability_tag))
+        {
+            Some(allowed) => !allowed,
+            None => {
+                !live_hostcall_decision(capability_tag, &interpreter.config.granted_capabilities)
+            }
+        };
 
     // bd-hxukn: cap the tag length at the recording sites so an attacker
     // who controls the `HostCall` capability string cannot inflate the
@@ -2616,6 +2625,10 @@ where
 pub struct RuntimeSymbolState {
     next_symbol_id: u32,
     symbols: BTreeMap<SymbolId, RuntimeSymbolRecord>,
+    // Derived lookup index, deliberately absent from the stable wire format.
+    // Private Symbols and class-private names must not affect Symbol.for's
+    // lookup cost. JsString preserves exact UTF-16 keys, including surrogates.
+    global_symbols: BTreeMap<JsString, SymbolId>,
 }
 
 impl Default for RuntimeSymbolState {
@@ -2623,6 +2636,7 @@ impl Default for RuntimeSymbolState {
         Self {
             next_symbol_id: FIRST_DYNAMIC_SYMBOL_ID,
             symbols: BTreeMap::new(),
+            global_symbols: BTreeMap::new(),
         }
     }
 }
@@ -2734,11 +2748,24 @@ impl<'de> Deserialize<'de> for RuntimeSymbolState {
                 return Err(D::Error::custom("duplicate dynamic Symbol id"));
             }
         }
-        let state = Self {
+        let mut state = Self {
             next_symbol_id: wire.next_symbol_id,
             symbols,
+            global_symbols: BTreeMap::new(),
         };
         state.validate().map_err(D::Error::custom)?;
+        // Validate before indexing: a hostile duplicate key must be rejected,
+        // not silently replaced by BTreeMap::collect's last-writer behavior.
+        state.global_symbols = state
+            .symbols
+            .values()
+            .filter_map(|record| {
+                record
+                    .registry_key
+                    .as_ref()
+                    .map(|key| (key.clone(), record.symbol_id))
+            })
+            .collect();
         Ok(state)
     }
 }
@@ -2800,11 +2827,7 @@ impl RuntimeSymbolState {
     }
 
     fn global_symbol(&self, key: &JsString) -> Option<SymbolId> {
-        self.symbols.values().find_map(|record| {
-            (matches!(record.kind, RuntimeSymbolKind::Global)
-                && record.registry_key.as_ref() == Some(key))
-            .then_some(record.symbol_id)
-        })
+        self.global_symbols.get(key).copied()
     }
 
     fn allocate(
@@ -2821,6 +2844,9 @@ impl RuntimeSymbolState {
         }
         let symbol_id = SymbolId(self.next_symbol_id);
         self.next_symbol_id += 1;
+        if let Some(key) = &registry_key {
+            self.global_symbols.insert(key.clone(), symbol_id);
+        }
         self.symbols.insert(
             symbol_id,
             RuntimeSymbolRecord {
@@ -3839,6 +3865,13 @@ pub enum BuiltinFunctionKind {
     /// function that returns undefined. Its bound object is the realm's
     /// canonical Function prototype property storage (bd-9vouw.346).
     FunctionPrototype,
+    /// The timers.promises getter reads the exports of its private native
+    /// factory carrier. It never calls guest code; the bound holder retains
+    /// both the returned reference label and the collector edge. Append only.
+    NativeTimerPromisesGetter,
+    /// `node:module.createRequire` for the executing captured origin. The
+    /// returned require retains the opaque module id. Append only.
+    ModuleCreateRequire,
 }
 
 /// Annex B B.2.2.2-14: each String HTML method's tag and attribute name.
@@ -4027,7 +4060,7 @@ impl BuiltinFunction {
             kind: BuiltinFunctionKind::RequireResolve,
             module_specifier: require.module_specifier.clone(),
             iterator_handle: None,
-            bound_object: None,
+            bound_object: require.bound_object,
         }
     }
 
@@ -5275,9 +5308,11 @@ impl BuiltinFunction {
     fn display_name(&self) -> &'static str {
         match self.kind {
             BuiltinFunctionKind::Require => "require",
+            BuiltinFunctionKind::ModuleCreateRequire => "createRequire",
             BuiltinFunctionKind::RequireResolve => "resolve",
             BuiltinFunctionKind::FunctionConstructor => "Function",
             BuiltinFunctionKind::FunctionPrototype => "",
+            BuiltinFunctionKind::NativeTimerPromisesGetter => "get",
             BuiltinFunctionKind::GeneratedFunction => "anonymous",
             BuiltinFunctionKind::IteratorNext
             | BuiltinFunctionKind::GeneratorNext
@@ -6095,6 +6130,7 @@ impl BuiltinFunction {
             | K::PromiseAllSettledResolveElement
             | K::PromiseAllSettledRejectElement
             | K::PromiseAnyRejectElement
+            | K::ModuleCreateRequire
             | K::ObjectProtoSetter => Some(1),
             K::PromiseCapabilityExecutor => Some(2),
             K::IteratorNext
@@ -6107,6 +6143,7 @@ impl BuiltinFunction {
             | K::ProxyRevoke
             | K::PrototypeGetter
             | K::FunctionPrototype
+            | K::NativeTimerPromisesGetter
             | K::ThrowTypeError => Some(0),
             _ => None,
         };
@@ -6436,6 +6473,9 @@ const GENERATED_REALM_OBJECT_GLOBALS: [&str; 8] = [
 /// Seed-tracked slot (in `builtin_prototypes`) of the `require('buffer')`
 /// module object (bd-9vouw.193), so every require returns the same object.
 const BUFFER_MODULE_KEY: &str = "<module buffer>";
+
+/// Retained native `module` provider shared by bare and `node:` aliases.
+const MODULE_MODULE_KEY: &str = "<module module>";
 
 /// Seed-tracked slot of the `require('os')` module object (bd-9vouw.204).
 const OS_MODULE_KEY: &str = "<module os>";
@@ -12807,6 +12847,11 @@ pub struct InterpreterConfig {
     /// unless the embedder supplies it.
     #[serde(default)]
     pub process_argv: Vec<String>,
+    /// Explicit embedder authority for private native-util argument readers.
+    /// This is the runtime counterpart of TrustedProcessShape lowering; a
+    /// Builtin grant alone must not authorize access to invocation inputs.
+    #[serde(default)]
+    pub process_shape_read_allowed: bool,
 }
 
 impl PartialEq for InterpreterConfig {
@@ -12826,6 +12871,7 @@ impl PartialEq for InterpreterConfig {
             && self.checkpoint_density == other.checkpoint_density
             && self.module_parser_options == other.module_parser_options
             && self.process_argv == other.process_argv
+            && self.process_shape_read_allowed == other.process_shape_read_allowed
         // Note: cancellation_token is intentionally excluded from comparison
     }
 }
@@ -12850,6 +12896,7 @@ impl InterpreterConfig {
             commonjs_entry: false,
             module_parser_options: ParserOptions::default(),
             process_argv: Vec::new(),
+            process_shape_read_allowed: false,
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
             cancellation_token: None,
@@ -12874,6 +12921,7 @@ impl InterpreterConfig {
             commonjs_entry: false,
             module_parser_options: ParserOptions::default(),
             process_argv: Vec::new(),
+            process_shape_read_allowed: false,
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
             cancellation_token: None,
@@ -12904,6 +12952,7 @@ impl InterpreterConfig {
             commonjs_entry: false,
             module_parser_options: ParserOptions::default(),
             process_argv: Vec::new(),
+            process_shape_read_allowed: false,
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
             cancellation_token: None,
@@ -12934,6 +12983,7 @@ impl InterpreterConfig {
             commonjs_entry: false,
             module_parser_options: ParserOptions::default(),
             process_argv: Vec::new(),
+            process_shape_read_allowed: false,
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
             cancellation_token: None,
@@ -15753,6 +15803,10 @@ pub struct InterpreterCore {
     /// no binding resolves reads and writes its properties, own or inherited,
     /// as a global environment's object record does. Cleared with the realm.
     realm_global_object: Option<ObjectId>,
+    /// The authority-bearing process object stays outside the public global
+    /// object and is shared by module scopes. This root also lets the private
+    /// util argv reader ignore guest bindings named `process`.
+    process_global_object: Option<ObjectId>,
     /// Engine-owned sanitized outer environment for `Function`-constructor
     /// artifacts. Binding cells persist for one top-level realm, while every
     /// invocation receives fresh frame structure that shares only these
@@ -16986,6 +17040,7 @@ impl InterpreterCore {
             scope_chain,
             realm_dynamic_globals: BTreeMap::new(),
             realm_global_object: None,
+            process_global_object: None,
             generated_function_realm_globals: None,
             generated_function_realm_generation: 0,
             runtime_name_references: Vec::new(),
@@ -21897,7 +21952,9 @@ impl InterpreterCore {
         self.loopback_task_in_flight_bytes = self
             .loopback_task_in_flight_bytes
             .saturating_add(retained_bytes);
+        let gc_pins = self.gc_pin_loopback_task(&task);
         let result = self.drive_pending_loopback_task(task, module);
+        self.gc_unpin_network_values(gc_pins);
         self.loopback_task_in_flight_bytes = self
             .loopback_task_in_flight_bytes
             .saturating_sub(retained_bytes);
@@ -24408,7 +24465,9 @@ impl InterpreterCore {
         self.http_task_in_flight_bytes = self
             .http_task_in_flight_bytes
             .saturating_add(retained_bytes);
+        let gc_pins = self.gc_pin_http_task(&task);
         let result = self.drive_pending_http_task(task, module);
+        self.gc_unpin_network_values(gc_pins);
         self.http_task_in_flight_bytes = self
             .http_task_in_flight_bytes
             .saturating_sub(retained_bytes);
@@ -24622,13 +24681,15 @@ impl InterpreterCore {
                 };
                 let publication = (|| {
                     if let (Some(module), Some(callback)) = (module, response_callback) {
-                        self.invoke_inline_method_call_with_argument_label(
-                            Some(module),
-                            Value::Closure(callback),
-                            Value::Undefined,
-                            vec![Value::Object(message)],
-                            Some(response_label.clone()),
-                        )?;
+                        self.with_event_job_gc_request(Vec::new(), |core| {
+                            core.invoke_inline_method_call_with_argument_label(
+                                Some(module),
+                                Value::Closure(callback),
+                                Value::Undefined,
+                                vec![Value::Object(message)],
+                                Some(response_label.clone()),
+                            )
+                        })?;
                     }
                     let _ = self.emit_loopback_event(
                         module,
@@ -24670,13 +24731,15 @@ impl InterpreterCore {
                     response_label.clone(),
                 )?;
                 if let (Some(module), Some(callback)) = (module, response_callback) {
-                    self.invoke_inline_method_call_with_argument_label(
-                        Some(module),
-                        Value::Closure(callback),
-                        Value::Undefined,
-                        vec![Value::Object(response)],
-                        Some(response_label.clone()),
-                    )?;
+                    self.with_event_job_gc_request(Vec::new(), |core| {
+                        core.invoke_inline_method_call_with_argument_label(
+                            Some(module),
+                            Value::Closure(callback),
+                            Value::Undefined,
+                            vec![Value::Object(response)],
+                            Some(response_label.clone()),
+                        )
+                    })?;
                 }
                 let _ = self.emit_loopback_event(
                     module,
@@ -24828,18 +24891,30 @@ impl InterpreterCore {
             } => {
                 if let Some(module) = module {
                     let records = self.event_listener_records_for(target, &event);
-                    if let Some(callback) = leading_callback {
-                        self.invoke_inline_method_call_with_argument_label(
-                            Some(module),
-                            Value::Closure(callback),
-                            Value::Object(target),
-                            arguments.clone(),
-                            Some(label.clone()),
-                        )?;
-                    }
-                    let _ = self.emit_event_listener_snapshot(
-                        module, target, &event, arguments, label, records,
-                    )?;
+                    // A leading callback may remove listeners before their
+                    // captured snapshot runs. Keep that snapshot alive even
+                    // when no live EventEmitter registration names it.
+                    let gc_pins = self.gc_pin_network_values(
+                        records.iter().map(|record| record.listener.clone()),
+                    );
+                    let emission = (|| {
+                        if let Some(callback) = leading_callback {
+                            self.with_event_job_gc_request(Vec::new(), |core| {
+                                core.invoke_inline_method_call_with_argument_label(
+                                    Some(module),
+                                    Value::Closure(callback),
+                                    Value::Object(target),
+                                    arguments.clone(),
+                                    Some(label.clone()),
+                                )
+                            })?;
+                        }
+                        self.emit_event_listener_snapshot(
+                            module, target, &event, arguments, label, records,
+                        )
+                    })();
+                    self.gc_unpin_network_values(gc_pins);
+                    let _ = emission?;
                 }
             }
         }
@@ -26046,14 +26121,23 @@ impl InterpreterCore {
         };
         state.fired = true;
 
-        let (result, result_label) = self
-            .invoke_inline_method_call_with_argument_label_preflighted(
+        let invoke = |core: &mut Self| {
+            core.invoke_inline_method_call_with_argument_label_preflighted(
                 Some(module),
                 original_listener,
                 Value::Object(target),
                 arguments,
                 Some(argument_label),
-            )?;
+            )
+        };
+        // An armed network event may enter through a once wrapper's builtin
+        // frame. Its original listener gets the same collection boundary;
+        // the nested-call guard still rejects unaudited enclosing builtins.
+        let (result, result_label) = if self.gc_network_task_active() {
+            self.with_gc_nested_request(Vec::new(), invoke)
+        } else {
+            invoke(self)
+        }?;
         self.replace_pending_hostcall_result_label(Some(result_label))?;
         Ok(result)
     }
@@ -26095,6 +26179,31 @@ impl InterpreterCore {
         records: Vec<EventListenerRecord>,
     ) -> Result<bool, InterpreterError> {
         let event = event.into();
+        let gc_pins = (self.gc_network_task_active() && self.gc_in_event_loop_phase()).then(|| {
+            self.gc_pin_network_values(
+                std::iter::once(Value::Object(target_id))
+                    .chain(arguments.iter().cloned())
+                    .chain(records.iter().map(|record| record.listener.clone())),
+            )
+        });
+        let emission = self.dispatch_event_listener_snapshot(
+            module, target_id, event, arguments, emission_label, records,
+        );
+        if let Some(checkpoint) = gc_pins {
+            self.gc_unpin_network_values(checkpoint);
+        }
+        emission
+    }
+
+    fn dispatch_event_listener_snapshot(
+        &mut self,
+        module: &Ir3Module,
+        target_id: ObjectId,
+        event: RuntimePropertyKey,
+        arguments: Vec<Value>,
+        emission_label: Label,
+        records: Vec<EventListenerRecord>,
+    ) -> Result<bool, InterpreterError> {
         let settled_waiter =
             self.settle_event_promise_waiters(target_id, &event, &arguments, &emission_label)?;
         if records.is_empty() {
@@ -26139,13 +26248,20 @@ impl InterpreterCore {
                 // not registrations made through EventEmitter.once().
                 let _ = self.remove_once_event_listener(target_id, &event, &record.listener);
             }
-            self.invoke_inline_method_call_with_argument_label(
-                Some(module),
-                record.listener,
-                Value::Object(target_id),
-                arguments.clone(),
-                Some(emission_label.clone()),
-            )?;
+            let invoke = |core: &mut Self| {
+                core.invoke_inline_method_call_with_argument_label(
+                    Some(module),
+                    record.listener,
+                    Value::Object(target_id),
+                    arguments.clone(),
+                    Some(emission_label.clone()),
+                )
+            };
+            if self.gc_network_task_active() {
+                self.with_event_job_gc_request(Vec::new(), invoke)?;
+            } else {
+                invoke(self)?;
+            }
         }
         Ok(true)
     }
@@ -38529,6 +38645,7 @@ impl InterpreterCore {
         // reset. Keeping their binding cells here would retain stale ObjectIds.
         self.realm_dynamic_globals.clear();
         self.realm_global_object = None;
+        self.process_global_object = None;
         self.generated_function_realm_generation = next_generation;
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
         Ok(())
@@ -38624,10 +38741,27 @@ impl InterpreterCore {
         {
             self.realm_global_object = None;
         }
+        if self
+            .process_global_object
+            .is_some_and(|process| process.0 as usize >= heap_checkpoint)
+        {
+            self.process_global_object = None;
+        }
         self.estimated_memory_bytes = memory_checkpoint;
     }
 
     fn inject_runtime_globals_inner(&mut self) -> Result<(), InterpreterError> {
+        let process = if let Some(process) = self.process_global_object {
+            Value::Object(process)
+        } else {
+            let process = self.alloc_process_global()?;
+            self.process_global_object = Some(process);
+            Value::Object(process)
+        };
+        self.inject_non_process_runtime_globals(process)
+    }
+
+    fn alloc_process_global(&mut self) -> Result<ObjectId, InterpreterError> {
         // bd-my9hk: the argv the embedder launched the program with; empty
         // when it supplied none.
         let argv_values: Vec<Value> = self
@@ -38645,12 +38779,15 @@ impl InterpreterCore {
         // a positive synthetic sentinel, never the nondeterministic host PID.
         // No env VALUES are exposed (env stays empty and env reads stay denied
         // at lowering).
-        let process = Value::Object(self.alloc_object_with_properties(&[
+        self.alloc_object_with_properties(&[
             ("argv", argv),
             ("env", env),
             ("platform", Value::str(NODE_OS_PLATFORM)),
             ("pid", Value::Int(1)),
-        ])?);
+        ])
+    }
+
+    fn inject_non_process_runtime_globals(&mut self, process: Value) -> Result<(), InterpreterError> {
         // The modules of a program share one `console`, `performance`,
         // `JSON`, `Reflect` and `Atomics` (bd-9vouw.297): a later module binds
         // the realm global object's own property, so a member one module adds
@@ -39732,16 +39869,11 @@ impl InterpreterCore {
             .saturating_add(Self::estimate_string_bytes(specifier))
     }
 
-    /// Transient bytes of an isolated call's synthetic call site: a private
-    /// copy of the module for an async callee (which may park its activation
-    /// on it), otherwise the two trampoline instructions. Charging the module
-    /// walked every instruction on every callback.
-    fn isolated_call_site_bytes(module: &Ir3Module, callee_is_async: bool) -> u64 {
-        if callee_is_async {
-            Self::transient_module_wrapper_bytes(module)
-        } else {
-            2u64.saturating_mul(std::mem::size_of::<Ir3Instruction>() as u64)
-        }
+    /// Transient bytes of an isolated call's two-instruction trampoline.
+    /// Async continuations retain their original owner program and their own
+    /// activation; they do not retain or copy this temporary call site.
+    fn isolated_call_site_bytes() -> u64 {
+        2u64.saturating_mul(std::mem::size_of::<Ir3Instruction>() as u64)
     }
 
     fn transient_module_wrapper_bytes(module: &Ir3Module) -> u64 {
@@ -39945,15 +40077,20 @@ impl InterpreterCore {
         }
 
         let source_is_delivered = delivered.is_some();
-        let native_path = delivered.as_ref().is_some_and(|source| {
-            matches!(
-                NativeBuiltinModule::from_record(&source.record),
-                Some(
-                    NativeBuiltinModule::Path
-                        | NativeBuiltinModule::PathPosix
-                        | NativeBuiltinModule::PathWin32
-                )
+        let native_provider = delivered
+            .as_ref()
+            .and_then(|source| NativeBuiltinModule::from_record(&source.record));
+        let native_path = matches!(
+            native_provider,
+            Some(
+                NativeBuiltinModule::Path
+                    | NativeBuiltinModule::PathPosix
+                    | NativeBuiltinModule::PathWin32
             )
+        );
+        let native_factory = native_provider.and_then(|native| {
+            crate::lowering_pipeline::native_runtime_module_source_bytes(native)
+                .map(|bytes| (native, bytes))
         });
         let declared_goal = match delivered.as_ref() {
             Some(delivered) => Some(if delivered.record.syntax == ModuleSyntax::CommonJs {
@@ -40069,7 +40206,7 @@ impl InterpreterCore {
         // throws for `require` and rejects `import()` with (bd-9vouw.389);
         // its record fails, so importing it again fails again. Unsupported
         // syntax and every policy refusal stay uncatchable.
-        let syntax_tree = match parsed {
+        let syntax_tree = match (native_factory, parsed) {
             _ if native_path => {
                 self.check_temporary_memory_budget(
                     crate::lowering_pipeline::path_module::RUNTIME_SOURCE_BYTES as u64,
@@ -40083,17 +40220,30 @@ impl InterpreterCore {
                     }
                 })?
             }
-            Ok(syntax_tree) => syntax_tree,
+            (Some((native, source_bytes)), _) => {
+                self.check_temporary_memory_budget(source_bytes as u64)
+                    .inspect_err(|error| self.fail_module_record(resolved, &error.to_string()))?;
+                crate::lowering_pipeline::native_runtime_module_tree(native).map_err(|error| {
+                    self.fail_module_record(resolved, &error.to_string());
+                    InterpreterError::ModuleLoweringFailed {
+                        specifier: resolved.to_string(),
+                        error: error.to_string(),
+                    }
+                })?
+            }
+            (None, Ok(syntax_tree)) => syntax_tree,
             // An empty file, or one holding only comments, white space or
             // TypeScript declarations, is a module with no code and no
             // exports, which Node and Bun load (bd-9vouw.430); the parser
             // reports it as an empty source.
-            Err(error) if error.code == ParseErrorCode::EmptySource => crate::ast::SyntaxTree {
-                goal: parse_goal,
-                body: Vec::new(),
-                span: crate::ast::SourceSpan::new(0, 0, 1, 1, 1, 1),
-            },
-            Err(error) => {
+            (None, Err(error)) if error.code == ParseErrorCode::EmptySource => {
+                crate::ast::SyntaxTree {
+                    goal: parse_goal,
+                    body: Vec::new(),
+                    span: crate::ast::SourceSpan::new(0, 0, 1, 1, 1, 1),
+                }
+            }
+            (None, Err(error)) => {
                 return Err(
                     // InvalidGoal: an import or export declaration in a
                     // CommonJS (script) module, a SyntaxError in Node too.
@@ -40350,17 +40500,45 @@ impl InterpreterCore {
         Ok(Value::Object(object))
     }
 
+    /// The captured-graph `node:module` surface. `createRequire` itself is
+    /// unbound: each call validates the executing module's trusted origin,
+    /// then returns the ordinary require value bound to that opaque id.
+    fn module_core_module(&mut self) -> Result<Value, InterpreterError> {
+        if let Some(object) = self.builtin_prototypes.get(MODULE_MODULE_KEY) {
+            return Ok(Value::Object(*object));
+        }
+        let object = self.alloc_object_with_properties(&[(
+            "createRequire",
+            Value::BuiltinFunction(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::ModuleCreateRequire,
+            )),
+        )])?;
+        self.mutate_builtin_prototypes(|prototypes| {
+            prototypes.insert(MODULE_MODULE_KEY.to_string(), object);
+        });
+        Ok(Value::Object(object))
+    }
+
     /// `require('timers')` (bd-9vouw.231): Node's timers module, whose six
     /// timer functions are the realm's own. xml2js reads
     /// `require('timers').setImmediate`; the timers facade lowers only the
     /// calls it recognizes on a confirmed alias, so the require reached the
-    /// runtime and found no module. Not provided: `promises`, `active`,
-    /// `unenroll`, `enroll`.
-    fn timers_core_module(&mut self) -> Result<Value, InterpreterError> {
+    /// runtime and found no module. The promises property and direct
+    /// timers/promises imports share one retained native factory. Loading
+    /// either module initializes wrappers without scheduling any timer.
+    fn timers_core_module(&mut self, module: &Ir3Module) -> Result<Value, InterpreterError> {
         if let Some(object) = self.builtin_prototypes.get(TIMERS_MODULE_KEY) {
             return Ok(Value::Object(*object));
         }
-        let members = Self::timer_global_kinds()
+        self.source_builtin_module(module, NativeBuiltinModule::TimersPromises, None)?;
+        let carrier = self
+            .builtin_prototypes
+            .get("\0franken-engine/native-timers/promises")
+            .copied()
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "native timer promises factory has no export carrier".to_string(),
+            })?;
+        let mut members = Self::timer_global_kinds()
             .into_iter()
             .filter(|(name, _)| *name != "queueMicrotask")
             .map(|(name, kind)| {
@@ -40370,6 +40548,16 @@ impl InterpreterCore {
                 )
             })
             .collect::<Vec<_>>();
+        members.push((
+            "promises",
+            Value::Accessor {
+                get: Some(Arc::new(Value::BuiltinFunction(BuiltinFunction::bound_to(
+                    BuiltinFunctionKind::NativeTimerPromisesGetter,
+                    carrier,
+                )))),
+                set: None,
+            },
+        ));
         let object = self.alloc_object_with_properties(&members)?;
         self.mutate_builtin_prototypes(|prototypes| {
             prototypes.insert(TIMERS_MODULE_KEY.to_string(), object);
@@ -40581,7 +40769,7 @@ impl InterpreterCore {
         if self.module_resolver.is_none()
             && let Some(native) = NativeBuiltinModule::from_specifier(specifier)
         {
-            return self.native_builtin_module(module, native);
+            return self.native_builtin_module(module, native, None);
         }
         let delivered = self
             .module_resolver
@@ -40595,7 +40783,7 @@ impl InterpreterCore {
         if let Some(source) = delivered.as_ref()
             && let Some(native) = NativeBuiltinModule::from_record(&source.module.record)
         {
-            return self.load_native_builtin_resolved(module, source, native);
+            return self.load_native_builtin_resolved(module, source, native, None);
         }
         let is_json = delivered.is_none()
             && Path::new(&resolved)
@@ -40641,6 +40829,7 @@ impl InterpreterCore {
         module: &Ir3Module,
         source: &ResolutionOutcome,
         native: NativeBuiltinModule,
+        import_bound: Option<&Label>,
     ) -> Result<Value, InterpreterError> {
         let resolved = &source.module.record.id;
         if let Some(record) = self.module_state.modules.get(resolved)
@@ -40651,8 +40840,19 @@ impl InterpreterCore {
                 error: "resolved module changed after its first authorized load".to_string(),
             });
         }
+        let value = self.native_builtin_module(module, native, import_bound)?;
+        // A source provider can create its private retained module while it
+        // initializes. A resolver-supplied id must not overwrite that new
+        // module's authenticated identity with a different provider hash.
+        if let Some(record) = self.module_state.modules.get(resolved)
+            && record.resolved_source_hash != Some(source.module.content_hash)
+        {
+            return Err(InterpreterError::ModuleLoweringFailed {
+                specifier: resolved.clone(),
+                error: "resolved module changed during native provider initialization".to_string(),
+            });
+        }
         let new_record = !self.module_state.modules.contains_key(resolved);
-        let value = self.native_builtin_module(module, native)?;
         self.ensure_module_record(module, resolved)?;
         if let Some(record) = self.module_state.modules.get_mut(resolved) {
             record.resolved_source_hash = Some(source.module.content_hash);
@@ -40673,27 +40873,40 @@ impl InterpreterCore {
         &mut self,
         module: &Ir3Module,
         native: NativeBuiltinModule,
+        import_bound: Option<&Label>,
     ) -> Result<Value, InterpreterError> {
         match native {
             NativeBuiltinModule::Buffer => self.buffer_core_module(),
+            NativeBuiltinModule::Module => self.module_core_module(),
             NativeBuiltinModule::Events => self.events_core_module(module),
             NativeBuiltinModule::Os => self.os_core_module(),
             NativeBuiltinModule::Querystring => self.querystring_core_module(),
             NativeBuiltinModule::Url => self.url_core_module(),
-            NativeBuiltinModule::Timers => self.timers_core_module(),
+            NativeBuiltinModule::Timers => self.timers_core_module(module),
             NativeBuiltinModule::PerfHooks => self.perf_hooks_core_module(),
             NativeBuiltinModule::Path
             | NativeBuiltinModule::PathPosix
             | NativeBuiltinModule::PathWin32 => self.path_core_module(module, native),
+            NativeBuiltinModule::Util
+            | NativeBuiltinModule::UtilTypes
+            | NativeBuiltinModule::Assert
+            | NativeBuiltinModule::AssertStrict
+            | NativeBuiltinModule::StringDecoder
+            | NativeBuiltinModule::TimersPromises
+            | NativeBuiltinModule::Stream
+            | NativeBuiltinModule::StreamPromises => {
+                self.source_builtin_module(module, native, import_bound)
+            }
         }
     }
 
-    /// Keep named exports tied to the engine's supported provider surface.
+/// Keep named exports tied to the engine's supported provider surface.
     /// CommonJS mutations change the values read on first ESM initialization,
     /// but adding an arbitrary property cannot add a module export. Reuse the
     /// facade inventories where the provider itself is table-driven.
     fn native_builtin_export_names(native: NativeBuiltinModule) -> Vec<&'static str> {
         match native {
+            NativeBuiltinModule::Module => vec!["createRequire"],
             NativeBuiltinModule::Buffer => vec![
                 "Buffer",
                 "Blob",
@@ -40725,18 +40938,69 @@ impl InterpreterCore {
             NativeBuiltinModule::Timers => Self::timer_global_kinds()
                 .into_iter()
                 .filter_map(|(name, _)| (name != "queueMicrotask").then_some(name))
+                .chain(std::iter::once("promises"))
                 .collect(),
             NativeBuiltinModule::PerfHooks => vec!["performance"],
             NativeBuiltinModule::Path
             | NativeBuiltinModule::PathPosix
             | NativeBuiltinModule::PathWin32 => PATH_ESM_EXPORT_NAMES.to_vec(),
+            NativeBuiltinModule::Util => vec![
+                "format", "formatWithOptions", "inspect", "inherits", "promisify",
+                "callbackify", "deprecate", "debuglog", "debug", "isDeepStrictEqual",
+                "parseArgs", "parseEnv", "styleText", "stripVTControlCharacters",
+                "toUSVString", "types", "isArray", "TextEncoder", "TextDecoder",
+                "MIMEType", "MIMEParams",
+            ],
+            NativeBuiltinModule::UtilTypes => vec![
+                "isDate", "isRegExp", "isMap", "isSet", "isWeakMap", "isWeakSet",
+                "isPromise", "isArrayBuffer", "isAnyArrayBuffer", "isDataView",
+                "isNativeError", "isProxy", "isGeneratorFunction", "isAsyncFunction",
+                "isGeneratorObject", "isNumberObject", "isStringObject", "isBooleanObject",
+                "isBigIntObject", "isSymbolObject", "isBoxedPrimitive", "isTypedArray",
+                "isArrayBufferView", "isInt8Array", "isUint8Array", "isUint8ClampedArray",
+                "isInt16Array", "isUint16Array", "isInt32Array", "isUint32Array",
+                "isFloat32Array", "isFloat64Array", "isBigInt64Array", "isBigUint64Array",
+            ],
+            NativeBuiltinModule::Assert | NativeBuiltinModule::AssertStrict => vec![
+                "AssertionError", "fail", "ok", "equal", "notEqual", "deepEqual",
+                "notDeepEqual", "strictEqual", "notStrictEqual", "deepStrictEqual",
+                "notDeepStrictEqual", "match", "doesNotMatch", "ifError", "throws",
+                "doesNotThrow", "rejects", "doesNotReject", "strict",
+            ],
+            NativeBuiltinModule::StringDecoder => vec!["StringDecoder"],
+            NativeBuiltinModule::TimersPromises => {
+                vec!["setTimeout", "setImmediate", "setInterval", "scheduler"]
+            }
+            NativeBuiltinModule::Stream => vec![
+                "Stream",
+                "Readable",
+                "Writable",
+                "Duplex",
+                "Transform",
+                "PassThrough",
+                "pipeline",
+                "finished",
+                "compose",
+                "destroy",
+                "isReadable",
+                "isWritable",
+                "isErrored",
+                "isDisturbed",
+                "isDestroyed",
+                "addAbortSignal",
+                "duplexPair",
+                "promises",
+                "_isUint8Array",
+                "_uint8ArrayToBuffer",
+            ],
+            NativeBuiltinModule::StreamPromises => vec!["pipeline", "finished"],
         }
     }
 
     /// Bound the mutable state reachable from a native export without calling
     /// guest code. A descriptor authenticates the provider, not later guest
-    /// writes to its shared CommonJS object. Accessors, proxies and opaque
-    /// suspended values stay fail-high. Callable effects retain their ordinary
+    /// writes to its shared CommonJS object. Unknown accessors, proxies and
+    /// opaque suspended values stay fail-high. Callable effects retain their ordinary
     /// invocation checks; their existing property storage is visited here too.
     /// The iterative walk charges every edge and reserves its guest-sized
     /// worklist before growing it, including on cached namespace imports.
@@ -40745,12 +41009,15 @@ impl InterpreterCore {
         module: &Ir3Module,
         root: ObjectId,
     ) -> Result<Label, InterpreterError> {
-        let mut pending = vec![root];
+        // Only the root and its prototype chain can supply properties read
+        // during the namespace snapshot. Nested accessors remain deferred
+        // code, like methods, but only audited native factory code is admitted.
+        let mut pending = vec![(root, true)];
         let mut visited = BTreeSet::new();
         let mut label = Label::Internal;
-        while let Some(object_id) = pending.pop() {
+        while let Some((object_id, snapshot_lookup)) = pending.pop() {
             self.charge_property_copy_work()?;
-            if visited.contains(&object_id) {
+            if visited.contains(&(object_id, snapshot_lookup)) {
                 continue;
             }
             let object = self
@@ -40783,12 +41050,13 @@ impl InterpreterCore {
             let temporary_bytes = (visited.len().saturating_add(1) as u64)
                 .saturating_mul(64)
                 .saturating_add(
-                    (capacity as u64).saturating_mul(std::mem::size_of::<ObjectId>() as u64),
+                    (capacity as u64)
+                        .saturating_mul(std::mem::size_of::<(ObjectId, bool)>() as u64),
                 );
             self.check_temporary_memory_budget(
                 temporary_bytes.saturating_add(Self::estimate_label_bytes(&label)),
             )?;
-            visited.insert(object_id);
+            visited.insert((object_id, snapshot_lookup));
             if object.brand() == Some(PROXY_TYPE_TAG)
                 || !object.private_elements.is_empty()
                 || object.primitive_value.is_some()
@@ -40830,25 +41098,32 @@ impl InterpreterCore {
             }
             let mut opaque = false;
             for value in object.properties.values_unordered() {
-                opaque |= self.queue_native_builtin_value(module, value, &mut pending)?;
+                opaque |=
+                    self.queue_native_builtin_value(module, value, !snapshot_lookup, &mut pending)?;
             }
             for (_, property) in object.properties.baseline_symbol_properties() {
                 match property {
                     BaselineSymbolProperty::Data(value) => {
-                        opaque |= self.queue_native_builtin_value(module, value, &mut pending)?;
+                        opaque |= self.queue_native_builtin_value(
+                            module,
+                            value,
+                            !snapshot_lookup,
+                            &mut pending,
+                        )?;
                     }
                     BaselineSymbolProperty::Accessor { get, set } => {
                         opaque |= self.queue_native_builtin_accessor(
                             module,
                             get.as_ref(),
                             set.as_ref(),
+                            !snapshot_lookup,
                             &mut pending,
                         )?;
                     }
                 }
             }
             if let Some(prototype) = self.observable_prototype_link(object, object_id) {
-                pending.push(prototype);
+                pending.push((prototype, snapshot_lookup));
             }
             self.instructions_executed = self.instructions_executed.saturating_add(work);
             if opaque {
@@ -40862,15 +41137,17 @@ impl InterpreterCore {
         &self,
         module: &Ir3Module,
         value: &Value,
-        pending: &mut Vec<ObjectId>,
+        allow_deferred_factory_accessor: bool,
+        pending: &mut Vec<(ObjectId, bool)>,
     ) -> Result<bool, InterpreterError> {
         match value {
-            Value::Object(object) => pending.push(*object),
+            Value::Object(object) => pending.push((*object, false)),
             Value::Accessor { get, set } => {
                 return self.queue_native_builtin_accessor(
                     module,
                     get.as_deref(),
                     set.as_deref(),
+                    allow_deferred_factory_accessor,
                     pending,
                 );
             }
@@ -40885,11 +41162,11 @@ impl InterpreterCore {
                         return Ok(true);
                     }
                     if let Some(receiver) = builtin.bound_object {
-                        pending.push(ObjectId(receiver));
+                        pending.push((ObjectId(receiver), false));
                     }
                 }
                 if let Some(object) = self.function_own_property_object(module, function)? {
-                    pending.push(object);
+                    pending.push((object, false));
                 }
             }
             _ => {}
@@ -40897,12 +41174,140 @@ impl InterpreterCore {
         Ok(false)
     }
 
+    /// Identify the narrowly audited deferred accessors in immutable native
+    /// factory programs. The guest-visible function name is not authority.
+    /// In particular, util.promisify/deprecate create closures in the same
+    /// program that capture guest callbacks; their code is not an accessor.
+    fn is_deferred_native_factory_accessor(&self, function: &Value, setter: bool) -> bool {
+        let Value::Closure(closure_id) = function else {
+            return false;
+        };
+        if self
+            .closure_generated_function_artifacts
+            .get(closure_id)
+            .is_some()
+        {
+            return false;
+        }
+        let Some(origin) = self.closure_module_origins.get(closure_id) else {
+            return false;
+        };
+        let provider = match origin.as_str() {
+            "\0franken-engine/native-util" => 0,
+            "\0franken-engine/native-string_decoder" => 1,
+            "\0franken-engine/native-timers/promises" => 2,
+            "\0franken-engine/native-stream" => 3,
+            _ => return false,
+        };
+        static FACTORY_HASHES: OnceLock<[ContentHash; 4]> = OnceLock::new();
+        let hashes = FACTORY_HASHES.get_or_init(|| {
+            [
+                NativeBuiltinModule::Util
+                    .record("\0franken-engine/native-util")
+                    .canonical_hash(),
+                NativeBuiltinModule::StringDecoder
+                    .record("\0franken-engine/native-string_decoder")
+                    .canonical_hash(),
+                NativeBuiltinModule::TimersPromises
+                    .record("\0franken-engine/native-timers/promises")
+                    .canonical_hash(),
+                NativeBuiltinModule::Stream
+                    .record("\0franken-engine/native-stream")
+                    .canonical_hash(),
+            ]
+        });
+        let Some(record) = self.module_state.modules.get(origin) else {
+            return false;
+        };
+        if record.resolved_source_hash != Some(hashes[provider])
+            || !matches!(record.status, ModuleRuntimeStatus::Evaluated)
+        {
+            return false;
+        }
+        let Some(program) = record.compiled_module.as_ref() else {
+            return false;
+        };
+        if program.header.source_label != *origin {
+            return false;
+        }
+        let Some(closure) = self.closures.get(*closure_id as usize) else {
+            return false;
+        };
+        let Some(code) = program.function_table.get(closure.function_index as usize) else {
+            return false;
+        };
+        if code.is_generator || code.rest_param_index.is_some() {
+            return false;
+        }
+        if provider == 3 {
+            // Only stream's receiver-owned state accessors are deferred here.
+            // The same retained program contains the lazy Web factory, whose
+            // class getters can have identical names and arities (notably
+            // "closed") while reading captured maps and promise state.
+            // Immutable source distinguishes object methods from class
+            // accessors and decoder function expressions; guest .name writes
+            // cannot supply this identity.
+            let Some(name) = code.name.as_deref() else {
+                return false;
+            };
+            let Some(source) = program.function_sources.get(&closure.function_index) else {
+                return false;
+            };
+            if !source
+                .as_str()
+                .trim_start()
+                .strip_prefix(name)
+                .is_some_and(|tail| tail.starts_with('('))
+            {
+                return false;
+            }
+            return matches!(
+                (setter, name, code.arity),
+                (
+                    false,
+                    "get"
+                        | "readableDidRead"
+                        | "readableAborted"
+                        | "readableHighWaterMark"
+                        | "readableBuffer"
+                        | "readableLength"
+                        | "readableObjectMode"
+                        | "readableEncoding"
+                        | "errored"
+                        | "closed"
+                        | "readableEnded"
+                        | "writableFinished"
+                        | "writableObjectMode"
+                        | "writableBuffer"
+                        | "writableEnded"
+                        | "writableNeedDrain"
+                        | "writableHighWaterMark"
+                        | "writableCorked"
+                        | "writableLength"
+                        | "writableAborted",
+                    0
+                ) | (true, "set", 1)
+            );
+        }
+        matches!(
+            (provider, setter, code.name.as_deref(), code.arity),
+            (
+                0,
+                false,
+                Some("get" | "type" | "subtype" | "essence" | "params"),
+                0
+            ) | (0, true, Some("set" | "type" | "subtype"), 1)
+                | (1 | 2, false, Some("get"), 0)
+        )
+    }
+
     fn queue_native_builtin_accessor(
         &self,
         module: &Ir3Module,
         get: Option<&Value>,
         set: Option<&Value>,
-        pending: &mut Vec<ObjectId>,
+        allow_deferred_factory_accessor: bool,
+        pending: &mut Vec<(ObjectId, bool)>,
     ) -> Result<bool, InterpreterError> {
         // These canonical accessors only expose the receiver or its already
         // visited prototype. Their identity cannot be forged by guest source.
@@ -40912,10 +41317,25 @@ impl InterpreterCore {
             let Some(function) = function else {
                 continue;
             };
+            if allow_deferred_factory_accessor
+                && self.is_deferred_native_factory_accessor(function, setter)
+            {
+                if self.queue_native_builtin_value(module, function, true, pending)? {
+                    return Ok(true);
+                }
+                continue;
+            }
             let Value::BuiltinFunction(builtin) = function else {
                 return Ok(true);
             };
             let inert = builtin.kind == BuiltinFunctionKind::ThrowTypeError
+                || (!setter
+                    && builtin.kind == BuiltinFunctionKind::NativeTimerPromisesGetter
+                    && builtin.bound_object.is_some_and(|holder| {
+                        self.builtin_prototypes
+                            .get("\0franken-engine/native-timers/promises")
+                            == Some(&ObjectId(holder))
+                    }))
                 || (setter && builtin.kind == BuiltinFunctionKind::ObjectProtoSetter)
                 || (!setter
                     && builtin.kind == BuiltinFunctionKind::PrototypeGetter
@@ -40930,7 +41350,7 @@ impl InterpreterCore {
                                 || (*owner == "TypedArray"
                                     && *key == prototype_getters::TYPED_ARRAY_TO_STRING_TAG)
                         }));
-            if !inert || self.queue_native_builtin_value(module, function, pending)? {
+            if !inert || self.queue_native_builtin_value(module, function, true, pending)? {
                 return Ok(true);
             }
         }
@@ -40951,6 +41371,7 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let specifier = match native {
             NativeBuiltinModule::Buffer => "\0franken-engine/native-buffer/esm",
+            NativeBuiltinModule::Module => "\0franken-engine/native-module/esm",
             NativeBuiltinModule::Events => "\0franken-engine/native-events/esm",
             NativeBuiltinModule::Os => "\0franken-engine/native-os/esm",
             NativeBuiltinModule::Querystring => "\0franken-engine/native-querystring/esm",
@@ -40960,8 +41381,16 @@ impl InterpreterCore {
             NativeBuiltinModule::Path => PATH_ESM_MODULE_ID,
             NativeBuiltinModule::PathPosix => PATH_POSIX_ESM_MODULE_ID,
             NativeBuiltinModule::PathWin32 => PATH_WIN32_ESM_MODULE_ID,
+            NativeBuiltinModule::Util => "\0franken-engine/native-util/esm",
+            NativeBuiltinModule::UtilTypes => "\0franken-engine/native-util/types/esm",
+            NativeBuiltinModule::Assert => "\0franken-engine/native-assert/esm",
+            NativeBuiltinModule::AssertStrict => "\0franken-engine/native-assert/strict/esm",
+            NativeBuiltinModule::StringDecoder => "\0franken-engine/native-string_decoder/esm",
+            NativeBuiltinModule::TimersPromises => "\0franken-engine/native-timers/promises/esm",
+            NativeBuiltinModule::Stream => "\0franken-engine/native-stream/esm",
+            NativeBuiltinModule::StreamPromises => "\0franken-engine/native-stream/promises/esm",
         };
-        let value = self.load_native_builtin_resolved(module, source, native)?;
+        let value = self.load_native_builtin_resolved(module, source, native, import_bound)?;
         let object = match &value {
             Value::Object(object) => *object,
             function => self
@@ -40971,6 +41400,15 @@ impl InterpreterCore {
                 })?,
         };
         if import_bound.is_some() {
+            // A submodule can cache a classified reference to an otherwise
+            // public function. Its selection label is independent of the
+            // mutable state reachable from that function's property storage.
+            let selected_label = self.json_parse_context_label()?;
+            Self::check_import_flow_bound(
+                &source.module.request_specifier,
+                &selected_label,
+                import_bound,
+            )?;
             let ceiling = self.native_builtin_state_label(module, object)?;
             Self::check_import_flow_bound(
                 &source.module.request_specifier,
@@ -40990,14 +41428,16 @@ impl InterpreterCore {
             match &record.status {
                 ModuleRuntimeStatus::Failed(_) => {
                     let key = RuntimePropertyKey::String(JsString::from("error"));
-                    let cached = self.builtin_prototypes.get(specifier).copied().and_then(
-                        |carrier| {
-                            self.heap
-                                .get(carrier.0 as usize)
-                                .and_then(|object| object.own_runtime_property_value(&key))
-                                .map(|value| (carrier, value))
-                        },
-                    );
+                    let cached =
+                        self.builtin_prototypes
+                            .get(specifier)
+                            .copied()
+                            .and_then(|carrier| {
+                                self.heap
+                                    .get(carrier.0 as usize)
+                                    .and_then(|object| object.own_runtime_property_value(&key))
+                                    .map(|value| (carrier, value))
+                            });
                     if let Some((carrier, thrown)) = cached {
                         let label = self.runtime_property_label(carrier, &key);
                         self.replace_pending_abrupt_slots(Some((thrown, label)), None)?;
@@ -41027,15 +41467,16 @@ impl InterpreterCore {
                     if import_bound.is_some() {
                         let ceiling = self.native_builtin_state_label(module, namespace)?;
                         Self::check_import_flow_bound(
-                            &source.module.request_specifier, &ceiling, import_bound,
+                            &source.module.request_specifier,
+                            &ceiling,
+                            import_bound,
                         )?;
                     }
                     return Ok(Value::Object(namespace));
                 }
                 ModuleRuntimeStatus::AsyncEvaluating => {
                     return Err(InterpreterError::InternalError {
-                        details: "a native namespace cannot evaluate asynchronously"
-                            .to_string(),
+                        details: "a native namespace cannot evaluate asynchronously".to_string(),
                     });
                 }
                 ModuleRuntimeStatus::Evaluated => {}
@@ -41050,16 +41491,20 @@ impl InterpreterCore {
             // Native imports can run outside a hostcall observation scope.
             // Track descriptor shape, getter effects and exceptional labels
             // while preserving the caller's pending-result ownership.
-            let observation = self.begin_property_observation([])?;
+            let selected_label = self.json_parse_context_label()?;
+            let selected_bytes = Self::estimate_label_bytes(&selected_label);
+            self.json_reserve_temporary(selected_bytes)?;
+            let observation = self.begin_property_observation([]);
+            self.json_release_temporary(selected_bytes);
+            let observation = observation?;
             let outcome = (|| -> Result<(), InterpreterError> {
+                // Opening the scope saved and cleared the pending result.
+                // The provider reference still labels every published export.
+                self.json_observe_label(selected_label)?;
                 for name in Self::native_builtin_export_names(native) {
                     let key = RuntimePropertyKey::String(JsString::from(name));
-                    let member = self.iterator_protocol_property(
-                        Some(module),
-                        object,
-                        &key,
-                        value.clone(),
-                    )?;
+                    let member =
+                        self.iterator_protocol_property(Some(module), object, &key, value.clone())?;
                     let label = self.json_parse_context_label()?;
                     self.publish_module_export(
                         specifier,
@@ -41237,6 +41682,181 @@ impl InterpreterCore {
         } else {
             posix
         }))
+    }
+
+    /// Execute the existing engine-owned factories as retained CommonJS
+    /// modules. Their closures keep their defining module across captured
+    /// package boundaries; aliases and submodules share the parent instance.
+    /// The authenticated descriptor is checked before this private cache.
+    fn source_builtin_module(
+        &mut self,
+        module: &Ir3Module,
+        native: NativeBuiltinModule,
+        import_bound: Option<&Label>,
+    ) -> Result<Value, InterpreterError> {
+        // A first submodule selection may observe a guest getter or a
+        // classified prototype/shape. Keep those observations on its private
+        // cached reference, including calls without an outer hostcall scope.
+        let selected_label = self.json_parse_context_label()?;
+        let selected_bytes = Self::estimate_label_bytes(&selected_label);
+        self.json_reserve_temporary(selected_bytes)?;
+        let observation = self.begin_property_observation([]);
+        self.json_release_temporary(selected_bytes);
+        let observation = observation?;
+        let outcome = (|| {
+            self.json_observe_label(selected_label)?;
+            self.source_builtin_module_inner(module, native, import_bound)
+        })();
+        self.finish_property_read_observation(observation, outcome)
+    }
+
+    fn source_builtin_module_inner(
+        &mut self,
+        module: &Ir3Module,
+        native: NativeBuiltinModule,
+        import_bound: Option<&Label>,
+    ) -> Result<Value, InterpreterError> {
+        let (factory, id, member) = match native {
+            NativeBuiltinModule::Util => (
+                NativeBuiltinModule::Util,
+                "\0franken-engine/native-util",
+                None,
+            ),
+            NativeBuiltinModule::UtilTypes => (
+                NativeBuiltinModule::Util,
+                "\0franken-engine/native-util",
+                Some("types"),
+            ),
+            NativeBuiltinModule::Assert => (
+                NativeBuiltinModule::Assert,
+                "\0franken-engine/native-assert",
+                None,
+            ),
+            NativeBuiltinModule::AssertStrict => (
+                NativeBuiltinModule::Assert,
+                "\0franken-engine/native-assert",
+                Some("strict"),
+            ),
+            NativeBuiltinModule::StringDecoder => (
+                NativeBuiltinModule::StringDecoder,
+                "\0franken-engine/native-string_decoder",
+                None,
+            ),
+            NativeBuiltinModule::TimersPromises => (
+                NativeBuiltinModule::TimersPromises,
+                "\0franken-engine/native-timers/promises",
+                None,
+            ),
+            NativeBuiltinModule::Stream => (
+                NativeBuiltinModule::Stream,
+                "\0franken-engine/native-stream",
+                None,
+            ),
+            NativeBuiltinModule::StreamPromises => (
+                NativeBuiltinModule::Stream,
+                "\0franken-engine/native-stream",
+                Some("promises"),
+            ),
+            _ => {
+                return Err(InterpreterError::InternalError {
+                    details: "native provider has no engine-owned source factory".to_string(),
+                });
+            }
+        };
+        let carrier = match self.builtin_prototypes.get(id).copied() {
+            Some(carrier) => carrier,
+            None => {
+                let record = factory.record(id);
+                let source = ResolvedModule {
+                    request_specifier: factory.canonical_specifier().to_string(),
+                    canonical_specifier: id.to_string(),
+                    content_hash: record.canonical_hash(),
+                    record,
+                    probe_sequence: Vec::new(),
+                };
+                self.load_module_resolved(module, id, ModuleLoadKind::Require, None, Some(source))?;
+                let module_object = self
+                    .module_state
+                    .modules
+                    .get(id)
+                    .and_then(|record| record.cjs_module_object)
+                    .ok_or_else(|| InterpreterError::ModuleEvaluationFailed {
+                        specifier: factory.canonical_specifier().to_string(),
+                        reason: "native factory did not initialize its CommonJS exports"
+                            .to_string(),
+                    })?;
+                let value = self.iterator_protocol_property(
+                    Some(module),
+                    module_object,
+                    &RuntimePropertyKey::String(JsString::from("exports")),
+                    Value::Object(module_object),
+                )?;
+                self.run_pre_allocation_hook(module, AllocKind::Object, 0)?;
+                let carrier = self.alloc_object_with_prototype(None)?;
+                self.json_store_parsed_property(carrier, JsString::from("exports"), value.clone())?;
+                // These submodules retain their original objects even when
+                // a package replaces the parent's property before the first
+                // submodule load. Capture only during factory initialization;
+                // a later require must neither select nor invoke guest code.
+                let stable_member = match factory {
+                    NativeBuiltinModule::Util => Some("types"),
+                    NativeBuiltinModule::Stream => Some("promises"),
+                    _ => None,
+                };
+                if let Some(name) = stable_member {
+                    let selected = self.get_v(
+                        module,
+                        &value,
+                        &RuntimePropertyKey::String(JsString::from(name)),
+                    )?;
+                    self.json_store_parsed_property(carrier, JsString::from(name), selected)?;
+                }
+                self.mutate_builtin_prototypes(|prototypes| {
+                    prototypes.insert(id.to_string(), carrier);
+                });
+                carrier
+            }
+        };
+        let name = member.unwrap_or("exports");
+        let key = RuntimePropertyKey::String(JsString::from(name));
+        if member == Some("strict")
+            && self
+                .heap
+                .get(carrier.0 as usize)
+                .and_then(|object| object.own_runtime_property_value(&key))
+                .is_none()
+        {
+            // assert/strict snapshots assert.strict on its first load. Keep
+            // that value and its observed label in a private rooted carrier,
+            // including when a package supplied an accessor or undefined.
+            let value = self.iterator_protocol_property(
+                Some(module),
+                carrier,
+                &RuntimePropertyKey::String(JsString::from("exports")),
+                Value::Object(carrier),
+            )?;
+            let backing = match &value {
+                Value::Object(object) => *object,
+                function => self
+                    .function_own_property_object(module, function)?
+                    .ok_or_else(|| InterpreterError::InternalError {
+                        details: "native assert factory has no export property storage".to_string(),
+                    })?,
+            };
+            if import_bound.is_some() {
+                // Selection itself can run a guest getter. Admit the parent
+                // state before Get, only while this alias is still uncached.
+                let ceiling = self.native_builtin_state_label(module, backing)?;
+                Self::check_import_flow_bound(
+                    native.canonical_specifier(),
+                    &ceiling,
+                    import_bound,
+                )?;
+            }
+            let strict = self.iterator_protocol_property(Some(module), backing, &key, value)?;
+            self.json_store_parsed_property(carrier, JsString::from(name), strict)?;
+        }
+        self.iterator_protocol_property(Some(module), carrier, &key, Value::Object(carrier))
     }
 
     /// Read a dependency once and charge its raw bytes before decoding or
@@ -43364,6 +43984,26 @@ impl InterpreterCore {
         }
         match builtin.kind {
             BuiltinFunctionKind::FunctionPrototype => Ok(Value::Undefined),
+            BuiltinFunctionKind::NativeTimerPromisesGetter => {
+                let holder = builtin
+                    .bound_object
+                    .map(ObjectId)
+                    .filter(|holder| {
+                        self.builtin_prototypes
+                            .get("\0franken-engine/native-timers/promises")
+                            == Some(holder)
+                    })
+                    .ok_or_else(|| InterpreterError::InternalError {
+                        details: "native timer promises getter has no authenticated export carrier"
+                            .to_string(),
+                    })?;
+                self.iterator_protocol_property(
+                    Some(module),
+                    holder,
+                    &RuntimePropertyKey::String(JsString::from("exports")),
+                    Value::Object(holder),
+                )
+            }
             BuiltinFunctionKind::AsyncGeneratorNext
             | BuiltinFunctionKind::AsyncGeneratorReturn
             | BuiltinFunctionKind::AsyncGeneratorThrow => self.dispatch_async_generator_resume(
@@ -43650,6 +44290,13 @@ impl InterpreterCore {
                     significant,
                     exponential,
                 )))
+            }
+            BuiltinFunctionKind::ModuleCreateRequire => {
+                check_hostcall_capability_gate(self, "module_load", self.ip as u32)?;
+                let args_label = self.join_arg_range_label(args)?;
+                let result = self.create_require(module, args)?;
+                self.replace_pending_hostcall_result_label(Some(args_label))?;
+                Ok(result)
             }
             BuiltinFunctionKind::Require => {
                 check_hostcall_capability_gate(self, "module_load", self.ip as u32)?;
@@ -67777,6 +68424,7 @@ impl InterpreterCore {
         }
         [
             "\0franken-engine/native-buffer/esm",
+            "\0franken-engine/native-module/esm",
             "\0franken-engine/native-events/esm",
             "\0franken-engine/native-os/esm",
             "\0franken-engine/native-querystring/esm",
@@ -67786,6 +68434,14 @@ impl InterpreterCore {
             PATH_ESM_MODULE_ID,
             PATH_POSIX_ESM_MODULE_ID,
             PATH_WIN32_ESM_MODULE_ID,
+            "\0franken-engine/native-util/esm",
+            "\0franken-engine/native-util/types/esm",
+            "\0franken-engine/native-assert/esm",
+            "\0franken-engine/native-assert/strict/esm",
+            "\0franken-engine/native-string_decoder/esm",
+            "\0franken-engine/native-timers/promises/esm",
+            "\0franken-engine/native-stream/esm",
+            "\0franken-engine/native-stream/promises/esm",
         ]
         .into_iter()
         .any(|specifier| {
@@ -71690,6 +72346,53 @@ impl InterpreterCore {
         let timestamp_ns = self.instructions_executed;
         self.record_hostcall_telemetry("module:require", args, timestamp_ns, args_hash, &outcome);
         outcome
+    }
+
+    /// Create a require value for the executing captured module only. Node's
+    /// arbitrary virtual bases and URL objects need an explicitly captured
+    /// route contract; accepting them here would confer another referrer's
+    /// authority or fall back to the host filesystem. Exact string metadata
+    /// covers `import.meta.url` (including query/fragment) and `__filename`.
+    fn create_require(
+        &mut self,
+        module: &Ir3Module,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let origin = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let Value::Str(origin) = origin else {
+            return Err(InterpreterError::TypeError {
+                expected: "createRequire origin string for the current captured module".to_string(),
+                got: origin.type_name().to_string(),
+            });
+        };
+        let origin = origin.as_str().ok_or_else(|| InterpreterError::TypeError {
+            expected: "well-formed createRequire origin string".to_string(),
+            got: "unpaired UTF-16 surrogate".to_string(),
+        })?;
+        let referrer = self
+            .current_module_specifier
+            .as_deref()
+            .filter(|id| {
+                self.module_resolver
+                    .as_ref()
+                    .and_then(|installed| installed.resolver.source_location(id))
+                    .is_some_and(|location| location.matches_create_require_origin(origin))
+            })
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected:
+                    "createRequire origin equal to the current captured URL or absolute filename"
+                        .to_string(),
+                got: "unregistered or different module origin".to_string(),
+            })?;
+        // Each factory call is a distinct function, including its .resolve
+        // and user-defined properties. The existing builtin identity and GC
+        // traversal already include bound_object; dispatch still uses only
+        // the captured module_specifier. Ordinary CJS require keeps None.
+        let holder_bytes = Self::estimate_heap_object_bytes(&HeapObject::new());
+        let mut require = self.construct_require_builtin(referrer, holder_bytes)?;
+        self.run_pre_allocation_hook(module, AllocKind::Function, referrer.len())?;
+        require.bound_object = Some(self.alloc_object_with_prototype(None)?.0);
+        Ok(Value::BuiltinFunction(require))
     }
 
     /// `require.resolve(request)` (bd-9vouw.199): the filename `require` would
@@ -85310,9 +86013,10 @@ impl InterpreterCore {
             expected: "module-backed Function.prototype.call/apply dispatch".to_string(),
             got: "missing module context".to_string(),
         })?;
-        let foreign_module = self.foreign_closure_module(callee, caller_module)?;
+        // Preserve owner validation before admitting callback state even
+        // though the borrowed call site no longer depends on program size.
+        self.foreign_closure_module(callee, caller_module)?;
         self.check_module_reentrant_call_depth()?;
-        let module = foreign_module.as_deref().unwrap_or(caller_module);
         let arg_count = u32::try_from(argument_count).map_err(|_| InterpreterError::TypeError {
             expected: "u32-bounded Function.prototype.call/apply argument count".to_string(),
             got: format!("{argument_count} arguments"),
@@ -85341,9 +86045,8 @@ impl InterpreterCore {
             });
         }
 
-        let transient_execution_bytes =
-            Self::isolated_call_site_bytes(module, matches!(callee, Value::AsyncFunction(_)))
-                .saturating_add(self.module_execution_snapshot_memory_bytes());
+        let transient_execution_bytes = Self::isolated_call_site_bytes()
+            .saturating_add(self.module_execution_snapshot_memory_bytes());
         let callback_context_label = match (
             self.active_inline_callback_context_label.as_ref(),
             argument_label,
@@ -85495,7 +86198,7 @@ impl InterpreterCore {
             });
         }
 
-        let transient_wrapper_bytes = Self::isolated_call_site_bytes(module, isolated_async_call);
+        let transient_wrapper_bytes = Self::isolated_call_site_bytes();
         let transient_execution_bytes = transient_wrapper_bytes;
         let mut remaining_label_transport_bytes = call_labels
             .as_ref()
@@ -85570,10 +86273,12 @@ impl InterpreterCore {
             );
             return outcome;
         }
-        // The synthetic call site runs as a trampoline past the end of the
-        // module rather than on a clone of the module with it appended, which
-        // cost O(module) per call. An async callee may leave its activation
-        // parked on the call site, so it keeps a private copy.
+        // The synthetic call site runs past the end of the immutable owner
+        // program. This applies to async callees too: suspension retains the
+        // activation and the owner's Arc, not this borrowed trampoline. On
+        // resumption the async frame returns past the owner's instruction
+        // stream, whose normal end-of-stream completion releases the wrapper.
+        // Copying the whole program here made every async call O(module size).
         let wrapper_instructions = [
             Ir3Instruction::CallMethod {
                 receiver: 0,
@@ -85586,13 +86291,6 @@ impl InterpreterCore {
             },
             Ir3Instruction::Return { value: 0 },
         ];
-        let wrapper = isolated_async_call.then(|| {
-            let mut wrapper = module.clone();
-            wrapper
-                .instructions
-                .extend(wrapper_instructions.iter().cloned());
-            wrapper
-        });
         let wrapper_start = module.instructions.len();
 
         let setup_previous_register_bytes = self.registers_memory_bytes();
@@ -85603,7 +86301,6 @@ impl InterpreterCore {
         let snapshot = match self.isolate_module_execution() {
             Ok(snapshot) => snapshot,
             Err(error) => {
-                drop(wrapper);
                 self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(
                     transient_execution_bytes.saturating_add(remaining_label_transport_bytes),
                 );
@@ -85692,10 +86389,7 @@ impl InterpreterCore {
                     previous_foreign_call_depth.saturating_add(1);
             }
             self.isolated_async_entry_pending = isolated_async_call;
-            let result = match &wrapper {
-                Some(wrapper) => self.run_loop(wrapper),
-                None => self.run_loop_with_trampoline(module, &wrapper_instructions),
-            };
+            let result = self.run_loop_with_trampoline(module, &wrapper_instructions);
             self.isolated_async_entry_pending = false;
             self.module_reentrant_call_depth = previous_reentrant_depth;
             self.active_foreign_module_call_depth = previous_foreign_call_depth;
@@ -85776,7 +86470,6 @@ impl InterpreterCore {
                 .map(|v| (v, self.pending_exception_label.clone())),
             _ => None,
         };
-        drop(wrapper);
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(
             transient_execution_bytes.saturating_add(remaining_label_transport_bytes),
         );
@@ -86131,7 +86824,7 @@ impl InterpreterCore {
             });
         }
 
-        let transient_wrapper_bytes = Self::isolated_call_site_bytes(module, false);
+        let transient_wrapper_bytes = Self::isolated_call_site_bytes();
         let transient_execution_bytes = transient_wrapper_bytes;
         let mut remaining_label_transport_bytes = call_labels
             .as_ref()
@@ -95259,6 +95952,38 @@ impl InterpreterCore {
                 let value = self.arg_or_undefined(args, 0)?;
                 Ok(Value::str(self.util_type_tag(&value)?))
             }
+            crate::capability::UTIL_PROCESS_ARGV_CAPABILITY
+            | crate::capability::UTIL_PROCESS_EXEC_ARGV_CAPABILITY => {
+                // The shared capability gate checked process_shape_read_allowed
+                // before recording this read. Use the engine-owned realm
+                // object, never a source binding or the host's ambient argv.
+                let process =
+                    self.process_global_object
+                        .ok_or_else(|| InterpreterError::InternalError {
+                            details: "native util argv read has no runtime process object"
+                                .to_string(),
+                        })?;
+                let observation = self.begin_property_observation([])?;
+                let outcome = (|| {
+                    let field = if cap == crate::capability::UTIL_PROCESS_ARGV_CAPABILITY {
+                        "argv"
+                    } else {
+                        "execArgv"
+                    };
+                    let key = RuntimePropertyKey::String(field.into());
+                    if let Some(module) = module {
+                        self.run_pre_runtime_property_access_hook(module, process, &key)?;
+                    }
+                    self.proxy_aware_get_runtime_property(
+                        module,
+                        process,
+                        &key,
+                        Value::Object(process),
+                        0,
+                    )
+                })();
+                self.finish_property_read_observation(observation, outcome)
+            }
             "builtin:ClassMembersNonEnumerable" => {
                 // ES2020 14.6.13: class methods and accessors are
                 // non-enumerable. args = (constructor, constructor.prototype).
@@ -96945,6 +97670,25 @@ impl InterpreterCore {
             // stringify/escape/unescape, shared by first-class querystring
             // module methods and direct hostcalls. No host effect;
             // semantics pinned against bun 1.3.14.
+            // Canonical dependencies of the retained native Stream factory.
+            // These private calls share public module state and retain normal
+            // runtime observation labels; they are not pure fresh aggregates.
+            "builtin:NativeEventsModule" | "builtin:NativeStringDecoderModule" => {
+                if args.count != 0 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "zero native module dependency arguments".to_string(),
+                        got: format!("{} argument(s)", args.count),
+                    });
+                }
+                let module = module.ok_or_else(|| InterpreterError::InternalError {
+                    details: "native module dependency requires an executable caller".to_string(),
+                })?;
+                if cap == "builtin:NativeEventsModule" {
+                    self.events_core_module(module)
+                } else {
+                    self.source_builtin_module(module, NativeBuiltinModule::StringDecoder, None)
+                }
+            }
             "builtin:QuerystringModule" => {
                 if args.count != 0 {
                     return Err(InterpreterError::TypeError {
@@ -105189,7 +105933,9 @@ impl InterpreterCore {
         }))
     }
 
-    /// One dynamic symbol record's term of [`Self::estimate_symbol_state_bytes`].
+    /// One dynamic symbol record and its derived registry index entry's term
+    /// of [`Self::estimate_symbol_state_bytes`]. Including the index here makes
+    /// eager budget admission, full walks, and execution seeds agree.
     fn estimate_symbol_record_bytes(
         description: Option<&JsString>,
         registry_key: Option<&JsString>,
@@ -105198,7 +105944,12 @@ impl InterpreterCore {
             .saturating_add(description.map(Self::estimate_js_string_bytes).unwrap_or(0))
             .saturating_add(
                 registry_key
-                    .map(Self::estimate_js_string_bytes)
+                    .map(|key| {
+                        Self::estimate_js_string_bytes(key)
+                            .saturating_mul(2)
+                            .saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES)
+                            .saturating_add(std::mem::size_of::<SymbolId>() as u64)
+                    })
                     .unwrap_or(0),
             )
     }
@@ -147949,6 +148700,112 @@ mod function_prototype_call_apply_tests_current {
     }
 
     #[test]
+    fn async_call_site_memory_is_independent_of_retained_program_size() {
+        // A package may retain a large program while having little execution
+        // headroom left. Calling a tiny async function must not require a
+        // second copy of that program, including when it suspends and resumes
+        // after the initiating callback has returned.
+        const CALL_HEADROOM: u64 = 1024 * 1024;
+        for foreign in [false, true] {
+            let mut owner = test_module_with_functions(
+                vec![
+                    Ir3Instruction::AwaitValue { promise_reg: 0 },
+                    Ir3Instruction::LoadInt { dst: 1, value: 40 },
+                    Ir3Instruction::Add {
+                        dst: 0,
+                        lhs: 0,
+                        rhs: 1,
+                    },
+                    Ir3Instruction::AsyncReturn { value_reg: 0 },
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 1,
+                    frame_size: 2,
+                    name: Some("bounded_async_call".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            );
+            owner.header.source_label = "large-async-owner.mjs".to_string();
+            owner.instructions.resize(32_768, Ir3Instruction::Halt);
+            assert!(InterpreterCore::transient_module_wrapper_bytes(&owner) > CALL_HEADROOM);
+            let caller = test_module_with_functions(vec![Ir3Instruction::Halt], Vec::new());
+            let caller_module = if foreign { &caller } else { &owner };
+            let mut core = test_interpreter();
+            core.ensure_module_record(&owner, &owner.header.source_label)
+                .expect("large owner program should be retained once");
+            core.closures.push(ClosureValue {
+                function_index: 0,
+                captured_env: core.scope_chain.snapshot(),
+            });
+            core.closure_module_origins
+                .insert(0, owner.header.source_label.clone());
+            let awaited = core.promise_store.create();
+            core.write_reg_with_label(7, Value::str("caller-sentinel"), Label::Internal)
+                .expect("caller sentinel");
+            let baseline = core
+                .sync_estimated_memory_bytes()
+                .expect("large owner fixture accounting");
+            core.config.max_total_memory_bytes = baseline + CALL_HEADROOM;
+
+            let (result, result_label) = core
+                .invoke_inline_method_call_with_argument_label(
+                    Some(caller_module),
+                    Value::AsyncFunction(0),
+                    Value::Undefined,
+                    vec![Value::Promise(awaited.0)],
+                    Some(Label::Confidential),
+                )
+                .expect("a retained large program must not be copied for an async call");
+            let Value::Promise(result_handle) = result else {
+                panic!("async callback must publish its Promise");
+            };
+            assert_eq!(result_label, Label::Confidential);
+            let suspended = &core.async_functions[0];
+            assert_eq!(suspended.phase, AsyncFunctionPhase::SuspendedAwait);
+            assert!(suspended.isolated_execution.is_some());
+            let retained_owner = core.module_state.modules[&owner.header.source_label]
+                .compiled_module
+                .as_ref()
+                .expect("retained original program");
+            assert!(Arc::ptr_eq(&suspended.owner_module, retained_owner));
+            assert_eq!(retained_owner.instructions.len(), owner.instructions.len());
+            assert_eq!(core.read_reg(7).unwrap(), Value::str("caller-sentinel"));
+            assert_eq!(core.get_register_label(7).unwrap(), &Label::Internal);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+
+            core.fulfill_promise(awaited, crate::object_model::JsValue::Int(2), Label::Secret)
+                .expect("settle awaited input within the same memory ceiling");
+            core.drain_microtasks(Some(caller_module))
+                .expect("resume without a retained trampoline copy");
+            let result = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(result_handle))
+                .expect("published Promise remains live");
+            assert_eq!(
+                result.state,
+                crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Int(
+                    42
+                ))
+            );
+            assert_eq!(result.label, Label::Secret);
+            assert_eq!(core.async_functions[0].phase, AsyncFunctionPhase::Completed);
+            assert!(core.async_functions[0].isolated_execution.is_none());
+            assert_eq!(core.read_reg(7).unwrap(), Value::str("caller-sentinel"));
+            assert_eq!(core.get_register_label(7).unwrap(), &Label::Internal);
+            assert!(core.estimated_memory_bytes() <= baseline + CALL_HEADROOM);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
     fn deferred_foreign_async_resume_retains_owner_activation_bd_fw7zd_6() {
         let mut owner = test_module_with_functions(
             vec![
@@ -151045,6 +151902,695 @@ mod function_prototype_call_apply_tests_current {
                 Some(Label::Secret),
                 "neither named nor default native exports may lower the invocation result label"
             );
+        }
+    }
+
+    #[test]
+    fn native_strict_alias_retains_selected_and_cached_reference_labels() {
+        let caller = test_module_with_functions(Vec::new(), Vec::new());
+        for (cached, label_shape) in [false, true]
+            .into_iter()
+            .flat_map(|cached| [(cached, false), (cached, true)])
+        {
+            let mut core = test_interpreter();
+            let assertion = core
+                .source_builtin_module(&caller, NativeBuiltinModule::Assert, None)
+                .expect("execute the real assert factory");
+            let holder = if cached {
+                core.source_builtin_module(&caller, NativeBuiltinModule::AssertStrict, None)
+                    .expect("initialize strict alias before classifying its cached reference");
+                core.builtin_prototypes["\0franken-engine/native-assert"]
+            } else {
+                core.function_own_property_object(&caller, &assertion)
+                    .unwrap()
+                    .expect("assert property storage")
+            };
+            let strict_key = RuntimePropertyKey::String(JsString::from("strict"));
+            if label_shape {
+                core.join_object_mutation_label(holder, &Label::Secret)
+                    .unwrap();
+            } else {
+                core.set_own_runtime_property_label(holder, &strict_key, &Label::Secret)
+                    .unwrap();
+            }
+            core.clear_pending_hostcall_result_label();
+            core.source_builtin_module(&caller, NativeBuiltinModule::AssertStrict, None)
+                .expect("unbounded CommonJS selection retains property and shape provenance");
+            assert_eq!(
+                core.take_pending_hostcall_result_label(),
+                Some(Label::Secret),
+                "cached={cached}, shape={label_shape}: first CJS read"
+            );
+            core.clear_pending_hostcall_result_label();
+            let record = NativeBuiltinModule::AssertStrict.record("captured:classified-strict");
+            let source = ResolutionOutcome {
+                module: ResolvedModule {
+                    request_specifier: "assert/strict".into(),
+                    canonical_specifier: record.id.clone(),
+                    content_hash: record.canonical_hash(),
+                    record,
+                    probe_sequence: Vec::new(),
+                },
+                event: crate::module_resolver::ResolutionEvent {
+                    trace_id: "strict-reference-label".into(),
+                    decision_id: "strict-reference-label".into(),
+                    policy_id: "strict-reference-label".into(),
+                    component: "module_resolver".into(),
+                    event: "resolved".into(),
+                    outcome: "allowed".into(),
+                    error_code: String::new(),
+                },
+            };
+            assert!(matches!(
+                core.load_native_builtin_namespace(
+                    &caller,
+                    &source,
+                    NativeBuiltinModule::AssertStrict,
+                    Some(&Label::Internal),
+                ),
+                Err(InterpreterError::ModuleLoweringFailed { .. })
+            ));
+            core.clear_pending_hostcall_result_label();
+            let Value::Object(namespace) = core
+                .load_native_builtin_namespace(
+                    &caller,
+                    &source,
+                    NativeBuiltinModule::AssertStrict,
+                    None,
+                )
+                .expect("unbounded namespace retains selection provenance")
+            else {
+                panic!("strict namespace");
+            };
+            for name in ["default", "strictEqual"] {
+                assert_eq!(
+                    core.runtime_property_label(
+                        namespace,
+                        &RuntimePropertyKey::String(JsString::from(name)),
+                    ),
+                    Label::Secret,
+                    "cached={cached}, shape={label_shape}: {name} must retain the classified reference"
+                );
+            }
+            core.clear_pending_hostcall_result_label();
+            core.source_builtin_module(&caller, NativeBuiltinModule::AssertStrict, None)
+                .expect("cached CommonJS alias");
+            assert_eq!(
+                core.take_pending_hostcall_result_label(),
+                Some(Label::Secret)
+            );
+            assert!(core.active_inline_callback_context_label.is_none());
+            assert_eq!(core.json_parse_temporary_bytes, 0);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn native_timer_promises_getter_retains_private_reference_labels() {
+        let caller = test_module_with_functions(Vec::new(), Vec::new());
+        for cached in [false, true] {
+            let mut core = test_interpreter();
+            core.config.granted_capabilities.extend([
+                RuntimeCapability::Builtin,
+                RuntimeCapability::ModuleLoad,
+                RuntimeCapability::Timer,
+            ]);
+            let promises = core
+                .source_builtin_module(&caller, NativeBuiltinModule::TimersPromises, None)
+                .expect("execute the actual timer promises factory");
+            let Value::Object(promises_object) = promises else {
+                panic!("timer promises exports an object");
+            };
+            let Value::Object(timers) = core.timers_core_module(&caller).unwrap() else {
+                panic!("timers exports an object");
+            };
+            assert!(!core.event_loop.has_pending_work());
+            assert!(core.next_tick_queue.is_empty());
+            core.clear_pending_hostcall_result_label();
+            assert_eq!(
+                core.native_builtin_state_label(&caller, timers).unwrap(),
+                Label::Internal,
+                "the exact bound getter is safe to inspect without running it"
+            );
+            let record = NativeBuiltinModule::Timers.record("captured:timer-reference-label");
+            let source = ResolutionOutcome {
+                module: ResolvedModule {
+                    request_specifier: "node:timers".into(),
+                    canonical_specifier: record.id.clone(),
+                    content_hash: record.canonical_hash(),
+                    record,
+                    probe_sequence: Vec::new(),
+                },
+                event: crate::module_resolver::ResolutionEvent {
+                    trace_id: "timer-reference-label".into(),
+                    decision_id: "timer-reference-label".into(),
+                    policy_id: "timer-reference-label".into(),
+                    component: "module_resolver".into(),
+                    event: "resolved".into(),
+                    outcome: "allowed".into(),
+                    error_code: String::new(),
+                },
+            };
+            if cached {
+                core.load_native_builtin_namespace(
+                    &caller,
+                    &source,
+                    NativeBuiltinModule::Timers,
+                    Some(&Label::Internal),
+                )
+                .expect("initialize the public namespace before classifying its carrier");
+            }
+            let carrier = core.builtin_prototypes["\0franken-engine/native-timers/promises"];
+            let exports = RuntimePropertyKey::String(JsString::from("exports"));
+            core.set_own_runtime_property_label(carrier, &exports, &Label::Secret)
+                .unwrap();
+            core.clear_pending_hostcall_result_label();
+            assert_eq!(
+                core.native_builtin_state_label(&caller, promises_object)
+                    .unwrap(),
+                Label::Internal,
+                "only the private reference is classified, not the returned object's properties"
+            );
+            assert_eq!(
+                core.native_builtin_state_label(&caller, timers).unwrap(),
+                Label::Secret,
+                "the bound carrier must participate in import admission"
+            );
+            assert!(matches!(
+                core.load_native_builtin_namespace(
+                    &caller,
+                    &source,
+                    NativeBuiltinModule::Timers,
+                    Some(&Label::Internal),
+                ),
+                Err(InterpreterError::ModuleLoweringFailed { .. })
+            ));
+            core.clear_pending_hostcall_result_label();
+            let Value::Object(namespace) = core
+                .load_native_builtin_namespace(
+                    &caller,
+                    &source,
+                    NativeBuiltinModule::Timers,
+                    None,
+                )
+                .expect("unbounded namespace still exposes the same module")
+            else {
+                panic!("timers namespace");
+            };
+            assert_eq!(
+                core.native_builtin_state_label(&caller, namespace).unwrap(),
+                Label::Secret,
+                "cached={cached}: namespace defaults must retain the live carrier edge"
+            );
+            core.clear_pending_hostcall_result_label();
+            assert_eq!(
+                core.iterator_protocol_property(
+                    Some(&caller),
+                    timers,
+                    &RuntimePropertyKey::String(JsString::from("promises")),
+                    Value::Object(timers),
+                )
+                .expect("the native getter reads its private carrier"),
+                Value::Object(promises_object)
+            );
+            assert_eq!(
+                core.take_pending_hostcall_result_label(),
+                Some(Label::Secret),
+                "cached={cached}: getter invocation must retain the reference label"
+            );
+            assert_eq!(
+                core.source_builtin_module(&caller, NativeBuiltinModule::TimersPromises, None)
+                    .expect("the direct alias uses the same private carrier"),
+                Value::Object(promises_object)
+            );
+            assert_eq!(
+                core.take_pending_hostcall_result_label(),
+                Some(Label::Secret)
+            );
+            assert!(!core.event_loop.has_pending_work());
+            assert!(core.next_tick_queue.is_empty());
+            assert!(core.active_inline_callback_context_label.is_none());
+            assert_eq!(core.json_parse_temporary_bytes, 0);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn native_timer_namespace_does_not_execute_replacement_promises_getter() {
+        let caller = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        core.config.granted_capabilities.extend([
+            RuntimeCapability::Builtin,
+            RuntimeCapability::ModuleLoad,
+            RuntimeCapability::Timer,
+        ]);
+        let Value::Object(timers) = core.timers_core_module(&caller).unwrap() else {
+            panic!("timers exports an object");
+        };
+        let mut owner = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadName {
+                    dst: 0,
+                    name_pool_index: 0,
+                    allow_missing: false,
+                },
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 1,
+                },
+                Ir3Instruction::LoadInt { dst: 2, value: 1 },
+                Ir3Instruction::SetProperty {
+                    obj: 0,
+                    key: 1,
+                    val: 2,
+                },
+                Ir3Instruction::Return { value: 2 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 3,
+                name: Some("get".into()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        owner.header.source_label = "guest-timer-getter.mjs".into();
+        owner.constant_pool = vec!["probe".into(), "hits".into()];
+        core.ensure_module_record(&owner, &owner.header.source_label)
+            .unwrap();
+        let probe = seed_object(&mut core, &[("hits", Value::Int(0))]);
+        let closure = u32::try_from(core.closures.len()).unwrap();
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: vec![ScopeFrame::from_bindings(BTreeMap::from([(
+                "probe".into(),
+                ScopeBinding::with_labeled_state(
+                    BindingKind::Const,
+                    Value::Object(probe),
+                    Label::Public,
+                    true,
+                ),
+            )]))],
+        });
+        core.closure_module_origins
+            .insert(closure, owner.header.source_label.clone());
+        let key = RuntimePropertyKey::String(JsString::from("promises"));
+        core.set_object_runtime_property(
+            timers,
+            key.clone(),
+            Value::Accessor {
+                get: Some(Arc::new(Value::Closure(closure))),
+                set: None,
+            },
+        )
+        .unwrap();
+        core.sync_estimated_memory_bytes().unwrap();
+        core.clear_pending_hostcall_result_label();
+        assert_eq!(
+            core.native_builtin_state_label(&caller, timers).unwrap(),
+            Label::TopSecret,
+            "a guest function named get is not the authenticated bound getter"
+        );
+        assert_eq!(
+            core.prototype_chain_get(probe, "hits").unwrap(),
+            Value::Int(0),
+            "state admission must not execute the replacement getter"
+        );
+        assert_eq!(
+            core.iterator_protocol_property(Some(&caller), timers, &key, Value::Object(timers))
+                .expect("an ordinary later property read runs the guest getter"),
+            Value::Int(1)
+        );
+        assert_eq!(
+            core.prototype_chain_get(probe, "hits").unwrap(),
+            Value::Int(1),
+            "the refusal check must use an actually executable getter"
+        );
+        core.clear_pending_hostcall_result_label();
+        assert!(!core.event_loop.has_pending_work());
+        assert!(core.active_inline_callback_context_label.is_none());
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn native_stream_accessor_admission_keeps_origins_and_nested_labels() {
+        let stack_bytes = interpreter_execution_stack_bytes(
+            test_config().max_call_depth.min(MAX_NATIVE_RUN_LOOP_DEPTH),
+        )
+        .expect("production native execution stack");
+        std::thread::Builder::new()
+            .name("native-stream-accessor-regression".into())
+            .stack_size(stack_bytes)
+            .spawn(|| {
+                const STREAM_FACTORY: &str = "\0franken-engine/native-stream";
+                let caller = test_module_with_functions(Vec::new(), Vec::new());
+                let mut core = test_interpreter();
+                core.config.instruction_budget = DEFAULT_V8_BUDGET;
+                core.config
+                    .granted_capabilities
+                    .extend([RuntimeCapability::ModuleLoad, RuntimeCapability::Timer]);
+                let stream = core
+                    .source_builtin_module(&caller, NativeBuiltinModule::Stream, None)
+                    .expect("execute the authenticated Stream factory");
+                let exports = core
+                    .function_own_property_object(&caller, &stream)
+                    .unwrap()
+                    .expect("Stream constructor property storage");
+                let readable = core.prototype_chain_get(exports, "Readable").unwrap();
+                let Value::Object(prototype) = core
+                    .get_v(
+                        &caller,
+                        &readable,
+                        &RuntimePropertyKey::String(JsString::from("prototype")),
+                    )
+                    .unwrap()
+                else {
+                    panic!("Readable.prototype");
+                };
+                let closed = RuntimePropertyKey::String(JsString::from("closed"));
+                let Some(Value::Accessor {
+                    get: Some(getter), ..
+                }) = core.heap[prototype.0 as usize].own_runtime_property_value(&closed)
+                else {
+                    panic!("the actual deferred Readable.closed getter");
+                };
+                assert!(core.is_deferred_native_factory_accessor(getter.as_ref(), false));
+                assert_eq!(
+                    core.native_builtin_state_label(&caller, exports).unwrap(),
+                    Label::Internal,
+                    "canonical receiver accessors are admitted without executing them"
+                );
+                core.set_own_runtime_property_label(prototype, &closed, &Label::Secret)
+                    .unwrap();
+                assert_eq!(
+                    core.native_builtin_state_label(&caller, exports).unwrap(),
+                    Label::Secret,
+                    "admitting immutable getter code must retain its descriptor label"
+                );
+
+                // The same compiled factory also contains the lazy Web module.
+                // Its class getter has identical diagnostic name and arity,
+                // but reads a captured WeakMap and returns a Promise. It must
+                // stay opaque. This test-only closure is never invoked.
+                let web_function_index = {
+                    let program = core.module_state.modules[STREAM_FACTORY]
+                        .compiled_module
+                        .as_ref()
+                        .expect("retained Stream program");
+                    program
+                        .function_table
+                        .iter()
+                        .enumerate()
+                        .find_map(|(index, code)| {
+                            let index = u32::try_from(index).expect("factory function index");
+                            (code.name.as_deref() == Some("closed")
+                                && code.arity == 0
+                                && program.function_sources.get(&index).is_some_and(|source| {
+                                    source.as_str().starts_with("get closed(")
+                                }))
+                            .then_some(index)
+                        })
+                        .expect("same-program Web writer closed getter")
+                };
+                let web_id = u32::try_from(core.closures.len()).unwrap();
+                core.closures.push(ClosureValue {
+                    function_index: web_function_index,
+                    captured_env: Vec::new(),
+                });
+                core.closure_module_origins
+                    .insert(web_id, STREAM_FACTORY.to_string());
+                core.sync_estimated_memory_bytes().unwrap();
+                let web_getter = Value::Closure(web_id);
+                assert!(
+                    !core.is_deferred_native_factory_accessor(&web_getter, false),
+                    "factory identity, name and arity alone do not authenticate Web accessors"
+                );
+                core.set_object_runtime_property(
+                    prototype,
+                    closed.clone(),
+                    Value::Accessor {
+                        get: Some(Arc::new(web_getter)),
+                        set: None,
+                    },
+                )
+                .unwrap();
+                assert_eq!(
+                    core.native_builtin_state_label(&caller, exports).unwrap(),
+                    Label::TopSecret,
+                    "a same-program but unaudited accessor keeps the namespace opaque"
+                );
+
+                // A guest method has both an allowed immutable code name and
+                // the same source-prefix form. Its separate origin still
+                // prevents it from acquiring native accessor authority.
+                let mut guest = test_module_with_functions(
+                    vec![
+                        Ir3Instruction::LoadInt { dst: 0, value: 7 },
+                        Ir3Instruction::Return { value: 0 },
+                    ],
+                    vec![Ir3FunctionDesc {
+                        entry: 0,
+                        arity: 0,
+                        frame_size: 1,
+                        name: Some("closed".into()),
+                        is_generator: false,
+                        rest_param_index: None,
+                    }],
+                );
+                guest.header.source_label = "guest-stream-getter.js".into();
+                guest
+                    .function_sources
+                    .insert(0, "closed() { return 7; }".into());
+                core.ensure_module_record(&guest, &guest.header.source_label)
+                    .unwrap();
+                core.module_state
+                    .modules
+                    .get_mut(&guest.header.source_label)
+                    .unwrap()
+                    .status = ModuleRuntimeStatus::Evaluated;
+                let guest_id = u32::try_from(core.closures.len()).unwrap();
+                core.closures.push(ClosureValue {
+                    function_index: 0,
+                    captured_env: Vec::new(),
+                });
+                core.closure_module_origins
+                    .insert(guest_id, guest.header.source_label.clone());
+                core.sync_estimated_memory_bytes().unwrap();
+                let guest_getter = Value::Closure(guest_id);
+                assert!(!core.is_deferred_native_factory_accessor(&guest_getter, false));
+                core.set_object_runtime_property(
+                    prototype,
+                    closed,
+                    Value::Accessor {
+                        get: Some(Arc::new(guest_getter)),
+                        set: None,
+                    },
+                )
+                .unwrap();
+                assert_eq!(
+                    core.native_builtin_state_label(&caller, exports).unwrap(),
+                    Label::TopSecret,
+                    "guest replacement methods do not inherit the native property's admission"
+                );
+            })
+            .expect("spawn native accessor regression")
+            .join()
+            .expect("native accessor regression");
+    }
+
+    #[test]
+    fn native_string_decoder_intrinsic_shares_carrier_and_observes_reference_labels() {
+        let stack_bytes = interpreter_execution_stack_bytes(
+            test_config().max_call_depth.min(MAX_NATIVE_RUN_LOOP_DEPTH),
+        )
+        .expect("production native execution stack");
+        std::thread::Builder::new()
+            .name("native-decoder-carrier-regression".into())
+            .stack_size(stack_bytes)
+            .spawn(|| {
+                const INTRINSIC: &str = "builtin:NativeStringDecoderModule";
+                let caller = test_module_with_functions(Vec::new(), Vec::new());
+                for intrinsic_first in [false, true] {
+                    for classify_shape in [false, true] {
+                        let mut core = test_interpreter();
+                        core.config
+                            .granted_capabilities
+                            .insert(RuntimeCapability::ModuleLoad);
+                        let first = if intrinsic_first {
+                            core.dispatch_builtin_hostcall(
+                                INTRINSIC,
+                                RegRange { start: 0, count: 0 },
+                                Some(&caller),
+                            )
+                        } else {
+                            core.source_builtin_module(
+                                &caller,
+                                NativeBuiltinModule::StringDecoder,
+                                None,
+                            )
+                        }
+                        .expect("first canonical decoder load");
+                        let second = if intrinsic_first {
+                            core.source_builtin_module(
+                                &caller,
+                                NativeBuiltinModule::StringDecoder,
+                                None,
+                            )
+                        } else {
+                            core.dispatch_builtin_hostcall(
+                                INTRINSIC,
+                                RegRange { start: 0, count: 0 },
+                                Some(&caller),
+                            )
+                        }
+                        .expect("second canonical decoder load");
+                        assert_eq!(
+                            first, second,
+                            "the private dependency and public provider share one decoder class"
+                        );
+                        let carrier =
+                            core.builtin_prototypes["\0franken-engine/native-string_decoder"];
+                        if classify_shape {
+                            core.join_object_mutation_label(carrier, &Label::Secret)
+                                .unwrap();
+                        } else {
+                            core.set_own_runtime_property_label(
+                                carrier,
+                                &RuntimePropertyKey::String(JsString::from("exports")),
+                                &Label::Secret,
+                            )
+                            .unwrap();
+                        }
+                        core.clear_pending_hostcall_result_label();
+                        assert_eq!(
+                            core.dispatch_builtin_hostcall(
+                                INTRINSIC,
+                                RegRange { start: 0, count: 0 },
+                                Some(&caller),
+                            )
+                            .expect("classified cached reference remains selectable"),
+                            first
+                        );
+                        assert_eq!(
+                            core.take_pending_hostcall_result_label(),
+                            Some(Label::Secret),
+                            "intrinsic_first={intrinsic_first}, shape={classify_shape}"
+                        );
+
+                        // Exercise actual HostCall publication too: zero
+                        // operands do not erase the private carrier's label.
+                        let invocation = test_module_with_functions(
+                            vec![
+                                Ir3Instruction::HostCall {
+                                    capability: CapabilityTag(INTRINSIC.into()),
+                                    args: RegRange { start: 0, count: 0 },
+                                    dst: 0,
+                                },
+                                Ir3Instruction::Halt,
+                            ],
+                            Vec::new(),
+                        );
+                        core.ip = 0;
+                        core.write_reg_with_label(0, Value::Undefined, Label::Public)
+                            .unwrap();
+                        assert_eq!(core.run_loop(&invocation), Err(InterpreterError::Halted));
+                        assert_eq!(core.read_reg(0).unwrap(), first);
+                        assert_eq!(core.get_register_label(0), Ok(&Label::Secret));
+                        assert!(core.active_inline_callback_context_label.is_none());
+                        assert_eq!(core.json_parse_temporary_bytes, 0);
+                        assert_eq!(
+                            core.estimated_memory_bytes(),
+                            core.recompute_estimated_memory_bytes()
+                        );
+                    }
+                }
+            })
+            .expect("spawn decoder carrier regression")
+            .join()
+            .expect("decoder carrier regression");
+    }
+
+    #[test]
+    fn native_factory_deferred_accessors_retain_nested_labels() {
+        let caller = test_module_with_functions(Vec::new(), Vec::new());
+        for native in [
+            NativeBuiltinModule::Util,
+            NativeBuiltinModule::StringDecoder,
+        ] {
+            let mut core = test_interpreter();
+            let Value::Object(exports) = core
+                .source_builtin_module(&caller, native, None)
+                .expect("execute the actual authenticated native factory")
+            else {
+                panic!("these providers export objects");
+            };
+            let (nested, property) = if native == NativeBuiltinModule::Util {
+                let inspect = core.prototype_chain_get(exports, "inspect").unwrap();
+                let Value::Object(colors) = core
+                    .get_v(
+                        &caller,
+                        &inspect,
+                        &RuntimePropertyKey::String(JsString::from("colors")),
+                    )
+                    .unwrap()
+                else {
+                    panic!("util.inspect.colors");
+                };
+                (colors, "gray")
+            } else {
+                let decoder = core.prototype_chain_get(exports, "StringDecoder").unwrap();
+                let Value::Object(prototype) = core
+                    .get_v(
+                        &caller,
+                        &decoder,
+                        &RuntimePropertyKey::String(JsString::from("prototype")),
+                    )
+                    .unwrap()
+                else {
+                    panic!("StringDecoder.prototype");
+                };
+                (prototype, "lastNeed")
+            };
+            assert_eq!(
+                core.native_builtin_state_label(&caller, exports).unwrap(),
+                Label::Internal,
+                "canonical deferred accessors do not execute at namespace creation"
+            );
+            core.set_own_runtime_property_label(
+                nested,
+                &RuntimePropertyKey::String(JsString::from(property)),
+                &Label::Secret,
+            )
+            .unwrap();
+            assert_eq!(
+                core.native_builtin_state_label(&caller, exports).unwrap(),
+                Label::Secret,
+                "admitting exact accessor code must not erase its live state labels"
+            );
+            if native == NativeBuiltinModule::Util {
+                let _ = core.take_pending_hostcall_result_label();
+                core.get_v(
+                    &caller,
+                    &Value::Object(nested),
+                    &RuntimePropertyKey::String(JsString::from("grey")),
+                )
+                .expect("the canonical alias getter remains callable later");
+                assert_eq!(
+                    core.take_pending_hostcall_result_label(),
+                    Some(Label::Secret)
+                );
+            }
         }
     }
 
@@ -154551,7 +156097,7 @@ mod tests {
         // The preflight charges the synthetic call site (two trampoline
         // instructions since fc0428914, not a module copy) plus the caller
         // snapshot.
-        let callback_temporary_bytes = InterpreterCore::isolated_call_site_bytes(module, false)
+        let callback_temporary_bytes = InterpreterCore::isolated_call_site_bytes()
             .saturating_add(compact_core.module_execution_snapshot_memory_bytes());
         let one_byte_short = compact_core
             .estimated_memory_bytes()
@@ -161590,6 +163136,95 @@ mod tests {
         ));
         assert_eq!(core.symbol_state.value, before_state);
         assert_eq!(core.estimated_memory_bytes(), before_memory);
+    }
+
+    #[test]
+    fn symbol_registry_index_restores_exact_keys_without_changing_wire() {
+        let mut state = RuntimeSymbolState::default();
+        let keys = [
+            JsString::from("shared"),
+            JsString::from_code_units(&[0xD800]),
+            JsString::from_code_units(&[0xD801]),
+            JsString::from_code_units(&[0xDC00]),
+            JsString::from("\u{FFFD}"),
+        ];
+        for key in &keys {
+            state
+                .allocate(RuntimeSymbolKind::Private, Some(key.clone()), None)
+                .unwrap();
+            state
+                .allocate(
+                    RuntimeSymbolKind::Global,
+                    Some(key.clone()),
+                    Some(key.clone()),
+                )
+                .unwrap();
+        }
+        let wire = serde_json::to_string(&state).unwrap();
+        assert!(!wire.contains("global_symbols"));
+        let restored: RuntimeSymbolState = serde_json::from_str(&wire).unwrap();
+        assert_eq!(restored, state);
+        assert_eq!(serde_json::to_string(&restored).unwrap(), wire);
+        for (index, key) in keys.iter().enumerate() {
+            assert_eq!(
+                restored.global_symbol(key),
+                Some(SymbolId(FIRST_DYNAMIC_SYMBOL_ID + index as u32 * 2 + 1))
+            );
+        }
+        assert_eq!(restored.global_symbol(&JsString::from("absent")), None);
+
+        // Rebuilding the derived index must not hide a duplicate in the wire.
+        let duplicate = r#"{"well_known_schema":"es2020-symbol-ids-1-13-v1","next_symbol_id":16,"symbols":[{"symbol_id":14,"kind":"global","description":"x","registry_key":"x"},{"symbol_id":15,"kind":"global","description":"x","registry_key":"x"}]}"#;
+        let error = serde_json::from_str::<RuntimeSymbolState>(duplicate).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate global Symbol registry key")
+        );
+    }
+
+    #[test]
+    fn symbol_registry_index_is_admitted_before_allocation_and_rolls_back() {
+        let mut core = quickjs_test_core();
+        let key = JsString::from("budgeted registry key");
+        let before = core.symbol_state.value.clone();
+        let before_memory = core.estimated_memory_bytes();
+        let charge = InterpreterCore::estimate_symbol_record_bytes(Some(&key), Some(&key));
+        let old_record_charge =
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES + InterpreterCore::estimate_js_string_bytes(&key) * 2;
+        assert!(
+            charge > old_record_charge,
+            "the lookup index must be charged"
+        );
+        core.config.max_total_memory_bytes = before_memory + charge - 1;
+        assert!(matches!(
+            core.intern_global_symbol(key.clone()),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.symbol_state.value, before);
+        assert_eq!(core.estimated_memory_bytes(), before_memory);
+        core.config.max_total_memory_bytes = before_memory + charge;
+        let id = core.intern_global_symbol(key.clone()).unwrap();
+        assert_eq!(core.estimated_memory_bytes(), before_memory + charge);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        assert_eq!(core.intern_global_symbol(key.clone()).unwrap(), id);
+
+        // Exhausting identities after memory admission must undo the charge
+        // without adding a dangling key to the derived index.
+        core.config.max_total_memory_bytes = u64::MAX;
+        core.symbol_state.value.next_symbol_id = u32::MAX;
+        let before = core.symbol_state.value.clone();
+        let before_memory = core.estimated_memory_bytes();
+        assert!(matches!(
+            core.intern_global_symbol(JsString::from("overflow")),
+            Err(InterpreterError::TypeError { .. })
+        ));
+        assert_eq!(core.symbol_state.value, before);
+        assert_eq!(core.estimated_memory_bytes(), before_memory);
+        assert_eq!(core.intern_global_symbol(key).unwrap(), id);
     }
 
     #[test]

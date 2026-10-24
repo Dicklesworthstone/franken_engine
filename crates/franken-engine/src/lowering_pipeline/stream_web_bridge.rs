@@ -20,7 +20,7 @@ const GLOBALS: [&str; 13] = [
     "Reflect", "Symbol", "TypeError", "Uint8Array",
 ];
 // Both adapters and completion observation share the SAME lazy Web instance.
-const SOURCE: &str = concat!(
+pub(super) const SOURCE: &str = concat!(
     "(function (stream, loadWeb) { return (",
     include_str!("stream_finished.js"),
     ")((",

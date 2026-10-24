@@ -91,10 +91,30 @@ impl InterpreterCore {
     pub(super) fn finish_property_write_observation(
         &mut self,
         saved: PropertyWriteObservation,
-        mut outcome: Result<(), InterpreterError>,
+        outcome: Result<(), InterpreterError>,
     ) -> Result<(), InterpreterError> {
+        self.finish_property_observation(saved, outcome, false)
+    }
+
+    /// A native read publishes its observed descriptor, shape and callback
+    /// labels into the hostcall result. A write only needs them on failure.
+    /// Both forms restore the caller's scope without allocating on cleanup.
+    pub(super) fn finish_property_read_observation(
+        &mut self,
+        saved: PropertyWriteObservation,
+        outcome: Result<Value, InterpreterError>,
+    ) -> Result<Value, InterpreterError> {
+        self.finish_property_observation(saved, outcome, true)
+    }
+
+    fn finish_property_observation<T>(
+        &mut self,
+        saved: PropertyWriteObservation,
+        mut outcome: Result<T, InterpreterError>,
+        publish_result: bool,
+    ) -> Result<T, InterpreterError> {
         let observable = match &outcome {
-            Ok(()) | Err(InterpreterError::UncaughtException { .. }) => true,
+            Ok(_) | Err(InterpreterError::UncaughtException { .. }) => true,
             Err(error) => Self::js_catchable_error_name(error).is_some(),
         };
         let has_new_callback_observation =
@@ -141,6 +161,11 @@ impl InterpreterCore {
             .saturating_add(Self::estimate_label_bytes(&self.pending_exception_label));
         let mut pending_result = saved.pending_result;
         match &outcome {
+            Ok(_) if publish_result => {
+                if pending_result.as_ref().is_none_or(|label| &context > label) {
+                    pending_result = Some(context);
+                }
+            }
             Err(InterpreterError::UncaughtException { .. })
                 if self.pending_exception.is_some() && context > self.pending_exception_label =>
             {
@@ -1087,9 +1112,17 @@ mod constructor_property_tests {
     use super::*;
     use crate::ast::ParseGoal;
     use crate::capability::RuntimeCapability;
-    use crate::ir_contract::Ir0Module;
+    use crate::ir_contract::{Ir0Module, Ir3FunctionDesc, IrHeader, IrLevel, IrSchemaVersion};
     use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
     use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
+
+    const PROCESS_ARGUMENT_READS: [(&str, &str); 2] = [
+        (crate::capability::UTIL_PROCESS_ARGV_CAPABILITY, "argv"),
+        (
+            crate::capability::UTIL_PROCESS_EXEC_ARGV_CAPABILITY,
+            "execArgv",
+        ),
+    ];
 
     fn assert_native_true(source: &str) {
         let tree = CanonicalEs2020Parser
@@ -1560,6 +1593,178 @@ mod constructor_property_tests {
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
         );
+    }
+
+    #[test]
+    fn native_util_argv_reads_preserve_property_and_shape_labels() {
+        for mut config in [
+            InterpreterConfig::quickjs_defaults(),
+            InterpreterConfig::v8_defaults(),
+        ] {
+            config.granted_capabilities = [RuntimeCapability::HeapAllocate].into_iter().collect();
+            config.process_argv = vec!["runtime".into(), "app.cjs".into(), "private".into()];
+            for (tag, field, label_shape) in PROCESS_ARGUMENT_READS
+                .into_iter()
+                .flat_map(|(tag, field)| [(tag, field, false), (tag, field, true)])
+            {
+                let mut core = InterpreterCore::new(config.clone(), "util-argv-label");
+                core.inject_runtime_globals().expect("seed runtime globals");
+                let process = core.process_global_object.expect("realm process object");
+                let argv = core.heap[process.0 as usize]
+                    .properties
+                    .get("argv")
+                    .expect("configured argv")
+                    .clone();
+                core.set_object_property(process, field.into(), argv.clone())
+                    .expect("install realm arguments");
+                if label_shape {
+                    core.join_object_mutation_label(process, &Label::Secret)
+                        .expect("label process shape");
+                } else {
+                    core.set_own_runtime_property_label(
+                        process,
+                        &RuntimePropertyKey::String(field.into()),
+                        &Label::Secret,
+                    )
+                    .expect("label replaced argv property");
+                }
+                let read = core
+                    .dispatch_builtin_hostcall(tag, RegRange { start: 0, count: 0 }, None)
+                    .expect("read labeled argv");
+                assert_eq!(read, argv);
+                assert_eq!(core.pending_hostcall_result_label, Some(Label::Secret));
+                assert!(core.active_inline_callback_context_label.is_none());
+                assert_eq!(core.json_parse_temporary_bytes, 0);
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
+                core.inject_runtime_globals()
+                    .expect("next module's globals");
+                assert_eq!(core.process_global_object, Some(process));
+                assert_eq!(
+                    core.load_runtime_name("process", false).unwrap(),
+                    Value::Object(process)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn native_util_argv_getter_labels_survive_success_and_throw() {
+        for (tag, field, throws) in PROCESS_ARGUMENT_READS
+            .into_iter()
+            .flat_map(|(tag, field)| [(tag, field, false), (tag, field, true)])
+        {
+            let module = Ir3Module {
+                header: IrHeader {
+                    schema_version: IrSchemaVersion::CURRENT,
+                    level: IrLevel::Ir3,
+                    source_hash: None,
+                    source_label: "util-argv-getter".into(),
+                },
+                instructions: vec![
+                    Ir3Instruction::LoadInt { dst: 0, value: 77 },
+                    if throws {
+                        Ir3Instruction::Throw { value: 0 }
+                    } else {
+                        Ir3Instruction::Return { value: 0 }
+                    },
+                ],
+                constant_pool: Vec::new(),
+                function_table: vec![Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("argv_getter".into()),
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+                specialization: None,
+                required_capabilities: Vec::new(),
+                function_lengths: Default::default(),
+                function_sources: Default::default(),
+                sloppy_functions: Default::default(),
+            };
+            let mut config = InterpreterConfig::quickjs_defaults();
+            config.granted_capabilities = [
+                RuntimeCapability::VmDispatch,
+                RuntimeCapability::HeapAllocate,
+                RuntimeCapability::Builtin,
+            ]
+            .into_iter()
+            .collect();
+            let mut core = InterpreterCore::new(config, "util-argv-getter");
+            core.inject_runtime_globals().expect("seed runtime globals");
+            let process = core.process_global_object.expect("realm process object");
+            core.set_object_property(
+                process,
+                field.into(),
+                Value::Accessor {
+                    get: Some(Box::new(Value::Function(0))),
+                    set: None,
+                },
+            )
+            .expect("install argv getter");
+            core.set_own_runtime_property_label(
+                process,
+                &RuntimePropertyKey::String(field.into()),
+                &Label::Secret,
+            )
+            .expect("label getter selection");
+            let outcome =
+                core.dispatch_builtin_hostcall(tag, RegRange { start: 0, count: 0 }, Some(&module));
+            if throws {
+                assert!(matches!(
+                    outcome,
+                    Err(InterpreterError::UncaughtException { .. })
+                ));
+                assert_eq!(core.pending_exception, Some(Value::Int(77)));
+                assert_eq!(core.pending_exception_label, Label::Secret);
+            } else {
+                assert_eq!(outcome.unwrap(), Value::Int(77));
+                assert_eq!(core.pending_hostcall_result_label, Some(Label::Secret));
+            }
+            assert!(core.active_inline_callback_context_label.is_none());
+            assert_eq!(core.json_parse_temporary_bytes, 0);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn native_util_argv_grants_are_checked_at_each_invocation() {
+        for (tag, _) in PROCESS_ARGUMENT_READS {
+            let mut config = InterpreterConfig::quickjs_defaults();
+            config.granted_capabilities = [RuntimeCapability::Builtin].into_iter().collect();
+            let mut core = InterpreterCore::new(config, "util-argv-grant");
+            assert!(matches!(
+                check_hostcall_capability_gate(&mut core, tag, 0),
+                Err(InterpreterError::CapabilityDenied { capability }) if capability == tag
+            ));
+            core.config.process_shape_read_allowed = true;
+            assert_eq!(check_hostcall_capability_gate(&mut core, tag, 1), Ok(true));
+            assert_eq!(check_hostcall_capability_gate(&mut core, tag, 2), Ok(true));
+            core.config.process_shape_read_allowed = false;
+            assert!(matches!(
+                check_hostcall_capability_gate(&mut core, tag, 3),
+                Err(InterpreterError::CapabilityDenied { capability }) if capability == tag
+            ));
+            core.config.process_shape_read_allowed = true;
+            core.config.granted_capabilities.clear();
+            assert!(matches!(
+                check_hostcall_capability_gate(&mut core, tag, 4),
+                Err(InterpreterError::CapabilityDenied { capability }) if capability == tag
+            ));
+            assert_eq!(core.hostcall_decisions.len(), 5);
+            assert!(!hostcall_is_effect_free(tag));
+            assert_eq!(
+                hostcall_result_contract(tag),
+                HostcallResultContract::SourceFloor(Label::Internal)
+            );
+        }
     }
 
     #[test]

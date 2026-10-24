@@ -308,8 +308,8 @@
     return result;
   }
   // util.parseArgs (bd-9vouw.441): Node v22's lib/internal/util/parse_args
-  // algorithm. Without `args` it parses no arguments: frankenctl passes the
-  // program none (Node would read process.argv).
+  // algorithm. Omitted `args` reads the embedder's program arguments only
+  // when called, through the same explicit process-shape authority as argv.
   function parseArgsError(code, message) {
     var error = new TypeError(message);
     error.code = code;
@@ -373,7 +373,7 @@
   var parseArgsApply = Reflect.apply;
   var parseArgsIncludes = Array.prototype.includes;
   function mainArgs() {
-    var execArgv = process.execArgv;
+    var execArgv = __franken_util_process_exec_argv();
     var start = 2;
     if (execArgv !== undefined &&
         (parseArgsApply(parseArgsIncludes, execArgv, ['-e']) ||
@@ -382,7 +382,7 @@
          parseArgsApply(parseArgsIncludes, execArgv, ['--print']))) {
       start = 1;
     }
-    return parseArgsApply(parseArgsSlice, process.argv, [start]);
+    return parseArgsApply(parseArgsSlice, __franken_util_process_argv(), [start]);
   }
   function argsToTokens(args, options) {
     var tokens = [];

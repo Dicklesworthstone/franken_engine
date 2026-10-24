@@ -2821,30 +2821,45 @@ mod tests {
     #[test]
     fn source_eval_builtin_reference_does_not_admit_host_effects() {
         for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-            for capability in [
-                "fs:read",
-                "fs:write",
-                "net:fetch",
-                "process_spawn",
-                "env:read",
-                "module:require",
-                "builtin:CryptoRandomBytes",
+            // Authority aliases share canonical denial/evidence identities.
+            // Keep the expected keys explicit, independent of the gate mapper.
+            for (capability, requested_authority, expected_denial) in [
+                ("fs:read", RuntimeCapability::FsRead, "fs:read"),
+                ("fs:write", RuntimeCapability::FsWrite, "fs:write"),
+                ("net:fetch", RuntimeCapability::NetworkEgress, "net:fetch"),
+                (
+                    "process_spawn",
+                    RuntimeCapability::ProcessSpawn,
+                    "process_spawn",
+                ),
+                ("env:read", RuntimeCapability::EnvRead, "env_read"),
+                ("env:has", RuntimeCapability::EnvRead, "env_read"),
+                (
+                    "module:require",
+                    RuntimeCapability::ModuleLoad,
+                    "module_load",
+                ),
+                (
+                    "builtin:CryptoRandomBytes",
+                    RuntimeCapability::RandomRead,
+                    "random_read",
+                ),
             ] {
                 let mut module = builtin_admission_probe(true, capability);
                 // Even an explicit request in IR must not expand source eval's
                 // safe ceiling to host effects.
                 module
                     .required_capabilities
-                    .push(ir_contract::CapabilityTag(capability.to_string()));
+                    .push(ir_contract::CapabilityTag(requested_authority.to_string()));
                 let router = eval_lane_router_for_ir3(&module, EngineEvalBudgets::default(), lane)
                     .expect("construct source-eval router");
                 let error = router
                     .execute(&module, "unadmitted-host-effect", Some(lane))
                     .expect_err("host effect must remain denied");
                 assert!(
-                    matches!(error, InterpreterError::CapabilityDenied { capability: denied }
-                    if denied == capability),
-                    "{lane:?}: {capability}"
+                    matches!(&error, InterpreterError::CapabilityDenied { capability: denied }
+                    if denied == expected_denial),
+                    "{lane:?}: {capability}: expected {expected_denial}, got {error:?}"
                 );
             }
         }

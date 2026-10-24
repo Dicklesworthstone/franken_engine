@@ -2440,6 +2440,47 @@ fn eval_lane_router_for_ir3(
         }
     }
 
+    // Source eval creates a fresh engine-owned realm. Reading one of its
+    // canonical pure-compute globals is an authority declaration just like a
+    // directly lowered builtin call (bd-9vouw.166). First-class aliases do not
+    // otherwise appear in required_capabilities. This recovers only Builtin;
+    // host effects still require their separately admitted capabilities.
+    let references_builtin_global = !granted_capabilities.contains(&RuntimeCapability::Builtin)
+        && ir3.instructions.iter().any(|instruction| {
+            let Ir3Instruction::LoadName {
+                name_pool_index, ..
+            } = instruction
+            else {
+                return false;
+            };
+            let Some(name) = ir3
+                .constant_pool
+                .get(*name_pool_index as usize)
+                .and_then(|name| name.as_str())
+            else {
+                return false;
+            };
+            baseline_interpreter::STANDARD_CONSTRUCTOR_GLOBALS.contains(&name)
+                || lowering_pipeline::GLOBAL_FUNCTION_VALUE_NAMES.contains(&name)
+                || matches!(
+                    name,
+                    "Function"
+                        | "Math"
+                        | "Date"
+                        | "Promise"
+                        | "JSON"
+                        | "Reflect"
+                        | "Atomics"
+                        | "Intl"
+                        | "performance"
+                        | "globalThis"
+                        | "global"
+                )
+        });
+    if references_builtin_global {
+        granted_capabilities.insert(RuntimeCapability::Builtin);
+    }
+
     let mut quickjs_config = InterpreterConfig::quickjs_defaults();
     quickjs_config.granted_capabilities = granted_capabilities.clone();
     quickjs_config.process_shape_read_allowed = true;
@@ -2723,6 +2764,90 @@ mod tests {
         assert_eq!(out.execution_tier(), ExecutionTier::TierI);
         assert!(out.tier_i_instructions_executed > 0);
         assert!(out.tier_i_specialized_instructions_executed > 0);
+    }
+
+    fn builtin_admission_probe(references_object: bool, capability: &str) -> Ir3Module {
+        let mut module = HybridRouter::prepare_eval("0;").expect("prepare probe").ir3;
+        module.constant_pool = vec!["Object".into()];
+        module.instructions.clear();
+        if references_object {
+            module.instructions.push(Ir3Instruction::LoadName {
+                name_pool_index: 0,
+                dst: 0,
+                allow_missing: false,
+            });
+        }
+        module.instructions.extend([
+            Ir3Instruction::LoadInt { dst: 0, value: -7 },
+            Ir3Instruction::HostCall {
+                capability: ir_contract::CapabilityTag(capability.to_string()),
+                args: ir_contract::RegRange { start: 0, count: 1 },
+                dst: 1,
+            },
+            Ir3Instruction::Return { value: 1 },
+        ]);
+        module.function_table[0].entry = 0;
+        module.function_table[0].frame_size = 2;
+        // A missing declaration must not implicitly grant authority merely
+        // because the instruction requests it. Runtime enforcement is required.
+        module.required_capabilities.clear();
+        module
+    }
+
+    #[test]
+    fn source_eval_builtin_admission_requires_a_realm_name_reference() {
+        for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+            let module = builtin_admission_probe(false, "builtin:MathAbs");
+            let router = eval_lane_router_for_ir3(&module, EngineEvalBudgets::default(), lane)
+                .expect("construct restricted router");
+            let error = router
+                .execute(&module, "unadmitted-builtin", Some(lane))
+                .expect_err("unused Object constant must not grant Builtin");
+            assert!(
+                matches!(error, InterpreterError::CapabilityDenied { capability }
+                if capability == "builtin:MathAbs")
+            );
+
+            let module = builtin_admission_probe(true, "builtin:MathAbs");
+            let router = eval_lane_router_for_ir3(&module, EngineEvalBudgets::default(), lane)
+                .expect("construct source-eval router");
+            let result = router
+                .execute(&module, "admitted-builtin", Some(lane))
+                .expect("canonical Object reference admits the pure builtin class");
+            assert_eq!(result.result.value, baseline_interpreter::Value::Int(7));
+        }
+    }
+
+    #[test]
+    fn source_eval_builtin_reference_does_not_admit_host_effects() {
+        for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+            for capability in [
+                "fs:read",
+                "fs:write",
+                "net:fetch",
+                "process_spawn",
+                "env:read",
+                "module:require",
+                "builtin:CryptoRandomBytes",
+            ] {
+                let mut module = builtin_admission_probe(true, capability);
+                // Even an explicit request in IR must not expand source eval's
+                // safe ceiling to host effects.
+                module
+                    .required_capabilities
+                    .push(ir_contract::CapabilityTag(capability.to_string()));
+                let router = eval_lane_router_for_ir3(&module, EngineEvalBudgets::default(), lane)
+                    .expect("construct source-eval router");
+                let error = router
+                    .execute(&module, "unadmitted-host-effect", Some(lane))
+                    .expect_err("host effect must remain denied");
+                assert!(
+                    matches!(error, InterpreterError::CapabilityDenied { capability: denied }
+                    if denied == capability),
+                    "{lane:?}: {capability}"
+                );
+            }
+        }
     }
 
     #[test]

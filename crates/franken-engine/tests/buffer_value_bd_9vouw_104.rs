@@ -13,13 +13,13 @@
 //! No-claim: `buf.map(...)` and the other species-creating methods return a
 //! Uint8Array, not a Buffer (Node: Buffer); `Buffer.isEncoding`,
 //! `Buffer.allocUnsafeSlow` and `class X extends Buffer` are not covered;
-//! `Object.getPrototypeOf(Buffer)` is not `Uint8Array`. Under `HybridRouter`
-//! a static called through an alias (`const B = Buffer; B.from('hi')`) is
-//! refused when nothing else in the program declares a builtin hostcall: the
-//! router grants the builtin capability class only from static lowering, and
-//! the alias call is not visible there (frankenctl runs it, bd-9vouw.166).
+//! `Object.getPrototypeOf(Buffer)` is not `Uint8Array`. The alias regressions
+//! also cover source-eval authority admission (bd-9vouw.166); they do not grant
+//! filesystem, network, environment, or process authority.
 
-use frankenengine_engine::HybridRouter;
+use frankenengine_engine::{
+    HybridRouter, JsEngine, QuickJsInspiredNativeEngine, V8InspiredNativeEngine,
+};
 
 fn eval(source: &str) -> String {
     HybridRouter::default()
@@ -38,6 +38,75 @@ fn buffer_global_value() {
         eval(source),
         "function Buffer 3 8192 true true function true"
     );
+}
+
+/// No direct static builtin call may accidentally grant the capability needed
+/// by these aliases. Expected values are independently checked in Node/Bun.
+#[test]
+fn canonical_builtin_aliases_work_without_a_direct_static_call() {
+    for (source, expected) in [
+        ("const B = Buffer; B.from('hi').toString('hex');", "6869"),
+        ("const O = Object; O.keys({a: 1})[0];", "a"),
+        ("const R = Reflect; R.get({answer: 42}, 'answer');", "42"),
+        ("const M = Math; M.abs(-7);", "7"),
+        (
+            "const G = globalThis; G.Buffer.from('hi').toString('hex');",
+            "6869",
+        ),
+        (
+            "function hex(s) { const B = Buffer; return B.from(s).toString('hex'); } hex('hi');",
+            "6869",
+        ),
+    ] {
+        assert_eq!(eval(source), expected, "HybridRouter: {source}");
+        assert_eq!(
+            QuickJsInspiredNativeEngine
+                .eval(source)
+                .expect("baseline lane")
+                .value,
+            expected,
+            "baseline lane: {source}"
+        );
+        assert_eq!(
+            V8InspiredNativeEngine
+                .eval(source)
+                .expect("throughput lane")
+                .value,
+            expected,
+            "throughput lane: {source}"
+        );
+        let prepared = HybridRouter::prepare_eval(source).expect("prepare alias source");
+        for _ in 0..2 {
+            assert_eq!(
+                HybridRouter::default()
+                    .eval_prepared(&prepared)
+                    .expect("fresh prepared execution")
+                    .value,
+                expected,
+                "prepared execution: {source}"
+            );
+        }
+    }
+}
+
+/// A builtin reached through an implicit constructor is outside source eval's
+/// canonical-name admission rule. A shadowed name must not grant authority.
+#[test]
+fn implicit_constructor_does_not_declare_builtin_authority() {
+    for source in [
+        "({}).constructor.keys({a: 1})[0];",
+        "const Object = 0; ({}).constructor.keys({a: 1})[0];",
+    ] {
+        let error = HybridRouter::default()
+            .eval(source)
+            .expect_err("no canonical builtin global was referenced");
+        assert_eq!(
+            error.stable_namespace(),
+            "eval.capability.denied",
+            "{source}"
+        );
+        assert!(error.to_string().contains("builtin:ObjectKeys"), "{error}");
+    }
 }
 
 /// Statics read as values keep their behavior, names and lengths.

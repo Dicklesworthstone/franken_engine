@@ -1701,7 +1701,7 @@ mod constructor_property_tests {
                 process,
                 field.into(),
                 Value::Accessor {
-                    get: Some(Box::new(Value::Function(0))),
+                    get: Some(Arc::new(Value::Function(0))),
                     set: None,
                 },
             )

@@ -6348,7 +6348,7 @@ impl DynamicFunctionKind {
 /// Every name has a canonical builtin prototype (`ensure_builtin_prototype`),
 /// which is also the prototype engine-created instances use, so `instanceof`,
 /// `x.constructor === X` and `class E extends X` agree with the instances.
-const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 50] = [
+pub(crate) const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 50] = [
     "Object",
     "Array",
     "Number",
@@ -108417,6 +108417,12 @@ impl InterpreterCore {
         let mut seen = BTreeSet::new();
         let mut total = 0u64;
         for frame in callee_frames {
+            // A held map's cells are all still charged by the cold ledger.
+            // As in the live-only walk, skip the map rather than looking up
+            // each of its captured bindings again on every return.
+            if cold.holds_frame(frame) {
+                continue;
+            }
             if self
                 .scope_chain
                 .frames
@@ -116294,6 +116300,191 @@ mod shared_binding_cell_accounting_tests_bd_sblaq {
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes(),
             "estimated must equal recompute {context}"
+        );
+    }
+
+    fn released_cell_payload_by_full_walk(
+        core: &mut InterpreterCore,
+        callee_frames: &[ScopeFrame],
+    ) -> u64 {
+        let restored = std::mem::replace(&mut core.scope_chain.frames, callee_frames.to_vec());
+        let before = core.shared_binding_cell_payloads_memory_bytes();
+        core.scope_chain.frames = restored;
+        let after = core.shared_binding_cell_payloads_memory_bytes();
+        before
+            .checked_sub(after)
+            .expect("callee retained caller cells")
+    }
+
+    #[test]
+    fn released_frame_payload_tracks_held_maps_cow_and_last_alias_bd_9vouw_31() {
+        let mut core = accounting_test_core();
+        let mut held = ScopeFrame::new();
+        for index in 0..24 {
+            held.insert_binding(
+                format!("captured_{index}"),
+                ScopeBinding::with_state(BindingKind::Let, Value::str("held".repeat(32)), true),
+            );
+        }
+        for _ in 0..2 {
+            core.closures.push(ClosureValue {
+                function_index: 0,
+                captured_env: vec![held.clone()],
+            });
+        }
+        assert!(core.closures.cold_cells.holds_frame(&held));
+
+        // The copied map shares its old cells with the held map, but its
+        // twelve new cells are not held. Repeated map and binding aliases
+        // must release each of those cells once, including the set spill.
+        let mut copied = held.clone();
+        let mut fresh_bytes = 0u64;
+        for index in 0..12 {
+            let binding = ScopeBinding::with_labeled_state(
+                BindingKind::Let,
+                Value::str(format!("fresh-{index}")),
+                Label::Custom {
+                    name: format!("fresh-label-{index}"),
+                    level: 3,
+                },
+                true,
+            );
+            fresh_bytes += InterpreterCore::estimate_binding_cell_payload_bytes(&binding.state);
+            copied.insert_binding(format!("fresh_{index}"), binding.clone());
+            copied.insert_binding(format!("alias_{index}"), binding);
+        }
+        assert!(!core.closures.cold_cells.holds_frame(&copied));
+        let restored = core.scope_chain.frames[0].clone();
+        let callee_frames = [restored.clone(), held.clone(), copied.clone(), copied];
+        for aliases_left in [2, 1] {
+            assert_eq!(held.bindings.ledger_holds.get(), aliases_left);
+            assert_eq!(
+                core.released_frame_cell_payload_bytes(&callee_frames),
+                fresh_bytes
+            );
+            assert_eq!(
+                core.released_frame_cell_payload_bytes(&callee_frames),
+                released_cell_payload_by_full_walk(&mut core, &callee_frames)
+            );
+            core.closures.pop().expect("captured alias");
+        }
+
+        // The last capture stops charging the original cells. Both maps
+        // still reach them, so releasing the chain must deduplicate them.
+        assert!(!core.closures.cold_cells.holds_frame(&held));
+        let held_bytes =
+            InterpreterCore::saturating_sum(held.bindings.values().map(|binding| {
+                InterpreterCore::estimate_binding_cell_payload_bytes(&binding.state)
+            }));
+        assert_eq!(
+            core.released_frame_cell_payload_bytes(&callee_frames),
+            held_bytes + fresh_bytes
+        );
+        assert_eq!(
+            core.released_frame_cell_payload_bytes(&callee_frames),
+            released_cell_payload_by_full_walk(&mut core, &callee_frames)
+        );
+        assert_eq!(core.released_frame_cell_payload_bytes(&[restored]), 0);
+        assert_eq!(
+            callee_frames[2]
+                .get("fresh_0")
+                .expect("fresh cell")
+                .label()
+                .expect("fresh label"),
+            Label::Custom {
+                name: "fresh-label-0".to_string(),
+                level: 3,
+            }
+        );
+    }
+
+    #[test]
+    fn released_frame_payload_preserves_saturation_bd_9vouw_31() {
+        // A compact accessor DAG has a saturated logical owner estimate
+        // without allocating an attacker-sized physical payload.
+        let mut value = Value::Int(1);
+        for _ in 0..128 {
+            let shared = Arc::new(value);
+            value = Value::Accessor {
+                get: Some(shared.clone()),
+                set: Some(shared),
+            };
+        }
+        let mut frame = ScopeFrame::new();
+        frame.insert_binding(
+            "saturated".to_string(),
+            ScopeBinding::with_state(BindingKind::Let, value, true),
+        );
+        let mut core = accounting_test_core();
+        assert_eq!(
+            core.released_frame_cell_payload_bytes(&[frame.clone()]),
+            u64::MAX
+        );
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: vec![frame.clone()],
+        });
+        assert_eq!(core.released_frame_cell_payload_bytes(&[frame.clone()]), 0);
+        assert!(core.memory_request_exceeds_budget(core.scope_chain_memory_bytes(), u64::MAX));
+        core.closures.pop().expect("last saturated capture");
+        assert_eq!(core.released_frame_cell_payload_bytes(&[frame]), u64::MAX);
+    }
+
+    #[test]
+    fn captured_returns_keep_full_walk_accounting_across_completion_paths_bd_9vouw_31() {
+        let module = lower_script_bd_9vouw_31(
+            "function make(seed) {\
+               let payload = 'captured';\
+               return function run(n) {\
+                 let scratch = 'local';\
+                 try {\
+                   if (n < 0) throw n;\
+                   return seed + n + payload.length + scratch.length;\
+                 } finally { let finalized = 'done'; }\
+               };\
+             }\
+             const run = make(10);\
+             let sum = 0;\
+             for (let i = 0; i < 4; i++) sum += run(i);\
+             try { run(-1); } catch (error) { sum += error; }\
+             class Base {}\
+             class Derived extends Base { constructor() { super(); this.value = run(1); } }\
+             const derived = new Derived();\
+             async function finish() { return run(2); }\
+             const done = finish();\
+             sum + derived.value;",
+        );
+        let mut core = accounting_test_core();
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::Builtin);
+        let result = core
+            .execute(&module)
+            .expect("captured completion paths execute");
+        // Node's result is 121; the async function resolves to 25.
+        assert_eq!(result.value, Value::Int(121));
+        let asynchronous = core
+            .async_functions
+            .last()
+            .expect("completed async function");
+        assert!(matches!(asynchronous.phase, AsyncFunctionPhase::Completed));
+        assert_eq!(
+            core.promise_store
+                .get(crate::promise_model::PromiseHandle(
+                    asynchronous.result_promise
+                ))
+                .expect("async result promise")
+                .state,
+            crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Int(25))
+        );
+        assert!(core.call_stack.is_empty());
+        assert_invariant(
+            &core,
+            "after ordinary, derived, async and throwing captured calls",
+        );
+        assert_eq!(
+            core.scope_chain_memory_bytes(),
+            core.scope_chain_memory_bytes_by_walk()
         );
     }
 

@@ -1,4 +1,4 @@
-# FrankenEngine Reality Check — 2026-10-23 refresh
+# FrankenEngine Reality Check — 2026-10-24 continuation
 
 **Verdict: useful native runtime and released CLI; the complete program remains
 undelivered.** The next decisive work is current-source qualification and G0
@@ -57,6 +57,96 @@ rechecks these findings. It creates no runtime or performance capability credit.
 | All active BRIDGE records | 459; none with empty description, missing referenced issue, or absent acceptance text | Structural coverage only. This does not establish logical sufficiency or execution of every acceptance requirement. |
 | Active dependency cycles | `br --no-db dep cycles --json`: 0 | Three archived closed cycles are separately reported and preserved. |
 | `bv` triage, insights and forecast | All exit 0, but displayed census is 5,030 versus authoritative 5,091; cycle computation explicitly skipped above 2,000 nodes | Treat its recommendations as a partial view and use canonical JSONL/`br` for coverage and cycles. Forecast confidence averages about 0.45; its dates are not a delivery promise. |
+
+### 2026-10-24: current-source application measurements and first repair
+
+The observations above retain their 2026-10-23 source scope. New measurements
+use production source `fa5723220dd29fd54a3da8ee3df14ba69df28a86`, pinned
+`nightly-2026-09-21`, `release-perf` (opt3, thin LTO, one codegen unit, line
+tables, no stripping) and frame pointers. The Linux x86-64 ELF SHA256 is
+`6cc7565fc3df10caf53ddd00190963157a6c47c738451abb8b13be89b95348e3`.
+The build's remote Cargo process exited 0, but its original RCH artifact
+retrieval exited 102 because a Linux executable was intentionally built from a
+Mac controller without declaring foreign-artifact retrieval. Recovery recorded
+that terminal failure; the retained ELF was verified and executed on Linux.
+This is not a passing artifact-retrieval gate. Main `410d46459` subsequently
+committed the one-line Reflect test-fixture Arc repair; its production code is
+identical to this measured baseline.
+
+On the same quiet `ovh-b` worker (hostname `yto`), the actual incumbent was
+Node **26.8.1**, V8 **14.6.202.34-node.28**. Four fixed tasks use real Lodash
+4.17.21, Marked 15.0.12, Acorn 8.15.0 and a TypeScript orders pipeline. Each
+runtime has **120 measured executions per task**, split into 60 identical A/A
+arms, plus three warmups per runtime per measurement window. All 960 measured
+executions preserve frozen console hashes; native runs also preserve guest
+instruction counts, IR3 hashes and the allow outcome. Marked checks full HTML;
+Acorn checks the full AST. The initial 20-per-arm window failed the unchanged
+10% p95 noise gate on Node's TS task. Adding 40 per arm to **every task**, while
+retaining all original samples, passed; worst final drift is **2.203%**. No
+competing heavy processes were observed.
+
+| Task | Native p50 / p95 | Node p50 / p95 | Native / Node p50 |
+|---|---|---|---|
+| Lodash aggregation, 5,000 records | 981.7 / 1,015.5 ms | 70.9 / 83.5 ms | 13.845x |
+| Marked rendering, 50 sections x 10 | 4,101.9 / 4,189.4 ms | 117.1 / 127.9 ms | 35.043x |
+| Acorn parsing, 100 functions | 2,374.2 / 2,423.3 ms | 76.1 / 87.2 ms | 31.196x |
+| TS orders, 5,000 records | 229.7 / 240.9 ms | 111.2 / 127.8 ms | 2.066x |
+
+These are **end-to-end CLI costs**, including startup, parsing/lowering,
+security accounting and report serialization. They do not isolate VM/JIT
+throughput, demonstrate general TS compatibility or qualify the program's
+security/performance targets. TS executes with type erasure, without a type
+checker. Peak native RSS across these samples is 143.7/149.1/145.1/56.0 MiB
+respectively; Node is 60.9/59.0/57.4/75.2 MiB. The short sample series does not
+support a precise extreme-tail claim.
+
+Three separate all-thread hardware-cycle captures per task identify current
+costs. Percentages below describe sampled CPU; inclusive entries overlap.
+
+| Task | Current attribution | First implication |
+|---|---|---|
+| Lodash | Runtime execution 49.55–50.05% inclusive; lowering 18.38–19.14%; parsing 15.98–16.41%. `released_frame_cell_payload_bytes` alone is 11.84–14.10% self; SHA-256 is 8.09–8.99% self. | Repeated return-time accounting is a measured target; frontend startup and evidence work also matter. |
+| Marked | Runtime execution 96.09–96.20% inclusive; dispatch 9.97–11.51% self; labeled register writes 3.83–4.66%; regex search 3.04–3.36%. | The runtime's distributed dispatch, value and security work dominates this task; startup-only work cannot close this gap. |
+| Acorn | Runtime execution 85.55–85.72% inclusive; dispatch 13.10–14.97% self; labeled register writes 2.82–3.26%; SHA-256 2.79–3.09%. | Interpreter execution is the main measured phase, with smaller frontend and evidence costs. |
+| TS orders | Runtime execution 95.97–96.07% inclusive; dispatch 5.56–8.77% self with property, value and evidence helpers distributed below it. | This short profile supports a phase-level conclusion; individual helper estimates are noisy. |
+
+Native median process CPU/wall ratios are 0.988/0.997/0.995/0.946 core. Separate
+syscall summaries, allocator totals and Node CPU/heap samples retain matching
+outputs. They support investigating CPU work first; they do not establish
+native allocation callsite or complete off-CPU attribution. Raw evidence is
+under `artifacts/optimization-100x-ss6_54xg/`, including
+`baseline60-combined.summary.json`, `ovh-b-baseline60-runs/` and
+`ovh-b-current-profiles/`. Inline DWARF expansion made inclusive reporting
+pathologically slow; the owned analysis child was stopped, preserving traces,
+and bounded `--no-inline` analysis plus the remaining captures finished through
+a new strict RCH job with exit 0. The stopped job remains exit 1.
+
+An additional current-baseline correctness run executes all nine repository
+macro programs: JSON roundtrip, matrix multiplication, object graphs, prime
+sieve, recursive Fibonacci, regex matching, sorting, string scanning and tree
+traversal. All nine console outputs match live Node and the frozen Node/Bun
+references; input hashes match the original case manifest. Its RCH job exits 0.
+This single-run check contributes no timing ratio or candidate qualification.
+
+The first optimization candidate reuses `ColdBindingCells::holds_frame` to skip
+maps whose cells are already retained and charged. The existing full-walk path
+already uses this shortcut. Three new tests cover identity/COW/last-capture
+transitions, saturation and ordinary/derived/async/throwing returns. Independent
+Node/Bun reference reexecution and changed-range formatting pass, but candidate
+native execution and old/new/Node speed qualification are **UNRUN**. The public
+Buffer-alias admission repair (`bd-9vouw.166`) is also uncompiled. Current
+baseline probes reproduce three Buffer-alias failures; Object, Reflect and Math
+aliases already work and receive no new capability credit. Existing P0
+`bd-9vouw.31` and the alias bead have implementation work awaiting native checks.
+**0/100 optimization passes are qualified.** Both beads are now explicitly **blocked on native verification**
+by the disk admission condition below; their source changes are preserved.
+
+The prerequisite fixture-only all-target check passed through RCH; it does not
+verify these uncommitted repairs. The fresh full formatting gate remains red
+(2,001 diff sections across 229 files), and required native tests/Clippy/checks
+remain pending. New heavy Cargo lanes are stopped by the ancestor AGENTS disk
+preflight rule: `sbh check --need 20G` is nonzero. No cleanup permission was
+received, no files were deleted and the gate was not lowered.
 
 ### Numbered vision checklist and bridge ownership
 

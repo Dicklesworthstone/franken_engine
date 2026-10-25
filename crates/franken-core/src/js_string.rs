@@ -1049,13 +1049,28 @@ impl fmt::Debug for CodeUnits<'_> {
     }
 }
 
+struct StreamingText<'a>(&'a Text);
+
+impl fmt::Display for StreamingText<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt_streaming(formatter)
+    }
+}
+
 impl Serialize for JsString {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
         match &self.shape {
-            Shape::WellFormed { .. } => serializer.serialize_str(&self.utf8),
+            Shape::WellFormed { .. } => match self.utf8.available_flat() {
+                Some(text) => serializer.serialize_str(text),
+                // collect_str lets JSON escape complete UTF-8 leaf chunks
+                // without publishing a joined buffer just for telemetry or
+                // another serialization reader. Exact units keep their wire
+                // map below; flat strings keep serialize_str's fast path.
+                None => serializer.collect_str(&StreamingText(&self.utf8)),
+            },
             Shape::Exact(units) => {
                 use serde::ser::SerializeMap;
                 let mut map = serializer.serialize_map(Some(1))?;

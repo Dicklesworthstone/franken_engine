@@ -6,6 +6,7 @@
 //! comparisons reuse the frontier but select UTF-16 order at a mismatch.
 
 use std::cmp::Ordering;
+use std::fmt;
 use std::sync::Arc;
 
 use super::Text;
@@ -74,11 +75,30 @@ impl Text {
         }
     }
 
-    fn available_flat(&self) -> Option<&Arc<str>> {
+    pub(super) fn available_flat(&self) -> Option<&Arc<str>> {
         match self {
             Self::Flat(text) => Some(text),
             Self::Concat(node) => node.joined.get(),
         }
+    }
+
+    /// Write complete UTF-8 leaves without publishing concatenation buffers.
+    /// This fresh cursor only consumes whole leaves, so its offsets always
+    /// remain scalar boundaries. Reuse the comparison frontier's inline
+    /// storage, spill handling and concurrent-publication fallback.
+    pub(super) fn fmt_streaming(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut cursor = ByteCursor::new(self);
+        while cursor.fill() {
+            let flat = cursor
+                .pending
+                .last()
+                .and_then(Text::available_flat)
+                .expect("fill supplied a flat UTF-8 leaf");
+            debug_assert!(flat.is_char_boundary(cursor.offset));
+            formatter.write_str(&flat[cursor.offset..])?;
+            cursor.offset = flat.len();
+        }
+        Ok(())
     }
 
     pub(super) fn cmp_streaming(&self, other: &Self) -> Ordering {
@@ -362,6 +382,145 @@ mod tests {
             panic!("test requires a rope");
         };
         assert!(node.joined.get().is_none(), "comparison joined a rope");
+    }
+
+    fn assert_tree_unjoined(value: &JsString) {
+        let mut pending = vec![value.clone()];
+        while let Some(value) = pending.pop() {
+            if let Text::Concat(node) = value.utf8 {
+                assert!(
+                    node.joined.get().is_none(),
+                    "serialization joined a subtree"
+                );
+                pending.extend(node.parts().expect("unpublished node retains its parts"));
+            }
+        }
+    }
+
+    #[test]
+    fn serialization_preserves_json_bytes_at_every_utf8_leaf_boundary() {
+        for text in [
+            "",
+            "\0\u{1}\u{8}\t\n\u{c}\r\u{1f}\"\\/\u{7f}",
+            "aé日😀\u{10000}\u{2028}\u{2029}z",
+        ] {
+            let expected = serde_json::to_vec(text).unwrap();
+            for split in (0..=text.len()).filter(|index| text.is_char_boundary(*index)) {
+                let value = rope(&text[..split], &text[split..]);
+                let alias = value.clone();
+                assert_eq!(serde_json::to_vec(&value).unwrap(), expected);
+                assert_eq!(serde_json::to_vec(&alias).unwrap(), expected);
+                let wrapped = crate::baseline_interpreter::Value::Str(value.clone());
+                let flat = crate::baseline_interpreter::Value::str(text);
+                let actual_bytes = serde_json::to_vec(&wrapped).unwrap();
+                let expected_bytes = serde_json::to_vec(&flat).unwrap();
+                assert_eq!(actual_bytes, expected_bytes);
+                assert_eq!(
+                    crate::hash_tiers::ContentHash::compute(&actual_bytes),
+                    crate::hash_tiers::ContentHash::compute(&expected_bytes)
+                );
+                let map = std::collections::BTreeMap::from([(value.clone(), alias)]);
+                let flat_map = std::collections::BTreeMap::from([(text, text)]);
+                assert_eq!(
+                    serde_json::to_vec(&map).unwrap(),
+                    serde_json::to_vec(&flat_map).unwrap()
+                );
+                assert_tree_unjoined(&value);
+            }
+        }
+    }
+
+    #[test]
+    fn serialization_streams_shared_dags_and_deep_spilled_frontiers() {
+        let piece = "é😀\"\\\n";
+        let mut deep = JsString::from(piece);
+        for _ in 0..512 {
+            deep = join(deep, JsString::from(piece));
+        }
+        let mut shared = rope(piece, piece);
+        for _ in 0..10 {
+            shared = join(shared.clone(), shared);
+        }
+        for (value, expected) in [(deep, piece.repeat(513)), (shared, piece.repeat(2048))] {
+            let alias = value.clone();
+            assert_eq!(
+                serde_json::to_vec(&value).unwrap(),
+                serde_json::to_vec(&expected).unwrap()
+            );
+            assert_tree_unjoined(&value);
+            assert_tree_unjoined(&alias);
+        }
+    }
+
+    #[test]
+    fn serialization_keeps_published_and_exact_surrogate_wire_contracts() {
+        let published = rope("é\"", "😀\\");
+        let flat = published.as_str().unwrap().to_string();
+        assert_eq!(
+            serde_json::to_vec(&published).unwrap(),
+            serde_json::to_vec(&flat).unwrap()
+        );
+        assert!(published.unjoined_concat_children().is_none());
+        for units in [
+            vec![0xd800],
+            vec![0xdc00],
+            vec![0x61, 0xd800, 0x22, 0xdc00, 0xd83d, 0xde00],
+        ] {
+            let exact = JsString::from_code_units(&units);
+            assert!(!exact.is_well_formed());
+            let expected =
+                serde_json::to_vec(&std::collections::BTreeMap::from([("$wtf16", units)])).unwrap();
+            assert_eq!(serde_json::to_vec(&exact).unwrap(), expected);
+        }
+        let healed =
+            JsString::from_code_units(&[0xd83d]).concat(&JsString::from_code_units(&[0xde00]));
+        assert!(healed.is_well_formed());
+        assert_eq!(
+            serde_json::to_vec(&healed).unwrap(),
+            serde_json::to_vec("😀").unwrap()
+        );
+        let healed_rope = join(healed, JsString::from("é\\\""));
+        assert_eq!(
+            serde_json::to_vec(&healed_rope).unwrap(),
+            serde_json::to_vec("😀é\\\"").unwrap()
+        );
+        assert_tree_unjoined(&healed_rope);
+    }
+
+    #[test]
+    fn serialization_writer_errors_preserve_prefix_and_unpublished_input() {
+        struct LimitedWriter {
+            output: Vec<u8>,
+            limit: usize,
+        }
+        impl std::io::Write for LimitedWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if self.output.len() == self.limit {
+                    return Err(std::io::Error::other("serialization output refused"));
+                }
+                let count = bytes.len().min(self.limit - self.output.len());
+                self.output.extend_from_slice(&bytes[..count]);
+                Ok(count)
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let value = rope("é\"\\", "😀\nend");
+        let text = "é\"\\😀\nend";
+        let expected = serde_json::to_vec(text).unwrap();
+        for limit in 0..expected.len() {
+            for input in [&value, &JsString::from(text)] {
+                let mut writer = LimitedWriter {
+                    output: Vec::new(),
+                    limit,
+                };
+                let error = serde_json::to_writer(&mut writer, input).unwrap_err();
+                assert!(error.is_io());
+                assert_eq!(writer.output, expected[..limit]);
+            }
+            assert_tree_unjoined(&value);
+        }
     }
 
     #[test]

@@ -10,7 +10,7 @@ usage: ./scripts/test_standalone_build.sh [standalone-check|standalone-test|stan
 
 Modes:
   standalone-check    rch-backed cargo check in standalone mode
-  standalone-test     rch-backed cargo test in standalone mode
+  standalone-test     rch-backed engine, fleet, and Buffer tests in standalone mode
   standalone-release  rch-backed frankenctl release build in standalone mode
   full-check          rch-backed cargo check with all features when sibling deps exist
   sibling-isolation   assert no /dp sibling appears in the manifest or standalone graph
@@ -29,7 +29,7 @@ Environment:
   STANDALONE_BUILD_GATE_ARTIFACT_ROOT  Output root (default: artifacts/standalone_build_gate)
   STANDALONE_BUILD_GATE_SKIP_REMOTE    Set to 1 to skip heavy rch-backed lanes and emit a manifest only
   STANDALONE_BUILD_GATE_SIBLING_ROOT   Source-checkout smoke root (default: /dp)
-  RUSTUP_TOOLCHAIN                     Toolchain for rch-backed cargo lanes (default: nightly)
+  RUSTUP_TOOLCHAIN                     Toolchain for rch-backed cargo lanes (default: rust-toolchain.toml pin)
   CARGO_TARGET_DIR                     Remote cargo target dir (default: repo-local .rch-target/standalone_build_gate_...)
   CARGO_BUILD_JOBS                     Remote cargo build jobs for rch lanes (default: 1)
   CARGO_INCREMENTAL                    Remote cargo incremental mode for rch lanes (default: 0)
@@ -39,7 +39,14 @@ EOF
 }
 
 mode="${1:-ci}"
-toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
+toolchain="${RUSTUP_TOOLCHAIN:-}"
+if [[ -z "$toolchain" ]]; then
+  toolchain="$(awk -F '"' '/^[[:space:]]*channel[[:space:]]*=/ { print $2; exit }' rust-toolchain.toml)"
+  if [[ -z "$toolchain" ]]; then
+    echo "error: rust-toolchain.toml must declare a quoted channel" >&2
+    exit 2
+  fi
+fi
 artifact_root="${STANDALONE_BUILD_GATE_ARTIFACT_ROOT:-artifacts/standalone_build_gate}"
 skip_remote="${STANDALONE_BUILD_GATE_SKIP_REMOTE:-0}"
 sibling_root="${STANDALONE_BUILD_GATE_SIBLING_ROOT:-/dp}"
@@ -354,8 +361,8 @@ run_full_integration_lane() {
 #   2. `cargo tree --no-default-features -e normal,dev` names zero `/dp/` paths.
 # Assertion 1 catches even an optional path edge when assertion 2 cannot run.
 #
-# `-e normal,dev` rather than `-e normal` is deliberate. The crate carries a self
-# dev-dependency (for `tee-test-mock`); while it lacked `default-features =
+# `-e normal,dev` rather than `-e normal` is deliberate. The former self
+# dev-dependency (for `tee-test-mock`), while it lacked `default-features =
 # false`, feature unification re-enabled `default` for every test target, so
 # `cargo test --no-default-features` rebuilt all nine siblings and the
 # standalone-test lane was proving nothing. A normal-only assertion is blind to
@@ -522,6 +529,14 @@ run_mode() {
         "standalone-test" \
         "cargo test -p frankenengine-engine --no-default-features" \
         cargo test -p frankenengine-engine --no-default-features || run_failures=$((run_failures + 1))
+      run_rch_lane \
+        "standalone-fleet-test" \
+        "cargo test -p frankenengine-control-plane-integration-tests --no-default-features --test fleet_quarantine_integration" \
+        cargo test -p frankenengine-control-plane-integration-tests --no-default-features --test fleet_quarantine_integration || run_failures=$((run_failures + 1))
+      run_rch_lane \
+        "standalone-buffer-test" \
+        "cargo test -p frankenengine-control-plane-integration-tests --no-default-features --test buffer_value_bd_9vouw_104" \
+        cargo test -p frankenengine-control-plane-integration-tests --no-default-features --test buffer_value_bd_9vouw_104 || run_failures=$((run_failures + 1))
       ;;
     standalone-release)
       run_rch_lane \
@@ -561,6 +576,14 @@ run_mode() {
         "cargo test -p frankenengine-engine --no-default-features" \
         cargo test -p frankenengine-engine --no-default-features || run_failures=$((run_failures + 1))
       run_rch_lane \
+        "standalone-fleet-test" \
+        "cargo test -p frankenengine-control-plane-integration-tests --no-default-features --test fleet_quarantine_integration" \
+        cargo test -p frankenengine-control-plane-integration-tests --no-default-features --test fleet_quarantine_integration || run_failures=$((run_failures + 1))
+      run_rch_lane \
+        "standalone-buffer-test" \
+        "cargo test -p frankenengine-control-plane-integration-tests --no-default-features --test buffer_value_bd_9vouw_104" \
+        cargo test -p frankenengine-control-plane-integration-tests --no-default-features --test buffer_value_bd_9vouw_104 || run_failures=$((run_failures + 1))
+      run_rch_lane \
         "standalone-release" \
         "cargo build --release --no-default-features -p frankenengine-engine --bin frankenctl" \
         cargo build --release --no-default-features -p frankenengine-engine --bin frankenctl || run_failures=$((run_failures + 1))
@@ -598,6 +621,8 @@ generated_at_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 standalone_check_status="$(printf '%s\n' "$lane_results_json" | jq -r 'map(select(.lane == "standalone-check")) | .[0].status // "not_run"')"
 standalone_test_status="$(printf '%s\n' "$lane_results_json" | jq -r 'map(select(.lane == "standalone-test")) | .[0].status // "not_run"')"
+standalone_fleet_test_status="$(printf '%s\n' "$lane_results_json" | jq -r 'map(select(.lane == "standalone-fleet-test")) | .[0].status // "not_run"')"
+standalone_buffer_test_status="$(printf '%s\n' "$lane_results_json" | jq -r 'map(select(.lane == "standalone-buffer-test")) | .[0].status // "not_run"')"
 standalone_release_status="$(printf '%s\n' "$lane_results_json" | jq -r 'map(select(.lane == "standalone-release")) | .[0].status // "not_run"')"
 full_check_status="$(printf '%s\n' "$lane_results_json" | jq -r 'map(select(.lane == "full-check")) | .[0].status // "not_run"')"
 sibling_isolation_status="$(printf '%s\n' "$lane_results_json" | jq -r 'map(select(.lane == "sibling-isolation")) | .[0].status // "not_run"')"
@@ -605,11 +630,15 @@ failed_lane_count="$(printf '%s\n' "$lane_results_json" | jq 'map(select(.status
 
 if [[ "$standalone_check_status" == "passed" \
   && "$standalone_test_status" == "passed" \
+  && "$standalone_fleet_test_status" == "passed" \
+  && "$standalone_buffer_test_status" == "passed" \
   && "$standalone_release_status" == "passed" ]]; then
   standalone_status="ready"
   standalone_gate_passed=true
 elif [[ "$standalone_check_status" == "failed" \
   || "$standalone_test_status" == "failed" \
+  || "$standalone_fleet_test_status" == "failed" \
+  || "$standalone_buffer_test_status" == "failed" \
   || "$standalone_release_status" == "failed" ]]; then
   standalone_status="blocked"
   standalone_gate_passed=false
@@ -696,6 +725,8 @@ jq -n \
         commands: [
           "cargo check -p frankenengine-engine --no-default-features",
           "cargo test -p frankenengine-engine --no-default-features",
+          "cargo test -p frankenengine-control-plane-integration-tests --no-default-features --test fleet_quarantine_integration",
+          "cargo test -p frankenengine-control-plane-integration-tests --no-default-features --test buffer_value_bd_9vouw_104",
           "cargo build --release --no-default-features -p frankenengine-engine --bin frankenctl"
         ]
       },
@@ -735,6 +766,8 @@ case "$mode" in
     ;;
   standalone-test)
     [[ "$standalone_test_status" == "passed" ]] || exit_code=1
+    [[ "$standalone_fleet_test_status" == "passed" ]] || exit_code=1
+    [[ "$standalone_buffer_test_status" == "passed" ]] || exit_code=1
     ;;
   standalone-release)
     [[ "$standalone_release_status" == "passed" ]] || exit_code=1

@@ -79,7 +79,7 @@ All ten members of the root workspace:
 - `crates/dp` (`dp`): QQ-track secure-aggregation primitive (Bonawitz et al. 2017) and protocol layer (`bd-cixqu.43.2`)
 - `crates/franken-core` (`frankenengine-core`): extracted runtime core — parser, lowering, baseline interpreter substrate
 - `crates/franken-engine` (`frankenengine-engine`): core runtime engine substrate
-- `crates/franken-engine-control-plane-integration-tests` (`frankenengine-control-plane-integration-tests`): control-plane integration tests that require `frankenengine-test-support`
+- `crates/franken-engine-control-plane-integration-tests` (`frankenengine-control-plane-integration-tests`): control-plane integration tests and the public Buffer API target; test-only support and mock TEE stay outside the engine's dev graph
 - `crates/franken-engine-deterministic-derive` (`franken-engine-deterministic-derive`): derive macro for the `Deterministic` marker trait
 - `crates/franken-engine-deterministic-trait` (`franken-engine-deterministic-trait`): `Deterministic` marker trait definition
 - `crates/franken-engine-fixed-layout-derive` (`franken-engine-fixed-layout-derive`): derive macro for the `FixedLayout` trait

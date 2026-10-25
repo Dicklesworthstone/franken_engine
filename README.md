@@ -105,7 +105,7 @@ The workspace exposes ten member crates; the operator-facing ones and their bina
 | `frankenengine-engine` | `frankenctl` (primary CLI), `franken-react-sidecar`, `franken-benchmark-evidence-export`, `franken-architecture-inventory`, `franken-decision-demo`, `franken-quarantine-mesh-demo` |
 | `frankenengine-extension-host` | — (library only) |
 | `frankenengine-test-support` | — (library only; mock control-plane adapters, latency/failure injection) |
-| `frankenengine-control-plane-integration-tests` | — (library only; holds integration tests gated on `frankenengine-test-support`) |
+| `frankenengine-control-plane-integration-tests` | — (library only; owns control-plane integration tests and the public Buffer API target) |
 | `frankenengine-metamorphic` | `run_metamorphic_suite`, `run_parser_metamorphic` (library + binaries; metamorphic-relation runner) |
 | `frankenengine-core` | — (library only; extracted runtime core) |
 | `dp` | — (library only; QQ-track secure-aggregation primitive, `bd-cixqu.43.2`) |
@@ -1426,17 +1426,21 @@ The `frankenctl` binary also builds directly from source. Standalone mode links 
 cargo check -p frankenengine-engine --no-default-features
 cargo build --release --no-default-features -p frankenengine-engine --bin frankenctl
 cargo test -p frankenengine-engine --no-default-features
+cargo test -p frankenengine-control-plane-integration-tests --no-default-features --test fleet_quarantine_integration
+cargo test -p frankenengine-control-plane-integration-tests --no-default-features --test buffer_value_bd_9vouw_104
 ```
 
 In standalone mode the core interpreter compiles, governance modules fall back to local-only behavior, and external policy integration is disabled. Suitable for development and testing.
 
-**What `--no-default-features` does (updated 2026-07-28, `bd-gw4cg`).** It disables all four optional integration families: the three `franken-*` control-plane crates, the three `sqlmodel*` persistence crates, `fastapi-core`, and the five `fp-*` dataframe crates. None is compiled or linked, and `./scripts/test_standalone_build.sh sibling-isolation` fails closed if a `/dp` source edge re-enters the manifest or resolved graph.
+The companion test package explicitly retains Asupersync and the non-authoritative TEE simulator in its standalone tests. Its defaults forward engine defaults for the unchanged Buffer public API target, which can be run with `cargo test -p frankenengine-control-plane-integration-tests --test buffer_value_bd_9vouw_104`. The explicit `--no-default-features` commands above preserve the separate standalone coverage.
 
-The nine former `/dp` path dependencies now use published registry versions (`bd-gw4cg`), and the workspace path patch was removed under `bd-h5cl7`. Pull-request CI asserts that `/dp` is absent and then runs the exact standalone release build above; the operator gate requires standalone check, test, and release success and rejects any recorded failed lane.
+**What `--no-default-features` does (updated 2026-07-28, `bd-gw4cg`).** For commands selecting only `frankenengine-engine`, it disables all four optional integration families: the three `franken-*` control-plane crates, the three `sqlmodel*` persistence crates, `fastapi-core`, and the five `fp-*` dataframe crates. None of those families is compiled or linked by that engine command; the companion test commands above explicitly re-enable Asupersync. `./scripts/test_standalone_build.sh sibling-isolation` fails closed if a `/dp` source edge re-enters the manifest or resolved graph.
+
+Former `/dp` path dependencies use registry crates or an exact upstream Git revision, and the workspace path patch was removed under `bd-h5cl7`. The optional SQLModel family is pinned coherently to `7f432ff690260ef85aca5227e2372b2eb63230c9` to consume its numeric FULL-readback fix; the lockfile retains FrankenSQLite `0.4.10`. The pin has no registry version fallback. Pull-request CI asserts that `/dp` is absent and then runs the exact standalone release build above; the operator gate requires standalone check, test, and release success and rejects any recorded failed lane.
 
 Standalone mode now provides both source-checkout independence and isolation: `/dp` repositories are needed only for source-level sibling development and the optional local-checkout smoke lanes, not for Cargo resolution or the engine build.
 
-### Full Integration Mode (registry-backed sibling features enabled)
+### Full Integration Mode (sibling features enabled)
 
 ```bash
 cargo check -p frankenengine-engine --all-features
@@ -1453,7 +1457,7 @@ In full integration mode governance and policy enforcement surfaces compile agai
 ./scripts/test_standalone_build.sh ci
 ```
 
-The second script records artifacts under `artifacts/standalone_build_gate/<timestamp>/`, routes every heavy Cargo lane through `rch` (the remote-compilation hook), requires standalone check/test/release success, and blocks on every failed lane. If `/dp` source checkouts are missing, only their six local-source smoke lanes are recorded as `skipped`; registry-backed build lanes still run. See the [canonical contract](./docs/CROSS_REPO_DEPENDENCY_ISOLATION_V1.md) and its [`docs/cross_repo_dependency_isolation_v1.json`](./docs/cross_repo_dependency_isolation_v1.json) companion.
+The second script records artifacts under `artifacts/standalone_build_gate/<timestamp>/`, routes every heavy Cargo lane through `rch` (the remote-compilation hook), requires standalone check/test/release success, and blocks on every failed lane. If `/dp` source checkouts are missing, only their six local-source smoke lanes are recorded as `skipped`; external-dependency build lanes still run. See the [canonical contract](./docs/CROSS_REPO_DEPENDENCY_ISOLATION_V1.md) and its [`docs/cross_repo_dependency_isolation_v1.json`](./docs/cross_repo_dependency_isolation_v1.json) companion.
 
 ### Optional Operator Stack
 

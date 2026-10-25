@@ -10,9 +10,19 @@ autotests = false
 [lib]
 path = "src/lib.rs"
 
-# Compile the moved support-heavy integration tests from their original
+[features]
+# Preserve the public Buffer target's original engine-default coverage.
+# Standalone callers explicitly disable this forwarding feature.
+default = ["engine-defaults"]
+engine-defaults = ["frankenengine-engine/default"]
+
+# Compile the moved integration tests from their original
 # crate-root files. The local tests/ shims use include! for discoverability, but
 # include! cannot preserve crate-root inner attributes from the source files.
+[[test]]
+name = "buffer_value_bd_9vouw_104"
+path = "../franken-engine/tests/buffer_value_bd_9vouw_104.rs"
+
 [[test]]
 name = "cancellation_lifecycle_integration"
 path = "../franken-engine/tests/cancellation_lifecycle_integration.rs"
@@ -52,6 +62,10 @@ path = "../franken-engine/tests/execution_cell_integration.rs"
 [[test]]
 name = "extension_host_lifecycle_integration"
 path = "../franken-engine/tests/extension_host_lifecycle_integration.rs"
+
+[[test]]
+name = "fleet_quarantine_integration"
+path = "../franken-engine/tests/fleet_quarantine_integration.rs"
 
 [[test]]
 name = "frankenlab_extension_lifecycle_enrichment_integration"
@@ -115,11 +129,16 @@ path = "../franken-engine/tests/safety_decision_router_integration.rs"
 # the engine's default features and drags all nine siblings back in
 # (bd-ndpm2). This crate uses no sibling-gated engine API. The asupersync
 # control-plane integration is requested explicitly because these tests do
-# exercise it.
+# exercise it. The fleet-quarantine target also needs the non-authoritative
+# TEE simulator; enable it here, outside the engine's own dev graph. The
+# package's default forwarding above adds engine defaults only when selected;
+# --no-default-features retains this explicit Asupersync/mock-TEE subset.
 frankenengine-engine = { path = "../franken-engine", default-features = false, features = [
     "asupersync-integration",
+    "tee-test-mock",
 ] }
 frankenengine-test-support = { path = "../franken-engine-test-support" }
+chrono = { version = "0.4", features = ["serde"] }
 insta = { version = "1.39", features = ["filters"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

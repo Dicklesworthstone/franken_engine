@@ -87,6 +87,11 @@ path = "benches/erasure_vs_replication.rs"
 harness = false
 
 [[test]]
+name = "buffer_value_bd_9vouw_104"
+path = "tests/buffer_value_bd_9vouw_104.rs"
+required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
+
+[[test]]
 name = "cancellation_lifecycle_integration"
 path = "tests/cancellation_lifecycle_integration.rs"
 required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
@@ -138,6 +143,11 @@ required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
 [[test]]
 name = "extension_host_lifecycle_integration"
 path = "tests/extension_host_lifecycle_integration.rs"
+required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
+
+[[test]]
+name = "fleet_quarantine_integration"
+path = "tests/fleet_quarantine_integration.rs"
 required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
 
 [[test]]
@@ -263,9 +273,9 @@ native-capsule-fixed-probe = [
     "frankenengine-native-capsule/embedded-fixed-probe",
 ]
 # Do not enable this feature in normal engine validation. The listed
-# support-dependent integration tests are owned by the sibling
-# frankenengine-control-plane-integration-tests package, which supplies
-# frankenengine-test-support without making engine lib-unit tests compile it.
+# moved integration tests are owned by the sibling
+# frankenengine-control-plane-integration-tests package. It supplies test-only
+# support and runs the public Buffer API target without building engine bins.
 __moved_to_frankenengine_control_plane_integration_tests = []
 # Temporary profiling feature for H4.1 deterministic_serde::encode_into phase analysis.
 # Adds #[inline(never)] sentinels around encode phases for perf attribution.
@@ -276,8 +286,9 @@ _h4_profile = []
 # with a fixed, publicly-known HMAC-SHA256 key and attests NOTHING about a real
 # TEE, so it must NEVER be enabled in production builds (bd-bg9l1.2). The
 # crate's own #[cfg(test)] unit tests reach the mock without this feature; it
-# exists purely so integration tests can — and those activate it via the self
-# dev-dependency below (which a plain `cargo build`/`--release` does not pull).
+# exists purely so integration tests can. The dedicated control-plane test
+# package activates it on its dev-dependency; the engine has no self
+# dev-dependency, so library unit tests need not first build a second engine lib.
 tee-test-mock = []
 # Real hardware-backed TEE quote path for `tee_live_quote`. OFF by default
 # because no Intel SGX / AMD SEV / Intel TDX SDK is integrated yet. With this
@@ -340,9 +351,12 @@ uuid = { version = "1.16", features = ["v7", "serde"] }
 syn = { version = "2.0", features = ["full", "visit"] }
 toml = "1"
 clap = { version = "4.5", features = ["derive"] }
-sqlmodel = { version = "0.5.0", optional = true }
-sqlmodel-core = { version = "0.5.0", optional = true }
-sqlmodel-frankensqlite = { version = "0.5.0", optional = true }
+# Keep the SQLModel family coherent while consuming the upstream numeric-FULL
+# fix missing from crates.io 0.5.0. No version fallback: packaging must not
+# silently select the broken registry driver instead of this exact source.
+sqlmodel = { git = "https://github.com/Dicklesworthstone/sqlmodel_rust.git", rev = "7f432ff690260ef85aca5227e2372b2eb63230c9", optional = true }
+sqlmodel-core = { git = "https://github.com/Dicklesworthstone/sqlmodel_rust.git", rev = "7f432ff690260ef85aca5227e2372b2eb63230c9", optional = true }
+sqlmodel-frankensqlite = { git = "https://github.com/Dicklesworthstone/sqlmodel_rust.git", rev = "7f432ff690260ef85aca5227e2372b2eb63230c9", optional = true }
 franken-engine-deterministic-trait = { path = "../franken-engine-deterministic-trait" }
 franken-engine-deterministic-derive = { path = "../franken-engine-deterministic-derive" }
 franken-engine-fixed-layout-derive = { path = "../franken-engine-fixed-layout-derive" }
@@ -374,20 +388,6 @@ fp-types = { version = "0.2.0", optional = true }
 dp = { path = "../dp" }
 
 [dev-dependencies]
-# Self dev-dependency: activates the test-only `tee-test-mock` feature for this
-# crate's integration tests (e.g. fleet_quarantine_integration.rs) without
-# leaking it into the default/production build. Dev-dependencies are not pulled
-# by `cargo build`/`--release`, so the mock stays out of prod (bd-bg9l1.2).
-#
-# `default-features = false` is load-bearing (bd-ndpm2): without it this entry
-# re-enables `default` during feature unification, so `cargo test
-# --no-default-features` silently rebuilt every `/dp` sibling and the gate's
-# standalone-test lane proved nothing. Requesting only `tee-test-mock` here
-# leaves an ordinary `cargo test` unchanged — the lib target still brings
-# `default` in — while letting the standalone lane actually be standalone.
-frankenengine-engine = { path = ".", default-features = false, features = [
-    "tee-test-mock",
-] }
 criterion = { version = "0.8", features = ["html_reports"] }
 tempfile = "3.0"
 tracing = "0.1"

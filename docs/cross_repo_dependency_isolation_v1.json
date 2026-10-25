@@ -101,8 +101,11 @@
     {
       "dependency_key": "sqlmodel",
       "crate_module": "sqlmodel",
-      "source_kind": "crates.io",
-      "version_requirement": "0.3.1",
+      "source_kind": "git",
+      "version_requirement": "*",
+      "package_version": "0.5.0",
+      "git_url": "https://github.com/Dicklesworthstone/sqlmodel_rust.git",
+      "git_revision": "7f432ff690260ef85aca5227e2372b2eb63230c9",
       "feature_gate": "sibling-persistence",
       "approved_boundary_files": [
         "crates/franken-engine/src/storage_adapter.rs",
@@ -118,8 +121,11 @@
     {
       "dependency_key": "sqlmodel-core",
       "crate_module": "sqlmodel_core",
-      "source_kind": "crates.io",
-      "version_requirement": "0.3.1",
+      "source_kind": "git",
+      "version_requirement": "*",
+      "package_version": "0.5.0",
+      "git_url": "https://github.com/Dicklesworthstone/sqlmodel_rust.git",
+      "git_revision": "7f432ff690260ef85aca5227e2372b2eb63230c9",
       "feature_gate": "sibling-persistence",
       "approved_boundary_files": [
         "crates/franken-engine/src/storage_adapter.rs",
@@ -133,8 +139,11 @@
     {
       "dependency_key": "sqlmodel-frankensqlite",
       "crate_module": "sqlmodel_frankensqlite",
-      "source_kind": "crates.io",
-      "version_requirement": "0.3.1",
+      "source_kind": "git",
+      "version_requirement": "*",
+      "package_version": "0.5.0",
+      "git_url": "https://github.com/Dicklesworthstone/sqlmodel_rust.git",
+      "git_revision": "7f432ff690260ef85aca5227e2372b2eb63230c9",
       "feature_gate": "sibling-persistence",
       "approved_boundary_files": [
         "crates/franken-engine/src/storage_adapter.rs",
@@ -233,15 +242,17 @@
       "commands": [
         "cargo check -p frankenengine-engine --no-default-features",
         "cargo test -p frankenengine-engine --no-default-features",
+        "cargo test -p frankenengine-control-plane-integration-tests --no-default-features --test fleet_quarantine_integration",
+        "cargo test -p frankenengine-control-plane-integration-tests --no-default-features --test buffer_value_bd_9vouw_104",
         "cargo build --release --no-default-features -p frankenengine-engine --bin frankenctl"
       ],
-      "description": "Compile, test, and release-build the engine without any default cross-repository integration feature."
+      "description": "Compile, test, and release-build the engine with default integration features disabled; the retained fleet and Buffer targets explicitly use Asupersync and the test-only TEE simulator without forwarding engine defaults."
     },
     "full_integration": {
       "commands": [
         "cargo check -p frankenengine-engine --all-features"
       ],
-      "description": "Verify the feature-gated control-plane, persistence, service, and dataframe surfaces with registry-backed sibling crates enabled."
+      "description": "Verify the feature-gated control-plane, persistence, service, and dataframe surfaces with registry crates and the exact upstream SQLModel Git revision enabled."
     }
   },
   "verification_surfaces": {

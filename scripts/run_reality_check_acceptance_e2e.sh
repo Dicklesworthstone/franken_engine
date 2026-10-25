@@ -627,7 +627,7 @@ if [ -f "$PROJECT_ROOT/crates/franken-engine/tests/fleet_quarantine_integration.
         "fleet_evidence/fleet_quarantine_integration.log" \
         "Fleet quarantine integration test executed successfully" \
         "Fleet quarantine integration test failed" \
-        cargo test -p frankenengine-engine --test fleet_quarantine_integration test_convergence_slo_met -- --exact --nocapture
+        cargo test -p frankenengine-control-plane-integration-tests --no-default-features --test fleet_quarantine_integration test_convergence_slo_met -- --exact --nocapture
 else
     log_fail_closed_artifact \
         "fleet_quarantine" \

@@ -6,18 +6,29 @@ verification posture.
 
 ## Scope
 
-`frankenengine-engine` carries four registry-backed dependency families behind
+`frankenengine-engine` carries four external dependency families behind
 feature gates:
 
 - asupersync: `franken-kernel`, `franken-decision`, `franken-evidence` at `0.3.4`
-- persistence: `sqlmodel`, `sqlmodel-core`, `sqlmodel-frankensqlite` at `0.3.1`
+- persistence: `sqlmodel`, `sqlmodel-core`, `sqlmodel-frankensqlite` at upstream
+  Git revision `7f432ff690260ef85aca5227e2372b2eb63230c9` (package version `0.5.0`)
 - service API: `fastapi-core` at `0.3.1`
 - dataframes: `fp-io`, `fp-frame`, `fp-columnar`, `fp-index`, `fp-types` at `0.2.0`
 
 These dependencies are optional at the Cargo layer, enabled by default through
-four explicit feature gates, and consumed as versioned crates rather than hard
-`/dp` path dependencies. That keeps the repo standalone-ready while preserving
+four explicit feature gates, and consumed as registry crates or an immutable
+upstream Git revision rather than hard `/dp` path dependencies. That keeps the
+repo standalone-ready while preserving
 an explicit full-integration feature surface.
+
+The SQLModel pin consumes its existing numeric `PRAGMA synchronous` FULL-readback
+fix, which is absent from crates.io `0.5.0`. All three direct SQLModel dependencies
+share that revision, and the lockfile keeps all eight SQLModel packages coherent.
+FrankenSQLite remains the SDK's selected registry `0.4.10`; the engine adds no
+root patch, cache modification, or durability-policy replacement. The Git entries
+have no registry version fallback, so packaging cannot silently substitute the
+broken driver. A future registry release must be qualified before replacing this
+pin.
 
 ## Dependency Manifest
 
@@ -25,7 +36,7 @@ The canonical dependency manifest is:
 
 - `docs/cross_repo_dependency_isolation_v1.json`
 
-That JSON contract records the external package keys, registry source,
+That JSON contract records the external package keys, source kind and revision,
 feature gate, approved boundary files, imported symbols, verification scripts,
 and operator commands.
 
@@ -43,13 +54,29 @@ The supported operator build modes are:
   `cargo check -p frankenengine-engine --no-default-features`
 - standalone test mode:
   `cargo test -p frankenengine-engine --no-default-features`
+- retained fleet test coverage:
+  `cargo test -p frankenengine-control-plane-integration-tests --no-default-features --test fleet_quarantine_integration`
+- retained Buffer public API coverage:
+  `cargo test -p frankenengine-control-plane-integration-tests --no-default-features --test buffer_value_bd_9vouw_104`
 - standalone release mode:
   `cargo build --release --no-default-features -p frankenengine-engine --bin frankenctl`
 - full integration mode:
   `cargo check -p frankenengine-engine --all-features`
 
 Standalone mode is the blocking portability gate. Full integration mode verifies
-the registry-backed control-plane, persistence, service, and dataframe surfaces.
+the control-plane, persistence, service, and dataframe surfaces.
+The fleet and Buffer targets use the existing control-plane test package's
+explicit Asupersync and mock-TEE features. Its simulator is not hardware
+attestation. The standalone gate runs all three test commands and rejects any
+command's failure. The companion package owns 26 integration targets, including
+the unchanged Buffer source; its default `engine-defaults` feature forwards
+`frankenengine-engine/default` to preserve Buffer's original default-feature
+coverage. `--no-default-features` disables that forwarding. Both-package CI
+continues to run the default coverage, while these explicit standalone commands
+keep persistence, service, and dataframe features disabled.
+The internal moved-target sentinel is off for default/no-default workspace
+selection. `--all-features` enables that sentinel and reactivates engine copies,
+so this arrangement does not establish universal target uniqueness.
 
 ## Verification Surfaces
 
@@ -98,10 +125,11 @@ Heavy Rust verification for this lane must stay remote:
 
 Both scripts are expected to route heavy Cargo commands through `rch`.
 
-## Sibling Repository SHA Pinning
+## Historical Sibling Checkout Inventory (2026-05-21)
 
-The following commit SHAs represent the exact state of sibling repositories that
-the most recent CI run was built against. These must be updated on each release cut.
+The following table preserves the earlier checkout inventory. The current
+`Cargo.toml`, `Cargo.lock`, and explicit source pin above govern dependency
+selection; this historical table does not attest a current build.
 
 | Repository | Commit SHA | Updated |
 |------------|------------|---------|

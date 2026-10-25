@@ -58,6 +58,98 @@ fn single_run_dir(root: &PathBuf) -> PathBuf {
 }
 
 #[test]
+fn moved_buffer_target_preserves_ownership_and_feature_modes() {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let engine: toml::Value = toml::from_str(&read_repo_text("crates/franken-engine/Cargo.toml"))
+        .expect("parse engine manifest");
+    let companion: toml::Value = toml::from_str(&read_repo_text(
+        "crates/franken-engine-control-plane-integration-tests/Cargo.toml",
+    ))
+    .expect("parse companion manifest");
+    let sentinel = "__moved_to_frankenengine_control_plane_integration_tests";
+    let mut moved = BTreeMap::new();
+    for target in engine["test"].as_array().expect("engine explicit tests") {
+        if target
+            .get("required-features")
+            .and_then(toml::Value::as_array)
+            .is_some_and(|features| {
+                features
+                    .iter()
+                    .any(|feature| feature.as_str() == Some(sentinel))
+            })
+        {
+            moved.insert(target["name"].as_str().unwrap(), target);
+        }
+    }
+    let owned = companion["test"]
+        .as_array()
+        .expect("companion explicit tests")
+        .iter()
+        .map(|target| (target["name"].as_str().unwrap(), target))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        moved.len(),
+        26,
+        "all existing targets plus Buffer stay moved"
+    );
+    assert_eq!(owned.len(), 26);
+    assert!(owned.contains_key("buffer_value_bd_9vouw_104"));
+    assert_eq!(
+        moved.keys().collect::<Vec<_>>(),
+        owned.keys().collect::<Vec<_>>()
+    );
+    for (name, target) in moved {
+        let original = repo_root()
+            .join("crates/franken-engine")
+            .join(target["path"].as_str().unwrap())
+            .canonicalize()
+            .unwrap();
+        let compiled = repo_root()
+            .join("crates/franken-engine-control-plane-integration-tests")
+            .join(owned[name]["path"].as_str().unwrap())
+            .canonicalize()
+            .unwrap();
+        assert_eq!(original, compiled, "the same test source is owned: {name}");
+    }
+    assert_eq!(companion["package"]["autotests"].as_bool(), Some(false));
+    assert_eq!(
+        companion["features"]["default"].as_array().unwrap(),
+        &[toml::Value::String("engine-defaults".into())]
+    );
+    assert_eq!(
+        companion["features"]["engine-defaults"].as_array().unwrap(),
+        &[toml::Value::String("frankenengine-engine/default".into())]
+    );
+    let dependency = &companion["dev-dependencies"]["frankenengine-engine"];
+    assert_eq!(dependency["default-features"].as_bool(), Some(false));
+    let explicit = dependency["features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|feature| feature.as_str().unwrap())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        explicit,
+        BTreeSet::from(["asupersync-integration", "tee-test-mock"])
+    );
+    assert!(
+        engine["dev-dependencies"]
+            .get("frankenengine-engine")
+            .is_none(),
+        "moving tests must not recreate the engine self dev-dependency"
+    );
+    assert!(
+        !engine["features"]["default"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|feature| feature.as_str() == Some("tee-test-mock")),
+        "mock TEE stays outside engine production defaults"
+    );
+}
+
+#[test]
 fn standalone_build_gate_script_routes_heavy_lanes_through_rch() {
     let script = read_repo_text("scripts/test_standalone_build.sh");
     assert!(
@@ -84,6 +176,10 @@ fn standalone_build_gate_script_routes_heavy_lanes_through_rch() {
     assert!(
         script.contains("cargo test -p frankenengine-engine --no-default-features"),
         "script should verify standalone cargo test"
+    );
+    assert!(
+        script.contains("cargo test -p frankenengine-control-plane-integration-tests --no-default-features --test buffer_value_bd_9vouw_104"),
+        "script should retain the moved Buffer target's standalone coverage"
     );
     assert!(
         script.contains(
@@ -166,10 +262,12 @@ fn standalone_build_gate_skip_mode_emits_manifest_and_commands() {
     let lanes = manifest["lanes"]
         .as_array()
         .expect("lanes should be an array");
-    assert_eq!(lanes.len(), 12, "ci mode should report every declared lane");
+    assert_eq!(lanes.len(), 14, "ci mode should report every declared lane");
     for lane_name in [
         "standalone-check",
         "standalone-test",
+        "standalone-fleet-test",
+        "standalone-buffer-test",
         "standalone-release",
         "full-check",
     ] {
@@ -215,6 +313,14 @@ fn standalone_build_gate_skip_mode_emits_manifest_and_commands() {
         "commands.txt should record the standalone test lane"
     );
     assert!(
+        commands.contains("cargo test -p frankenengine-control-plane-integration-tests --no-default-features --test fleet_quarantine_integration"),
+        "commands.txt should retain the moved fleet test lane"
+    );
+    assert!(
+        commands.contains("cargo test -p frankenengine-control-plane-integration-tests --no-default-features --test buffer_value_bd_9vouw_104"),
+        "commands.txt should retain the moved Buffer test lane"
+    );
+    assert!(
         commands.contains(
             "cargo build --release --no-default-features -p frankenengine-engine --bin frankenctl"
         ),
@@ -224,6 +330,124 @@ fn standalone_build_gate_skip_mode_emits_manifest_and_commands() {
         commands.contains("cargo check -p frankenengine-engine --all-features"),
         "commands.txt should record the full integration lane"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn standalone_build_gate_rejects_injected_fleet_command_failure() {
+    assert_moved_target_command_failure_blocks_gate(
+        "fleet_quarantine_integration",
+        "standalone-fleet-test",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn standalone_build_gate_rejects_injected_buffer_command_failure() {
+    assert_moved_target_command_failure_blocks_gate(
+        "buffer_value_bd_9vouw_104",
+        "standalone-buffer-test",
+    );
+}
+
+#[cfg(unix)]
+fn assert_moved_target_command_failure_blocks_gate(failing_target: &str, failing_lane: &str) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let out_dir = unique_temp_dir(&format!("standalone-{failing_target}-command-failure"));
+    let bin_dir = out_dir.join("injected-bin");
+    fs::create_dir_all(&bin_dir).expect("create injected command directory");
+    let rch = bin_dir.join("rch");
+    let toolchain: toml::Value = toml::from_str(
+        &fs::read_to_string(repo_root().join("rust-toolchain.toml")).expect("read repository pin"),
+    )
+    .expect("parse repository toolchain");
+    let pinned_channel = toolchain["toolchain"]["channel"]
+        .as_str()
+        .expect("pinned channel");
+    // Protocol fault double tests the shell gate, not any Rust compilation or
+    // integration execution. With the declared pin, only the selected command
+    // fails. A floating-nightly override must also fail the permitted lane.
+    fs::write(
+        &rch,
+        r#"#!/usr/bin/env bash
+pin_seen=0
+for argument in "$@"; do
+  if [[ "$argument" == "RUSTUP_TOOLCHAIN=$EXPECTED_RUSTUP_TOOLCHAIN" ]]; then
+    pin_seen=1
+  fi
+done
+if [[ "$pin_seen" != 1 ]]; then
+  echo 'Remote command finished: exit=91' >&2
+  exit 91
+fi
+case "$*" in
+*"--test $INJECTED_FAILING_TARGET"*)
+  echo 'Remote command finished: exit=23' >&2
+  exit 23
+  ;;
+*) echo 'Remote command finished: exit=0' ;;
+esac
+"#,
+    )
+    .expect("write injected RCH protocol double");
+    fs::set_permissions(&rch, fs::Permissions::from_mode(0o755)).expect("make double executable");
+    let mut paths = vec![bin_dir];
+    paths.extend(env::split_paths(&env::var_os("PATH").expect("PATH")));
+    let output = Command::new("bash")
+        .arg(repo_root().join("scripts/test_standalone_build.sh"))
+        .arg("standalone-test")
+        .env("PATH", env::join_paths(paths).expect("fixture PATH"))
+        .env_remove("RUSTUP_TOOLCHAIN")
+        .env("EXPECTED_RUSTUP_TOOLCHAIN", pinned_channel)
+        .env("INJECTED_FAILING_TARGET", failing_target)
+        .env(
+            "STANDALONE_BUILD_GATE_ARTIFACT_ROOT",
+            out_dir.join("results"),
+        )
+        .env("STANDALONE_BUILD_GATE_SKIP_REMOTE", "0")
+        .output()
+        .expect("run moved-target command failure drill");
+    assert!(
+        !output.status.success(),
+        "the moved {failing_target} failure must block the gate"
+    );
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &fs::read(single_run_dir(&out_dir.join("results")).join("manifest.json"))
+            .expect("read failure manifest"),
+    )
+    .expect("parse failure manifest");
+    let lanes = manifest["lanes"].as_array().expect("lanes");
+    assert_eq!(lanes.len(), 3);
+    for (name, status) in [
+        ("standalone-test", "passed"),
+        (
+            "standalone-fleet-test",
+            if failing_lane == "standalone-fleet-test" {
+                "failed"
+            } else {
+                "passed"
+            },
+        ),
+        (
+            "standalone-buffer-test",
+            if failing_lane == "standalone-buffer-test" {
+                "failed"
+            } else {
+                "passed"
+            },
+        ),
+    ] {
+        let lane = lanes
+            .iter()
+            .find(|lane| lane["lane"] == name)
+            .expect("lane");
+        assert_eq!(lane["status"], status, "{name}");
+    }
+    assert_eq!(manifest["build_modes"]["standalone"]["status"], "blocked");
+    assert_eq!(manifest["summary"]["standalone_gate_passed"], false);
+    assert_eq!(manifest["summary"]["failed_lane_count"], 1);
+    assert_eq!(manifest["summary"]["overall_status"], "blocked");
 }
 
 #[test]
@@ -370,6 +594,31 @@ fn dependency_isolation_contract_documents_standalone_and_full_integration_modes
     let standalone_commands = contract["build_modes"]["standalone"]["commands"]
         .as_array()
         .expect("standalone commands should be an array");
+    let fleet_command = "cargo test -p frankenengine-control-plane-integration-tests --no-default-features --test fleet_quarantine_integration";
+    let buffer_command = "cargo test -p frankenengine-control-plane-integration-tests --no-default-features --test buffer_value_bd_9vouw_104";
+    assert!(doc.contains(fleet_command));
+    assert!(doc.contains(buffer_command));
+    assert!(
+        standalone_commands
+            .iter()
+            .any(|command| command == fleet_command)
+    );
+    assert!(
+        standalone_commands
+            .iter()
+            .any(|command| command == buffer_command)
+    );
+    let workflow = read_repo_text(".github/workflows/quality-gates.yml");
+    for command in [
+        "cargo check -p frankenengine-engine -p frankenengine-control-plane-integration-tests",
+        "cargo clippy -p frankenengine-engine -p frankenengine-control-plane-integration-tests --all-targets -- -D warnings",
+        "cargo test -p frankenengine-engine -p frankenengine-control-plane-integration-tests",
+    ] {
+        assert!(
+            workflow.contains(command),
+            "missing both-package CI command: {command}"
+        );
+    }
     assert!(standalone_commands.iter().any(|command| {
         command
             .as_str()

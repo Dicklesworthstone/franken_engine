@@ -64,7 +64,7 @@ run_rch_cargo_test() {
         "RUSTUP_TOOLCHAIN=$RUSTUP_TOOLCHAIN" \
         "CARGO_INCREMENTAL=$CARGO_INCREMENTAL" \
         "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS" \
-        cargo test "$@"
+        cargo test -p frankenengine-control-plane-integration-tests --no-default-features "$@"
 }
 
 require_remote_result() {

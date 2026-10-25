@@ -1755,8 +1755,8 @@ fn is_hex_ascii(s: &str) -> bool {
 /// This type is never compiled into production builds. It is gated behind
 /// `#[cfg(test)]` (for this crate's own unit tests) and the opt-in
 /// `tee-test-mock` Cargo feature (activated for cross-crate integration tests
-/// via the self dev-dependency in `Cargo.toml`); it is not part of the default
-/// library API (bd-bg9l1.2).
+/// via the control-plane test package's dev-dependency); it is not part of the
+/// default library API (bd-bg9l1.2).
 ///
 /// Quotes are signed with a real HMAC-SHA256 tag over a canonical preimage, but
 /// the signing key is a fixed, publicly-known constant — so a *verified* quote

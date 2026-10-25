@@ -131,13 +131,13 @@ jobs:
           shared-key: quality-gates-frankenengine-engine
 
       - name: Cargo check
-        run: cargo check -p frankenengine-engine
+        run: cargo check -p frankenengine-engine -p frankenengine-control-plane-integration-tests
 
       - name: Cargo clippy
-        run: cargo clippy -p frankenengine-engine --all-targets -- -D warnings
+        run: cargo clippy -p frankenengine-engine -p frankenengine-control-plane-integration-tests --all-targets -- -D warnings
 
       - name: Cargo fmt
         run: cargo fmt --check
 
       - name: Cargo test
-        run: cargo test -p frankenengine-engine
+        run: cargo test -p frankenengine-engine -p frankenengine-control-plane-integration-tests

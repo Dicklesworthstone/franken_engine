@@ -16949,6 +16949,7 @@ impl InterpreterCore {
             .saturating_add(Self::accumulate_scope_frame_cell_payload_bytes(
                 &scope_chain.frames,
                 &mut BTreeSet::new(),
+                &mut BTreeSet::new(),
             ));
         Self {
             config,
@@ -106966,12 +106967,19 @@ impl InterpreterCore {
     /// payload exactly once (bd-sblaq).
     fn accumulate_scope_frame_cell_payload_bytes(
         frames: &[ScopeFrame],
-        seen: &mut BTreeSet<usize>,
+        seen_cells: &mut BTreeSet<usize>,
+        seen_maps: &mut BTreeSet<usize>,
     ) -> u64 {
         let mut total = 0u64;
         for frame in frames {
+            // Equal Rc map identities contain the same cells. COW maps must
+            // still be inspected, and their shared cells deduplicated below.
+            // This local proof reads no cold-ledger membership or totals.
+            if !seen_maps.insert(Rc::as_ptr(&frame.bindings) as usize) {
+                continue;
+            }
             for binding in frame.bindings.values() {
-                if seen.insert(Rc::as_ptr(&binding.state) as usize) {
+                if seen_cells.insert(Rc::as_ptr(&binding.state) as usize) {
                     total = total
                         .saturating_add(Self::estimate_binding_cell_payload_bytes(&binding.state));
                 }
@@ -106984,14 +106992,19 @@ impl InterpreterCore {
     /// every call frame's saved caller chain.
     fn accumulate_generator_execution_cell_payload_bytes(
         execution: &GeneratorExecutionSnapshot,
-        seen: &mut BTreeSet<usize>,
+        seen_cells: &mut BTreeSet<usize>,
+        seen_maps: &mut BTreeSet<usize>,
     ) -> u64 {
-        let mut total =
-            Self::accumulate_scope_frame_cell_payload_bytes(&execution.scope_chain.frames, seen);
+        let mut total = Self::accumulate_scope_frame_cell_payload_bytes(
+            &execution.scope_chain.frames,
+            seen_cells,
+            seen_maps,
+        );
         for frame in &execution.call_stack {
             if let Some(saved) = &frame.saved_scope_chain {
-                total = total
-                    .saturating_add(Self::accumulate_scope_frame_cell_payload_bytes(saved, seen));
+                total = total.saturating_add(Self::accumulate_scope_frame_cell_payload_bytes(
+                    saved, seen_cells, seen_maps,
+                ));
             }
         }
         total
@@ -107005,34 +107018,49 @@ impl InterpreterCore {
     /// the conservative per-alias model outside this walk, so a cell aliased
     /// both here and there is over-counted, never under-counted.
     fn shared_binding_cell_payloads_memory_bytes(&self) -> u64 {
-        let mut seen: BTreeSet<usize> = BTreeSet::new();
-        let mut total =
-            Self::accumulate_scope_frame_cell_payload_bytes(&self.scope_chain.frames, &mut seen);
+        // Every invocation independently inspects each physical map and cell.
+        // Never reuse visited maps from key accounting or cached ledger state.
+        let mut seen_cells = BTreeSet::new();
+        let mut seen_maps = BTreeSet::new();
+        let mut total = Self::accumulate_scope_frame_cell_payload_bytes(
+            &self.scope_chain.frames,
+            &mut seen_cells,
+            &mut seen_maps,
+        );
         for frame in self.call_stack.iter() {
             if let Some(saved) = &frame.saved_scope_chain {
                 total = total.saturating_add(Self::accumulate_scope_frame_cell_payload_bytes(
-                    saved, &mut seen,
+                    saved,
+                    &mut seen_cells,
+                    &mut seen_maps,
                 ));
             }
         }
         for closure in self.closures.iter() {
             total = total.saturating_add(Self::accumulate_scope_frame_cell_payload_bytes(
                 &closure.captured_env,
-                &mut seen,
+                &mut seen_cells,
+                &mut seen_maps,
             ));
         }
         for generator in self.generators.iter() {
             if let Some(execution) = &generator.execution {
-                total = total.saturating_add(
-                    Self::accumulate_generator_execution_cell_payload_bytes(execution, &mut seen),
-                );
+                total =
+                    total.saturating_add(Self::accumulate_generator_execution_cell_payload_bytes(
+                        execution,
+                        &mut seen_cells,
+                        &mut seen_maps,
+                    ));
             }
         }
         for function in self.async_functions.iter() {
             if let Some(execution) = &function.isolated_execution {
-                total = total.saturating_add(
-                    Self::accumulate_generator_execution_cell_payload_bytes(execution, &mut seen),
-                );
+                total =
+                    total.saturating_add(Self::accumulate_generator_execution_cell_payload_bytes(
+                        execution,
+                        &mut seen_cells,
+                        &mut seen_maps,
+                    ));
             }
         }
         total
@@ -116317,6 +116345,70 @@ mod shared_binding_cell_accounting_tests_bd_sblaq {
     }
 
     #[test]
+    fn full_payload_oracle_preserves_cell_union_without_ledger_metadata_bd_9vouw_31() {
+        // Original cell-only traversal: deliberately inspect repeated maps.
+        fn original_walk(frames: &[ScopeFrame]) -> u64 {
+            let mut cells = BTreeSet::new();
+            let mut total = 0u64;
+            for frame in frames {
+                for binding in frame.bindings.values() {
+                    if cells.insert(Rc::as_ptr(&binding.state) as usize) {
+                        total = total.saturating_add(
+                            InterpreterCore::estimate_binding_cell_payload_bytes(&binding.state),
+                        );
+                    }
+                }
+            }
+            total
+        }
+
+        let mut original = ScopeFrame::new();
+        let shared = ScopeBinding::with_state(BindingKind::Let, Value::str("same"), true);
+        original.insert_binding("binding".to_string(), shared.clone());
+        let fresh =
+            ScopeBinding::with_labeled_state(BindingKind::Let, Value::Int(7), Label::Secret, true);
+        let mut copied = original.clone();
+        copied.insert_binding("fresh".to_string(), fresh.clone());
+        copied.insert_binding("fresh_alias".to_string(), fresh.clone());
+        let mut equal_content = ScopeFrame::new();
+        equal_content.insert_binding(
+            "binding".to_string(),
+            ScopeBinding::with_state(BindingKind::Let, Value::str("same"), true),
+        );
+        let mut core = accounting_test_core();
+        core.scope_chain.frames = vec![
+            original.clone(),
+            original,
+            copied.clone(),
+            equal_content,
+            copied,
+        ];
+        let expected = InterpreterCore::estimate_binding_cell_payload_bytes(&shared.state)
+            .saturating_mul(2)
+            .saturating_add(InterpreterCore::estimate_binding_cell_payload_bytes(
+                &fresh.state,
+            ));
+        assert_eq!(original_walk(&core.scope_chain.frames), expected);
+
+        // A reference walk must not certify the incremental ledger from its
+        // own cached total, even when its map identities are reused.
+        let ledger_bytes = core.closures.cold_cells.payload_bytes;
+        core.closures.cold_cells.payload_bytes = u64::MAX;
+        assert_eq!(core.shared_binding_cell_payloads_memory_bytes(), expected);
+
+        shared.state.borrow_mut().value = Value::str("changed".repeat(128));
+        let changed = original_walk(&core.scope_chain.frames);
+        assert_ne!(changed, expected);
+        assert_eq!(core.shared_binding_cell_payloads_memory_bytes(), changed);
+        let borrowed = shared.state.borrow_mut();
+        assert_eq!(original_walk(&core.scope_chain.frames), u64::MAX);
+        assert_eq!(core.shared_binding_cell_payloads_memory_bytes(), u64::MAX);
+        drop(borrowed);
+        assert_eq!(core.shared_binding_cell_payloads_memory_bytes(), changed);
+        core.closures.cold_cells.payload_bytes = ledger_bytes;
+    }
+
+    #[test]
     fn released_frame_payload_tracks_held_maps_cow_and_last_alias_bd_9vouw_31() {
         let mut core = accounting_test_core();
         let mut held = ScopeFrame::new();
@@ -119931,7 +120023,10 @@ mod active_builtin_regressions {
 
         let error = call_builtin_for_test(&mut core, BuiltinFunction::array_pop(), array, &[])
             .expect_err("popping a frozen array must fail");
-        assert!(matches!(error, InterpreterError::TypeError { .. }));
+        assert!(
+            matches!(&error, InterpreterError::TypeError { .. }),
+            "frozen pop error must remain TypeError; observed {error:?}"
+        );
 
         let object = &core.heap[array.0 as usize];
         assert_eq!(object.properties.get("1"), Some(&Value::Int(8)));
@@ -126928,6 +127023,9 @@ mod async_runtime_tests_current {
         let provider = Arc::new(SandboxedHostIo::with_root(&root).expect("sandboxed provider"));
         let recorder = Arc::new(InMemoryHostIoTranscript::recording());
         let mut core = test_interpreter();
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::NetworkEgress);
         let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
         core.set_host_io(provider, Some(recorder_dyn));
 
@@ -127272,6 +127370,9 @@ mod async_runtime_tests_current {
         let provider = Arc::new(SandboxedHostIo::with_root(&root).expect("sandboxed provider"));
         let recorder = Arc::new(InMemoryHostIoTranscript::recording());
         let mut core = test_interpreter();
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::NetworkEgress);
         let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
         core.set_host_io(provider, Some(recorder_dyn));
 
@@ -127426,6 +127527,9 @@ mod async_runtime_tests_current {
     #[test]
     fn client_request_receiver_label_reaches_deferred_error_bd_z1peg() {
         let mut core = test_interpreter();
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::NetworkEgress);
         core.write_reg_with_label(0, Value::str("http://127.0.0.1:9/"), Label::Public)
             .expect("request URL");
         let request = core
@@ -127473,6 +127577,9 @@ mod async_runtime_tests_current {
     fn legacy_client_request_body_is_bounded_and_failure_atomic_bd_z1peg_2() {
         let module = test_module_with_functions(Vec::new(), Vec::new());
         let mut core = test_interpreter();
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::NetworkEgress);
         core.write_reg(0, Value::str("http://127.0.0.1:9/"))
             .expect("request URL");
         let Value::Object(request) = core
@@ -127724,6 +127831,107 @@ mod async_runtime_tests_current {
     }
 
     #[test]
+    fn legacy_client_request_end_rechecks_authority_before_mutation_or_provider() {
+        use frankenengine_extension_host::host_io::{HostIoCapability, InMemoryHostIoTranscript};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        #[derive(Debug)]
+        struct NeverNetworkProvider(Arc<AtomicUsize>);
+
+        impl HostIoProvider for NeverNetworkProvider {
+            fn name(&self) -> &str {
+                "never-network-after-authority-denial"
+            }
+
+            fn perform(
+                &self,
+                _request: &HostIoRequest,
+                _granted: &[HostIoCapability],
+            ) -> HostIoOutcome {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                panic!("authority-denied deferred request reached the provider")
+            }
+        }
+
+        for grant_at_construction in [false, true] {
+            let mut core = test_interpreter();
+            let calls = Arc::new(AtomicUsize::new(0));
+            let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+            let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+            core.set_host_io(
+                Arc::new(NeverNetworkProvider(calls.clone())),
+                Some(recorder_dyn),
+            );
+            if grant_at_construction {
+                core.config
+                    .granted_capabilities
+                    .insert(RuntimeCapability::NetworkEgress);
+                check_hostcall_capability_gate(&mut core, "net:client_request", 0)
+                    .expect("construction is authorized before later revocation");
+            }
+            core.write_reg(0, Value::str("http://127.0.0.1:9/"))
+                .expect("request URL");
+            // Seed the deferred state directly to cover both a withheld grant
+            // and a grant revoked after authorized construction.
+            let Value::Object(request) = core
+                .dispatch_client_request_create(RegRange { start: 0, count: 1 })
+                .expect("buffered request")
+            else {
+                panic!("expected ClientRequest")
+            };
+            let module = test_module_with_functions(Vec::new(), Vec::new());
+            core.write_reg(1, Value::str("prefix"))
+                .expect("buffered body prefix");
+            core.dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::client_request_write(),
+                RegRange { start: 1, count: 1 },
+                Some(Value::Object(request)),
+                None,
+            )
+            .expect("buffering does not egress");
+            core.config
+                .granted_capabilities
+                .remove(&RuntimeCapability::NetworkEgress);
+            core.write_reg_with_label(1, Value::str("classified suffix"), Label::Secret)
+                .expect("final chunk");
+            let before_properties = core.heap[request.0 as usize].properties.clone();
+            let before_label = core.object_mutation_labels.get(&request).cloned();
+            let before_decisions = core.hostcall_decisions.len();
+            let error = core
+                .dispatch_builtin_function(
+                    &module,
+                    &BuiltinFunction::client_request_end(),
+                    RegRange { start: 1, count: 1 },
+                    Some(Value::Object(request)),
+                    None,
+                )
+                .expect_err("withheld or revoked authority must stop deferred egress");
+            assert!(matches!(
+                error,
+                InterpreterError::CapabilityDenied { capability } if capability == "net:request"
+            ));
+            assert_eq!(core.heap[request.0 as usize].properties, before_properties);
+            assert_eq!(
+                core.object_mutation_labels.get(&request).cloned(),
+                before_label
+            );
+            assert!(core.pending_http_tasks.is_empty());
+            assert!(core.pending_stream_emissions.is_empty());
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+            assert!(recorder.recorded_entries().is_empty());
+            assert_eq!(core.hostcall_decisions.len(), before_decisions + 1);
+            let denial = core.hostcall_decisions.last().expect("authority evidence");
+            assert_eq!(denial.capability.0, "net:request");
+            assert!(!denial.allowed);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
     fn legacy_client_request_ifc_denial_is_recorded_before_provider_bd_z1peg_2() {
         use frankenengine_extension_host::host_io::{
             HostIoCapability, HostIoRequest, InMemoryHostIoTranscript,
@@ -127757,6 +127965,9 @@ mod async_runtime_tests_current {
         });
         let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
         let mut core = test_interpreter();
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::NetworkEgress);
         core.set_host_io(provider, Some(recorder_dyn));
         let module = test_module_with_functions(Vec::new(), Vec::new());
 
@@ -127856,6 +128067,10 @@ mod async_runtime_tests_current {
         );
 
         let mut missing_evidence = test_interpreter();
+        missing_evidence
+            .config
+            .granted_capabilities
+            .insert(RuntimeCapability::NetworkEgress);
         let missing_evidence_provider: Arc<dyn HostIoProvider> = Arc::new(NeverNetworkProvider {
             calls: calls.clone(),
         });
@@ -142698,6 +142913,9 @@ mod async_runtime_tests_current {
     #[test]
     fn client_request_on_error_fires_on_failed_egress_bd_3894s() {
         let mut core = test_interpreter();
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::NetworkEgress);
         let module = test_module_with_functions(vec![], vec![]);
 
         // http.request('http://127.0.0.1:0/') — build the writable request (no egress).
@@ -142828,6 +143046,9 @@ mod async_runtime_tests_current {
         let provider = Arc::new(SandboxedHostIo::with_root(&root).expect("sandboxed provider"));
         let recorder = Arc::new(InMemoryHostIoTranscript::recording());
         let mut core = test_interpreter();
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::NetworkEgress);
         let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
         core.set_host_io(provider, Some(recorder_dyn));
         let module = test_module_with_functions(vec![], vec![]);

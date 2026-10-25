@@ -165,18 +165,90 @@ These results do **not** establish the original `.31` requirement at
 100/200/400/800 with at most 2.3x per doubling against the closure-free twin.
 That stricter acceptance and production old/new/live-Node qualification remain
 unrun. **0/100 optimization passes are qualified; no candidate speedup has
-been measured.**
+passed the full comparative acceptance.**
 
-Final-source all-target Clippy passes under the pinned toolchain, default profile
-and default features. Clean pre-correction source also passed all-target check;
-the final-source check on `hz3` timed out after 3,630 seconds and recovered as
-exit 137 with terminal acknowledgement. It is not a pass; a normally admitted
-retry remains pending. The full formatting gate stays red (2,001 sections across
-229 files), and full workspace tests remain unrun after transport failures.
+The frozen production candidate `13392082920f4ae4dbfd375c29f1684a00987c57`
+has now compiled successfully under the same pinned release configuration.
+Its 147,533,432-byte ELF, SHA256
+`2888e3001625f2b400d61f22f6006ee88aff7e4f4504287c42fb11cfdf1fd8d8`,
+is retained on workers. Original Cargo JSON and exact-job recovery confirm
+compiler exit 0; RCH's foreign-artifact delivery refusal remains exit 102.
+A direct private Tailscale transfer placed the hash-matching candidate beside
+the baseline and Node on `ovh-b`; no binary bytes passed through the Mac.
+All 13 candidate/live-Node correctness checks and 26 candidate strict replays
+passed. Two subsequent three-runtime measurement attempts stopped at contention
+guards after 450 and 336 measured samples. Every sample is retained; neither
+attempt qualifies a speed result. The completed Lodash portion of the first
+attempt has 120 samples per runtime and passing noise checks, with old/candidate
+medians of 982.7/840.0 ms. This is diagnostic evidence from a refused whole
+attempt; the remaining regression, memory and replay gates were not completed.
+
+Final-source all-target check and Clippy now both pass under the pinned toolchain,
+default profile and default features. The successful check on `ts1` took 23m13s,
+with strict remote exit 0 and terminal acknowledgement. The earlier `hz3` timeout
+recovered as 137, the redundant `hz4` run ended 143 following a cancellation
+request, and the `trj` retry recovered 255; those remain non-passes. The full
+formatting gate stays red (2,001 sections across 229 files), and full workspace
+tests remain unrun after transport failures.
+
+An additional 72 parser-oracle module tests passed on the retained native test
+binary, including the real-file→parser→critical-drift→Reject regression. An
+independent verifier reran all 72, checked the executable hash before/after and
+closed only `bd-nrfpu` against its original criteria. Five actual CLI controls
+also passed: a valid parse promotes, matching errors with an expected success
+hash reject, a wrong success hash rejects, mixed catalogs retain the failing
+denominator, and invalid schemas produce no success report. The parent's first
+CLI probe was 4/5 because its malformed-schema exit expectation was wrong;
+the exact CLI error exit was corrected to 2 and every original run was retained.
+The verifier's extra CLI reexecution stopped before execution and stays unrun;
+closure rests on the independently executed original Rust E2E and source
+inspection. These are **112 distinct selected native tests**, plus five CLI
+controls; the independent repeated 72 do not add unique coverage. No broad
+conformance or concurrent file-swap experiment is claimed.
+
+The broader engine library run compiled and began 46,163 tests. It recorded
+3,104 passing and 22 failing tests before an expensive Promise case stopped
+making visible progress. A read-only GDB capture found repeated full memory
+accounting walks during async unwind. The owned run was cancelled and recovered
+as 143 with terminal acknowledgement; it has no completed full-suite verdict.
+An independent fail-alone reproduction confirms the frozen-array error-type
+assertion fails on the identical native executable. Public old/candidate/Node
+probes agree on frozen-array state and ordinary sparse reduction; native JSON
+depth behavior differs from Node. These observations do not resolve every unit
+failure or establish a new accounting regression.
+
+Current unverified maintenance deduplicates immutable frame-map identities in
+the reference payload walk while retaining global cell deduplication and every
+existing debug assertion. Its new test compares the original cell-only walk,
+including COW, distinct cells, corrupted ledger metadata and borrow saturation.
+Three failing assertions now print their actual errors without changing their
+expectations. Its preformat all-target check passed; native validation is still
+pending. Independent reproduction of a legacy ClientRequest failure found
+`CapabilityDenied(net:request)` before egress. Eight explicit network grants now
+restore the intended body/response/IFC fixtures without changing their assertions,
+shared defaults or production gates. A new two-case test checks withheld and
+revoked authority before mutation or provider entry. Independent source review
+found no blocker; this is fixture maintenance and a lower-level `.end()` control,
+not a newly proved public JavaScript network path. Frozen revision
+`a68422e25e516dd2167a3bc721eac8b93a53ed78` contains only the four owned source
+paths over `070257311`; native tests, Clippy and check are running against it.
+
+The revised original Buffer target separately passed all eight tests, including
+the exact Object alias `.join()` example and four actual/captured shadow reads.
+Its same-coverage all-target check and Clippy passed, as did whole-file formatting.
+These repeated eight tests do not increase the distinct-test denominator above.
+The required UBS scan reports identical findings on the original and revised
+file: one critical on its unchanged intentional test-helper `panic!`, fourteen
+warnings and five informational findings. A scoped commit exception is pending;
+the helper and scanner remain unchanged. Full workspace testing and inherited
+formatting failures remain unresolved.
 Raw logs are retained in `artifacts/optimization-100x-ss6_54xg/` as
 `current-native-accounting-tests.log`,
 `current-native-public-integration-tests.log`,
-`current-native-all-targets-clippy.log` and `current-native-check-recovery.json`.
+`current-native-all-targets-clippy.log`, `current-native-all-targets-check-ts1.log`,
+`parser-oracle-independent-unit-tests.log`,
+`current-native-parser-oracle-acceptance-corrected.log` and
+`current-native-check-recovery.json`.
 The owner authorized scoped worker-only validation and affirmed the proposed
 worker-only candidate build/comparison despite the Mac's failing disk preflight.
 During these scoped lanes, compiler outputs stayed on workers; no local

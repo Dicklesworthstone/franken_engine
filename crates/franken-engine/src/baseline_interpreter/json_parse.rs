@@ -1364,10 +1364,11 @@ mod tests {
     fn depth_and_instruction_exhaustion_are_not_syntax_errors() {
         let mut core = core();
         let nested = format!("{}0{}", "[".repeat(202), "]".repeat(202));
-        assert!(matches!(
-            parse(&mut core, Value::str(nested)),
-            Err(InterpreterError::StackOverflow { .. })
-        ));
+        let outcome = parse(&mut core, Value::str(nested));
+        assert!(
+            matches!(&outcome, Err(InterpreterError::StackOverflow { .. })),
+            "nested JSON must preserve the typed depth refusal; observed {outcome:?}"
+        );
         assert!(core.pending_exception.is_none());
         assert!(core.active_inline_callback_context_label.is_none());
         assert_eq!(

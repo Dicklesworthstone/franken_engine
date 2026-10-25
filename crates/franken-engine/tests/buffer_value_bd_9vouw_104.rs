@@ -47,6 +47,7 @@ fn canonical_builtin_aliases_work_without_a_direct_static_call() {
     for (source, expected) in [
         ("const B = Buffer; B.from('hi').toString('hex');", "6869"),
         ("const O = Object; O.keys({a: 1})[0];", "a"),
+        ("const O = Object; O.keys({a: 1}).join();", "a"),
         ("const R = Reflect; R.get({answer: 42}, 'answer');", "42"),
         ("const M = Math; M.abs(-7);", "7"),
         (
@@ -96,6 +97,10 @@ fn implicit_constructor_does_not_declare_builtin_authority() {
     for source in [
         "({}).constructor.keys({a: 1})[0];",
         "const Object = 0; ({}).constructor.keys({a: 1})[0];",
+        "const Object = 0; Object; ({}).constructor.keys({a: 1})[0];",
+        "const Buffer = 0; Buffer; ({}).constructor.keys({a: 1})[0];",
+        "const Object = 0; function read() { return Object; } read(); ({}).constructor.keys({a: 1})[0];",
+        "const Buffer = 0; function read() { return Buffer; } read(); ({}).constructor.keys({a: 1})[0];",
     ] {
         let error = HybridRouter::default()
             .eval(source)

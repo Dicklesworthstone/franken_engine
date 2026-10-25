@@ -537,13 +537,13 @@ mod tests {
                 );
                 assert!(
                     matches!(
-                        outcome,
+                        &outcome,
                         Err(InterpreterError::BudgetExhausted {
                             executed: 32,
                             budget: 32,
                         })
                     ),
-                    "sparse indices must be probed under the shared budget"
+                    "sparse indices must be probed under the shared budget; observed {outcome:?}"
                 );
                 assert_eq!(core.instructions_executed, 32);
                 assert!(

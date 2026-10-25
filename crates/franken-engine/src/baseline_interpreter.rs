@@ -458,6 +458,9 @@ const MEMORY_ESTIMATE_STRING_BASE_BYTES: u64 = 24;
 const MEMORY_ESTIMATE_HEAP_OBJECT_BASE_BYTES: u64 = 64;
 /// Approximate per-map-entry footprint.
 const MEMORY_ESTIMATE_MAP_ENTRY_BYTES: u64 = 48;
+/// Bound the stack-only source-owner deduplication in program preflights.
+/// Owners beyond this small table remain conservatively charged per entry.
+const MEMORY_ESTIMATE_FUNCTION_SOURCE_OWNERS: usize = 8;
 /// Synthetic `ClosureHandle` id space for non-closure Promise reaction
 /// callables (builtin functions, async/generator function objects). Real
 /// closure ids stay far below this bound — each closure carries a tracked
@@ -19754,6 +19757,7 @@ impl InterpreterCore {
         task: PendingChildProcessTask,
     ) -> Result<(), InterpreterError> {
         let retained_bytes = Self::pending_child_process_task_bytes(&task);
+        self.apply_memory_component_delta(0, retained_bytes)?;
         let previous_promise_bytes = self.promise_runtime_memory_bytes();
         let sequence = self
             .event_loop
@@ -39808,6 +39812,41 @@ impl InterpreterCore {
         Ok(namespace_object)
     }
 
+    fn retained_module_function_source_bytes(module: &Ir3Module) -> u64 {
+        use crate::ast::FunctionSourceText;
+
+        let entry_bytes = MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(std::mem::size_of::<(u32, FunctionSourceText)>() as u64);
+        let mut bytes = u64::try_from(module.function_sources.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(entry_bytes);
+        let mut owners: [Option<&FunctionSourceText>; MEMORY_ESTIMATE_FUNCTION_SOURCE_OWNERS] =
+            [None; MEMORY_ESTIMATE_FUNCTION_SOURCE_OWNERS];
+        let mut owner_count = 0;
+        for source in module.function_sources.values() {
+            if owners[..owner_count]
+                .iter()
+                .flatten()
+                .any(|owner| source.shares_backing(owner))
+            {
+                continue;
+            }
+            // A short view retains the entire original source allocation.
+            // Count its Arc control words as well as the backing text.
+            bytes = bytes
+                .saturating_add(std::mem::size_of::<[usize; 2]>() as u64)
+                .saturating_add(u64::try_from(source.retained_backing_len()).unwrap_or(u64::MAX));
+            if owner_count < owners.len() {
+                owners[owner_count] = Some(source);
+                owner_count += 1;
+            }
+            // No allocating set or quadratic owner scan during preflight.
+            // Repeated owners outside the fixed table are charged again,
+            // giving a conservative logical bound rather than free storage.
+        }
+        bytes
+    }
+
     fn retained_module_program_bytes(module: &Ir3Module, specifier: &str) -> u64 {
         let instruction_slots = u64::try_from(module.instructions.capacity())
             .unwrap_or(u64::MAX)
@@ -39865,6 +39904,7 @@ impl InterpreterCore {
             .saturating_add(instruction_strings)
             .saturating_add(constant_pool)
             .saturating_add(function_table)
+            .saturating_add(Self::retained_module_function_source_bytes(module))
             .saturating_add(required_capabilities)
             .saturating_add(specialization)
             .saturating_add(Self::estimate_string_bytes(specifier))
@@ -41013,12 +41053,14 @@ impl InterpreterCore {
         // Only the root and its prototype chain can supply properties read
         // during the namespace snapshot. Nested accessors remain deferred
         // code, like methods, but only audited native factory code is admitted.
-        let mut pending = vec![(root, true)];
+        // Private prototype-override cells expose their own value and label,
+        // not their implementation carrier's implicit Object prototype.
+        let mut pending = vec![(root, true, true)];
         let mut visited = BTreeSet::new();
         let mut label = Label::Internal;
-        while let Some((object_id, snapshot_lookup)) = pending.pop() {
+        while let Some((object_id, snapshot_lookup, follow_prototype)) = pending.pop() {
             self.charge_property_copy_work()?;
-            if visited.contains(&(object_id, snapshot_lookup)) {
+            if visited.contains(&(object_id, snapshot_lookup, follow_prototype)) {
                 continue;
             }
             let object = self
@@ -41050,14 +41092,15 @@ impl InterpreterCore {
             let capacity = pending.capacity().max(slots.saturating_mul(2));
             let temporary_bytes = (visited.len().saturating_add(1) as u64)
                 .saturating_mul(64)
-                .saturating_add(
-                    (capacity as u64)
-                        .saturating_mul(std::mem::size_of::<(ObjectId, bool)>() as u64),
-                );
+                .saturating_add((capacity as u64).saturating_mul(std::mem::size_of::<(
+                    ObjectId,
+                    bool,
+                    bool,
+                )>() as u64));
             self.check_temporary_memory_budget(
                 temporary_bytes.saturating_add(Self::estimate_label_bytes(&label)),
             )?;
-            visited.insert((object_id, snapshot_lookup));
+            visited.insert((object_id, snapshot_lookup, follow_prototype));
             if object.brand() == Some(PROXY_TYPE_TAG)
                 || !object.private_elements.is_empty()
                 || object.primitive_value.is_some()
@@ -41123,8 +41166,10 @@ impl InterpreterCore {
                     }
                 }
             }
-            if let Some(prototype) = self.observable_prototype_link(object, object_id) {
-                pending.push((prototype, snapshot_lookup));
+            if follow_prototype
+                && let Some(prototype) = self.observable_prototype_link(object, object_id)
+            {
+                pending.push((prototype, snapshot_lookup, true));
             }
             self.instructions_executed = self.instructions_executed.saturating_add(work);
             if opaque {
@@ -41139,10 +41184,10 @@ impl InterpreterCore {
         module: &Ir3Module,
         value: &Value,
         allow_deferred_factory_accessor: bool,
-        pending: &mut Vec<(ObjectId, bool)>,
+        pending: &mut Vec<(ObjectId, bool, bool)>,
     ) -> Result<bool, InterpreterError> {
         match value {
-            Value::Object(object) => pending.push((*object, false)),
+            Value::Object(object) => pending.push((*object, false, true)),
             Value::Accessor { get, set } => {
                 return self.queue_native_builtin_accessor(
                     module,
@@ -41163,16 +41208,57 @@ impl InterpreterCore {
                         return Ok(true);
                     }
                     if let Some(receiver) = builtin.bound_object {
-                        pending.push((ObjectId(receiver), false));
+                        pending.push((ObjectId(receiver), false, true));
                     }
                 }
                 if let Some(object) = self.function_own_property_object(module, function)? {
-                    pending.push((object, false));
+                    pending.push((object, false, true));
+                }
+                if let Some((object, follow_prototype)) =
+                    self.existing_function_prototype_state_object(module, function)?
+                {
+                    pending.push((object, false, follow_prototype));
                 }
             }
             _ => {}
         }
         Ok(false)
+    }
+
+    /// An ordinary function's intrinsic `prototype` uses a different registry
+    /// cell from its named own properties. Visit existing observable state
+    /// without invoking a getter or materializing a previously unread prototype.
+    /// A replacement cell includes both the replacement value and its label;
+    /// the superseded intrinsic object is no longer this property's value.
+    fn existing_function_prototype_state_object(
+        &self,
+        module: &Ir3Module,
+        function: &Value,
+    ) -> Result<Option<(ObjectId, bool)>, InterpreterError> {
+        let (index, closure) = match function {
+            Value::Function(index) => (*index, false),
+            Value::Closure(index)
+            | Value::GeneratorFunction(index)
+            | Value::AsyncGeneratorFunction(index) => (*index, true),
+            _ => return Ok(None),
+        };
+        if !self.function_has_intrinsic_prototype(function) {
+            return Ok(None);
+        }
+        let foreign = self.foreign_closure_module(function, module)?;
+        let ids = self.prototype_owner_ids(foreign.as_deref().unwrap_or(module));
+        let (intrinsic_owner, replacement_owner) = if closure {
+            (ids.closure, ids.constructor_override[1])
+        } else {
+            (ids.function, ids.constructor_override[0])
+        };
+        if let Some(cell) = self.function_prototypes.get(&(replacement_owner, index)) {
+            return Ok(Some((*cell, false)));
+        }
+        Ok(self
+            .function_prototypes
+            .get(&(intrinsic_owner, index))
+            .map(|object| (*object, true)))
     }
 
     /// Identify the narrowly audited deferred accessors in immutable native
@@ -41308,7 +41394,7 @@ impl InterpreterCore {
         get: Option<&Value>,
         set: Option<&Value>,
         allow_deferred_factory_accessor: bool,
-        pending: &mut Vec<(ObjectId, bool)>,
+        pending: &mut Vec<(ObjectId, bool, bool)>,
     ) -> Result<bool, InterpreterError> {
         // These canonical accessors only expose the receiver or its already
         // visited prototype. Their identity cannot be forged by guest source.
@@ -123672,11 +123758,10 @@ mod async_runtime_tests_current {
         let empty_args = core
             .alloc_array_from_values(&[])
             .expect("arguments array allocation should succeed");
-        core.mutate_registers(|r| {
-            r[0] = Value::Function(0);
-            r[1] = Value::Undefined;
-            r[2] = Value::Object(empty_args);
-        });
+        core.write_reg(0, Value::Function(0)).expect("apply target");
+        core.write_reg(1, Value::Undefined).expect("apply receiver");
+        core.write_reg(2, Value::Object(empty_args))
+            .expect("apply arguments");
         assert_eq!(
             core.dispatch_builtin_hostcall(
                 "builtin:ReflectApply",
@@ -123687,10 +123772,10 @@ mod async_runtime_tests_current {
             Value::Int(99)
         );
 
-        core.mutate_registers(|r| {
-            r[0] = Value::Function(1);
-            r[1] = Value::Object(empty_args);
-        });
+        core.write_reg(0, Value::Function(1))
+            .expect("construct target");
+        core.write_reg(1, Value::Object(empty_args))
+            .expect("construct arguments");
         let constructed = core
             .dispatch_builtin_hostcall(
                 "builtin:ReflectConstruct",
@@ -123712,10 +123797,12 @@ mod async_runtime_tests_current {
         let handler = core
             .alloc_object_with_prototype(None)
             .expect("handler allocation should succeed");
-        core.mutate_registers(|r| {
-            r[0] = Value::Object(target);
-            r[1] = Value::Object(handler);
-        });
+        core.set_object_property(target, "x".to_string(), Value::Int(23))
+            .expect("proxy target property");
+        core.write_reg(0, Value::Object(target))
+            .expect("proxy target");
+        core.write_reg(1, Value::Object(handler))
+            .expect("proxy handler");
         let revocable = core
             .dispatch_builtin_hostcall(
                 "builtin:ProxyRevocable",
@@ -123735,6 +123822,31 @@ mod async_runtime_tests_current {
         let Value::BuiltinFunction(revoker) = revoker else {
             panic!("revoke field should be callable");
         };
+        let Value::Object(proxy_id) = proxy else {
+            panic!("proxy field should be object");
+        };
+        core.write_reg(0, Value::Object(proxy_id))
+            .expect("live proxy");
+        core.write_reg(1, Value::str("x")).expect("live proxy key");
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "fixture writes must be charged before observing the proxy"
+        );
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:ReflectGet",
+                RegRange { start: 0, count: 2 },
+                None,
+            )
+            .expect("the same proxy access before revocation must succeed"),
+            Value::Int(23)
+        );
+        assert!(core.pending_exception.is_none());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
 
         core.dispatch_builtin_function(
             &module,
@@ -123744,17 +123856,39 @@ mod async_runtime_tests_current {
             None,
         )
         .expect("revoker should execute");
-        let Value::Object(proxy_id) = proxy else {
-            panic!("proxy field should be object");
-        };
-        core.mutate_registers(|r| {
-            r[0] = Value::Object(proxy_id);
-            r[1] = Value::str("x");
-        });
+        core.write_reg(0, Value::Object(proxy_id))
+            .expect("revoked proxy");
+        core.write_reg(1, Value::str("x"))
+            .expect("revoked proxy key");
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
         let err = core
             .dispatch_builtin_hostcall("builtin:ReflectGet", RegRange { start: 0, count: 2 }, None)
             .expect_err("revoked proxy access must fail closed");
-        assert!(matches!(err, InterpreterError::TypeError { .. }));
+        assert!(
+            matches!(err, InterpreterError::UncaughtException { .. }),
+            "revocation must transport a guest language error: {err:?}"
+        );
+        let Some(Value::Object(error_id)) = core.pending_exception.as_ref() else {
+            panic!("revoked access must retain its guest TypeError");
+        };
+        assert_eq!(
+            core.chain_data_property(*error_id, "name"),
+            Some(&Value::str("TypeError"))
+        );
+        assert!(matches!(
+            core.chain_data_property(*error_id, "message"),
+            Some(Value::Str(message)) if message.contains("revoked Proxy")
+        ));
+        assert_eq!(core.pending_exception_label, Label::Public);
+        assert!(core.active_inline_callback_context_label.is_none());
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]
@@ -125108,6 +125242,104 @@ mod async_runtime_tests_current {
             fill_core.estimated_memory_bytes(),
             fill_core.recompute_estimated_memory_bytes()
         );
+    }
+
+    #[test]
+    fn pending_child_process_wait_retains_its_payload_charge() {
+        let mut core = test_interpreter();
+        let before = core.estimated_memory_bytes();
+        core.schedule_child_process_wait(PendingChildProcessTask {
+            child: ObjectId(0),
+            handle: "charged-process-wait".to_string(),
+            callback: Some(46),
+            callback_label: Label::Secret,
+            callback_encoding: Some("utf8".to_string()),
+            options: ProcessCallOptions::default(),
+        })
+        .expect("pending process wait must fit the ordinary budget");
+
+        assert_eq!(core.pending_child_process_tasks.len(), 1);
+        assert_eq!(
+            core.pending_child_process_tasks
+                .values()
+                .next()
+                .expect("retained process wait")
+                .callback_label,
+            Label::Secret
+        );
+        assert!(core.event_loop.has_pending_work());
+        assert!(core.estimated_memory_bytes() > before);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn pending_child_process_wait_budget_refusals_preserve_memory_and_queue() {
+        for (refuse_task_payload, existing_task) in
+            [(true, false), (false, false), (true, true), (false, true)]
+        {
+            let mut core = test_interpreter();
+            let existing_sequence = if existing_task {
+                let previous_promise_bytes = core.promise_runtime_memory_bytes();
+                let sequence = core.event_loop.schedule_io_completion(
+                    crate::closure_model::ClosureHandle(47),
+                    Label::Internal,
+                );
+                core.apply_promise_runtime_memory_delta(previous_promise_bytes)
+                    .expect("unrelated callback fixture must fit");
+                Some(sequence)
+            } else {
+                None
+            };
+            let task = PendingChildProcessTask {
+                child: ObjectId(0),
+                handle: "refused-process-wait".to_string(),
+                callback: Some(46),
+                callback_label: Label::Secret,
+                callback_encoding: Some("utf8".to_string()),
+                options: ProcessCallOptions::default(),
+            };
+            let before = core.estimated_memory_bytes();
+            let retained_bytes = InterpreterCore::pending_child_process_task_bytes(&task);
+            assert!(retained_bytes > 0);
+            // First refuse the task itself. Then admit exactly that payload,
+            // forcing the event-loop allocation to exercise charge rollback.
+            let limit = if refuse_task_payload {
+                before + retained_bytes - 1
+            } else {
+                before + retained_bytes
+            };
+            core.config.max_total_memory_bytes = limit;
+            let result = core.schedule_child_process_wait(task);
+            assert!(
+                matches!(
+                    &result,
+                    Err(InterpreterError::MemoryBudgetExceeded {
+                        requested_bytes,
+                        max_bytes,
+                        ..
+                    }) if requested_bytes > max_bytes && *max_bytes == limit
+                ),
+                "refuse_task_payload={refuse_task_payload}: {result:?}"
+            );
+            assert!(core.pending_child_process_tasks.is_empty());
+            assert_eq!(core.event_loop.has_pending_work(), existing_task);
+            assert_eq!(core.estimated_memory_bytes(), before);
+            assert_eq!(core.recompute_estimated_memory_bytes(), before);
+            if let Some(sequence) = existing_sequence {
+                let preserved = core
+                    .event_loop
+                    .turn()
+                    .macrotask
+                    .expect("unrelated callback must survive refusal");
+                assert_eq!(preserved.registration_seq, sequence);
+                assert_eq!(preserved.handler, crate::closure_model::ClosureHandle(47));
+                assert_eq!(preserved.label, Label::Internal);
+                assert!(!core.event_loop.has_pending_work());
+            }
+        }
     }
 
     #[test]
@@ -129551,25 +129783,47 @@ mod async_runtime_tests_current {
         ));
         assert_eq!(native_fault_core.get_register_label(4), Ok(&Label::Secret));
 
-        let (effect_module, mut effect_core) = secret_method_fixture_bd_gqaa4(vec![
-            Ir3Instruction::HostCall {
-                capability: CapabilityTag("console:log".to_string()),
-                args: RegRange { start: 0, count: 0 },
-                dst: 0,
-            },
-            Ir3Instruction::Return { value: 0 },
-        ]);
-        effect_core
-            .config
-            .granted_capabilities
-            .insert(RuntimeCapability::Console);
-        assert_eq!(
+        // An empty argument range still carries the method's execution
+        // context. Console has Internal clearance; a grant is not a release
+        // of a Secret-selected effect. Run identical IR at each boundary.
+        for label in [Label::Public, Label::Internal, Label::Secret] {
+            let (effect_module, mut effect_core) = secret_method_fixture_bd_gqaa4(vec![
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("console:log".to_string()),
+                    args: RegRange { start: 0, count: 0 },
+                    dst: 0,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ]);
             effect_core
-                .run_loop(&effect_module)
-                .expect("secret-selected zero-argument effect should execute"),
-            Value::Undefined
-        );
-        assert_eq!(effect_core.get_register_label(4), Ok(&Label::Secret));
+                .config
+                .granted_capabilities
+                .insert(RuntimeCapability::Console);
+            effect_core
+                .write_reg_with_label(1, Value::str("m"), label.clone())
+                .expect("computed method key should fit");
+            let outcome = effect_core.run_loop(&effect_module);
+            if label == Label::Secret {
+                assert!(
+                    matches!(outcome, Err(InterpreterError::CapabilityDenied { ref capability })
+                        if capability == "console:log:confidentiality"),
+                    "Secret zero-argument effect must fail at the sink: {outcome:?}"
+                );
+                assert!(effect_core.console_output.is_empty());
+            } else {
+                assert_eq!(
+                    outcome.expect("permitted zero-argument effect"),
+                    Value::Undefined
+                );
+                assert_eq!(effect_core.get_register_label(4), Ok(&label));
+                assert_eq!(effect_core.console_output.len(), 1);
+                assert_eq!(effect_core.console_output[0].message, "");
+            }
+            assert_eq!(
+                effect_core.estimated_memory_bytes(),
+                effect_core.recompute_estimated_memory_bytes()
+            );
+        }
     }
 
     #[test]
@@ -129643,23 +129897,56 @@ mod async_runtime_tests_current {
                 },
             ],
         );
-        let mut core = test_interpreter();
-        core.config
-            .granted_capabilities
-            .insert(RuntimeCapability::Console);
-        core.write_reg_with_label(1, Value::str("m"), Label::Secret)
-            .expect("secret computed method key should fit");
+        for label in [Label::Public, Label::Internal, Label::Secret] {
+            let mut core = test_interpreter();
+            core.config
+                .granted_capabilities
+                .insert(RuntimeCapability::Console);
+            core.write_reg_with_label(1, Value::str("m"), label.clone())
+                .expect("computed method key should fit");
+            let outcome = core.run_loop(&module);
+            if label == Label::Secret {
+                assert!(
+                    matches!(outcome, Err(InterpreterError::CapabilityDenied { ref capability })
+                        if capability == "console:log:confidentiality"),
+                    "a plain helper must not erase the Secret method context: {outcome:?}"
+                );
+                assert!(core.console_output.is_empty());
+            } else {
+                assert_eq!(
+                    outcome.expect("permitted plain helper effect"),
+                    Value::Undefined
+                );
+                assert_eq!(core.get_register_label(4), Ok(&label));
+                assert_eq!(core.console_output.len(), 1);
+                assert_eq!(core.console_output[0].message, "");
+            }
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
 
-        assert_eq!(
-            core.run_loop(&module)
-                .expect("plain helper effect should execute under method context"),
-            Value::Undefined
-        );
-        assert_eq!(core.get_register_label(4), Ok(&Label::Secret));
-        assert_eq!(
-            core.estimated_memory_bytes(),
-            core.recompute_estimated_memory_bytes()
-        );
+            // Preserve a positive return-taint witness through the same
+            // method/helper call chain without attempting a forbidden sink.
+            let mut return_module = module.clone();
+            return_module.instructions[13] = Ir3Instruction::LoadInt { dst: 0, value: 17 };
+            let mut return_core = test_interpreter();
+            return_core
+                .write_reg_with_label(1, Value::str("m"), label.clone())
+                .expect("computed method key should fit");
+            assert_eq!(
+                return_core
+                    .run_loop(&return_module)
+                    .expect("plain helper return"),
+                Value::Int(17)
+            );
+            assert_eq!(return_core.get_register_label(4), Ok(&label));
+            assert!(return_core.console_output.is_empty());
+            assert_eq!(
+                return_core.estimated_memory_bytes(),
+                return_core.recompute_estimated_memory_bytes()
+            );
+        }
     }
 
     #[test]
@@ -139157,14 +139444,27 @@ mod async_runtime_tests_current {
 
     #[test]
     fn passthrough_prefinish_write_then_pause_consumes_reserved_final_tick_bd_fw7zd_11() {
-        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let module = writable_order_module(&["error", "close", "finish"]);
         let mut core = test_interpreter();
+        let log = install_writable_order_log(&mut core);
         let Value::Object(passthrough) = core
             .construct_stream_passthrough(RegRange { start: 0, count: 0 })
             .expect("PassThrough")
         else {
             panic!("PassThrough constructor must return an object");
         };
+        for (event, function_index) in [("error", 0), ("close", 1), ("finish", 2)] {
+            core.insert_event_listener(
+                passthrough,
+                event,
+                EventListenerRecord {
+                    listener: Value::Function(function_index),
+                    once: false,
+                },
+                false,
+            )
+            .expect("observe deferred PassThrough lifecycle");
+        }
         let token = core
             .allocate_writable_completion_token()
             .expect("final completion token");
@@ -139217,7 +139517,14 @@ mod async_runtime_tests_current {
         assert_eq!(writable.final_status, WritableFinalStatus::Done);
         assert_eq!(writable.deferred_final_tick_sequence, None);
         assert_eq!(writable.tick_sequence, Some(91));
-        assert_eq!(writable.tick_phase, WritableTickPhase::Error);
+        // The reserved turn first drains callbacks; it publishes the error
+        // only at a checkpoint. Recording the terminal failure is synchronous.
+        assert_eq!(writable.tick_phase, WritableTickPhase::Callbacks);
+        // A dual stream reserves delivery for the readable half and marks
+        // the writable half to suppress a duplicate shared-emitter event.
+        // The empty log below proves this ownership marker is not delivery.
+        assert!(writable.terminal_error_emitted);
+        assert!(writable_order_entries(&core, log).is_empty());
         assert_eq!(
             writable.terminal_error_origin,
             Some(WritableErrorOrigin::Write)
@@ -139245,6 +139552,22 @@ mod async_runtime_tests_current {
             Some(Value::Bool(false))
         );
         assert_eq!(core.next_writable_tick_sequence, 92);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.run_event_loop_until_idle_with_module(Some(&module))
+            .expect("deliver the reserved error and deferred close");
+        assert_eq!(writable_order_entries(&core, log), ["error", "close"]);
+        assert_eq!(core.object_mutation_labels.get(&log), Some(&Label::Secret));
+        assert!(!core.writable_streams.contains_key(&passthrough));
+        assert!(!core.readable_from_streams.contains_key(&passthrough));
+        assert_eq!(
+            core.fs_object_property(&Value::Object(passthrough), "writableFinished"),
+            Some(Value::Bool(false)),
+            "a failed final must not publish a successful finish"
+        );
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
@@ -152104,24 +152427,47 @@ mod function_prototype_call_apply_tests_current {
             exact.recompute_estimated_memory_bytes()
         );
 
-        let mut parse_failure = test_interpreter();
-        parse_failure
-            .ensure_module_record(&owner, &owner.header.source_label)
-            .expect("retain generated parse-failure owner");
-        parse_failure
-            .ensure_generated_function_realm_globals()
-            .expect("initialize generated parse-failure realm");
-        parse_failure
-            .write_reg(0, Value::str("const x;"))
-            .expect("seed invalid generated source");
-        parse_failure
-            .sync_estimated_memory_bytes()
-            .expect("generated parse-failure baseline");
+        let parse_failure_fixture = || {
+            let mut core = test_interpreter();
+            core.ensure_module_record(&owner, &owner.header.source_label)
+                .expect("retain generated parse-failure owner");
+            core.ensure_generated_function_realm_globals()
+                .expect("initialize generated parse-failure realm");
+            core.write_reg(0, Value::str("const x;"))
+                .expect("seed invalid generated source");
+            core.sync_estimated_memory_bytes()
+                .expect("generated parse-failure baseline");
+            core
+        };
+        let mut parse_failure = parse_failure_fixture();
+        let mut reference = parse_failure_fixture();
         let parse_failure_baseline = parse_failure.estimated_memory_bytes();
-        assert!(matches!(
-            parse_failure.construct_generated_function(&owner, args),
-            Err(InterpreterError::ModuleParseFailed { .. })
-        ));
+        assert_eq!(reference.estimated_memory_bytes(), parse_failure_baseline);
+        let error = parse_failure
+            .construct_generated_function(&owner, args)
+            .expect_err("a const declaration without an initializer is a guest SyntaxError");
+        assert!(
+            matches!(error, InterpreterError::UncaughtException { .. }),
+            "invalid generated source must transport its language error: {error:?}"
+        );
+        let Some(Value::Object(error_id)) = parse_failure.pending_exception.as_ref() else {
+            panic!("invalid generated source must retain the guest SyntaxError");
+        };
+        assert_eq!(
+            parse_failure.chain_data_property(*error_id, "name"),
+            Some(&Value::str("SyntaxError"))
+        );
+        let Some(Value::Str(message)) = parse_failure.chain_data_property(*error_id, "message")
+        else {
+            panic!("generated SyntaxError must carry a diagnostic message");
+        };
+        assert!(!message.is_empty());
+        // Error construction is legitimate retained growth. A direct error
+        // from the identical precompile state isolates that growth from any
+        // leaked compilation scratch or generated artifact.
+        let expected_error = reference.throw_js_error("SyntaxError", message.to_string());
+        assert_eq!(error, expected_error);
+        assert_eq!(parse_failure.pending_exception_label, Label::Public);
         assert!(
             parse_failure
                 .module_state
@@ -152129,13 +152475,21 @@ mod function_prototype_call_apply_tests_current {
                 .is_empty()
         );
         assert!(parse_failure.generated_code_audit.is_empty());
+        assert!(parse_failure.events.is_empty());
+        assert_eq!(parse_failure.generated_code_observability_bytes, 0);
+        assert_eq!(parse_failure.json_parse_temporary_bytes, 0);
         assert_eq!(
             parse_failure.estimated_memory_bytes(),
-            parse_failure_baseline
+            reference.estimated_memory_bytes(),
+            "only the guest SyntaxError and its intrinsic prototypes may remain"
         );
         assert_eq!(
             parse_failure.estimated_memory_bytes(),
             parse_failure.recompute_estimated_memory_bytes()
+        );
+        assert_eq!(
+            reference.estimated_memory_bytes(),
+            reference.recompute_estimated_memory_bytes()
         );
     }
 
@@ -152782,7 +153136,27 @@ mod function_prototype_call_apply_tests_current {
                 else {
                     panic!("the actual deferred Readable.closed getter");
                 };
-                assert!(core.is_deferred_native_factory_accessor(getter.as_ref(), false));
+                let accessor_identity = match getter.as_ref() {
+                    Value::Closure(id) => {
+                        let origin = core.closure_module_origins.get(id);
+                        let record = origin.and_then(|origin| core.module_state.modules.get(origin));
+                        let function_index = core.closures.get(*id as usize)
+                            .map(|closure| closure.function_index);
+                        let program = record.and_then(|record| record.compiled_module.as_ref());
+                        format!(
+                            "origin={origin:?}, record={:?}, code={:?}, source={:?}",
+                            record.map(|record| (&record.status, &record.resolved_source_hash)),
+                            program.zip(function_index).and_then(|(program, index)| program.function_table.get(index as usize)),
+                            program.zip(function_index).and_then(|(program, index)| program.function_sources.get(&index))
+                                .map(|source| source.as_str().chars().take(160).collect::<String>()),
+                        )
+                    }
+                    other => format!("non-closure getter: {other:?}"),
+                };
+                assert!(
+                    core.is_deferred_native_factory_accessor(getter.as_ref(), false),
+                    "the canonical getter must have authenticated factory identity: {accessor_identity}"
+                );
                 assert_eq!(
                     core.native_builtin_state_label(&caller, exports).unwrap(),
                     Label::Internal,
@@ -153016,6 +153390,116 @@ mod function_prototype_call_apply_tests_current {
             .expect("spawn decoder carrier regression")
             .join()
             .expect("decoder carrier regression");
+    }
+
+    #[test]
+    fn native_namespace_constructor_prototype_state_is_observable_without_materialization() {
+        let caller = test_module_with_functions(
+            vec![Ir3Instruction::Return { value: 0 }],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 1,
+                name: Some("Constructor".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = test_interpreter();
+        let constructor = Value::Function(0);
+        let exports = seed_object(&mut core, &[("Constructor", constructor.clone())]);
+        let heap_before = core.heap.live_len();
+        let registry_before = core.function_prototypes.len();
+        assert_eq!(
+            core.native_builtin_state_label(&caller, exports).unwrap(),
+            Label::Internal
+        );
+        assert_eq!(core.heap.live_len(), heap_before);
+        assert_eq!(core.function_prototypes.len(), registry_before);
+
+        let prototype = core.ensure_function_prototype(&caller, 0).unwrap();
+        core.set_object_property(prototype, "marker".to_string(), Value::Int(1))
+            .unwrap();
+        core.set_own_runtime_property_label(
+            prototype,
+            &RuntimePropertyKey::String(JsString::from("marker")),
+            &Label::Secret,
+        )
+        .unwrap();
+        assert_eq!(
+            core.native_builtin_state_label(&caller, exports).unwrap(),
+            Label::Secret
+        );
+
+        let replacement = core.alloc_object_with_prototype(None).unwrap();
+        core.set_constructor_prototype_override(
+            &caller,
+            &constructor,
+            Value::Object(replacement),
+            Label::Public,
+        )
+        .unwrap();
+        assert_eq!(
+            core.native_builtin_state_label(&caller, exports).unwrap(),
+            Label::Internal,
+            "a replaced prototype must not retain the old object's label"
+        );
+        core.set_constructor_prototype_override(
+            &caller,
+            &constructor,
+            Value::Object(replacement),
+            Label::Secret,
+        )
+        .unwrap();
+        assert_eq!(
+            core.native_builtin_state_label(&caller, exports).unwrap(),
+            Label::Secret,
+            "the replacement property's own label must remain visible"
+        );
+
+        let handler = seed_object(&mut core, &[]);
+        let proxy = core.create_proxy_object(replacement, handler).unwrap();
+        core.set_constructor_prototype_override(
+            &caller,
+            &constructor,
+            Value::Object(proxy),
+            Label::Public,
+        )
+        .unwrap();
+        assert_eq!(
+            core.native_builtin_state_label(&caller, exports).unwrap(),
+            Label::TopSecret,
+            "an opaque replacement remains fail-high"
+        );
+
+        // The private replacement carrier must not create a hidden edge to
+        // Object.prototype when all observable prototype links are null.
+        core.store_prototype_link(exports, None);
+        assert!(
+            core.set_function_value_prototype(Some(&caller), &constructor, &Value::Null)
+                .unwrap()
+        );
+        core.set_constructor_prototype_override(&caller, &constructor, Value::Null, Label::Public)
+            .unwrap();
+        let object_prototype = core.ensure_builtin_prototype("Object").unwrap();
+        core.set_object_property(object_prototype, "unrelated".to_string(), Value::Int(1))
+            .unwrap();
+        core.set_own_runtime_property_label(
+            object_prototype,
+            &RuntimePropertyKey::String(JsString::from("unrelated")),
+            &Label::Secret,
+        )
+        .unwrap();
+        assert_eq!(
+            core.native_builtin_state_label(&caller, exports).unwrap(),
+            Label::Internal,
+            "a private carrier's prototype is not observable namespace state"
+        );
+        assert!(core.console_output().is_empty());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]
@@ -154627,40 +155111,51 @@ mod function_prototype_call_apply_tests_current {
         );
         module.constant_pool.push("mark".into());
 
-        let mut core = test_interpreter();
-        let arguments = seed_array_like(&mut core, &[Value::str("classified")]);
-        core.write_reg(0, Value::Function(0))
-            .expect("constructor register");
-        core.write_reg_with_label(1, Value::Object(arguments), Label::Secret)
-            .expect("constructor argument-list register");
-        let result = core
-            .dispatch_builtin_hostcall(
-                "builtin:ReflectConstruct",
-                RegRange { start: 0, count: 2 },
-                Some(&module),
-            )
-            .expect("Reflect.construct wrapper");
-        let Value::Object(constructed) = result else {
-            panic!("Reflect.construct must return an object");
-        };
-        assert_eq!(
-            core.object_mutation_labels.get(&constructed),
-            Some(&Label::Secret),
-            "the constructor body must observe the argument-list label before mutating this"
-        );
-        assert_eq!(
-            core.get_register_label(1)
-                .expect("restored argument-list label"),
-            &Label::Secret
-        );
-        assert_eq!(
-            core.take_pending_hostcall_result_label(),
-            Some(Label::Public)
-        );
-        assert_eq!(
-            core.estimated_memory_bytes(),
-            core.recompute_estimated_memory_bytes()
-        );
+        for label in [Label::Public, Label::Secret] {
+            let mut core = test_interpreter();
+            let arguments = seed_array_like(&mut core, &[Value::str("classified")]);
+            core.write_reg(0, Value::Function(0))
+                .expect("constructor register");
+            core.write_reg_with_label(1, Value::Object(arguments), label.clone())
+                .expect("constructor argument-list register");
+            let result = core
+                .dispatch_builtin_hostcall(
+                    "builtin:ReflectConstruct",
+                    RegRange { start: 0, count: 2 },
+                    Some(&module),
+                )
+                .expect("Reflect.construct wrapper");
+            let Value::Object(constructed) = result else {
+                panic!("Reflect.construct must return an object");
+            };
+            assert_eq!(
+                core.chain_data_property(constructed, "mark"),
+                Some(&Value::str("classified"))
+            );
+            assert_eq!(
+                core.object_mutation_labels
+                    .get(&constructed)
+                    .unwrap_or(&Label::Public),
+                &label,
+                "constructor writes must retain argument-list provenance"
+            );
+            assert_eq!(
+                core.get_register_label(1)
+                    .expect("restored argument-list label"),
+                &label
+            );
+            assert_eq!(
+                core.take_pending_hostcall_result_label(),
+                Some(label),
+                "the returned object must also retain argument-list selection provenance"
+            );
+            assert!(core.active_inline_callback_context_label.is_none());
+            assert_eq!(core.json_parse_temporary_bytes, 0);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
     }
 
     #[test]
@@ -166851,6 +167346,138 @@ mod tests {
         );
 
         assert_eq!(exact_bytes.saturating_sub(empty_bytes), expected_delta);
+    }
+
+    #[test]
+    fn retained_module_function_sources_charge_whole_shared_backing() {
+        let source: Arc<str> = Arc::from(format!(
+            "{}function first() {{}} function second() {{}}",
+            " ".repeat(4096)
+        ));
+        let mut module = test_module(Vec::new());
+        let base_bytes = InterpreterCore::retained_module_program_bytes(&module, "test");
+        for (index, name) in [(0, "first"), (1, "second")] {
+            let start = source.find(&format!("function {name}")).unwrap();
+            let end = source[start..].find('}').unwrap() + start + 1;
+            module.function_sources.insert(
+                index,
+                crate::ast::FunctionSourceText::new(Arc::clone(&source), start, end).unwrap(),
+            );
+        }
+        let entry_bytes = MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            + std::mem::size_of::<(u32, crate::ast::FunctionSourceText)>() as u64;
+        let backing_bytes = (std::mem::size_of::<[usize; 2]>() + source.len()) as u64;
+        assert_eq!(
+            InterpreterCore::retained_module_program_bytes(&module, "test") - base_bytes,
+            2 * entry_bytes + backing_bytes,
+            "two short ranges retain the full whitespace prefix once"
+        );
+    }
+
+    #[test]
+    fn retained_module_function_sources_bound_mixed_owner_accounting_without_allocation() {
+        let owners: Vec<Arc<str>> = (0..9).map(|_| Arc::from("function same() {}")).collect();
+        assert!(!Arc::ptr_eq(&owners[0], &owners[1]));
+        let mut module = test_module(Vec::new());
+        for repeat in 0..2 {
+            for (index, owner) in owners[..8].iter().enumerate() {
+                module.function_sources.insert(
+                    u32::try_from(repeat * 8 + index).unwrap(),
+                    crate::ast::FunctionSourceText::new(Arc::clone(owner), 0, owner.len()).unwrap(),
+                );
+            }
+        }
+        let entry_bytes = MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            + std::mem::size_of::<(u32, crate::ast::FunctionSourceText)>() as u64;
+        let backing_bytes = (std::mem::size_of::<[usize; 2]>() + owners[0].len()) as u64;
+        assert_eq!(
+            InterpreterCore::retained_module_function_source_bytes(&module),
+            16 * entry_bytes + 8 * backing_bytes,
+            "equal text from distinct allocations must not be merged"
+        );
+        for index in [16, 17] {
+            module.function_sources.insert(
+                index,
+                crate::ast::FunctionSourceText::new(Arc::clone(&owners[8]), 0, owners[8].len())
+                    .unwrap(),
+            );
+        }
+        let bytes = InterpreterCore::retained_module_function_source_bytes(&module);
+        assert_eq!(bytes, 18 * entry_bytes + 10 * backing_bytes);
+        assert!(
+            bytes >= 18 * entry_bytes + 9 * backing_bytes,
+            "unremembered duplicate owners may overcharge, never provide free storage"
+        );
+    }
+
+    #[test]
+    fn retained_module_function_source_budget_refusal_is_atomic_and_retryable() {
+        let mut module = test_module(vec![Ir3Instruction::Return { value: 0 }]);
+        let source: Arc<str> = Arc::from(format!("{}function f() {{}}", " ".repeat(4096)));
+        module.function_table.push(Ir3FunctionDesc {
+            entry: 0,
+            arity: 0,
+            frame_size: 1,
+            name: Some("f".to_string()),
+            is_generator: false,
+            rest_param_index: None,
+        });
+        let specifier = "imported-source-budget.mjs";
+        let base_bytes = InterpreterCore::retained_module_program_bytes(&module, specifier);
+        module.function_sources.insert(
+            0,
+            crate::ast::FunctionSourceText::new(Arc::clone(&source), 4096, source.len()).unwrap(),
+        );
+        let source_bytes = MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            + std::mem::size_of::<(u32, crate::ast::FunctionSourceText)>() as u64
+            + (std::mem::size_of::<[usize; 2]>() + source.len()) as u64;
+        let retained_bytes = base_bytes + source_bytes;
+        let mut core = InterpreterCore::new(test_quickjs_config(), "source-budget");
+        core.ensure_module_record(&module, specifier).unwrap();
+        assert!(
+            core.module_state.modules[specifier]
+                .compiled_module
+                .is_none()
+        );
+        let baseline = core.estimated_memory_bytes();
+        let heap_before = core.heap_size();
+        let events_before = core.events.len();
+        assert_eq!(baseline, core.recompute_estimated_memory_bytes());
+        core.config.max_total_memory_bytes = baseline + retained_bytes - 1;
+        assert!(matches!(
+            core.retain_module_program(specifier, &module),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(
+            core.module_state.modules[specifier]
+                .compiled_module
+                .is_none()
+        );
+        assert_eq!(core.module_state.retained_program_bytes, 0);
+        assert_eq!(core.heap_size(), heap_before);
+        assert_eq!(core.events.len(), events_before);
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.config.max_total_memory_bytes = baseline + retained_bytes;
+        core.retain_module_program(specifier, &module).unwrap();
+        assert!(
+            core.module_state.modules[specifier]
+                .compiled_module
+                .is_some()
+        );
+        assert_eq!(core.module_state.retained_program_bytes, retained_bytes);
+        assert_eq!(core.estimated_memory_bytes(), baseline + retained_bytes);
+        core.retain_module_program(specifier, &module).unwrap();
+        assert_eq!(core.module_state.retained_program_bytes, retained_bytes);
+        assert_eq!(core.estimated_memory_bytes(), baseline + retained_bytes);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]

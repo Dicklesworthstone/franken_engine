@@ -15,8 +15,11 @@ pub(super) struct NativeModuleSource {
     label: &'static str,
     source: &'static str,
     parsed: OnceLock<Result<Expression, ()>>,
+    runtime_parsed: OnceLock<Result<Expression, ()>>,
     #[cfg(test)]
     parse_attempts: std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
+    runtime_parse_attempts: std::sync::atomic::AtomicUsize,
 }
 
 impl NativeModuleSource {
@@ -25,8 +28,11 @@ impl NativeModuleSource {
             label,
             source,
             parsed: OnceLock::new(),
+            runtime_parsed: OnceLock::new(),
             #[cfg(test)]
             parse_attempts: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            runtime_parse_attempts: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -35,11 +41,23 @@ impl NativeModuleSource {
     /// or private loader references from contaminating another compilation.
     pub(super) fn expression(&self) -> Result<Expression, LoweringPipelineError> {
         self.parsed
-            .get_or_init(|| self.parse())
+            .get_or_init(|| self.parse(false))
             .as_ref()
             .cloned()
             .map_err(|_| LoweringPipelineError::InvariantViolation {
                 detail: "the engine's pure builtin module source failed to parse",
+            })
+    }
+
+    /// One additional lazy template per fixed embedded source, never a
+    /// guest-controlled key. Keep audit metadata out of the legacy template.
+    pub(super) fn runtime_expression(&self) -> Result<Expression, LoweringPipelineError> {
+        self.runtime_parsed
+            .get_or_init(|| self.parse(true))
+            .as_ref()
+            .cloned()
+            .map_err(|_| LoweringPipelineError::InvariantViolation {
+                detail: "the engine's native runtime source failed to parse",
             })
     }
 
@@ -49,26 +67,45 @@ impl NativeModuleSource {
         self.parse_attempts.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    fn parse(&self) -> Result<Expression, ()> {
+    fn parse(&self, retain_runtime_sources: bool) -> Result<Expression, ()> {
         #[cfg(test)]
-        self.parse_attempts
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        {
+            let attempts = if retain_runtime_sources {
+                &self.runtime_parse_attempts
+            } else {
+                &self.parse_attempts
+            };
+            attempts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
 
-        let tree = CanonicalEs2020Parser
-            .parse_with_options(
-                ParserSource {
-                    label: self.label.into(),
-                    text: self.source.into(),
-                },
+        let source = ParserSource {
+            label: self.label.into(),
+            text: self.source.into(),
+        };
+        let tree = if retain_runtime_sources {
+            CanonicalEs2020Parser.parse_native_runtime_with_function_sources(
+                source,
                 ParseGoal::Script,
                 &ParserOptions::default(),
             )
-            .map_err(|_| ())?;
+        } else {
+            CanonicalEs2020Parser.parse_with_options(
+                source,
+                ParseGoal::Script,
+                &ParserOptions::default(),
+            )
+        }
+        .map_err(|_| ())?;
         // Move the owned expression out of the parser result. A cold parse
         // must not deep-clone the tree before saving its immutable template.
         let mut body = tree.body.into_iter();
         match (body.next(), body.next()) {
-            (Some(Statement::Expression(statement)), None) => Ok(statement.expression),
+            (Some(Statement::Expression(statement)), None) => match statement.expression {
+                // Raw is an unresolved parser fallback, not a parsed builtin
+                // expression. Never publish it as a successful native template.
+                Expression::Raw(_) => Err(()),
+                expression => Ok(expression),
+            },
             _ => Err(()),
         }
     }
@@ -110,6 +147,45 @@ mod tests {
     }
 
     #[test]
+    fn native_runtime_metadata_templates_are_lazy_separate_and_parse_once() {
+        fn source_text(expression: &Expression) -> Option<&str> {
+            let Expression::Call { callee, .. } = expression else {
+                panic!("factory call");
+            };
+            let Expression::Function { source_text, .. } = callee.as_ref() else {
+                panic!("factory function");
+            };
+            source_text
+                .as_ref()
+                .map(crate::ast::FunctionSourceText::as_str)
+        }
+        let source = NativeModuleSource::new("franken:cache-audit", SOURCE);
+        assert!(source.parsed.get().is_none() && source.runtime_parsed.get().is_none());
+        let legacy = source.expression().unwrap();
+        assert!(source_text(&legacy).is_none());
+        assert!(source.runtime_parsed.get().is_none());
+        let runtime = source.runtime_expression().unwrap();
+        assert_eq!(
+            source_text(&runtime),
+            Some("function () { return ['cached', 42]; }")
+        );
+        assert_eq!(legacy.canonical_value(), runtime.canonical_value());
+        for _ in 0..16 {
+            assert_eq!(source.expression().unwrap(), legacy);
+            assert_eq!(source.runtime_expression().unwrap(), runtime);
+        }
+        let mut changed = source.runtime_expression().unwrap();
+        let Expression::Call { arguments, .. } = &mut changed else {
+            panic!("factory call");
+        };
+        arguments.push(Expression::UndefinedLiteral);
+        assert_eq!(source.runtime_expression().unwrap(), runtime);
+        assert_eq!(source.expression().unwrap(), legacy);
+        assert_eq!(source.parse_attempts.load(Ordering::Relaxed), 1);
+        assert_eq!(source.runtime_parse_attempts.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
     fn modifying_a_returned_tree_cannot_modify_the_cached_template() {
         let source = NativeModuleSource::new("franken:cache-isolation", SOURCE);
         let expected = fresh_expression("franken:cache-isolation", SOURCE);
@@ -148,16 +224,31 @@ mod tests {
     fn failed_embedded_sources_are_cached_without_publishing_partial_syntax() {
         for text in ["(", "", "const value = 1;", "1; 2;"] {
             let source = NativeModuleSource::new("franken:invalid-source", text);
+            assert!(source.parsed.get().is_none() && source.runtime_parsed.get().is_none());
             for _ in 0..3 {
-                assert!(matches!(
-                    source.expression(),
-                    Err(LoweringPipelineError::InvariantViolation {
-                        detail: "the engine's pure builtin module source failed to parse"
-                    })
-                ));
+                assert!(
+                    matches!(
+                        source.expression(),
+                        Err(LoweringPipelineError::InvariantViolation {
+                            detail: "the engine's pure builtin module source failed to parse"
+                        })
+                    ),
+                    "legacy source {text:?}"
+                );
+                assert!(
+                    matches!(
+                        source.runtime_expression(),
+                        Err(LoweringPipelineError::InvariantViolation {
+                            detail: "the engine's native runtime source failed to parse"
+                        })
+                    ),
+                    "runtime source {text:?}"
+                );
             }
             assert!(matches!(source.parsed.get(), Some(Err(()))));
+            assert!(matches!(source.runtime_parsed.get(), Some(Err(()))));
             assert_eq!(source.parse_attempts.load(Ordering::Relaxed), 1);
+            assert_eq!(source.runtime_parse_attempts.load(Ordering::Relaxed), 1);
         }
     }
 

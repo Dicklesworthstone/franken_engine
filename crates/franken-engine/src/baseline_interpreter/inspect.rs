@@ -27,6 +27,124 @@
 
 use super::*;
 
+#[cfg(test)]
+mod native_runtime_source_tests {
+    use super::*;
+
+    #[test]
+    fn native_runtime_audit_text_stays_native_for_direct_and_foreign_functions() {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.instruction_budget = DEFAULT_V8_BUDGET;
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+            RuntimeCapability::ModuleLoad,
+            RuntimeCapability::Timer,
+        ]
+        .into_iter()
+        .collect();
+        let stack_bytes =
+            interpreter_execution_stack_bytes(config.max_call_depth.min(MAX_NATIVE_RUN_LOOP_DEPTH))
+                .unwrap();
+        std::thread::Builder::new()
+            .name("native-source-display".into())
+            .stack_size(stack_bytes)
+            .spawn(move || {
+                let caller = Ir3Module::new(
+                    ContentHash::compute(b"native-source-display"),
+                    "native-source-display-caller",
+                );
+                let mut core = InterpreterCore::new(config, "native-source-display");
+                let stream = core
+                    .source_builtin_module(&caller, NativeBuiltinModule::Stream, None)
+                    .unwrap();
+                let exports = core
+                    .function_own_property_object(&caller, &stream)
+                    .unwrap()
+                    .unwrap();
+                let readable = core.prototype_chain_get(exports, "Readable").unwrap();
+                let Value::Object(prototype) = core
+                    .get_v(
+                        &caller,
+                        &readable,
+                        &RuntimePropertyKey::String(JsString::from("prototype")),
+                    )
+                    .unwrap()
+                else {
+                    panic!("Readable.prototype");
+                };
+                let Some(Value::Accessor {
+                    get: Some(getter), ..
+                }) = core.heap[prototype.0 as usize].own_runtime_property_value(
+                    &RuntimePropertyKey::String(JsString::from("closed")),
+                )
+                else {
+                    panic!("canonical Readable.closed getter");
+                };
+                let Value::Closure(id) = getter.as_ref() else {
+                    panic!("foreign native getter closure");
+                };
+                let owner = core
+                    .foreign_closure_module(getter.as_ref(), &caller)
+                    .unwrap()
+                    .unwrap();
+                let index = core.closures[*id as usize].function_index;
+                assert!(
+                    owner.function_sources[&index]
+                        .as_str()
+                        .starts_with("closed(")
+                );
+                assert_eq!(
+                    core.function_native_source_text(Some(&caller), getter.as_ref()),
+                    "function closed() { [native code] }"
+                );
+                assert_eq!(
+                    core.function_native_source_text(Some(&owner), &Value::Function(index)),
+                    "function closed() { [native code] }"
+                );
+
+                let source = "function visible(/*é*/ x) { return x; }";
+                let tree = crate::parser::CanonicalEs2020Parser
+                    .parse_with_options(
+                        crate::parser::ParserSource {
+                            label: "guest-source-display".into(),
+                            text: source.into(),
+                        },
+                        crate::ast::ParseGoal::Script,
+                        &crate::parser::ParserOptions::default(),
+                    )
+                    .unwrap();
+                let guest = crate::lowering_pipeline::lower_ir0_to_ir3(
+                    &crate::ir_contract::Ir0Module::from_syntax_tree(tree, "guest-source-display"),
+                    &crate::lowering_pipeline::LoweringContext::new(
+                        "guest-source",
+                        "source-display",
+                        "builtin-only",
+                    ),
+                )
+                .unwrap()
+                .ir3;
+                let index = guest
+                    .function_table
+                    .iter()
+                    .position(|code| code.name.as_deref() == Some("visible"))
+                    .unwrap() as u32;
+                assert_eq!(
+                    core.function_native_source_text(Some(&guest), &Value::Function(index)),
+                    source
+                );
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+}
+
 const INSPECT_DEPTH: i64 = 2;
 const INSPECT_PERCENT_O_DEPTH: i64 = 4;
 const INSPECT_BREAK_LENGTH: usize = 80;
@@ -1129,9 +1247,19 @@ impl InterpreterCore {
             ),
             _ => return None,
         };
+        let owner = owner.as_deref().unwrap_or(module);
+        // Authenticated runtime factories retain exact source ranges for
+        // their internal accessor audit, never for guest-visible toString.
+        // Legacy facades still carry no source metadata. Resolve foreign
+        // closure ownership before this check, just as for user source below.
+        if owner
+            .header
+            .source_label
+            .starts_with("\0franken-engine/native-")
+        {
+            return None;
+        }
         owner
-            .as_deref()
-            .unwrap_or(module)
             .function_sources
             .get(&index)
             .map(|text| text.as_str().to_string())

@@ -8,11 +8,13 @@
 
 use std::collections::BTreeSet;
 
-use super::super::{
-    ModuleRenamer, NativeModuleSource, PureModule, STREAM_MODULE_BINDING,
-    WEB_STREAMS_BINDING, module_source,
+use super::super::super::with_statement::{
+    Outcome, Walk, lexical_names, var_names, walk_expression,
 };
-use super::super::super::with_statement::{Outcome, Walk, lexical_names, var_names, walk_expression};
+use super::super::{
+    ModuleRenamer, NativeModuleSource, PureModule, STREAM_MODULE_BINDING, WEB_STREAMS_BINDING,
+    module_source, module_source_with_runtime_sources,
+};
 use crate::ast::{BindingPattern, Expression, Statement, SyntaxTree};
 
 const GLOBALS: [&str; 13] = [
@@ -43,6 +45,14 @@ impl Walk for CompletionTick {
 }
 
 pub(super) fn compose(tree: &mut SyntaxTree, bindings: &BTreeSet<String>) -> Outcome {
+    compose_with_runtime_sources(tree, bindings, false)
+}
+
+pub(super) fn compose_with_runtime_sources(
+    tree: &mut SyntaxTree,
+    bindings: &BTreeSet<String>,
+    retain_runtime_sources: bool,
+) -> Outcome {
     if !bindings.contains(STREAM_MODULE_BINDING) {
         return Ok(());
     }
@@ -59,6 +69,11 @@ pub(super) fn compose(tree: &mut SyntaxTree, bindings: &BTreeSet<String>) -> Out
     // Never make a second Web factory when the program already has one.
     let dependency = if bindings.contains(WEB_STREAMS_BINDING) {
         Expression::Identifier(WEB_STREAMS_BINDING.to_string())
+    } else if retain_runtime_sources {
+        // The private runtime factory needs immutable audit ranges from its
+        // lazy Web dependency too. Ordinary source rewrites keep the legacy
+        // template and native display policy.
+        module_source_with_runtime_sources(&names, PureModule::WebStreams, true)?
     } else {
         module_source(&names, PureModule::WebStreams)?
     };

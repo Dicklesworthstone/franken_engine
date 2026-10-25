@@ -1940,7 +1940,7 @@ mod tests {
         }
     }
 
-    fn assert_callable_then_fixture(source: &str, expected: &str) {
+    fn lower_callable_then_fixture(source: &str) -> Ir3Module {
         let tree = CanonicalEs2020Parser
             .parse_with_options(
                 ParserSource {
@@ -1951,28 +1951,45 @@ mod tests {
                 &ParserOptions::default(),
             )
             .expect("callable-then source parses");
-        let module = lower_ir0_to_ir3(
+        lower_ir0_to_ir3(
             &Ir0Module::from_syntax_tree(tree, "async-generator-callable-then.js"),
             &LoweringContext::new("thenables", "native-callables", "builtin-only"),
         )
         .expect("callable-then source lowers")
-        .ir3;
+        .ir3
+    }
+
+    fn callable_then_fixture_config(
+        throughput: bool,
+        extra_capabilities: &[RuntimeCapability],
+    ) -> InterpreterConfig {
+        let mut config = if throughput {
+            InterpreterConfig::v8_defaults()
+        } else {
+            InterpreterConfig::quickjs_defaults()
+        };
+        config.instruction_budget = 1_000_000;
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+            RuntimeCapability::Console,
+        ]
+        .into_iter()
+        .chain(extra_capabilities.iter().copied())
+        .collect();
+        config
+    }
+
+    fn assert_callable_then_fixture(
+        source: &str,
+        expected: &str,
+        extra_capabilities: &[RuntimeCapability],
+    ) {
+        let module = lower_callable_then_fixture(source);
         for throughput in [false, true] {
             for stress in [None, Some(7)] {
-                let mut config = if throughput {
-                    InterpreterConfig::v8_defaults()
-                } else {
-                    InterpreterConfig::quickjs_defaults()
-                };
-                config.instruction_budget = 1_000_000;
-                config.granted_capabilities = [
-                    RuntimeCapability::VmDispatch,
-                    RuntimeCapability::HeapAllocate,
-                    RuntimeCapability::Builtin,
-                    RuntimeCapability::Console,
-                ]
-                .into_iter()
-                .collect();
+                let config = callable_then_fixture_config(throughput, extra_capabilities);
                 let mut core = InterpreterCore::new(config, "callable-then");
                 core.set_gc_stress_interval(stress);
                 let result = core.execute(&module).expect("native thenable execution");
@@ -2005,7 +2022,7 @@ async function* values() { yield input; yield await input; return input; }
 
     #[test]
     fn bound_then_runs_for_yield_body_await_and_return_with_once_only_resolution() {
-        assert_callable_then_fixture(BOUND_THEN_SOURCE, BOUND_THEN_EXPECTED);
+        assert_callable_then_fixture(BOUND_THEN_SOURCE, BOUND_THEN_EXPECTED, &[]);
     }
 
     const PROXY_THEN_SOURCE: &str = r#"
@@ -2033,7 +2050,11 @@ async function* values() { yield input; }
 
     #[test]
     fn inherited_then_getter_is_read_once_and_proxy_call_runs_as_a_job() {
-        assert_callable_then_fixture(PROXY_THEN_SOURCE, PROXY_THEN_EXPECTED);
+        assert_callable_then_fixture(
+            PROXY_THEN_SOURCE,
+            PROXY_THEN_EXPECTED,
+            &[RuntimeCapability::Timer],
+        );
     }
 
     const BUILTIN_THEN_SOURCE: &str = r#"
@@ -2054,7 +2075,7 @@ async function* values(input) { yield input; }
 
     #[test]
     fn builtin_then_observes_receiver_first_resolution_and_native_exceptions() {
-        assert_callable_then_fixture(BUILTIN_THEN_SOURCE, BUILTIN_THEN_EXPECTED);
+        assert_callable_then_fixture(BUILTIN_THEN_SOURCE, BUILTIN_THEN_EXPECTED, &[]);
     }
 
     const RETURN_REJECTION_SOURCE: &str = r#"
@@ -2077,7 +2098,7 @@ async function* values() {
 
     #[test]
     fn bound_then_rejection_on_return_reenters_the_suspended_catch_and_finally() {
-        assert_callable_then_fixture(RETURN_REJECTION_SOURCE, RETURN_REJECTION_EXPECTED);
+        assert_callable_then_fixture(RETURN_REJECTION_SOURCE, RETURN_REJECTION_EXPECTED, &[]);
     }
 
     const ASYNC_THEN_SOURCE: &str = r#"
@@ -2097,7 +2118,7 @@ async function* empty() {}
 
     #[test]
     fn async_then_and_completed_return_keep_fifo_request_completion() {
-        assert_callable_then_fixture(ASYNC_THEN_SOURCE, ASYNC_THEN_EXPECTED);
+        assert_callable_then_fixture(ASYNC_THEN_SOURCE, ASYNC_THEN_EXPECTED, &[]);
     }
 
     const DELEGATED_THEN_SOURCE: &str = r#"
@@ -2120,7 +2141,7 @@ async function* values() { return yield* iterable; }
 
     #[test]
     fn delegation_awaits_callable_result_then_without_unwrapping_its_yielded_value() {
-        assert_callable_then_fixture(DELEGATED_THEN_SOURCE, DELEGATED_THEN_EXPECTED);
+        assert_callable_then_fixture(DELEGATED_THEN_SOURCE, DELEGATED_THEN_EXPECTED, &[]);
     }
 
     fn callable_value_request_core() -> (InterpreterCore, u32, PromiseHandle, Value) {
@@ -2219,7 +2240,7 @@ let calls = 0;
 
     #[test]
     fn every_callable_value_representation_assimilates_its_then_property() {
-        assert_callable_then_fixture(FUNCTION_VALUES_SOURCE, FUNCTION_VALUES_EXPECTED);
+        assert_callable_then_fixture(FUNCTION_VALUES_SOURCE, FUNCTION_VALUES_EXPECTED, &[]);
     }
 
     const FUNCTION_PROTOTYPE_SOURCE: &str = r#"
@@ -2245,7 +2266,39 @@ async function* values() { yield input; }
 
     #[test]
     fn callable_value_inherited_then_runs_once_with_original_receiver_and_job_order() {
-        assert_callable_then_fixture(FUNCTION_PROTOTYPE_SOURCE, FUNCTION_PROTOTYPE_EXPECTED);
+        assert_callable_then_fixture(
+            FUNCTION_PROTOTYPE_SOURCE,
+            FUNCTION_PROTOTYPE_EXPECTED,
+            &[RuntimeCapability::Timer],
+        );
+    }
+
+    #[test]
+    fn explicit_microtasks_in_callable_then_fixtures_require_timer_authority() {
+        for (fixture, source) in [
+            ("proxy then", PROXY_THEN_SOURCE),
+            ("inherited function then", FUNCTION_PROTOTYPE_SOURCE),
+        ] {
+            let module = lower_callable_then_fixture(source);
+            for throughput in [false, true] {
+                for stress in [None, Some(7)] {
+                    let config = callable_then_fixture_config(throughput, &[]);
+                    let mut core = InterpreterCore::new(config, "callable-then");
+                    core.set_gc_stress_interval(stress);
+                    let result = core.execute(&module);
+                    assert!(
+                        matches!(
+                            &result,
+                            Err(InterpreterError::CapabilityDenied { capability })
+                                if capability == "builtin:QueueMicrotask"
+                        ),
+                        "{fixture}: throughput={throughput}, GC={stress:?}: {result:?}"
+                    );
+                    assert!(core.console_output().is_empty());
+                    assert_accounting(&core);
+                }
+            }
+        }
     }
 
     const FUNCTION_PROXY_SOURCE: &str = r#"
@@ -2270,7 +2323,7 @@ async function* values(value) { yield value; }
 
     #[test]
     fn callable_proxy_values_use_get_traps_and_reject_revocation() {
-        assert_callable_then_fixture(FUNCTION_PROXY_SOURCE, FUNCTION_PROXY_EXPECTED);
+        assert_callable_then_fixture(FUNCTION_PROXY_SOURCE, FUNCTION_PROXY_EXPECTED, &[]);
     }
 
     const FUNCTION_GETTER_REJECTION_SOURCE: &str = r#"
@@ -2291,7 +2344,11 @@ async function* values() {
 
     #[test]
     fn callable_then_getter_rejection_on_return_preserves_catch_finally_and_identity() {
-        assert_callable_then_fixture(FUNCTION_GETTER_REJECTION_SOURCE, FUNCTION_GETTER_REJECTION_EXPECTED);
+        assert_callable_then_fixture(
+            FUNCTION_GETTER_REJECTION_SOURCE,
+            FUNCTION_GETTER_REJECTION_EXPECTED,
+            &[],
+        );
     }
 
     const OBJECT_IDENTITY_SOURCE: &str = r#"
@@ -2315,7 +2372,7 @@ const values = [function () {}, () => 1, (function () {}).bind(null), async func
 
     #[test]
     fn object_like_values_with_non_callable_then_keep_exact_identity() {
-        assert_callable_then_fixture(OBJECT_IDENTITY_SOURCE, OBJECT_IDENTITY_EXPECTED);
+        assert_callable_then_fixture(OBJECT_IDENTITY_SOURCE, OBJECT_IDENTITY_EXPECTED, &[]);
     }
 
     const PRIMITIVE_AWAIT_SOURCE: &str = r#"
@@ -2342,7 +2399,7 @@ const values = [undefined, null, false, -0, NaN, 3.5, 900719925474099312345n, '\
 
     #[test]
     fn primitive_await_never_boxes_to_look_up_then_and_keeps_exact_values() {
-        assert_callable_then_fixture(PRIMITIVE_AWAIT_SOURCE, PRIMITIVE_AWAIT_EXPECTED);
+        assert_callable_then_fixture(PRIMITIVE_AWAIT_SOURCE, PRIMITIVE_AWAIT_EXPECTED, &[]);
     }
 
     const ITERATOR_VALUES_SOURCE: &str = r#"
@@ -2370,7 +2427,7 @@ async function* values(input) { yield input; }
 
     #[test]
     fn iterator_values_assimilate_without_consumption_or_unwrapping_raw_yield_star() {
-        assert_callable_then_fixture(ITERATOR_VALUES_SOURCE, ITERATOR_VALUES_EXPECTED);
+        assert_callable_then_fixture(ITERATOR_VALUES_SOURCE, ITERATOR_VALUES_EXPECTED, &[]);
     }
 
     const COMPLETED_FUNCTION_RETURN_SOURCE: &str = r#"
@@ -2391,7 +2448,11 @@ async function* empty() {}
 
     #[test]
     fn completed_return_assimilates_callable_value_and_serializes_getter_reentry() {
-        assert_callable_then_fixture(COMPLETED_FUNCTION_RETURN_SOURCE, COMPLETED_FUNCTION_RETURN_EXPECTED);
+        assert_callable_then_fixture(
+            COMPLETED_FUNCTION_RETURN_SOURCE,
+            COMPLETED_FUNCTION_RETURN_EXPECTED,
+            &[],
+        );
     }
 
 
@@ -2426,6 +2487,6 @@ async function* values() {
 
     #[test]
     fn event_job_getters_keep_the_receiver_and_unpublished_source_promise_rooted() {
-        assert_callable_then_fixture(EVENT_GETTER_ROOTS_SOURCE, EVENT_GETTER_ROOTS_EXPECTED);
+        assert_callable_then_fixture(EVENT_GETTER_ROOTS_SOURCE, EVENT_GETTER_ROOTS_EXPECTED, &[]);
     }
 }

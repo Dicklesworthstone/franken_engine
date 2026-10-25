@@ -50,6 +50,13 @@ fn invalid() -> LoweringPipelineError {
 /// bindings are callable caches, not module values. No guest spelling can
 /// collide with these reserved names.
 pub(super) fn defer_modules(tree: &mut SyntaxTree) -> Outcome {
+    defer_modules_with_runtime_sources(tree, false)
+}
+
+pub(super) fn defer_modules_with_runtime_sources(
+    tree: &mut SyntaxTree,
+    retain_runtime_sources: bool,
+) -> Outcome {
     let mut bindings = BTreeSet::new();
     let mut declarations = Vec::new();
     for (index, statement) in tree.body.iter().enumerate() {
@@ -77,7 +84,11 @@ pub(super) fn defer_modules(tree: &mut SyntaxTree) -> Outcome {
         // Direct native calls introduce no module object or loader overhead.
         return Ok(());
     }
-    stream_web_bridge::compose(tree, &bindings)?;
+    if retain_runtime_sources {
+        stream_web_bridge::compose_with_runtime_sources(tree, &bindings, true)?;
+    } else {
+        stream_web_bridge::compose(tree, &bindings)?;
+    }
     readline_cursor::compose(tree, &bindings)?;
     util_mime::compose(tree, &bindings)?;
     ModuleReferences(&bindings).statements(&mut tree.body)?;

@@ -141,6 +141,16 @@ impl FunctionSourceText {
     pub fn as_str(&self) -> &str {
         &self.source[self.start..self.end]
     }
+
+    /// Full retained source allocation, including text outside this range.
+    pub(crate) fn retained_backing_len(&self) -> usize {
+        self.source.len()
+    }
+
+    /// Several ranges from one parse share this immutable source owner.
+    pub(crate) fn shares_backing(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.source, &other.source)
+    }
 }
 
 impl From<&str> for FunctionSourceText {
@@ -177,6 +187,35 @@ impl<'de> Deserialize<'de> for FunctionSourceText {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let text = String::deserialize(deserializer)?;
         Ok(Self::from(text.as_str()))
+    }
+}
+
+#[cfg(test)]
+mod function_source_text_tests {
+    use super::FunctionSourceText;
+    use std::sync::Arc;
+
+    #[test]
+    fn retained_source_backing_counts_full_unicode_owner_without_changing_serde() {
+        let source: Arc<str> = Arc::from("  é😀 function f() {} trailing whitespace  \n");
+        let start = source.find("function").unwrap();
+        let end = start + "function f() {}".len();
+        let function = FunctionSourceText::new(Arc::clone(&source), start, end).unwrap();
+        let prefix = FunctionSourceText::new(Arc::clone(&source), 0, start).unwrap();
+        assert_eq!(function.retained_backing_len(), source.len());
+        assert!(function.retained_backing_len() > function.as_str().len());
+        assert!(function.shares_backing(&prefix));
+        let separate = FunctionSourceText::from(function.as_str());
+        assert_eq!(function, separate);
+        assert!(!function.shares_backing(&separate));
+        let wire = serde_json::to_string(function.as_str()).unwrap();
+        assert_eq!(serde_json::to_string(&function).unwrap(), wire);
+        assert_eq!(serde_json::to_string(&separate).unwrap(), wire);
+        let decoded: FunctionSourceText = serde_json::from_str(&wire).unwrap();
+        assert_eq!(decoded, function);
+        assert!(!decoded.shares_backing(&function));
+        assert_eq!(decoded.retained_backing_len(), function.as_str().len());
+        assert_eq!(serde_json::to_string(&decoded).unwrap(), wire);
     }
 }
 

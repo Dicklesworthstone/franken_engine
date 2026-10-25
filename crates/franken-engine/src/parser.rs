@@ -1997,6 +1997,22 @@ impl CanonicalEs2020Parser {
         result
     }
 
+    /// Preserve immutable source ranges for the authenticated runtime factory.
+    /// This is metadata retention, not native authority. Public parsing and
+    /// legacy builtin facades retain their existing native-display policy.
+    pub(crate) fn parse_native_runtime_with_function_sources<I>(
+        &self,
+        input: I,
+        goal: ParseGoal,
+        options: &ParserOptions,
+    ) -> ParseResult<SyntaxTree>
+    where
+        I: ParserInput,
+    {
+        self.parse_with_event_ir_and_native_sources(input, goal, options, true)
+            .0
+    }
+
     /// Parse input while emitting a deterministic Parse Event IR stream.
     ///
     /// This method always returns a Parse Event IR value, including when parsing
@@ -2010,11 +2026,30 @@ impl CanonicalEs2020Parser {
     where
         I: ParserInput,
     {
+        self.parse_with_event_ir_and_native_sources(input, goal, options, false)
+    }
+
+    fn parse_with_event_ir_and_native_sources<I>(
+        &self,
+        input: I,
+        goal: ParseGoal,
+        options: &ParserOptions,
+        retain_native_sources: bool,
+    ) -> (ParseResult<SyntaxTree>, ParseEventIr)
+    where
+        I: ParserInput,
+    {
         match input.into_source() {
             // bd-rucba: tree parse AND event-IR construction both recurse over
             // the tree, so run them together on one budget-provisioned stack.
             Ok(source) => with_provisioned_parse_stack(options, || {
-                match parse_source(&source.text, &source.label, goal, options) {
+                match parse_source_with_native_sources(
+                    &source.text,
+                    &source.label,
+                    goal,
+                    options,
+                    retain_native_sources,
+                ) {
                     Ok(tree) => {
                         let event_ir = ParseEventIr::from_parse_source(
                             &tree,
@@ -4229,6 +4264,16 @@ fn parse_source(
     goal: ParseGoal,
     options: &ParserOptions,
 ) -> ParseResult<SyntaxTree> {
+    parse_source_with_native_sources(text, source_label, goal, options, false)
+}
+
+fn parse_source_with_native_sources(
+    text: &str,
+    source_label: &str,
+    goal: ParseGoal,
+    options: &ParserOptions,
+    retain_native_sources: bool,
+) -> ParseResult<SyntaxTree> {
     if text.trim().is_empty() {
         return Err(ParseError::new(
             ParseErrorCode::EmptySource,
@@ -4305,7 +4350,9 @@ fn parse_source(
     // record no function source text: their functions stand in for
     // built-ins, which print as native code, and their text spells the
     // placeholder names lowering renames (`__franken_util_format`).
-    if !source_label.starts_with("franken:") {
+    // The private runtime factory also needs these exact ranges for its
+    // immutable accessor audit. Its public display still uses NativeFunction.
+    if retain_native_sources || !source_label.starts_with("franken:") {
         context.function_sources.original = Some(std::sync::Arc::from(text));
         context.function_sources.blanked = Some((stripped.as_ptr() as usize, stripped.len()));
     }
@@ -7487,6 +7534,13 @@ fn parse_primary_expression(
 ///   (`\u0061sync function f() {}`): a keyword contains no escapes (ES2020
 ///   11.6.2).
 fn raw_expression_early_error(expression: &str) -> Option<&'static str> {
+    // A leading group must close even when no supported expression parser
+    // recognized it. Otherwise `(` reaches Raw and dynamic compilation can
+    // fabricate a value instead of throwing a catchable SyntaxError (bd-6vl81).
+    // Comments are already blanked; the scanner skips literal delimiters.
+    if expression.starts_with('(') && extract_balanced(expression, '(', ')').is_none() {
+        return Some("unterminated parenthesized expression");
+    }
     if expression.starts_with('/') && leading_regexp_literal(expression).is_none() {
         return Some("unterminated regular expression literal");
     }
@@ -17874,6 +17928,61 @@ mod tests {
     use super::*;
 
     #[test]
+    fn native_runtime_source_ranges_preserve_public_policy_and_parse_budgets() {
+        fn method_source(tree: &SyntaxTree) -> Option<&str> {
+            tree.body.iter().find_map(|statement| {
+                let Statement::VariableDeclaration(declaration) = statement else {
+                    return None;
+                };
+                declaration.declarations.iter().find_map(|declarator| {
+                    let Some(Expression::ObjectLiteral(properties)) = &declarator.initializer
+                    else {
+                        return None;
+                    };
+                    let Expression::Function { source_text, .. } = &properties[0].value else {
+                        return None;
+                    };
+                    source_text.as_ref().map(FunctionSourceText::as_str)
+                })
+            })
+        }
+        let source = "const prefix = '😀'; const o = { closed() { /*é*/ return this.state; } };";
+        let input = || ParserSource {
+            label: "franken:metadata-probe".into(),
+            text: source.into(),
+        };
+        let options = ParserOptions::default();
+        let legacy = CanonicalEs2020Parser
+            .parse_with_options(input(), ParseGoal::Script, &options)
+            .unwrap();
+        let runtime = CanonicalEs2020Parser
+            .parse_native_runtime_with_function_sources(input(), ParseGoal::Script, &options)
+            .unwrap();
+        assert!(method_source(&legacy).is_none());
+        assert_eq!(
+            method_source(&runtime),
+            Some("closed() { /*é*/ return this.state; }")
+        );
+        assert_eq!(legacy.canonical_value(), runtime.canonical_value());
+        for source_limit in [true, false] {
+            let mut options = ParserOptions::default();
+            if source_limit {
+                options.budget.max_source_bytes = source.len() as u64 - 1;
+            } else {
+                options.budget.max_token_count = 0;
+            }
+            let legacy = CanonicalEs2020Parser
+                .parse_with_options(input(), ParseGoal::Script, &options)
+                .unwrap_err();
+            let runtime = CanonicalEs2020Parser
+                .parse_native_runtime_with_function_sources(input(), ParseGoal::Script, &options)
+                .unwrap_err();
+            assert_eq!(legacy, runtime);
+            assert_eq!(runtime.source_label, "franken:metadata-probe");
+        }
+    }
+
+    #[test]
     fn function_parameters_reject_only_body_lexical_redeclarations() {
         let parser = CanonicalEs2020Parser;
         for source in [
@@ -17887,7 +17996,11 @@ mod tests {
             "(function(exports, require, module, __filename, __dirname) { const module = 42; });",
         ] {
             let error = parser.parse(source, ParseGoal::Script).expect_err(source);
-            assert_eq!(error.code, ParseErrorCode::InvalidSyntax, "{source}: {error:?}");
+            assert_eq!(
+                error.code,
+                ParseErrorCode::InvalidSyntax,
+                "{source}: {error:?}"
+            );
             assert!(
                 error.message.contains("redeclares a function parameter"),
                 "{source}: {error:?}"
@@ -19161,6 +19274,123 @@ mod tests {
             parser
                 .parse(source, ParseGoal::Script)
                 .unwrap_or_else(|err| panic!("`{source}` must parse: {}", err.message));
+        }
+    }
+
+    #[test]
+    fn unterminated_parenthesized_expressions_are_syntax_errors() {
+        let parser = CanonicalEs2020Parser;
+        for goal in [ParseGoal::Script, ParseGoal::Module] {
+            for source in [
+                "(",
+                "((",
+                "(1",
+                "var x = (",
+                "var x = (1 + 2",
+                "(/* ) */",
+                "(// )\n",
+                "(')'",
+                r"(/\)/",
+                "(`)`",
+                "var effects = 1; (",
+            ] {
+                let err = parser.parse(source, goal).expect_err(&format!(
+                    "`{source}` must fail before execution in {goal:?}"
+                ));
+                assert_eq!(
+                    err.code,
+                    ParseErrorCode::InvalidSyntax,
+                    "wrong code for `{source}` in {goal:?}: {}",
+                    err.message
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn parenthesized_literal_delimiters_are_not_group_delimiters() {
+        let parser = CanonicalEs2020Parser;
+        for goal in [ParseGoal::Script, ParseGoal::Module] {
+            for source in [
+                "('(');",
+                "(\")\");",
+                r"(/\(/);",
+                r"(/\)/).test(')');",
+                "(`(`);",
+                "(`)`);",
+                "(`x${'('}`);",
+                "(`x${`)`}`);",
+                "(/* ( */ 1);",
+                "(/* ) */ 1);",
+                "(// (\n1);",
+                "(1 + (2 * 3));",
+                "((x) => x)(1);",
+            ] {
+                parser.parse(source, goal).unwrap_or_else(|err| {
+                    panic!("`{source}` must parse in {goal:?}: {}", err.message)
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn unterminated_parentheses_fail_public_preparation_and_function_compilation() {
+        for source in ["(", "var effects = 1; ("] {
+            let error = crate::HybridRouter::default()
+                .eval(source)
+                .expect_err("invalid source must fail preparation");
+            assert_eq!(error.code, crate::EvalErrorCode::ParseFailure);
+            assert!(
+                error
+                    .message
+                    .contains("unterminated parenthesized expression"),
+                "{source}: {error}"
+            );
+        }
+        for compile in [
+            "Function('effects = 1; (')()",
+            "new Function('effects = 1; (')()",
+        ] {
+            let source = format!(
+                "var effects = 0; var caught = 0; \
+                 try {{ {compile}; }} catch (error) {{ \
+                 if (error instanceof SyntaxError && error.name === 'SyntaxError') caught = 1; \
+                 }} effects * 10 + caught;"
+            );
+            let outcome = crate::HybridRouter::default()
+                .eval(&source)
+                .unwrap_or_else(|err| {
+                    panic!("{compile} must throw a catchable SyntaxError: {err}")
+                });
+            assert_eq!(
+                outcome.value, "1",
+                "{compile} must not execute invalid source"
+            );
+            assert_eq!(outcome.completion_type.as_deref(), Some("number"));
+        }
+    }
+
+    #[test]
+    fn malformed_dynamic_source_does_not_widen_eval_authority() {
+        let denied = crate::HybridRouter::default()
+            .eval("eval('(');")
+            .expect_err("direct eval must retain its authority check");
+        assert!(denied.message.contains("runtime.eval"), "{denied}");
+        for source in [
+            "var effects = 0; var caught = 0; \
+             try { (0, eval)('effects = 1; ('); } catch (error) { \
+             if (error instanceof EvalError && error.name === 'EvalError') caught = 1; \
+             } effects * 10 + caught;",
+            "var effects = 0; var caught = 0; var indirect = eval; \
+             try { indirect('effects = 1; ('); } catch (error) { \
+             if (error instanceof EvalError && error.name === 'EvalError') caught = 1; \
+             } effects * 10 + caught;",
+        ] {
+            let outcome = crate::HybridRouter::default()
+                .eval(source)
+                .expect("inert eval must throw a catchable EvalError without executing source");
+            assert_eq!(outcome.value, "1");
+            assert_eq!(outcome.completion_type.as_deref(), Some("number"));
         }
     }
 

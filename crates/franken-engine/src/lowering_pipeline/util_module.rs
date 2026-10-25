@@ -621,7 +621,8 @@ pub(crate) fn native_runtime_module_tree(
             &ParserOptions::default(),
         )
         .map_err(|_| invalid())?;
-    let mut rewritten = rewrite_module_objects(&tree)?.ok_or_else(invalid)?;
+    let mut rewritten =
+        rewrite_module_objects_with_runtime_sources(&tree, true)?.ok_or_else(invalid)?;
     if matches!(
         native,
         NativeBuiltinModule::Stream | NativeBuiltinModule::StreamPromises
@@ -664,11 +665,18 @@ pub(crate) fn native_runtime_module_tree(
             }
         }
     }
-    native_module_loader::defer_modules(&mut rewritten)?;
+    native_module_loader::defer_modules_with_runtime_sources(&mut rewritten, true)?;
     Ok(rewritten)
 }
 
 fn rewrite_module_objects(tree: &SyntaxTree) -> Result<Option<SyntaxTree>, LoweringPipelineError> {
+    rewrite_module_objects_with_runtime_sources(tree, false)
+}
+
+fn rewrite_module_objects_with_runtime_sources(
+    tree: &SyntaxTree,
+    retain_runtime_sources: bool,
+) -> Result<Option<SyntaxTree>, LoweringPipelineError> {
     let fs_rewritten = fs_module::rewrite_fs_requires(tree)?;
     let tree = fs_rewritten.as_ref().unwrap_or(tree);
     if !tree
@@ -764,7 +772,11 @@ fn rewrite_module_objects(tree: &SyntaxTree) -> Result<Option<SyntaxTree>, Lower
             kind: VariableDeclarationKind::Const,
             declarations: vec![VariableDeclarator {
                 pattern: BindingPattern::Identifier(module.binding().to_string()),
-                initializer: Some(module_source(&root, module)?),
+                initializer: Some(if retain_runtime_sources {
+                    module_source_with_runtime_sources(&root, module, true)?
+                } else {
+                    module_source(&root, module)?
+                }),
                 span,
             }],
             span,
@@ -1100,7 +1112,19 @@ fn module_source(
     program_names: &BTreeSet<String>,
     module: PureModule,
 ) -> Result<Expression, LoweringPipelineError> {
-    let mut expression = parse_module_source(module)?;
+    module_source_with_runtime_sources(program_names, module, false)
+}
+
+fn module_source_with_runtime_sources(
+    program_names: &BTreeSet<String>,
+    module: PureModule,
+    retain_runtime_sources: bool,
+) -> Result<Expression, LoweringPipelineError> {
+    let mut expression = if retain_runtime_sources {
+        module_syntax_source(module).runtime_expression()?
+    } else {
+        parse_module_source(module)?
+    };
     let globals: &[&str] = match module {
         PureModule::Util => &MODULE_GLOBALS,
         PureModule::Events => &EVENTS_GLOBALS,
@@ -1382,6 +1406,77 @@ mod tests {
     }
 
     #[test]
+    fn native_runtime_stream_source_metadata_reaches_ir3_without_legacy_capture() {
+        struct SourceCount(usize);
+        impl Walk for SourceCount {
+            fn expression(&mut self, expression: &mut Expression) -> Outcome {
+                if matches!(
+                    expression,
+                    Expression::Function {
+                        source_text: Some(_),
+                        ..
+                    } | Expression::ArrowFunction {
+                        source_text: Some(_),
+                        ..
+                    } | Expression::ClassExpression {
+                        source_text: Some(_),
+                        ..
+                    }
+                ) {
+                    self.0 += 1;
+                }
+                walk_expression(self, expression)
+            }
+        }
+        for legacy_module in [PureModule::Stream, PureModule::WebStreams] {
+            let mut legacy = parse_module_source(legacy_module).unwrap();
+            let mut count = SourceCount(0);
+            count.expression(&mut legacy).unwrap();
+            assert_eq!(
+                count.0, 0,
+                "legacy facade source remains native-display-only"
+            );
+        }
+        let tree = native_runtime_module_tree(NativeBuiltinModule::Stream).unwrap();
+        let context =
+            super::super::LoweringContext::new("native-source", "source-metadata", "builtin-only")
+                .with_authenticated_commonjs_runtime_bindings()
+                .with_preserved_runtime_module_loads();
+        let ir0 =
+            crate::ir_contract::Ir0Module::from_syntax_tree(tree, "\0franken-engine/native-stream");
+        let module = super::super::lower_ir0_to_ir3(&ir0, &context).unwrap().ir3;
+        let closed_sources: Vec<_> = module
+            .function_sources
+            .iter()
+            .filter_map(|(index, text)| {
+                (module.function_table[*index as usize].name.as_deref() == Some("closed"))
+                    .then_some(text.as_str())
+            })
+            .collect();
+        assert!(
+            closed_sources
+                .iter()
+                .any(|text| text.starts_with("closed(") && text.contains("this._readableState")),
+            "the canonical receiver-owned getter retains its exact method source"
+        );
+        assert!(
+            closed_sources
+                .iter()
+                .any(|text| text.starts_with("get closed(")),
+            "same-program Web getters retain their distinct class-accessor source"
+        );
+        for legacy_module in [PureModule::Stream, PureModule::WebStreams] {
+            let mut legacy_again = parse_module_source(legacy_module).unwrap();
+            let mut count = SourceCount(0);
+            count.expression(&mut legacy_again).unwrap();
+            assert_eq!(
+                count.0, 0,
+                "runtime metadata cannot contaminate the legacy cache"
+            );
+        }
+    }
+
+    #[test]
     fn cached_syntax_matches_fresh_parses_for_every_pure_module() {
         for (module, label, source) in [
             (PureModule::Util, "franken:util", UTIL_SOURCE),
@@ -1415,6 +1510,19 @@ mod tests {
                 cached.canonical_value(),
                 statement.expression.canonical_value(),
                 "canonical syntax for {label}"
+            );
+            let runtime = module_syntax_source(module)
+                .runtime_expression()
+                .expect("runtime audit template parses");
+            assert_eq!(
+                runtime.canonical_value(),
+                statement.expression.canonical_value(),
+                "retaining audit ranges preserves canonical syntax for {label}"
+            );
+            assert_eq!(
+                parse_module_source(module).unwrap(),
+                cached,
+                "runtime capture leaves legacy syntax untouched for {label}"
             );
         }
     }

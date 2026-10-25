@@ -1362,19 +1362,43 @@ mod tests {
 
     #[test]
     fn depth_and_instruction_exhaustion_are_not_syntax_errors() {
-        let mut core = core();
         let nested = format!("{}0{}", "[".repeat(202), "]".repeat(202));
+        let mut document_core = core();
+        let units: Vec<u16> = nested.encode_utf16().collect();
+        let document_outcome = document_core.json_parse_document(&units);
+        assert!(matches!(
+            document_outcome,
+            Err(InterpreterError::StackOverflow { .. })
+        ));
+        assert!(document_core.pending_exception.is_none());
+        assert!(document_core.active_inline_callback_context_label.is_none());
+        assert_eq!(
+            document_core.estimated_memory_bytes(),
+            document_core.recompute_estimated_memory_bytes()
+        );
+
+        // The document parser preserves its typed depth fault. At the JS
+        // boundary, bd-9vouw.72 deliberately exposes stack overflow as a
+        // RangeError; instruction/memory/containment refusals stay host faults.
+        let mut core = core();
         let outcome = parse(&mut core, Value::str(nested));
         assert!(
-            matches!(&outcome, Err(InterpreterError::StackOverflow { .. })),
-            "nested JSON must preserve the typed depth refusal; observed {outcome:?}"
+            matches!(&outcome, Err(InterpreterError::UncaughtException { value })
+                if value == "RangeError: Maximum call stack size exceeded"),
+            "depth refusal must not become SyntaxError; observed {outcome:?}"
         );
-        assert!(core.pending_exception.is_none());
+        let Some((Value::Object(error), label)) = core.pending_exception.as_ref() else {
+            panic!("the JS boundary must retain the actual RangeError object");
+        };
+        assert_eq!(core.chain_data_property(*error, "name"), Some(Value::str("RangeError")));
+        assert_eq!(label, &Label::Public);
         assert!(core.active_inline_callback_context_label.is_none());
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
         );
+        core.replace_pending_abrupt_slots(None, None)
+            .expect("consume the language exception through its accounted boundary");
         core.config.instruction_budget = core.instructions_executed;
         assert!(matches!(
             parse(&mut core, Value::str("[1]")),

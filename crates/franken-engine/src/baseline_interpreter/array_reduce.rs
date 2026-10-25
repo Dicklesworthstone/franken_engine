@@ -539,13 +539,18 @@ mod tests {
                     matches!(
                         &outcome,
                         Err(InterpreterError::BudgetExhausted {
-                            executed: 32,
+                            executed: 17,
                             budget: 32,
                         })
                     ),
                     "sparse indices must be probed under the shared budget; observed {outcome:?}"
                 );
-                assert_eq!(core.instructions_executed, 32);
+                // Property observations and hole probes share the ceiling,
+                // but the error's executed field reports the instruction
+                // counter only. The refused hole attempt is recorded too.
+                assert_eq!(core.instructions_executed, 17);
+                assert_eq!(core.native_hole_reads, 16);
+                assert_eq!(core.instructions_executed + core.native_hole_reads, 33);
                 assert!(
                     core.simple_callback_register_pool.is_empty(),
                     "holes never invoke the throwing callback"

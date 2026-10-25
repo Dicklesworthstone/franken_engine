@@ -120023,16 +120023,38 @@ mod active_builtin_regressions {
 
         let error = call_builtin_for_test(&mut core, BuiltinFunction::array_pop(), array, &[])
             .expect_err("popping a frozen array must fail");
+        // The scoped builtin boundary materializes language errors before
+        // restoring observation labels. The only permitted retained growth
+        // is the same TypeError and intrinsic prototypes it requires.
+        let mut reference = test_core();
+        let reference_array = reference
+            .alloc_array_from_values(&[Value::Int(7), Value::Int(8)])
+            .expect("reference array allocation should succeed");
+        reference.mutate_heap(|heap| heap[reference_array.0 as usize].is_frozen = true);
+        assert_eq!(reference.estimated_memory_bytes(), memory_before);
+        let expected_error = reference
+            .scoped_native_error(&InterpreterError::TypeError {
+                expected: "configurable property 1".to_string(),
+                got: "a refused [[Delete]]".to_string(),
+            })
+            .expect("reference TypeError construction should fit the test budget");
         assert!(
-            matches!(&error, InterpreterError::TypeError { .. }),
+            matches!((&error, &expected_error),
+                (InterpreterError::UncaughtException { value },
+                 InterpreterError::UncaughtException { value: expected }) if value == expected),
             "frozen pop error must remain TypeError; observed {error:?}"
         );
+        let Some((Value::Object(error_object), label)) = core.pending_exception.as_ref() else {
+            panic!("frozen pop must retain the actual TypeError object");
+        };
+        assert_eq!(core.chain_data_property(*error_object, "name"), Some(Value::str("TypeError")));
+        assert_eq!(label, &Label::Public);
 
         let object = &core.heap[array.0 as usize];
         assert_eq!(object.properties.get("1"), Some(&Value::Int(8)));
         assert_eq!(object.properties.get("length"), Some(&Value::Int(2)));
         assert_eq!(object.cached_dense_length, Some(2));
-        assert_eq!(core.estimated_memory_bytes(), memory_before);
+        assert_eq!(core.estimated_memory_bytes(), reference.estimated_memory_bytes());
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
@@ -127526,10 +127548,15 @@ mod async_runtime_tests_current {
 
     #[test]
     fn client_request_receiver_label_reaches_deferred_error_bd_z1peg() {
+        use frankenengine_extension_host::host_io::InMemoryHostIoTranscript;
+
         let mut core = test_interpreter();
         core.config
             .granted_capabilities
             .insert(RuntimeCapability::NetworkEgress);
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+        let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+        core.host_io_recorder = Some(recorder_dyn);
         core.write_reg_with_label(0, Value::str("http://127.0.0.1:9/"), Label::Public)
             .expect("request URL");
         let request = core
@@ -127567,6 +127594,15 @@ mod async_runtime_tests_current {
         };
         assert_eq!(event, "error");
         assert_eq!(label, &Label::Secret);
+        let entries = recorder.recorded_entries();
+        assert_eq!(entries.len(), 1, "classified egress refusal must be evidenced");
+        assert!(matches!(entries[0].0, HostIoRequest::NetworkRequest { .. }));
+        assert_eq!(
+            entries[0].1,
+            Err(HostIoError::Denied {
+                reason: DEFERRED_NETWORK_FLOW_POLICY_DENIAL.to_string(),
+            })
+        );
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
@@ -142991,7 +143027,7 @@ mod async_runtime_tests_current {
         assert_eq!(*target, req_id);
         assert_eq!(event, "error");
         assert_eq!(*leading_callback, None);
-        assert_eq!(label, &Label::Public);
+        assert_eq!(label, &Label::Internal);
         assert_eq!(
             args.len(),
             1,
@@ -143127,7 +143163,7 @@ mod async_runtime_tests_current {
         assert_eq!(*target, req_id);
         assert_eq!(event, "response");
         assert_eq!(*leading_callback, None);
-        assert_eq!(label, &Label::Public);
+        assert_eq!(label, &Label::Internal);
         let Value::Object(resp_id) = &args[0] else {
             panic!(
                 "the listener arg must be the response object, got {:?}",

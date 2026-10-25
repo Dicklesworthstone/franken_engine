@@ -549,8 +549,8 @@ mod tests {
                 // but the error's executed field reports the instruction
                 // counter only. The refused hole attempt is recorded too.
                 assert_eq!(core.instructions_executed, 17);
-                assert_eq!(core.native_hole_reads, 16);
-                assert_eq!(core.instructions_executed + core.native_hole_reads, 33);
+                assert_eq!(core.native_hole_reads.get(), 16);
+                assert_eq!(core.instructions_executed + core.native_hole_reads.get(), 33);
                 assert!(
                     core.simple_callback_register_pool.is_empty(),
                     "holes never invoke the throwing callback"

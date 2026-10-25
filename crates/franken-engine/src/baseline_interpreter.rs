@@ -120044,13 +120044,15 @@ mod active_builtin_regressions {
                  InterpreterError::UncaughtException { value: expected }) if value == expected),
             "frozen pop error must remain TypeError; observed {error:?}"
         );
-        let Some((Value::Object(error_object), label)) = core.pending_exception.as_ref() else {
+        let Some(Value::Object(error_object)) = core.pending_exception.as_ref() else {
             panic!("frozen pop must retain the actual TypeError object");
         };
-        assert_eq!(core.chain_data_property(*error_object, "name"), Some(Value::str("TypeError")));
-        assert_eq!(label, &Label::Public);
+        assert_eq!(core.chain_data_property(*error_object, "name"), Some(&Value::str("TypeError")));
+        assert_eq!(core.pending_exception_label, Label::Public);
 
         let object = &core.heap[array.0 as usize];
+        assert_eq!(object.properties, reference.heap[reference_array.0 as usize].properties);
+        assert!(object.is_frozen);
         assert_eq!(object.properties.get("1"), Some(&Value::Int(8)));
         assert_eq!(object.properties.get("length"), Some(&Value::Int(2)));
         assert_eq!(object.cached_dense_length, Some(2));

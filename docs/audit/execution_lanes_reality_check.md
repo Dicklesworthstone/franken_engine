@@ -14,6 +14,154 @@ unqualified current-source changes and documentation describing the wrong IFC
 authorization order. Supersede this section when a newer revision-bound review
 rechecks these findings. It creates no runtime or performance capability credit.
 
+### 2026-10-25 persisted fleet-state repair and current qualification
+
+The current tested source is
+`8fa53dbe72be3314d7166627f4cf8f3cbab30e256bd6ed76f488da31f73e5f4e`,
+base `07025731194b72952eb5fcbff0459694668ac7a2` plus 28 explicit owned
+overlays. Its manifest is retained at
+`artifacts/optimization-100x-ss6_54xg/sqlmodel-durable-consumer-source-8fa53dbe72be/manifest.json`.
+It preserves all 17 Rust file hashes from the qualified parser/runtime source
+`78c7032ce026e35103230e3870446d1664a4510710ca3d7bdfe69d30183658e6`.
+Only the SQLModel dependency source, generated lockfile and three existing
+dependency/build documents differ. Pre-existing peer edits are excluded.
+
+Actual retained-file fleet tests exposed a defect in the published SQLModel
+`0.5.0` driver: it requires textual `FULL`, but FrankenSQLite correctly reports
+`PRAGMA synchronous` as integer `2`. The full engine fleet module first produced
+139 passes and four ignored tests; explicitly including those four produced
+139 passes and four failures at database admission. None reached its intended
+crash, stale-writer or reopen scenario. These failed observations remain retained.
+
+The engine now consumes the already committed public SQLModel fix
+`7f432ff690260ef85aca5227e2372b2eb63230c9` through three coherent direct Git
+dependencies. All eight resolved SQLModel packages use that immutable revision;
+all 15 FrankenSQLite packages remain registry `0.4.10`. Every other resolved
+package record is unchanged. There is no root patch, registry-cache edit,
+engine-owned durability policy or registry-version fallback. No crate was
+published. The SDK still requires WAL, exact integer FULL and disabled statement
+microbatching; weaker profiles remain rejected.
+
+Upstream qualification on its own pinned toolchain passed all three strict-profile
+tests, including retained-file reopen/commit/readback and five weaker-profile
+refusals (`rchw-83d2641c-53a3-426e-9179-34bd56bfc1d8`, exit 0 and terminal
+acknowledgement). Its lockfile uses FrankenSQLite `0.4.12`; that upstream result
+alone does not qualify the engine's `0.4.10` consumer.
+
+Fresh engine-consumer validation on pinned `nightly-2026-09-21` passes
+**1,039/1,039, zero failed or ignored, 45,142 filtered**, in 21.39 seconds
+(`rchw-0d19e2cb-4798-47d2-bb41-cb0572d94f6c`, exit 0, acknowledged).
+This is the earlier 896 parser/runtime checks plus the entire 143-test engine
+fleet module, with `--include-ignored`, assertions and overflow checks enabled.
+All four real persistence/process tests now pass. A second execution with a
+different retained database root passes the same **1,039/1,039** in 20.25 seconds
+(`rchw-daf8c1f9-7fe6-45ca-8785-e538f04c10c3`, exit 0, acknowledged).
+The worker-only 718,219,952-byte ELF keeps SHA256
+`d5ae051c525617385cf9ddd5f06e943d267cd7c9f46a3576851f5e090d6b88fb`
+and file identity before/after reexecution. Child-process summaries are preserved
+separately from the outer 1,039-test result. This is solo reexecution, not a
+second independent verifier, full-library conformance or physical power-loss proof.
+The external authority anchor used by the process test is explicitly test-only.
+
+Current-source all-target Check passed in 23m11s
+(`rchw-2019eb0c-2209-4de2-b400-62694f305d62`, exit 0, acknowledged).
+Strict all-target Clippy also passed in 24m11s
+(`rchw-6a7b0306-cbda-4d51-91e1-b44ab94d94dc`, exit 0, acknowledged).
+Engine-only no-default-feature all-target Check passed in 16m58s
+(`rchw-3495ee43-3749-4c5a-88f6-5969eaf10bbf`, exit 0, acknowledged), with no
+optional integration-family compilation in its fresh isolated log. The six
+selected standalone build-gate tests passed with zero ignored and two filtered
+in 0.41 seconds after a 17m20s build
+(`rchw-c60d66ef-b88f-47df-9a8d-d0764f7e4e84`, exit 0, acknowledged).
+These include the manifest ownership check, documentation contract checks, and
+injected fleet/Buffer command-failure checks. The injected commands are protocol
+doubles testing the gate; they are not evidence of native command execution.
+An incorrect
+initial build-test selection was cancelled during compilation, before any test
+executed; its exit 143 is not test evidence. The corrected selection excludes
+the two CI-mode tests that invoke a deleting temporary-file drill. A separate
+no-default Cargo graph emitted no optional integration units but suffered SSH
+exit 255; recovery acknowledged that failure, so it is partial diagnostic evidence
+only and does not replace the separate compiler gate.
+
+The fresh CLI produced by the same successful Cargo build passes three functional
+checks: JS `const n = 40; n + 2;` returns `42`, TS
+`const n: number = 40; n + 2;` returns `42`, and sole source `(` exits 2 with a
+parse error (`rchw-b64d6c7b-cd05-4c88-b653-60bcebf411e6`, exit 0, acknowledged).
+The worker-retained 109,697,872-byte ELF has SHA256
+`1198177c5d682a40f6d2d044d0af63c650a17e7983b4317976a3f7e2bcabb22d`,
+unchanged before/after these probes. It is unoptimized; these three examples
+establish functional behavior only, not broad TS support or runtime performance.
+
+The previous `78c7032c`
+source passed its 896-test selection twice and both compiler gates, but those
+passes are not substituted for this dependency-source change. Workspace format
+and UBS remain unqualified, as described below; the existing scoped commit
+exception remains unanswered and the patch is uncommitted. Full live fleet
+transport/decoder cutover, full workspace tests, downstream `franken_node`
+compatibility and the original performance campaign remain open. The latter
+still has zero qualified passes or speed samples.
+
+### 2026-10-25 public parser repair and benchmark attempt (preceding source cuts)
+
+At HEAD `c18108919fe4f8aa17cdddcffc327391e27b2499`, tested logic
+cut `b10dde4a0149426c7ea87ff119a8e6450cbd38608e9cbaacd55f6e166b702b52`
+rejects an unmatched leading parenthesized expression at the Raw fallback.
+Previously, the retained candidate accepted sole source `(` as Raw. The change
+uses the existing literal-aware delimiter scanner after comment removal; it
+does not reject every remaining Raw expression or complete the broader Raw
+inventory/lowering task `bd-6vl81`.
+
+Pinned strict remote native validation passes **772/772, 0 ignored, 45,409
+filtered**, in 2.57 seconds after compilation: 467 canonical parser tests,
+160 parallel parser tests, 86 dual-backend parser tests, 52 JSX/TSX parser tests,
+six native module source tests and one cached-module test. Four new regressions
+cover invalid Script/Module source, valid literal/comment delimiters, public
+preparation and Function compilation, and unchanged eval authority restrictions.
+The caught synthetic worker panic is an existing parallel-parser negative
+control. This is selected native evidence, not a full-library or Test262 result.
+The retained worker ELF is SHA256
+`7efd5266f181e489417b0ba76338e8c99081e91241b4423dd6883696fb51a9b4`.
+A second invocation from that same retained ELF passes **136/136, 0 ignored,
+46,045 filtered**, in 17.93 seconds: the prior 132 runtime checks plus the four
+new regressions. Its byte identity and SHA256 match before and after execution.
+This is solo reexecution, not a second independent verifier. Both exact-source
+compiler gates subsequently passed with terminal acknowledgements.
+The complete parser file passes pinned formatting and static UBS (zero critical
+findings); this does not establish green workspace formatting or UBS.
+
+The subsequent parser/runtime cut was
+`78c7032ce026e35103230e3870446d1664a4510710ca3d7bdfe69d30183658e6`:
+one manual formatting hunk in the earlier interpreter patch, with the parser
+bytes unchanged. Pinned formatted interpreter output before/after is identical;
+its 896-test union passed twice, and both final compiler gates passed separately.
+The ordinary pinned formatter checked 16 of 17 owned Rust files (seven clean,
+nine dirty), then aborted while requesting 76,555,678,280 bytes in its diff
+generator under an explicit 8 GiB child limit. The same pinned formatter's stdout
+plus exact byte comparison agrees with all 16 completed verdicts and finds the
+remaining file dirty: seven clean, ten dirty overall. No acceptance condition
+changed and no previously dirty file passed. The one formatting difference on a
+changed line was fixed; remaining reported differences are outside changed lines.
+This does not establish a green workspace format gate. The final interpreter's
+static scan still exits 1 with 18 critical flags, matching the preceding scan;
+the broader patch therefore remains gated and uncommitted.
+
+An initial new fixture wrongly expected eval SyntaxError behavior. Inspection
+confirmed that direct eval requires `runtime.eval`, and indirect eval is inert
+and throws EvalError. The fixture now checks those restrictions explicitly;
+production authority checks were not changed. Function already rejected this
+invalid body and remains a positive counterexample. The earlier D28 invocation
+is retained separately and is not evidence for the corrected final source.
+
+One fresh TS1 comparison reserved all four configured slots and kept the
+original driver, binary identities and gates. The historical baseline transferred
+directly between workers with exact hashes and a wrong-token refusal; its
+listener closed afterward. Old/candidate/Node Lodash preflight checks passed.
+The next CPU observation refused **87.5% against the unchanged 80% one-core
+limit**: **0/4,680 measured samples and 0/52 replays**, strict remote exit 2 with
+terminal acknowledgement. No qualified speedup or V8-relative number follows.
+The campaign remains **0/100**, and the performance Bead remains open.
+
 ### Source, reading and evidence boundaries
 
 - Inspected main: `5129eba9ccbcfa4c9993a0c074618c74b1cfbfef`. Existing changes to
@@ -39,6 +187,145 @@ rechecks these findings. It creates no runtime or performance capability credit.
   `artifacts/reality_check/20261023T2230-Pa0MIP/`, with the supplied smoke's
   artifacts under `artifacts/readme_cli_workflow_smoke_tests/real-binary-q3svp3gl/`.
   These ignored local files are not a published or independently verified bundle.
+
+### 2026-10-25 native repair qualification
+
+Verified native source cut `f75b673aee3e423f0e5177a06cb2dbeaeb567a65b5a6afacc8f3c742631dae7a`
+is base `07025731194b72952eb5fcbff0459694668ac7a2` plus 17 explicit overlays,
+excluding the pre-existing process-lifecycle/orchestrator edits. Its manifest and
+recovery archive are retained under
+`artifacts/optimization-100x-ss6_54xg/wait-prototype-timer-fleet-source-f75b673aee3e/`.
+Pinned strict remote all-target check and Clippy with `-D warnings` exit 0 with
+terminal acknowledgements. No native compilation or executable retrieval ran on
+the Mac. Debug test builds retain assertions and overflow checks.
+
+Production changes charge pending child-process wait payloads before enqueue,
+with exact admission rollback, and include existing intrinsic constructor
+prototypes in native namespace provenance walks. Private override carriers expose
+their own value and label without pulling in an unrelated hidden prototype.
+Tests cover denied admission with an unrelated queued callback, no lazy prototype
+allocation, replacement precedence, Secret labels, Proxy labels and a Public
+replacement under an unrelated Secret realm prototype. Two thenable fixtures now
+explicitly grant Timer; matching negative controls withhold Timer and require the
+original exact denial. No production capability gate was weakened.
+
+The selected native run passes **84/84, 0 ignored, 46,085 filtered**, including
+the unchanged 864-case Promise module in both lanes and both GC modes. Independent
+reexecution passes **83/83**, excluding only that exact Promise test. The earlier
+845 source cut independently passes its selected 33 short tests and full Promise
+test in two separate runs; its original timeout remains a failed invocation.
+These selections do not establish a green full workspace or full 46,169-test
+library. Eight failures from the original sampled run remain under investigation.
+
+The existing fleet-quarantine target moved to the control-plane test package,
+removing the engine self dev-edge while retaining all 11 original test bodies.
+Both its native Cargo run and independent Cargo-context rerun pass **11/11**.
+An earlier direct retained-binary rerun was 10/11 because a script fixture's
+compile-time source namespace had retired; that failure remains recorded.
+The four shell fault scenarios are protocol evidence only. The broader crate
+split, three-run compile measurements, downstream qualification and targeted
+native standalone gate tests are not complete. Existing all-features sentinel
+behavior can still duplicate target ownership.
+
+The subsequent `554f03f8103fe49416fad09901ca06ff7af5634ffe1d2afd8a3e280c380e3f45`
+cut adds nonjoining rope serialization in the canonical core string type and
+fixture repairs with stronger positive/negative controls. Core string tests
+pass **176/176, with one pre-existing release timing experiment ignored**;
+independent worker reexecution repeats that result with the same ELF hash.
+The two complete changed core files also pass static UBS. The new engine
+selection is **88 passed / 3 failed / 0 ignored / 46,078 filtered**. Its unchanged
+rope/stringify regression now passes. The canonical Stream getter has the
+correct authenticated origin and function identity but lacks retained function
+source metadata, so admission correctly refuses it. The proxy's fresh memory
+oracle exposes an uncharged raw fixture write; PassThrough's writable error
+marker reserves delivery for the readable half. Corrections to those two
+fixtures and a producer-side metadata repair remain unverified. No accessor
+allowlist or confidentiality gate has been relaxed.
+
+The targeted native standalone fault/contract tests also pass **2/2** at f75.
+The first 19-path compiler run caught a type error in the added diagnostic;
+the corrected 554 cut's all-target check and Clippy both exit 0 with terminal
+acknowledgements. Commit `c18108919fe4f8aa17cdddcffc327391e27b2499` lands only
+the independently reexecuted two-file core rope repair, with a fresh complete
+two-file UBS exit 0. Full-file engine UBS remains incomplete after hitting its
+analyzer-output limit; this is not a passing scan and has not been suppressed.
+
+The subsequent 24-path `39682c60b199` source cut passes **101/105**, with all three
+new source-quota tests, charged proxy fixture and native-source display privacy
+controls passing. Independent reexecution of the same selection plus two library
+admission controls gives **103/107**, reproducing all four failures. The source
+cache failure also reproduces alone on the older f75 executable. Two failures
+expose missing audit-source propagation to a lazy Web dependency; a three-file
+producer repair is pending native verification. The fourth fixture used a
+partial checkpoint that never drives readable-stream delivery; its correction
+uses the full event loop and retains the exact event, label and cleanup checks.
+
+A retained-CLI diagnostic identifies the cache defect precisely: `(` becomes a
+sole unresolved `Expression::Raw`. The pending repair rejects that top-level
+fallback in both native caches, retains all four original malformed fixtures,
+and adds runtime-cache refusal/parse-once checks plus canonical comparisons for
+all 14 valid embedded module templates. It does not repair or qualify the general
+parser's fallback behavior. These repairs are frozen in the 26-path source cut
+`2ecd85fb7f8b`, whose expanded native selection passes **132/132, 0 ignored**.
+Independent worker reexecution repeats **132/132**, with unchanged executable
+identity and the full original selection retained. All four prior failures pass.
+Pinned all-target check and Clippy both exit 0 with terminal acknowledgements.
+The full unchanged Promise matrix also passes: **864 cases in both native lanes
+and both GC modes**, with exact result and memory-accounting checks. Its single
+native test completes in 2,123.42 seconds with zero ignored; the retained ELF
+identity and hash remain unchanged before and after execution.
+
+The seven metadata, parser and display files pass complete static UBS with zero
+critical findings. Scanning the interpreter separately completes without the
+combined-file output limit, but exits 1 with 18 critical findings. A full scan of
+the committed c181 interpreter finds 15; all 15 fingerprints persist, and three
+additional flags concern test-only byte-limit and label-enum comparisons. The
+findings remain visible and the interpreter commit remains gated. No scanner
+rules, limits, tests or assertions were weakened to obtain a passing result.
+
+The next 28-path `d3fe92ab363b` cut moves the unchanged eight-test public Buffer
+target to the existing companion package. It preserves all 25 previous targets,
+forwards engine defaults for normal coverage, and explicitly retains Buffer in
+both standalone modes with corresponding failure/readiness guards. Default
+Buffer execution passes **8/8**, and six focused standalone guards pass **6/6**,
+including independently injected Buffer and fleet command failures. These fault
+doubles test shell-gate behavior. No-default Buffer also passes **8/8**. Fleet
+quarantine passes **11/11 in both feature modes**, retaining the explicit
+non-authoritative mock-TEE disposition. The new full all-target check and Clippy
+both exit 0 with terminal acknowledgements. Both after-only Cargo graphs have zero engine binary units;
+the default graph retains all nine optional sibling packages, while no-default
+retains exactly Asupersync/mock TEE and excludes all nine. The observed single
+build duration is not a matched or three-run compile-speed result. The runtime
+production source is unchanged from 2ecd85; this does not close the broader
+crate-extraction, CI, full-suite or performance tasks.
+
+The remaining patch is uncommitted under the required static/format gates. UBS
+now completes across the supported changed files in full-file partitions, with
+21 critical flags visible: 18 inherited and three new test-only comparison
+flags. Direct strict RCH refuses `cargo fmt` as non-compilation. A worker-only
+read-only formatter check of the 17 frozen Rust files ended with SIGKILL before
+completion; the kernel journal window contains no entries, so its cause remains
+unconfirmed. No full formatting pass, suppression or policy exception is claimed.
+
+After validation jobs finished, the single TS1 readiness opportunity found a
+peer job reserving all four worker slots. No readiness or benchmark invocation
+was submitted. The old fa benchmark executable is also absent on TS1; candidate
+133, the genuine Node executable and all 36 input/provenance files match their
+expected hashes. The staged observer is legacy; the corrected source pair is
+available locally. These facts earn no measurements, replays or optimization
+passes, and candidate 133 remains separate from the maintenance source cuts.
+
+Independent proper-Cargo Buffer and fleet targets pass **8/8** and **11/11**.
+Separate exact library admission probes pass **2/2**, retaining unnamed-builtin
+and fs/net/process denial controls. The committed library and Buffer-test bytes
+match those executions. This closes only `bd-9vouw.166`'s original canonical
+alias-admission acceptance. It does not close the red full selection, CI,
+compile-wall or performance tasks. The full unchanged Promise matrix has not
+yet run on the new source cut.
+
+Global formatting remains red from inherited drift. Comparative performance
+qualification remains unresolved, with **0/100 optimization passes**. No new
+speedup is claimed from these correctness and build-ownership repairs.
 
 ### Fresh observations
 
@@ -176,15 +463,34 @@ compiler exit 0; RCH's foreign-artifact delivery refusal remains exit 102.
 A direct private Tailscale transfer placed the hash-matching candidate beside
 the baseline and Node on `ovh-b`; no binary bytes passed through the Mac.
 All 13 candidate/live-Node correctness checks and 26 candidate strict replays
-passed. Two subsequent three-runtime measurement attempts stopped at contention
-guards after 450 and 336 measured samples. Every sample is retained; neither
+passed. Two subsequent three-runtime measurement attempts stopped at the frozen
+CPU observer after 450 and 336 measured samples. Every sample is retained; neither
 attempt qualifies a speed result. The completed Lodash portion of the first
 attempt has 120 samples per runtime and passing noise checks, with old/candidate
 medians of 982.7/840.0 ms. This is diagnostic evidence from a refused whole
 attempt; the remaining regression, memory and replay gates were not completed.
 
-Final-source all-target check and Clippy now both pass under the pinned toolchain,
-default profile and default features. The successful check on `ts1` took 23m13s,
+Live detector controls subsequently demonstrated a temporal defect in that
+observer's lifetime CPU percentages: it refused an idle-after-burst process
+and admitted a busy-after-idle process. A separate observer version uses a
+bracketed one-second aggregate accounted-CPU window, the same 80%-of-one-core
+threshold and all eight categorical compiler exclusions. Independent review
+and execution passed 24 unchanged protocol tests, 11 detector tests and five
+unsafe-mutation controls. Fresh live controls admitted both idle cases
+(45.43%/45.24% upper accounted-counter estimates) and refused the busy case
+(129.97%, with its child consuming 99.65% of one core). The six-tick allowance
+covers integer conversion only; pending kernel accounting and future contention
+remain outside this finite observation. This correction preserves every case,
+sample count, noise, regression, RSS and replay gate. It does not reclassify
+earlier refusals or reuse their measurements. The wholly fresh comparison
+refused before measured workloads: 167 busy ticks, including 115 system ticks,
+over a 1.01453-second lower interval gave a 170.52% upper accounted-counter
+estimate. No compiler category was present. This remains a refusal with zero
+measured rows; a bounded attribution diagnostic is queued, and no speedup is
+qualified.
+
+Earlier all-target check and Clippy both passed under the pinned toolchain,
+default profile and default features. That successful check on `ts1` took 23m13s,
 with strict remote exit 0 and terminal acknowledgement. The earlier `hz3` timeout
 recovered as 137, the redundant `hz4` run ended 143 following a cancellation
 request, and the `trj` retry recovered 255; those remain non-passes. The full
@@ -217,21 +523,37 @@ probes agree on frozen-array state and ordinary sparse reduction; native JSON
 depth behavior differs from Node. These observations do not resolve every unit
 failure or establish a new accounting regression.
 
-Current unverified maintenance deduplicates immutable frame-map identities in
+Accounting maintenance deduplicates immutable frame-map identities in
 the reference payload walk while retaining global cell deduplication and every
 existing debug assertion. Its new test compares the original cell-only walk,
 including COW, distinct cells, corrupted ledger metadata and borrow saturation.
-Three failing assertions now print their actual errors without changing their
-expectations. Its preformat all-target check passed; native validation is still
-pending. Independent reproduction of a legacy ClientRequest failure found
+All 17 selected accounting tests passed on frozen revision
+`a68422e25e516dd2167a3bc721eac8b93a53ed78`; broader validation remains incomplete.
+Independent reproduction of a legacy ClientRequest failure found
 `CapabilityDenied(net:request)` before egress. Eight explicit network grants now
 restore the intended body/response/IFC fixtures without changing their assertions,
 shared defaults or production gates. A new two-case test checks withheld and
 revoked authority before mutation or provider entry. Independent source review
 found no blocker; this is fixture maintenance and a lower-level `.end()` control,
-not a newly proved public JavaScript network path. Frozen revision
-`a68422e25e516dd2167a3bc721eac8b93a53ed78` contains only the four owned source
-paths over `070257311`; native tests, Clippy and check are running against it.
+not a newly proved public JavaScript network path. The frozen run passed 25 of
+31 selected tests. Its six actual failures exposed stale fixture expectations:
+HTTP task labels require the stronger Internal floor; a denied Secret receiver
+requires an evidence sink; JSON depth and frozen pop materialize actual guest
+RangeError/TypeError objects; sparse reduction's shared ceiling counts both
+instructions and native hole reads. Corrections preserve the typed raw JSON
+fault, frozen-array state/memory reference, budget32 and all four sparse modes,
+and add exact shared32-admit/33-refuse and writable-pop controls.
+
+The corrected four-file source cut
+`845aa7fcc3b26cd6def8b87174115ba4b11de3e5f3116fd67b63255340803991`
+over `070257311` passes pinned all-target check (isolated target, 25m00s) and
+strict Clippy, both with terminal acknowledgement. An earlier pooled check
+failed E0463 at `scheduler_lane_integration.rs:29`; its cause is unproved and
+the failure remains recorded. The new selected native run includes the
+unchanged 864-case Promise matrix across both lanes and both GC modes and is
+still compiling. It has no test verdict yet. The earlier test ELF was reaped
+before independent repetition; the new worker runner retains its actual ELF
+before execution so that re-verification can use identical bytes.
 
 The revised original Buffer target separately passed all eight tests, including
 the exact Object alias `.join()` example and four actual/captured shadow reads.

@@ -120014,6 +120014,40 @@ mod active_builtin_regressions {
 
     #[test]
     fn frozen_array_pop_preserves_error_and_state() {
+        let mut writable = test_core();
+        let writable_array = writable
+            .alloc_array_from_values(&[Value::Int(7), Value::Int(8)])
+            .expect("writable control array");
+        assert_eq!(
+            call_builtin_for_test(
+                &mut writable,
+                BuiltinFunction::array_pop(),
+                writable_array,
+                &[]
+            )
+            .expect("the same array without freezing must remain writable"),
+            Value::Int(8)
+        );
+        assert_eq!(
+            writable.heap[writable_array.0 as usize].properties.get("0"),
+            Some(&Value::Int(7))
+        );
+        assert_eq!(
+            writable.heap[writable_array.0 as usize].properties.get("1"),
+            None
+        );
+        assert_eq!(
+            writable.heap[writable_array.0 as usize]
+                .properties
+                .get("length"),
+            Some(&Value::Int(1))
+        );
+        assert!(writable.pending_exception.is_none());
+        assert_eq!(
+            writable.estimated_memory_bytes(),
+            writable.recompute_estimated_memory_bytes()
+        );
+
         let mut core = test_core();
         let array = core
             .alloc_array_from_values(&[Value::Int(7), Value::Int(8)])
@@ -120047,16 +120081,25 @@ mod active_builtin_regressions {
         let Some(Value::Object(error_object)) = core.pending_exception.as_ref() else {
             panic!("frozen pop must retain the actual TypeError object");
         };
-        assert_eq!(core.chain_data_property(*error_object, "name"), Some(&Value::str("TypeError")));
+        assert_eq!(
+            core.chain_data_property(*error_object, "name"),
+            Some(&Value::str("TypeError"))
+        );
         assert_eq!(core.pending_exception_label, Label::Public);
 
         let object = &core.heap[array.0 as usize];
-        assert_eq!(object.properties, reference.heap[reference_array.0 as usize].properties);
+        assert_eq!(
+            object.properties,
+            reference.heap[reference_array.0 as usize].properties
+        );
         assert!(object.is_frozen);
         assert_eq!(object.properties.get("1"), Some(&Value::Int(8)));
         assert_eq!(object.properties.get("length"), Some(&Value::Int(2)));
         assert_eq!(object.cached_dense_length, Some(2));
-        assert_eq!(core.estimated_memory_bytes(), reference.estimated_memory_bytes());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            reference.estimated_memory_bytes()
+        );
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
@@ -127597,7 +127640,11 @@ mod async_runtime_tests_current {
         assert_eq!(event, "error");
         assert_eq!(label, &Label::Secret);
         let entries = recorder.recorded_entries();
-        assert_eq!(entries.len(), 1, "classified egress refusal must be evidenced");
+        assert_eq!(
+            entries.len(),
+            1,
+            "classified egress refusal must be evidenced"
+        );
         assert!(matches!(entries[0].0, HostIoRequest::NetworkRequest { .. }));
         assert_eq!(
             entries[0].1,

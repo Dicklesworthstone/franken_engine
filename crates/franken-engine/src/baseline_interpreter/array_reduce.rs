@@ -506,6 +506,26 @@ mod tests {
 
     #[test]
     fn sparse_reductions_stream_indices_and_refuse_at_shared_budget_bd_9vouw_487() {
+        // A probe that reaches the shared ceiling succeeds; the otherwise
+        // identical next probe fails even though the instruction counter
+        // alone is far below the ceiling. Ignoring hole work fails this pair.
+        let mut boundary = core();
+        boundary.config.instruction_budget = 32;
+        boundary.instructions_executed = 1;
+        boundary.native_hole_reads.set(30);
+        boundary
+            .charge_native_hole_read()
+            .expect("exact shared ceiling");
+        assert_eq!(boundary.native_hole_reads.get(), 31);
+        assert!(matches!(
+            boundary.charge_native_hole_read(),
+            Err(InterpreterError::BudgetExhausted {
+                executed: 1,
+                budget: 32
+            })
+        ));
+        assert_eq!(boundary.native_hole_reads.get(), 32);
+
         for reverse in [false, true] {
             for has_initial in [false, true] {
                 let module = reduction_module(
@@ -550,7 +570,10 @@ mod tests {
                 // counter only. The refused hole attempt is recorded too.
                 assert_eq!(core.instructions_executed, 17);
                 assert_eq!(core.native_hole_reads.get(), 16);
-                assert_eq!(core.instructions_executed + core.native_hole_reads.get(), 33);
+                assert_eq!(
+                    core.instructions_executed + core.native_hole_reads.get(),
+                    33
+                );
                 assert!(
                     core.simple_callback_register_pool.is_empty(),
                     "holes never invoke the throwing callback"

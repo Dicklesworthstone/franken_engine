@@ -45665,7 +45665,27 @@ impl InterpreterCore {
                         Self::is_typed_array_prototype_builtin(builtin),
                         "Array.prototype.map",
                     )?;
-                let result = self.array_species_result(module, arr_id, len as u64)?;
+                let allocation = self.array_species_allocation(module, arr_id, len as u64)?;
+                let result = allocation.object;
+                if !allocation.intrinsic {
+                    return self.with_custom_array_species_result(
+                        arr_id,
+                        result,
+                        args,
+                        receiver_register,
+                        |core| {
+                            core.generic_iterate_result(
+                                module,
+                                arr_id,
+                                BuiltinFunctionKind::ArrayMap,
+                                len as u64,
+                                &callback,
+                                &this_arg,
+                                Some(result),
+                            )
+                        },
+                    );
+                }
                 for index in 0..len {
                     let Some(element) = self.array_index_get(Some(module), arr_id, index)? else {
                         continue;
@@ -45688,15 +45708,9 @@ impl InterpreterCore {
                         &mapped_label,
                     )?;
                 }
-                // An array result keeps its length in step; another
-                // species object gets only the data properties.
-                if self.generic_is_array(result)? {
-                    self.set_object_property(
-                        result,
-                        "length".to_string(),
-                        Value::Int(i64::try_from(len).unwrap_or(i64::MAX)),
-                    )?;
-                }
+                // ArraySpeciesCreate initialized an intrinsic result's length.
+                // A custom result receives only element definitions: map must
+                // not truncate an aliased Array or write its length property.
                 Ok(Value::Object(result))
             }
             BuiltinFunctionKind::ArrayFilter => {
@@ -45709,7 +45723,27 @@ impl InterpreterCore {
                         Self::is_typed_array_prototype_builtin(builtin),
                         "Array.prototype.filter",
                     )?;
-                let result = self.array_species_result(module, arr_id, 0)?;
+                let allocation = self.array_species_allocation(module, arr_id, 0)?;
+                let result = allocation.object;
+                if !allocation.intrinsic {
+                    return self.with_custom_array_species_result(
+                        arr_id,
+                        result,
+                        args,
+                        receiver_register,
+                        |core| {
+                            core.generic_iterate_result(
+                                module,
+                                arr_id,
+                                BuiltinFunctionKind::ArrayFilter,
+                                len as u64,
+                                &callback,
+                                &this_arg,
+                                Some(result),
+                            )
+                        },
+                    );
+                }
                 let mut prefix_label = {
                     let mut source_label = self.join_arg_range_label(args)?;
                     if let Some(register) = receiver_register {
@@ -45754,15 +45788,12 @@ impl InterpreterCore {
                         out += 1;
                     }
                 }
-                // An array result keeps its length in step; another
-                // species object gets only the data properties.
-                if self.generic_is_array(result)? {
-                    self.set_object_property(
-                        result,
-                        "length".to_string(),
-                        Value::Int(i64::try_from(out).unwrap_or(i64::MAX)),
-                    )?;
-                }
+                // Only the unexposed intrinsic result uses raw storage.
+                self.set_object_property(
+                    result,
+                    "length".to_string(),
+                    Value::Int(i64::try_from(out).unwrap_or(i64::MAX)),
+                )?;
                 Ok(Value::Object(result))
             }
             BuiltinFunctionKind::ArrayFind => {
@@ -46150,7 +46181,21 @@ impl InterpreterCore {
                         got: receiver.type_name().to_string(),
                     });
                 };
-                let result = self.array_species_result(module, arr_id, 0)?;
+                let allocation = self.array_species_allocation(module, arr_id, 0)?;
+                let result = allocation.object;
+                if !allocation.intrinsic {
+                    let mut items = vec![Value::Object(arr_id)];
+                    for index in 0..args.count {
+                        items.push(self.builtin_arg(args, index)?.unwrap_or(Value::Undefined));
+                    }
+                    return self.with_custom_array_species_result(
+                        arr_id,
+                        result,
+                        args,
+                        receiver_register,
+                        |core| core.generic_concat_result(module, items, result),
+                    );
+                }
                 let mut out = 0usize;
                 let len = self.array_like_length(arr_id)?;
                 // A hole in a spread array stays a hole in the result (step
@@ -46214,8 +46259,26 @@ impl InterpreterCore {
                     None | Some(Value::Undefined) => len,
                     Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
                 };
-                let result =
-                    self.array_species_result(module, arr_id, end.saturating_sub(start) as u64)?;
+                let allocation =
+                    self.array_species_allocation(module, arr_id, end.saturating_sub(start) as u64)?;
+                let result = allocation.object;
+                if !allocation.intrinsic {
+                    return self.with_custom_array_species_result(
+                        arr_id,
+                        result,
+                        args,
+                        receiver_register,
+                        |core| {
+                            core.generic_slice_result(
+                                module,
+                                arr_id,
+                                start as u64,
+                                end as u64,
+                                result,
+                            )
+                        },
+                    );
+                }
                 let mut out = 0usize;
                 let mut index = start;
                 while index < end {
@@ -113754,8 +113817,25 @@ impl InterpreterCore {
         original: ObjectId,
         length: u64,
     ) -> Result<ObjectId, InterpreterError> {
+        self.array_species_allocation(module, original, length)
+            .map(|allocation| allocation.object)
+    }
+
+    /// Retain whether ArraySpeciesCreate allocated an unexposed intrinsic
+    /// Array. Only that branch can bypass observable output property writes;
+    /// even a plain Array returned by a custom species can be a guest alias.
+    fn array_species_allocation(
+        &mut self,
+        module: &Ir3Module,
+        original: ObjectId,
+        length: u64,
+    ) -> Result<array_generic::ArraySpeciesAllocation, InterpreterError> {
+        let intrinsic = |object| array_generic::ArraySpeciesAllocation {
+            object,
+            intrinsic: true,
+        };
         if !self.generic_is_array(original)? {
-            return self.alloc_array_with_length(length);
+            return self.alloc_array_with_length(length).map(intrinsic);
         }
         let constructor_key = RuntimePropertyKey::String(JsString::from("constructor"));
         let constructor = self.proxy_aware_get_runtime_property(
@@ -113771,7 +113851,7 @@ impl InterpreterCore {
                     && Self::standard_constructor_name(builtin).is_ok_and(|name| name == "Array"))
         };
         if matches!(constructor, Value::Undefined) {
-            return self.alloc_array_with_length(length);
+            return self.alloc_array_with_length(length).map(intrinsic);
         }
         if !constructor.is_object_like() {
             return Err(InterpreterError::TypeError {
@@ -113781,7 +113861,7 @@ impl InterpreterCore {
         }
         let species = self.species_of_constructor(module, &constructor)?;
         if matches!(species, Value::Undefined | Value::Null) || is_intrinsic_array(&species) {
-            return self.alloc_array_with_length(length);
+            return self.alloc_array_with_length(length).map(intrinsic);
         }
         if !self.is_constructible_value(&species) {
             return Err(InterpreterError::TypeError {
@@ -113807,7 +113887,10 @@ impl InterpreterCore {
             .join(&label);
         self.replace_pending_hostcall_result_label(Some(label))?;
         match result {
-            Value::Object(object_id) => Ok(object_id),
+            Value::Object(object) => Ok(array_generic::ArraySpeciesAllocation {
+                object,
+                intrinsic: false,
+            }),
             other => Err(InterpreterError::TypeError {
                 expected: "object from the @@species constructor".to_string(),
                 got: other.type_name().to_string(),

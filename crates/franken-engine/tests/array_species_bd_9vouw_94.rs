@@ -187,6 +187,13 @@ true undefined undefined true
 v true undefined length,name,prototype,all,allSettled,any,race,resolve,reject,withResolvers"#;
 
 fn console_output(source: &str) -> Result<String, String> {
+    console_output_with_config(source, InterpreterConfig::quickjs_defaults())
+}
+
+fn console_output_with_config(
+    source: &str,
+    mut config: InterpreterConfig,
+) -> Result<String, String> {
     let tree = CanonicalEs2020Parser
         .parse_with_options(
             ParserSource {
@@ -203,7 +210,6 @@ fn console_output(source: &str) -> Result<String, String> {
     )
     .map_err(|error| format!("lower: {error:?}"))?
     .ir3;
-    let mut config = InterpreterConfig::quickjs_defaults();
     config.granted_capabilities = [
         RuntimeCapability::VmDispatch,
         RuntimeCapability::HeapAllocate,
@@ -398,24 +404,30 @@ function Species(length) {
         set(target, key, value) { events.push('set:' + key + ':' + value); return Reflect.set(target, key, value); }
     });
 }
+for (var sourceKind of ['array', 'proxy']) {
 for (var method of ['map', 'filter', 'slice', 'splice', 'concat']) {
     events = [];
     var target = [7];
     target.constructor = { [Symbol.species]: Species };
-    var source = new Proxy(target, {});
+    var source = sourceKind === 'proxy' ? new Proxy(target, {}) : target;
     if (method === 'map') source.map(x => x);
     else if (method === 'filter') source.filter(x => true);
     else if (method === 'slice') source.slice();
     else if (method === 'splice') source.splice(0);
     else source.concat();
-    console.log(method, events.join(','));
+    console.log(sourceKind, method, events.join(','));
+}
 }
 "#;
-    let output = console_output(source).expect("species proxy traps run in specification order");
-    assert_eq!(
-        output,
-        "map species:1,define:0:true:true:true\nfilter species:0,define:0:true:true:true\nslice species:1,define:0:true:true:true,set:length:1\nsplice species:1,define:0:true:true:true,set:length:1\nconcat species:0,define:0:true:true:true,set:length:1"
-    );
+    let expected = "array map species:1,define:0:true:true:true\narray filter species:0,define:0:true:true:true\narray slice species:1,define:0:true:true:true,set:length:1\narray splice species:1,define:0:true:true:true,set:length:1\narray concat species:0,define:0:true:true:true,set:length:1\nproxy map species:1,define:0:true:true:true\nproxy filter species:0,define:0:true:true:true\nproxy slice species:1,define:0:true:true:true,set:length:1\nproxy splice species:1,define:0:true:true:true,set:length:1\nproxy concat species:0,define:0:true:true:true,set:length:1";
+    for config in [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ] {
+        let output = console_output_with_config(source, config)
+            .expect("species proxy traps run in specification order");
+        assert_eq!(output, expected);
+    }
 }
 
 #[test]
@@ -485,14 +497,22 @@ fn generic_species_copies_preserve_public_alias_labels_after_success_and_partial
         source.constructor = { [Symbol.species]: Species };
         source[SECRET_KEY] = 424242;
         let state = 'success';
-        try { source.slice({ valueOf() { return 0; } }); }
+        try { source.slice(SLICE_START); }
         catch (error) { state = error.name; }
         state;
     "#;
-    for length_only in [false, true] {
+    for (length_only, generic) in [(false, false), (false, true), (true, false), (true, true)] {
         for proxied in [false, true] {
             for partial in [false, true] {
                 let source = source
+                    .replace(
+                        "SLICE_START",
+                        if generic {
+                            "{ valueOf() { return 0; } }"
+                        } else {
+                            "0"
+                        },
+                    )
                     .replace("PROXIED", if proxied { "true" } else { "false" })
                     .replace("PARTIAL", if partial { "true" } else { "false" })
                     .replace("BLOCKED_KEY", if length_only { "'length'" } else { "'1'" })
@@ -610,6 +630,218 @@ fn generic_species_copies_preserve_public_alias_labels_after_success_and_partial
                             core.recompute_estimated_memory_bytes()
                         );
                     }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn ordinary_array_species_keeps_custom_lengths_and_observes_length_set_refusals() {
+    let source = r#"
+for (const method of ['map', 'filter', 'slice', 'concat']) {
+    for (const locked of [false, true]) {
+        const destination = [40, 50, 60];
+        if (locked) Object.defineProperty(destination, 'length', { writable: false });
+        const source = [7];
+        let constructions = 0;
+        source.constructor = { [Symbol.species]: function () {
+            constructions++;
+            return destination;
+        } };
+        let status = 'ok';
+        try {
+            if (method === 'map') source.map(x => x + 1);
+            else if (method === 'filter') source.filter(() => true);
+            else if (method === 'slice') source.slice();
+            else source.concat();
+        } catch (e) { status = e.name; }
+        console.log(method, locked, status, constructions, destination.length, destination.join(','));
+    }
+}
+// A locked length rejects the second indexed definition and preserves the first.
+for (const method of ['map', 'filter']) {
+    const destination = [0];
+    Object.defineProperty(destination, 'length', { writable: false });
+    const source = [7, 8];
+    source.constructor = { [Symbol.species]: function () { return destination; } };
+    let status = 'ok';
+    try {
+        if (method === 'map') source.map(x => x);
+        else source.filter(() => true);
+    } catch (e) { status = e.name; }
+    console.log('grow', method, status, destination.length, destination.join(','));
+}
+"#;
+    let expected = "map false ok 1 3 8,50,60\nmap true ok 1 3 8,50,60\nfilter false ok 1 3 7,50,60\nfilter true ok 1 3 7,50,60\nslice false ok 1 1 7\nslice true TypeError 1 3 7,50,60\nconcat false ok 1 1 7\nconcat true TypeError 1 3 7,50,60\ngrow map TypeError 1 7\ngrow filter TypeError 1 7";
+    for config in [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ] {
+        assert_eq!(
+            console_output_with_config(source, config).unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn ordinary_array_species_rechecks_destinations_after_each_guest_callback() {
+    let source = r#"
+for (const method of ['map', 'filter', 'slice', 'concat']) {
+    const destination = {};
+    const events = [];
+    const output = new Proxy(destination, {
+        defineProperty(target, key, descriptor) {
+            events.push('define:' + key);
+            if (key === '0') Object.defineProperty(target, '1', { value: 'locked' });
+            return Reflect.defineProperty(target, key, descriptor);
+        },
+        set(target, key, value) {
+            events.push('set:' + key);
+            return Reflect.set(target, key, value);
+        }
+    });
+    const source = [7, 8];
+    source.constructor = { [Symbol.species]: function () { events.push('species'); return output; } };
+    let status = 'ok';
+    try {
+        if (method === 'map') source.map(x => { events.push('callback:' + x); return x; });
+        else if (method === 'filter') source.filter(x => { events.push('callback:' + x); return true; });
+        else if (method === 'slice') source.slice();
+        else source.concat();
+    } catch (e) { status = e.name; }
+    console.log(method, status, destination[0], destination[1], events.join(','));
+}
+"#;
+    let expected = "map TypeError 7 locked species,callback:7,define:0,callback:8,define:1\nfilter TypeError 7 locked species,callback:7,define:0,callback:8,define:1\nslice TypeError 7 locked species,define:0,define:1\nconcat TypeError 7 locked species,define:0,define:1";
+    for config in [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ] {
+        assert_eq!(
+            console_output_with_config(source, config).unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn filter_rejected_predicates_preserve_public_species_alias_provenance() {
+    use frankenengine_engine::baseline_interpreter::Value;
+    use frankenengine_engine::ifc_artifacts::Label;
+    use frankenengine_engine::ir_contract::Ir3Instruction;
+
+    for proxied in [false, true] {
+        let source = r#"
+const output = 424241;
+const predicateResult = 424242;
+const destination = PROXIED ? new Proxy(output, {}) : output;
+const source = [1, 2];
+source.constructor = { [Symbol.species]: function () { return destination; } };
+source.filter(function () { return predicateResult; });
+0;
+"#
+        .replace("PROXIED", if proxied { "true" } else { "false" });
+        let tree = CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: "filter-alias-labels.js".into(),
+                    text: source,
+                },
+                ParseGoal::Script,
+                &ParserOptions::default(),
+            )
+            .unwrap();
+        let mut module = lower_ir0_to_ir3(
+            &Ir0Module::from_syntax_tree(tree, "filter-alias-labels.js"),
+            &LoweringContext::new("filter-trace", "filter-decision", "filter-policy"),
+        )
+        .unwrap()
+        .ir3;
+        let mut markers = [0, 0];
+        for instruction in &mut module.instructions {
+            if let Ir3Instruction::LoadInt { dst, value } = instruction {
+                let marker = match *value {
+                    424241 => Some((0, 200)),
+                    424242 => Some((1, 201)),
+                    _ => None,
+                };
+                if let Some((index, seed)) = marker {
+                    markers[index] += 1;
+                    *instruction = Ir3Instruction::Move {
+                        dst: *dst,
+                        src: seed,
+                    };
+                }
+            }
+        }
+        assert_eq!(markers, [1, 1]);
+        // Discard filter's return value and observe the untouched public alias
+        // from a fresh control context after the script's completion.
+        let observation = module.instructions.len() as u32;
+        let script_end = module
+            .instructions
+            .iter()
+            .position(|instruction| matches!(instruction, Ir3Instruction::Halt))
+            .expect("main script has a Halt before function bodies");
+        let mut returns = 0;
+        for instruction in &mut module.instructions[..script_end] {
+            if let Ir3Instruction::Return { value } = instruction {
+                assert_eq!(*value, 0);
+                returns += 1;
+                *instruction = Ir3Instruction::Jump {
+                    target: observation,
+                };
+            }
+        }
+        assert_eq!(returns, 1);
+        module.instructions.extend([
+            Ir3Instruction::LoadInt { dst: 204, value: 0 },
+            Ir3Instruction::GetProperty {
+                obj: 200,
+                key: 202,
+                dst: 203,
+            },
+            Ir3Instruction::Return { value: 203 },
+        ]);
+        for predicate_label in [Label::Public, Label::Secret] {
+            for (key, expected) in [("length", 1), ("0", 40)] {
+                for mut config in [
+                    InterpreterConfig::quickjs_defaults(),
+                    InterpreterConfig::v8_defaults(),
+                ] {
+                    config.granted_capabilities = [
+                        RuntimeCapability::VmDispatch,
+                        RuntimeCapability::HeapAllocate,
+                        RuntimeCapability::Builtin,
+                    ]
+                    .into_iter()
+                    .collect();
+                    let mut core = InterpreterCore::new(config, "filter-alias-labels");
+                    let output = core.alloc_array_with_prototype(None).unwrap();
+                    core.set_object_property(output, "length".into(), Value::Int(1))
+                        .unwrap();
+                    core.set_object_property(output, "0".into(), Value::Int(40))
+                        .unwrap();
+                    core.seed_register(200, Value::Object(output)).unwrap();
+                    core.seed_register(201, Value::Bool(false)).unwrap();
+                    core.seed_register(202, Value::str(key)).unwrap();
+                    core.set_register_label(201, predicate_label.clone())
+                        .unwrap();
+                    let result = core.execute(&module).unwrap();
+                    assert_eq!(result.value, Value::Int(expected));
+                    assert_eq!(
+                        core.get_register_label(203).unwrap(),
+                        &predicate_label,
+                        "proxied={proxied}, key={key}"
+                    );
+                    assert_eq!(core.get_register_label(200).unwrap(), &Label::Public);
+                    assert_eq!(core.get_register_label(204).unwrap(), &Label::Public);
+                    assert_eq!(
+                        core.estimated_memory_bytes(),
+                        core.recompute_estimated_memory_bytes()
+                    );
                 }
             }
         }

@@ -3,10 +3,11 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use frankenengine_engine::ast::ParseGoal;
-use frankenengine_engine::baseline_interpreter::LaneChoice;
+use frankenengine_engine::baseline_interpreter::{InterpreterError, LaneChoice};
 use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::execution_cell::CellError;
 use frankenengine_engine::execution_orchestrator::{
@@ -22,6 +23,10 @@ use frankenengine_engine::module_resolver::{
     ResolutionErrorCode, ResolutionOutcome, ResolutionResult,
 };
 use frankenengine_engine::runtime_config::RuntimeConfig;
+use frankenengine_extension_host::host_io::{
+    HostIoCapability, HostIoControl, HostIoError, HostIoExceptionProvenance, HostIoOutcome,
+    HostIoProvider, HostIoRecorder, HostIoRequest, InMemoryHostIoTranscript, SandboxedHostIo,
+};
 
 const ROOT: &str = "/captured-module-test";
 const ID_PREFIX: &str = "captured:";
@@ -3420,6 +3425,174 @@ fn delivered_transitive_dependencies_preserve_the_explicit_process_shape_grant()
                 } else {
                     result.expect_err("source modules cannot introduce process-shape authority");
                     assert!(engine.last_failed_console_output().is_empty());
+                }
+            }
+        }
+    }
+}
+
+/// Transparent I/O decorator: every effect still uses the real sandbox and
+/// forwards the supervisor control. Only the declared exception contract varies.
+#[derive(Debug)]
+struct DependencyProvenanceHostIo {
+    inner: SandboxedHostIo,
+    provenance: HostIoExceptionProvenance,
+    calls: AtomicUsize,
+}
+
+impl HostIoProvider for DependencyProvenanceHostIo {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn filesystem_exception_provenance(&self) -> HostIoExceptionProvenance {
+        self.provenance
+    }
+
+    fn perform(&self, request: &HostIoRequest, granted: &[HostIoCapability]) -> HostIoOutcome {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.perform(request, granted)
+    }
+
+    fn perform_controlled(
+        &self,
+        request: &HostIoRequest,
+        granted: &[HostIoCapability],
+        control: Arc<dyn HostIoControl>,
+    ) -> HostIoOutcome {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.perform_controlled(request, granted, control)
+    }
+}
+
+/// An otherwise transparent recording source deliberately retains the trait's
+/// fail-high default. It must not inherit trust merely from the live provider.
+#[derive(Debug)]
+struct UnknownDependencyRecorder {
+    inner: Arc<InMemoryHostIoTranscript>,
+}
+
+impl HostIoRecorder for UnknownDependencyRecorder {
+    fn begin_execution(&self) -> Result<(), HostIoError> {
+        self.inner.begin_execution()
+    }
+
+    fn replay(&self, request: &HostIoRequest) -> Option<HostIoOutcome> {
+        self.inner.replay(request)
+    }
+
+    fn record(&self, request: &HostIoRequest, outcome: &HostIoOutcome) {
+        self.inner.record(request, outcome);
+    }
+
+    fn finish_execution(&self) -> Result<Vec<(HostIoRequest, HostIoOutcome)>, HostIoError> {
+        self.inner.finish_execution()
+    }
+
+    fn recorded_entries(&self) -> Vec<(HostIoRequest, HostIoOutcome)> {
+        self.inner.recorded_entries()
+    }
+}
+
+#[test]
+fn filesystem_dependencies_use_effective_provider_and_recorder_exception_provenance() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for syntax in [ModuleSyntax::CommonJs, ModuleSyntax::EsModule] {
+            for (provider_trusted, recorder_trusted) in [
+                (true, None),
+                (true, Some(true)),
+                (false, None),
+                (true, Some(false)),
+            ] {
+                let root = tempfile::tempdir().expect("module and I/O sandbox");
+                let (entry_name, dependency_name, entry_source, dependency_source) =
+                    if syntax == ModuleSyntax::CommonJs {
+                        (
+                            "entry.cjs",
+                            "dependency.cjs",
+                            "require('./dependency.cjs');",
+                            "const fs = require('fs'); \
+                             try { fs.readFileSync('absent.txt', 'utf8'); } \
+                             catch (error) { console.log(error.code); } \
+                             console.log(fs.readFileSync('input.txt', 'utf8'));",
+                        )
+                    } else {
+                        (
+                            "entry.mjs",
+                            "dependency.mjs",
+                            "import './dependency.mjs';",
+                            "import fs from 'node:fs'; \
+                             try { fs.readFileSync('absent.txt', 'utf8'); } \
+                             catch (error) { console.log(error.code); } \
+                             console.log(fs.readFileSync('input.txt', 'utf8'));",
+                        )
+                    };
+                let entry_path = root.path().join(entry_name);
+                std::fs::write(&entry_path, entry_source).expect("entry module");
+                std::fs::write(root.path().join(dependency_name), dependency_source)
+                    .expect("dependency module");
+                std::fs::write(root.path().join("input.txt"), "dependency bytes")
+                    .expect("real provider input");
+                let provider = Arc::new(DependencyProvenanceHostIo {
+                    inner: SandboxedHostIo::with_root(root.path()).expect("real sandbox provider"),
+                    provenance: if provider_trusted {
+                        HostIoExceptionProvenance::ProviderInternal
+                    } else {
+                        HostIoExceptionProvenance::Unknown
+                    },
+                    calls: AtomicUsize::new(0),
+                });
+                let transcript = Arc::new(InMemoryHostIoTranscript::recording());
+                let recorder: Option<Arc<dyn HostIoRecorder>> = match recorder_trusted {
+                    None => None,
+                    Some(true) => Some(transcript.clone()),
+                    Some(false) => Some(Arc::new(UnknownDependencyRecorder {
+                        inner: transcript.clone(),
+                    })),
+                };
+                let mut engine = orchestrator(lane, syntax);
+                engine.set_host_io(provider.clone(), recorder);
+                let mut execution = package();
+                execution.source = entry_source.to_string();
+                execution.source_file = Some(entry_path.display().to_string());
+                execution.module_root = Some(root.path().display().to_string());
+                execution.capabilities = [
+                    "module_load",
+                    "builtin",
+                    "console",
+                    "heap_allocate",
+                    "vm_dispatch",
+                    "fs_read",
+                ]
+                .into_iter()
+                .map(str::to_string)
+                .collect();
+                let result = engine.execute(&execution);
+                if provider_trusted && recorder_trusted != Some(false) {
+                    let result = result.expect(
+                        "a dependency inherits the execution's authenticated exception contract",
+                    );
+                    assert_eq!(lines(&result), ["ENOENT", "dependency bytes"]);
+                    assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+                    let recorded = if recorder_trusted.is_some() { 2 } else { 0 };
+                    assert_eq!(result.host_effect_transcript.len(), recorded);
+                    assert_eq!(transcript.len(), recorded);
+                } else {
+                    let error = result.expect_err(
+                        "an unknown provider or effect source keeps dependency exceptions high",
+                    );
+                    assert!(
+                        matches!(
+                            error.primary_error(),
+                            OrchestratorError::Interpreter(
+                                InterpreterError::ModuleLoweringFailed { .. }
+                            )
+                        ),
+                        "must reject dependency lowering, not fail later in the host: {error}",
+                    );
+                    assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+                    assert!(engine.last_failed_console_output().is_empty());
+                    assert!(transcript.is_empty());
                 }
             }
         }

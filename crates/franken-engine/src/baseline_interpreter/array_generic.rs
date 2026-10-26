@@ -37,6 +37,15 @@ use iteration::LiveArrayCursor;
 
 const MAX_SAFE_LENGTH: u64 = (1 << 53) - 1;
 
+/// Only a fresh intrinsic Array is unreachable by guest code until the method
+/// returns. A species constructor may instead expose an alias, a Proxy, or an
+/// exotic object, so its result always needs observable property operations.
+#[derive(Clone, Copy)]
+pub(super) struct ArraySpeciesAllocation {
+    pub(super) object: ObjectId,
+    pub(super) intrinsic: bool,
+}
+
 impl InterpreterCore {
     /// The Array.prototype methods `array_method_generic` implements.
     pub(super) fn has_generic_array_path(kind: BuiltinFunctionKind) -> bool {
@@ -521,21 +530,7 @@ impl InterpreterCore {
                 let end = self.generic_relative_index(m, arg(self, 1)?, len, len)?;
                 let count = end.saturating_sub(start);
                 let result = self.array_species_result(module, o, count)?;
-                let mut indices = LiveArrayCursor::new(start, end.max(start), false, false);
-                while let Some(k) = indices.next(self, o)? {
-                    let key = Self::generic_index_key(k);
-                    let present = self.generic_has(m, o, &key)?;
-                    self.observe_scoped_callback_result()?;
-                    if present {
-                        let element = self.generic_get(m, o, &key)?;
-                        self.observe_scoped_callback_result()?;
-                        // A skipped hole still occupies its position in the
-                        // result; the count of present properties is not length.
-                        self.generic_create_data_property(m, result, k - start, element)?;
-                    }
-                }
-                self.generic_species_set_length(m, result, count)?;
-                Value::Object(result)
+                self.generic_slice_result(module, o, start, end, result)?
             }
             K::ArrayConcat => {
                 let mut items = vec![self.generic_object_value(o)];
@@ -543,41 +538,7 @@ impl InterpreterCore {
                     items.push(arg(self, index)?);
                 }
                 let result = self.array_species_result(module, o, 0)?;
-                let mut n = 0u64;
-                for item in items {
-                    let spreadable = match &item {
-                        Value::Object(id) => self.generic_is_concat_spreadable(m, *id)?,
-                        _ => false,
-                    };
-                    let Value::Object(source) = item else {
-                        self.generic_create_data_property(m, result, n, item)?;
-                        n += 1;
-                        continue;
-                    };
-                    if !spreadable {
-                        self.generic_create_data_property(m, result, n, item)?;
-                        n += 1;
-                        continue;
-                    }
-                    let len = self.generic_length(m, source)?;
-                    if n + len > MAX_SAFE_LENGTH {
-                        return Err(Self::generic_length_error());
-                    }
-                    let mut indices = LiveArrayCursor::new(0, len, false, false);
-                    while let Some(k) = indices.next(self, source)? {
-                        let key = Self::generic_index_key(k);
-                        let present = self.generic_has(m, source, &key)?;
-                        self.observe_scoped_callback_result()?;
-                        if present {
-                            let element = self.generic_get(m, source, &key)?;
-                            self.observe_scoped_callback_result()?;
-                            self.generic_create_data_property(m, result, n + k, element)?;
-                        }
-                    }
-                    n += len;
-                }
-                self.generic_species_set_length(m, result, n)?;
-                Value::Object(result)
+                self.generic_concat_result(module, items, result)?
             }
             K::ArrayIndexOf | K::ArrayLastIndexOf => {
                 let len = self.generic_length(m, o)?;
@@ -1022,6 +983,104 @@ impl InterpreterCore {
         Ok(Value::Object(removed))
     }
 
+    /// Continue a native Array method after a custom species has run. Keep
+    /// its already captured length, indices and callback; neither source
+    /// conversion nor species construction may happen a second time.
+    pub(super) fn with_custom_array_species_result<T>(
+        &mut self,
+        source: ObjectId,
+        result: ObjectId,
+        args: RegRange,
+        receiver_register: Option<u32>,
+        step: impl FnOnce(&mut Self) -> Result<T, InterpreterError>,
+    ) -> Result<T, InterpreterError> {
+        let mut input_label = self.join_arg_range_label(args)?;
+        if let Some(register) = receiver_register {
+            input_label = self.join_owned_label_with_temporary_budget(
+                input_label,
+                self.get_register_label(register)?,
+            )?;
+        }
+        let label = self.array_result_prefix_label(source, result, &input_label)?;
+        drop(input_label);
+        // Generic algorithms keep values in native locals. A trap or getter
+        // must not inherit a collection request that omitted those roots.
+        self.gc_nested_request = None;
+        self.generic_species_scope(|core| {
+            core.json_observe_label(label)?;
+            step(core)
+        })
+    }
+
+    pub(super) fn generic_slice_result(
+        &mut self,
+        module: &Ir3Module,
+        source: ObjectId,
+        start: u64,
+        end: u64,
+        result: ObjectId,
+    ) -> Result<Value, InterpreterError> {
+        let m = Some(module);
+        let mut indices = LiveArrayCursor::new(start, end.max(start), false, false);
+        while let Some(k) = indices.next(self, source)? {
+            let key = Self::generic_index_key(k);
+            let present = self.generic_has(m, source, &key)?;
+            self.observe_scoped_callback_result()?;
+            if present {
+                let element = self.generic_get(m, source, &key)?;
+                self.observe_scoped_callback_result()?;
+                // Holes retain their positions, including trailing ones.
+                self.generic_create_data_property(m, result, k - start, element)?;
+            }
+        }
+        self.generic_species_set_length(m, result, end.saturating_sub(start))?;
+        Ok(Value::Object(result))
+    }
+
+    pub(super) fn generic_concat_result(
+        &mut self,
+        module: &Ir3Module,
+        items: Vec<Value>,
+        result: ObjectId,
+    ) -> Result<Value, InterpreterError> {
+        let m = Some(module);
+        let mut n = 0u64;
+        for item in items {
+            let spreadable = match &item {
+                Value::Object(id) => self.generic_is_concat_spreadable(m, *id)?,
+                _ => false,
+            };
+            let Value::Object(source) = item else {
+                self.generic_create_data_property(m, result, n, item)?;
+                n += 1;
+                continue;
+            };
+            if !spreadable {
+                self.generic_create_data_property(m, result, n, item)?;
+                n += 1;
+                continue;
+            }
+            let len = self.generic_length(m, source)?;
+            if n + len > MAX_SAFE_LENGTH {
+                return Err(Self::generic_length_error());
+            }
+            let mut indices = LiveArrayCursor::new(0, len, false, false);
+            while let Some(k) = indices.next(self, source)? {
+                let key = Self::generic_index_key(k);
+                let present = self.generic_has(m, source, &key)?;
+                self.observe_scoped_callback_result()?;
+                if present {
+                    let element = self.generic_get(m, source, &key)?;
+                    self.observe_scoped_callback_result()?;
+                    self.generic_create_data_property(m, result, n + k, element)?;
+                }
+            }
+            n += len;
+        }
+        self.generic_species_set_length(m, result, n)?;
+        Ok(Value::Object(result))
+    }
+
     /// forEach, map, filter, some, every and the find family.
     fn generic_iterate(
         &mut self,
@@ -1033,12 +1092,51 @@ impl InterpreterCore {
         this_arg: &Value,
     ) -> Result<Value, InterpreterError> {
         use BuiltinFunctionKind as K;
-        let m = Some(module);
         let result = match kind {
             K::ArrayMap => Some(self.array_species_result(module, o, len)?),
             K::ArrayFilter => Some(self.array_species_result(module, o, 0)?),
             _ => None,
         };
+        self.generic_iterate_result(module, o, kind, len, callback, this_arg, result)
+    }
+
+    /// Filter's rejected predicates still determine the result prefix.
+    /// Preserve that control provenance on a pre-existing species alias even
+    /// when no indexed property is defined; this is metadata, never a JS Set.
+    fn generic_filter_admit_prefix(
+        &mut self,
+        source: ObjectId,
+        result: ObjectId,
+    ) -> Result<(), InterpreterError> {
+        let context = self.json_parse_context_label()?;
+        let label = self.array_result_prefix_label(source, result, &context)?;
+        drop(context);
+        self.record_array_result_prefix_label(result, &label)?;
+        self.json_observe_label(label)?;
+        // A custom result may wrap a public target. Keep its length label
+        // protected without invoking a Proxy trap or guest length setter.
+        self.generic_species_admit_output_label(result, &Self::generic_length_key())
+    }
+
+    // These are already captured algorithm inputs. Re-reading a callback,
+    // thisArg, or species result here would run guest code a second time.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn generic_iterate_result(
+        &mut self,
+        module: &Ir3Module,
+        o: ObjectId,
+        kind: BuiltinFunctionKind,
+        len: u64,
+        callback: &Value,
+        this_arg: &Value,
+        result: Option<ObjectId>,
+    ) -> Result<Value, InterpreterError> {
+        use BuiltinFunctionKind as K;
+        let m = Some(module);
+        let filter_result = if kind == K::ArrayFilter { result } else { None };
+        if let Some(result) = filter_result {
+            self.generic_filter_admit_prefix(o, result)?;
+        }
         let backwards = matches!(kind, K::ArrayFindLast | K::ArrayFindLastIndex);
         // The find family visits every index; the others skip holes.
         let visits_holes = matches!(
@@ -1052,10 +1150,18 @@ impl InterpreterCore {
             if !visits_holes {
                 let present = self.generic_has(m, o, &key)?;
                 self.observe_scoped_callback_result()?;
-                if !present { continue; }
+                if let Some(result) = filter_result {
+                    self.generic_filter_admit_prefix(o, result)?;
+                }
+                if !present {
+                    continue;
+                }
             }
             let element = self.generic_get(m, o, &key)?;
             self.observe_scoped_callback_result()?;
+            if let Some(result) = filter_result {
+                self.generic_filter_admit_prefix(o, result)?;
+            }
             let outcome = self.invoke_inline_method_call(
                 m,
                 callback.clone(),
@@ -1067,6 +1173,9 @@ impl InterpreterCore {
                 ],
             )?;
             self.observe_scoped_callback_result()?;
+            if let Some(result) = filter_result {
+                self.generic_filter_admit_prefix(o, result)?;
+            }
             match kind {
                 K::ArrayMap => {
                     let result = result.expect("map allocates its result");

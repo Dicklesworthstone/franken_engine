@@ -273,6 +273,8 @@ impl ModuleRecord {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeBuiltinModule {
     Buffer,
+    Crypto,
+    Zlib,
     Events,
     Os,
     Querystring,
@@ -297,6 +299,8 @@ impl NativeBuiltinModule {
     pub fn from_specifier(specifier: &str) -> Option<Self> {
         match specifier {
             "buffer" | "node:buffer" => Some(Self::Buffer),
+            "crypto" | "node:crypto" => Some(Self::Crypto),
+            "zlib" | "node:zlib" => Some(Self::Zlib),
             "module" | "node:module" => Some(Self::Module),
             "events" | "node:events" => Some(Self::Events),
             "os" | "node:os" => Some(Self::Os),
@@ -322,6 +326,8 @@ impl NativeBuiltinModule {
     pub fn canonical_specifier(self) -> &'static str {
         match self {
             Self::Buffer => "node:buffer",
+            Self::Crypto => "node:crypto",
+            Self::Zlib => "node:zlib",
             Self::Module => "node:module",
             Self::Events => "node:events",
             Self::Os => "node:os",
@@ -2633,6 +2639,8 @@ mod tests {
     fn native_builtin_descriptors_bind_exact_provider_and_capabilities() {
         for name in [
             "buffer",
+            "crypto",
+            "zlib",
             "module",
             "events",
             "os",
@@ -2673,6 +2681,12 @@ mod tests {
                     .required_capabilities
                     .contains(&RuntimeCapability::Builtin)
             );
+            assert!(
+                !record
+                    .required_capabilities
+                    .contains(&RuntimeCapability::RandomRead),
+                "loading {name} must not require or grant entropy authority"
+            );
             assert_eq!(
                 record
                     .required_capabilities
@@ -2702,28 +2716,38 @@ mod tests {
 
     #[test]
     fn native_builtin_descriptor_cannot_smuggle_source_or_reduce_authority() {
-        let original = NativeBuiltinModule::Buffer.record("captured:graph:buffer");
-        let mut forged = original.clone();
-        forged.source = "module.exports = require('fs');".into();
-        assert!(NativeBuiltinModule::from_record(&forged).is_none());
-        forged = original.clone();
-        forged.dependencies.push(ModuleDependency::new("fs", ImportStyle::Require));
-        assert!(NativeBuiltinModule::from_record(&forged).is_none());
-        forged = original.clone();
-        forged.required_capabilities.remove(&RuntimeCapability::Builtin);
-        assert!(NativeBuiltinModule::from_record(&forged).is_none());
-        forged = original.clone();
-        forged.provenance.kind = ModuleSourceKind::Workspace;
-        assert!(NativeBuiltinModule::from_record(&forged).is_none());
-        forged = original.clone();
-        forged.provenance.origin = "franken-engine/native-builtin/v1:buffer".into();
-        assert!(NativeBuiltinModule::from_record(&forged).is_none());
-        forged = original.clone();
-        forged.syntax = ModuleSyntax::EsModule;
-        assert!(NativeBuiltinModule::from_record(&forged).is_none());
-        forged = original;
-        forged.id.clear();
-        assert!(NativeBuiltinModule::from_record(&forged).is_none());
+        for builtin in [
+            NativeBuiltinModule::Buffer,
+            NativeBuiltinModule::Crypto,
+            NativeBuiltinModule::Zlib,
+        ] {
+            let original = builtin.record("captured:graph:native");
+            let mut forged = original.clone();
+            forged.source = "module.exports = require('fs');".into();
+            assert!(NativeBuiltinModule::from_record(&forged).is_none());
+            forged = original.clone();
+            forged
+                .dependencies
+                .push(ModuleDependency::new("fs", ImportStyle::Require));
+            assert!(NativeBuiltinModule::from_record(&forged).is_none());
+            forged = original.clone();
+            forged
+                .required_capabilities
+                .remove(&RuntimeCapability::Builtin);
+            assert!(NativeBuiltinModule::from_record(&forged).is_none());
+            forged = original.clone();
+            forged.provenance.kind = ModuleSourceKind::Workspace;
+            assert!(NativeBuiltinModule::from_record(&forged).is_none());
+            forged = original.clone();
+            forged.provenance.origin = "franken-engine/native-builtin/v1:buffer".into();
+            assert!(NativeBuiltinModule::from_record(&forged).is_none());
+            forged = original.clone();
+            forged.syntax = ModuleSyntax::EsModule;
+            assert!(NativeBuiltinModule::from_record(&forged).is_none());
+            forged = original;
+            forged.id.clear();
+            assert!(NativeBuiltinModule::from_record(&forged).is_none());
+        }
     }
 
     #[test]

@@ -24191,7 +24191,26 @@ fn is_require_zlib_module_initializer(
             if well_formed_string_literal(specifier).is_some_and(is_zlib_module_specifier))
 }
 
-fn zlib_method_capability(method: &str) -> Option<&'static str> {
+/// The methods backed by the engine's bounded codec implementation. Both the
+/// legacy direct-call lowering and ordinary runtime module objects use this
+/// inventory; exporting a function never grants its invocation authority.
+pub(crate) const ZLIB_METHOD_NAMES: [&str; 13] = [
+    "gzipSync",
+    "gunzipSync",
+    "deflateSync",
+    "inflateSync",
+    "deflateRawSync",
+    "inflateRawSync",
+    "unzipSync",
+    "gzip",
+    "gunzip",
+    "deflate",
+    "inflate",
+    "brotliCompressSync",
+    "brotliDecompressSync",
+];
+
+pub(crate) fn zlib_method_capability(method: &str) -> Option<&'static str> {
     match method {
         "gzipSync" => Some("builtin:ZlibGzipSync"),
         "gunzipSync" => Some("builtin:ZlibGunzipSync"),
@@ -24211,6 +24230,12 @@ fn zlib_method_capability(method: &str) -> Option<&'static str> {
 }
 
 fn is_zlib_module_object(expr: &Expression, binding_lookup: &BTreeMap<String, BindingId>) -> bool {
+    // A CommonJS wrapper has a real, mutable realm module. Preserve ordinary
+    // property reads/calls (including aliases and later mutations) rather than
+    // replacing its exports with compile-time hostcall sentinels.
+    if require_is_commonjs_wrapper(binding_lookup) {
+        return false;
+    }
     match expr {
         Expression::Identifier(alias) => {
             binding_lookup.contains_key(&zlib_module_alias_sentinel(alias))
@@ -24268,6 +24293,9 @@ fn confirmed_zlib_module_aliases(
     body: &[Statement],
     binding_lookup: &BTreeMap<String, BindingId>,
 ) -> BTreeSet<String> {
+    if require_is_commonjs_wrapper(binding_lookup) {
+        return BTreeSet::new();
+    }
     let mut candidates = BTreeMap::new();
     for (statement_index, statement) in body.iter().enumerate() {
         if let Statement::VariableDeclaration(declaration) = statement {
@@ -24384,10 +24412,30 @@ fn is_require_crypto_module_initializer(
             if well_formed_string_literal(specifier).is_some_and(is_crypto_module_specifier))
 }
 
-/// Finite deterministic crypto surface. Entropy and asymmetric-key operations
-/// remain separate so only the authenticated alias form can receive RandomRead
-/// authority.
-fn crypto_deterministic_method_capability(method: &str) -> Option<&'static str> {
+/// Supported native crypto exports, shared by lowering and runtime providers.
+/// Randomness still requires RandomRead at the invocation boundary; loading
+/// the crypto module supplies no entropy or additional authority.
+pub(crate) const CRYPTO_METHOD_NAMES: [&str; 17] = [
+    "createHash",
+    "createHmac",
+    "timingSafeEqual",
+    "pbkdf2Sync",
+    "pbkdf2",
+    "scryptSync",
+    "createCipheriv",
+    "createDecipheriv",
+    "getHashes",
+    "getCiphers",
+    "generateKeyPairSync",
+    "sign",
+    "verify",
+    "randomBytes",
+    "randomUUID",
+    "randomInt",
+    "randomFillSync",
+];
+
+pub(crate) fn crypto_method_capability(method: &str) -> Option<&'static str> {
     match method {
         "createHash" => Some("builtin:CryptoCreateHash"),
         "createHmac" => Some("builtin:CryptoCreateHmac"),
@@ -24406,6 +24454,10 @@ fn crypto_deterministic_method_capability(method: &str) -> Option<&'static str> 
         // handles; Ed25519-only in this slice.
         "sign" => Some("builtin:CryptoSign"),
         "verify" => Some("builtin:CryptoVerify"),
+        "randomBytes" => Some("builtin:CryptoRandomBytes"),
+        "randomUUID" => Some("builtin:CryptoRandomUUID"),
+        "randomInt" => Some("builtin:CryptoRandomInt"),
+        "randomFillSync" => Some("builtin:CryptoRandomFillSync"),
         _ => None,
     }
 }
@@ -24431,24 +24483,22 @@ fn crypto_method_call_capability(method: &str, arguments: &[Expression]) -> Opti
     {
         return None;
     }
-    crypto_deterministic_method_capability(method)
-        .or_else(|| {
-            (method == "randomInt" && crypto_random_int_args_are_statically_invalid(arguments))
-                .then_some("builtin:CryptoInvalidRandomInt")
-        })
-        .or(match method {
-            "randomBytes" => Some("builtin:CryptoRandomBytes"),
-            "randomUUID" if arguments.is_empty() => Some("builtin:CryptoRandomUUID"),
-            "randomInt" => Some("builtin:CryptoRandomInt"),
-            "randomFillSync" => Some("builtin:CryptoRandomFillSync"),
-            _ => None,
-        })
+    if method == "randomInt" && crypto_random_int_args_are_statically_invalid(arguments) {
+        return Some("builtin:CryptoInvalidRandomInt");
+    }
+    if method == "randomUUID" && !arguments.is_empty() {
+        return None;
+    }
+    crypto_method_capability(method)
 }
 
 fn is_crypto_module_object(
     expr: &Expression,
     binding_lookup: &BTreeMap<String, BindingId>,
 ) -> bool {
+    if require_is_commonjs_wrapper(binding_lookup) {
+        return false;
+    }
     match expr {
         Expression::Identifier(alias) => {
             binding_lookup.contains_key(&crypto_module_alias_sentinel(alias))
@@ -24978,6 +25028,9 @@ fn confirmed_crypto_module_aliases(
     body: &[Statement],
     binding_lookup: &BTreeMap<String, BindingId>,
 ) -> BTreeSet<String> {
+    if require_is_commonjs_wrapper(binding_lookup) {
+        return BTreeSet::new();
+    }
     let mut candidates = BTreeMap::new();
     for (statement_index, statement) in body.iter().enumerate() {
         if let Statement::VariableDeclaration(declaration) = statement {
@@ -50074,9 +50127,45 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_crypto_and_zlib_calls_preserve_runtime_module_objects() {
+        for (name, method, argument, capability) in [
+            ("crypto", "createHash", "sha256", "builtin:CryptoCreateHash"),
+            ("zlib", "gzipSync", "payload", "builtin:ZlibGzipSync"),
+        ] {
+            let source = format!(
+                "const builtin = require('{name}');\n\
+                 builtin.{method}('{argument}');\n\
+                 require('node:{name}').{method}('{argument}');"
+            );
+            let tree = crate::parser_api_stability::parse_script(&source)
+                .expect("parse CommonJS native module calls");
+            let ir0 = Ir0Module::from_syntax_tree(tree, "native-module-values.cjs");
+            // Ordinary CommonJS, without the external resolver's separate
+            // preserve-loads flag, must retain mutable module properties too.
+            let output = lower_ir0_to_ir3(
+                &ir0,
+                &LoweringContext::new("native-module-values", "cjs", "policy")
+                    .with_authenticated_commonjs_runtime_bindings(),
+            )
+            .expect("lower runtime module methods");
+            assert_eq!(count_hostcall_deep(&output.ir1.ops, capability), 0);
+            assert_eq!(
+                count_ops_deep(&output.ir1.ops, &|op| matches!(
+                    op,
+                    Ir1Op::Call { arg_count: 1 }
+                )),
+                2,
+                "both {name} aliases must reach the authenticated runtime require"
+            );
+        }
+    }
+
+    #[test]
     fn preserved_commonjs_builtin_loads_reach_the_runtime_callee() {
         for name in [
             "buffer",
+            "crypto",
+            "zlib",
             "events",
             "os",
             "querystring",

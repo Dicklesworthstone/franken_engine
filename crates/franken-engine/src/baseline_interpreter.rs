@@ -6477,6 +6477,10 @@ const GENERATED_REALM_OBJECT_GLOBALS: [&str; 8] = [
 /// module object (bd-9vouw.193), so every require returns the same object.
 const BUFFER_MODULE_KEY: &str = "<module buffer>";
 
+/// Realm-owned provider objects, shared by bare and node-prefixed loads.
+const CRYPTO_MODULE_KEY: &str = "<module crypto>";
+const ZLIB_MODULE_KEY: &str = "<module zlib>";
+
 /// Retained native `module` provider shared by bare and `node:` aliases.
 const MODULE_MODULE_KEY: &str = "<module module>";
 
@@ -7017,6 +7021,20 @@ fn static_hostcall_owner_and_name(tag: &str) -> Option<(&'static str, &'static s
                     crate::lowering_pipeline::querystring_method_capability(name) == Some(tag)
                 })
                 .map(|name| ("querystring", name))
+        })
+        .or_else(|| {
+            crate::lowering_pipeline::CRYPTO_METHOD_NAMES
+                .iter()
+                .copied()
+                .find(|name| crate::lowering_pipeline::crypto_method_capability(name) == Some(tag))
+                .map(|name| ("crypto", name))
+        })
+        .or_else(|| {
+            crate::lowering_pipeline::ZLIB_METHOD_NAMES
+                .iter()
+                .copied()
+                .find(|name| crate::lowering_pipeline::zlib_method_capability(name) == Some(tag))
+                .map(|name| ("zlib", name))
         })
 }
 
@@ -40560,6 +40578,59 @@ impl InterpreterCore {
         Ok(Value::Object(object))
     }
 
+    /// First-class crypto exports use the same native hostcalls as direct
+    /// lowering. In particular, fetching the module or extracting a method
+    /// never reads entropy; RandomRead is checked when that method is called.
+    fn crypto_core_module(&mut self) -> Result<Value, InterpreterError> {
+        if let Some(object) = self.builtin_prototypes.get(CRYPTO_MODULE_KEY) {
+            return Ok(Value::Object(*object));
+        }
+        let constants = self.crypto_constants(RegRange { start: 0, count: 0 })?;
+        let mut members: Vec<(&str, Value)> = crate::lowering_pipeline::CRYPTO_METHOD_NAMES
+            .iter()
+            .map(|&name| {
+                let tag = crate::lowering_pipeline::crypto_method_capability(name)
+                    .expect("native crypto exports share the lowering inventory");
+                (
+                    name,
+                    Value::BuiltinFunction(BuiltinFunction::static_hostcall(tag)),
+                )
+            })
+            .collect();
+        members.push(("constants", constants));
+        let object = self.alloc_object_with_properties(&members)?;
+        self.mutate_builtin_prototypes(|prototypes| {
+            prototypes.insert(CRYPTO_MODULE_KEY.to_string(), object);
+        });
+        Ok(Value::Object(object))
+    }
+
+    /// The codec functions retain their existing work, output, memory and
+    /// callback-label checks when passed across a module or invoked indirectly.
+    fn zlib_core_module(&mut self) -> Result<Value, InterpreterError> {
+        if let Some(object) = self.builtin_prototypes.get(ZLIB_MODULE_KEY) {
+            return Ok(Value::Object(*object));
+        }
+        let constants = self.zlib_constants()?;
+        let mut members: Vec<(&str, Value)> = crate::lowering_pipeline::ZLIB_METHOD_NAMES
+            .iter()
+            .map(|&name| {
+                let tag = crate::lowering_pipeline::zlib_method_capability(name)
+                    .expect("native zlib exports share the lowering inventory");
+                (
+                    name,
+                    Value::BuiltinFunction(BuiltinFunction::static_hostcall(tag)),
+                )
+            })
+            .collect();
+        members.push(("constants", constants));
+        let object = self.alloc_object_with_properties(&members)?;
+        self.mutate_builtin_prototypes(|prototypes| {
+            prototypes.insert(ZLIB_MODULE_KEY.to_string(), object);
+        });
+        Ok(Value::Object(object))
+    }
+
     /// `require('timers')` (bd-9vouw.231): Node's timers module, whose six
     /// timer functions are the realm's own. xml2js reads
     /// `require('timers').setImmediate`; the timers facade lowers only the
@@ -40918,6 +40989,8 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         match native {
             NativeBuiltinModule::Buffer => self.buffer_core_module(),
+            NativeBuiltinModule::Crypto => self.crypto_core_module(),
+            NativeBuiltinModule::Zlib => self.zlib_core_module(),
             NativeBuiltinModule::Module => self.module_core_module(),
             NativeBuiltinModule::Events => self.events_core_module(module),
             NativeBuiltinModule::Os => self.os_core_module(),
@@ -40948,6 +41021,14 @@ impl InterpreterCore {
     fn native_builtin_export_names(native: NativeBuiltinModule) -> Vec<&'static str> {
         match native {
             NativeBuiltinModule::Module => vec!["createRequire"],
+            NativeBuiltinModule::Crypto => crate::lowering_pipeline::CRYPTO_METHOD_NAMES
+                .into_iter()
+                .chain(["constants"])
+                .collect(),
+            NativeBuiltinModule::Zlib => crate::lowering_pipeline::ZLIB_METHOD_NAMES
+                .into_iter()
+                .chain(["constants"])
+                .collect(),
             NativeBuiltinModule::Buffer => vec![
                 "Buffer",
                 "Blob",
@@ -41458,6 +41539,8 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let specifier = match native {
             NativeBuiltinModule::Buffer => "\0franken-engine/native-buffer/esm",
+            NativeBuiltinModule::Crypto => "\0franken-engine/native-crypto/esm",
+            NativeBuiltinModule::Zlib => "\0franken-engine/native-zlib/esm",
             NativeBuiltinModule::Module => "\0franken-engine/native-module/esm",
             NativeBuiltinModule::Events => "\0franken-engine/native-events/esm",
             NativeBuiltinModule::Os => "\0franken-engine/native-os/esm",
@@ -89976,6 +90059,26 @@ impl InterpreterCore {
         Ok(())
     }
 
+    fn zlib_constants(&mut self) -> Result<Value, InterpreterError> {
+        let constants = self.alloc_object_with_properties(&[
+            ("Z_BEST_COMPRESSION", Value::Int(9)),
+            ("Z_NO_COMPRESSION", Value::Int(0)),
+            ("Z_DEFAULT_COMPRESSION", Value::Int(-1)),
+            // Node's numeric brotli parameter/mode constants; options.params
+            // uses these exact keys in both the facade and module-object path.
+            ("BROTLI_PARAM_QUALITY", Value::Int(4)),
+            ("BROTLI_PARAM_LGWIN", Value::Int(6)),
+            ("BROTLI_PARAM_LGBLOCK", Value::Int(7)),
+            ("BROTLI_PARAM_SIZE_HINT", Value::Int(9)),
+            ("BROTLI_MODE_GENERIC", Value::Int(0)),
+            ("BROTLI_MODE_TEXT", Value::Int(1)),
+            ("BROTLI_MODE_FONT", Value::Int(2)),
+            ("BROTLI_DEFAULT_QUALITY", Value::Int(11)),
+            ("BROTLI_DEFAULT_WINDOW", Value::Int(22)),
+        ])?;
+        Ok(Value::Object(constants))
+    }
+
     fn zlib_input_byte_length(&self, value: &Value) -> Result<usize, InterpreterError> {
         match value {
             Value::Str(text) => Ok(text.len()),
@@ -96242,23 +96345,7 @@ impl InterpreterCore {
                         got: format!("{} argument(s)", args.count),
                     });
                 }
-                let constants = self.alloc_object_with_properties(&[
-                    ("Z_BEST_COMPRESSION", Value::Int(9)),
-                    ("Z_NO_COMPRESSION", Value::Int(0)),
-                    ("Z_DEFAULT_COMPRESSION", Value::Int(-1)),
-                    // Node's numeric brotli parameter/mode constants; the
-                    // corpus keys options.params by these exact values.
-                    ("BROTLI_PARAM_QUALITY", Value::Int(4)),
-                    ("BROTLI_PARAM_LGWIN", Value::Int(6)),
-                    ("BROTLI_PARAM_LGBLOCK", Value::Int(7)),
-                    ("BROTLI_PARAM_SIZE_HINT", Value::Int(9)),
-                    ("BROTLI_MODE_GENERIC", Value::Int(0)),
-                    ("BROTLI_MODE_TEXT", Value::Int(1)),
-                    ("BROTLI_MODE_FONT", Value::Int(2)),
-                    ("BROTLI_DEFAULT_QUALITY", Value::Int(11)),
-                    ("BROTLI_DEFAULT_WINDOW", Value::Int(22)),
-                ])?;
-                Ok(Value::Object(constants))
+                self.zlib_constants()
             }
             "builtin:NetIsIP" | "builtin:NetIsIPv4" | "builtin:NetIsIPv6" => {
                 let candidate = self
@@ -114928,7 +115015,7 @@ impl InterpreterCore {
         Ok(Value::BigInt(Arc::from(digits.as_str())))
     }
 
-    /// bd-9vouw.17: call a first-class pure static builtin. The tag is
+    /// bd-9vouw.17: call a first-class static builtin. The tag is
     /// re-validated against the shared lowering tables and passes the same
     /// hostcall capability gate as a direct call, so a value can never reach
     /// a hostcall that direct-call interception would not.
@@ -114945,7 +115032,25 @@ impl InterpreterCore {
                 got: tag.to_string(),
             });
         }
-        let tag = tag.to_string();
+        // Preserve the existing deterministic rejection of a nonpositive
+        // randomInt range when the same method is called through a value.
+        // This selects a validation-only hostcall that cannot draw entropy;
+        // all valid or otherwise unresolved calls retain RandomRead authority.
+        let invalid_random_range = tag == "builtin:CryptoRandomInt"
+            && match args.count {
+                1 => matches!(self.builtin_arg(args, 0)?, Some(Value::Int(max)) if max <= 0),
+                2 => matches!(
+                    (self.builtin_arg(args, 0)?, self.builtin_arg(args, 1)?),
+                    (Some(Value::Int(min)), Some(Value::Int(max))) if min >= max
+                ),
+                _ => false,
+            };
+        let tag = if invalid_random_range {
+            "builtin:CryptoInvalidRandomInt"
+        } else {
+            tag
+        }
+        .to_string();
         let instruction_index = u32::try_from(self.ip).unwrap_or(u32::MAX);
         check_hostcall_capability_gate(self, &tag, instruction_index)?;
         if let Some(value) = self.object_receiver_static_value_call(module, &tag, args)? {

@@ -74,6 +74,8 @@ impl OpaqueResolver {
     fn with_native_builtins(mut self) -> Self {
         for native in [
             NativeBuiltinModule::Buffer,
+            NativeBuiltinModule::Crypto,
+            NativeBuiltinModule::Zlib,
             NativeBuiltinModule::Module,
             NativeBuiltinModule::Events,
             NativeBuiltinModule::Os,
@@ -1161,6 +1163,175 @@ console.log(require.resolve('querystring'), require.resolve('node:querystring'))
 }
 
 #[test]
+fn delivered_crypto_and_zlib_are_first_class_modules_without_entropy_authority() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![
+                (
+                    "entry.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        r#"
+const crypto = require('crypto');
+const zlib = require('zlib');
+const child = require('./child.cjs');
+console.log(crypto === child.crypto, zlib === child.zlib);
+const createHash = crypto.createHash;
+const gzip = zlib.gzipSync;
+const gunzip = zlib.gunzipSync;
+console.log(createHash('sha256').update('abc').digest('hex'));
+console.log(gunzip(gzip('native codecs')).toString());
+console.log(typeof crypto.randomBytes, typeof crypto.generateKeyPairSync);
+try { crypto.randomInt(0); } catch (error) { console.log(error.code); }
+crypto.createHash = function() { return 'replacement'; };
+zlib.gzipSync = function() { return 'changed'; };
+console.log(crypto.createHash(), zlib.gzipSync());
+console.log(createHash('sha256').update('abc').digest('hex'));
+console.log(gunzip(gzip('retained callable')).toString());
+console.log(require('node:crypto') === crypto, require('node:zlib') === zlib);
+"#,
+                    )
+                    .with_dependency(ModuleDependency::new("./child.cjs", ImportStyle::Require)),
+                ),
+                (
+                    "child.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        "exports.crypto = require('node:crypto'); exports.zlib = require('node:zlib');",
+                    ),
+                ),
+            ])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let policy = Arc::new(RecordingPolicy {
+            allow_native_builtins: true,
+            ..RecordingPolicy::default()
+        });
+        let installed =
+            ExecutionModuleResolver::new(&source.module.record.id, resolver, policy.clone());
+        let result = orchestrator(lane, ModuleSyntax::CommonJs)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("deterministic crypto and codecs need no entropy grant");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true",
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+                "native codecs",
+                "function function",
+                "ERR_OUT_OF_RANGE",
+                "replacement changed",
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+                "retained callable",
+                "true true",
+            ]
+        );
+        let requests = policy.requests.lock().expect("policy log");
+        assert!(
+            requests
+                .iter()
+                .any(|(request, _)| request.specifier == "crypto")
+        );
+        assert!(requests.iter().any(|(request, _)| request.specifier == "zlib"));
+    }
+}
+
+#[test]
+fn delivered_crypto_and_zlib_esm_names_and_async_codecs_use_native_providers() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![(
+                "entry.mjs",
+                definition(
+                    ModuleSyntax::EsModule,
+                    r#"
+import crypto, { createHash, constants as cryptoConstants } from 'node:crypto';
+import zlib, { gzip, gunzipSync, constants as zlibConstants } from 'node:zlib';
+console.log(createHash === crypto.createHash, gzip === zlib.gzip);
+console.log(cryptoConstants === crypto.constants, zlibConstants === zlib.constants);
+console.log(createHash('sha256').update('abc').digest('hex'));
+gzip('async native codec', function(error, compressed) {
+    console.log(error === null, gunzipSync(compressed).toString());
+});
+console.log('scheduled');
+"#,
+                ),
+            )])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+        let policy = Arc::new(RecordingPolicy {
+            allow_native_builtins: true,
+            ..RecordingPolicy::default()
+        });
+        let installed = ExecutionModuleResolver::new(&source.module.record.id, resolver, policy);
+        let result = orchestrator(lane, ModuleSyntax::EsModule)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("ESM imports expose the same native callable values");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true",
+                "true true",
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+                "scheduled",
+                "true async native codec",
+            ]
+        );
+    }
+}
+
+#[test]
+fn delivered_crypto_callable_values_cannot_acquire_entropy_authority() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for invocation in [
+            "const f = crypto.randomBytes; f(16);",
+            "const f = crypto.randomUUID; f();",
+            "const f = crypto.randomInt; f(10);",
+            "const f = crypto.randomFillSync; f(Buffer.alloc(16));",
+            "const f = crypto.generateKeyPairSync; f('ed25519');",
+        ] {
+            let resolver = Arc::new(
+                OpaqueResolver::new(vec![(
+                    "entry.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        &format!(
+                            "const crypto = require('crypto'); console.log('loaded'); {invocation} console.log('escaped');"
+                        ),
+                    ),
+                )])
+                .with_native_builtins(),
+            );
+            let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+            let policy = Arc::new(RecordingPolicy {
+                allow_native_builtins: true,
+                ..RecordingPolicy::default()
+            });
+            let installed = ExecutionModuleResolver::new(&source.module.record.id, resolver, policy);
+            let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
+            let error = engine
+                .execute_resolved_entry_with_resolver(&package(), &source, installed)
+                .expect_err("an extracted native function cannot grant RandomRead");
+            assert!(
+                error.to_string().contains("capability denied"),
+                "{invocation}: {error}"
+            );
+            assert_eq!(
+                engine
+                    .last_failed_console_output()
+                    .iter()
+                    .map(|entry| entry.message.as_str())
+                    .collect::<Vec<_>>(),
+                ["loaded"],
+                "import succeeds; the effectful invocation is denied"
+            );
+        }
+    }
+}
+
+#[test]
 fn delivered_source_factories_preserve_cross_module_closures_aliases_and_submodules() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         let resolver = Arc::new(
@@ -2120,6 +2291,8 @@ fn delivered_native_builtin_cache_cannot_bypass_policy_in_nested_source() {
 #[test]
 fn delivered_native_descriptors_reject_forgery_and_cached_provider_substitution() {
     for (builtin, corruption) in [
+        "crypto",
+        "zlib",
         "querystring",
         "path",
         "util",

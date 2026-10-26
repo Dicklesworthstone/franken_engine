@@ -334,40 +334,53 @@ impl InterpreterCore {
         receiver: ObjectId,
         args: RegRange,
     ) -> Result<bool, InterpreterError> {
-        let key = RuntimePropertyKey::Symbol(WellKnownSymbol::IsConcatSpreadable.id());
-        let mut objects = vec![receiver];
-        for index in 0..args.count {
-            if let Some(Value::Object(object_id)) = self.builtin_arg(args, index)? {
-                if self.active_proxy_record(object_id)?.is_some()
-                    || self.sparse_array_iteration_requires_generic(
-                        object_id,
-                        BuiltinFunctionKind::ArrayConcat,
-                    )
-                {
-                    return Ok(true);
-                }
-                objects.push(object_id);
-            }
+        if self.concat_item_requires_generic(&Value::Object(receiver))? {
+            return Ok(true);
         }
-        for object_id in objects {
-            let mut current = Some(object_id);
-            for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
-                let Some(id) = current else {
-                    break;
-                };
-                if self.proxy_record(id)?.is_some() {
-                    return Ok(true);
-                }
-                let Some(object) = self.heap.get(id.0 as usize) else {
-                    break;
-                };
-                if object.contains_own_runtime_property(&key) {
-                    return Ok(true);
-                }
-                current = self.observable_prototype_link(object, id);
+        for index in 0..args.count {
+            let item = self.builtin_arg(args, index)?.unwrap_or(Value::Undefined);
+            if self.concat_item_requires_generic(&item)? {
+                return Ok(true);
             }
         }
         Ok(false)
+    }
+
+    /// A storage-copy proof for ONE concat item, without running guest code.
+    /// Recheck it after species construction and after every earlier item.
+    /// Proxy revocation is observed by the real Get, never by this guard.
+    pub(super) fn concat_item_requires_generic(
+        &self,
+        item: &Value,
+    ) -> Result<bool, InterpreterError> {
+        let Value::Object(object_id) = item else {
+            return Ok(false);
+        };
+        if self
+            .sparse_array_iteration_requires_generic(*object_id, BuiltinFunctionKind::ArrayConcat)
+        {
+            return Ok(true);
+        }
+        let key = RuntimePropertyKey::Symbol(WellKnownSymbol::IsConcatSpreadable.id());
+        let mut current = Some(*object_id);
+        for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
+            let Some(id) = current else {
+                return Ok(false);
+            };
+            // Even a revoked Proxy is only a reason to select the spec path.
+            if self.proxy_record(id)?.is_some() {
+                return Ok(true);
+            }
+            let Some(object) = self.heap.get(id.0 as usize) else {
+                return Ok(true);
+            };
+            if object.contains_own_runtime_property(&key) {
+                return Ok(true);
+            }
+            current = self.observable_prototype_link(object, id);
+        }
+        // Exhausting the bounded proof is not proof that the symbol is absent.
+        Ok(current.is_some())
     }
 
     /// The result of the Array.prototype method `kind` called on `object`
@@ -1043,42 +1056,83 @@ impl InterpreterCore {
         items: Vec<Value>,
         result: ObjectId,
     ) -> Result<Value, InterpreterError> {
+        self.generic_concat_tail(module, items, result, 0, None)
+    }
+
+    pub(super) fn concat_result_end(
+        current: u64,
+        additional: u64,
+    ) -> Result<u64, InterpreterError> {
+        current
+            .checked_add(additional)
+            .filter(|end| *end <= MAX_SAFE_LENGTH)
+            .ok_or_else(Self::generic_length_error)
+    }
+
+    /// Resume after a native prefix. A pending source has already had its
+    /// spreadability and length observed; neither may be read a second time.
+    /// The tuple is (source, next index, captured length).
+    pub(super) fn generic_concat_tail(
+        &mut self,
+        module: &Ir3Module,
+        items: Vec<Value>,
+        result: ObjectId,
+        mut n: u64,
+        pending_source: Option<(ObjectId, u64, u64)>,
+    ) -> Result<Value, InterpreterError> {
         let m = Some(module);
-        let mut n = 0u64;
+        if let Some((source, start, len)) = pending_source {
+            n = self.generic_concat_spread_tail(module, source, result, n, start, len)?;
+        }
         for item in items {
             let spreadable = match &item {
                 Value::Object(id) => self.generic_is_concat_spreadable(m, *id)?,
                 _ => false,
             };
+            self.observe_scoped_callback_result()?;
             let Value::Object(source) = item else {
+                let end = Self::concat_result_end(n, 1)?;
                 self.generic_create_data_property(m, result, n, item)?;
-                n += 1;
+                n = end;
                 continue;
             };
             if !spreadable {
+                let end = Self::concat_result_end(n, 1)?;
                 self.generic_create_data_property(m, result, n, item)?;
-                n += 1;
+                n = end;
                 continue;
             }
             let len = self.generic_length(m, source)?;
-            if n + len > MAX_SAFE_LENGTH {
-                return Err(Self::generic_length_error());
-            }
-            let mut indices = LiveArrayCursor::new(0, len, false, false);
-            while let Some(k) = indices.next(self, source)? {
-                let key = Self::generic_index_key(k);
-                let present = self.generic_has(m, source, &key)?;
-                self.observe_scoped_callback_result()?;
-                if present {
-                    let element = self.generic_get(m, source, &key)?;
-                    self.observe_scoped_callback_result()?;
-                    self.generic_create_data_property(m, result, n + k, element)?;
-                }
-            }
-            n += len;
+            self.observe_scoped_callback_result()?;
+            n = self.generic_concat_spread_tail(module, source, result, n, 0, len)?;
         }
         self.generic_species_set_length(m, result, n)?;
         Ok(Value::Object(result))
+    }
+
+    fn generic_concat_spread_tail(
+        &mut self,
+        module: &Ir3Module,
+        source: ObjectId,
+        result: ObjectId,
+        n: u64,
+        start: u64,
+        len: u64,
+    ) -> Result<u64, InterpreterError> {
+        let m = Some(module);
+        let end = Self::concat_result_end(n, len.saturating_sub(start))?;
+        let mut indices = LiveArrayCursor::new(start, len, false, false);
+        while let Some(k) = indices.next(self, source)? {
+            let key = Self::generic_index_key(k);
+            let present = self.generic_has(m, source, &key)?;
+            self.observe_scoped_callback_result()?;
+            if present {
+                let element = self.generic_get(m, source, &key)?;
+                self.observe_scoped_callback_result()?;
+                self.generic_create_data_property(m, result, n + (k - start), element)?;
+            }
+        }
+        Ok(end)
     }
 
     /// forEach, map, filter, some, every and the find family.

@@ -847,3 +847,214 @@ source.filter(function () { return predicateResult; });
         }
     }
 }
+
+/// Reference output captured from Node v24.22.1. Every source getter runs
+/// exactly once, including when concat leaves its dense storage-copy prefix.
+#[test]
+fn intrinsic_concat_revalidates_spreading_after_species_and_element_getters() {
+    let source = r#"
+const spread = Symbol.isConcatSpreadable;
+{
+    const source = [1, 2];
+    let species = 0;
+    source.constructor = { get [Symbol.species]() {
+        species++;
+        source[spread] = false;
+        return Array;
+    } };
+    const result = source.concat([3]);
+    console.log('species-source', species, result.length, result[0] === source, result[1]);
+}
+{
+    const source = [1];
+    const argument = [2, 3];
+    let species = 0;
+    source.constructor = { get [Symbol.species]() {
+        species++;
+        argument[spread] = false;
+        return Array;
+    } };
+    const result = source.concat(argument);
+    console.log('species-array', species, result.length, result[0], result[1] === argument);
+}
+{
+    const source = [1];
+    const argument = { 0: 8, length: 1 };
+    let species = 0;
+    source.constructor = { get [Symbol.species]() {
+        species++;
+        argument[spread] = true;
+        return Array;
+    } };
+    const result = source.concat(argument);
+    console.log('species-object', species, result.length, result[0], result[1]);
+}
+{
+    const events = [];
+    const source = [1];
+    source.length = 2;
+    source.constructor = { get [Symbol.species]() {
+        events.push('species');
+        Object.setPrototypeOf(source, new Proxy(Array.prototype, {
+            get(target, key, receiver) {
+                if (typeof key === 'symbol') events.push('spread');
+                if (key === '1') { events.push('get:1'); return 9; }
+                return Reflect.get(target, key, receiver);
+            },
+            has(target, key) {
+                if (key === '1') { events.push('has:1'); return true; }
+                return Reflect.has(target, key);
+            }
+        }));
+        return Array;
+    } };
+    const result = source.concat();
+    console.log('species-proxy-proto', result.length, result[0], result[1], events.join(','));
+}
+{
+    const source = [0, 1];
+    const argument = [2, 3];
+    let reads = 0;
+    Object.defineProperty(source, '1', { configurable: true, get() {
+        reads++;
+        argument[spread] = false;
+        return 1;
+    } });
+    const result = source.concat(argument);
+    console.log('source-getter', reads, result.length, result[0], result[1], result[2] === argument);
+}
+{
+    const first = [1, 2];
+    const last = { 0: 3, length: 1 };
+    let reads = 0;
+    Object.defineProperty(first, '1', { configurable: true, get() {
+        reads++;
+        last[spread] = true;
+        return 2;
+    } });
+    const result = [0].concat(first, last);
+    console.log('argument-getter', reads, result.length, result.join(','));
+}
+{
+    const first = [1];
+    first.length = 2;
+    const last = [2, 3];
+    let reads = 0;
+    const prototype = Object.create(Array.prototype);
+    Object.defineProperty(prototype, '1', { configurable: true, get() {
+        reads++;
+        last[spread] = false;
+        return 4;
+    } });
+    Object.setPrototypeOf(first, prototype);
+    const result = [].concat(first, last);
+    console.log('inherited-getter', reads, result.length, result[0], result[1], result[2] === last);
+}
+{
+    const source = [1, 2, 3];
+    let reads = 0;
+    Object.defineProperty(source, '1', { configurable: true, get() {
+        reads++;
+        source[spread] = false;
+        source.length = 1;
+        return 2;
+    } });
+    const result = source.concat([]);
+    console.log('captured-shape', reads, result.length, result.join(','), 2 in result);
+}
+{
+    const result = Array.prototype.concat([7]);
+    console.log('array-prototype', result.length, result[0], [].concat(Array.prototype).length);
+}
+for (const throwSource of [false, true]) {
+    const events = [];
+    const source = [0];
+    source.constructor = { get [Symbol.species]() { events.push('species'); return Array; } };
+    Object.defineProperty(source, '0', { configurable: true, get() {
+        events.push('source');
+        if (throwSource) throw new Error('source first');
+        return 7;
+    } });
+    const argument = Proxy.revocable([], {});
+    argument.revoke();
+    let status = 'ok';
+    try { source.concat(argument.proxy); }
+    catch (error) { status = throwSource ? error.message : error.name; }
+    console.log('revoked', throwSource, status, events.join(','));
+}
+"#;
+    let expected = "species-source 1 2 true 3\nspecies-array 1 2 1 true\nspecies-object 1 2 1 8\nspecies-proxy-proto 2 1 9 species,spread,has:1,get:1\nsource-getter 1 3 0 1 true\nargument-getter 1 4 0,1,2,3\ninherited-getter 1 3 1 4 true\ncaptured-shape 1 3 1,2, false\narray-prototype 1 7 0\nrevoked false TypeError species,source\nrevoked true source first species,source";
+    for config in [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ] {
+        assert_eq!(
+            console_output_with_config(source, config).unwrap(),
+            expected
+        );
+    }
+}
+
+/// The live ordinary-property cursor skips this empty interval. Its instruction
+/// budget also bounds the test if that proof regresses. This huge-hole fixture
+/// is engine-only: a reference engine may probe every index.
+#[test]
+fn concat_checks_max_safe_length_after_spreadability_before_output_writes() {
+    let source = r#"
+for (const kind of ['primitive', 'object', 'throws', 'empty', 'spread']) {
+    const events = [];
+    const target = {};
+    const output = new Proxy(target, {
+        defineProperty(target, key, descriptor) {
+            events.push('define:' + key);
+            return Reflect.defineProperty(target, key, descriptor);
+        },
+        set(target, key, value) {
+            events.push('set:' + key + ':' + value);
+            return Reflect.set(target, key, value);
+        }
+    });
+    const source = [];
+    let constructions = 0;
+    source.constructor = { [Symbol.species]: function () {
+        constructions++;
+        return output;
+    } };
+    const huge = { length: 9007199254740991, [Symbol.isConcatSpreadable]: true };
+    let tail = 7;
+    if (kind === 'object' || kind === 'throws') {
+        tail = {
+            get [Symbol.isConcatSpreadable]() {
+                events.push('spread');
+                if (kind === 'throws') throw new Error('lookup');
+                return false;
+            },
+            get length() { events.push('unexpected-length'); return 1; }
+        };
+    } else if (kind === 'empty') {
+        tail = { length: 0, [Symbol.isConcatSpreadable]: true };
+    } else if (kind === 'spread') {
+        tail = {
+            get [Symbol.isConcatSpreadable]() { events.push('spread'); return true; },
+            get length() { events.push('length'); return 1; },
+            get 0() { events.push('element'); return 8; }
+        };
+    }
+    let status = 'ok';
+    try { source.concat(huge, tail); }
+    catch (error) { status = kind === 'throws' ? error.message : error.name; }
+    console.log(kind, status, constructions, events.length ? events.join(',') : 'none');
+}
+"#;
+    let expected = "primitive TypeError 1 none\nobject TypeError 1 spread\nthrows lookup 1 spread\nempty ok 1 set:length:9007199254740991\nspread TypeError 1 spread,length";
+    for mut config in [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ] {
+        config.instruction_budget = 50_000;
+        assert_eq!(
+            console_output_with_config(source, config).unwrap(),
+            expected
+        );
+    }
+}

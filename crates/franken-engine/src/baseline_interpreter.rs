@@ -46172,8 +46172,6 @@ impl InterpreterCore {
                 Ok(Value::Object(arr_id))
             }
             BuiltinFunctionKind::ArrayConcat => {
-                // ES2020 23.1.3.1: new array of this array's elements followed
-                // by each argument; array arguments are spread one level.
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let Value::Object(arr_id) = receiver else {
                     return Err(InterpreterError::TypeError {
@@ -46196,30 +46194,67 @@ impl InterpreterCore {
                         |core| core.generic_concat_result(module, items, result),
                     );
                 }
-                let mut out = 0usize;
-                let len = self.array_like_length(arr_id)?;
-                // A hole in a spread array stays a hole in the result (step
-                // 5.c.iv: only a present element is created); `length`
-                // counts it.
-                for i in 0..len {
-                    if let Some(element) = self.array_index_get(Some(module), arr_id, i)? {
-                        self.create_data_property_or_throw(result, out.to_string(), element)?;
+
+                // Only a fresh intrinsic result can use raw output writes.
+                // No guest code runs in this prefix: revalidate each item,
+                // then hand off BEFORE the first element accessor is invoked.
+                let mut out = 0u64;
+                for item_index in 0..=args.count {
+                    let item = if item_index == 0 {
+                        Value::Object(arr_id)
+                    } else {
+                        self.builtin_arg(args, item_index - 1)?
+                            .unwrap_or(Value::Undefined)
+                    };
+                    if self.concat_item_requires_generic(&item)? {
+                        let mut items = vec![item];
+                        for tail in item_index..args.count {
+                            items.push(self.builtin_arg(args, tail)?.unwrap_or(Value::Undefined));
+                        }
+                        return self.with_custom_array_species_result(
+                            arr_id,
+                            result,
+                            args,
+                            receiver_register,
+                            |core| core.generic_concat_tail(module, items, result, out, None),
+                        );
                     }
-                    out += 1;
-                }
-                for k in 0..args.count {
-                    let arg = self.builtin_arg(args, k)?.unwrap_or(Value::Undefined);
-                    if let Value::Object(arg_id) = &arg
-                        && self
-                            .heap
-                            .get(arg_id.0 as usize)
-                            .map(|object| object.is_array)
-                            .unwrap_or(false)
-                    {
-                        let arg_id = *arg_id;
-                        let arg_len = self.array_like_length(arg_id)?;
-                        for i in 0..arg_len {
-                            if let Some(element) = self.array_index_get(Some(module), arg_id, i)? {
+                    let array = match &item {
+                        Value::Object(id) if self.generic_is_array(*id)? => Some(*id),
+                        _ => None,
+                    };
+                    if let Some(source) = array {
+                        let len = self.array_like_length(source)?;
+                        Self::concat_result_end(out, len as u64)?;
+                        for index in 0..len {
+                            // array_index_get uses this same read and returns
+                            // non-accessors unchanged. Do not read twice: a
+                            // missing slot charges its hole budget here.
+                            let element = self.array_index_value(source, index)?;
+                            if matches!(&element, Some(Value::Accessor { .. })) {
+                                let mut items = Vec::new();
+                                for tail in item_index..args.count {
+                                    items.push(
+                                        self.builtin_arg(args, tail)?.unwrap_or(Value::Undefined),
+                                    );
+                                }
+                                return self.with_custom_array_species_result(
+                                    arr_id,
+                                    result,
+                                    args,
+                                    receiver_register,
+                                    |core| {
+                                        core.generic_concat_tail(
+                                            module,
+                                            items,
+                                            result,
+                                            out,
+                                            Some((source, index as u64, len as u64)),
+                                        )
+                                    },
+                                );
+                            }
+                            if let Some(element) = element {
                                 self.create_data_property_or_throw(
                                     result,
                                     out.to_string(),
@@ -46229,8 +46264,9 @@ impl InterpreterCore {
                             out += 1;
                         }
                     } else {
-                        self.create_data_property_or_throw(result, out.to_string(), arg)?;
-                        out += 1;
+                        let end = Self::concat_result_end(out, 1)?;
+                        self.create_data_property_or_throw(result, out.to_string(), item)?;
+                        out = end;
                     }
                 }
                 self.set_object_property(

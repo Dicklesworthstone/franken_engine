@@ -388,8 +388,9 @@ fn is_internal_lowering_binding(name: &str) -> bool {
 /// default), so no ambient authority is reachable and every red-team scenario
 /// is rejected at lowering. A *trusted* top-level eval context
 /// (`QuickJsInspiredNativeEngine::eval`) runs under [`Self::TrustedProcessShape`],
-/// which grants only the benign [`EffectKind::ProcessShapeRead`] effect. The
-/// grant is consumed only by statically allowlisted `process.<shape>` reads;
+/// which grants only the benign [`EffectKind::ProcessShapeRead`] effect. Explicitly
+/// admitted executions preserve this grant when lowering their dependencies.
+/// The grant is consumed only by statically allowlisted `process.<shape>` reads;
 /// bare, aliased, and computed `process` access stays denied, as do env *values*
 /// (`process.env.X` → [`EffectKind::EnvRead`]), `eval`, fs, network, and spawn.
 ///
@@ -407,7 +408,8 @@ pub enum AmbientAuthorityGrant {
     DenyAll,
     /// Statically allowlisted `process.<shape>` reads are permitted; possession
     /// of the bare object, aliases, computed access, env values, `eval`, fs,
-    /// network, and spawn remain denied. For trusted top-level eval only.
+    /// network, and spawn remain denied. For explicitly admitted executions
+    /// and the dependencies loaded into the same execution.
     TrustedProcessShape,
 }
 
@@ -470,8 +472,9 @@ impl LoweringContext {
     }
 
     /// Builder: set the ambient-authority grant for this lowering unit. Used by
-    /// the trusted top-level eval path to grant the benign process-shape
-    /// profile; all other callers keep the deny-all default.
+    /// trusted evaluation and explicitly admitted executions to grant the
+    /// benign process-shape profile, including their loaded dependencies.
+    /// Generated code and other callers retain the deny-all default.
     pub fn with_ambient_authority_grant(mut self, grant: AmbientAuthorityGrant) -> Self {
         self.ambient_authority_grant = grant;
         self

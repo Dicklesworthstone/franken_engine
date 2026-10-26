@@ -13,6 +13,7 @@ use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorError,
     OrchestratorResult,
 };
+use frankenengine_engine::lowering_pipeline::AmbientAuthorityGrant;
 use frankenengine_engine::module_compatibility_matrix::CompatibilityMode;
 use frankenengine_engine::module_resolver::{
     AllowAllPolicy, CapabilityPolicyHook, DeterministicModuleResolver, ExecutionModuleResolver,
@@ -3324,6 +3325,103 @@ console.log(Object.getPrototypeOf(stream.Stream.prototype) === constructor.proto
                 ["true true true true", "23 true", "true true"],
                 "first={first}, lane={lane:?}"
             );
+        }
+    }
+}
+
+#[test]
+fn delivered_transitive_dependencies_preserve_the_explicit_process_shape_grant() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for syntax in [ModuleSyntax::CommonJs, ModuleSyntax::EsModule] {
+            let (
+                entry_name,
+                middle_name,
+                leaf_name,
+                entry_source,
+                middle_source,
+                leaf_source,
+                style,
+            ) = if syntax == ModuleSyntax::CommonJs {
+                (
+                    "entry.cjs",
+                    "middle.cjs",
+                    "leaf.cjs",
+                    "console.log(require('./middle.cjs'));",
+                    "module.exports = require('./leaf.cjs');",
+                    "module.exports = typeof process.platform + ' ' + typeof process.arch + ' ' + process.argv[2];",
+                    ImportStyle::Require,
+                )
+            } else {
+                (
+                    "entry.mjs",
+                    "middle.mjs",
+                    "leaf.mjs",
+                    "import value from './middle.mjs'; console.log(value);",
+                    "export { default } from './leaf.mjs';",
+                    "export default typeof process.platform + ' ' + typeof process.arch + ' ' + process.argv[2];",
+                    ImportStyle::Import,
+                )
+            };
+            for grant in [
+                AmbientAuthorityGrant::DenyAll,
+                AmbientAuthorityGrant::TrustedProcessShape,
+            ] {
+                let resolver =
+                    Arc::new(OpaqueResolver::new(vec![
+                        (
+                            entry_name,
+                            definition(syntax, entry_source).with_dependency(
+                                ModuleDependency::new(format!("./{middle_name}"), style),
+                            ),
+                        ),
+                        (
+                            middle_name,
+                            definition(syntax, middle_source).with_dependency(
+                                ModuleDependency::new(format!("./{leaf_name}"), style),
+                            ),
+                        ),
+                        (leaf_name, definition(syntax, leaf_source)),
+                    ]));
+                let source = entry(&resolver, entry_name, syntax);
+                let installed = ExecutionModuleResolver::new(
+                    &source.module.record.id,
+                    resolver,
+                    Arc::new(RecordingPolicy::default()),
+                );
+                let mut engine =
+                    ExecutionOrchestrator::try_new_lab_with_runtime_config_and_ambient_authority_grant(
+                        OrchestratorConfig {
+                            force_lane: Some(lane),
+                            parse_goal: if syntax == ModuleSyntax::CommonJs {
+                                ParseGoal::Script
+                            } else {
+                                ParseGoal::Module
+                            },
+                            commonjs_entry: syntax == ModuleSyntax::CommonJs,
+                            policy_id: "runtime-source-policy".to_string(),
+                            ..OrchestratorConfig::default()
+                        },
+                        RuntimeConfig::default(),
+                        grant,
+                    )
+                    .expect("native runtime with explicit ambient grant");
+                engine.set_process_argv(vec![
+                    "franken-node".to_string(),
+                    entry_name.to_string(),
+                    "package-argument".to_string(),
+                ]);
+                let result =
+                    engine.execute_resolved_entry_with_resolver(&package(), &source, installed);
+                if grant == AmbientAuthorityGrant::TrustedProcessShape {
+                    assert_eq!(
+                        lines(&result.expect("the admitted grant reaches transitive dependencies")),
+                        ["string string package-argument"],
+                    );
+                } else {
+                    result.expect_err("source modules cannot introduce process-shape authority");
+                    assert!(engine.last_failed_console_output().is_empty());
+                }
+            }
         }
     }
 }

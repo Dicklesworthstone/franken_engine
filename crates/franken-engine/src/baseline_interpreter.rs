@@ -174,7 +174,7 @@ use crate::iterator_protocol::{
     make_enumerate_event, make_get_iterator_event, make_next_event,
 };
 use crate::js_string::JsString;
-use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+use crate::lowering_pipeline::{AmbientAuthorityGrant, LoweringContext, lower_ir0_to_ir3};
 use crate::module_compatibility_matrix::CompatibilityMode;
 use crate::module_resolver::{
     ExecutionModuleResolver, ImportStyle, ModuleRequest, ModuleSyntax, NativeBuiltinModule,
@@ -17250,6 +17250,35 @@ impl InterpreterCore {
         self.host_io_recorder = recorder;
     }
 
+    /// Bind compilation and execution to the same live/replay exception
+    /// contract. A module loaded later in the execution must not lose the
+    /// provider's authenticated provenance, or trust an unknown replay source.
+    fn filesystem_exception_provenance(&self) -> HostIoExceptionProvenance {
+        let Some(provider) = self.host_io.as_ref() else {
+            return if self.host_io_recorder.is_none()
+                && self.process_spawn.is_none()
+                && self.host_effect_journal.is_none()
+            {
+                HostIoExceptionProvenance::ProviderInternal
+            } else {
+                HostIoExceptionProvenance::Unknown
+            };
+        };
+        let effect_source_provenance = self.host_effect_journal.as_ref().map_or_else(
+            || {
+                self.host_io_recorder
+                    .as_ref()
+                    .map_or(HostIoExceptionProvenance::ProviderInternal, |recorder| {
+                        recorder.filesystem_exception_provenance()
+                    })
+            },
+            |journal| journal.filesystem_exception_provenance(),
+        );
+        provider
+            .filesystem_exception_provenance()
+            .combine(effect_source_provenance)
+    }
+
     /// Install the separately admitted process provider and the global journal
     /// that also records any host-I/O crossings in this execution.
     pub fn set_process_spawn(
@@ -19083,26 +19112,14 @@ impl InterpreterCore {
         let Some(provider) = self.host_io.clone() else {
             return Ok(Value::Undefined);
         };
-        let provider_exception_provenance = provider.filesystem_exception_provenance();
-        let effect_source_exception_provenance = self.host_effect_journal.as_ref().map_or_else(
-            || {
-                self.host_io_recorder
-                    .as_ref()
-                    .map_or(HostIoExceptionProvenance::ProviderInternal, |recorder| {
-                        recorder.filesystem_exception_provenance()
-                    })
-            },
-            |journal| journal.filesystem_exception_provenance(),
-        );
         let args_label = self.join_arg_range_label(args)?;
         let filesystem_result_label =
             hostcall_result_contract(capability).result_label(&args_label, None);
-        let filesystem_exception_label =
-            match provider_exception_provenance.combine(effect_source_exception_provenance) {
-                HostIoExceptionProvenance::ProviderInternal => Label::Internal,
-                HostIoExceptionProvenance::Unknown => Label::TopSecret,
-            }
-            .join(&args_label);
+        let filesystem_exception_label = match self.filesystem_exception_provenance() {
+            HostIoExceptionProvenance::ProviderInternal => Label::Internal,
+            HostIoExceptionProvenance::Unknown => Label::TopSecret,
+        }
+        .join(&args_label);
         let mut raw_args = Vec::with_capacity(args.count as usize);
         for offset in 0..args.count {
             raw_args.push(self.read_reg(args.start + offset)?);
@@ -40338,8 +40355,19 @@ impl InterpreterCore {
                 }));
         }
         let ir0 = Ir0Module::from_syntax_tree(syntax_tree, resolved);
+        // Dependencies execute in this same admitted cell. Preserve its
+        // explicit process-shape grant and effective host/replay provenance
+        // instead of lowering every dependency under fresh deny-all/unknown
+        // defaults. No module record or source text can widen these settings.
+        let ambient_grant = if self.config.process_shape_read_allowed {
+            AmbientAuthorityGrant::TrustedProcessShape
+        } else {
+            AmbientAuthorityGrant::DenyAll
+        };
         let lowering_ctx =
-            LoweringContext::new(&self.trace_id, "module-import", "baseline_interpreter");
+            LoweringContext::new(&self.trace_id, "module-import", "baseline_interpreter")
+                .with_ambient_authority_grant(ambient_grant)
+                .with_host_io_exception_provenance(self.filesystem_exception_provenance());
         let lowering_ctx = if is_cjs {
             lowering_ctx.with_authenticated_commonjs_runtime_bindings()
         } else {

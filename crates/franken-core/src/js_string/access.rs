@@ -3,7 +3,7 @@
 //! Keep the flat readers and rope traversal together: neither the engine
 //! re-export nor the extracted core may fork these string semantics.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use super::{JsString, Shape, Text, is_high_surrogate, is_low_surrogate};
 
@@ -54,6 +54,136 @@ fn ascii_middle_boundary(text: &str, length: usize, position: usize) -> Option<u
     let prefix_excess = prefix_end - text[..prefix_end].encode_utf16().count();
     let suffix_excess = text.len() - suffix_start - text[suffix_start..].encode_utf16().count();
     (prefix_excess + suffix_excess == excess).then_some(position + prefix_excess)
+}
+
+/// A checkpoint every 64 UTF-16 code units bounds each indexed read to a
+/// short scan, even when a checkpoint falls inside a surrogate pair.
+const INDEX_STRIDE: usize = 64;
+const INDEX_MIN_UNITS: usize = 512;
+
+#[derive(Clone, Copy)]
+struct Checkpoint {
+    byte: usize,
+    unit: usize,
+}
+
+/// Immutable lookup metadata. Its full eventual allocation is reserved at
+/// construction; queries can initialize the table but cannot grow it.
+pub(super) struct SparseIndex {
+    units: usize,
+    checkpoints: OnceLock<Box<[Checkpoint]>>,
+}
+
+impl SparseIndex {
+    pub(super) fn for_lengths(bytes: usize, units: usize) -> Self {
+        let enabled =
+            units >= INDEX_MIN_UNITS && bytes != units && units.checked_mul(3) != Some(bytes);
+        Self {
+            units: if enabled { units } else { 0 },
+            checkpoints: OnceLock::new(),
+        }
+    }
+
+    pub(super) fn for_text(text: &str, units: usize) -> Self {
+        let mut index = Self::for_lengths(text.len(), units);
+        // Copy-sized leaves are repeatedly replaced while appends coalesce
+        // pieces. Their scans are bounded already, so avoid allocating an
+        // index carrier for each intermediate leaf. Fringe proofs likewise
+        // bound strings whose few Unicode scalars are confined to the ends.
+        if index.enabled()
+            && (text.len() <= super::CONCAT_COPY_MAX_BYTES
+                || ascii_middle_boundary(text, units, units / 2).is_some())
+        {
+            index.units = 0;
+        }
+        index
+    }
+
+    pub(super) fn enabled(&self) -> bool {
+        self.units != 0
+    }
+
+    pub(super) fn reserved_bytes(&self) -> usize {
+        if self.units == 0 {
+            0
+        } else {
+            ((self.units - 1) / INDEX_STRIDE + 1).saturating_mul(std::mem::size_of::<Checkpoint>())
+        }
+    }
+
+    fn boundary(
+        &self,
+        text: &str,
+        position: usize,
+        release_parts: impl FnOnce(),
+    ) -> Option<(usize, bool)> {
+        if !self.enabled() {
+            return None;
+        }
+        debug_assert!(position <= self.units);
+        if position == self.units {
+            return Some((text.len(), false));
+        }
+        if position == 0 {
+            return Some((0, false));
+        }
+        // A cold read near either edge is already bounded by the stride.
+        // Preserve that path instead of scanning the whole string to index it.
+        if (position <= INDEX_STRIDE || self.units - position <= INDEX_STRIDE)
+            && self.checkpoints.get().is_none()
+        {
+            return None;
+        }
+        let checkpoints = self.checkpoints.get_or_init(|| {
+            // Publication can precede the publishing thread's child release.
+            // Retire owned children even in that race before allocating here.
+            release_parts();
+            let count = (self.units - 1) / INDEX_STRIDE + 1;
+            let mut checkpoints = Vec::with_capacity(count);
+            let mut unit = 0;
+            let mut next = 0;
+            for (byte, scalar) in text.char_indices() {
+                let width = scalar.len_utf16();
+                if next < unit + width {
+                    // Record the scalar's start, not a byte inside it. When
+                    // next bisects a pair, unit is exactly one less than next.
+                    checkpoints.push(Checkpoint { byte, unit });
+                    next += INDEX_STRIDE;
+                }
+                unit += width;
+            }
+            debug_assert_eq!(unit, self.units);
+            debug_assert_eq!(checkpoints.len(), count);
+            checkpoints.into_boxed_slice()
+        });
+        let checkpoint = checkpoints[position / INDEX_STRIDE];
+        let mut offset = position - checkpoint.unit;
+        for (byte, scalar) in text[checkpoint.byte..].char_indices() {
+            if offset == 0 {
+                return Some((checkpoint.byte + byte, false));
+            }
+            let width = scalar.len_utf16();
+            if offset < width {
+                return Some((checkpoint.byte + byte, true));
+            }
+            offset -= width;
+        }
+        unreachable!("checkpoint and cached UTF-16 length must agree")
+    }
+}
+
+impl Text {
+    fn indexed_boundary(&self, text: &str, position: usize) -> Option<(usize, bool)> {
+        match self {
+            Self::Flat(_) => None,
+            Self::Concat(node) => node.index.boundary(text, position, || node.release_parts()),
+        }
+    }
+
+    fn utf16_boundary(&self, text: &str, length: usize, position: usize) -> (usize, bool) {
+        self.indexed_boundary(text, position)
+            .unwrap_or_else(|| utf16_boundary(text, length, position))
+    }
 }
 
 /// Locate a UTF-16 boundary in well-formed UTF-8. A true second component
@@ -175,7 +305,7 @@ impl JsString {
                 right
             };
         }
-        if matches!(&piece.utf8, Text::Flat(_)) {
+        if piece.utf8.is_leaf() {
             read(&piece, index)
         } else {
             // Join the root, not just a deep descendant: later sequential
@@ -198,7 +328,7 @@ impl JsString {
                 if piece.is_ascii_text() {
                     return text.as_bytes().get(index).map(|byte| u16::from(*byte));
                 }
-                let (byte, second) = utf16_boundary(text, *utf16_len, index);
+                let (byte, second) = piece.utf8.utf16_boundary(text, *utf16_len, index);
                 let scalar = text[byte..].chars().next()?;
                 let mut units = [0; 2];
                 scalar
@@ -236,7 +366,7 @@ impl JsString {
                 if piece.is_ascii_text() {
                     return text.as_bytes().get(index).map(|byte| u32::from(*byte));
                 }
-                let (byte, second) = utf16_boundary(text, *utf16_len, index);
+                let (byte, second) = piece.utf8.utf16_boundary(text, *utf16_len, index);
                 let scalar = u32::from(text[byte..].chars().next()?);
                 Some(if second {
                     0xDC00 + ((scalar - 0x10000) & 0x3FF)
@@ -339,18 +469,23 @@ impl JsString {
             },
             Shape::WellFormed { utf16_len } => {
                 let text = self.utf8.as_str();
-                let (byte, second) = utf16_boundary(text, *utf16_len, start);
+                let (byte, second) = self.utf8.utf16_boundary(text, *utf16_len, start);
                 let rest = &text[byte..];
                 let count = end - start;
                 // `rest` begins at the scalar, including its high half when
                 // `start` selected the low half. Keep both coordinates in
                 // that same frame so short slices never rescan the prefix.
                 let skipped = usize::from(second);
-                let (stop, split_end) =
-                    utf16_boundary(rest, *utf16_len - start + skipped, count + skipped);
+                let (stop, split_end) = self
+                    .utf8
+                    .indexed_boundary(text, end)
+                    .map(|(stop, split)| (stop - byte, split))
+                    .unwrap_or_else(|| {
+                        utf16_boundary(rest, *utf16_len - start + skipped, count + skipped)
+                    });
                 if !second && !split_end {
                     return Self {
-                        utf8: Text::Flat(Arc::from(&rest[..stop])),
+                        utf8: Text::well_formed(Arc::from(&rest[..stop]), count),
                         shape: Shape::WellFormed { utf16_len: count },
                     };
                 }
@@ -393,6 +528,51 @@ impl JsString {
 mod tests {
     use super::*;
     use crate::js_string::CONCAT_COPY_MAX_BYTES;
+
+    #[test]
+    fn cold_edge_reads_do_not_build_a_whole_string_index() {
+        let text = "aé中😀".repeat(4096);
+        let units: Vec<u16> = text.encode_utf16().collect();
+        let value = JsString::from(text);
+        let Text::Concat(node) = &value.utf8 else {
+            panic!("mixed fixture requires an indexed flat leaf");
+        };
+        assert_eq!(node.tree.nodes, 0);
+        for position in [
+            0,
+            1,
+            63,
+            64,
+            units.len() - 64,
+            units.len() - 2,
+            units.len() - 1,
+        ] {
+            assert_eq!(value.code_unit_at(position), Some(units[position]));
+            assert_eq!(
+                value.code_point_at(position),
+                reference_point(&units, position)
+            );
+            assert!(node.index.checkpoints.get().is_none());
+        }
+        let position = units.len() / 2;
+        assert_eq!(value.code_unit_at(position), Some(units[position]));
+        assert!(node.index.checkpoints.get().is_some());
+    }
+
+    #[test]
+    fn copying_sized_mixed_leaves_do_not_allocate_index_carriers() {
+        let repeats = CONCAT_COPY_MAX_BYTES / 3;
+        let small = JsString::from("aé".repeat(repeats));
+        assert!(small.utf16_len() >= INDEX_MIN_UNITS);
+        assert!(matches!(&small.utf8, Text::Flat(_)));
+        assert_eq!(small.retained_bytes(16), small.len() as u64 + 16);
+        let large = JsString::from("aé".repeat(repeats + 1));
+        let Text::Concat(node) = &large.utf8 else {
+            panic!("larger mixed leaf should reserve an index");
+        };
+        assert_eq!(node.tree.nodes, 0);
+        assert_eq!(large.code_unit_at(513), Some(0xe9));
+    }
 
     fn assert_unjoined(string: &JsString) {
         let Text::Concat(node) = &string.utf8 else {

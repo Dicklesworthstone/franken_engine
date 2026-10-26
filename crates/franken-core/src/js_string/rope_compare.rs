@@ -388,6 +388,21 @@ mod tests {
         let mut pending = vec![value.clone()];
         while let Some(value) = pending.pop() {
             if let Text::Concat(node) = value.utf8 {
+                if node.tree.nodes == 0 {
+                    assert!(
+                        node.joined.get().is_some(),
+                        "indexed flat leaf has no backing"
+                    );
+                    assert!(
+                        node.parts().is_none(),
+                        "indexed flat leaf retained children"
+                    );
+                    assert_eq!(
+                        node.tree.pieces, 1,
+                        "indexed flat leaf has invalid piece count"
+                    );
+                    continue;
+                }
                 assert!(
                     node.joined.get().is_none(),
                     "serialization joined a subtree"
@@ -783,7 +798,7 @@ mod tests {
                 );
             }
             for (value, _) in &values {
-                if matches!(&value.utf8, Text::Concat(_)) {
+                if value.concat_parts().nodes != 0 {
                     assert_unjoined(value);
                 }
             }

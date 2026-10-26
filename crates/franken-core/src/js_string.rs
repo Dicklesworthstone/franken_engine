@@ -153,8 +153,13 @@ struct Concat {
     byte_len: usize,
     /// The nodes and pieces under this node, fixed when it is built.
     tree: ConcatParts,
-    /// The joined bytes, made on first read.
+    /// The joined bytes, made on first read. An indexed flat leaf starts
+    /// published and has no parts; its tree counts one piece and no joins.
     joined: OnceLock<Arc<str>>,
+    /// Bounded UTF-16 lookup, reserved before the string enters the heap.
+    index: access::SparseIndex,
+    /// Index storage retained by children, or this node after joining.
+    index_bytes: usize,
 }
 
 /// The concatenation nodes and flat pieces a string built by
@@ -187,6 +192,45 @@ impl ConcatParts {
 }
 
 impl Text {
+    /// Reuse the thin Arc carrier for indexed flat leaves without widening
+    /// JsString or Value. Ordinary short, ASCII and three-byte BMP text keeps
+    /// its original flat representation.
+    fn well_formed(text: Arc<str>, utf16_len: usize) -> Self {
+        let index = access::SparseIndex::for_text(&text, utf16_len);
+        if !index.enabled() {
+            return Self::Flat(text);
+        }
+        let byte_len = text.len();
+        let index_bytes = CONCAT_NODE_BYTES.saturating_add(index.reserved_bytes());
+        Self::Concat(Arc::new(Concat {
+            parts: Mutex::new(None),
+            byte_len,
+            tree: ConcatParts {
+                nodes: 0,
+                pieces: 1,
+                piece_bytes: byte_len,
+            },
+            joined: OnceLock::from(text),
+            index,
+            index_bytes,
+        }))
+    }
+
+    fn index_bytes(&self) -> usize {
+        match self {
+            Self::Flat(_) => 0,
+            Self::Concat(node) => node.index_bytes,
+        }
+    }
+
+    /// A single buffer, including one carrying a sparse UTF-16 index.
+    fn is_leaf(&self) -> bool {
+        match self {
+            Self::Flat(_) => true,
+            Self::Concat(node) => node.tree.nodes == 0,
+        }
+    }
+
     /// The UTF-8 length, without joining.
     fn len(&self) -> usize {
         match self {
@@ -209,10 +253,11 @@ impl Text {
 
     /// The same bytes, as one buffer when this concatenation was already
     /// joined, so a new node does not keep the old one alive.
-    fn settled(&self) -> Self {
+    fn settled(&self, utf16_len: usize) -> Self {
         match self {
+            Self::Concat(node) if node.tree.nodes == 0 => self.clone(),
             Self::Concat(node) => match node.joined.get() {
-                Some(joined) => Self::Flat(Arc::clone(joined)),
+                Some(joined) => Self::well_formed(Arc::clone(joined), utf16_len),
                 None => self.clone(),
             },
             Self::Flat(_) => self.clone(),
@@ -257,11 +302,24 @@ impl fmt::Debug for Text {
 
 impl Concat {
     fn new(left: JsString, right: JsString) -> Self {
+        let byte_len = left.utf8.len() + right.utf8.len();
+        let index =
+            access::SparseIndex::for_lengths(byte_len, left.utf16_len() + right.utf16_len());
+        // Joining releases owned children before this node builds its index.
+        // A maximum reserves both retained states without charging a future
+        // table at every ancestor of a skewed append chain.
+        let index_bytes = left
+            .utf8
+            .index_bytes()
+            .saturating_add(right.utf8.index_bytes())
+            .max(index.reserved_bytes());
         Self {
-            byte_len: left.utf8.len() + right.utf8.len(),
+            byte_len,
             tree: ConcatParts::joining(&left, &right),
             parts: Mutex::new(Some([left, right])),
             joined: OnceLock::new(),
+            index,
+            index_bytes,
         }
     }
 
@@ -280,13 +338,20 @@ impl Concat {
         let joined = self.joined.get_or_init(|| self.join());
         // Released only after `joined` is set: a reader that finds no parts
         // finds the joined bytes. Dropped outside the lock.
+        self.release_parts();
+        joined
+    }
+
+    /// Another reader can see the published buffer before its publisher
+    /// releases the children. Index initialization also calls this method,
+    /// so those owned children cannot overlap its retained checkpoint table.
+    fn release_parts(&self) {
         let parts = self
             .parts
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take();
         drop(parts);
-        joined
     }
 
     /// Continue a join after its cache check missed. Another reader may
@@ -402,7 +467,7 @@ impl JsString {
             })
         };
         Self {
-            utf8: Text::Flat(utf8),
+            utf8: Text::well_formed(utf8, utf16_len),
             shape: Shape::WellFormed { utf16_len },
         }
     }
@@ -414,7 +479,7 @@ impl JsString {
     pub fn from_code_units(units: &[u16]) -> Self {
         match String::from_utf16(units) {
             Ok(text) => Self {
-                utf8: Text::Flat(Arc::from(text)),
+                utf8: Text::well_formed(Arc::from(text), units.len()),
                 shape: Shape::WellFormed {
                     utf16_len: units.len(),
                 },
@@ -538,6 +603,7 @@ impl JsString {
     pub fn concat_parts(&self) -> ConcatParts {
         match &self.utf8 {
             Text::Flat(_) => ConcatParts::default(),
+            Text::Concat(node) if node.tree.nodes == 0 => ConcatParts::default(),
             Text::Concat(node) => node.tree,
         }
     }
@@ -549,7 +615,9 @@ impl JsString {
     /// longer than its piece bytes, so nodes plus pieces bound it in both
     /// states. Fixed when the string is built, so an estimate does not
     /// change when the string is later joined (bd-9vouw.468). The copy made
-    /// while joining is transient, like other temporaries.
+    /// while joining is transient, like other temporaries. Sparse UTF-16
+    /// checkpoints are reserved up front, including on an unjoined rope;
+    /// first indexed access therefore cannot increase retained memory.
     pub fn retained_bytes(&self, buffer_base_bytes: u64) -> u64 {
         let to_u64 = |count: usize| u64::try_from(count).unwrap_or(u64::MAX);
         match &self.utf8 {
@@ -557,7 +625,8 @@ impl JsString {
             Text::Concat(node) => to_u64(node.tree.nodes)
                 .saturating_mul(to_u64(CONCAT_NODE_BYTES))
                 .saturating_add(to_u64(node.tree.pieces).saturating_mul(buffer_base_bytes))
-                .saturating_add(to_u64(node.tree.piece_bytes)),
+                .saturating_add(to_u64(node.tree.piece_bytes))
+                .saturating_add(to_u64(node.index_bytes)),
         }
     }
 
@@ -596,9 +665,9 @@ impl JsString {
             // Appending a short piece to a node whose last piece is short:
             // copy the two into a new last piece instead of adding a node.
             if let Text::Concat(node) = &head.utf8
-                && let Text::Flat(_) = &tail.utf8
+                && tail.utf8.is_leaf()
                 && let Some([first, last]) = node.parts()
-                && let Text::Flat(_) = &last.utf8
+                && last.utf8.is_leaf()
                 && last.utf8.len() + tail.utf8.len() <= CONCAT_COPY_MAX_BYTES
             {
                 let last = Self::copied(&last, &tail, last.joined_shape(&tail));
@@ -606,9 +675,9 @@ impl JsString {
             }
             // The mirror case for prepending.
             if let Text::Concat(node) = &tail.utf8
-                && let Text::Flat(_) = &head.utf8
+                && head.utf8.is_leaf()
                 && let Some([first, last]) = node.parts()
-                && let Text::Flat(_) = &first.utf8
+                && first.utf8.is_leaf()
                 && head.utf8.len() + first.utf8.len() <= CONCAT_COPY_MAX_BYTES
             {
                 let first = Self::copied(&head, &first, head.joined_shape(&first));
@@ -626,7 +695,7 @@ impl JsString {
     /// when it was already joined.
     fn settled(&self) -> JsString {
         Self {
-            utf8: self.utf8.settled(),
+            utf8: self.utf8.settled(self.utf16_len()),
             shape: self.shape.clone(),
         }
     }
@@ -643,8 +712,9 @@ impl JsString {
         let mut text = String::with_capacity(left.utf8.len() + right.utf8.len());
         text.push_str(&left.utf8);
         text.push_str(&right.utf8);
+        let utf16_len = left.utf16_len() + right.utf16_len();
         Self {
-            utf8: Text::Flat(Arc::from(text)),
+            utf8: Text::well_formed(Arc::from(text), utf16_len),
             shape,
         }
     }
@@ -2151,7 +2221,10 @@ mod tests {
         let retained = built.retained_bytes(24);
         assert_eq!(
             retained,
-            (parts.nodes * CONCAT_NODE_BYTES + parts.pieces * 24 + parts.piece_bytes) as u64
+            (parts.nodes * CONCAT_NODE_BYTES
+                + parts.pieces * 24
+                + parts.piece_bytes
+                + built.utf8.index_bytes()) as u64
         );
         // Nodes plus pieces bound the joined buffer the string keeps later.
         assert!(retained >= JsString::from(expected.as_str()).retained_bytes(24));

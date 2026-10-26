@@ -35,8 +35,8 @@ fn measure(name: &str, units: usize, iterations: usize, mut operation: impl FnMu
 #[test]
 #[ignore = "release-mode comparative microbenchmark; no timing assertions in CI"]
 fn string_hotpath_matrix() {
-    // Record constructor overhead too: eager metadata trades a construction
-    // scan and one usize per JsString for constant-time repeated reads.
+    // Include construction and first-read costs as countermetrics for the
+    // metadata and indexing used by repeated reads.
     println!(
         "{}",
         serde_json::json!({"js_string_size_bytes": std::mem::size_of::<JsString>()})
@@ -46,6 +46,11 @@ fn string_hotpath_matrix() {
         let unicode_source = "😀".repeat(size / 2);
         let text = JsString::from(ascii.as_str());
         let unicode = JsString::from(unicode_source.as_str());
+        // Mixed widths exercise UTF-16 boundaries that cannot use ASCII or
+        // uniform three-byte BMP indexing. Include both halves of astral pairs.
+        let mixed_source = "aé中😀".repeat(size.div_ceil(5));
+        let mixed = JsString::from(mixed_source.as_str());
+        let mixed_units = mixed.utf16_len();
         let suffix = JsString::from("needle");
         let searchable = JsString::from(format!("{ascii}needle"));
         let unicode_suffix = JsString::from("é中😀");
@@ -59,6 +64,13 @@ fn string_hotpath_matrix() {
         });
         measure("construct_unicode", size, 1024, || {
             black_box(JsString::from(black_box(unicode_source.as_str()))).len()
+        });
+        measure("construct_mixed", mixed_units, 128, || {
+            black_box(JsString::from(black_box(mixed_source.as_str()))).len()
+        });
+        measure("first_index_mixed", mixed_units, 128, || {
+            let fresh = JsString::from(black_box(mixed_source.as_str()));
+            usize::from(fresh.code_unit_at(black_box(mixed_units / 2)).unwrap())
         });
         measure("clone", size, 4096, || {
             black_box(black_box(&text).clone()).len()
@@ -88,6 +100,16 @@ fn string_hotpath_matrix() {
                     .nth(black_box(index))
                     .unwrap(),
             )
+        });
+        measure("random_index_mixed", mixed_units, 4096, || {
+            index = (index + 127) % mixed_units;
+            usize::from(black_box(&mixed).code_unit_at(black_box(index)).unwrap())
+        });
+        measure("sequential_indices_mixed", mixed_units, 8, || {
+            let text = black_box(&mixed);
+            (0..mixed_units).fold(0_usize, |sum, index| {
+                sum.wrapping_add(usize::from(text.code_unit_at(black_box(index)).unwrap()))
+            })
         });
         measure("sequential_units_ascii", size, 128, || {
             black_box(&text)

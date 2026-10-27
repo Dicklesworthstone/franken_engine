@@ -176,9 +176,12 @@ use crate::iterator_protocol::{
 use crate::js_string::JsString;
 use crate::lowering_pipeline::{AmbientAuthorityGrant, LoweringContext, lower_ir0_to_ir3};
 use crate::module_compatibility_matrix::CompatibilityMode;
+#[cfg(test)]
+use crate::module_resolver::ResolutionOutcome;
 use crate::module_resolver::{
     ExecutionModuleResolver, ImportStyle, ModuleRequest, ModuleSyntax, NativeBuiltinModule,
-    ResolutionContext, ResolutionErrorCode, ResolutionOutcome, ResolvedModule,
+    ResolutionContext, ResolutionErrorCode, ResolvedModule, SharedResolutionOutcome,
+    SharedResolvedModule,
 };
 use crate::object_model::{SymbolId, WellKnownSymbol};
 use crate::parser::{
@@ -39560,7 +39563,7 @@ impl InterpreterCore {
         &self,
         specifier: &str,
         style: ImportStyle,
-    ) -> Result<ResolutionOutcome, InterpreterError> {
+    ) -> Result<SharedResolutionOutcome, InterpreterError> {
         let installed =
             self.module_resolver
                 .as_ref()
@@ -39585,7 +39588,7 @@ impl InterpreterCore {
             .with_compatibility_mode(CompatibilityMode::NodeCompat);
         let resolved = installed
             .resolver
-            .resolve(&request, &installed.context)
+            .resolve_shared(&request, &installed.context)
             .map_err(|error| {
                 // A resolver can bind an observed absence or package-map
                 // refusal into its closed world. Optional dependencies may
@@ -39616,6 +39619,9 @@ impl InterpreterCore {
             });
         }
         self.check_temporary_memory_budget(Self::estimate_string_bytes(&record.source))?;
+        // Only the sealed engine-owned record memoizes this hash. The
+        // provider's claim is checked after the same resource checks on every
+        // request, even when the ordinary evaluation cache already has it.
         if record.id.is_empty()
             || resolved.module.request_specifier != specifier
             || resolved.module.canonical_specifier.is_empty()
@@ -40118,7 +40124,7 @@ impl InterpreterCore {
         resolved: &str,
         load_kind: ModuleLoadKind,
         import_bound: Option<&Label>,
-        delivered: Option<ResolvedModule>,
+        delivered: Option<SharedResolvedModule>,
     ) -> Result<Value, InterpreterError> {
         if self.module_resolver.is_some() && delivered.is_none() {
             return Err(InterpreterError::ModuleLoweringFailed {
@@ -40219,7 +40225,9 @@ impl InterpreterCore {
             },
         };
         let source = match delivered {
-            Some(delivered) => delivered.record.source,
+            // Cached evaluations returned above without copying the source.
+            // The parser requires ownership only for this first compilation.
+            Some(delivered) => delivered.record.source.clone(),
             None => match self.read_module_source(resolved) {
                 Ok(source) => source,
                 Err(error) => {
@@ -40925,7 +40933,7 @@ impl InterpreterCore {
     fn load_native_builtin_resolved(
         &mut self,
         module: &Ir3Module,
-        source: &ResolutionOutcome,
+        source: &SharedResolutionOutcome,
         native: NativeBuiltinModule,
         import_bound: Option<&Label>,
     ) -> Result<Value, InterpreterError> {
@@ -41641,7 +41649,7 @@ impl InterpreterCore {
     fn load_native_builtin_namespace(
         &mut self,
         module: &Ir3Module,
-        source: &ResolutionOutcome,
+        source: &SharedResolutionOutcome,
         native: NativeBuiltinModule,
         import_bound: Option<&Label>,
     ) -> Result<Value, InterpreterError> {
@@ -41955,7 +41963,7 @@ impl InterpreterCore {
             PATH_RUNTIME_MODULE_ID,
             ModuleLoadKind::Require,
             None,
-            Some(source),
+            Some(source.into()),
         )?;
         let module_object = self
             .module_state
@@ -42108,7 +42116,13 @@ impl InterpreterCore {
                     record,
                     probe_sequence: Vec::new(),
                 };
-                self.load_module_resolved(module, id, ModuleLoadKind::Require, None, Some(source))?;
+                self.load_module_resolved(
+                    module,
+                    id,
+                    ModuleLoadKind::Require,
+                    None,
+                    Some(source.into()),
+                )?;
                 let module_object = self
                     .module_state
                     .modules
@@ -149239,6 +149253,151 @@ mod function_prototype_call_apply_tests_current {
         InterpreterCore::new(test_config(), "function-prototype-call-apply-test")
     }
 
+    #[test]
+    fn shared_delivery_checks_source_budget_before_rejecting_a_legacy_forged_digest() {
+        use crate::module_resolver::{
+            AllowAllPolicy, ModulePolicyHook, ModuleProvenance, ModuleRecord, ModuleResolver,
+            ModuleSourceKind, ResolutionEvent, ResolutionResult,
+        };
+
+        struct OwnedOnlyResolver(ModuleRecord);
+
+        impl ModuleResolver for OwnedOnlyResolver {
+            fn resolve(
+                &self,
+                request: &ModuleRequest,
+                context: &ResolutionContext,
+                policy: &dyn ModulePolicyHook,
+            ) -> ResolutionResult<ResolutionOutcome> {
+                policy.authorize(request, &self.0, context)?;
+                Ok(ResolutionOutcome {
+                    module: ResolvedModule {
+                        request_specifier: request.specifier.clone(),
+                        canonical_specifier: self.0.id.clone(),
+                        record: self.0.clone(),
+                        content_hash: ContentHash::from_bytes([0; 32]),
+                        probe_sequence: Vec::new(),
+                    },
+                    event: ResolutionEvent {
+                        trace_id: context.trace_id.clone(),
+                        decision_id: context.decision_id.clone(),
+                        policy_id: context.policy_id.clone(),
+                        component: "module_resolver".into(),
+                        event: "module_resolution".into(),
+                        outcome: "allow".into(),
+                        error_code: String::new(),
+                    },
+                })
+            }
+
+            fn resolve_chain(
+                &self,
+                request: &ModuleRequest,
+                context: &ResolutionContext,
+                policy: &dyn ModulePolicyHook,
+            ) -> ResolutionResult<Vec<ResolutionOutcome>> {
+                Ok(vec![self.resolve(request, context, policy)?])
+            }
+        }
+
+        let mut core = test_interpreter();
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::ModuleLoad);
+        core.config.module_parser_options.budget.max_source_bytes = 63;
+        core.module_resolver = Some(InstalledModuleResolver {
+            resolver: ExecutionModuleResolver::new(
+                "captured:entry",
+                Arc::new(OwnedOnlyResolver(ModuleRecord {
+                    id: "captured:dependency".into(),
+                    syntax: ModuleSyntax::CommonJs,
+                    source: " ".repeat(64),
+                    dependencies: Vec::new(),
+                    required_capabilities: std::collections::BTreeSet::from([
+                        RuntimeCapability::ModuleLoad,
+                    ]),
+                    provenance: ModuleProvenance {
+                        kind: ModuleSourceKind::Workspace,
+                        origin: "captured-test".into(),
+                    },
+                })),
+                Arc::new(AllowAllPolicy),
+            ),
+            entry_hash: ContentHash::compute(b"entry"),
+            context: ResolutionContext::new("trace", "decision", "policy"),
+        });
+        assert!(matches!(
+            core.resolve_installed_module("./dependency.cjs", ImportStyle::Require),
+            Err(InterpreterError::ModuleParseFailed { error, .. })
+                if error.contains("source-byte budget")
+        ));
+        core.config.module_parser_options.budget.max_source_bytes = 64;
+        assert!(matches!(
+            core.resolve_installed_module("./dependency.cjs", ImportStyle::Require),
+            Err(InterpreterError::ModuleLoweringFailed { error, .. })
+                if error.contains("canonical content hash is inconsistent")
+        ));
+    }
+
+    #[test]
+    fn shared_delivery_keeps_content_identity_when_cached_record_wrappers_change() {
+        use crate::module_resolver::{
+            ModuleProvenance, ModuleRecord, ModuleSourceKind, SharedModuleRecord,
+        };
+
+        let original = SharedModuleRecord::new(ModuleRecord {
+            id: "captured:dependency".into(),
+            syntax: ModuleSyntax::CommonJs,
+            source: "module.exports = 42;".into(),
+            dependencies: Vec::new(),
+            required_capabilities: std::collections::BTreeSet::from([
+                RuntimeCapability::ModuleLoad,
+            ]),
+            provenance: ModuleProvenance {
+                kind: ModuleSourceKind::Workspace,
+                origin: "captured-test".into(),
+            },
+        });
+        let caller = test_module_with_functions(vec![Ir3Instruction::Halt], Vec::new());
+        let mut core = test_interpreter();
+        let namespace = core
+            .ensure_module_record(&caller, &original.id)
+            .expect("retained module namespace");
+        let cached = core.module_state.modules.get_mut(&original.id).unwrap();
+        cached.resolved_source_hash = Some(original.canonical_hash());
+        cached.status = ModuleRuntimeStatus::Evaluated;
+        for changed in [false, true] {
+            let mut record = original.record().clone();
+            if changed {
+                record.source = "module.exports = 99;".into();
+            }
+            let record = Arc::new(SharedModuleRecord::new(record));
+            let delivered = SharedResolvedModule {
+                request_specifier: "./dependency.cjs".into(),
+                canonical_specifier: record.id.clone(),
+                content_hash: record.canonical_hash(),
+                record,
+                probe_sequence: Vec::new(),
+            };
+            let result = core.load_module_resolved(
+                &caller,
+                &original.id,
+                ModuleLoadKind::Require,
+                None,
+                Some(delivered),
+            );
+            if changed {
+                assert!(matches!(
+                    result,
+                    Err(InterpreterError::ModuleLoweringFailed { error, .. })
+                        if error.contains("changed after its first authorized load")
+                ));
+            } else {
+                assert_eq!(result.unwrap(), Value::Object(namespace));
+            }
+        }
+    }
+
     fn retain_generated_test_artifact(
         core: &mut InterpreterCore,
         owner: &Ir3Module,
@@ -153331,6 +153490,7 @@ mod function_prototype_call_apply_tests_current {
                 error_code: String::new(),
             },
         };
+        let source: SharedResolutionOutcome = source.into();
         let Value::Object(namespace) = core
             .load_native_builtin_namespace(
                 &caller,
@@ -153418,6 +153578,7 @@ mod function_prototype_call_apply_tests_current {
                     error_code: String::new(),
                 },
             };
+            let source: SharedResolutionOutcome = source.into();
             assert!(matches!(
                 core.load_native_builtin_namespace(
                     &caller,
@@ -153511,6 +153672,7 @@ mod function_prototype_call_apply_tests_current {
                     error_code: String::new(),
                 },
             };
+            let source: SharedResolutionOutcome = source.into();
             if cached {
                 core.load_native_builtin_namespace(
                     &caller,
@@ -154237,6 +154399,7 @@ mod function_prototype_call_apply_tests_current {
                 error_code: String::new(),
             },
         };
+        let source: SharedResolutionOutcome = source.into();
         let Value::Object(namespace) = core
             .load_native_builtin_namespace(&module, &source, NativeBuiltinModule::Path, None)
             .expect("load the real native Path namespace")
@@ -154388,6 +154551,7 @@ mod function_prototype_call_apply_tests_current {
                         error_code: String::new(),
                     },
                 };
+                let source: SharedResolutionOutcome = source.into();
                 let Value::Object(namespace) = core
                     .load_native_builtin_namespace(
                         &module,
@@ -154769,6 +154933,7 @@ mod function_prototype_call_apply_tests_current {
                         error_code: String::new(),
                     },
                 };
+                let source: SharedResolutionOutcome = source.into();
                 let namespace = if cached || poison == "namespace" {
                     let value = core
                         .load_native_builtin_namespace(
@@ -154893,6 +155058,7 @@ mod function_prototype_call_apply_tests_current {
                     error_code: String::new(),
                 },
             };
+            let source: SharedResolutionOutcome = source.into();
             core.sync_estimated_memory_bytes().expect("fixture accounting");
 
             if throws {

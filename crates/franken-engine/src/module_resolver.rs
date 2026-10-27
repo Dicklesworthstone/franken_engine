@@ -333,6 +333,8 @@ pub enum NativeBuiltinModule {    Buffer,
     TimersPromises,
     Stream,
     StreamPromises,
+    StreamConsumers,
+    StreamWeb,
     Module,
 }
 
@@ -362,6 +364,8 @@ impl NativeBuiltinModule {
             "timers/promises" | "node:timers/promises" => Some(Self::TimersPromises),
             "stream" | "node:stream" => Some(Self::Stream),
             "stream/promises" | "node:stream/promises" => Some(Self::StreamPromises),
+            "stream/consumers" | "node:stream/consumers" => Some(Self::StreamConsumers),
+            "stream/web" | "node:stream/web" => Some(Self::StreamWeb),
             _ => None,
         }
     }
@@ -391,6 +395,8 @@ impl NativeBuiltinModule {
             Self::TimersPromises => "node:timers/promises",
             Self::Stream => "node:stream",
             Self::StreamPromises => "node:stream/promises",
+            Self::StreamConsumers => "node:stream/consumers",
+            Self::StreamWeb => "node:stream/web",
         }
     }
 
@@ -2713,6 +2719,8 @@ mod tests {
             "timers/promises",
             "stream",
             "stream/promises",
+            "stream/consumers",
+            "stream/web",
         ] {
             let builtin = NativeBuiltinModule::from_specifier(name).unwrap();
             assert_eq!(builtin.canonical_specifier(), format!("node:{name}"));
@@ -2762,6 +2770,7 @@ mod tests {
         for name in [
             "fs/unknown",
             "path/unknown",
+            "stream/unknown",
             "node:unknown",
             "node:node:buffer",
             "./buffer",
@@ -2782,6 +2791,8 @@ mod tests {
             NativeBuiltinModule::Zlib,
             NativeBuiltinModule::Fs,
             NativeBuiltinModule::FsPromises,
+            NativeBuiltinModule::StreamConsumers,
+            NativeBuiltinModule::StreamWeb,
         ] {
             let original = builtin.record("captured:graph:native");
             let mut forged = original.clone();

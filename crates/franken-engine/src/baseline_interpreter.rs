@@ -40996,7 +40996,9 @@ impl InterpreterCore {
             | NativeBuiltinModule::StringDecoder
             | NativeBuiltinModule::TimersPromises
             | NativeBuiltinModule::Stream
-            | NativeBuiltinModule::StreamPromises => {
+            | NativeBuiltinModule::StreamPromises
+            | NativeBuiltinModule::StreamConsumers
+            | NativeBuiltinModule::StreamWeb => {
                 self.source_builtin_module(module, native, import_bound)
             }
         }
@@ -41136,6 +41138,26 @@ impl InterpreterCore {
                 "_uint8ArrayToBuffer",
             ],
             NativeBuiltinModule::StreamPromises => vec!["pipeline", "finished"],
+            NativeBuiltinModule::StreamConsumers => {
+                vec!["arrayBuffer", "blob", "buffer", "text", "json"]
+            }
+            NativeBuiltinModule::StreamWeb => vec![
+                "ReadableStream",
+                "ReadableStreamDefaultReader",
+                "ReadableStreamDefaultController",
+                "ReadableByteStreamController",
+                "ReadableStreamBYOBReader",
+                "ReadableStreamBYOBRequest",
+                "WritableStream",
+                "WritableStreamDefaultWriter",
+                "WritableStreamDefaultController",
+                "TransformStream",
+                "TransformStreamDefaultController",
+                "CountQueuingStrategy",
+                "ByteLengthQueuingStrategy",
+                "TextEncoderStream",
+                "TextDecoderStream",
+            ],
         }
     }
 
@@ -41386,9 +41408,10 @@ impl InterpreterCore {
             "\0franken-engine/native-timers/promises" => 2,
             "\0franken-engine/native-stream" => 3,
             "\0franken-engine/native-buffer" => 4,
+            "\0franken-engine/native-stream/web" => 5,
             _ => return false,
         };
-        static FACTORY_HASHES: OnceLock<[ContentHash; 5]> = OnceLock::new();
+        static FACTORY_HASHES: OnceLock<[ContentHash; 6]> = OnceLock::new();
         let hashes = FACTORY_HASHES.get_or_init(|| {
             [
                 NativeBuiltinModule::Util
@@ -41405,6 +41428,9 @@ impl InterpreterCore {
                     .canonical_hash(),
                 NativeBuiltinModule::Buffer
                     .record("\0franken-engine/native-buffer")
+                    .canonical_hash(),
+                NativeBuiltinModule::StreamWeb
+                    .record("\0franken-engine/native-stream/web")
                     .canonical_hash(),
             ]
         });
@@ -41430,6 +41456,23 @@ impl InterpreterCore {
         };
         if code.is_generator || code.rest_param_index.is_some() {
             return false;
+        }
+        if provider == 5 {
+            // Web Stream accessors are deferred receiver operations over the
+            // factory's private WeakMaps. Reading an export never invokes one.
+            // Authenticate the entire retained getter against the immutable
+            // embedded sources; a same-named guest function or a callback
+            // created by a stream algorithm cannot acquire this admission.
+            let Some(source) = program.function_sources.get(&closure.function_index) else {
+                return false;
+            };
+            let source = source.as_str().trim();
+            return !setter
+                && code.arity == 0
+                && source.starts_with("get ")
+                && (include_str!("lowering_pipeline/web_stream_module.js").contains(source)
+                    || include_str!("lowering_pipeline/web_text_stream_module.js")
+                        .contains(source));
         }
         if provider == 4 {
             // File's two metadata getters are deferred until an actual File
@@ -41649,6 +41692,8 @@ impl InterpreterCore {
             NativeBuiltinModule::TimersPromises => "\0franken-engine/native-timers/promises/esm",
             NativeBuiltinModule::Stream => "\0franken-engine/native-stream/esm",
             NativeBuiltinModule::StreamPromises => "\0franken-engine/native-stream/promises/esm",
+            NativeBuiltinModule::StreamConsumers => "\0franken-engine/native-stream/consumers/esm",
+            NativeBuiltinModule::StreamWeb => "\0franken-engine/native-stream/web/esm",
         };
         let object = match &value {
             Value::Object(object) => *object,
@@ -42035,6 +42080,16 @@ impl InterpreterCore {
                 NativeBuiltinModule::Stream,
                 "\0franken-engine/native-stream",
                 Some("promises"),
+            ),
+            NativeBuiltinModule::StreamConsumers => (
+                NativeBuiltinModule::StreamConsumers,
+                "\0franken-engine/native-stream/consumers",
+                None,
+            ),
+            NativeBuiltinModule::StreamWeb => (
+                NativeBuiltinModule::StreamWeb,
+                "\0franken-engine/native-stream/web",
+                None,
             ),
             _ => {
                 return Err(InterpreterError::InternalError {
@@ -68870,6 +68925,8 @@ impl InterpreterCore {
             "\0franken-engine/native-timers/promises/esm",
             "\0franken-engine/native-stream/esm",
             "\0franken-engine/native-stream/promises/esm",
+            "\0franken-engine/native-stream/consumers/esm",
+            "\0franken-engine/native-stream/web/esm",
         ]
         .into_iter()
         .any(|specifier| {
@@ -98155,7 +98212,8 @@ impl InterpreterCore {
             // runtime observation labels; they are not pure fresh aggregates.
             "builtin:NativeEventsModule"
             | "builtin:NativeStringDecoderModule"
-            | "builtin:NativeStreamModule" => {
+            | "builtin:NativeStreamModule"
+            | "builtin:NativeWebStreamsModule" => {
                 if args.count != 0 {
                     return Err(InterpreterError::TypeError {
                         expected: "zero native module dependency arguments".to_string(),
@@ -98167,6 +98225,18 @@ impl InterpreterCore {
                 })?;
                 if cap == "builtin:NativeEventsModule" {
                     self.source_builtin_module(module, NativeBuiltinModule::Events, None)
+                } else if cap == "builtin:NativeWebStreamsModule" {
+                    let descriptor = NativeBuiltinModule::StreamWeb.record("native-web-dependency");
+                    if let Some(missing) = descriptor
+                        .required_capabilities
+                        .difference(&self.config.granted_capabilities)
+                        .next()
+                    {
+                        return Err(InterpreterError::CapabilityDenied {
+                            capability: missing.to_string(),
+                        });
+                    }
+                    self.source_builtin_module(module, NativeBuiltinModule::StreamWeb, None)
                 } else if cap == "builtin:NativeStreamModule" {
                     // The filesystem factory may load its canonical Stream
                     // dependency lazily. This private intrinsic preserves the

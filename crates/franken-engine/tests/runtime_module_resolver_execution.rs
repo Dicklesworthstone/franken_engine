@@ -114,6 +114,8 @@ impl OpaqueResolver {
             NativeBuiltinModule::TimersPromises,
             NativeBuiltinModule::Stream,
             NativeBuiltinModule::StreamPromises,
+            NativeBuiltinModule::StreamConsumers,
+            NativeBuiltinModule::StreamWeb,
         ] {
             let canonical = native.canonical_specifier();
             let names = [
@@ -3177,6 +3179,8 @@ fn delivered_native_descriptors_reject_forgery_and_cached_provider_substitution(
         "timers/promises",
         "stream",
         "stream/promises",
+        "stream/consumers",
+        "stream/web",
     ]
     .into_iter()
     .flat_map(|builtin| {
@@ -3768,6 +3772,322 @@ module.exports = {
 }
 
 #[test]
+fn delivered_stream_consumers_collect_cross_module_iterables_without_timer_authority() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![
+                (
+                    "entry.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        r#"
+const consumers = require('stream/consumers');
+const child = require('./consumer-child.cjs');
+console.log(consumers === require('node:stream/consumers'), child.consumers === consumers);
+(async function() {
+    console.log(await child.text([new Uint8Array([226]), new Uint8Array([130,172]), '!']));
+    console.log((await child.json(['{"value":', '42}'])).value);
+    const bytes = await child.arrayBuffer([new Uint8Array([1,2]), new Uint8Array([3])]);
+    console.log(Array.from(new Uint8Array(bytes)).join(','));
+    const buffer = await child.buffer(['A', new Uint8Array([66,67])]);
+    console.log(Buffer.isBuffer(buffer), buffer.toString());
+    const blob = await child.blob(['body']);
+    console.log(blob instanceof Blob, await blob.text());
+    const failure = new Error('producer failed');
+    async function* broken() { yield 'first'; throw failure; }
+    try { await child.text(broken()); } catch (error) { console.log(error === failure); }
+})();
+"#,
+                    )
+                    .with_dependency(ModuleDependency::new(
+                        "./consumer-child.cjs",
+                        ImportStyle::Require,
+                    )),
+                ),
+                (
+                    "consumer-child.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        r#"
+const consumers = require('node:stream/consumers');
+module.exports = {consumers, text: consumers.text, json: consumers.json,
+    arrayBuffer: consumers.arrayBuffer, buffer: consumers.buffer, blob: consumers.blob};
+"#,
+                    ),
+                ),
+            ])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(CapabilityPolicyHook::new(BTreeSet::from([
+                RuntimeCapability::ModuleLoad,
+                RuntimeCapability::Builtin,
+            ]))),
+        );
+        let mut granted = package();
+        granted
+            .capabilities
+            .retain(|capability| capability != "timer");
+        let result = orchestrator(lane, ModuleSyntax::CommonJs)
+            .execute_resolved_entry_with_resolver(&granted, &source, installed)
+            .expect("pure stream consumers retain foreign closures and need no timer grant");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true",
+                "€!",
+                "42",
+                "1,2,3",
+                "true ABC",
+                "true body",
+                "true"
+            ],
+            "lane={lane:?}"
+        );
+    }
+}
+
+#[test]
+fn delivered_web_streams_share_classes_with_buffer_and_node_stream_adapters() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for first in ["buffer", "stream", "stream/web"] {
+            let source_text = r#"
+require('__FIRST__');
+const web = require('stream/web');
+const binary = require('buffer');
+const stream = require('stream');
+const child = require('./web-child.cjs');
+console.log(web === require('node:stream/web'), child.web === web,
+    child.ReadableStream === web.ReadableStream);
+(async function() {
+    const fromBlob = new binary.Blob(['blob']).stream();
+    console.log(fromBlob instanceof web.ReadableStream,
+        fromBlob.getReader() instanceof web.ReadableStreamDefaultReader);
+    const bridged = stream.Readable.toWeb(stream.Readable.from(['node']));
+    console.log(bridged instanceof web.ReadableStream);
+    const back = stream.Readable.fromWeb(new child.ReadableStream({
+        start(controller) { controller.enqueue(new Uint8Array([119,101,98])); controller.close(); }
+    }));
+    let value = '';
+    for await (const chunk of back) value += chunk.toString();
+    console.log(value);
+    const byteStream = new child.ReadableStream({type: 'bytes', start(controller) {
+        controller.enqueue(new Uint8Array([1,2,3])); controller.close();
+    }});
+    const reader = byteStream.getReader({mode: 'byob'});
+    console.log(reader instanceof web.ReadableStreamBYOBReader);
+    const result = await reader.read(new Uint8Array(4));
+    console.log(Array.from(result.value).join(','), result.done);
+    reader.releaseLock();
+})();
+"#
+            .replace("__FIRST__", first);
+            let resolver = Arc::new(OpaqueResolver::new(vec![
+                ("entry.cjs", definition(ModuleSyntax::CommonJs, &source_text)
+                    .with_dependency(ModuleDependency::new("./web-child.cjs", ImportStyle::Require))),
+                ("web-child.cjs", definition(ModuleSyntax::CommonJs,
+                    "const web = require('node:stream/web'); module.exports = {web, ReadableStream: web.ReadableStream};")),
+            ]).with_native_builtins());
+            let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+            let policy = Arc::new(RecordingPolicy {
+                allow_native_builtins: true,
+                ..RecordingPolicy::default()
+            });
+            let installed =
+                ExecutionModuleResolver::new(&source.module.record.id, resolver, policy.clone());
+            let result = orchestrator(lane, ModuleSyntax::CommonJs)
+                .execute_resolved_entry_with_resolver(&package(), &source, installed)
+                .expect(
+                    "captured binary and Node streams share the canonical Web constructor family",
+                );
+            assert_eq!(
+                lines(&result),
+                [
+                    "true true true",
+                    "true true",
+                    "true",
+                    "web",
+                    "true",
+                    "1,2,3 false"
+                ],
+                "lane={lane:?}, first={first}"
+            );
+            assert!(
+                policy
+                    .requests
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .all(|(request, _)| { !request.specifier.starts_with('\0') }),
+                "private Web dependencies do not invent captured source routes"
+            );
+        }
+    }
+}
+
+#[test]
+fn delivered_web_and_consumer_esm_execute_transforms_and_keep_namespace_identity() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(OpaqueResolver::new(vec![("entry.mjs",
+            definition(ModuleSyntax::EsModule, r#"
+import web, {ReadableStream, TextDecoderStream, TextEncoderStream, WritableStream} from 'stream/web';
+import * as namespace from 'node:stream/web';
+import consumers, {text} from 'stream/consumers';
+import * as consumerNamespace from 'node:stream/consumers';
+console.log(namespace.default === web, namespace.ReadableStream === ReadableStream,
+    consumerNamespace.default === consumers, consumerNamespace.text === text);
+(async function() {
+    const input = new ReadableStream({ start(controller) {
+        controller.enqueue(new Uint8Array([226]));
+        controller.enqueue(new Uint8Array([130,172,33])); controller.close();
+    }});
+    console.log(await text(input.pipeThrough(new TextDecoderStream())));
+    const encoded = new ReadableStream({start(controller) {
+        controller.enqueue('\ud83d'); controller.enqueue('\ude00'); controller.close();
+    }}).pipeThrough(new TextEncoderStream());
+    console.log((await consumers.buffer(encoded)).toString('hex'));
+    const controller = new AbortController();
+    const reason = new Error('cancel transfer');
+    let canceled;
+    const endless = new ReadableStream({cancel(value) { canceled = value; }});
+    const operation = endless.pipeTo(new WritableStream(), {signal: controller.signal});
+    controller.abort(reason);
+    try { await operation; } catch (error) { console.log(error === reason, canceled === reason); }
+    web.added = 1; consumers.added = 2;
+    console.log(await import('stream/web') === namespace,
+        await import('node:stream/consumers') === consumerNamespace,
+        !('added' in namespace), !('added' in consumerNamespace));
+})();
+"#))]).with_native_builtins());
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let mut granted = package();
+        granted
+            .capabilities
+            .retain(|capability| capability != "timer");
+        let result = orchestrator(lane, ModuleSyntax::EsModule)
+            .execute_resolved_entry_with_resolver(&granted, &source, installed)
+            .expect("bounded native ESM streams execute codecs, cancellation and dynamic imports");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true true true",
+                "€!",
+                "f09f9880",
+                "true true",
+                "true true true true"
+            ],
+            "lane={lane:?}"
+        );
+    }
+}
+
+#[test]
+fn delivered_web_esm_refuses_guest_accessors_and_native_accessors_at_snapshot_sites() {
+    for mutation in [
+        "Object.defineProperty(web.ReadableStream.prototype, 'locked', {get: function locked() { console.log('guest getter ran'); return false; }});",
+        "const get = Object.getOwnPropertyDescriptor(web.ReadableStream.prototype, 'locked').get; Object.defineProperty(web, 'ReadableStream', {get});",
+        "const get = Object.getOwnPropertyDescriptor(web.ReadableStream.prototype, 'locked').get; const proto = {}; Object.defineProperty(proto, 'ReadableStream', {get}); delete web.ReadableStream; Object.setPrototypeOf(web, proto);",
+    ] {
+        let resolver = Arc::new(OpaqueResolver::new(vec![
+            ("entry.mjs", definition(ModuleSyntax::EsModule,
+                "import './mutator.cjs'; import {ReadableStream} from 'node:stream/web'; console.log('must not execute');")
+                .with_dependency(ModuleDependency::new("./mutator.cjs", ImportStyle::Import))),
+            ("mutator.cjs", definition(ModuleSyntax::CommonJs,
+                &format!("const web = require('stream/web'); {mutation}"))),
+        ]).with_native_builtins());
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let mut engine = orchestrator(LaneChoice::QuickJs, ModuleSyntax::EsModule);
+        let error = engine
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect_err("only deferred immutable factory accessors may cross the import bound");
+        assert!(
+            error.to_string().contains("bounded-import contract"),
+            "{mutation}: {error}"
+        );
+        assert!(engine.last_failed_console_output().is_empty(), "{mutation}");
+    }
+}
+
+#[test]
+fn delivered_web_and_consumer_caches_reauthorize_runtime_requests() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for (specifier, member) in [
+            ("stream/consumers", "text"),
+            ("stream/web", "ReadableStream"),
+        ] {
+            for source_text in [
+                format!(
+                    "const load = require; console.log(typeof load('{specifier}').{member}); load('{specifier}');"
+                ),
+                format!(
+                    "import('{specifier}').then(function(module) {{ console.log(typeof module.{member}); return import('{specifier}'); }});"
+                ),
+            ] {
+                let resolver = Arc::new(
+                    OpaqueResolver::new(vec![(
+                        "entry.cjs",
+                        definition(ModuleSyntax::CommonJs, &source_text),
+                    )])
+                    .with_native_builtins(),
+                );
+                let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+                let policy = Arc::new(RecordingPolicy {
+                    denied: Some((specifier.into(), 2)),
+                    allow_native_builtins: true,
+                    ..RecordingPolicy::default()
+                });
+                let installed = ExecutionModuleResolver::new(
+                    &source.module.record.id,
+                    resolver,
+                    policy.clone(),
+                );
+                let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
+                let error = engine
+                    .execute_resolved_entry_with_resolver(&package(), &source, installed)
+                    .expect_err("provider and namespace caches never cache permission");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("closed-world module resolution refused"),
+                    "{error}"
+                );
+                assert_eq!(
+                    engine
+                        .last_failed_console_output()
+                        .iter()
+                        .map(|entry| entry.message.as_str())
+                        .collect::<Vec<_>>(),
+                    ["function"]
+                );
+                assert_eq!(
+                    policy
+                        .requests
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .filter(|(request, _)| request.specifier == specifier)
+                        .count(),
+                    2
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn delivered_stream_promises_keeps_original_exports_after_parent_replacement() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         let resolver = Arc::new(
@@ -3828,6 +4148,8 @@ fn delivered_native_namespaces_reject_export_replacement() {
             ("module", "createRequire"),
             ("stream", "Readable"),
             ("stream/promises", "pipeline"),
+            ("stream/consumers", "text"),
+            ("stream/web", "ReadableStream"),
         ] {
             let source_text = format!(
                 r#"

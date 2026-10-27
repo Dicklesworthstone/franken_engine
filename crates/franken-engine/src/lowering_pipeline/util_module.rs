@@ -183,6 +183,7 @@ pub(super) fn intrinsic_capability(name: &str) -> Option<&'static str> {
         "%NativeBufferConstructor" => Some("builtin:NativeBufferConstructor"),
         "%NativeBlobConstructor" => Some("builtin:NativeBlobConstructor"),
         "%NativeStreamModule" => Some("builtin:NativeStreamModule"),
+        "%NativeWebStreamsModule" => Some("builtin:NativeWebStreamsModule"),
         _ => fs_module::intrinsic_capability(name)
             .or_else(|| zlib_module::intrinsic_capability(name)),
     }
@@ -634,6 +635,14 @@ fn native_runtime_wrapper(native: NativeBuiltinModule) -> Option<(&'static str, 
             "module.exports = require('timers/promises');",
             TIMERS_SOURCE.len() + loader_bytes,
         )),
+        NativeBuiltinModule::StreamConsumers => Some((
+            "module.exports = require('stream/consumers');",
+            STREAM_CONSUMERS_SOURCE.len() + loader_bytes,
+        )),
+        NativeBuiltinModule::StreamWeb => Some((
+            "module.exports = require('stream/web');",
+            WEB_STREAMS_SOURCE.len() + loader_bytes,
+        )),
         NativeBuiltinModule::Stream | NativeBuiltinModule::StreamPromises => Some((
             "module.exports = require('stream');",
             // The ordinary module-object rewrite also installs collection
@@ -763,6 +772,56 @@ pub(crate) fn native_runtime_module_tree(
             }
         }
         StreamReferences.statements(&mut rewritten.body)?;
+    }
+    if matches!(
+        native,
+        NativeBuiltinModule::Buffer
+            | NativeBuiltinModule::Stream
+            | NativeBuiltinModule::StreamPromises
+            | NativeBuiltinModule::Fs
+            | NativeBuiltinModule::FsPromises
+    ) {
+        // Blob.stream, Node/Web adapters and filesystem streams must use the
+        // same constructors as a public stream/web import. Keep this as a
+        // private lazy dependency; obtaining Buffer or Stream does not create
+        // a Web stream or initialize a second realm of stream classes.
+        let span = SourceSpan::new(0, 0, 1, 1, 1, 1);
+        let dependency = Expression::Call {
+            callee: Box::new(Expression::Identifier("%NativeWebStreamsModule".into())),
+            arguments: Vec::new(),
+            span: Some(span),
+        };
+        let mut replaced = false;
+        for statement in &mut rewritten.body {
+            let Statement::VariableDeclaration(declaration) = statement else {
+                continue;
+            };
+            for declarator in &mut declaration.declarations {
+                if !matches!(&declarator.pattern, BindingPattern::Identifier(name) if name == WEB_STREAMS_BINDING)
+                {
+                    continue;
+                }
+                if replaced || declaration.kind != VariableDeclarationKind::Const {
+                    return Err(invalid());
+                }
+                declarator.initializer = Some(dependency.clone());
+                replaced = true;
+            }
+        }
+        if !replaced {
+            rewritten.body.insert(
+                0,
+                Statement::VariableDeclaration(VariableDeclaration {
+                    kind: VariableDeclarationKind::Const,
+                    declarations: vec![VariableDeclarator {
+                        pattern: BindingPattern::Identifier(WEB_STREAMS_BINDING.into()),
+                        initializer: Some(dependency),
+                        span,
+                    }],
+                    span,
+                }),
+            );
+        }
     }
     native_module_loader::defer_modules_with_runtime_sources(&mut rewritten, true)?;
     Ok(rewritten)
@@ -1436,6 +1495,8 @@ impl BuiltinRewriter {
                     | PureModule::StringDecoder
                     | PureModule::Buffer
                     | PureModule::Stream
+                    | PureModule::StreamConsumers
+                    | PureModule::WebStreams
             )
         {
             return None;
@@ -1687,10 +1748,23 @@ mod tests {
             "the canonical receiver-owned getter retains its exact method source"
         );
         assert!(
-            closed_sources
+            !closed_sources
                 .iter()
                 .any(|text| text.starts_with("get closed(")),
-            "same-program Web getters retain their distinct class-accessor source"
+            "the Stream provider must not compile a second private Web factory"
+        );
+        let tree = native_runtime_module_tree(NativeBuiltinModule::StreamWeb).unwrap();
+        let ir0 = crate::ir_contract::Ir0Module::from_syntax_tree(
+            tree,
+            "\0franken-engine/native-stream/web",
+        );
+        let web = super::super::lower_ir0_to_ir3(&ir0, &context).unwrap().ir3;
+        assert!(
+            web.function_sources.iter().any(|(index, text)| {
+                web.function_table[*index as usize].name.as_deref() == Some("closed")
+                    && text.as_str().starts_with("get closed(")
+            }),
+            "the canonical Web provider retains its distinct class-accessor source"
         );
         for legacy_module in [PureModule::Stream, PureModule::WebStreams] {
             let mut legacy_again = parse_module_source(legacy_module).unwrap();
@@ -1708,6 +1782,7 @@ mod tests {
         for name in [
             "util", "util/types", "events", "assert", "assert/strict", "timers",
             "timers/promises", "string_decoder", "buffer", "stream", "stream/promises",
+            "stream/consumers", "stream/web",
         ] {
             for specifier in [name.to_string(), format!("node:{name}")] {
                 assert!(NativeBuiltinModule::from_specifier(&specifier).is_some());
@@ -1729,6 +1804,58 @@ mod tests {
             native_runtime_module_source_bytes(NativeBuiltinModule::Events).unwrap()
                 > EVENTS_SOURCE.len()
         );
+    }
+
+    #[test]
+    fn native_web_and_consumer_sources_share_only_the_canonical_web_dependency() {
+        struct Dependencies {
+            web: usize,
+        }
+        impl Walk for Dependencies {
+            fn expression(&mut self, expression: &mut Expression) -> Outcome {
+                if matches!(expression, Expression::Identifier(name) if name == "%NativeWebStreamsModule")
+                {
+                    self.web += 1;
+                }
+                walk_expression(self, expression)
+            }
+        }
+        for native in [
+            NativeBuiltinModule::Buffer,
+            NativeBuiltinModule::Stream,
+            NativeBuiltinModule::StreamPromises,
+            NativeBuiltinModule::Fs,
+            NativeBuiltinModule::FsPromises,
+        ] {
+            let mut tree = native_runtime_module_tree(native).unwrap();
+            let mut dependencies = Dependencies { web: 0 };
+            dependencies.statements(&mut tree.body).unwrap();
+            assert_eq!(
+                dependencies.web, 1,
+                "one canonical dependency for {native:?}"
+            );
+        }
+        for (native, source_bytes) in [
+            (
+                NativeBuiltinModule::StreamConsumers,
+                STREAM_CONSUMERS_SOURCE.len(),
+            ),
+            (NativeBuiltinModule::StreamWeb, WEB_STREAMS_SOURCE.len()),
+        ] {
+            assert!(native_runtime_module_source_bytes(native).unwrap() > source_bytes);
+            let mut tree = native_runtime_module_tree(native).unwrap();
+            let mut dependencies = Dependencies { web: 0 };
+            dependencies.statements(&mut tree.body).unwrap();
+            assert_eq!(
+                dependencies.web, 0,
+                "the canonical factory must not recurse"
+            );
+        }
+        assert_eq!(
+            intrinsic_capability("%NativeWebStreamsModule"),
+            Some("builtin:NativeWebStreamsModule")
+        );
+        assert_eq!(intrinsic_capability("__franken_native_web_streams"), None);
     }
 
     #[test]

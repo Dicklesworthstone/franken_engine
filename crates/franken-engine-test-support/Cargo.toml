@@ -5,8 +5,22 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[features]
+# Opt in for public API probes that require the engine's stock feature set.
+# Keep standalone --no-default-features builds free of sibling integrations.
+engine-defaults = ["frankenengine-engine/default"]
+
 [lib]
 path = "src/lib.rs"
+
+# Compile the original source directly, preserving all five tests, fixtures,
+# lane profiles and default runtime budgets. These probes use the real engine
+# API, not this crate's mock adapters. Selecting this package avoids linking
+# every engine artifact-tool binary before a focused runtime test can execute.
+[[test]]
+name = "array_mutation_property_operations"
+path = "../franken-engine/tests/array_mutation_property_operations.rs"
+required-features = ["engine-defaults"]
 
 [dependencies]
 # See bd-ndpm2: `default-features = false` stops this edge from re-enabling

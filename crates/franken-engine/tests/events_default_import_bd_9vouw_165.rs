@@ -166,6 +166,146 @@ fn first_class_events_support_nested_mutable_destructured_and_computed_forms() {
     );
 }
 
+#[test]
+fn events_constructor_and_static_once_on_one_alias_keep_the_module_value() {
+    let source = r#"
+const events = require('node:events');
+const emitter = new events.EventEmitter();
+events.once(emitter, 'ready').then(values => console.log(values[0]));
+emitter.emit('ready', 42);
+console.log(typeof events, emitter.listenerCount('ready'), emitter.listenerCount('error'));
+"#;
+    assert_native_events(source, "function 0 0\n42", false);
+}
+
+#[test]
+fn a_called_and_detached_once_export_retains_its_function_value() {
+    let source = r#"
+const { EventEmitter, once } = require('events');
+const saved = once;
+const emitter = new EventEmitter();
+once(emitter, 'first').then(values => console.log('direct', values[0]));
+saved(emitter, 'second').then(values => console.log('detached', values[0]));
+emitter.emit('first', 7);
+emitter.emit('second', 9);
+console.log(saved === once, typeof saved);
+"#;
+    assert_native_events(source, "true function\ndirect 7\ndetached 9", false);
+}
+
+#[test]
+fn finite_and_materialized_events_aliases_observe_the_same_mutable_exports() {
+    let source = r#"
+const E = require('events');
+const events = require('node:events');
+function load() { return require('events'); }
+const value = load();
+value.defaultMaxListeners = 23;
+value.captureRejections = true;
+value.once = function () { return 'replacement'; };
+console.log(E.defaultMaxListeners, events.captureRejections);
+console.log(events.once(null, 'ready'));
+"#;
+    assert_native_events(source, "23 true\nreplacement", false);
+}
+
+#[test]
+fn mutable_events_and_once_bindings_dispatch_their_reassigned_values() {
+    let source = r#"
+let events = require('events');
+let { once } = require('node:events');
+events = { once: function () { return 'module replacement'; } };
+once = function () { return 'export replacement'; };
+console.log(events.once(null, 'ready'));
+console.log(once(null, 'ready'));
+"#;
+    assert_native_events(source, "module replacement\nexport replacement", false);
+}
+
+#[test]
+fn destructured_once_options_cancel_and_release_the_registered_listeners() {
+    let source = r#"
+const { EventEmitter, once } = require('events');
+const emitter = new EventEmitter();
+const controller = new AbortController();
+once(emitter, 'ready', { signal: controller.signal }).catch(error => {
+  console.log(error.name, error.code, error.cause === 'stop');
+});
+controller.abort('stop');
+console.log(emitter.listenerCount('ready'), emitter.listenerCount('error'));
+"#;
+    assert_native_events(source, "0 0\nAbortError ABORT_ERR true", false);
+}
+
+#[test]
+fn destructured_once_invalid_options_reject_without_registering_listeners() {
+    let source = r#"
+const { EventEmitter, once } = require('node:events');
+const emitter = new EventEmitter();
+let sync = true;
+once(emitter, 'ready', null).catch(error => {
+  console.log(error.name, error.code, sync);
+});
+sync = false;
+console.log(emitter.listenerCount('ready'), emitter.listenerCount('error'));
+"#;
+    assert_native_events(source, "0 0\nTypeError ERR_INVALID_ARG_TYPE false", false);
+}
+
+#[test]
+fn destructured_once_spread_preserves_expanded_arguments() {
+    let source = r#"
+const { EventEmitter, once } = require('events');
+const emitter = new EventEmitter();
+once(...[emitter, 'ready']).then(values => console.log(values.length, values[0]));
+emitter.emit('ready', 42);
+"#;
+    assert_native_events(source, "1 42", false);
+}
+
+#[test]
+fn first_class_events_still_require_the_builtin_capability() {
+    use frankenengine_engine::baseline_interpreter::{
+        InterpreterConfig, InterpreterCore, InterpreterError,
+    };
+    use frankenengine_engine::capability::RuntimeCapability;
+    use frankenengine_engine::ir_contract::Ir0Module;
+    use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+    use frankenengine_engine::parser_api_stability::parse_script;
+
+    let tree = parse_script(
+        "const events = require('events'); const emitter = new events.EventEmitter(); \
+         events.once(emitter, 'ready'); emitter.emit('ready');",
+    )
+    .expect("events capability probe parses");
+    let lowered = lower_ir0_to_ir3(
+        &Ir0Module::from_syntax_tree(tree, "events-capability.js"),
+        &LoweringContext::new("events-capability", "bd-15w28", "deny-builtin"),
+    )
+    .expect("the known pure module needs no ambient loader authority");
+    for v8_profile in [false, true] {
+        let mut config = if v8_profile {
+            InterpreterConfig::v8_defaults()
+        } else {
+            InterpreterConfig::quickjs_defaults()
+        };
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+        ]
+        .into_iter()
+        .collect();
+        let error = InterpreterCore::new(config, "events-capability")
+            .execute(&lowered.ir3)
+            .expect_err("possessing Events must not confer the builtin capability");
+        assert!(
+            matches!(&error, InterpreterError::CapabilityDenied { capability }
+                if capability == "builtin:EventEmitterConstructorRef"),
+            "must refuse at the native constructor boundary: {error:?}"
+        );
+    }
+}
+
 const ITERATOR_QUEUE: &str = r#"
 const E = require('events'); const e = new E();
 const it = E.on(e, 'data', {close:['end']});

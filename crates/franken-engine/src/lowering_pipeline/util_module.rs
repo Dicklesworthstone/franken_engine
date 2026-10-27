@@ -72,7 +72,7 @@ use super::LoweringPipelineError;
 use super::native_module_source::NativeModuleSource;
 use super::with_statement::{
     FunctionBody, FunctionParts, Outcome, Search, Walk, lexical_names, var_names, walk_class,
-    walk_expression, walk_function, walk_statement, walk_switch_cases,
+    walk_expression, walk_function, walk_pattern, walk_statement, walk_switch_cases,
 };
 use crate::ast::ParseGoal;
 use crate::ast::{
@@ -879,9 +879,14 @@ fn rewrite_module_objects_with_runtime_sources(
     } else {
         facade_claimed_stream_declarators(&tree.body)
     };
+    let events_claimed = if root.contains("require") {
+        BTreeSet::new()
+    } else {
+        facade_claimed_events_declarators(&tree.body)
+    };
     let mut claimed = stream_claimed.clone();
+    claimed.extend(events_claimed.iter().copied());
     if !root.contains("require") {
-        claimed.extend(facade_claimed_events_declarators(&tree.body));
         claimed.extend(zlib_module::claimed_declarators(&tree.body));
     }
     for (index, statement) in rewritten.body.iter_mut().enumerate() {
@@ -919,6 +924,20 @@ fn rewrite_module_objects_with_runtime_sources(
     if rewriter.modules.contains(&PureModule::Readline) {
         rewriter.modules.insert(PureModule::Events);
         rewriter.modules.insert(PureModule::StringDecoder);
+    }
+    if rewriter.modules.contains(&PureModule::Events) && !events_claimed.is_empty() {
+        // The full module exposes mutable constructor settings and helpers.
+        // A second alias must read those same values instead of folding a
+        // setting or calling an elided helper. This also covers the Events
+        // dependency exposed by a first-class Stream or Readline module.
+        for (index, statement) in rewritten.body.iter_mut().enumerate() {
+            let mut held = take_claimed_initializers(statement, index, &events_claimed);
+            let outcome = held
+                .iter_mut()
+                .try_for_each(|(_, initializer)| rewriter.expression(initializer));
+            restore_claimed_initializers(statement, held);
+            outcome?;
+        }
     }
     // Blob.stream reads this private dependency only on first invocation.
     // Explicit stream/web imports and binary files must share its identity.
@@ -970,9 +989,25 @@ fn rewrite_module_objects_with_runtime_sources(
 /// Top-level CommonJS `events` declarators that the existing finite
 /// lowering facade has proved safe to consume. Keep their initializers intact
 /// during pure-module rewriting so the authenticated EventEmitter/once lowering
-/// can see the original require shape. Unsupported, escaping, computed or
-/// otherwise observable module uses are deliberately not claimed here.
+/// can see the original require shape. Some legacy recognizers confirm an
+/// alias after just one matching use; an elided module/once binding would then
+/// be undefined at every ordinary use. Require a const binding and prove all
+/// its uses, including initialization order, before withholding its initializer.
 fn facade_claimed_events_declarators(body: &[Statement]) -> BTreeSet<(usize, usize)> {
+    const EVENTS: Search = Search {
+        statement: |_| false,
+        expression: |expression| {
+            matches!(
+                builtin_require_member(expression),
+                Some((PureModule::Events, None))
+            )
+        },
+    };
+    if !body.iter().any(|statement| EVENTS.in_statement(statement))
+        || events_facade_has_dynamic_observer(body)
+    {
+        return BTreeSet::new();
+    }
     let lookup = BTreeMap::new();
     let emitters = super::confirmed_event_emitter_bindings(body, &lookup);
     let once = super::confirmed_events_once_destructured_requires(body, &lookup);
@@ -983,9 +1018,24 @@ fn facade_claimed_events_declarators(body: &[Statement]) -> BTreeSet<(usize, usi
         let Statement::VariableDeclaration(declaration) = statement else {
             continue;
         };
+        if declaration.kind != VariableDeclarationKind::Const {
+            continue;
+        }
         for (declarator_index, declarator) in declaration.declarations.iter().enumerate() {
             let Some(initializer) = &declarator.initializer else {
                 continue;
+            };
+            let finite = |local: &str, surface| {
+                !super::module_alias_has_predeclaration_hazard(
+                    body,
+                    statement_index,
+                    declarator_index,
+                    local,
+                    surface,
+                    &lookup,
+                ) && !body.iter().any(|statement| {
+                    super::module_alias_statement_has_rejected_use(statement, local, surface)
+                }) && events_once_arguments_are_finite(body, local, surface)
             };
             match &declarator.pattern {
                 BindingPattern::Identifier(local)
@@ -995,7 +1045,8 @@ fn facade_claimed_events_declarators(body: &[Statement]) -> BTreeSet<(usize, usi
                             &lookup,
                         ) || super::is_require_events_module_initializer(initializer, &lookup)))
                         || (modules.contains(local)
-                            && super::is_require_events_module_initializer(initializer, &lookup)) =>
+                            && super::is_require_events_module_initializer(initializer, &lookup)
+                            && finite(local, super::LoweringOnlyModuleAliasSurface::EventsModule)) =>
                 {
                     claimed.insert((statement_index, declarator_index));
                 }
@@ -1012,7 +1063,13 @@ fn facade_claimed_events_declarators(body: &[Statement]) -> BTreeSet<(usize, usi
                             };
                             match super::well_formed_static_name(&property.key) {
                                 Some("EventEmitter") => emitters.contains(local),
-                                Some("once") => once.contains(local),
+                                Some("once") => {
+                                    once.contains(local)
+                                        && finite(
+                                            local,
+                                            super::LoweringOnlyModuleAliasSurface::EventsOnce,
+                                        )
+                                }
                                 _ => false,
                             }
                         });
@@ -1025,6 +1082,105 @@ fn facade_claimed_events_declarators(body: &[Statement]) -> BTreeSet<(usize, usi
         }
     }
     claimed
+}
+
+/// Finite aliases cannot account for exports changed by generated code or a
+/// second loader. Keep their ordinary cached module values whenever such an
+/// observer is present; the normal rewriter still preserves lexical shadows.
+fn events_facade_has_dynamic_observer(body: &[Statement]) -> bool {
+    struct Observer(bool);
+    impl Walk for Observer {
+        fn statement(&mut self, statement: &mut Statement) -> Outcome {
+            self.0 |= matches!(statement, Statement::Import(_) | Statement::With(_));
+            walk_statement(self, statement)
+        }
+
+        fn pattern(&mut self, pattern: &mut BindingPattern) -> Outcome {
+            if let BindingPattern::ObjectPattern(properties) = pattern {
+                self.0 |= properties.iter().any(|property| {
+                    property.computed
+                        || super::well_formed_static_name(&property.key) == Some("constructor")
+                });
+            }
+            walk_pattern(self, pattern)
+        }
+
+        fn expression(&mut self, expression: &mut Expression) -> Outcome {
+            self.0 |= matches!(expression, Expression::Identifier(name)
+                if matches!(name.as_str(), "eval" | "Function" | "globalThis" | "global"
+                    | "self" | "window" | "Reflect" | "Object" | "process" | "module" | "exports"))
+                || matches!(
+                    expression,
+                    Expression::This | Expression::SloppyThis | Expression::Raw(_)
+                );
+            if let Expression::Member {
+                property, computed, ..
+            }
+            | Expression::OptionalMember {
+                property, computed, ..
+            } = expression
+            {
+                self.0 |=
+                    *computed || super::well_formed_static_name(property) == Some("constructor");
+            }
+            if self.0 {
+                Ok(())
+            } else {
+                walk_expression(self, expression)
+            }
+        }
+    }
+    let mut observer = Observer(false);
+    body.iter()
+        .any(|statement| observer.statement(&mut statement.clone()).is_err() || observer.0)
+}
+
+/// The native wait accepts exactly two arguments. Options, spreading and
+/// invalid arity need the module's observable async validation. Walk default
+/// parameters and computed keys too, not just function/method bodies. A
+/// shadowed call can conservatively select the full module, but the actual
+/// rewrite still resolves every require and alias in its lexical scope.
+fn events_once_arguments_are_finite(
+    body: &[Statement],
+    local: &str,
+    surface: super::LoweringOnlyModuleAliasSurface,
+) -> bool {
+    struct Arguments<'a> {
+        local: &'a str,
+        surface: super::LoweringOnlyModuleAliasSurface,
+        finite: bool,
+    }
+    impl Walk for Arguments<'_> {
+        fn expression(&mut self, expression: &mut Expression) -> Outcome {
+            let once_call = match self.surface {
+                super::LoweringOnlyModuleAliasSurface::EventsOnce => {
+                    super::is_events_once_direct_call(expression, self.local)
+                }
+                super::LoweringOnlyModuleAliasSurface::EventsModule => {
+                    super::is_events_alias_once_call(expression, self.local)
+                }
+                _ => false,
+            };
+            if once_call && let Expression::Call { arguments, .. } = expression {
+                self.finite &= arguments.len() == 2
+                    && !arguments
+                        .iter()
+                        .any(|argument| matches!(argument, Expression::SpreadElement(_)));
+            }
+            if self.finite {
+                walk_expression(self, expression)
+            } else {
+                Ok(())
+            }
+        }
+    }
+    let mut arguments = Arguments {
+        local,
+        surface,
+        finite: true,
+    };
+    body.iter()
+        .all(|statement| arguments.statement(&mut statement.clone()).is_ok() && arguments.finite)
 }
 
 /// The top-level `const { ... } = require('stream')` declarators, as
@@ -2486,6 +2642,149 @@ mod events_tests {
                 }),
                 "full events module must remain for {source}"
             );
+        }
+    }
+
+    #[test]
+    fn one_direct_events_use_cannot_elide_other_uses_or_mutable_bindings() {
+        for source in [
+            "const events = require('events'); events.once(emitter, 'ready'); new events.EventEmitter();",
+            "const E = require('node:events'); const emitter = new E(); E.once(emitter, 'ready');",
+            "const { once } = require('events'); once(emitter, 'ready'); const saved = once;",
+            "const events = require('events'); events.once(emitter, 'ready'); events.captureRejections = true;",
+            "let events = require('events'); events = local; events.once(emitter, 'ready');",
+            "let { once } = require('events'); once = local; once(emitter, 'ready');",
+            "once(emitter, 'ready'); const { once } = require('events');",
+            "read(); const events = require('events'); function read() { return events.captureRejections; }",
+        ] {
+            let tree = parse(source, ParseGoal::Script);
+            let original = tree.clone();
+            let rewritten = rewrite_util_requires(&tree)
+                .expect("events alias rewrite")
+                .expect("ordinary values must be materialized");
+            assert_eq!(tree, original, "the source AST must remain unchanged");
+            assert_eq!(
+                rewritten
+                    .body
+                    .iter()
+                    .filter(|s| is_module_declaration(s))
+                    .count(),
+                1,
+                "one shared Events loader: {source}"
+            );
+            assert!(
+                !rewritten
+                    .body
+                    .iter()
+                    .any(|statement| BUILTIN_REQUIRE_SEARCH.in_statement(statement)),
+                "no guest alias may remain on the eliding facade path: {source}"
+            );
+            assert!(rewrite_util_requires(&rewritten).unwrap().is_none());
+        }
+    }
+
+    #[test]
+    fn once_options_spread_and_invalid_arity_use_the_first_class_helper() {
+        for source in [
+            "const { once } = require('events'); once(emitter, 'ready', options);",
+            "const events = require('node:events'); events.once(emitter, 'ready', null);",
+            "const { once } = require('events'); once(...[emitter, 'ready']);",
+            "const events = require('events'); events.once(emitter, ...['ready']);",
+            "const { once } = require('events'); once(emitter);",
+            "const events = require('events'); events.once();",
+            "const { once } = require('events'); function wait(value = once(emitter, 'ready', options)) { return value; }",
+            "const events = require('events'); const wait = (value = events.once(emitter, 'ready', options)) => value;",
+        ] {
+            let tree = parse(source, ParseGoal::Script);
+            let rewritten = rewrite_util_requires(&tree)
+                .expect("once argument rewrite")
+                .expect("the finite two-argument hostcall cannot serve this form");
+            assert!(
+                !rewritten
+                    .body
+                    .iter()
+                    .any(|statement| BUILTIN_REQUIRE_SEARCH.in_statement(statement)),
+                "once must use ordinary call/async validation semantics: {source}"
+            );
+            assert!(rewrite_util_requires(&rewritten).unwrap().is_none());
+        }
+    }
+
+    #[test]
+    fn materialized_events_rewrites_every_other_finite_events_alias() {
+        for source in [
+            "const E = require('events'); const events = require('node:events'); \
+             function load() { return require('events'); } \
+             load().defaultMaxListeners = 23; E.defaultMaxListeners; events.captureRejections;",
+            "const { once } = require('events'); once(emitter, 'ready'); \
+             const events = require('events'); events.once = replacement;",
+            "const E = require('events'); E.defaultMaxListeners; \
+             const stream = require('stream'); stream.Readable;",
+            "const E = require('events'); new E(); \
+             const readline = require('readline'); readline.createInterface(input);",
+        ] {
+            let tree = parse(source, ParseGoal::Script);
+            let rewritten = rewrite_util_requires(&tree)
+                .expect("mixed events rewrite")
+                .expect("first-class module");
+            assert!(
+                !rewritten
+                    .body
+                    .iter()
+                    .any(|statement| BUILTIN_REQUIRE_SEARCH.in_statement(statement)),
+                "every Events alias must read shared mutable exports: {source}"
+            );
+            assert!(rewrite_util_requires(&rewritten).unwrap().is_none());
+        }
+    }
+
+    #[test]
+    fn finite_events_handoff_ignores_lexically_shadowed_uses() {
+        for source in [
+            "const events = require('events'); events.once(emitter, 'ready'); \
+             function local(events) { return events.arbitrary; }",
+            "const { once } = require('events'); once(emitter, 'ready'); \
+             { const once = local; consume(once); }",
+            "const E = require('events'); new E(); \
+             function local(require) { return require('events'); }",
+        ] {
+            let tree = parse(source, ParseGoal::Script);
+            assert!(
+                rewrite_util_requires(&tree).unwrap().is_none(),
+                "local bindings must not be mistaken for builtin aliases: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn dynamic_observers_cannot_keep_events_settings_on_the_finite_path() {
+        for observer in [
+            "eval(\"require('events').captureRejections = true\");",
+            "Function(\"require('events').captureRejections = true\")();",
+            "globalThis.require('events').captureRejections = true;",
+            "module.require('events').captureRejections = true;",
+            "process.getBuiltinModule('events').captureRejections = true;",
+            "this.require('events').captureRejections = true;",
+            "const C = (() => {}).constructor; C(source)();",
+            "const { constructor: C } = function () {}; C(source)();",
+            "const key = 'constructor'; const { [key]: C } = function () {}; C(source)();",
+            "function eval(x) { return x; } eval('local');",
+        ] {
+            let source =
+                format!("const events = require('events'); {observer} events.captureRejections;");
+            let tree = parse(&source, ParseGoal::Script);
+            assert!(
+                facade_claimed_events_declarators(&tree.body).is_empty(),
+                "{observer}"
+            );
+            let rewritten = rewrite_util_requires(&tree)
+                .unwrap()
+                .expect("real events value");
+            assert!(is_module_declaration(&rewritten.body[0]), "{observer}");
+            // Calls that can observe exports, including a source-owned eval,
+            // must remain in place; the fallback only changes the require.
+            assert!(rewritten.body.ends_with(&tree.body[1..]), "{observer}");
+            assert_eq!(tree, parse(&source, ParseGoal::Script));
         }
     }
 

@@ -49,7 +49,7 @@ on:
   workflow_dispatch:
     inputs:
       scope:
-        description: Validation scope; buffer runs the complete Buffer target only
+        description: Validation scope; buffer runs complete Buffer and focused native HTTP regressions
         type: choice
         options: [all, buffer]
         default: all
@@ -308,7 +308,7 @@ jobs:
           path: async-generator-validation/
           retention-days: 7
   buffer:
-    name: Full-source Buffer values and authority
+    name: Full-source Buffer values and native HTTP evidence
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
@@ -338,6 +338,7 @@ jobs:
             rustc --version --verbose
             cargo --version
             sha256sum Cargo.lock crates/franken-engine/Cargo.toml \
+              crates/franken-engine/src/baseline_interpreter.rs \
               crates/franken-engine/src/lowering_pipeline/util_module.rs \
               crates/franken-engine/tests/buffer_value_bd_9vouw_104.rs
           } | tee native-buffer-inputs.log
@@ -358,6 +359,26 @@ jobs:
           cargo test --locked -j1 -p frankenengine-control-plane-integration-tests \
             --test buffer_value_bd_9vouw_104 \
             -- --nocapture --test-threads=1 2>&1 | tee native-buffer-tests.log
+      - name: Require the native HTTP evidence and real-socket tests
+        if: always()
+        run: |
+          set -euo pipefail
+          cargo test --locked -j1 -p frankenengine-engine --lib \
+            native_http_client_request_ -- --list 2>&1 | tee native-buffer-http-test-list.log
+          for test in \
+            native_http_client_request_ifc_denial_is_recorded_and_deferred \
+            native_http_client_request_denial_evidence_failure_is_atomic \
+            native_http_client_request_public_body_reaches_real_socket; do
+            grep -Fxq "baseline_interpreter::async_runtime_tests_current::$test: test" \
+              native-buffer-http-test-list.log
+          done
+      - name: Execute native HTTP evidence and public-socket controls
+        if: always()
+        run: |
+          set -euo pipefail
+          cargo test --locked -j1 -p frankenengine-engine --lib \
+            native_http_client_request_ -- --nocapture --test-threads=1 \
+            2>&1 | tee native-buffer-http-tests.log
       - name: Retain full-source Buffer test output
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

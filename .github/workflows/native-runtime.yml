@@ -30,6 +30,8 @@ on:
       - 'crates/franken-engine/tests/promise_subclass_bd_9vouw_137.rs'
       - 'crates/franken-engine/tests/promise_reaction_label_conformance.rs'
       - 'crates/franken-engine/tests/gc_reclaim_bd_9vouw_57.rs'
+      - 'crates/franken-engine/tests/process_spawn_foundation_bd_x85a7.rs'
+      - 'crates/franken-engine/tests/nested_callback_semantics.rs'
       - 'crates/franken-engine/tests/reflect_*.rs'
       - 'crates/franken-engine/tests/querystring_os_builtin_bd_qmy52.rs'
       - 'crates/franken-engine/tests/js_string*.rs'
@@ -224,7 +226,10 @@ jobs:
           todo = ['lib', 'baseline_interpreter', 'parser', 'lowering_pipeline',
                   'ir_contract', 'security_e2e', 'tls_x509_metadata',
                   'crypto_kdf_zeroized', 'profiling', 'ts_normalization',
-                  'static_semantics', 'parser_api_stability']
+                  'static_semantics', 'parser_api_stability',
+                  'execution_orchestrator', 'execution_cell',
+                  'hostcall_telemetry', 'intrinsics_codegen', 'intrinsics_table',
+                  'iterator_protocol', 'stdlib']
           seen = set()
           def production(text):
               return re.split(r'#\[cfg\(test\)\]\s*(?:pub\s+)?mod\s+\w+', text)[0]
@@ -264,6 +269,8 @@ jobs:
             --test array_species_bd_9vouw_94 --test proxy_descriptor_traps_bd_9vouw_147 \
             --test promise_subclass_bd_9vouw_137 --test promise_reaction_label_conformance \
             --test gc_reclaim_bd_9vouw_57 \
+            --test process_spawn_foundation_bd_x85a7 \
+            --test nested_callback_semantics \
             -- --nocapture > async-generator-validation/tests.log 2>&1 || status=$?
           tail -n 220 async-generator-validation/tests.log
           exit "$status"

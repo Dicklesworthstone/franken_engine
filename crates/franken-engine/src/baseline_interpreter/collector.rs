@@ -27,9 +27,9 @@
 //!   on a stack for the duration. Builtins that call guest callbacks while
 //!   holding values only in Rust locals (map's result array, sort's element
 //!   vector) never arm, so no collection runs inside those callbacks.
-//! - Child-process host state is not traced yet and still blocks collection.
-//!   Streams, loopback sockets, HTTP, URL and crypto state are traced; dead
-//!   host-object records release their memory charge with their heap owner.
+//! - Child processes, streams, loopback sockets, HTTP, URL and crypto state
+//!   are traced. Pending native lifecycles remain roots; dead host-object
+//!   records release their memory charge with their heap owner.
 //! - Triggers are deterministic: live-object and live-byte thresholds derived
 //!   from the configured budgets, so replay reproduces every collection.
 //! - `roots` destructures `InterpreterCore` exhaustively. Adding a field does
@@ -74,7 +74,8 @@ mod network;
 pub struct GcStats {
     /// Completed collections.
     pub collections: u64,
-    /// Safe points where a collection was due but host state blocked it.
+    /// Historical safe points where untraced host state blocked collection.
+    /// All current host state is traced, so new collections do not skip.
     pub skipped_collections: u64,
     /// Objects reclaimed over all collections.
     pub reclaimed_objects: u64,
@@ -177,13 +178,6 @@ struct NestedPins {
 #[must_use]
 pub(super) struct NestedGcArm {
     previous: Option<u32>,
-}
-
-/// Why a due collection did not run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum GcSkip {
-    /// Child-process host state is live and not traced.
-    HostState,
 }
 
 /// Mark bits for ids stored in fixed chunks (heap slots, closure-table
@@ -1212,21 +1206,11 @@ impl InterpreterCore {
                 return;
             }
         }
-        match self.collect_garbage() {
-            Ok(()) => {}
-            Err(GcSkip::HostState) => {
-                self.gc.stats.skipped_collections =
-                    self.gc.stats.skipped_collections.saturating_add(1);
-                // Nothing can change until host state drains; stop checking
-                // on every instruction. The allocation budget still applies.
-                self.gc.trigger_objects = usize::MAX;
-                self.gc.trigger_bytes = u64::MAX;
-            }
-        }
+        self.collect_garbage();
     }
 
     /// One stop-the-world mark-sweep over the heap.
-    fn collect_garbage(&mut self) -> Result<(), GcSkip> {
+    fn collect_garbage(&mut self) {
         let mut marker = GcMarker::new(
             self.heap.len(),
             self.closures.len(),
@@ -1238,7 +1222,7 @@ impl InterpreterCore {
         );
         marker.visited_frames.reserve(self.gc.last_visited_frames);
         marker.visited_cells.reserve(self.gc.last_visited_cells);
-        self.gc_mark_roots(&mut marker)?;
+        self.gc_mark_roots(&mut marker);
         self.gc_drain(&mut marker);
         self.gc_mark_ephemerons(&mut marker);
         self.gc.last_visited_frames = marker.visited_frames.len();
@@ -1529,7 +1513,6 @@ impl InterpreterCore {
         let max_bytes = self.config.max_total_memory_bytes;
         let bytes = self.estimated_memory_bytes;
         self.gc.trigger_bytes = bytes.saturating_add((max_bytes.saturating_sub(bytes) / 2).max(1));
-        Ok(())
     }
 
     fn gc_drain(&self, marker: &mut GcMarker) {
@@ -1698,7 +1681,7 @@ impl InterpreterCore {
 
     /// Enumerate every root. The exhaustive destructuring is the registration
     /// guard: a new field must be classified here before the crate compiles.
-    fn gc_mark_roots(&self, m: &mut GcMarker) -> Result<(), GcSkip> {
+    fn gc_mark_roots(&self, m: &mut GcMarker) {
         let InterpreterCore {
             // Configuration, providers and hooks hold no heap references.
             config: _,
@@ -1851,14 +1834,19 @@ impl InterpreterCore {
             next_promise_reaction_callable_id: _,
             builtin_dispatch_hit_unknown_member: _,
             pending_io_callbacks,
+            // Queue arguments transferred to a running callback are pinned
+            // by its invocation. This field holds only their memory charge.
+            deferred_callback_in_flight_bytes: _,
             pending_child_process_tasks,
             child_process_task_in_flight_bytes: _,
             event_listeners,
             event_once_wrappers,
             event_promise_waiters,
             next_event_promise_waiter_id: _,
-            completed_child_processes,
-            child_process_streams,
+            // Weak owner tables: hidden values are traced from a reachable
+            // child or pipe facade, then dead entries are swept with it.
+            completed_child_processes: _,
+            child_process_streams: _,
             child_process_handles,
             // Weak: traced in gc_mark_ephemerons, purged after the sweep.
             url_objects: _,
@@ -1959,22 +1947,19 @@ impl InterpreterCore {
             gc: _,
         } = self;
 
-        // Child-process state is not traced yet: keep its existing guard.
-        let host_state: [(&'static str, bool); 4] = [
-            (
-                "pending_child_process_tasks",
-                pending_child_process_tasks.is_empty(),
-            ),
-            (
-                "completed_child_processes",
-                completed_child_processes.is_empty(),
-            ),
-            ("child_process_streams", child_process_streams.is_empty()),
-            ("child_process_handles", child_process_handles.is_empty()),
-        ];
-        if host_state.iter().any(|(_, idle)| !idle) {
-            return Err(GcSkip::HostState);
+        // A queued Wait owns its child and optional exec callback even if
+        // guest code drops every reference. Native handles independently
+        // root their facade until settlement or explicit teardown; GC never
+        // closes a process or changes effect ordering.
+        for task in pending_child_process_tasks.values() {
+            m.object(task.child);
+            if let Some(callback) = task.callback {
+                m.closure(callback);
+            }
         }
+        child_process_handles
+            .keys()
+            .for_each(|child| m.object(*child));
         self.gc_mark_network_roots(m);
 
         // Execution state.
@@ -2163,17 +2148,30 @@ impl InterpreterCore {
 
         // Event emitters.
         for (emitter, events) in event_listeners {
+            // Process listeners are owned by the reachable facade, rather
+            // than rooting an otherwise dead child/listener capture cycle.
+            // Pending native waits and event tasks root that facade until
+            // its work finishes. Other emitter ownership is unchanged.
+            if self.is_child_process_gc_owner(*emitter) {
+                continue;
+            }
             m.object(*emitter);
             for record in events.values().flatten() {
                 m.value(&record.listener);
             }
         }
         for (wrapper, state) in event_once_wrappers {
+            if self.is_child_process_gc_owner(state.target) {
+                continue;
+            }
             m.object(*wrapper);
             m.object(state.target);
             m.value(&state.original_listener);
         }
         for (emitter, waiters) in event_promise_waiters {
+            if self.is_child_process_gc_owner(*emitter) {
+                continue;
+            }
             m.object(*emitter);
             for record in waiters.values().flatten() {
                 m.promise(record.promise.0);
@@ -2257,7 +2255,6 @@ impl InterpreterCore {
             m.object(context.module_object);
             m.object(context.exports_object);
         }
-        Ok(())
     }
 }
 
@@ -2498,7 +2495,7 @@ mod tests {
         // actual process object collectible. No register or binding owns it.
         core.process_global_object = Some(process);
         let garbage = core.alloc_object_with_prototype(None).expect("garbage");
-        core.collect_garbage().expect("collection runs");
+        core.collect_garbage();
         assert!(core.heap.get(process.0 as usize).is_some());
         assert!(core.heap.get(argv.0 as usize).is_some());
         assert!(core.heap.is_reclaimed(garbage.0 as usize));
@@ -2551,7 +2548,7 @@ mod tests {
             );
         });
         core.set_reg(0, Value::Object(holder));
-        core.collect_garbage().expect("collection runs");
+        core.collect_garbage();
         for (name, id) in [
             ("holder", holder),
             ("symbol data", via_symbol),
@@ -2640,7 +2637,7 @@ mod tests {
         let resident_before = core.heap.resident_chunks();
 
         core.set_reg(0, Value::Object(holder));
-        core.collect_garbage().expect("collection runs");
+        core.collect_garbage();
 
         for chunk in &full_garbage_chunks {
             assert!(core.heap.chunks[*chunk].is_none(), "chunk {chunk} kept");
@@ -2688,7 +2685,7 @@ mod tests {
         let charged = core.object_mutation_labels_memory_bytes();
         assert!(charged > 0);
         core.set_reg(0, Value::Object(holder));
-        core.collect_garbage().expect("collection runs");
+        core.collect_garbage();
         assert_eq!(
             core.object_mutation_labels.get(&holder),
             Some(&Label::Secret)
@@ -2710,7 +2707,7 @@ mod tests {
         core.gc_write_barrier(garbage);
         assert_eq!(core.gc_remembered_set_size(), 2);
         core.set_reg(0, Value::Object(holder));
-        core.collect_garbage().expect("collection runs");
+        core.collect_garbage();
         assert_eq!(core.gc_remembered_set_size(), 0);
         assert!(
             core.heap.get(holder.0 as usize).is_some(),
@@ -2931,7 +2928,7 @@ mod tests {
         let mut core = InterpreterCore::new(config, "gc-unit");
         core.execute(&module).expect("execute");
         assert!(core.promise_store.slot_count() >= 6_000);
-        core.collect_garbage().expect("collection runs");
+        core.collect_garbage();
         let retained = core.promise_store.len();
         assert!(retained < 16, "{retained} promise records retained");
         assert!(core.async_resumption_contexts.is_empty());

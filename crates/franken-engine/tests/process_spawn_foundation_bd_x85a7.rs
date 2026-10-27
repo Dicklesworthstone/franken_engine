@@ -13,6 +13,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use frankenengine_engine::HybridRouter;
 use frankenengine_engine::ast::ParseGoal;
 #[cfg(unix)]
+use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore, LaneChoice};
+#[cfg(unix)]
 use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::checkpoint::CancellationToken;
 #[cfg(unix)]
@@ -31,6 +33,8 @@ use frankenengine_engine::lowering_pipeline::{
     LoweringContext, LoweringPipelineError, lower_ir0_to_ir3,
 };
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions};
+#[cfg(unix)]
+use frankenengine_engine::runtime_config::RuntimeConfig;
 use frankenengine_extension_host::host_effect_journal::{
     HostEffectJournalAttemptRecord, HostEffectJournalEntry, InMemoryHostEffectJournal,
 };
@@ -1935,4 +1939,169 @@ fn child_stdin_write_and_end_round_trip_bd_m42c2() {
             .collect::<Vec<_>>(),
         vec!["roundtrip:through-stdin"]
     );
+}
+
+/// Real native process effects with a heap much smaller than the program's
+/// allocation count. The same parser/lowering/interpreter path runs in both
+/// profiles, and the incremental memory charge is checked against a full walk.
+#[cfg(unix)]
+fn run_native_process_collection(source: &str, expected: &[&str]) {
+    let module = lower(source);
+    for throughput in [false, true] {
+        let (provider, _) =
+            native_process_provider("native-printf", &["/usr/bin/printf", "/bin/printf"], 30_000);
+        let journal = Arc::new(InMemoryHostEffectJournal::recording());
+        let mut config = if throughput {
+            InterpreterConfig::v8_defaults()
+        } else {
+            InterpreterConfig::quickjs_defaults()
+        };
+        config.max_heap_objects = 4096;
+        config.instruction_budget = 100_000_000;
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+            RuntimeCapability::Console,
+            RuntimeCapability::ProcessSpawn,
+        ]
+        .into_iter()
+        .collect();
+        let mut core = InterpreterCore::new(config, "native-process-collection");
+        core.set_process_spawn(provider, journal);
+        let result = core
+            .execute(&module)
+            .unwrap_or_else(|error| panic!("throughput={throughput}: {error}\n{source}"));
+        assert_eq!(
+            result
+                .console_output
+                .iter()
+                .map(|entry| entry.message.as_str())
+                .collect::<Vec<_>>(),
+            expected,
+            "throughput={throughput}"
+        );
+        assert!(
+            core.gc_stats().collections > 0,
+            "native process state must permit collection"
+        );
+        assert!(core.gc_stats().reclaimed_objects > 0);
+        assert_eq!(core.gc_stats().skipped_collections, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "memory accounting drift, throughput={throughput}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn native_process_collection_keeps_a_pending_exec_callback_and_its_capture() {
+    run_native_process_collection(
+        r#"
+        const cp = require('child_process');
+        let total = 0;
+        cp.execFile('native-printf', ['payload'], (() => {
+          const captured = { text: 'kept' };
+          return (error, stdout, stderr) => {
+            console.log(captured.text, error === null, stdout, stderr.length, total);
+          };
+        })());
+        for (let i = 0; i < 12000; i++) { const item = { i }; total += item.i & 1; }
+        "#,
+        &["kept true payload 0 6000"],
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn native_process_collection_runs_inside_exec_callbacks() {
+    run_native_process_collection(
+        r#"
+        const cp = require('child_process');
+        cp.execFile('native-printf', ['payload'], (error, stdout, stderr) => {
+          let total = 0;
+          for (let i = 0; i < 12000; i++) { const item = { i }; total += item.i & 1; }
+          console.log(error === null, stdout, stderr.length, total);
+        });
+        "#,
+        &["true payload 0 6000"],
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn native_process_collection_preserves_buffers_and_removed_listener_snapshots() {
+    run_native_process_collection(
+        r#"
+        const cp = require('child_process');
+        let total = 0;
+        function churn() {
+          for (let i = 0; i < 6000; i++) { const item = { i }; total += item.i & 1; }
+        }
+        const child = cp.spawn('native-printf', ['payload']);
+        child.stdout.on('data', chunk => {
+          child.stdout.removeAllListeners('data');
+          churn();
+        });
+        child.stdout.on('data', (() => {
+          const captured = { text: 'kept' };
+          return chunk => { churn(); console.log('data:' + chunk + ':' + captured.text); };
+        })());
+        child.once('close', code => console.log('close:' + code + ':' + total));
+        churn();
+        "#,
+        &["data:payload:kept", "close:0:9000"],
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn orchestrator_native_process_collection_respects_the_configured_heap_in_both_profiles() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let (provider, _) =
+            native_process_provider("native-printf", &["/usr/bin/printf", "/bin/printf"], 30_000);
+        let journal = Arc::new(InMemoryHostEffectJournal::recording());
+        let mut runtime = RuntimeConfig::default();
+        runtime.execution.max_heap_objects = Some(4096);
+        runtime.execution.deterministic_budget = 100_000_000;
+        runtime.execution.throughput_budget = 100_000_000;
+        let mut orchestrator = ExecutionOrchestrator::new_with_runtime_config(
+            OrchestratorConfig {
+                force_lane: Some(lane),
+                ..OrchestratorConfig::default()
+            },
+            runtime,
+        );
+        orchestrator.set_process_spawn(provider, journal, test_process_authority());
+        let mut package = process_package(
+            r#"
+            const cp = require('child_process');
+            let total = 0;
+            cp.execFile('native-printf', ['product'], (error, stdout) => {
+              for (let i = 0; i < 6000; i++) { const item = { i }; total += item.i & 1; }
+              console.log(error === null, stdout, total);
+            });
+            for (let i = 0; i < 6000; i++) { const item = { i }; total += item.i & 1; }
+            "#,
+        );
+        package.capabilities.push("builtin".to_string());
+        let result = orchestrator
+            .execute(&package)
+            .expect("collecting product execution");
+        assert_eq!(result.console_output.len(), 1);
+        assert_eq!(result.console_output[0].message, "true product 6000");
+        assert_eq!(
+            result.host_effect_journal.len(),
+            2,
+            "exactly Spawn and Wait"
+        );
+        result
+            .cell_execution_transcript
+            .as_ref()
+            .expect("cell transcript")
+            .verify()
+            .expect("native effects retain their cell authority");
+    }
 }

@@ -84,6 +84,8 @@ impl OpaqueResolver {
             NativeBuiltinModule::Zlib,
             NativeBuiltinModule::Module,
             NativeBuiltinModule::Events,
+            NativeBuiltinModule::Fs,
+            NativeBuiltinModule::FsPromises,
             NativeBuiltinModule::Os,
             NativeBuiltinModule::Querystring,
             NativeBuiltinModule::Url,
@@ -275,13 +277,15 @@ impl ModulePolicyHook for RecordingPolicy {
         {
             policy.denied_specifiers.insert(request.specifier.clone());
         }
-        policy.authorize(request, record, context).map_err(|mut error| {
-            if let Some(code) = self.denial_code {
-                error.code = code;
-                error.event.error_code = code.stable_code().to_string();
-            }
-            error
-        })
+        policy
+            .authorize(request, record, context)
+            .map_err(|mut error| {
+                if let Some(code) = self.denial_code {
+                    error.code = code;
+                    error.event.error_code = code.stable_code().to_string();
+                }
+                error
+            })
     }
 }
 
@@ -987,7 +991,10 @@ console.log(require('./fallback.cjs').answer);
         let result = orchestrator(lane, ModuleSyntax::CommonJs)
             .execute_resolved_entry_with_resolver(&package(), &source, installed)
             .expect("an admitted absent optional dependency permits the program's fallback");
-        assert_eq!(lines(&result), ["MODULE_NOT_FOUND true", "MODULE_NOT_FOUND true", "42"]);
+        assert_eq!(
+            lines(&result),
+            ["MODULE_NOT_FOUND true", "MODULE_NOT_FOUND true", "42"]
+        );
         assert_eq!(
             resolver
                 .requests
@@ -1018,7 +1025,10 @@ fn delivered_policy_refusals_are_not_optional_dependency_fallbacks() {
                 );
                 let resolver = Arc::new(OpaqueResolver::new(vec![
                     ("entry.cjs", definition(ModuleSyntax::CommonJs, &code)),
-                    ("dep.cjs", definition(ModuleSyntax::CommonJs, "module.exports = 42;")),
+                    (
+                        "dep.cjs",
+                        definition(ModuleSyntax::CommonJs, "module.exports = 42;"),
+                    ),
                 ]));
                 let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
                 let policy = Arc::new(RecordingPolicy {
@@ -1032,7 +1042,12 @@ fn delivered_policy_refusals_are_not_optional_dependency_fallbacks() {
                 let error = engine
                     .execute_resolved_entry_with_resolver(&package(), &source, installed)
                     .expect_err("guest catch blocks cannot suppress a load-policy refusal");
-                assert!(error.to_string().contains("closed-world module resolution refused"), "{error}");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("closed-world module resolution refused"),
+                    "{error}"
+                );
                 assert!(error.to_string().contains("FE-MODRES-0005"), "{error}");
                 assert!(engine.last_failed_console_output().is_empty());
             }
@@ -1239,7 +1254,563 @@ console.log(require('node:crypto') === crypto, require('node:zlib') === zlib);
                 .iter()
                 .any(|(request, _)| request.specifier == "crypto")
         );
-        assert!(requests.iter().any(|(request, _)| request.specifier == "zlib"));
+        assert!(
+            requests
+                .iter()
+                .any(|(request, _)| request.specifier == "zlib")
+        );
+    }
+}
+
+#[test]
+fn delivered_buffer_modules_expose_complete_binary_operations_without_host_authority() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![("entry.cjs", definition(ModuleSyntax::CommonJs, r#"
+const load = require;
+const binary = load('buffer');
+console.log(binary === load('node:buffer'), binary.Buffer === Buffer, binary.Blob === Blob);
+console.log(typeof binary.SlowBuffer, typeof binary.File, typeof binary.transcode,
+    typeof binary.isUtf8, typeof binary.isAscii, typeof binary.resolveObjectURL);
+console.log(binary.SlowBuffer(3).length,
+    binary.isUtf8(Buffer.from([195, 169])), binary.isUtf8(Buffer.from([255])),
+    binary.isAscii(Buffer.from([65])), binary.isAscii(Buffer.from([128])));
+console.log(binary.transcode(Buffer.from('hé€'), 'utf8', 'latin1').toString('latin1'));
+const file = new binary.File(['payload'], 'note.txt', {type: 'TEXT/PLAIN', lastModified: 17});
+file.text().then(function(text) { console.log(text, file.name, file.size, file.type, file.lastModified); });
+"#))])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let mut execution = package();
+        execution.capabilities.retain(|grant| grant != "timer");
+        let result = orchestrator(lane, ModuleSyntax::CommonJs)
+            .execute_resolved_entry_with_resolver(&execution, &source, installed)
+            .expect("the native Buffer module exposes the existing binary implementation");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true true",
+                "function function function function function function",
+                "3 true false true false",
+                "hé?",
+                "payload note.txt 7 text/plain 17",
+            ],
+            "{lane:?}"
+        );
+        assert!(result.host_effect_transcript.is_empty());
+    }
+}
+
+#[test]
+fn delivered_buffer_esm_names_share_the_canonical_commonjs_factory() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![
+                (
+                    "entry.mjs",
+                    definition(
+                        ModuleSyntax::EsModule,
+                        r#"
+import child from './child.cjs';
+import binary, {Buffer as NativeBuffer, Blob as NativeBlob, File, SlowBuffer,
+    transcode, isUtf8, isAscii, resolveObjectURL} from 'node:buffer';
+import * as namespace from 'buffer';
+console.log(binary === child, namespace.default === binary, NativeBuffer === Buffer,
+    NativeBlob === Blob, File === child.File, SlowBuffer === child.SlowBuffer);
+console.log(transcode(Buffer.from('abc'), 'utf8', 'utf16le').toString('hex'),
+    isUtf8(Buffer.from('hi')), isAscii(Buffer.from('hi')), typeof resolveObjectURL);
+console.log(Object.getPrototypeOf(namespace) === null, Object.isExtensible(namespace),
+    Reflect.set(namespace, 'File', null), Reflect.defineProperty(namespace, 'File', {value: null}));
+const original = File;
+binary.File = function Replacement() {};
+binary.guestAdded = 1;
+import('node:buffer').then(function(again) {
+    console.log(again === namespace, again.File === original,
+        again.default.File === binary.File, 'guestAdded' in again);
+});
+"#,
+                    )
+                    .with_dependency(ModuleDependency::new("./child.cjs", ImportStyle::Import)),
+                ),
+                (
+                    "child.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        "const load = require; module.exports = load('buffer');",
+                    ),
+                ),
+            ])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let mut execution = package();
+        execution.capabilities.retain(|grant| grant != "timer");
+        let result = orchestrator(lane, ModuleSyntax::EsModule)
+            .execute_resolved_entry_with_resolver(&execution, &source, installed)
+            .expect("complete Buffer names are admitted without process or timer authority");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true true true true true",
+                "610062006300 true true function",
+                "true false false false",
+                "true true true false",
+            ],
+            "{lane:?}"
+        );
+    }
+}
+
+#[test]
+fn delivered_buffer_esm_does_not_trust_guest_file_metadata_getters() {
+    for property in ["name", "lastModified"] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![
+                ("entry.mjs", definition(ModuleSyntax::EsModule,
+                    "import './mutator.cjs'; import {File} from 'node:buffer'; console.log(typeof File);")
+                    .with_dependency(ModuleDependency::new("./mutator.cjs", ImportStyle::Import))),
+                ("mutator.cjs", definition(ModuleSyntax::CommonJs, &format!(
+                    "const load = require; const binary = load('buffer'); Object.defineProperty(binary.File.prototype, '{property}', {{get: function() {{ console.log('guest getter ran'); return 'forged'; }} }});"
+                ))),
+            ])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let mut engine = orchestrator(LaneChoice::QuickJs, ModuleSyntax::EsModule);
+        let error = engine
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect_err("a native File prototype does not authenticate a replacement getter");
+        assert!(
+            error.to_string().contains("bounded-import contract"),
+            "{property}: {error}"
+        );
+        assert!(engine.last_failed_console_output().is_empty());
+    }
+}
+
+#[test]
+fn delivered_events_expose_async_iteration_and_listener_helpers() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![("entry.cjs", definition(ModuleSyntax::CommonJs, r#"
+const load = require;
+const events = load('events');
+const emitter = new events.EventEmitter();
+console.log(events === load('node:events'), events === events.EventEmitter,
+    typeof events.on, typeof events.addAbortListener);
+const iterator = events.on(emitter, 'data');
+emitter.emit('data', 7, 'value');
+console.log(events.listenerCount(emitter, 'data'), events.getEventListeners(emitter, 'data').length);
+events.setMaxListeners(23, emitter);
+console.log(events.getMaxListeners(emitter));
+iterator.next().then(function(item) {
+    console.log(item.value.join(':'), item.done);
+    return iterator.return();
+}).then(function(item) { console.log(item.done, events.listenerCount(emitter, 'data')); });
+const controller = new AbortController();
+let count = 0;
+const subscription = events.addAbortListener(controller.signal, function() { count++; });
+controller.abort();
+subscription[Symbol.dispose]();
+console.log('abort', count);
+"#))])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let result = orchestrator(lane, ModuleSyntax::CommonJs)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("captured Events executes the complete retained engine implementation");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true function function",
+                "1 1",
+                "23",
+                "abort 1",
+                "7:value false",
+                "true 0",
+            ],
+            "{lane:?}"
+        );
+    }
+}
+
+#[test]
+fn delivered_events_esm_helpers_share_mutable_commonjs_state() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![
+                (
+                    "entry.mjs",
+                    definition(
+                        ModuleSyntax::EsModule,
+                        r#"
+import child from './child.cjs';
+import EventEmitter, {EventEmitter as Named, on, once, addAbortListener,
+    listenerCount, getEventListeners, setMaxListeners, getMaxListeners} from 'node:events';
+import * as namespace from 'events';
+console.log(EventEmitter === child, Named === child, namespace.default === child,
+    on === child.on, once === child.once, addAbortListener === child.addAbortListener);
+const emitter = new EventEmitter();
+function listener() {}
+emitter.on('event', listener);
+setMaxListeners(19, emitter);
+console.log(listenerCount(emitter, 'event'), getEventListeners(emitter, 'event')[0] === listener,
+    getMaxListeners(emitter));
+const pending = once(emitter, 'ready');
+emitter.emit('ready', 42);
+pending.then(function(args) { console.log(args[0]); });
+console.log(Reflect.set(namespace, 'on', null), namespace.on === on);
+"#,
+                    )
+                    .with_dependency(ModuleDependency::new("./child.cjs", ImportStyle::Import)),
+                ),
+                (
+                    "child.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        "module.exports = require('events');",
+                    ),
+                ),
+            ])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let result = orchestrator(lane, ModuleSyntax::EsModule)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("native Events imports expose callable retained helpers and shared state");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true true true true true",
+                "1 true 19",
+                "false true",
+                "42"
+            ],
+            "{lane:?}"
+        );
+    }
+}
+
+#[test]
+fn delivered_filesystem_aliases_share_modules_without_io_authority() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![(
+                "entry.cjs",
+                definition(
+                    ModuleSyntax::CommonJs,
+                    r#"
+const load = require;
+const fs = load('fs');
+const promises = load('node:fs/promises');
+console.log(fs === load('node:fs'), promises === load('fs/promises'),
+    promises === fs.promises, promises.constants === fs.constants);
+console.log(typeof fs.readFileSync, typeof fs.writeFileSync,
+    typeof fs.openSync, typeof promises.readFile, typeof promises.open);
+Object.defineProperty(fs, 'promises', {get: function() {
+    throw new Error('the parent getter must not select a cached submodule');
+}});
+console.log(load('fs/promises') === promises, load('node:fs/promises') === promises);
+"#,
+                ),
+            )])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let policy = Arc::new(RecordingPolicy {
+            allow_native_builtins: true,
+            ..RecordingPolicy::default()
+        });
+        let installed =
+            ExecutionModuleResolver::new(&source.module.record.id, resolver, policy.clone());
+        let mut execution = package();
+        execution.capabilities.retain(|grant| grant != "timer");
+        let result = orchestrator(lane, ModuleSyntax::CommonJs)
+            .execute_resolved_entry_with_resolver(&execution, &source, installed)
+            .expect("filesystem module construction confers no filesystem or timer authority");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true true true",
+                "function function function function function",
+                "true true"
+            ],
+            "{lane:?}"
+        );
+        assert!(result.host_effect_transcript.is_empty());
+        assert_eq!(policy.requests.lock().expect("policy log").len(), 6);
+    }
+}
+
+#[test]
+fn delivered_filesystem_functions_use_the_real_recorded_host_boundary() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let root = tempfile::tempdir().expect("filesystem sandbox");
+        std::fs::write(root.path().join("input.txt"), "input bytes").expect("input");
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![(
+                "entry.cjs",
+                definition(
+                    ModuleSyntax::CommonJs,
+                    r#"
+const load = require;
+const fs = load('node:fs');
+const promises = load('fs/promises');
+const read = fs.readFileSync, write = fs.writeFileSync;
+write('output.txt', 'native bytes');
+console.log(read('input.txt', 'utf8'), fs.statSync('output.txt').size);
+promises.readFile('output.txt', 'utf8').then(function(value) {
+    console.log(value);
+    return promises.writeFile('async.txt', 'promise bytes');
+}).then(function() { console.log('completed'); });
+"#,
+                ),
+            )])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let transcript = Arc::new(InMemoryHostIoTranscript::recording());
+        let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
+        engine.set_host_io(
+            Arc::new(SandboxedHostIo::with_root(root.path()).expect("real provider")),
+            Some(transcript.clone()),
+        );
+        let mut execution = package();
+        execution
+            .capabilities
+            .extend(["fs_read".into(), "fs_write".into()]);
+        let result = engine
+            .execute_resolved_entry_with_resolver(&execution, &source, installed)
+            .expect("captured filesystem modules execute native host I/O");
+        assert_eq!(
+            lines(&result),
+            ["input bytes 12", "native bytes", "completed"],
+            "{lane:?}"
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("output.txt")).expect("output"),
+            b"native bytes"
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("async.txt")).expect("async output"),
+            b"promise bytes"
+        );
+        assert_eq!(transcript.len(), 5, "every filesystem effect is recorded");
+        assert_eq!(result.host_effect_transcript.len(), 5);
+    }
+}
+
+#[test]
+fn delivered_filesystem_functions_do_not_acquire_read_or_write_authority() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for (module, invocation, read_grant) in [
+            ("fs", "fs.readFileSync('input.txt', 'utf8');", false),
+            ("fs", "fs.writeFileSync('forbidden.txt', 'no');", true),
+            (
+                "fs/promises",
+                "fs.readFile('input.txt', 'utf8').catch(() => console.log('caught'));",
+                false,
+            ),
+            (
+                "fs/promises",
+                "fs.writeFile('forbidden.txt', 'no').catch(() => console.log('caught'));",
+                true,
+            ),
+        ] {
+            let root = tempfile::tempdir().expect("filesystem sandbox");
+            std::fs::write(root.path().join("input.txt"), "input bytes").expect("input");
+            let resolver = Arc::new(
+                OpaqueResolver::new(vec![(
+                    "entry.cjs",
+                    definition(ModuleSyntax::CommonJs, &format!(
+                        "const load = require; const fs = load('{module}'); console.log('loaded'); {invocation}"
+                    )),
+                )])
+                .with_native_builtins(),
+            );
+            let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+            let installed = ExecutionModuleResolver::new(
+                &source.module.record.id,
+                resolver,
+                Arc::new(AllowAllPolicy),
+            );
+            let transcript = Arc::new(InMemoryHostIoTranscript::recording());
+            let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
+            engine.set_host_io(
+                Arc::new(SandboxedHostIo::with_root(root.path()).expect("real provider")),
+                Some(transcript.clone()),
+            );
+            let mut execution = package();
+            if read_grant {
+                execution.capabilities.push("fs_read".into());
+            }
+            let error = engine
+                .execute_resolved_entry_with_resolver(&execution, &source, installed)
+                .expect_err("a module descriptor cannot grant host I/O authority");
+            assert!(
+                error.to_string().contains("capability denied"),
+                "{module}: {invocation}: {error}"
+            );
+            assert_eq!(
+                engine
+                    .last_failed_console_output()
+                    .iter()
+                    .map(|line| line.message.as_str())
+                    .collect::<Vec<_>>(),
+                ["loaded"],
+                "loading succeeds and the denied effect remains uncatchable"
+            );
+            assert!(
+                transcript.is_empty(),
+                "refused effects must not reach the provider"
+            );
+            assert!(!root.path().join("forbidden.txt").exists());
+        }
+    }
+}
+
+#[test]
+fn delivered_filesystem_promises_esm_keeps_identity_and_fixed_exports() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![
+                ("entry.mjs", definition(ModuleSyntax::EsModule, r#"
+import child from './child.cjs';
+import promises, {readFile, open, constants} from 'node:fs/promises';
+import * as namespace from 'fs/promises';
+console.log(promises === child.promises, namespace.default === promises,
+    constants === promises.constants, readFile === promises.readFile, open === promises.open);
+console.log(Object.getPrototypeOf(namespace) === null, Object.isExtensible(namespace),
+    Reflect.set(namespace, 'readFile', null), 'added' in namespace);
+promises.readFile = function replacement() { return 'changed'; };
+import('node:fs/promises').then(function(again) {
+    console.log(again === namespace, again.readFile === readFile, again.default.readFile());
+});
+"#).with_dependency(ModuleDependency::new("./child.cjs", ImportStyle::Import))),
+                ("child.cjs", definition(ModuleSyntax::CommonJs,
+                    "const load = require; const fs = load('fs'); fs.promises.added = true; module.exports = {promises: fs.promises};")),
+            ])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let result = orchestrator(lane, ModuleSyntax::EsModule)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("filesystem promise namespaces share the native CommonJS provider");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true true true true",
+                "true false false false",
+                "true true changed"
+            ],
+            "{lane:?}"
+        );
+    }
+}
+
+#[test]
+fn delivered_filesystem_promises_esm_rejects_guest_snapshot_getters() {
+    let resolver = Arc::new(
+        OpaqueResolver::new(vec![
+            ("entry.mjs", definition(ModuleSyntax::EsModule,
+                "import './mutator.cjs'; import {readFile} from 'node:fs/promises'; console.log(typeof readFile);")
+                .with_dependency(ModuleDependency::new("./mutator.cjs", ImportStyle::Import))),
+            ("mutator.cjs", definition(ModuleSyntax::CommonJs,
+                "const load = require; const fs = load('fs'); Object.defineProperty(fs.promises, 'readFile', {get: function() { console.log('guest getter ran'); return function() {}; }});")),
+        ])
+        .with_native_builtins(),
+    );
+    let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+    let installed =
+        ExecutionModuleResolver::new(&source.module.record.id, resolver, Arc::new(AllowAllPolicy));
+    let mut engine = orchestrator(LaneChoice::QuickJs, ModuleSyntax::EsModule);
+    let error = engine
+        .execute_resolved_entry_with_resolver(&package(), &source, installed)
+        .expect_err("bounded imports must reject guest accessors before snapshotting");
+    assert!(
+        error.to_string().contains("bounded-import contract"),
+        "{error}"
+    );
+    assert!(engine.last_failed_console_output().is_empty());
+}
+
+#[test]
+fn delivered_filesystem_cache_reauthorizes_every_alias_route() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for specifier in ["node:fs", "node:fs/promises"] {
+            let resolver = Arc::new(
+                OpaqueResolver::new(vec![(
+                    "entry.cjs",
+                    definition(ModuleSyntax::CommonJs, &format!(
+                        "const load = require; load('fs'); load('{specifier}'); console.log('loaded'); load('{specifier}'); console.log('escaped');"
+                    )),
+                )])
+                .with_native_builtins(),
+            );
+            let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+            let policy = Arc::new(RecordingPolicy {
+                allow_native_builtins: true,
+                denied: Some((specifier.to_string(), 2)),
+                ..RecordingPolicy::default()
+            });
+            let installed =
+                ExecutionModuleResolver::new(&source.module.record.id, resolver, policy);
+            let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
+            let error = engine
+                .execute_resolved_entry_with_resolver(&package(), &source, installed)
+                .expect_err("cached filesystem modules still require route authorization");
+            assert!(
+                error
+                    .to_string()
+                    .contains("closed-world module resolution refused"),
+                "{specifier}: {error}"
+            );
+            assert_eq!(
+                engine
+                    .last_failed_console_output()
+                    .iter()
+                    .map(|line| line.message.as_str())
+                    .collect::<Vec<_>>(),
+                ["loaded"]
+            );
+        }
     }
 }
 
@@ -1315,7 +1886,8 @@ fn delivered_crypto_callable_values_cannot_acquire_entropy_authority() {
                 allow_native_builtins: true,
                 ..RecordingPolicy::default()
             });
-            let installed = ExecutionModuleResolver::new(&source.module.record.id, resolver, policy);
+            let installed =
+                ExecutionModuleResolver::new(&source.module.record.id, resolver, policy);
             let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
             let error = engine
                 .execute_resolved_entry_with_resolver(&package(), &source, installed)
@@ -1334,6 +1906,215 @@ fn delivered_crypto_callable_values_cannot_acquire_entropy_authority() {
                 "import succeeds; the effectful invocation is denied"
             );
         }
+    }
+}
+
+#[test]
+fn delivered_filesystem_modules_share_identity_without_performing_io() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(OpaqueResolver::new(vec![
+            ("entry.cjs", definition(ModuleSyntax::CommonJs, r#"
+const stream = require('stream');
+const events = require('events');
+const toWeb = stream.Readable.toWeb;
+const map = stream.Readable.prototype.map;
+events.defaultMaxListeners = 23;
+const fs = require('fs');
+const promises = require('node:fs/promises');
+const child = require('./child.cjs');
+console.log(fs === child.fs, fs === require('node:fs'), promises === fs.promises,
+    promises === child.promises, promises.constants === fs.constants);
+console.log(typeof child.read, typeof promises.open, typeof fs.cp, typeof fs.opendir);
+fs.marker = 17;
+console.log(child.fs.marker);
+fs.promises = {};
+console.log(require('fs/promises') === promises);
+console.log(Object.getPrototypeOf(fs.ReadStream.prototype) === stream.Readable.prototype,
+    Object.getPrototypeOf(fs.WriteStream.prototype) === stream.Writable.prototype,
+    stream.Readable.toWeb === toWeb, stream.Readable.prototype.map === map,
+    events.defaultMaxListeners);
+"#).with_dependency(ModuleDependency::new("./child.cjs", ImportStyle::Require))),
+            ("child.cjs", definition(ModuleSyntax::CommonJs,
+                "const fs = require('node:fs'); module.exports = {fs: fs, promises: require('fs/promises'), read: fs.readFileSync};")),
+        ]).with_native_builtins());
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let root = tempfile::tempdir().unwrap();
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+        let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
+        engine.set_host_io(
+            Arc::new(SandboxedHostIo::with_root(root.path()).unwrap()),
+            Some(recorder.clone()),
+        );
+        let result = engine
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("loading filesystem objects requires no read or write grant");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true true true true",
+                "function function function function",
+                "17",
+                "true",
+                "true true true true 23",
+            ]
+        );
+        assert!(
+            recorder.entries().is_empty(),
+            "module initialization performs no I/O"
+        );
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn delivered_filesystem_promises_esm_and_commonjs_share_real_protected_operations() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(OpaqueResolver::new(vec![
+            ("entry.mjs", definition(ModuleSyntax::EsModule, r#"
+import promiseFs, {readFile} from 'fs/promises';
+import * as namespace from 'node:fs/promises';
+import child from './child.cjs';
+console.log(namespace.default === promiseFs, child.promises === promiseFs,
+    namespace.readFile === readFile);
+child.write('out.txt', 'native filesystem');
+console.log(child.read('out.txt', 'utf8'));
+readFile('out.txt', 'utf8').then(function(value) { console.log('promise', value); });
+"#).with_dependency(ModuleDependency::new("./child.cjs", ImportStyle::Import))),
+            ("child.cjs", definition(ModuleSyntax::CommonJs,
+                "const fs = require('fs'); module.exports = {promises: fs.promises, read: fs.readFileSync, write: fs.writeFileSync};")),
+        ]).with_native_builtins());
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let root = tempfile::tempdir().unwrap();
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+        let mut engine = orchestrator(lane, ModuleSyntax::EsModule);
+        engine.set_host_io(
+            Arc::new(SandboxedHostIo::with_root(root.path()).unwrap()),
+            Some(recorder.clone()),
+        );
+        let mut granted = package();
+        granted
+            .capabilities
+            .extend(["fs_read".into(), "fs_write".into()]);
+        let result = engine
+            .execute_resolved_entry_with_resolver(&granted, &source, installed)
+            .expect("captured fs imports execute the existing sandboxed host operations");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true true",
+                "native filesystem",
+                "promise native filesystem",
+            ]
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("out.txt")).unwrap(),
+            b"native filesystem"
+        );
+        let effects = recorder.entries();
+        assert_eq!(
+            effects.len(),
+            3,
+            "one write and two reads, with no load-time effects"
+        );
+        assert!(effects.iter().all(|(_, outcome)| outcome.is_ok()));
+    }
+}
+
+#[test]
+fn delivered_filesystem_methods_cannot_acquire_read_or_write_authority() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for operation in [
+            "const read = fs.readFileSync; read('input.txt', 'utf8');",
+            "const write = fs.writeFileSync; write('forbidden.txt', 'escape');",
+        ] {
+            let resolver = Arc::new(OpaqueResolver::new(vec![(
+                "entry.cjs", definition(ModuleSyntax::CommonJs,
+                    &format!("const fs = require('fs'); console.log('loaded'); {operation} console.log('escaped');")),
+            )]).with_native_builtins());
+            let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+            let installed = ExecutionModuleResolver::new(
+                &source.module.record.id,
+                resolver,
+                Arc::new(AllowAllPolicy),
+            );
+            let root = tempfile::tempdir().unwrap();
+            std::fs::write(root.path().join("input.txt"), "protected bytes").unwrap();
+            let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+            let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
+            engine.set_host_io(
+                Arc::new(SandboxedHostIo::with_root(root.path()).unwrap()),
+                Some(recorder.clone()),
+            );
+            let error = engine
+                .execute_resolved_entry_with_resolver(&package(), &source, installed)
+                .expect_err("a module descriptor must not grant filesystem authority");
+            assert!(
+                error.to_string().contains("capability denied"),
+                "{operation}: {error}"
+            );
+            assert_eq!(
+                engine
+                    .last_failed_console_output()
+                    .iter()
+                    .map(|entry| entry.message.as_str())
+                    .collect::<Vec<_>>(),
+                ["loaded"]
+            );
+            assert!(!root.path().join("forbidden.txt").exists());
+            assert!(
+                recorder
+                    .entries()
+                    .iter()
+                    .all(|(_, outcome)| outcome.is_err())
+            );
+        }
+    }
+}
+
+#[test]
+fn delivered_full_filesystem_esm_remains_refused_before_namespace_getters() {
+    for mutation in [
+        "0;",
+        "Object.defineProperty(fs, 'ReadStream', { get: function ReadStream() { console.log('guest getter ran'); return function() {}; } });",
+        "Object.defineProperty(fs, 'readFileSync', { get: function() { console.log('guest getter ran'); return function() {}; } });",
+    ] {
+        let resolver = Arc::new(OpaqueResolver::new(vec![
+            ("entry.mjs", definition(ModuleSyntax::EsModule,
+                "import './mutator.cjs'; import fs from 'node:fs'; console.log(typeof fs.readFileSync);")
+                .with_dependency(ModuleDependency::new("./mutator.cjs", ImportStyle::Import))),
+            ("mutator.cjs", definition(ModuleSyntax::CommonJs,
+                &format!("const fs = require('fs'); {mutation}"))),
+        ]).with_native_builtins());
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let root = tempfile::tempdir().unwrap();
+        let mut engine = orchestrator(LaneChoice::QuickJs, ModuleSyntax::EsModule);
+        engine.set_host_io(
+            Arc::new(SandboxedHostIo::with_root(root.path()).unwrap()),
+            None,
+        );
+        let error = engine
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect_err("filesystem ESM snapshot getters retain the existing opaque-state refusal");
+        assert!(
+            error.to_string().contains("bounded-import contract"),
+            "{error}"
+        );
+        assert!(engine.last_failed_console_output().is_empty());
     }
 }
 
@@ -1536,7 +2317,10 @@ fn delivered_source_factory_esm_does_not_admit_guest_or_snapshot_getters() {
             error.to_string().contains("bounded-import contract"),
             "{mutation}: {error}"
         );
-        assert!(error.to_string().contains("'node:util'"), "{mutation}: {error}");
+        assert!(
+            error.to_string().contains("'node:util'"),
+            "{mutation}: {error}"
+        );
         assert!(engine.last_failed_console_output().is_empty(), "{mutation}");
     }
 }
@@ -1595,7 +2379,10 @@ fn delivered_strict_alias_bounds_first_getter_but_keeps_cached_identity() {
                 error.to_string().contains("bounded-import contract"),
                 "{error}"
             );
-            assert!(error.to_string().contains("'node:assert/strict'"), "{error}");
+            assert!(
+                error.to_string().contains("'node:assert/strict'"),
+                "{error}"
+            );
             assert!(engine.last_failed_console_output().is_empty());
         }
     }
@@ -1607,6 +2394,7 @@ fn delivered_builtin_submodule_cannot_rebind_its_initializing_factory() {
         ("util/types", "\0franken-engine/native-util"),
         ("assert/strict", "\0franken-engine/native-assert"),
         ("stream/promises", "\0franken-engine/native-stream"),
+        ("fs/promises", "\0franken-engine/native-fs"),
     ] {
         let mut resolver = OpaqueResolver::new(vec![(
             "entry.cjs",
@@ -2266,7 +3054,9 @@ fn delivered_native_builtin_cache_cannot_bypass_policy_in_nested_source() {
         let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
         let error = engine
             .execute_resolved_entry_with_resolver(&package(), &source, installed)
-            .expect_err("nested literal require must authorize before returning a cached core object");
+            .expect_err(
+                "nested literal require must authorize before returning a cached core object",
+            );
         assert!(
             error
                 .to_string()
@@ -2997,10 +3787,15 @@ console.log(fake[key] === replacement, Reflect.set(fake, key, original),
             );
             let result = orchestrator(lane, ModuleSyntax::EsModule)
                 .execute_resolved_entry_with_resolver(&package(), &source, installed)
-                .expect("native module namespaces reject export replacement without trusting a tag");
+                .expect(
+                    "native module namespaces reject export replacement without trusting a tag",
+                );
             assert_eq!(
                 lines(&result),
-                ["true false false false true true true", "true true true true"],
+                [
+                    "true false false false true true true",
+                    "true true true true"
+                ],
                 "lane={lane:?}, alias={alias}"
             );
         }
@@ -3602,7 +4397,6 @@ fn filesystem_dependencies_use_effective_provider_and_recorder_exception_provena
     }
 }
 
-
 #[test]
 fn delivered_native_imports_never_fall_back_after_resolver_refusal() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
@@ -3611,7 +4405,9 @@ fn delivered_native_imports_never_fall_back_after_resolver_refusal() {
                 (
                     ModuleSyntax::CommonJs,
                     "entry.cjs",
-                    format!("import('node:{alias}').then(function() {{ console.log('escaped'); }});"),
+                    format!(
+                        "import('node:{alias}').then(function() {{ console.log('escaped'); }});"
+                    ),
                 ),
                 (
                     ModuleSyntax::EsModule,
@@ -3636,7 +4432,9 @@ fn delivered_native_imports_never_fall_back_after_resolver_refusal() {
                     .execute_resolved_entry_with_resolver(&package(), &source, installed)
                     .expect_err("an uncaptured native import must remain refused");
                 assert!(
-                    error.to_string().contains("closed-world module resolution refused"),
+                    error
+                        .to_string()
+                        .contains("closed-world module resolution refused"),
                     "{lane:?} {alias} {syntax:?}: {error}"
                 );
                 assert!(engine.last_failed_console_output().is_empty());

@@ -12,7 +12,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::capability::RuntimeCapability;
-use crate::deterministic_serde::{CanonicalValue, encode_value};
+use crate::deterministic_serde::{CanonicalSink, CanonicalValue, CanonicalWriter, encode_value};
 use crate::hash_tiers::ContentHash;
 use crate::module_compatibility_matrix::CompatibilityMode;
 
@@ -255,11 +255,51 @@ impl ModuleRecord {
     }
 
     pub fn canonical_bytes(&self) -> Vec<u8> {
-        encode_value(&self.canonical_value())
+        let mut writer = CanonicalWriter::new();
+        self.write_canonical(&mut writer);
+        writer.finish()
     }
 
     pub fn canonical_hash(&self) -> ContentHash {
-        ContentHash::compute(&self.canonical_bytes())
+        let mut writer = CanonicalWriter::hasher();
+        self.write_canonical(&mut writer);
+        writer.finish_hash()
+    }
+
+    /// Keep the complete canonical record in the identity check, but borrow
+    /// its fields. Native require/import cache hits recheck this hash; neither
+    /// an owned value tree nor a full encoded source buffer is needed there.
+    /// Field order and container clamping match `canonical_value` exactly.
+    fn write_canonical<S: CanonicalSink>(&self, writer: &mut CanonicalWriter<S>) {
+        writer.map_header(6);
+        writer.key("dependencies");
+        let count = writer.array_header(self.dependencies.len());
+        for dependency in self.dependencies.iter().take(count) {
+            writer.map_header(2);
+            writer.key("specifier");
+            writer.string(&dependency.specifier);
+            writer.key("style");
+            writer.string(dependency.style.as_str());
+        }
+        writer.key("id");
+        writer.string(&self.id);
+        writer.key("provenance");
+        writer.map_header(2);
+        writer.key("kind");
+        writer.string(self.provenance.kind.as_str());
+        writer.key("origin");
+        writer.string(&self.provenance.origin);
+        writer.key("required_capabilities");
+        let count = writer.array_header(self.required_capabilities.len());
+        for capability in self.required_capabilities.iter().take(count) {
+            // Capability iteration follows the enum's BTreeSet ordering,
+            // exactly as the public value representation does.
+            writer.string(&capability.to_string());
+        }
+        writer.key("source");
+        writer.string(&self.source);
+        writer.key("syntax");
+        writer.string(self.syntax.as_str());
     }
 }
 
@@ -271,10 +311,11 @@ impl ModuleRecord {
 /// rechecks the complete descriptor before dispatching the real realm object;
 /// no source text or filesystem fallback is used to manufacture a builtin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NativeBuiltinModule {
-    Buffer,
+pub enum NativeBuiltinModule {    Buffer,
     Crypto,
     Zlib,
+    Fs,
+    FsPromises,
     Events,
     Os,
     Querystring,
@@ -301,6 +342,8 @@ impl NativeBuiltinModule {
             "buffer" | "node:buffer" => Some(Self::Buffer),
             "crypto" | "node:crypto" => Some(Self::Crypto),
             "zlib" | "node:zlib" => Some(Self::Zlib),
+            "fs" | "node:fs" => Some(Self::Fs),
+            "fs/promises" | "node:fs/promises" => Some(Self::FsPromises),
             "module" | "node:module" => Some(Self::Module),
             "events" | "node:events" => Some(Self::Events),
             "os" | "node:os" => Some(Self::Os),
@@ -328,6 +371,8 @@ impl NativeBuiltinModule {
             Self::Buffer => "node:buffer",
             Self::Crypto => "node:crypto",
             Self::Zlib => "node:zlib",
+            Self::Fs => "node:fs",
+            Self::FsPromises => "node:fs/promises",
             Self::Module => "node:module",
             Self::Events => "node:events",
             Self::Os => "node:os",
@@ -2641,6 +2686,8 @@ mod tests {
             "buffer",
             "crypto",
             "zlib",
+            "fs",
+            "fs/promises",
             "module",
             "events",
             "os",
@@ -2687,6 +2734,12 @@ mod tests {
                     .contains(&RuntimeCapability::RandomRead),
                 "loading {name} must not require or grant entropy authority"
             );
+            for effect in [RuntimeCapability::FsRead, RuntimeCapability::FsWrite] {
+                assert!(
+                    !record.required_capabilities.contains(&effect),
+                    "loading {name} must not require or grant filesystem authority"
+                );
+            }
             assert_eq!(
                 record
                     .required_capabilities
@@ -2700,7 +2753,7 @@ mod tests {
             assert!(allowed.authorize(&request, &record, &context()).is_ok());
         }
         for name in [
-            "fs",
+            "fs/unknown",
             "path/unknown",
             "node:unknown",
             "node:node:buffer",
@@ -2720,6 +2773,8 @@ mod tests {
             NativeBuiltinModule::Buffer,
             NativeBuiltinModule::Crypto,
             NativeBuiltinModule::Zlib,
+            NativeBuiltinModule::Fs,
+            NativeBuiltinModule::FsPromises,
         ] {
             let original = builtin.record("captured:graph:native");
             let mut forged = original.clone();
@@ -4361,6 +4416,114 @@ mod tests {
     // -----------------------------------------------------------------------
     // ModuleRecord canonical value/hash determinism
     // -----------------------------------------------------------------------
+
+    #[test]
+    fn module_record_borrowed_encoding_and_hash_match_owned_reference() {
+        use crate::deterministic_serde::encode_value;
+
+        let sources = [
+            String::new(),
+            "export const answer = 42;".to_string(),
+            "// \0é🚀\r\nmodule.exports = 'λ';".to_string(),
+            "a".repeat(63),
+            "a".repeat(64),
+            "a".repeat(65),
+            "x".repeat(1024 * 1024),
+        ];
+        let capability_sets = [
+            BTreeSet::new(),
+            BTreeSet::from([RuntimeCapability::FsRead, RuntimeCapability::ModuleLoad]),
+            RuntimeCapability::ALL.into_iter().collect(),
+        ];
+        for syntax in [
+            ModuleSyntax::EsModule,
+            ModuleSyntax::CommonJs,
+            ModuleSyntax::Wasm,
+        ] {
+            for kind in [
+                ModuleSourceKind::BuiltIn,
+                ModuleSourceKind::Workspace,
+                ModuleSourceKind::ExternalRegistry,
+            ] {
+                for source in &sources {
+                    for capabilities in &capability_sets {
+                        let record = ModuleRecord {
+                            id: "captured:\0é🚀?instance=1".into(),
+                            syntax,
+                            source: source.clone(),
+                            dependencies: vec![
+                                ModuleDependency::new("./z.cjs", ImportStyle::Require),
+                                ModuleDependency::new("./a.mjs?é", ImportStyle::Import),
+                                ModuleDependency::new("./z.cjs", ImportStyle::Import),
+                                ModuleDependency::new("./z.cjs", ImportStyle::Require),
+                            ],
+                            required_capabilities: capabilities.clone(),
+                            provenance: ModuleProvenance {
+                                kind,
+                                origin: "captured:root\0🚀".into(),
+                            },
+                        };
+                        // The independently maintained owned representation
+                        // remains the oracle for every byte and identity bit.
+                        let reference = encode_value(&record.canonical_value());
+                        assert_eq!(record.canonical_bytes(), reference);
+                        assert_eq!(record.canonical_hash(), ContentHash::compute(&reference));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn streaming_module_hash_retains_every_authority_and_identity_field() {
+        use crate::deterministic_serde::encode_value;
+
+        let original = ModuleRecord {
+            id: "captured:root:module".into(),
+            syntax: ModuleSyntax::EsModule,
+            source: "export const answer=42;".into(),
+            dependencies: vec![
+                ModuleDependency::new("./first.cjs", ImportStyle::Require),
+                ModuleDependency::new("./second.mjs", ImportStyle::Import),
+            ],
+            required_capabilities: BTreeSet::from([
+                RuntimeCapability::ModuleLoad,
+                RuntimeCapability::FsRead,
+            ]),
+            provenance: ModuleProvenance {
+                kind: ModuleSourceKind::Workspace,
+                origin: "captured:graph-pin".into(),
+            },
+        };
+        let original_hash = original.canonical_hash();
+        for field in 0..10 {
+            let mut changed = original.clone();
+            match field {
+                0 => changed.id.push_str("?different-instance"),
+                1 => changed.syntax = ModuleSyntax::CommonJs,
+                2 => changed.source.push_str("\n// changed"),
+                3 => changed.dependencies[0].style = ImportStyle::Import,
+                4 => changed.dependencies.reverse(),
+                5 => changed.dependencies.push(changed.dependencies[0].clone()),
+                6 => {
+                    changed
+                        .required_capabilities
+                        .remove(&RuntimeCapability::FsRead);
+                }
+                7 => changed.provenance.kind = ModuleSourceKind::ExternalRegistry,
+                8 => changed.provenance.origin.push_str(":changed"),
+                9 => changed.dependencies.clear(),
+                _ => unreachable!(),
+            }
+            let reference = encode_value(&changed.canonical_value());
+            assert_eq!(changed.canonical_hash(), ContentHash::compute(&reference));
+            assert_ne!(
+                changed.canonical_hash(),
+                original_hash,
+                "changed field {field}"
+            );
+        }
+    }
 
     #[test]
     fn module_record_canonical_hash_is_deterministic() {

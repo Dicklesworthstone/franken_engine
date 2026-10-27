@@ -1,0 +1,2811 @@
+{
+  "schema": "franken-engine.issue6.scoped-qualification.v1",
+  "reporting_date": "2026-10-27",
+  "consumer": "v0.3.0 release qualification owner; issue #6 / bd-15w28",
+  "purpose": "Preserve executed baseline comparisons and source provenance from an ephemeral, resource-limited runner. Bounded diagnostic evidence, not a release certificate.",
+  "observed_defect_classes": [
+    "false filesystem authority refusals",
+    "observable events aliases elided by finite lowering",
+    "first-class events initialization authority omitted by IR2-only reporting"
+  ],
+  "supersession_condition": "Supersede only after an archived canonical native comparison at a named revision covers these inputs, focused runtime regressions, and the complete zero-new-failures release gate.",
+  "release_qualified": false,
+  "source_revision": "1466ad9b11f550452c16929fd537e850a04001cb",
+  "implementation_commits": {
+    "events": "761d36410ed25b38ee26a82d192b49c02ca3d592",
+    "native_filesystem": "94aa53272cb836d0a6c5d3f14ea9e3966c7c8157",
+    "filesystem_lowering": "1466ad9b11f550452c16929fd537e850a04001cb"
+  },
+  "toolchain": "nightly-2026-09-21; rustc 1.100.0-nightly (bba531001 2026-09-20)",
+  "scope": {
+    "description": "Scoped native parser/lowering/authority probe; NOT full engine/runtime/library gate. Actual source modules included by path. Only interpreter metadata functions needed by lowering extracted verbatim; no interpreter execution.",
+    "repo": "/workspace/scratch/bcfd21b969bd/franken_engine",
+    "included_modules": [
+      "ast",
+      "authority_footprint",
+      "capability",
+      "deterministic_serde",
+      "effect_set",
+      "engine_object_id",
+      "epoch_barrier",
+      "feature_parity_tracker",
+      "flow_lattice",
+      "hash_tiers",
+      "ifc_artifacts",
+      "ir_contract",
+      "js_string",
+      "lowering_arena",
+      "lowering_pipeline",
+      "module_compatibility_matrix",
+      "module_resolver",
+      "object_model",
+      "parser",
+      "parser_api_stability",
+      "parser_gap_inventory",
+      "security_epoch",
+      "signature_preimage",
+      "ts_normalization",
+      "unified_authority_algebra"
+    ],
+    "interpreter_metadata_sha256": "4f41679452c948de294aa10efdfea73653667e6752d1c34742c0d494be56b8f4",
+    "excluded_unused_module": "capability::trust_zone; no lowerer/analyzer calls; unchanged rest of capability.rs",
+    "interpreter_extraction": "Exact capability metadata, full regexp_syntax/backtrack sources, exact regex early-error functions and error enums; no InterpreterCore runtime execution",
+    "v02_interpreter_metadata_sha256": "837e7d309a20679864702c3db04e939b1ff609afd54c7911fa9ee4e39eb9fbe7",
+    "capability_slice_verified_only_unused_trust_zone_excluded": true
+  },
+  "authority_provenance": {
+    "cases_sha256": "20ccd1278b8d54098b4f9e4139d3014186ad76fc56301840c87b758a497df97f",
+    "baseline": "2b3bfb6366ba1bd267ce92bad5466b1c105a91ee",
+    "original_main": "84e3c91b7684bd48a8fcc05f67a0fef7cd3c1a03",
+    "patched_sources_sha256": {
+      "crates/franken-engine/src/lowering_pipeline/fs_module.rs": "985a4c4b0542b3c7ea74f329346042ca81b1f09a7f5159eb944469089c0d6a27",
+      "crates/franken-engine/src/lowering_pipeline/util_module.rs": "30218ab86b4c416a26245d3fe1022e9597f15c36775829b8a3a03d8638465d91",
+      "crates/franken-engine/src/authority_footprint.rs": "69d79ad2d297dc02e9fab041f027856de8653e2f42de3018d20521365b2e555d"
+    }
+  },
+  "authority_inputs": [
+    {
+      "name": "inline-fs-read",
+      "source": "require('fs').readFileSync('input.txt', 'utf8');"
+    },
+    {
+      "name": "inline-node-fs-read",
+      "source": "require('node:fs').readFileSync('input.txt', 'utf8');"
+    },
+    {
+      "name": "namespace-fs-read",
+      "source": "const fs = require('fs'); fs.readFileSync('input.txt', 'utf8');"
+    },
+    {
+      "name": "destructured-fs-read",
+      "source": "const {readFileSync: read} = require('fs'); read('input.txt', 'utf8');"
+    },
+    {
+      "name": "inline-promises-read",
+      "source": "require('fs/promises').readFile('input.txt', 'utf8');"
+    },
+    {
+      "name": "namespace-promises-read",
+      "source": "const fs = require('node:fs/promises'); fs.readFile('input.txt', 'utf8');"
+    },
+    {
+      "name": "inline-fs-write",
+      "source": "require('fs').writeFileSync('out.txt', 'data');"
+    },
+    {
+      "name": "namespace-fs-write",
+      "source": "const fs = require('fs'); fs.writeFileSync('out.txt', 'data');"
+    },
+    {
+      "name": "inline-fs-constant",
+      "source": "require('fs').constants.R_OK;"
+    },
+    {
+      "name": "node-fs-constant",
+      "source": "require('node:fs').constants.W_OK;"
+    },
+    {
+      "name": "namespace-fs-constant",
+      "source": "const fs = require('fs'); fs.constants.F_OK;"
+    },
+    {
+      "name": "inline-access-constant",
+      "source": "require('fs').accessSync('input.txt', require('fs').constants.R_OK);"
+    },
+    {
+      "name": "namespace-access-constant",
+      "source": "const fs = require('fs'); fs.accessSync('input.txt', fs.constants.R_OK);"
+    },
+    {
+      "name": "invalid-write-undefined",
+      "source": "require('fs').writeFileSync('out.txt', undefined);"
+    },
+    {
+      "name": "missing-write-payload",
+      "source": "require('fs').writeFileSync('out.txt');"
+    },
+    {
+      "name": "invalid-read-path",
+      "source": "require('fs').readFileSync(null, 'utf8');"
+    },
+    {
+      "name": "escaped-fs-object",
+      "source": "const fs = require('fs'); console.log(fs);"
+    },
+    {
+      "name": "mutated-fs-method",
+      "source": "const fs = require('fs'); fs.readFileSync = function () { return 'replacement'; }; fs.readFileSync('missing');"
+    },
+    {
+      "name": "inline-secret-flow",
+      "source": "const secret = process.env.TOKEN; require('fs').writeFileSync('out', secret);"
+    },
+    {
+      "name": "bound-secret-flow",
+      "source": "const fs = require('fs'); const secret = process.env.TOKEN; fs.writeFileSync('out', secret);"
+    },
+    {
+      "name": "fs-and-http-read",
+      "source": "const fs = require('fs'); const http = require('http'); fs.readFileSync('input.txt', 'utf8'); http.get('https://example.com');"
+    },
+    {
+      "name": "events-default-constructor",
+      "source": "const EventEmitter = require('events'); const emitter = new EventEmitter(); emitter.emit('tick');"
+    },
+    {
+      "name": "events-named-constructor",
+      "source": "const {EventEmitter} = require('node:events'); const emitter = new EventEmitter(); emitter.emit('tick');"
+    },
+    {
+      "name": "events-namespace-constructor",
+      "source": "const events = require('events'); const emitter = new events.EventEmitter(); emitter.emit('tick');"
+    },
+    {
+      "name": "events-mixed-constructor-once",
+      "source": "const events = require('events'); const emitter = new events.EventEmitter(); events.once(emitter, 'tick'); emitter.emit('tick');"
+    },
+    {
+      "name": "events-once-options",
+      "source": "const events = require('events'); const emitter = new events.EventEmitter(); events.once(emitter, 'tick', {}); emitter.emit('tick');"
+    },
+    {
+      "name": "events-detached-helper",
+      "source": "const events = require('events'); const helper = events.once; helper({}, 'tick');"
+    },
+    {
+      "name": "dynamic-fs-observer",
+      "source": "eval(\"require('fs').readFileSync = function() { return 'changed'; }\"); require('fs').readFileSync('input.txt');"
+    },
+    {
+      "name": "unknown-core-module",
+      "source": "require('node:unknown-native-module');"
+    },
+    {
+      "name": "dynamic-module-import",
+      "source": "const name = 'fs'; require(name);"
+    },
+    {
+      "name": "read-result-indexing",
+      "source": "require('fs').readFileSync('input.txt', 'utf8').split('\\n')[0];"
+    },
+    {
+      "name": "bare-fs-import",
+      "source": "require('fs');"
+    },
+    {
+      "name": "bare-promises-import",
+      "source": "require('fs/promises');"
+    }
+  ],
+  "authority_results": {
+    "v0.2.0": [
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "inline-fs-read",
+        "outcome": "Clean",
+        "report_sha256": "d5b1836e0c444660768198ee57f7d38483d4188b4b6925053a185bc9f0125862",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 48,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "source": "require('fs').readFileSync('input.txt', 'utf8');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "inline-node-fs-read",
+        "outcome": "Clean",
+        "report_sha256": "68968e4ec4db9c562f8a37c3af0eca74ef90f2b34571d70d192c1202925b3ad9",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 53,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "source": "require('node:fs').readFileSync('input.txt', 'utf8');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "namespace-fs-read",
+        "outcome": "Clean",
+        "report_sha256": "5f95666df49d6311a850cafcea840d45bbd3a45f1daaff792117fbca80b6f144",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 63,
+                "end_line": 1,
+                "start_column": 27,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "source": "const fs = require('fs'); fs.readFileSync('input.txt', 'utf8');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "destructured-fs-read",
+        "outcome": "Clean",
+        "report_sha256": "c3b32318abdb4fa08abc6338bbabd40d9d03e1de9288886adf4d2412fff9b4e0",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 70,
+                "end_line": 1,
+                "start_column": 45,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "source": "const {readFileSync: read} = require('fs'); read('input.txt', 'utf8');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "inline-promises-read",
+        "outcome": "Clean",
+        "report_sha256": "b7e46e1faa1c878f6b2acb29d3ec5f8ae1e30c677c2dd1fb540589bcd8da92a0",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 53,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          },
+          {
+            "call_sites": [
+              {
+                "end_column": 53,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": null,
+            "capability_tag": "promise:resolve"
+          }
+        ],
+        "source": "require('fs/promises').readFile('input.txt', 'utf8');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "namespace-promises-read",
+        "outcome": "Clean",
+        "report_sha256": "2685762ac1d02507d860533a0aaafd7f1b34b6dd7eef276b9ae2bff756a15d74",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 73,
+                "end_line": 1,
+                "start_column": 41,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          },
+          {
+            "call_sites": [
+              {
+                "end_column": 73,
+                "end_line": 1,
+                "start_column": 41,
+                "start_line": 1
+              }
+            ],
+            "capability": null,
+            "capability_tag": "promise:resolve"
+          }
+        ],
+        "source": "const fs = require('node:fs/promises'); fs.readFile('input.txt', 'utf8');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "inline-fs-write",
+        "outcome": "Clean",
+        "report_sha256": "9c0f0551b3a0ec49b0f17b2873f6d60d64c6b1a54d78f6b3aa4223c099b09cde",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 47,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsWrite",
+            "capability_tag": "fs:write"
+          }
+        ],
+        "source": "require('fs').writeFileSync('out.txt', 'data');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "namespace-fs-write",
+        "outcome": "Clean",
+        "report_sha256": "581b5e631b6c4131f78398c3756e958d6731662dc4edbfe4bf3a923c4593e9bf",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 62,
+                "end_line": 1,
+                "start_column": 27,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsWrite",
+            "capability_tag": "fs:write"
+          }
+        ],
+        "source": "const fs = require('fs'); fs.writeFileSync('out.txt', 'data');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "inline-fs-constant",
+        "outcome": "Clean",
+        "report_sha256": "3b9c6fcf2cf29df7ab7d6261b3719ee7beb2a85b895ebf5d3324334c60f2c28e",
+        "required_capabilities": [],
+        "source": "require('fs').constants.R_OK;"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "node-fs-constant",
+        "outcome": "Clean",
+        "report_sha256": "437d95d39f09cb0c15b3b9d4b25071c968141033b3d2349d0542dbb56e5ec5e0",
+        "required_capabilities": [],
+        "source": "require('node:fs').constants.W_OK;"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "namespace-fs-constant",
+        "outcome": "Clean",
+        "report_sha256": "f876fd7c797542cfe39172be78932841446dff90df3f5ff088fc6a23131d616a",
+        "required_capabilities": [],
+        "source": "const fs = require('fs'); fs.constants.F_OK;"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "inline-access-constant",
+        "outcome": "Clean",
+        "report_sha256": "9076eb49f8daeb717ab04c037d66e1ebda877410187b10e140c54739c4a15cae",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 68,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "source": "require('fs').accessSync('input.txt', require('fs').constants.R_OK);"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "namespace-access-constant",
+        "outcome": "Clean",
+        "report_sha256": "dbfd0093eb74abb4f1f73e19ef6e25f49b25d970a055d695f477d9c59f51730a",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 72,
+                "end_line": 1,
+                "start_column": 27,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "source": "const fs = require('fs'); fs.accessSync('input.txt', fs.constants.R_OK);"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "invalid-write-undefined",
+        "outcome": "Clean",
+        "report_sha256": "4181b949a571677dbd3a336c18f04d7704e843b88bf52f9ef077db1bbedd3e22",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 50,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsWrite",
+            "capability_tag": "fs:write"
+          }
+        ],
+        "source": "require('fs').writeFileSync('out.txt', undefined);"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": {
+              "end_column": 39,
+              "end_line": 1,
+              "start_column": 1,
+              "start_line": 1
+            },
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "missing-write-payload",
+        "outcome": "FindingsPresent",
+        "report_sha256": "17a470635a2d388073c98e21cb70fa556ecf9a9adfcaf253fd3ae425a02d6d08",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 39,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "require('fs').writeFileSync('out.txt');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "invalid-read-path",
+        "outcome": "Clean",
+        "report_sha256": "2b79d99194c321aba56a9bbb96e2f97076a17587aa72aea33458a57757c571c6",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 41,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "source": "require('fs').readFileSync(null, 'utf8');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": {
+              "end_column": 25,
+              "end_line": 1,
+              "start_column": 1,
+              "start_line": 1
+            },
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "escaped-fs-object",
+        "outcome": "FindingsPresent",
+        "report_sha256": "82961cffd8e2a3a4a0c0dde9eaa206c344bf199d91ef3e42c295624010601feb",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 25,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "const fs = require('fs'); console.log(fs);"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "mutated-fs-method",
+        "outcome": "Clean",
+        "report_sha256": "4961ade7dd70f7523fefc3ea7728d7f8c4f8b43b6bdc41730a687128b96e1944",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 110,
+                "end_line": 1,
+                "start_column": 84,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "source": "const fs = require('fs'); fs.readFileSync = function () { return 'replacement'; }; fs.readFileSync('missing');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "process.env",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "EnvRead",
+            "kind": "ambient_authority_violation",
+            "location": {
+              "end_column": 33,
+              "end_line": 1,
+              "start_column": 1,
+              "start_line": 1
+            },
+            "message": "ambient access to `process.env` is rejected at the lowering boundary; it requires the `env.read` effect (env_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "inline-secret-flow",
+        "outcome": "FindingsPresent",
+        "report_sha256": "171df8bde4e5267ea647f72b11d2154db4cc9ff73131582744f45fd329eb66c1",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 33,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "EnvRead",
+            "capability_tag": "env_read"
+          }
+        ],
+        "source": "const secret = process.env.TOKEN; require('fs').writeFileSync('out', secret);"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "process.env",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "EnvRead",
+            "kind": "ambient_authority_violation",
+            "location": {
+              "end_column": 59,
+              "end_line": 1,
+              "start_column": 27,
+              "start_line": 1
+            },
+            "message": "ambient access to `process.env` is rejected at the lowering boundary; it requires the `env.read` effect (env_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "bound-secret-flow",
+        "outcome": "FindingsPresent",
+        "report_sha256": "823afae162ef1bb5aedae44bc0e9b79bc9ef9c1312e70d861dfc2d8405969df3",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 59,
+                "end_line": 1,
+                "start_column": 27,
+                "start_line": 1
+              }
+            ],
+            "capability": "EnvRead",
+            "capability_tag": "env_read"
+          }
+        ],
+        "source": "const fs = require('fs'); const secret = process.env.TOKEN; fs.writeFileSync('out', secret);"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "fs-and-http-read",
+        "outcome": "Clean",
+        "report_sha256": "785650123a3852a58e7e6caa9b5f9c7a139d960cfb6d446cff96a3780fef8d94",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 126,
+                "end_line": 1,
+                "start_column": 95,
+                "start_line": 1
+              }
+            ],
+            "capability": "NetworkEgress",
+            "capability_tag": "builtin:HttpGet"
+          },
+          {
+            "call_sites": [
+              {
+                "end_column": 93,
+                "end_line": 1,
+                "start_column": 57,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "source": "const fs = require('fs'); const http = require('http'); fs.readFileSync('input.txt', 'utf8'); http.get('https://example.com');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "events-default-constructor",
+        "outcome": "Clean",
+        "report_sha256": "c7f25eb2035cc688ad6bfcac9a5a3d82aad91e5c36ac13171ea255baf43c92c4",
+        "required_capabilities": [
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:EventEmitterConstructorRef"
+          }
+        ],
+        "source": "const EventEmitter = require('events'); const emitter = new EventEmitter(); emitter.emit('tick');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "events-named-constructor",
+        "outcome": "Clean",
+        "report_sha256": "b15fe8d6132ee5bfb658007f95d94d975beb1fc5b636f4c35afbebaaa4125863",
+        "required_capabilities": [
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:EventEmitterConstructorRef"
+          }
+        ],
+        "source": "const {EventEmitter} = require('node:events'); const emitter = new EventEmitter(); emitter.emit('tick');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": {
+              "end_column": 33,
+              "end_line": 1,
+              "start_column": 1,
+              "start_line": 1
+            },
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "events-namespace-constructor",
+        "outcome": "FindingsPresent",
+        "report_sha256": "a5eccd0eb26aeb49d525e56b4d820abafbaf2c9e2d2e3906010fedc790b69824",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 33,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "const events = require('events'); const emitter = new events.EventEmitter(); emitter.emit('tick');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "events-mixed-constructor-once",
+        "outcome": "Clean",
+        "report_sha256": "b690189567edb9eab5e766eeb4a3c32724bf7afebf41c6946b113cfe4291e29b",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 106,
+                "end_line": 1,
+                "start_column": 78,
+                "start_line": 1
+              }
+            ],
+            "capability": "Builtin",
+            "capability_tag": "builtin:EventsOnce"
+          }
+        ],
+        "source": "const events = require('events'); const emitter = new events.EventEmitter(); events.once(emitter, 'tick'); emitter.emit('tick');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "events-once-options",
+        "outcome": "Clean",
+        "report_sha256": "4a9ac1175d4e450588b28b4395498efe43d58c79cbed471bd13e512813a7009d",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 110,
+                "end_line": 1,
+                "start_column": 78,
+                "start_line": 1
+              }
+            ],
+            "capability": "Builtin",
+            "capability_tag": "builtin:EventsOnce"
+          }
+        ],
+        "source": "const events = require('events'); const emitter = new events.EventEmitter(); events.once(emitter, 'tick', {}); emitter.emit('tick');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": {
+              "end_column": 33,
+              "end_line": 1,
+              "start_column": 1,
+              "start_line": 1
+            },
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "events-detached-helper",
+        "outcome": "FindingsPresent",
+        "report_sha256": "982a9870e6bced235304d5c4ac50a9857db13da0fcf6b5ab411f37e18e51408c",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 33,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "const events = require('events'); const helper = events.once; helper({}, 'tick');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "eval",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "VmDispatch",
+            "kind": "ambient_authority_violation",
+            "location": null,
+            "message": "ambient access to `eval` is rejected at the lowering boundary; it requires the `runtime.eval` effect (vm_dispatch), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "dynamic-fs-observer",
+        "outcome": "FindingsPresent",
+        "report_sha256": "395015703b68efd3d7188980f9f9d5dfbc477dd0bb9ad86f3f9103e48f831135",
+        "required_capabilities": [
+          {
+            "call_sites": [],
+            "capability": "VmDispatch",
+            "capability_tag": "vm_dispatch"
+          }
+        ],
+        "source": "eval(\"require('fs').readFileSync = function() { return 'changed'; }\"); require('fs').readFileSync('input.txt');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": {
+              "end_column": 38,
+              "end_line": 1,
+              "start_column": 1,
+              "start_line": 1
+            },
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "unknown-core-module",
+        "outcome": "FindingsPresent",
+        "report_sha256": "773fe183d7608458093e063d0908925bb3109849d116f2df11db21f0d2ed2824",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 38,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "require('node:unknown-native-module');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": {
+              "end_column": 33,
+              "end_line": 1,
+              "start_column": 20,
+              "start_line": 1
+            },
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "dynamic-module-import",
+        "outcome": "FindingsPresent",
+        "report_sha256": "3f21a39e3dcb7ea38dbe919dd1f29cd51e30edb03c1b8f9345595531fcfdfc4d",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 33,
+                "end_line": 1,
+                "start_column": 20,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "const name = 'fs'; require(name);"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "read-result-indexing",
+        "outcome": "Clean",
+        "report_sha256": "0767b64ddb77f48dd9f09d186c4392ca4bc918a03ef2aa85dc4c0fea9833cf77",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 63,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "source": "require('fs').readFileSync('input.txt', 'utf8').split('\\n')[0];"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": {
+              "end_column": 14,
+              "end_line": 1,
+              "start_column": 1,
+              "start_line": 1
+            },
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "bare-fs-import",
+        "outcome": "FindingsPresent",
+        "report_sha256": "c1638bfef02cfb379f142090e8be69b271ff703902acc3fb29c9adbc86a5bcf0",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 14,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "require('fs');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": {
+              "end_column": 23,
+              "end_line": 1,
+              "start_column": 1,
+              "start_line": 1
+            },
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "bare-promises-import",
+        "outcome": "FindingsPresent",
+        "report_sha256": "671ae4562603977b44a962c04a64c45f07d7a0ce2f9a28c21b0c3b442e636041",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 23,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "require('fs/promises');"
+      }
+    ],
+    "starting_main": [
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "inline-fs-read",
+        "outcome": "Clean",
+        "report_sha256": "d5b1836e0c444660768198ee57f7d38483d4188b4b6925053a185bc9f0125862",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 48,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "source": "require('fs').readFileSync('input.txt', 'utf8');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "inline-node-fs-read",
+        "outcome": "Clean",
+        "report_sha256": "68968e4ec4db9c562f8a37c3af0eca74ef90f2b34571d70d192c1202925b3ad9",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 53,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "source": "require('node:fs').readFileSync('input.txt', 'utf8');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "namespace-fs-read",
+        "outcome": "Clean",
+        "report_sha256": "5f95666df49d6311a850cafcea840d45bbd3a45f1daaff792117fbca80b6f144",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 63,
+                "end_line": 1,
+                "start_column": 27,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "source": "const fs = require('fs'); fs.readFileSync('input.txt', 'utf8');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "destructured-fs-read",
+        "outcome": "Clean",
+        "report_sha256": "c3b32318abdb4fa08abc6338bbabd40d9d03e1de9288886adf4d2412fff9b4e0",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 70,
+                "end_line": 1,
+                "start_column": 45,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "source": "const {readFileSync: read} = require('fs'); read('input.txt', 'utf8');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": null,
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "inline-promises-read",
+        "outcome": "FindingsPresent",
+        "report_sha256": "b03f62e230df8756519a4a5b01f99a444685c4300c6818b7fe718f907e1e2e17",
+        "required_capabilities": [
+          {
+            "call_sites": [],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "require('fs/promises').readFile('input.txt', 'utf8');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": null,
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "namespace-promises-read",
+        "outcome": "FindingsPresent",
+        "report_sha256": "e7c9c9d484f5703478023928ebcac6064d68b683d62197bc786d6bdc24ef3a2d",
+        "required_capabilities": [
+          {
+            "call_sites": [],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "const fs = require('node:fs/promises'); fs.readFile('input.txt', 'utf8');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "inline-fs-write",
+        "outcome": "Clean",
+        "report_sha256": "9c0f0551b3a0ec49b0f17b2873f6d60d64c6b1a54d78f6b3aa4223c099b09cde",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 47,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsWrite",
+            "capability_tag": "fs:write"
+          }
+        ],
+        "source": "require('fs').writeFileSync('out.txt', 'data');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "namespace-fs-write",
+        "outcome": "Clean",
+        "report_sha256": "581b5e631b6c4131f78398c3756e958d6731662dc4edbfe4bf3a923c4593e9bf",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 62,
+                "end_line": 1,
+                "start_column": 27,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsWrite",
+            "capability_tag": "fs:write"
+          }
+        ],
+        "source": "const fs = require('fs'); fs.writeFileSync('out.txt', 'data');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": null,
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "inline-fs-constant",
+        "outcome": "FindingsPresent",
+        "report_sha256": "78b4f8c44b9713b5f5d8a5b038f2e4fe949aeaebec160944ef3c5897e3700f20",
+        "required_capabilities": [
+          {
+            "call_sites": [],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "require('fs').constants.R_OK;"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": null,
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "node-fs-constant",
+        "outcome": "FindingsPresent",
+        "report_sha256": "b7b70e3d6203e5e2d445ea5da620f3396e3c35a36b65c05a471d88325d55c86c",
+        "required_capabilities": [
+          {
+            "call_sites": [],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "require('node:fs').constants.W_OK;"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": null,
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "namespace-fs-constant",
+        "outcome": "FindingsPresent",
+        "report_sha256": "d2752f30543ab06285db810d75b35d42e08e17b7e1ac73d9f5e4a29e00c287a5",
+        "required_capabilities": [
+          {
+            "call_sites": [],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "const fs = require('fs'); fs.constants.F_OK;"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": null,
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "inline-access-constant",
+        "outcome": "FindingsPresent",
+        "report_sha256": "e5fd1732d6eeba2ca3ed57ee34dd97b428670bb0688521d4298007ca5344e0c8",
+        "required_capabilities": [
+          {
+            "call_sites": [],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "require('fs').accessSync('input.txt', require('fs').constants.R_OK);"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": null,
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "namespace-access-constant",
+        "outcome": "FindingsPresent",
+        "report_sha256": "21e927ae4e835d2a4c290e13c10e805b5018ea830434465382069ff3e5e84751",
+        "required_capabilities": [
+          {
+            "call_sites": [],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "const fs = require('fs'); fs.accessSync('input.txt', fs.constants.R_OK);"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "invalid-write-undefined",
+        "outcome": "Clean",
+        "report_sha256": "4181b949a571677dbd3a336c18f04d7704e843b88bf52f9ef077db1bbedd3e22",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 50,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsWrite",
+            "capability_tag": "fs:write"
+          }
+        ],
+        "source": "require('fs').writeFileSync('out.txt', undefined);"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": null,
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "missing-write-payload",
+        "outcome": "FindingsPresent",
+        "report_sha256": "2de654a96a5a0cb19dde62bd342662b0d4e1c72c3af0a425fd4faec42f633f74",
+        "required_capabilities": [
+          {
+            "call_sites": [],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "require('fs').writeFileSync('out.txt');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "invalid-read-path",
+        "outcome": "Clean",
+        "report_sha256": "2b79d99194c321aba56a9bbb96e2f97076a17587aa72aea33458a57757c571c6",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 41,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "source": "require('fs').readFileSync(null, 'utf8');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": null,
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "escaped-fs-object",
+        "outcome": "FindingsPresent",
+        "report_sha256": "f21fce78501417fca2124147f29672c900feab29383627ececc5a9fd32b16cb8",
+        "required_capabilities": [
+          {
+            "call_sites": [],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "const fs = require('fs'); console.log(fs);"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": null,
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "mutated-fs-method",
+        "outcome": "FindingsPresent",
+        "report_sha256": "027e361c77982f2aa52d1c509204fd581af7c2650ab8eb38ab0815319a7581b8",
+        "required_capabilities": [
+          {
+            "call_sites": [],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "const fs = require('fs'); fs.readFileSync = function () { return 'replacement'; }; fs.readFileSync('missing');"
+      },
+      {
+        "analyzable": false,
+        "deterministic_replay": true,
+        "fail_closed_reason": "unsupported or unanalyzable construct: unauthorized flow detected at op 8: Secret -> Internal (artifact_id=sha256:bbfb3e39927fdc43b8b80dfe736dacba17b37e2ff3a3a86a4c4ce7de2cafbd04 denied_flow_count=1 reason=no_lattice_or_declassification_path)",
+        "findings": [],
+        "name": "inline-secret-flow",
+        "outcome": "Unanalyzable",
+        "report_sha256": "6b4542da4170a991aed2f4c751f6021a8a518efab346e0bed8baa938a0781353",
+        "required_capabilities": [],
+        "source": "const secret = process.env.TOKEN; require('fs').writeFileSync('out', secret);"
+      },
+      {
+        "analyzable": false,
+        "deterministic_replay": true,
+        "fail_closed_reason": "unsupported or unanalyzable construct: unauthorized flow detected at op 11: Secret -> Internal (artifact_id=sha256:4bf3d0b07b5ac2e8b7557b96d279808435820be73e3897a31d3110c38304e7ba denied_flow_count=1 reason=no_lattice_or_declassification_path)",
+        "findings": [],
+        "name": "bound-secret-flow",
+        "outcome": "Unanalyzable",
+        "report_sha256": "bd2e521183eac6cf67714936b40e07ff4f0942010f0a4002c1c1b19d878368b4",
+        "required_capabilities": [],
+        "source": "const fs = require('fs'); const secret = process.env.TOKEN; fs.writeFileSync('out', secret);"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "fs-and-http-read",
+        "outcome": "Clean",
+        "report_sha256": "785650123a3852a58e7e6caa9b5f9c7a139d960cfb6d446cff96a3780fef8d94",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 126,
+                "end_line": 1,
+                "start_column": 95,
+                "start_line": 1
+              }
+            ],
+            "capability": "NetworkEgress",
+            "capability_tag": "builtin:HttpGet"
+          },
+          {
+            "call_sites": [
+              {
+                "end_column": 93,
+                "end_line": 1,
+                "start_column": 57,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "source": "const fs = require('fs'); const http = require('http'); fs.readFileSync('input.txt', 'utf8'); http.get('https://example.com');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "events-default-constructor",
+        "outcome": "Clean",
+        "report_sha256": "c7f25eb2035cc688ad6bfcac9a5a3d82aad91e5c36ac13171ea255baf43c92c4",
+        "required_capabilities": [
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:EventEmitterConstructorRef"
+          }
+        ],
+        "source": "const EventEmitter = require('events'); const emitter = new EventEmitter(); emitter.emit('tick');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "events-named-constructor",
+        "outcome": "Clean",
+        "report_sha256": "b15fe8d6132ee5bfb658007f95d94d975beb1fc5b636f4c35afbebaaa4125863",
+        "required_capabilities": [
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:EventEmitterConstructorRef"
+          }
+        ],
+        "source": "const {EventEmitter} = require('node:events'); const emitter = new EventEmitter(); emitter.emit('tick');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "events-namespace-constructor",
+        "outcome": "Clean",
+        "report_sha256": "af9d2df335b42fde7d809faaa7817acabe9ccd8019f7987f36a17d0d091e1333",
+        "required_capabilities": [],
+        "source": "const events = require('events'); const emitter = new events.EventEmitter(); emitter.emit('tick');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "events-mixed-constructor-once",
+        "outcome": "Clean",
+        "report_sha256": "b690189567edb9eab5e766eeb4a3c32724bf7afebf41c6946b113cfe4291e29b",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 106,
+                "end_line": 1,
+                "start_column": 78,
+                "start_line": 1
+              }
+            ],
+            "capability": "Builtin",
+            "capability_tag": "builtin:EventsOnce"
+          }
+        ],
+        "source": "const events = require('events'); const emitter = new events.EventEmitter(); events.once(emitter, 'tick'); emitter.emit('tick');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "events-once-options",
+        "outcome": "Clean",
+        "report_sha256": "4a9ac1175d4e450588b28b4395498efe43d58c79cbed471bd13e512813a7009d",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 110,
+                "end_line": 1,
+                "start_column": 78,
+                "start_line": 1
+              }
+            ],
+            "capability": "Builtin",
+            "capability_tag": "builtin:EventsOnce"
+          }
+        ],
+        "source": "const events = require('events'); const emitter = new events.EventEmitter(); events.once(emitter, 'tick', {}); emitter.emit('tick');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "events-detached-helper",
+        "outcome": "Clean",
+        "report_sha256": "0259069069239ffadc8bfb3acedba1c86e0a3170768101168656ba8c63365072",
+        "required_capabilities": [],
+        "source": "const events = require('events'); const helper = events.once; helper({}, 'tick');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "eval",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "VmDispatch",
+            "kind": "ambient_authority_violation",
+            "location": {
+              "end_column": 70,
+              "end_line": 1,
+              "start_column": 1,
+              "start_line": 1
+            },
+            "message": "ambient access to `eval` is rejected at the lowering boundary; it requires the `runtime.eval` effect (vm_dispatch), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "dynamic-fs-observer",
+        "outcome": "FindingsPresent",
+        "report_sha256": "d80ea8ff13e4f18757de5e6941445ed3d8dea3e4df5668e2d69e0effb13dbc1b",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 70,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "VmDispatch",
+            "capability_tag": "vm_dispatch"
+          }
+        ],
+        "source": "eval(\"require('fs').readFileSync = function() { return 'changed'; }\"); require('fs').readFileSync('input.txt');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": {
+              "end_column": 38,
+              "end_line": 1,
+              "start_column": 1,
+              "start_line": 1
+            },
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "unknown-core-module",
+        "outcome": "FindingsPresent",
+        "report_sha256": "773fe183d7608458093e063d0908925bb3109849d116f2df11db21f0d2ed2824",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 38,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "require('node:unknown-native-module');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": {
+              "end_column": 33,
+              "end_line": 1,
+              "start_column": 20,
+              "start_line": 1
+            },
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "dynamic-module-import",
+        "outcome": "FindingsPresent",
+        "report_sha256": "3f21a39e3dcb7ea38dbe919dd1f29cd51e30edb03c1b8f9345595531fcfdfc4d",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 33,
+                "end_line": 1,
+                "start_column": 20,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "const name = 'fs'; require(name);"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "read-result-indexing",
+        "outcome": "Clean",
+        "report_sha256": "0767b64ddb77f48dd9f09d186c4392ca4bc918a03ef2aa85dc4c0fea9833cf77",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 63,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "source": "require('fs').readFileSync('input.txt', 'utf8').split('\\n')[0];"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": null,
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "bare-fs-import",
+        "outcome": "FindingsPresent",
+        "report_sha256": "3b631c8d625365886a6b9a075a489392fa4ccfbdad3c68c88ea675fc27d6a2fe",
+        "required_capabilities": [
+          {
+            "call_sites": [],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "require('fs');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": null,
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "bare-promises-import",
+        "outcome": "FindingsPresent",
+        "report_sha256": "f4c0ff9d4248c6dffa598abe5cefef72e11c9231352dcb3d529c6799e8af50a4",
+        "required_capabilities": [
+          {
+            "call_sites": [],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "require('fs/promises');"
+      }
+    ],
+    "patched": [
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "inline-fs-read",
+        "outcome": "Clean",
+        "report_sha256": "d5b1836e0c444660768198ee57f7d38483d4188b4b6925053a185bc9f0125862",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 48,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "source": "require('fs').readFileSync('input.txt', 'utf8');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "inline-node-fs-read",
+        "outcome": "Clean",
+        "report_sha256": "68968e4ec4db9c562f8a37c3af0eca74ef90f2b34571d70d192c1202925b3ad9",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 53,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "source": "require('node:fs').readFileSync('input.txt', 'utf8');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "namespace-fs-read",
+        "outcome": "Clean",
+        "report_sha256": "5f95666df49d6311a850cafcea840d45bbd3a45f1daaff792117fbca80b6f144",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 63,
+                "end_line": 1,
+                "start_column": 27,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "source": "const fs = require('fs'); fs.readFileSync('input.txt', 'utf8');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "destructured-fs-read",
+        "outcome": "Clean",
+        "report_sha256": "c3b32318abdb4fa08abc6338bbabd40d9d03e1de9288886adf4d2412fff9b4e0",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 70,
+                "end_line": 1,
+                "start_column": 45,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "source": "const {readFileSync: read} = require('fs'); read('input.txt', 'utf8');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": null,
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "inline-promises-read",
+        "outcome": "FindingsPresent",
+        "report_sha256": "b03f62e230df8756519a4a5b01f99a444685c4300c6818b7fe718f907e1e2e17",
+        "required_capabilities": [
+          {
+            "call_sites": [],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "require('fs/promises').readFile('input.txt', 'utf8');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": null,
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "namespace-promises-read",
+        "outcome": "FindingsPresent",
+        "report_sha256": "e7c9c9d484f5703478023928ebcac6064d68b683d62197bc786d6bdc24ef3a2d",
+        "required_capabilities": [
+          {
+            "call_sites": [],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "const fs = require('node:fs/promises'); fs.readFile('input.txt', 'utf8');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "inline-fs-write",
+        "outcome": "Clean",
+        "report_sha256": "9c0f0551b3a0ec49b0f17b2873f6d60d64c6b1a54d78f6b3aa4223c099b09cde",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 47,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsWrite",
+            "capability_tag": "fs:write"
+          }
+        ],
+        "source": "require('fs').writeFileSync('out.txt', 'data');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "namespace-fs-write",
+        "outcome": "Clean",
+        "report_sha256": "581b5e631b6c4131f78398c3756e958d6731662dc4edbfe4bf3a923c4593e9bf",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 62,
+                "end_line": 1,
+                "start_column": 27,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsWrite",
+            "capability_tag": "fs:write"
+          }
+        ],
+        "source": "const fs = require('fs'); fs.writeFileSync('out.txt', 'data');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "inline-fs-constant",
+        "outcome": "Clean",
+        "report_sha256": "3b9c6fcf2cf29df7ab7d6261b3719ee7beb2a85b895ebf5d3324334c60f2c28e",
+        "required_capabilities": [],
+        "source": "require('fs').constants.R_OK;"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "node-fs-constant",
+        "outcome": "Clean",
+        "report_sha256": "437d95d39f09cb0c15b3b9d4b25071c968141033b3d2349d0542dbb56e5ec5e0",
+        "required_capabilities": [],
+        "source": "require('node:fs').constants.W_OK;"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "namespace-fs-constant",
+        "outcome": "Clean",
+        "report_sha256": "f876fd7c797542cfe39172be78932841446dff90df3f5ff088fc6a23131d616a",
+        "required_capabilities": [],
+        "source": "const fs = require('fs'); fs.constants.F_OK;"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "inline-access-constant",
+        "outcome": "Clean",
+        "report_sha256": "9076eb49f8daeb717ab04c037d66e1ebda877410187b10e140c54739c4a15cae",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 68,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "source": "require('fs').accessSync('input.txt', require('fs').constants.R_OK);"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "namespace-access-constant",
+        "outcome": "Clean",
+        "report_sha256": "dbfd0093eb74abb4f1f73e19ef6e25f49b25d970a055d695f477d9c59f51730a",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 72,
+                "end_line": 1,
+                "start_column": 27,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "source": "const fs = require('fs'); fs.accessSync('input.txt', fs.constants.R_OK);"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "invalid-write-undefined",
+        "outcome": "Clean",
+        "report_sha256": "4181b949a571677dbd3a336c18f04d7704e843b88bf52f9ef077db1bbedd3e22",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 50,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsWrite",
+            "capability_tag": "fs:write"
+          }
+        ],
+        "source": "require('fs').writeFileSync('out.txt', undefined);"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": null,
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "missing-write-payload",
+        "outcome": "FindingsPresent",
+        "report_sha256": "2de654a96a5a0cb19dde62bd342662b0d4e1c72c3af0a425fd4faec42f633f74",
+        "required_capabilities": [
+          {
+            "call_sites": [],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "require('fs').writeFileSync('out.txt');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "invalid-read-path",
+        "outcome": "Clean",
+        "report_sha256": "2b79d99194c321aba56a9bbb96e2f97076a17587aa72aea33458a57757c571c6",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 41,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "source": "require('fs').readFileSync(null, 'utf8');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": null,
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "escaped-fs-object",
+        "outcome": "FindingsPresent",
+        "report_sha256": "f21fce78501417fca2124147f29672c900feab29383627ececc5a9fd32b16cb8",
+        "required_capabilities": [
+          {
+            "call_sites": [],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "const fs = require('fs'); console.log(fs);"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": null,
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "mutated-fs-method",
+        "outcome": "FindingsPresent",
+        "report_sha256": "027e361c77982f2aa52d1c509204fd581af7c2650ab8eb38ab0815319a7581b8",
+        "required_capabilities": [
+          {
+            "call_sites": [],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "const fs = require('fs'); fs.readFileSync = function () { return 'replacement'; }; fs.readFileSync('missing');"
+      },
+      {
+        "analyzable": false,
+        "deterministic_replay": true,
+        "fail_closed_reason": "unsupported or unanalyzable construct: unauthorized flow detected at op 8: Secret -> Internal (artifact_id=sha256:bbfb3e39927fdc43b8b80dfe736dacba17b37e2ff3a3a86a4c4ce7de2cafbd04 denied_flow_count=1 reason=no_lattice_or_declassification_path)",
+        "findings": [],
+        "name": "inline-secret-flow",
+        "outcome": "Unanalyzable",
+        "report_sha256": "6b4542da4170a991aed2f4c751f6021a8a518efab346e0bed8baa938a0781353",
+        "required_capabilities": [],
+        "source": "const secret = process.env.TOKEN; require('fs').writeFileSync('out', secret);"
+      },
+      {
+        "analyzable": false,
+        "deterministic_replay": true,
+        "fail_closed_reason": "unsupported or unanalyzable construct: unauthorized flow detected at op 11: Secret -> Internal (artifact_id=sha256:4bf3d0b07b5ac2e8b7557b96d279808435820be73e3897a31d3110c38304e7ba denied_flow_count=1 reason=no_lattice_or_declassification_path)",
+        "findings": [],
+        "name": "bound-secret-flow",
+        "outcome": "Unanalyzable",
+        "report_sha256": "bd2e521183eac6cf67714936b40e07ff4f0942010f0a4002c1c1b19d878368b4",
+        "required_capabilities": [],
+        "source": "const fs = require('fs'); const secret = process.env.TOKEN; fs.writeFileSync('out', secret);"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "fs-and-http-read",
+        "outcome": "Clean",
+        "report_sha256": "785650123a3852a58e7e6caa9b5f9c7a139d960cfb6d446cff96a3780fef8d94",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 126,
+                "end_line": 1,
+                "start_column": 95,
+                "start_line": 1
+              }
+            ],
+            "capability": "NetworkEgress",
+            "capability_tag": "builtin:HttpGet"
+          },
+          {
+            "call_sites": [
+              {
+                "end_column": 93,
+                "end_line": 1,
+                "start_column": 57,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "source": "const fs = require('fs'); const http = require('http'); fs.readFileSync('input.txt', 'utf8'); http.get('https://example.com');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "events-default-constructor",
+        "outcome": "Clean",
+        "report_sha256": "c7f25eb2035cc688ad6bfcac9a5a3d82aad91e5c36ac13171ea255baf43c92c4",
+        "required_capabilities": [
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:EventEmitterConstructorRef"
+          }
+        ],
+        "source": "const EventEmitter = require('events'); const emitter = new EventEmitter(); emitter.emit('tick');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "events-named-constructor",
+        "outcome": "Clean",
+        "report_sha256": "b15fe8d6132ee5bfb658007f95d94d975beb1fc5b636f4c35afbebaaa4125863",
+        "required_capabilities": [
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:EventEmitterConstructorRef"
+          }
+        ],
+        "source": "const {EventEmitter} = require('node:events'); const emitter = new EventEmitter(); emitter.emit('tick');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "events-namespace-constructor",
+        "outcome": "Clean",
+        "report_sha256": "af9d2df335b42fde7d809faaa7817acabe9ccd8019f7987f36a17d0d091e1333",
+        "required_capabilities": [],
+        "source": "const events = require('events'); const emitter = new events.EventEmitter(); emitter.emit('tick');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "events-mixed-constructor-once",
+        "outcome": "Clean",
+        "report_sha256": "607a1ed42b949d167e2de1eab25283e8e216e6049e1e45fffb7a90965637707a",
+        "required_capabilities": [],
+        "source": "const events = require('events'); const emitter = new events.EventEmitter(); events.once(emitter, 'tick'); emitter.emit('tick');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "events-once-options",
+        "outcome": "Clean",
+        "report_sha256": "bf33a4d2814700a1af20c9f47b3bedf0a092c9284281bb9a8bb2fdb6c301c435",
+        "required_capabilities": [],
+        "source": "const events = require('events'); const emitter = new events.EventEmitter(); events.once(emitter, 'tick', {}); emitter.emit('tick');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "events-detached-helper",
+        "outcome": "Clean",
+        "report_sha256": "0259069069239ffadc8bfb3acedba1c86e0a3170768101168656ba8c63365072",
+        "required_capabilities": [],
+        "source": "const events = require('events'); const helper = events.once; helper({}, 'tick');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": null,
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "dynamic-fs-observer",
+        "outcome": "FindingsPresent",
+        "report_sha256": "ee1353defb8d97fa204a1c90105707ec30ff4308a3e5688f89523e43b334d2a2",
+        "required_capabilities": [
+          {
+            "call_sites": [],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "eval(\"require('fs').readFileSync = function() { return 'changed'; }\"); require('fs').readFileSync('input.txt');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": {
+              "end_column": 38,
+              "end_line": 1,
+              "start_column": 1,
+              "start_line": 1
+            },
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "unknown-core-module",
+        "outcome": "FindingsPresent",
+        "report_sha256": "773fe183d7608458093e063d0908925bb3109849d116f2df11db21f0d2ed2824",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 38,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "require('node:unknown-native-module');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": {
+              "end_column": 33,
+              "end_line": 1,
+              "start_column": 20,
+              "start_line": 1
+            },
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "dynamic-module-import",
+        "outcome": "FindingsPresent",
+        "report_sha256": "3f21a39e3dcb7ea38dbe919dd1f29cd51e30edb03c1b8f9345595531fcfdfc4d",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 33,
+                "end_line": 1,
+                "start_column": 20,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "const name = 'fs'; require(name);"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [],
+        "name": "read-result-indexing",
+        "outcome": "Clean",
+        "report_sha256": "0767b64ddb77f48dd9f09d186c4392ca4bc918a03ef2aa85dc4c0fea9833cf77",
+        "required_capabilities": [
+          {
+            "call_sites": [
+              {
+                "end_column": 63,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "source": "require('fs').readFileSync('input.txt', 'utf8').split('\\n')[0];"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": null,
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "bare-fs-import",
+        "outcome": "FindingsPresent",
+        "report_sha256": "3b631c8d625365886a6b9a075a489392fa4ccfbdad3c68c88ea675fc27d6a2fe",
+        "required_capabilities": [
+          {
+            "call_sites": [],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "require('fs');"
+      },
+      {
+        "analyzable": true,
+        "deterministic_replay": true,
+        "fail_closed_reason": null,
+        "findings": [
+          {
+            "accessor": "require",
+            "confidence": "definite",
+            "error_code": "FE-CAP-0001",
+            "implied_capability": "FsRead",
+            "kind": "ambient_authority_violation",
+            "location": null,
+            "message": "ambient access to `require` is rejected at the lowering boundary; it requires the `fs.read` effect (fs_read), which no ambient identifier may exercise"
+          }
+        ],
+        "name": "bare-promises-import",
+        "outcome": "FindingsPresent",
+        "report_sha256": "f4c0ff9d4248c6dffa598abe5cefef72e11c9231352dcb3d529c6799e8af50a4",
+        "required_capabilities": [
+          {
+            "call_sites": [],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "source": "require('fs/promises');"
+      }
+    ]
+  },
+  "selected_ast_tests": {
+    "result": "26/26 selected production test bodies passed unchanged;18 filesystem and8 events",
+    "provenance": {
+      "scope": "Selected production AST test bodies executed verbatim through added temporary entrypoints; no full interpreter or cfg(test) library gate",
+      "tests": {
+        "authority_probe_distinguishes_module_values_from_mediated_calls": "1f93463887ecfc427a181bee3406aa61fc7e9128b409e6afedec7fe29de8677d",
+        "direct_sync_calls_use_protected_operations_without_a_module_prelude": "4cf13e3923025029723c447d6c3fb752a5de0daf3e3c56103c4adb34d861f152",
+        "direct_calls_preserve_arguments_and_discriminator_like_guest_paths": "eb8fd9320ead78a3d1194cc556f7bc48a294fd16e0ce55749b373a1e27a2133c",
+        "literal_network_facades_preserve_direct_fs_calls_without_claiming_their_loads": "92158dd32719629668cf1ae6f71122453ec7d118b08858ac6ddbc3055ed5f30e",
+        "one_observable_or_unsupported_use_keeps_the_complete_module_path": "ad2830e8ba7c6b822f9e8168c1715eb076eef3b1434e1028218c8777cc4f0a8b",
+        "direct_calls_never_claim_a_shadowed_or_dynamic_loader": "3727cff478105f14d152bf8e95351c030c388bdfa2123d4fb01c78796d581583",
+        "inline_calls_keep_module_values_when_dynamic_code_can_observe_them": "74b0cf520980fba49a62116ecb8f7a02bfe10957426c202dc16aa54b2971ab13",
+        "dynamic_loader_guards_preserve_direct_named_environment_inputs": "fc82c4c4688c8d6039a16d2952bc87cc155eac73ac23a4f4710d8be9c7967f3d",
+        "numeric_result_indexing_keeps_inline_and_bound_reads_direct": "f29336c6bf4229c7b529a27f0d09e2989d1948393998db20a41eefbc6972ff8b",
+        "access_constants_use_the_native_values_without_constructing_a_module": "2237da89cec485c2ead976acd66b8fb58f5660104fcea19d7fb95f28987facf3",
+        "access_constant_mutation_escape_and_lexical_reads_keep_the_module_path": "0123470bb456d46f50fead0175c642a744aa6ca21060043b6c1a1693e4535796",
+        "const_namespaces_and_named_destructures_reuse_the_inline_operation_emitter": "a02066eac9f908aa007a4b7745437ef5da35c165d3622d7eac3edee8c483cf28",
+        "alias_expansion_keeps_declarator_order_and_non_alias_effects": "f8bbca7cd7b5089c2a4f9c83fdd61e41e84ac6bf5c79a561dde4aebc970f1129",
+        "aliases_in_loops_and_branches_are_claimed_only_after_initialization": "f033f7c4e2272dc8e8561e5739623cc546426fdb9b52b2abb3e891ad92619682",
+        "one_escaped_mutated_or_async_alias_preserves_the_whole_original_module": "367f421fb84e127a617d135d34c6dd160f124a28bac839abfc836d52a6fca18c",
+        "alias_shadowing_never_rewrites_a_different_binding": "12643b42af7196c17f59760f8ec3f1720148d9086f0c9791490507cae6bdcdb3",
+        "process_named_aliases_keep_property_observations_on_the_object_path": "d4e2479e58d9f7c09af920c1fd82dc2cc7508adad3cef3a7cc24ad98d649ebea",
+        "partial_destructures_and_unused_aliases_are_not_elided": "1b8c065c5fad157dd5d48002e1cdcde5a439c19187e18714170feb865b909eb6",
+        "finite_events_facade_keeps_original_require_initializers_for_legacy_lowering": "0fa6d70a55d2fcf124cea449339810f3f7fdbb9b001d4dbe3f5527d1ff1afd63",
+        "observable_or_unsupported_events_uses_still_materialize_the_module": "e1c0a4fc83044efd4bf1018b347c56fe78ec6f62877d390e9ce6f25cef2f8eeb",
+        "one_direct_events_use_cannot_elide_other_uses_or_mutable_bindings": "b3379f8a16feaa762db4c6ed15d576e33a445df679f345f7ab4029e0554d3b99",
+        "once_options_spread_and_invalid_arity_use_the_first_class_helper": "f71f6c6c9d4d64f9e3e705ccbf915c7a9650a8f31c1c42176d805459d4790c25",
+        "materialized_events_rewrites_every_other_finite_events_alias": "19404bea06b2590352c9aa6872a0868a90435fe80a86bb8412c3ba4f951c0fd7",
+        "finite_events_handoff_ignores_lexically_shadowed_uses": "9a3744ec95b40b89e75604833d255d183b0d7f9e388285d55d7f817e956e0e53",
+        "dynamic_observers_cannot_keep_events_settings_on_the_finite_path": "721a8585efb9e5a1b828880a5e71ced205cd90185081d5801b83c24d1a52cc48",
+        "event_intrinsics_are_builtin_capabilities_not_filesystem_authority": "cf4980c77f14ef4c8e947015c3b654a94969d1765b6b216b6af01b8e3464839a"
+      },
+      "source_sha256": {
+        "lowering_pipeline.rs": "0bc9b3182f0c60a0539b043dfe3077366fd99ad7bb208df9ba7dae0b30cb217c",
+        "lowering_pipeline/fs_module.rs": "985a4c4b0542b3c7ea74f329346042ca81b1f09a7f5159eb944469089c0d6a27",
+        "lowering_pipeline/util_module.rs": "30218ab86b4c416a26245d3fe1022e9597f15c36775829b8a3a03d8638465d91"
+      }
+    },
+    "stdout": "PASS fs::authority_probe_distinguishes_module_values_from_mediated_calls\nPASS fs::direct_sync_calls_use_protected_operations_without_a_module_prelude\nPASS fs::direct_calls_preserve_arguments_and_discriminator_like_guest_paths\nPASS fs::literal_network_facades_preserve_direct_fs_calls_without_claiming_their_loads\nPASS fs::one_observable_or_unsupported_use_keeps_the_complete_module_path\nPASS fs::direct_calls_never_claim_a_shadowed_or_dynamic_loader\nPASS fs::inline_calls_keep_module_values_when_dynamic_code_can_observe_them\nPASS fs::dynamic_loader_guards_preserve_direct_named_environment_inputs\nPASS fs::numeric_result_indexing_keeps_inline_and_bound_reads_direct\nPASS fs::access_constants_use_the_native_values_without_constructing_a_module\nPASS fs::access_constant_mutation_escape_and_lexical_reads_keep_the_module_path\nPASS fs::const_namespaces_and_named_destructures_reuse_the_inline_operation_emitter\nPASS fs::alias_expansion_keeps_declarator_order_and_non_alias_effects\nPASS fs::aliases_in_loops_and_branches_are_claimed_only_after_initialization\nPASS fs::one_escaped_mutated_or_async_alias_preserves_the_whole_original_module\nPASS fs::alias_shadowing_never_rewrites_a_different_binding\nPASS fs::process_named_aliases_keep_property_observations_on_the_object_path\nPASS fs::partial_destructures_and_unused_aliases_are_not_elided\nPASS events::finite_events_facade_keeps_original_require_initializers_for_legacy_lowering\nPASS events::observable_or_unsupported_events_uses_still_materialize_the_module\nPASS events::one_direct_events_use_cannot_elide_other_uses_or_mutable_bindings\nPASS events::once_options_spread_and_invalid_arity_use_the_first_class_helper\nPASS events::materialized_events_rewrites_every_other_finite_events_alias\nPASS events::finite_events_handoff_ignores_lexically_shadowed_uses\nPASS events::dynamic_observers_cannot_keep_events_settings_on_the_finite_path\nPASS events::event_intrinsics_are_builtin_capabilities_not_filesystem_authority\nSELECTED_TESTS failures=0\n",
+    "limitation": "Temporary entrypoints in copies of production modules; not canonical cargo test and no native interpreter execution."
+  },
+  "canonical_gates": {
+    "check": {
+      "command": [
+        "cargo",
+        "check",
+        "--all-targets",
+        "--locked",
+        "--offline"
+      ],
+      "cwd": "/workspace/scratch/bcfd21b969bd/franken_engine",
+      "exit_code": -15,
+      "elapsed_seconds": 0.01,
+      "aborted_reason": "filesystem free blocks under64MiB",
+      "maximum_owned_rss_bytes": 802816,
+      "maximum_shared_cgroup_bytes": 8211255296,
+      "virtual_memory_limit_bytes": 2252800000,
+      "log": "/tmp/fe-issue6-native/canonical-check.log"
+    },
+    "clippy": {
+      "command": [
+        "cargo",
+        "clippy",
+        "--all-targets",
+        "--locked",
+        "--offline",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "cwd": "/workspace/scratch/bcfd21b969bd/franken_engine",
+      "exit_code": -15,
+      "elapsed_seconds": 0,
+      "aborted_reason": "filesystem free blocks under64MiB",
+      "maximum_owned_rss_bytes": 1388544,
+      "maximum_shared_cgroup_bytes": 8250126336,
+      "virtual_memory_limit_bytes": 2252800000,
+      "log": "/tmp/fe-issue6-native/canonical-clippy.log"
+    },
+    "fmt": {
+      "command": [
+        "cargo",
+        "fmt",
+        "--check"
+      ],
+      "cwd": "/workspace/scratch/bcfd21b969bd/franken_engine",
+      "exit_code": -15,
+      "elapsed_seconds": 4.28,
+      "aborted_reason": "shared cgroup memory headroom under128MiB with owned compiler RSS above600MiB",
+      "maximum_owned_rss_bytes": 695132160,
+      "maximum_shared_cgroup_bytes": 8589926400,
+      "virtual_memory_limit_bytes": 2252800000,
+      "log": "/tmp/fe-issue6-native/canonical-fmt.log"
+    }
+  },
+  "authority_result_interpretation": "Clean, FindingsPresent and Unanalyzable are analyzer classifications, not test pass/fail counts. Negative inputs intentionally exercise refusals. Each input was analyzed twice and reports compared for equality.",
+  "full_library_attempt": {
+    "command": "cargo test --locked --offline -p frankenengine-engine --no-default-features --lib --no-run",
+    "result": "Stopped under shared-memory pressure while compiling frankenengine-core; no test binary and no source/test verdict. Subsequent disk exhaustion also prevented full qualification."
+  },
+  "node_reference_checks": {
+    "version": "v24.22.1",
+    "events": {
+      "positive_fixtures": 7,
+      "exact_stdout_matches": 7,
+      "actual_events_facade_hosted_on_node_matches": 7
+    },
+    "filesystem": {
+      "fixtures": 3,
+      "exact_stdout_matches": 2,
+      "invalid_write_type_errors": 10,
+      "invalid_path_type_errors": 7,
+      "exists_false": 2,
+      "unchanged_inputs": 2,
+      "positive_file_byte_matches": 3,
+      "known_difference": "Node coerces a forged path object once in its fd-overload probe; engine test explicitly requires zero guest coercions at the supported-path boundary."
+    },
+    "limitation": "Node checks do not validate FrankenEngine execution, capabilities, GC, or host-effect transcripts."
+  },
+  "remaining_blockers": [
+    "Direct and namespace fs/promises reads are Clean on v0.2.0 but FE-CAP-0001 FindingsPresent on starting main and patched source.",
+    "First-class Events reports can be Clean with an empty footprint although module initialization requires Builtin. IR2 aggregation misses nested factory hostcalls; final IR3 aggregation includes them but also unused-method Timer authority. Initialization/selected-method summaries remain needed.",
+    "The retained exact-two-argument EventsOnce intrinsic bypasses public listener registration and async promise adoption. Native conformance for newListener, overridden once, delivery order and invalid targets remains unverified.",
+    "Full first-class filesystem authority and runtime construction requirements remain unqualified. Bare-import refusals in this matrix also occur at v0.2.0 and are not newly measured regressions.",
+    "Native interpreter argument validation, real host effects, capability-denial fixtures, orchestration, and the complete library/integration comparison have not run successfully in this environment.",
+    "All-target check, clippy and full format attempts were resource-aborted; no canonical gate pass is claimed."
+  ],
+  "historical_counts": "The October8 issue counts and October14 baseline are historical; this snapshot does not remeasure their complete test population.",
+  "test_compilation_source_check": "No InterpreterConfig::default() occurrences remain in engine src/tests; historical private-GC calls are no longer cross-module. This source inspection does not establish that the complete test target compiles."
+}

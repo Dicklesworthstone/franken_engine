@@ -37,8 +37,9 @@ fn ordinary_buffer_import_lowers_without_process_authority_bd_h8s4j() {
         let source = format!("const {{ Blob, File }} = require('{specifier}'); [Blob, File];");
         let tree = frankenengine_engine::parser_api_stability::parse_script(&source)
             .expect("parse the ordinary Buffer import");
-        let context = LoweringContext::new("buffer-import", "source-metadata", "builtin-only")
-            .with_authenticated_commonjs_runtime_bindings();
+        // Authenticated CommonJS preserves native requires instead of
+        // selecting this ordinary inline factory.
+        let context = LoweringContext::new("buffer-import", "source-metadata", "builtin-only");
         let ir0 = Ir0Module::from_syntax_tree(tree, "buffer-import.cjs");
         let module = lower_ir0_to_ir3(&ir0, &context)
             .expect("the engine-owned File factory must not require guest process authority")
@@ -64,8 +65,7 @@ fn buffer_import_does_not_authorize_guest_process_reads_bd_h8s4j() {
         "require('node:buffer'); process.env.SECRET;",
     ] {
         let tree = frankenengine_engine::parser_api_stability::parse_script(source).unwrap();
-        let context = LoweringContext::new("guest-process", "source-metadata", "builtin-only")
-            .with_authenticated_commonjs_runtime_bindings();
+        let context = LoweringContext::new("guest-process", "source-metadata", "builtin-only");
         let error = lower_ir0_to_ir3(
             &Ir0Module::from_syntax_tree(tree, "guest-process.cjs"),
             &context,

@@ -42707,8 +42707,8 @@ mod tests {
         assert!(is_bounded_import_specifier("/abs/a.mjs"));
         assert!(is_bounded_import_specifier("pkg/sub"));
         assert!(is_bounded_import_specifier("@scope/pkg"));
-        assert!(!is_bounded_import_specifier("node:fs"));
-        assert!(!is_bounded_import_specifier("fs"));
+        assert!(is_bounded_import_specifier("node:fs"));
+        assert!(is_bounded_import_specifier("fs"));
         for name in ["node:buffer", "events", "path", "node:path/posix"] {
             let source = format!("import value from '{name}'; console.log(typeof value);");
             let tree = crate::parser_api_stability::parse_module(&source).unwrap();

@@ -226,7 +226,9 @@ jobs:
                   'ir_contract', 'security_e2e', 'tls_x509_metadata',
                   'crypto_kdf_zeroized', 'profiling', 'ts_normalization',
                   'static_semantics', 'parser_api_stability',
-                  'execution_orchestrator', 'execution_cell']
+                  'execution_orchestrator', 'execution_cell',
+                  'hostcall_telemetry', 'intrinsics_codegen', 'intrinsics_table',
+                  'iterator_protocol', 'stdlib']
           seen = set()
           def production(text):
               return re.split(r'#\[cfg\(test\)\]\s*(?:pub\s+)?mod\s+\w+', text)[0]

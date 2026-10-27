@@ -1654,6 +1654,215 @@ fn delivered_crypto_callable_values_cannot_acquire_entropy_authority() {
 }
 
 #[test]
+fn delivered_filesystem_modules_share_identity_without_performing_io() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(OpaqueResolver::new(vec![
+            ("entry.cjs", definition(ModuleSyntax::CommonJs, r#"
+const stream = require('stream');
+const events = require('events');
+const toWeb = stream.Readable.toWeb;
+const map = stream.Readable.prototype.map;
+events.defaultMaxListeners = 23;
+const fs = require('fs');
+const promises = require('node:fs/promises');
+const child = require('./child.cjs');
+console.log(fs === child.fs, fs === require('node:fs'), promises === fs.promises,
+    promises === child.promises, promises.constants === fs.constants);
+console.log(typeof child.read, typeof promises.open, typeof fs.cp, typeof fs.opendir);
+fs.marker = 17;
+console.log(child.fs.marker);
+fs.promises = {};
+console.log(require('fs/promises') === promises);
+console.log(Object.getPrototypeOf(fs.ReadStream.prototype) === stream.Readable.prototype,
+    Object.getPrototypeOf(fs.WriteStream.prototype) === stream.Writable.prototype,
+    stream.Readable.toWeb === toWeb, stream.Readable.prototype.map === map,
+    events.defaultMaxListeners);
+"#).with_dependency(ModuleDependency::new("./child.cjs", ImportStyle::Require))),
+            ("child.cjs", definition(ModuleSyntax::CommonJs,
+                "const fs = require('node:fs'); module.exports = {fs: fs, promises: require('fs/promises'), read: fs.readFileSync};")),
+        ]).with_native_builtins());
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let root = tempfile::tempdir().unwrap();
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+        let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
+        engine.set_host_io(
+            Arc::new(SandboxedHostIo::with_root(root.path()).unwrap()),
+            Some(recorder.clone()),
+        );
+        let result = engine
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("loading filesystem objects requires no read or write grant");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true true true true",
+                "function function function function",
+                "17",
+                "true",
+                "true true true true 23",
+            ]
+        );
+        assert!(
+            recorder.entries().is_empty(),
+            "module initialization performs no I/O"
+        );
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn delivered_filesystem_promises_esm_and_commonjs_share_real_protected_operations() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(OpaqueResolver::new(vec![
+            ("entry.mjs", definition(ModuleSyntax::EsModule, r#"
+import promiseFs, {readFile} from 'fs/promises';
+import * as namespace from 'node:fs/promises';
+import child from './child.cjs';
+console.log(namespace.default === promiseFs, child.promises === promiseFs,
+    namespace.readFile === readFile);
+child.write('out.txt', 'native filesystem');
+console.log(child.read('out.txt', 'utf8'));
+readFile('out.txt', 'utf8').then(function(value) { console.log('promise', value); });
+"#).with_dependency(ModuleDependency::new("./child.cjs", ImportStyle::Import))),
+            ("child.cjs", definition(ModuleSyntax::CommonJs,
+                "const fs = require('fs'); module.exports = {promises: fs.promises, read: fs.readFileSync, write: fs.writeFileSync};")),
+        ]).with_native_builtins());
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let root = tempfile::tempdir().unwrap();
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+        let mut engine = orchestrator(lane, ModuleSyntax::EsModule);
+        engine.set_host_io(
+            Arc::new(SandboxedHostIo::with_root(root.path()).unwrap()),
+            Some(recorder.clone()),
+        );
+        let mut granted = package();
+        granted
+            .capabilities
+            .extend(["fs_read".into(), "fs_write".into()]);
+        let result = engine
+            .execute_resolved_entry_with_resolver(&granted, &source, installed)
+            .expect("captured fs imports execute the existing sandboxed host operations");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true true",
+                "native filesystem",
+                "promise native filesystem",
+            ]
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("out.txt")).unwrap(),
+            b"native filesystem"
+        );
+        let effects = recorder.entries();
+        assert_eq!(
+            effects.len(),
+            3,
+            "one write and two reads, with no load-time effects"
+        );
+        assert!(effects.iter().all(|(_, outcome)| outcome.is_ok()));
+    }
+}
+
+#[test]
+fn delivered_filesystem_methods_cannot_acquire_read_or_write_authority() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for operation in [
+            "const read = fs.readFileSync; read('input.txt', 'utf8');",
+            "const write = fs.writeFileSync; write('forbidden.txt', 'escape');",
+        ] {
+            let resolver = Arc::new(OpaqueResolver::new(vec![(
+                "entry.cjs", definition(ModuleSyntax::CommonJs,
+                    &format!("const fs = require('fs'); console.log('loaded'); {operation} console.log('escaped');")),
+            )]).with_native_builtins());
+            let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+            let installed = ExecutionModuleResolver::new(
+                &source.module.record.id,
+                resolver,
+                Arc::new(AllowAllPolicy),
+            );
+            let root = tempfile::tempdir().unwrap();
+            std::fs::write(root.path().join("input.txt"), "protected bytes").unwrap();
+            let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+            let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
+            engine.set_host_io(
+                Arc::new(SandboxedHostIo::with_root(root.path()).unwrap()),
+                Some(recorder.clone()),
+            );
+            let error = engine
+                .execute_resolved_entry_with_resolver(&package(), &source, installed)
+                .expect_err("a module descriptor must not grant filesystem authority");
+            assert!(
+                error.to_string().contains("capability denied"),
+                "{operation}: {error}"
+            );
+            assert_eq!(
+                engine
+                    .last_failed_console_output()
+                    .iter()
+                    .map(|entry| entry.message.as_str())
+                    .collect::<Vec<_>>(),
+                ["loaded"]
+            );
+            assert!(!root.path().join("forbidden.txt").exists());
+            assert!(
+                recorder
+                    .entries()
+                    .iter()
+                    .all(|(_, outcome)| outcome.is_err())
+            );
+        }
+    }
+}
+
+#[test]
+fn delivered_full_filesystem_esm_remains_refused_before_namespace_getters() {
+    for mutation in [
+        "0;",
+        "Object.defineProperty(fs, 'ReadStream', { get: function ReadStream() { console.log('guest getter ran'); return function() {}; } });",
+        "Object.defineProperty(fs, 'readFileSync', { get: function() { console.log('guest getter ran'); return function() {}; } });",
+    ] {
+        let resolver = Arc::new(OpaqueResolver::new(vec![
+            ("entry.mjs", definition(ModuleSyntax::EsModule,
+                "import './mutator.cjs'; import fs from 'node:fs'; console.log(typeof fs.readFileSync);")
+                .with_dependency(ModuleDependency::new("./mutator.cjs", ImportStyle::Import))),
+            ("mutator.cjs", definition(ModuleSyntax::CommonJs,
+                &format!("const fs = require('fs'); {mutation}"))),
+        ]).with_native_builtins());
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let root = tempfile::tempdir().unwrap();
+        let mut engine = orchestrator(LaneChoice::QuickJs, ModuleSyntax::EsModule);
+        engine.set_host_io(
+            Arc::new(SandboxedHostIo::with_root(root.path()).unwrap()),
+            None,
+        );
+        let error = engine
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect_err("filesystem ESM snapshot getters retain the existing opaque-state refusal");
+        assert!(
+            error.to_string().contains("bounded-import contract"),
+            "{error}"
+        );
+        assert!(engine.last_failed_console_output().is_empty());
+    }
+}
+
+#[test]
 fn delivered_source_factories_preserve_cross_module_closures_aliases_and_submodules() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         let resolver = Arc::new(

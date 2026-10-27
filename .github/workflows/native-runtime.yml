@@ -53,6 +53,11 @@ on:
         type: choice
         options: [all, buffer]
         default: all
+      runner:
+        description: Hosted runner for the focused Buffer and HTTP job
+        type: choice
+        options: [ubuntu-24.04, ubuntu-24.04-arm]
+        default: ubuntu-24.04
 
 permissions:
   contents: read
@@ -309,7 +314,7 @@ jobs:
           retention-days: 7
   buffer:
     name: Full-source Buffer values and native HTTP evidence
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner || 'ubuntu-24.04' }}
     timeout-minutes: 40
     env:
       RUSTUP_TOOLCHAIN: nightly-2026-09-21
@@ -335,6 +340,9 @@ jobs:
           rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
           {
             git rev-parse HEAD
+            uname -m
+            free -h
+            df -h / /mnt
             rustc --version --verbose
             cargo --version
             sha256sum Cargo.lock crates/franken-engine/Cargo.toml \

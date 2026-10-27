@@ -8244,6 +8244,10 @@ struct HeapSlot {
     measured_bytes: Cell<u64>,
     /// Borrowed mutably since it was last measured.
     dirty: Cell<bool>,
+    /// Derived admission proof for dense array moves. Every mutable object
+    /// borrow invalidates it, including low-level embedder writes. Keeping it
+    /// on the slot leaves HeapObject equality and checkpoint bytes unchanged.
+    dense_moves_plain: Cell<Option<bool>>,
 }
 
 impl HeapSlot {
@@ -8253,6 +8257,7 @@ impl HeapSlot {
             object,
             measured_bytes,
             dirty: Cell::new(false),
+            dense_moves_plain: Cell::new(None),
         })
     }
 }
@@ -8331,6 +8336,7 @@ impl Heap {
         if !slot.dirty.replace(true) {
             self.dirty.get_mut().push(index);
         }
+        slot.dense_moves_plain.set(None);
         Some(&mut slot.object)
     }
 
@@ -45297,6 +45303,13 @@ impl InterpreterCore {
                     });
                 };
                 let mut next_index = self.array_like_length(arr_id)?;
+                // Only preserve a proof already established by a guarded
+                // move. A standalone push must not scan the existing array.
+                let mut preserves_plain_moves = self
+                    .heap
+                    .slot(arr_id.0 as usize)
+                    .is_some_and(|slot| slot.dense_moves_plain.get() == Some(true))
+                    && self.array_cache_matches_visible_length(arr_id, next_index);
                 // ES2020 23.1.3.20 step 4: the new length must stay a safe
                 // integer.
                 if (next_index as u64).saturating_add(u64::from(args.count)) > (1 << 53) - 1 {
@@ -45315,6 +45328,8 @@ impl InterpreterCore {
                     })?;
                     let element = self.read_reg(reg)?;
                     let element_label = self.get_register_label(reg)?.clone();
+                    preserves_plain_moves &= !matches!(element, Value::Accessor { .. })
+                        && element_label == Label::Public;
                     let element_key = RuntimePropertyKey::String(JsString::from(
                         next_index.to_string(),
                     ));
@@ -45351,6 +45366,15 @@ impl InterpreterCore {
                         obj.cached_dense_length = cached_len;
                     }
                 });
+                if preserves_plain_moves
+                    && self.array_cache_matches_visible_length(arr_id, next_index)
+                {
+                    self.heap
+                        .slot(arr_index)
+                        .expect("appended array remains live")
+                        .dense_moves_plain
+                        .set(Some(true));
+                }
                 Ok(Value::Int(new_len))
             }
             BuiltinFunctionKind::ArrayPop => {
@@ -45375,6 +45399,12 @@ impl InterpreterCore {
                 // Sample trust immediately before the destructive mutation.
                 let was_dense = self.array_cache_is_dense(arr_id);
                 let trusted_dense_length = self.array_cache_matches_visible_length(arr_id, len);
+                // An accessor read above may have reentered and changed the
+                // array. Never carry a proof sampled before that [[Get]].
+                let preserves_plain_moves = self
+                    .heap
+                    .slot(arr_id.0 as usize)
+                    .is_some_and(|slot| slot.dense_moves_plain.get() == Some(true));
                 let last_key = last.to_string();
                 let removed_tail = self.array_delete_or_throw(arr_id, &last_key)?;
                 let updated_without_scan = trusted_dense_length
@@ -45389,6 +45419,13 @@ impl InterpreterCore {
                     let new_len = i64::try_from(last).unwrap_or(i64::MAX);
                     self.set_object_property(arr_id, "length".to_string(), Value::Int(new_len))?;
                     self.refresh_dense_length_cache(arr_id, last, was_dense);
+                }
+                if preserves_plain_moves && updated_without_scan {
+                    self.heap
+                        .slot(arr_id.0 as usize)
+                        .expect("popped array remains live")
+                        .dense_moves_plain
+                        .set(Some(true));
                 }
                 Ok(element)
             }
@@ -58347,6 +58384,13 @@ impl InterpreterCore {
                             })
                             .unwrap_or(0);
                         let next_len = next_idx.saturating_add(1);
+                        let preserves_plain_moves = self
+                            .heap
+                            .slot(arr_id.0 as usize)
+                            .is_some_and(|slot| slot.dense_moves_plain.get() == Some(true))
+                            && self.array_cache_matches_visible_length(arr_id, next_idx as usize)
+                            && !matches!(elem_val, Value::Accessor { .. })
+                            && element_label == Label::Public;
                         let element_key =
                             RuntimePropertyKey::String(JsString::from(next_idx.to_string()));
                         let previous_label =
@@ -58376,6 +58420,15 @@ impl InterpreterCore {
                                 }
                             }
                         });
+                        if preserves_plain_moves
+                            && self.array_cache_matches_visible_length(arr_id, next_len as usize)
+                        {
+                            self.heap
+                                .slot(arr_index)
+                                .expect("appended array remains live")
+                                .dense_moves_plain
+                                .set(Some(true));
+                        }
                     }
                     self.ip += 1;
                 }
@@ -81308,16 +81361,20 @@ impl InterpreterCore {
         if !self.array_cache_matches_visible_length(array_id, len) {
             return Ok(false);
         }
-        let Some(object) = self.heap.get(array_id.0 as usize) else {
+        let Some(slot) = self.heap.slot(array_id.0 as usize) else {
             return Err(InterpreterError::ObjectNotFound { id: array_id.0 });
         };
+        if let Some(plain) = slot.dense_moves_plain.get() {
+            return Ok(plain);
+        }
+        let object = &slot.object;
         let attributed = object.property_attributes.keys().any(|key| match key {
             RuntimePropertyKey::String(name) => name.as_str().is_some_and(|name| {
                 name == "length" || Self::canonical_array_index_key(name).is_some()
             }),
             RuntimePropertyKey::Symbol(_) => false,
         });
-        Ok(!(attributed
+        let plain = !(attributed
             || object.is_frozen
             || object.typed_array.is_some()
             || object.properties.exact_len() != object.properties.len()
@@ -81325,7 +81382,9 @@ impl InterpreterCore {
             || object
                 .properties
                 .index_values()
-                .any(|value| matches!(value, Value::Accessor { .. }))))
+                .any(|value| matches!(value, Value::Accessor { .. })));
+        slot.dense_moves_plain.set(Some(plain));
+        Ok(plain)
     }
 
     /// `Array.prototype.shift` on an array `dense_array_moves_are_plain`
@@ -81367,6 +81426,14 @@ impl InterpreterCore {
             self.set_object_property(array_id, "length".to_string(), Value::Int(new_len))?;
             self.refresh_dense_length_cache(array_id, last, true);
         }
+        // The guarded move only removes a plain own element. All mutable
+        // borrows above invalidated the cache; re-establish its proof after
+        // the final length write, without rescanning every surviving value.
+        self.heap
+            .slot(heap_index)
+            .expect("shifted array remains live")
+            .dense_moves_plain
+            .set(Some(true));
         Ok(Some(shifted))
     }
 
@@ -81398,6 +81465,9 @@ impl InterpreterCore {
         {
             return Ok(Err(items));
         }
+        let inserted_are_plain = items
+            .iter()
+            .all(|item| !matches!(item, Value::Accessor { .. }));
         for item in &items {
             validate_symbol_value(&self.symbol_state, item).map_err(|got| {
                 InterpreterError::TypeError {
@@ -81432,6 +81502,11 @@ impl InterpreterCore {
         self.set_object_property(array_id, "length".to_string(), Value::Int(new_len_int))?;
         self.refresh_dense_length_cache(array_id, new_len, true);
         self.gc_write_barrier(array_id);
+        self.heap
+            .slot(heap_index)
+            .expect("unshifted array remains live")
+            .dense_moves_plain
+            .set(Some(inserted_are_plain));
         Ok(Ok(new_len))
     }
 
@@ -117726,6 +117801,292 @@ mod shared_binding_cell_accounting_tests_bd_sblaq {
             Err(Vec::new())
         );
         assert_eq!(core.heap[frozen.0 as usize].properties, before);
+    }
+
+    #[test]
+    fn dense_move_proof_tracks_mutable_borrows_without_changing_checkpoints() {
+        let mut core = accounting_test_core();
+        let array = core
+            .alloc_array_from_values(&[Value::Int(1), Value::Int(2)])
+            .expect("array allocation");
+        let index = array.0 as usize;
+        let before = serde_json::to_value(&core.heap.value).expect("heap serialization");
+        assert!(core.dense_array_moves_are_plain(array, 2).expect("proof"));
+        assert_eq!(
+            core.heap.slot(index).unwrap().dense_moves_plain.get(),
+            Some(true)
+        );
+        assert_eq!(
+            serde_json::to_value(&core.heap.value).expect("heap serialization"),
+            before,
+            "admission proofs must not change checkpoint bytes"
+        );
+        assert!(
+            !core
+                .dense_array_moves_are_plain(array, 1)
+                .expect("wrong length")
+        );
+
+        let mut copied = core.heap.value.clone();
+        copied.slot(index).unwrap().dense_moves_plain.set(None);
+        assert_eq!(
+            core.heap.value, copied,
+            "proofs do not change heap equality"
+        );
+        copied.get_mut(index).expect("cloned object").is_frozen = true;
+        assert_eq!(copied.slot(index).unwrap().dense_moves_plain.get(), None);
+        assert_eq!(
+            core.heap.slot(index).unwrap().dense_moves_plain.get(),
+            Some(true)
+        );
+
+        core.mutate_heap(|heap| {
+            let _ = heap.get_mut(index).expect("mutable object borrow");
+        });
+        assert_eq!(core.heap.slot(index).unwrap().dense_moves_plain.get(), None);
+        assert!(
+            core.dense_array_moves_are_plain(array, 2)
+                .expect("revalidated")
+        );
+        core.mutate_heap(|heap| heap[index].is_frozen = true);
+        assert_eq!(core.heap.slot(index).unwrap().dense_moves_plain.get(), None);
+        assert!(!core.dense_array_moves_are_plain(array, 2).expect("frozen"));
+        core.mutate_heap(|heap| heap[index].is_frozen = false);
+        assert!(
+            core.dense_array_moves_are_plain(array, 2)
+                .expect("repaired")
+        );
+
+        core.set_own_property_attributes(
+            array,
+            &RuntimePropertyKey::String(JsString::from("length")),
+            PropertyAttributes {
+                writable: false,
+                ..PropertyAttributes::DEFAULT
+            },
+        )
+        .expect("length attributes");
+        assert_eq!(core.heap.slot(index).unwrap().dense_moves_plain.get(), None);
+        assert!(
+            !core
+                .dense_array_moves_are_plain(array, 2)
+                .expect("attributes")
+        );
+        assert_eq!(
+            core.shift_dense_array_in_place(array, 2).expect("refused"),
+            None
+        );
+        assert_eq!(core.array_like_length(array).expect("length"), 2);
+    }
+
+    #[test]
+    fn dense_move_proof_survives_plain_builtin_and_ir_queue_ends() {
+        let mut core = accounting_test_core();
+        let mut module = lower_script_bd_9vouw_31("undefined;");
+        let array = core
+            .alloc_array_from_values(&[Value::Int(1), Value::Int(2), Value::Int(3)])
+            .expect("array allocation");
+        let push = BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayPush);
+        let pop = BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayPop);
+        let mut expected = vec![1, 2, 3];
+        for next in 4..20 {
+            assert_eq!(
+                core.shift_dense_array_in_place(array, 3).expect("shift"),
+                Some(Value::Int(expected.remove(0)))
+            );
+            core.write_reg(0, Value::Int(next)).expect("push argument");
+            assert_eq!(
+                core.dispatch_builtin_function(
+                    &module,
+                    &push,
+                    RegRange { start: 0, count: 1 },
+                    Some(Value::Object(array)),
+                    None,
+                )
+                .expect("push"),
+                Value::Int(3)
+            );
+            expected.push(next);
+            assert_eq!(
+                core.heap
+                    .slot(array.0 as usize)
+                    .unwrap()
+                    .dense_moves_plain
+                    .get(),
+                Some(true),
+                "shift/push must retain the proof between queue steps"
+            );
+        }
+        for next in 0..16 {
+            assert_eq!(
+                core.unshift_dense_array_in_place(array, 3, vec![Value::Int(-next)])
+                    .expect("unshift"),
+                Ok(4)
+            );
+            expected.insert(0, -next);
+            assert_eq!(
+                core.dispatch_builtin_function(
+                    &module,
+                    &pop,
+                    RegRange { start: 0, count: 0 },
+                    Some(Value::Object(array)),
+                    None,
+                )
+                .expect("pop"),
+                Value::Int(expected.pop().expect("tail"))
+            );
+            assert_eq!(
+                core.heap
+                    .slot(array.0 as usize)
+                    .unwrap()
+                    .dense_moves_plain
+                    .get(),
+                Some(true),
+                "unshift/pop must retain the proof between queue steps"
+            );
+        }
+
+        core.write_reg(0, Value::Object(array))
+            .expect("IR receiver");
+        core.write_reg(1, Value::Int(99)).expect("IR argument");
+        module.instructions = vec![
+            Ir3Instruction::ArrayPush {
+                array: 0,
+                element: 1,
+            },
+            Ir3Instruction::Halt,
+        ];
+        core.execute(&module).expect("IR append");
+        expected.push(99);
+        assert_eq!(
+            core.heap
+                .slot(array.0 as usize)
+                .unwrap()
+                .dense_moves_plain
+                .get(),
+            Some(true)
+        );
+        assert_eq!(
+            core.heap[array.0 as usize]
+                .properties
+                .index_values()
+                .cloned()
+                .collect::<Vec<_>>(),
+            expected.into_iter().map(Value::Int).collect::<Vec<_>>()
+        );
+        assert_eq!(core.array_like_length(array).expect("length"), 4);
+        assert_invariant(&core, "after plain queue ends");
+    }
+
+    #[test]
+    fn dense_move_proof_refuses_accessor_and_labeled_appends() {
+        let mut core = accounting_test_core();
+        let module = lower_script_bd_9vouw_31("undefined;");
+        let push = BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayPush);
+        let pop = BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayPop);
+        for (value, label, popped) in [
+            (
+                Value::Accessor {
+                    get: None,
+                    set: None,
+                },
+                Label::Public,
+                Value::Undefined,
+            ),
+            (Value::Int(9), Label::Secret, Value::Int(9)),
+        ] {
+            let array = core
+                .alloc_array_from_values(&[Value::Int(1), Value::Int(2)])
+                .expect("array allocation");
+            assert!(core.dense_array_moves_are_plain(array, 2).expect("proof"));
+            core.write_reg(0, value.clone()).expect("argument");
+            core.set_register_label(0, label.clone())
+                .expect("argument label");
+            core.dispatch_builtin_function(
+                &module,
+                &push,
+                RegRange { start: 0, count: 1 },
+                Some(Value::Object(array)),
+                None,
+            )
+            .expect("append");
+            assert_eq!(
+                core.heap
+                    .slot(array.0 as usize)
+                    .unwrap()
+                    .dense_moves_plain
+                    .get(),
+                None
+            );
+            assert!(!core.dense_array_moves_are_plain(array, 3).expect("guard"));
+            assert_eq!(
+                core.shift_dense_array_in_place(array, 3).expect("refused"),
+                None
+            );
+            assert_eq!(
+                core.heap[array.0 as usize].properties.get_index(2),
+                Some(&value)
+            );
+            assert_eq!(
+                core.own_stored_runtime_property_label(
+                    array,
+                    &RuntimePropertyKey::String(JsString::from("2")),
+                ),
+                label
+            );
+            assert_eq!(
+                core.dispatch_builtin_function(
+                    &module,
+                    &pop,
+                    RegRange { start: 0, count: 0 },
+                    Some(Value::Object(array)),
+                    None,
+                )
+                .expect("pop"),
+                popped
+            );
+            assert_eq!(
+                core.heap
+                    .slot(array.0 as usize)
+                    .unwrap()
+                    .dense_moves_plain
+                    .get(),
+                None
+            );
+            assert!(
+                core.dense_array_moves_are_plain(array, 2)
+                    .expect("revalidated")
+            );
+        }
+
+        let array = core
+            .alloc_array_from_values(&[Value::Int(1)])
+            .expect("array allocation");
+        assert_eq!(
+            core.unshift_dense_array_in_place(
+                array,
+                1,
+                vec![Value::Accessor {
+                    get: None,
+                    set: None
+                }],
+            )
+            .expect("accessor unshift"),
+            Ok(2)
+        );
+        assert_eq!(
+            core.heap
+                .slot(array.0 as usize)
+                .unwrap()
+                .dense_moves_plain
+                .get(),
+            Some(false)
+        );
+        assert!(
+            !core
+                .dense_array_moves_are_plain(array, 2)
+                .expect("accessor guard")
+        );
     }
 
     /// bd-9vouw.31: drive the cold-cell ledger through every transition a real

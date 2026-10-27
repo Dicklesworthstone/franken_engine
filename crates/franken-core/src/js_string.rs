@@ -549,6 +549,39 @@ impl JsString {
         self.encode_utf16().collect()
     }
 
+    /// Apply a scalar Unicode transform without replacing lone surrogates.
+    ///
+    /// Casing and normalization accept every ECMAScript UTF-16 string, while
+    /// Rust's Unicode routines accept only scalar values. A lone surrogate is
+    /// a boundary for both algorithms: preserve it verbatim and transform each
+    /// intervening scalar span as a whole. In particular, mapping one scalar at
+    /// a time would lose context-dependent lowercase Greek sigma.
+    ///
+    /// Empty spans also reach the transform, so validation errors are preserved
+    /// for empty strings and strings containing only unpaired surrogates.
+    pub fn try_map_unicode_spans<E>(
+        &self,
+        mut transform: impl FnMut(&str) -> Result<String, E>,
+    ) -> Result<Self, E> {
+        if let Some(text) = self.as_str() {
+            return transform(text).map(Self::from);
+        }
+        let mut output = Vec::with_capacity(self.utf16_len());
+        let mut span = String::new();
+        for point in char::decode_utf16(self.encode_utf16()) {
+            match point {
+                Ok(scalar) => span.push(scalar),
+                Err(error) => {
+                    output.extend(transform(&span)?.encode_utf16());
+                    span.clear();
+                    output.push(error.unpaired_surrogate());
+                }
+            }
+        }
+        output.extend(transform(&span)?.encode_utf16());
+        Ok(Self::from_code_units(&output))
+    }
+
     /// Convert this string to its deterministic canonical representation.
     ///
     /// Well-formed content remains a plain canonical string, preserving the
@@ -2400,5 +2433,64 @@ mod tests {
         // A trailing high surrogate still heals against a leading low one.
         let healed = lone.concat(&JsString::from_code_units(&[LOW]));
         assert_same_string(&healed, &format!("{long}{}\u{1f600}", "b".repeat(2_000)));
+    }
+
+    #[test]
+    fn unicode_span_casing_preserves_surrogates_and_context() {
+        let input = JsString::from_code_units(&[
+            0xd800, 0x039f, 0x03a3, 0x0301, 0xdc00, 0x03a3, 0x0041, 0xd800,
+        ]);
+        let lower = input
+            .try_map_unicode_spans::<()>(|text| Ok(text.to_lowercase()))
+            .expect("case conversion is infallible");
+        assert_eq!(
+            lower.code_units_vec(),
+            [0xd800, 0x03bf, 0x03c2, 0x0301, 0xdc00, 0x03c3, 0x0061, 0xd800]
+        );
+
+        let input = JsString::from_code_units(&[
+            0xd800, 0x00df, 0xdc00, 0x0130, 0xd801, 0xdc28, 0xd800,
+        ]);
+        let upper = input
+            .try_map_unicode_spans::<()>(|text| Ok(text.to_uppercase()))
+            .expect("case conversion is infallible");
+        assert_eq!(
+            upper.code_units_vec(),
+            [0xd800, 0x0053, 0x0053, 0xdc00, 0x0130, 0xd801, 0xdc00, 0xd800]
+        );
+        let lower = input
+            .try_map_unicode_spans::<()>(|text| Ok(text.to_lowercase()))
+            .expect("case conversion is infallible");
+        assert_eq!(
+            lower.code_units_vec(),
+            [0xd800, 0x00df, 0xdc00, 0x0069, 0x0307, 0xd801, 0xdc28, 0xd800]
+        );
+    }
+
+    #[test]
+    fn unicode_span_transform_preserves_every_unpaired_surrogate() {
+        for surrogate in 0xd800..=0xdfff {
+            let input = JsString::from_code_units(&[surrogate, 0x0041, surrogate]);
+            let actual = input
+                .try_map_unicode_spans::<()>(|text| Ok(text.to_lowercase()))
+                .expect("case conversion is infallible");
+            assert_eq!(actual.code_units_vec(), [surrogate, 0x0061, surrogate]);
+            assert!(!actual.is_well_formed());
+        }
+    }
+
+    #[test]
+    fn unicode_span_validation_rejects_empty_and_all_surrogate_inputs() {
+        for input in [
+            JsString::empty(),
+            JsString::from_code_units(&[0xd800]),
+            JsString::from_code_units(&[0xdc00, 0xd800]),
+            JsString::from_code_units(&[0x0041, 0xd800, 0x0042]),
+        ] {
+            let before = input.code_units_vec();
+            let result = input.try_map_unicode_spans::<&str>(|_| Err("invalid form"));
+            assert_eq!(result, Err("invalid form"));
+            assert_eq!(input.code_units_vec(), before);
+        }
     }
 }

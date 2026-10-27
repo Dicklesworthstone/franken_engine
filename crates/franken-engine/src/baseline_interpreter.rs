@@ -63491,7 +63491,9 @@ impl InterpreterCore {
         this_str: &JsString,
         _args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        Ok(Value::str(this_str.to_uppercase()))
+        this_str
+            .try_map_unicode_spans(|text| Ok(text.to_uppercase()))
+            .map(Value::Str)
     }
 
     fn string_to_lower_case_impl(
@@ -63499,7 +63501,9 @@ impl InterpreterCore {
         this_str: &JsString,
         _args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        Ok(Value::str(this_str.to_lowercase()))
+        this_str
+            .try_map_unicode_spans(|text| Ok(text.to_lowercase()))
+            .map(Value::Str)
     }
 
     /// TrimString (ES2020 21.1.3.29.1): drop leading and/or trailing
@@ -63701,9 +63705,10 @@ impl InterpreterCore {
             Some(Value::Undefined) | None => "NFC".to_string(),
             Some(value) => self.value_to_string(&value),
         };
-        let normalized = normalize_unicode_string(this_str, &form)
+        let normalized = this_str
+            .try_map_unicode_spans(|text| normalize_unicode_string(text, &form))
             .map_err(|message| InterpreterError::RangeError { message })?;
-        Ok(Value::str(normalized))
+        Ok(Value::Str(normalized))
     }
 
     /// ToUint32 of a split `limit`; `undefined` means no limit.
@@ -97833,11 +97838,10 @@ impl InterpreterCore {
                 }
 
                 let string_arg = self.read_reg(args.start)?;
-                let string_val = Self::require_object_coercible_to_string(&string_arg)?;
-
-                // Convert to lowercase using Unicode-aware conversion
-                let lowercase = string_val.to_lowercase();
-                Ok(Value::str(lowercase))
+                let string_val = Self::require_object_coercible_to_js_string(&string_arg)?;
+                string_val
+                    .try_map_unicode_spans(|text| Ok(text.to_lowercase()))
+                    .map(Value::Str)
             }
             "builtin:StringPrototypeToUpperCase" => {
                 // String.prototype.toUpperCase implementation - converts string to uppercase
@@ -97846,11 +97850,10 @@ impl InterpreterCore {
                 }
 
                 let string_arg = self.read_reg(args.start)?;
-                let string_val = Self::require_object_coercible_to_string(&string_arg)?;
-
-                // Convert to uppercase using Unicode-aware conversion
-                let uppercase = string_val.to_uppercase();
-                Ok(Value::str(uppercase))
+                let string_val = Self::require_object_coercible_to_js_string(&string_arg)?;
+                string_val
+                    .try_map_unicode_spans(|text| Ok(text.to_uppercase()))
+                    .map(Value::Str)
             }
             "builtin:StringPrototypeTrim" => {
                 // String.prototype.trim implementation - removes whitespace from both ends
@@ -101199,7 +101202,7 @@ impl InterpreterCore {
             "builtin:StringPrototypeNormalize" => {
                 // String.prototype.normalize(form) implementation - Unicode normalization
                 let this_val = self.read_reg(args.start)?;
-                let string_val = Self::require_object_coercible_to_string(&this_val)?;
+                let string_val = Self::require_object_coercible_to_js_string(&this_val)?;
 
                 let form = if args.count >= 2 {
                     match self.read_reg(args.start + 1)? {
@@ -101210,10 +101213,11 @@ impl InterpreterCore {
                     "NFC".to_string()
                 };
 
-                let normalized = normalize_unicode_string(&string_val, &form)
+                let normalized = string_val
+                    .try_map_unicode_spans(|text| normalize_unicode_string(text, &form))
                     .map_err(|message| InterpreterError::RangeError { message })?;
 
-                Ok(Value::str(normalized))
+                Ok(Value::Str(normalized))
             }
 
             "builtin:StringPrototypeTrimStart" => {
@@ -103503,19 +103507,23 @@ impl InterpreterCore {
             "builtin:StringPrototypeToLocaleLowerCase" => {
                 // String.prototype.toLocaleLowerCase() implementation - simplified locale-aware lowercase
                 let this_val = self.read_reg(args.start)?;
-                let str_text = Self::require_object_coercible_to_string(&this_val)?;
+                let str_text = Self::require_object_coercible_to_js_string(&this_val)?;
 
-                // Simplified: use standard lowercase (full locale support would require ICU)
-                Ok(Value::str(str_text.to_lowercase()))
+                // Root-locale casing; locale selection remains a separate surface.
+                str_text
+                    .try_map_unicode_spans(|text| Ok(text.to_lowercase()))
+                    .map(Value::Str)
             }
 
             "builtin:StringPrototypeToLocaleUpperCase" => {
                 // String.prototype.toLocaleUpperCase() implementation - simplified locale-aware uppercase
                 let this_val = self.read_reg(args.start)?;
-                let str_text = Self::require_object_coercible_to_string(&this_val)?;
+                let str_text = Self::require_object_coercible_to_js_string(&this_val)?;
 
-                // Simplified: use standard uppercase (full locale support would require ICU)
-                Ok(Value::str(str_text.to_uppercase()))
+                // Root-locale casing; locale selection remains a separate surface.
+                str_text
+                    .try_map_unicode_spans(|text| Ok(text.to_uppercase()))
+                    .map(Value::Str)
             }
 
             _ => {
@@ -122801,6 +122809,41 @@ mod active_builtin_regressions {
                 .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 2 })
                 .expect("StringPrototypeNormalize NFKC should execute");
             assert_eq!(nfkc_result, Value::str("fi"));
+        }
+    }
+
+    #[test]
+    fn string_prototype_normalize_preserves_exact_units_across_builtin_ids() {
+        for builtin_id in [222_u32, 273_u32] {
+            let mut core = test_core();
+            for (form, expected) in [
+                ("NFC", vec![0xd800, 0x00e9, 0xdc00, 0xfb01, 0xd800]),
+                ("NFD", vec![0xd800, 0x0065, 0x0301, 0xdc00, 0xfb01, 0xd800]),
+                ("NFKC", vec![0xd800, 0x00e9, 0xdc00, 0x0066, 0x0069, 0xd800]),
+                (
+                    "NFKD",
+                    vec![0xd800, 0x0065, 0x0301, 0xdc00, 0x0066, 0x0069, 0xd800],
+                ),
+            ] {
+                core.mutate_registers(|registers| {
+                    registers[0] = Value::Str(JsString::from_code_units(&[
+                        0xd800, 0x0065, 0x0301, 0xdc00, 0xfb01, 0xd800,
+                    ]));
+                    registers[1] = Value::str(form);
+                });
+                let actual = core
+                    .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 2 })
+                    .expect("exact string normalization should execute");
+                assert_eq!(actual, Value::Str(JsString::from_code_units(&expected)));
+            }
+            core.mutate_registers(|registers| {
+                registers[0] = Value::Str(JsString::from_code_units(&[0xd800]));
+                registers[1] = Value::str("BAD");
+            });
+            assert!(matches!(
+                core.call_builtin_by_id(builtin_id, RegRange { start: 0, count: 2 }),
+                Err(InterpreterError::RangeError { .. })
+            ));
         }
     }
 
@@ -171986,6 +172029,37 @@ mod tests {
                         result, expected_result,
                         "string casing builtin {} conversion mismatch for {:?}",
                         builtin_id, input
+                    );
+                }
+            }
+        }
+
+
+        #[test]
+        fn string_case_conversion_preserves_exact_units_across_builtin_ids() {
+            let input = JsString::from_code_units(&[
+                0xd800, 0x00df, 0xdc00, 0x0130, 0xd801, 0xdc28, 0xd800,
+            ]);
+            let lower = JsString::from_code_units(&[
+                0xd800, 0x00df, 0xdc00, 0x0069, 0x0307, 0xd801, 0xdc28, 0xd800,
+            ]);
+            let upper = JsString::from_code_units(&[
+                0xd800, 0x0053, 0x0053, 0xdc00, 0x0130, 0xd801, 0xdc00, 0xd800,
+            ]);
+            let mut interpreter = test_interpreter();
+            for (builtin_ids, expected) in [
+                ([34_u32, 293, 330, 386], lower),
+                ([35_u32, 297, 331, 387], upper),
+            ] {
+                for builtin_id in builtin_ids {
+                    interpreter.set_reg(0, Value::Str(input.clone()));
+                    let actual = interpreter
+                        .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 1 })
+                        .expect("exact string casing should execute");
+                    assert_eq!(
+                        actual,
+                        Value::Str(expected.clone()),
+                        "string casing builtin {builtin_id}"
                     );
                 }
             }

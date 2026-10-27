@@ -471,3 +471,73 @@ fn pads_measure_target_length_in_code_units() {
          padded.length === 2 && padded.charCodeAt(1) === 0xD83D;",
     );
 }
+
+#[test]
+fn case_conversion_preserves_exact_units_for_methods_and_borrowed_functions() {
+    let input = r#""\uD800\u00DF\uDC00\u0130\uD801\uDC28\uD800""#;
+    let lower = vec![0xd800, 0x00df, 0xdc00, 0x0069, 0x0307, 0xd801, 0xdc28, 0xd800];
+    let upper = vec![0xd800, 0x0053, 0x0053, 0xdc00, 0x0130, 0xd801, 0xdc00, 0xd800];
+    for (method, expected) in [
+        ("toLowerCase", &lower),
+        ("toUpperCase", &upper),
+        ("toLocaleLowerCase", &lower),
+        ("toLocaleUpperCase", &upper),
+    ] {
+        for source in [
+            format!("{input}.{method}();"),
+            format!("String.prototype.{method}.call({input});"),
+        ] {
+            let actual = expect_string("case-exact-units", &source);
+            assert_eq!(actual.code_units_vec(), *expected, "{source}");
+            assert!(!actual.is_well_formed(), "{source}");
+        }
+    }
+}
+
+#[test]
+fn lowercase_keeps_context_within_scalar_spans() {
+    let result = expect_string(
+        "lowercase-context",
+        r#""\uD800\u039F\u03A3\u0301\uDC00\u03A3A\uD800".toLowerCase();"#,
+    );
+    assert_eq!(
+        result.code_units_vec(),
+        [0xd800, 0x03bf, 0x03c2, 0x0301, 0xdc00, 0x03c3, 0x0061, 0xd800]
+    );
+}
+
+#[test]
+fn normalization_preserves_surrogates_and_all_four_unicode_forms() {
+    let input = r#""\uD800e\u0301\uDC00\uFB01\uD800""#;
+    for (form, expected) in [
+        ("NFC", vec![0xd800, 0x00e9, 0xdc00, 0xfb01, 0xd800]),
+        ("NFD", vec![0xd800, 0x0065, 0x0301, 0xdc00, 0xfb01, 0xd800]),
+        ("NFKC", vec![0xd800, 0x00e9, 0xdc00, 0x0066, 0x0069, 0xd800]),
+        (
+            "NFKD",
+            vec![0xd800, 0x0065, 0x0301, 0xdc00, 0x0066, 0x0069, 0xd800],
+        ),
+    ] {
+        for source in [
+            format!("{input}.normalize('{form}');"),
+            format!("String.prototype.normalize.call({input}, '{form}');"),
+        ] {
+            assert_eq!(
+                expect_string("normalization-exact-units", &source).code_units_vec(),
+                expected,
+                "{source}"
+            );
+        }
+    }
+    assert_eq!(
+        expect_string("normalization-only-surrogates", r#""\uDC00\uD800".normalize();"#)
+            .code_units_vec(),
+        [0xdc00, 0xd800]
+    );
+    expect_true(
+        "normalization-invalid-form-on-surrogate",
+        r#"var failed = false;
+try { "\uD800".normalize("BAD"); } catch (error) { failed = error instanceof RangeError; }
+failed;"#,
+    );
+}

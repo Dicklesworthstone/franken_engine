@@ -19,6 +19,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::hash_tiers::ContentHash;
 
@@ -347,50 +348,85 @@ pub fn encode_value(value: &CanonicalValue) -> Vec<u8> {
     buf
 }
 
-/// Append canonical fields directly from borrowed data. Large IR modules use
-/// this writer to avoid first allocating an owned `CanonicalValue` tree.
-/// Container callers emit keys in lexicographic order and exactly the number
-/// of elements returned by the header method, including length clamping.
-pub(crate) struct CanonicalWriter {
-    buf: Vec<u8>,
+/// Destination for canonical bytes: an owned encoding or an incremental hash.
+/// Both sinks consume the identical tagged, length-prefixed byte sequence.
+pub(crate) trait CanonicalSink {
+    fn append(&mut self, bytes: &[u8]);
 }
 
-impl CanonicalWriter {
+impl CanonicalSink for Vec<u8> {
+    fn append(&mut self, bytes: &[u8]) {
+        self.extend_from_slice(bytes);
+    }
+}
+
+impl CanonicalSink for Sha256 {
+    fn append(&mut self, bytes: &[u8]) {
+        Digest::update(self, bytes);
+    }
+}
+
+/// Append canonical fields directly from borrowed data. Large modules use
+/// this writer to avoid first allocating an owned `CanonicalValue` tree;
+/// the hashing sink also avoids retaining a complete encoded byte buffer.
+/// Container callers emit keys in lexicographic order and exactly the number
+/// of elements returned by the header method, including length clamping.
+pub(crate) struct CanonicalWriter<S = Vec<u8>> {
+    sink: S,
+}
+
+impl CanonicalWriter<Vec<u8>> {
     pub(crate) fn new() -> Self {
-        Self { buf: Vec::new() }
+        Self { sink: Vec::new() }
     }
 
     pub(crate) fn finish(self) -> Vec<u8> {
-        self.buf
+        self.sink
     }
 
     pub(crate) fn value(&mut self, value: &CanonicalValue) {
-        encode_into(&mut self.buf, value);
+        encode_into(&mut self.sink, value);
+    }
+}
+
+impl CanonicalWriter<Sha256> {
+    pub(crate) fn hasher() -> Self {
+        Self {
+            sink: Sha256::new(),
+        }
     }
 
+    pub(crate) fn finish_hash(self) -> ContentHash {
+        ContentHash::from_bytes(self.sink.finalize().into())
+    }
+}
+
+impl<S: CanonicalSink> CanonicalWriter<S> {
     pub(crate) fn u64(&mut self, value: u64) {
-        self.value(&CanonicalValue::U64(value));
+        self.sink.append(&[TAG_U64]);
+        self.sink.append(&value.to_be_bytes());
     }
 
     pub(crate) fn i64(&mut self, value: i64) {
-        self.value(&CanonicalValue::I64(value));
+        self.sink.append(&[TAG_I64]);
+        self.sink.append(&value.to_be_bytes());
     }
 
     pub(crate) fn boolean(&mut self, value: bool) {
-        self.value(&CanonicalValue::Bool(value));
+        self.sink.append(&[TAG_BOOL, u8::from(value)]);
     }
 
     pub(crate) fn null(&mut self) {
-        self.value(&CanonicalValue::Null);
+        self.sink.append(&[TAG_NULL]);
     }
 
     pub(crate) fn string(&mut self, value: &str) {
-        self.buf.push(TAG_STRING);
+        self.sink.append(&[TAG_STRING]);
         self.key(value);
     }
 
     pub(crate) fn bytes(&mut self, value: &[u8]) {
-        self.buf.push(TAG_BYTES);
+        self.sink.append(&[TAG_BYTES]);
         self.length_prefixed_bytes(value);
     }
 
@@ -400,8 +436,8 @@ impl CanonicalWriter {
 
     fn length_prefixed_bytes(&mut self, value: &[u8]) {
         let clamped = value.len().min(u32::MAX as usize);
-        self.buf.extend_from_slice(&(clamped as u32).to_be_bytes());
-        self.buf.extend_from_slice(&value[..clamped]);
+        self.sink.append(&(clamped as u32).to_be_bytes());
+        self.sink.append(&value[..clamped]);
     }
 
     pub(crate) fn array_header(&mut self, len: usize) -> usize {
@@ -414,8 +450,8 @@ impl CanonicalWriter {
 
     fn container_header(&mut self, tag: u8, len: usize) -> usize {
         let clamped = len.min(u32::MAX as usize);
-        self.buf.push(tag);
-        self.buf.extend_from_slice(&(clamped as u32).to_be_bytes());
+        self.sink.append(&[tag]);
+        self.sink.append(&(clamped as u32).to_be_bytes());
         clamped
     }
 }
@@ -426,26 +462,37 @@ mod writer_tests {
 
     #[test]
     fn borrowed_fields_match_reference_encoding() {
+        fn fields<S: CanonicalSink>(writer: &mut CanonicalWriter<S>) {
+            writer.array_header(7);
+            writer.u64(u64::MAX);
+            writer.i64(i64::MIN);
+            writer.boolean(false);
+            writer.boolean(true);
+            writer.null();
+            writer.string("\0é🚀");
+            writer.bytes(&[0, 127, 128, 255]);
+        }
         let values = [
             CanonicalValue::U64(u64::MAX),
             CanonicalValue::I64(i64::MIN),
             CanonicalValue::Bool(false),
+            CanonicalValue::Bool(true),
             CanonicalValue::Null,
             CanonicalValue::str("\0é🚀"),
             CanonicalValue::Bytes(vec![0, 127, 128, 255]),
         ];
         let mut writer = CanonicalWriter::new();
-        writer.array_header(values.len());
-        writer.u64(u64::MAX);
-        writer.i64(i64::MIN);
-        writer.boolean(false);
-        writer.null();
-        writer.string("\0é🚀");
-        writer.bytes(&[0, 127, 128, 255]);
+        fields(&mut writer);
         let actual = writer.finish();
         let reference = CanonicalValue::Array(values.into());
         assert_eq!(actual, encode_value(&reference));
         assert_eq!(decode_value(&actual).expect("canonical fields"), reference);
+        let mut writer = CanonicalWriter::hasher();
+        fields(&mut writer);
+        assert_eq!(
+            writer.finish_hash(),
+            ContentHash::compute(&encode_value(&reference))
+        );
     }
 
     #[test]
@@ -474,6 +521,52 @@ mod writer_tests {
             expected.push(TAG_MAP);
             expected.extend_from_slice(&(count as u32).to_be_bytes());
             assert_eq!(writer.finish(), expected);
+            let mut writer = CanonicalWriter::hasher();
+            assert_eq!(writer.array_header(len), count);
+            assert_eq!(writer.map_header(len), count);
+            assert_eq!(writer.finish_hash(), ContentHash::compute(&expected));
+        }
+    }
+
+    #[test]
+    fn borrowed_hashing_matches_nested_reference_across_digest_blocks() {
+        fn fields<S: CanonicalSink>(writer: &mut CanonicalWriter<S>, source: &str) {
+            writer.map_header(3);
+            writer.key("");
+            writer.array_header(3);
+            writer.boolean(true);
+            writer.map_header(0);
+            writer.array_header(0);
+            writer.key("source");
+            writer.string(source);
+            writer.key("é🚀");
+            writer.bytes(&[0, 1, 127, 128, 254, 255]);
+        }
+        for len in [0, 1, 55, 56, 63, 64, 65, 127, 128, 129, 1024, 65_536] {
+            let source = "x".repeat(len);
+            let reference = CanonicalValue::map_from_entries([
+                (
+                    "",
+                    CanonicalValue::Array(vec![
+                        CanonicalValue::Bool(true),
+                        CanonicalValue::Map(BTreeMap::new()),
+                        CanonicalValue::Array(Vec::new()),
+                    ]),
+                ),
+                ("source", CanonicalValue::str(&source)),
+                ("é🚀", CanonicalValue::Bytes(vec![0, 1, 127, 128, 254, 255])),
+            ]);
+            let expected = encode_value(&reference);
+            let mut writer = CanonicalWriter::new();
+            fields(&mut writer, &source);
+            assert_eq!(writer.finish(), expected, "source length {len}");
+            let mut writer = CanonicalWriter::hasher();
+            fields(&mut writer, &source);
+            assert_eq!(
+                writer.finish_hash(),
+                ContentHash::compute(&expected),
+                "source length {len}"
+            );
         }
     }
 }

@@ -37,7 +37,10 @@ fn run_with_capabilities(
         source: std::fs::read_to_string(&entry).expect("entry source"),
         source_file: Some(entry.display().to_string()),
         module_root: Some(root.display().to_string()),
-        capabilities: capabilities.iter().map(|grant| (*grant).to_string()).collect(),
+        capabilities: capabilities
+            .iter()
+            .map(|grant| (*grant).to_string())
+            .collect(),
         version: "1.0.0".to_string(),
         metadata: Default::default(),
     };
@@ -190,6 +193,62 @@ fn side_effect_import_of_a_core_module() {
     );
 }
 
+#[test]
+fn filesystem_literal_dynamic_and_cross_file_requires_share_one_provider() {
+    assert_output(
+        &[
+            (
+                "app.cjs",
+                r#"
+const load = require;
+const fs = load('fs');
+const literal = require('node:fs');
+const child = require('./child.cjs');
+console.log(fs === literal, fs === child.fs,
+    fs.promises === child.promises, load('node:fs/promises') === child.promises);
+fs.marker = 31;
+console.log(child.fs.marker, typeof child.promises.readFile);
+fs.readFileSync = function() { return 'replacement'; };
+console.log(literal.readFileSync('unread'), require('fs').readFileSync('unread'));
+child.promises.readFile = function() { return Promise.resolve('promise replacement'); };
+require('fs/promises').readFile('unread').then(value => console.log(value));
+"#,
+            ),
+            (
+                "child.cjs",
+                "module.exports = {fs: require('fs'), promises: require('fs/promises')};",
+            ),
+        ],
+        &[
+            "true true true true",
+            "31 function",
+            "replacement replacement",
+            "promise replacement",
+        ],
+    );
+}
+
+#[test]
+fn ordinary_filesystem_promises_imports_share_the_commonjs_module() {
+    assert_output(
+        &[
+            (
+                "app.mjs",
+                r#"
+import promises, {readFile, open, constants} from 'node:fs/promises';
+import * as namespace from 'fs/promises';
+import child from './child.cjs';
+console.log(promises === child, namespace.default === child,
+    readFile === child.readFile, open === child.open, constants === child.constants);
+import('fs/promises').then(function(again) { console.log(again === namespace); });
+"#,
+            ),
+            ("child.cjs", "module.exports = require('fs').promises;"),
+        ],
+        &["true true true true true", "true"],
+    );
+}
+
 /// A local module that imports path: its results reach the importer's console.
 #[test]
 fn imported_module_uses_a_core_module() {
@@ -335,7 +394,6 @@ fn a_reexport_of_an_unmodeled_core_module_stays_refused_bd_9vouw_221() {
     );
 }
 
-
 /// Exercise runtime module loading, deliberately avoiding the legacy literal
 /// require rewrites. The same provider must serve both spellings and both
 /// import forms, including source-backed factories and callable CJS exports.
@@ -397,7 +455,10 @@ import('{alias}').then(function(again) {{
         assert_output(
             &[
                 ("app.mjs", &esm),
-                ("load.cjs", "module.exports = function(name) { return require(name); };"),
+                (
+                    "load.cjs",
+                    "module.exports = function(name) { return require(name); };",
+                ),
             ],
             &["true true true true true local:sentinel"],
         );
@@ -493,7 +554,9 @@ fn ordinary_native_imports_require_the_provider_capabilities() {
             ("app.cjs", format!("import('node:{alias}');")),
             (
                 "app.mjs",
-                format!("import * as namespace from 'node:{alias}';\nfunction require(name) {{ return name; }}\n"),
+                format!(
+                    "import * as namespace from 'node:{alias}';\nfunction require(name) {{ return name; }}\n"
+                ),
             ),
         ] {
             with_tree(&[(name, &source)], |root| {

@@ -31,6 +31,7 @@ const SOURCE: &str = concat!(
     "(", include_str!("fs_directory.js"), ")((",
     include_str!("fs_copy.js"), ")(", include_str!("fs_module.js"), "))))",
 );
+pub(super) const SOURCE_BYTES: usize = SOURCE.len();
 // One immutable parser template shared by fs and fs/promises. Every program
 // still receives a clone before renaming and dependency/loader rewriting.
 static FILESYSTEM_SOURCE: NativeModuleSource = NativeModuleSource::new("franken:fs", SOURCE);
@@ -124,6 +125,13 @@ pub(super) fn has_ambient_fs_require(
 pub(super) fn rewrite_fs_requires(
     tree: &SyntaxTree,
 ) -> Result<Option<SyntaxTree>, LoweringPipelineError> {
+    rewrite_fs_requires_with_runtime_sources(tree, false)
+}
+
+pub(super) fn rewrite_fs_requires_with_runtime_sources(
+    tree: &SyntaxTree,
+    retain_runtime_sources: bool,
+) -> Result<Option<SyntaxTree>, LoweringPipelineError> {
     if !tree
         .body
         .iter()
@@ -164,7 +172,7 @@ pub(super) fn rewrite_fs_requires(
             kind: VariableDeclarationKind::Const,
             declarations: vec![VariableDeclarator {
                 pattern: BindingPattern::Identifier(MODULE_BINDING.to_string()),
-                initializer: Some(module_source(&names)?),
+                initializer: Some(module_source_with_runtime_sources(&names, retain_runtime_sources)?),
                 span,
             }],
             span,
@@ -547,10 +555,23 @@ impl Walk for DirectFsCalls {
     }
 }
 
+#[cfg(test)]
 fn module_source(names: &BTreeSet<String>) -> Result<Expression, LoweringPipelineError> {
+    module_source_with_runtime_sources(names, false)
+}
+
+fn module_source_with_runtime_sources(
+    names: &BTreeSet<String>,
+    retain_runtime_sources: bool,
+) -> Result<Expression, LoweringPipelineError> {
     // Keep the filesystem diagnostic at its existing boundary. The shared
     // carrier stores only pristine syntax, never renamed host-I/O intrinsics.
-    let mut expression = FILESYSTEM_SOURCE.expression().map_err(|_| {
+    let parsed = if retain_runtime_sources {
+        FILESYSTEM_SOURCE.runtime_expression()
+    } else {
+        FILESYSTEM_SOURCE.expression()
+    };
+    let mut expression = parsed.map_err(|_| {
         LoweringPipelineError::InvariantViolation {
             detail: "the engine's filesystem module source failed to parse",
         }
@@ -789,6 +810,46 @@ mod tests {
             assert!(cached_names.contains(placeholder));
             assert!(!cached_names.contains(intrinsic));
         }
+    }
+
+    #[test]
+    fn runtime_filesystem_syntax_retains_sources_in_a_separate_template() {
+        struct Sources(usize);
+        impl Walk for Sources {
+            fn expression(&mut self, expression: &mut Expression) -> Outcome {
+                if matches!(
+                    expression,
+                    Expression::Function {
+                        source_text: Some(_),
+                        ..
+                    }
+                ) {
+                    self.0 += 1;
+                }
+                walk_expression(self, expression)
+            }
+        }
+        let names = BTreeSet::new();
+        let mut legacy = module_source(&names).unwrap();
+        let mut runtime = module_source_with_runtime_sources(&names, true).unwrap();
+        let mut before = Sources(0);
+        before.expression(&mut legacy).unwrap();
+        assert_eq!(before.0, 0);
+        let mut retained = Sources(0);
+        retained.expression(&mut runtime).unwrap();
+        assert!(
+            retained.0 > 0,
+            "native filesystem closures retain their defining source"
+        );
+        assert_eq!(legacy.canonical_value(), runtime.canonical_value());
+        let mut after = Sources(0);
+        after
+            .expression(&mut module_source(&names).unwrap())
+            .unwrap();
+        assert_eq!(
+            after.0, 0,
+            "runtime metadata does not contaminate script facade syntax"
+        );
     }
 
     #[test]

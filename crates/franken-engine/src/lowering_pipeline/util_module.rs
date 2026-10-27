@@ -179,6 +179,7 @@ pub(super) fn intrinsic_capability(name: &str) -> Option<&'static str> {
         "%QuerystringModule" => Some("builtin:QuerystringModule"),
         "%NativeEventsModule" => Some("builtin:NativeEventsModule"),
         "%NativeStringDecoderModule" => Some("builtin:NativeStringDecoderModule"),
+        "%NativeStreamModule" => Some("builtin:NativeStreamModule"),
         _ => fs_module::intrinsic_capability(name)
             .or_else(|| zlib_module::intrinsic_capability(name)),
     }
@@ -558,6 +559,20 @@ pub(super) fn rewrite_util_requires(
     Ok(Some(rewritten))
 }
 
+/// Authenticated CommonJS already owns a real runtime require. Preserve its
+/// filesystem loads so literal, aliased and cross-module calls share the same
+/// mutable native object. Script-only facades still use the ordinary rewrite.
+pub(super) fn rewrite_commonjs_util_requires(
+    tree: &SyntaxTree,
+) -> Result<Option<SyntaxTree>, LoweringPipelineError> {
+    let Some(mut rewritten) = rewrite_module_objects_with_runtime_sources(tree, false, true)?
+    else {
+        return Ok(None);
+    };
+    native_module_loader::defer_modules(&mut rewritten)?;
+    Ok(Some(rewritten))
+}
+
 /// Fixed engine-owned entrypoints for the authenticated runtime provider.
 /// Reuse the ordinary factory, dependency and first-use loader transforms;
 /// captured guest source never enters this function. Submodules select a
@@ -566,6 +581,21 @@ fn native_runtime_wrapper(native: NativeBuiltinModule) -> Option<(&'static str, 
     let loader_bytes = include_str!("native_module_loader.js").len();
     let util_bytes = UTIL_SOURCE.len() + include_str!("util_mime.js").len() + loader_bytes;
     match native {
+        NativeBuiltinModule::Fs | NativeBuiltinModule::FsPromises => Some((
+            "module.exports = require('fs');",
+            // Admit the full temporary syntax before replacing the Stream,
+            // EventEmitter and decoder factories with canonical providers.
+            // Readline and Web Streams remain lazy private dependencies.
+            fs_module::SOURCE_BYTES
+                + STREAM_SOURCE.len()
+                + EVENTS_SOURCE.len()
+                + STRING_DECODER_SOURCE.len()
+                + WEB_STREAMS_SOURCE.len()
+                + READLINE_SOURCE.len()
+                + include_str!("readline_cursor.js").len()
+                + native_module_loader::stream_bridge_source_bytes()
+                + loader_bytes * 6,
+        )),
         NativeBuiltinModule::Util | NativeBuiltinModule::UtilTypes => {
             Some(("module.exports = require('util');", util_bytes))
         }
@@ -622,10 +652,11 @@ pub(crate) fn native_runtime_module_tree(
         )
         .map_err(|_| invalid())?;
     let mut rewritten =
-        rewrite_module_objects_with_runtime_sources(&tree, true)?.ok_or_else(invalid)?;
+        rewrite_module_objects_with_runtime_sources(&tree, true, false)?.ok_or_else(invalid)?;
     if matches!(
         native,
         NativeBuiltinModule::Stream | NativeBuiltinModule::StreamPromises
+            | NativeBuiltinModule::Fs | NativeBuiltinModule::FsPromises
     ) {
         // The runtime provider shares its dependencies with public native
         // imports. Re-running the legacy Events initializer would reset
@@ -665,19 +696,71 @@ pub(crate) fn native_runtime_module_tree(
             }
         }
     }
+    if matches!(
+        native,
+        NativeBuiltinModule::Fs | NativeBuiltinModule::FsPromises
+    ) {
+        // A filesystem stream must inherit the realm's public Stream classes.
+        // Remove only this exact private declaration, then replace its value
+        // references with the native provider call. Keeping a declaration
+        // would make the final composition pass install the Web bridge twice
+        // and overwrite guest-visible Stream methods on an already loaded
+        // shared object.
+        let mut removed = 0;
+        rewritten.body.retain(|statement| {
+            let Statement::VariableDeclaration(declaration) = statement else {
+                return true;
+            };
+            if matches!(declaration.declarations.as_slice(),
+                [VariableDeclarator { pattern: BindingPattern::Identifier(name), .. }]
+                    if name == STREAM_MODULE_BINDING)
+            {
+                removed += 1;
+                false
+            } else {
+                true
+            }
+        });
+        if removed != 1 {
+            return Err(invalid());
+        }
+        struct StreamReferences;
+        impl Walk for StreamReferences {
+            fn expression(&mut self, expression: &mut Expression) -> Outcome {
+                if matches!(expression, Expression::Identifier(name) if name == STREAM_MODULE_BINDING)
+                {
+                    *expression = Expression::Call {
+                        callee: Box::new(Expression::Identifier("%NativeStreamModule".into())),
+                        arguments: Vec::new(),
+                        span: None,
+                    };
+                    return Ok(());
+                }
+                walk_expression(self, expression)
+            }
+        }
+        StreamReferences.statements(&mut rewritten.body)?;
+    }
     native_module_loader::defer_modules_with_runtime_sources(&mut rewritten, true)?;
     Ok(rewritten)
 }
 
 fn rewrite_module_objects(tree: &SyntaxTree) -> Result<Option<SyntaxTree>, LoweringPipelineError> {
-    rewrite_module_objects_with_runtime_sources(tree, false)
+    rewrite_module_objects_with_runtime_sources(tree, false, false)
 }
 
 fn rewrite_module_objects_with_runtime_sources(
     tree: &SyntaxTree,
     retain_runtime_sources: bool,
+    preserve_filesystem_requires: bool,
 ) -> Result<Option<SyntaxTree>, LoweringPipelineError> {
-    let fs_rewritten = fs_module::rewrite_fs_requires(tree)?;
+    let fs_rewritten = if preserve_filesystem_requires {
+        None
+    } else if retain_runtime_sources {
+        fs_module::rewrite_fs_requires_with_runtime_sources(tree, true)?
+    } else {
+        fs_module::rewrite_fs_requires(tree)?
+    };
     let tree = fs_rewritten.as_ref().unwrap_or(tree);
     if !tree
         .body
@@ -1473,6 +1556,57 @@ mod tests {
                 count.0, 0,
                 "runtime metadata cannot contaminate the legacy cache"
             );
+        }
+    }
+
+    #[test]
+    fn native_filesystem_factory_uses_canonical_stream_dependencies() {
+        struct References {
+            stream: usize,
+            events: usize,
+            decoder: usize,
+            private_stream: usize,
+        }
+        impl Walk for References {
+            fn expression(&mut self, expression: &mut Expression) -> Outcome {
+                if let Expression::Identifier(name) = expression {
+                    match name.as_str() {
+                        "%NativeStreamModule" => self.stream += 1,
+                        "%NativeEventsModule" => self.events += 1,
+                        "%NativeStringDecoderModule" => self.decoder += 1,
+                        STREAM_MODULE_BINDING => self.private_stream += 1,
+                        _ => {}
+                    }
+                }
+                walk_expression(self, expression)
+            }
+        }
+        for native in [NativeBuiltinModule::Fs, NativeBuiltinModule::FsPromises] {
+            let mut tree = native_runtime_module_tree(native).unwrap();
+            assert!(
+                tree.body.iter().all(|statement| {
+                    !matches!(statement, Statement::VariableDeclaration(declaration)
+                    if declaration.declarations.iter().any(|declarator|
+                        matches!(&declarator.pattern, BindingPattern::Identifier(name)
+                            if name == STREAM_MODULE_BINDING)))
+                }),
+                "the final composition cannot wrap the canonical Stream twice"
+            );
+            let mut references = References {
+                stream: 0,
+                events: 0,
+                decoder: 0,
+                private_stream: 0,
+            };
+            references.statements(&mut tree.body).unwrap();
+            assert!(
+                references.stream > 0,
+                "file streams load the native shared provider"
+            );
+            assert_eq!(references.events, 1);
+            assert_eq!(references.decoder, 1);
+            assert_eq!(references.private_stream, 0);
+            assert!(native_runtime_module_source_bytes(native).unwrap() > fs_module::SOURCE_BYTES);
         }
     }
 

@@ -271,10 +271,11 @@ impl ModuleRecord {
 /// rechecks the complete descriptor before dispatching the real realm object;
 /// no source text or filesystem fallback is used to manufacture a builtin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NativeBuiltinModule {
-    Buffer,
+pub enum NativeBuiltinModule {    Buffer,
     Crypto,
     Zlib,
+    Fs,
+    FsPromises,
     Events,
     Os,
     Querystring,
@@ -301,6 +302,8 @@ impl NativeBuiltinModule {
             "buffer" | "node:buffer" => Some(Self::Buffer),
             "crypto" | "node:crypto" => Some(Self::Crypto),
             "zlib" | "node:zlib" => Some(Self::Zlib),
+            "fs" | "node:fs" => Some(Self::Fs),
+            "fs/promises" | "node:fs/promises" => Some(Self::FsPromises),
             "module" | "node:module" => Some(Self::Module),
             "events" | "node:events" => Some(Self::Events),
             "os" | "node:os" => Some(Self::Os),
@@ -328,6 +331,8 @@ impl NativeBuiltinModule {
             Self::Buffer => "node:buffer",
             Self::Crypto => "node:crypto",
             Self::Zlib => "node:zlib",
+            Self::Fs => "node:fs",
+            Self::FsPromises => "node:fs/promises",
             Self::Module => "node:module",
             Self::Events => "node:events",
             Self::Os => "node:os",
@@ -2641,6 +2646,8 @@ mod tests {
             "buffer",
             "crypto",
             "zlib",
+            "fs",
+            "fs/promises",
             "module",
             "events",
             "os",
@@ -2687,6 +2694,12 @@ mod tests {
                     .contains(&RuntimeCapability::RandomRead),
                 "loading {name} must not require or grant entropy authority"
             );
+            for effect in [RuntimeCapability::FsRead, RuntimeCapability::FsWrite] {
+                assert!(
+                    !record.required_capabilities.contains(&effect),
+                    "loading {name} must not require or grant filesystem authority"
+                );
+            }
             assert_eq!(
                 record
                     .required_capabilities
@@ -2700,7 +2713,7 @@ mod tests {
             assert!(allowed.authorize(&request, &record, &context()).is_ok());
         }
         for name in [
-            "fs",
+            "fs/unknown",
             "path/unknown",
             "node:unknown",
             "node:node:buffer",
@@ -2720,6 +2733,8 @@ mod tests {
             NativeBuiltinModule::Buffer,
             NativeBuiltinModule::Crypto,
             NativeBuiltinModule::Zlib,
+            NativeBuiltinModule::Fs,
+            NativeBuiltinModule::FsPromises,
         ] {
             let original = builtin.record("captured:graph:native");
             let mut forged = original.clone();

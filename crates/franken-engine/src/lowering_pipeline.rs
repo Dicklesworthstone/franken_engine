@@ -1272,6 +1272,8 @@ fn lower_ir0_to_ir1_on_current_stack(
     let util_rewritten;
     let ir0 = match if preserve_runtime_module_loads {
         None
+    } else if authenticated_commonjs_runtime_bindings {
+        util_module::rewrite_commonjs_util_requires(&ir0.tree)?
     } else {
         util_module::rewrite_util_requires(&ir0.tree)?
     } {
@@ -22943,6 +22945,12 @@ fn is_require_fs_module_initializer(
     expr: &Expression,
     binding_lookup: &BTreeMap<String, BindingId>,
 ) -> bool {
+    // A real CommonJS require returns the shared mutable native object. Its
+    // methods and constants must be read at runtime, including after another
+    // module replaces them; only script-only facades may bypass that object.
+    if require_is_commonjs_wrapper(binding_lookup) {
+        return false;
+    }
     let Expression::Call {
         callee, arguments, ..
     } = expr
@@ -30069,6 +30077,9 @@ fn is_require_fs_promises_module_initializer(
     expr: &Expression,
     binding_lookup: &BTreeMap<String, BindingId>,
 ) -> bool {
+    if require_is_commonjs_wrapper(binding_lookup) {
+        return false;
+    }
     let Expression::Call {
         callee, arguments, ..
     } = expr
@@ -50205,6 +50216,42 @@ mod tests {
                     "a source require must not become a hidden builtin loader"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn authenticated_filesystem_calls_preserve_mutable_runtime_module_objects() {
+        for name in ["fs", "node:fs", "fs/promises", "node:fs/promises"] {
+            let method = if name.ends_with("/promises") {
+                "readFile"
+            } else {
+                "readFileSync"
+            };
+            let source = format!(
+                "const fs = require('{name}'); const load = require;\n\
+                 const again = load('{name}');\n\
+                 fs.{method} = function () {{ return 'replacement'; }};\n\
+                 fs.{method}('unread'); again.{method}('unread');\n\
+                 require('{name}').{method}('unread');"
+            );
+            let tree = crate::parser_api_stability::parse_script(&source).unwrap();
+            let ir0 = Ir0Module::from_syntax_tree(tree, "native-fs-values.cjs");
+            let output = lower_ir0_to_ir3(
+                &ir0,
+                &LoweringContext::new("native-fs-values", "cjs", "policy")
+                    .with_authenticated_commonjs_runtime_bindings(),
+            )
+            .expect("literal and aliased CommonJS loads stay on the runtime module path");
+            assert_eq!(count_hostcall_deep(&output.ir1.ops, "fs:read"), 0);
+            assert_eq!(count_hostcall_deep(&output.ir1.ops, "fs:write"), 0);
+            assert_eq!(
+                count_ops_deep(&output.ir1.ops, &|op| matches!(
+                    op,
+                    Ir1Op::Call { arg_count: 1 }
+                )),
+                3,
+                "literal, aliased and inline loads call the actual CommonJS binding for {name}"
+            );
         }
     }
 

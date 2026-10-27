@@ -41056,6 +41056,8 @@ impl InterpreterCore {
             | NativeBuiltinModule::PathWin32 => self.path_core_module(module, native),
             NativeBuiltinModule::Util
             | NativeBuiltinModule::UtilTypes
+            | NativeBuiltinModule::Fs
+            | NativeBuiltinModule::FsPromises
             | NativeBuiltinModule::Assert
             | NativeBuiltinModule::AssertStrict
             | NativeBuiltinModule::StringDecoder
@@ -41073,6 +41075,27 @@ impl InterpreterCore {
     /// facade inventories where the provider itself is table-driven.
     fn native_builtin_export_names(native: NativeBuiltinModule) -> Vec<&'static str> {
         match native {
+            NativeBuiltinModule::Fs => vec![
+                "readFileSync", "writeFileSync", "appendFileSync", "existsSync",
+                "statSync", "lstatSync", "readdirSync", "mkdirSync", "unlinkSync",
+                "rmdirSync", "rmSync", "renameSync", "copyFileSync", "accessSync",
+                "chmodSync", "utimesSync", "realpathSync", "readlinkSync", "symlinkSync",
+                "truncateSync", "mkdtempSync", "openSync", "closeSync", "fsyncSync",
+                "readSync", "writeSync", "readvSync", "writevSync", "cpSync",
+                "readFile", "writeFile", "appendFile", "exists", "stat", "lstat",
+                "readdir", "mkdir", "unlink", "rmdir", "rm", "rename", "copyFile",
+                "access", "chmod", "utimes", "realpath", "readlink", "symlink",
+                "truncate", "mkdtemp", "open", "close", "fsync", "read", "write",
+                "readv", "writev", "cp", "Dir", "opendirSync", "opendir", "globSync",
+                "glob", "createReadStream", "createWriteStream", "ReadStream",
+                "WriteStream", "constants", "promises",
+            ],
+            NativeBuiltinModule::FsPromises => vec![
+                "constants", "open", "mkdir", "readdir", "stat", "lstat", "unlink",
+                "rmdir", "rm", "rename", "copyFile", "access", "chmod", "utimes",
+                "realpath", "readlink", "symlink", "truncate", "mkdtemp", "readFile",
+                "writeFile", "appendFile", "opendir", "glob", "cp",
+            ],
             NativeBuiltinModule::Module => vec!["createRequire"],
             NativeBuiltinModule::Crypto => crate::lowering_pipeline::CRYPTO_METHOD_NAMES
                 .into_iter()
@@ -41638,6 +41661,8 @@ impl InterpreterCore {
             NativeBuiltinModule::Buffer => "\0franken-engine/native-buffer/esm",
             NativeBuiltinModule::Crypto => "\0franken-engine/native-crypto/esm",
             NativeBuiltinModule::Zlib => "\0franken-engine/native-zlib/esm",
+            NativeBuiltinModule::Fs => "\0franken-engine/native-fs/esm",
+            NativeBuiltinModule::FsPromises => "\0franken-engine/native-fs/promises/esm",
             NativeBuiltinModule::Module => "\0franken-engine/native-module/esm",
             NativeBuiltinModule::Events => "\0franken-engine/native-events/esm",
             NativeBuiltinModule::Os => "\0franken-engine/native-os/esm",
@@ -41983,6 +42008,16 @@ impl InterpreterCore {
         import_bound: Option<&Label>,
     ) -> Result<Value, InterpreterError> {
         let (factory, id, member) = match native {
+            NativeBuiltinModule::Fs => (
+                NativeBuiltinModule::Fs,
+                "\0franken-engine/native-fs",
+                None,
+            ),
+            NativeBuiltinModule::FsPromises => (
+                NativeBuiltinModule::Fs,
+                "\0franken-engine/native-fs",
+                Some("promises"),
+            ),
             NativeBuiltinModule::Util => (
                 NativeBuiltinModule::Util,
                 "\0franken-engine/native-util",
@@ -42066,7 +42101,7 @@ impl InterpreterCore {
                 // a later require must neither select nor invoke guest code.
                 let stable_member = match factory {
                     NativeBuiltinModule::Util => Some("types"),
-                    NativeBuiltinModule::Stream => Some("promises"),
+                    NativeBuiltinModule::Stream | NativeBuiltinModule::Fs => Some("promises"),
                     _ => None,
                 };
                 if let Some(name) = stable_member {
@@ -68797,6 +68832,8 @@ impl InterpreterCore {
             "\0franken-engine/native-buffer/esm",
             "\0franken-engine/native-crypto/esm",
             "\0franken-engine/native-zlib/esm",
+            "\0franken-engine/native-fs/esm",
+            "\0franken-engine/native-fs/promises/esm",
             "\0franken-engine/native-module/esm",
             "\0franken-engine/native-events/esm",
             "\0franken-engine/native-os/esm",
@@ -98080,7 +98117,9 @@ impl InterpreterCore {
             // Canonical dependencies of the retained native Stream factory.
             // These private calls share public module state and retain normal
             // runtime observation labels; they are not pure fresh aggregates.
-            "builtin:NativeEventsModule" | "builtin:NativeStringDecoderModule" => {
+            "builtin:NativeEventsModule"
+            | "builtin:NativeStringDecoderModule"
+            | "builtin:NativeStreamModule" => {
                 if args.count != 0 {
                     return Err(InterpreterError::TypeError {
                         expected: "zero native module dependency arguments".to_string(),
@@ -98092,6 +98131,22 @@ impl InterpreterCore {
                 })?;
                 if cap == "builtin:NativeEventsModule" {
                     self.events_core_module(module)
+                } else if cap == "builtin:NativeStreamModule" {
+                    // The filesystem factory may load its canonical Stream
+                    // dependency lazily. This private intrinsic preserves the
+                    // public provider's authority contract on every access;
+                    // possessing fs never grants scheduling authority.
+                    let descriptor = NativeBuiltinModule::Stream.record("native-stream-dependency");
+                    if let Some(missing) = descriptor
+                        .required_capabilities
+                        .difference(&self.config.granted_capabilities)
+                        .next()
+                    {
+                        return Err(InterpreterError::CapabilityDenied {
+                            capability: missing.to_string(),
+                        });
+                    }
+                    self.source_builtin_module(module, NativeBuiltinModule::Stream, None)
                 } else {
                     self.source_builtin_module(module, NativeBuiltinModule::StringDecoder, None)
                 }

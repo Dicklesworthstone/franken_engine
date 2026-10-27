@@ -18828,6 +18828,74 @@ impl InterpreterCore {
         }
     }
 
+    /// Filesystem arguments are not arbitrary string-coercion sites. In
+    /// particular, an omitted write payload must fail before an existing
+    /// file can be truncated, and a view denotes its bytes, not its numeric
+    /// elements or its public `buffer`/`byteOffset` properties.
+    fn fs_write_data_bytes(&self, value: Option<&Value>) -> Result<Vec<u8>, InterpreterError> {
+        match value {
+            Some(Value::Str(text)) => {
+                self.check_temporary_memory_budget(u64::try_from(text.len()).unwrap_or(u64::MAX))?;
+                Ok(text.as_bytes().to_vec())
+            }
+            Some(value @ Value::Object(object_id)) => {
+                let object = self
+                    .heap
+                    .get(object_id.0 as usize)
+                    .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+                if let Some(view) = &object.typed_array {
+                    Self::reject_out_of_bounds_typed_array(view, "filesystem write")?;
+                } else if let Some(view) = &object.data_view {
+                    Self::reject_out_of_bounds_data_view(view, "filesystem write")?;
+                } else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "filesystem data of type string or ArrayBufferView".to_string(),
+                        got: "ordinary object".to_string(),
+                    });
+                }
+                // This shared native helper authenticates the backing store,
+                // checks its byte range and admits the copy before allocating.
+                self.crypto_binary_view_bytes_with_mode(value, false)
+            }
+            other => Err(InterpreterError::TypeError {
+                expected: "filesystem data of type string or ArrayBufferView".to_string(),
+                got: other.map_or("undefined", Value::type_name).to_string(),
+            }),
+        }
+    }
+
+    fn fs_path_argument(&self, value: Option<&Value>) -> Result<String, InterpreterError> {
+        let path = match value {
+            Some(Value::Str(text)) => {
+                self.check_temporary_memory_budget(u64::try_from(text.len()).unwrap_or(u64::MAX))?;
+                text.to_string()
+            }
+            Some(value @ Value::Object(_)) => {
+                let view = self.buffer_like_view(value)?;
+                Self::reject_out_of_bounds_typed_array(&view, "filesystem path")?;
+                String::from_utf8(self.bytes_for_typed_array_view(&view)?).map_err(|_| {
+                    InterpreterError::TypeError {
+                        expected: "a UTF-8 filesystem path".to_string(),
+                        got: "non-UTF-8 path bytes".to_string(),
+                    }
+                })?
+            }
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "filesystem path of type string, Buffer or Uint8Array".to_string(),
+                    got: other.map_or("undefined", Value::type_name).to_string(),
+                });
+            }
+        };
+        if path.contains('\0') {
+            return Err(InterpreterError::TypeError {
+                expected: "filesystem path without NUL bytes".to_string(),
+                got: "path containing a NUL byte".to_string(),
+            });
+        }
+        Ok(path)
+    }
+
     fn fs_value_argument(&self, value: &Value) -> String {
         match value {
             Value::Str(value) => value.to_string(),
@@ -18853,8 +18921,12 @@ impl InterpreterCore {
             .is_some_and(|value| matches!(value, Value::Bool(true)))
     }
 
-    fn fs_operation_arguments(&self, operation: FsOperation, args: &[Value]) -> Vec<String> {
-        match operation {
+    fn fs_operation_arguments(
+        &self,
+        operation: FsOperation,
+        args: &[Value],
+    ) -> Result<Vec<String>, InterpreterError> {
+        Ok(match operation {
             FsOperation::Mkdir => vec![format!(
                 "recursive={}",
                 self.fs_option_is_true(args.get(1), "recursive")
@@ -18872,9 +18944,8 @@ impl InterpreterCore {
             ],
             FsOperation::Symlink
             | FsOperation::Rename
-            | FsOperation::CopyFile
-            | FsOperation::Truncate
-            | FsOperation::Chmod => args
+            | FsOperation::CopyFile => vec![self.fs_path_argument(args.get(1))?],
+            FsOperation::Truncate | FsOperation::Chmod => args
                 .get(1)
                 .map_or_else(Vec::new, |value| vec![self.fs_value_argument(value)]),
             FsOperation::Utimes => args
@@ -18932,7 +19003,7 @@ impl InterpreterCore {
             | FsOperation::Access
             | FsOperation::Realpath
             | FsOperation::Mkdtemp => Vec::new(),
-        }
+        })
     }
 
     fn alloc_fs_date(&mut self, modified_millis: i64) -> Result<Value, InterpreterError> {
@@ -19162,9 +19233,6 @@ impl InterpreterCore {
             }
             return Ok(result);
         }
-        let Some(provider) = self.host_io.clone() else {
-            return Ok(Value::Undefined);
-        };
         let args_label = self.join_arg_range_label(args)?;
         let filesystem_result_label =
             hostcall_result_contract(capability).result_label(&args_label, None);
@@ -19181,39 +19249,64 @@ impl InterpreterCore {
         // retaining the existing `fs:read` / `fs:write` capability tag. Keeping
         // it in the typed effect/request makes transcripts and receipts commit to
         // the concrete action without adding capability aliases.
-        let (mut operation, logical_args) = match raw_args.first() {
-            Some(Value::Str(value)) => value
-                .strip_prefix("\0fsop:")
-                .and_then(FsOperation::parse_name)
-                .map_or_else(
-                    || {
-                        (
-                            if capability == "fs:read" {
-                                FsOperation::Read
-                            } else {
-                                FsOperation::Write
-                            },
-                            raw_args.as_slice(),
-                        )
-                    },
-                    |operation| (operation, &raw_args[1..]),
-                ),
-            _ => (
-                if capability == "fs:read" {
-                    FsOperation::Read
-                } else {
-                    FsOperation::Write
-                },
-                raw_args.as_slice(),
-            ),
+        let declared_operation = match capability {
+            "fs:read" => FsOperation::Read,
+            "fs:write" => FsOperation::Write,
+            _ => {
+                return Err(InterpreterError::CapabilityDenied {
+                    capability: recordable_capability_tag(capability).into_owned(),
+                });
+            }
         };
+        let (mut operation, logical_args) = if let Some(Value::Str(value)) = raw_args.first()
+            && let Some(name) = value.strip_prefix("\0fsop:")
+        {
+            let operation = FsOperation::parse_name(name).ok_or_else(|| {
+                InterpreterError::CapabilityDenied {
+                    capability: "fs:unknown_operation".to_string(),
+                }
+            })?;
+            (operation, &raw_args[1..])
+        } else {
+            (declared_operation, raw_args.as_slice())
+        };
+        // The discriminator is internal metadata, not a second source of
+        // authority. Even forged IR cannot smuggle a mutation through a read
+        // tag (or mislabel a read as a write) into the Full handler stack.
+        if operation.required_capability() != declared_operation.required_capability() {
+            return Err(InterpreterError::CapabilityDenied {
+                capability: if operation.required_capability()
+                    == FsOperation::Read.required_capability()
+                {
+                    "fs:read".to_string()
+                } else {
+                    "fs:write".to_string()
+                },
+            });
+        }
         let callback_closure = logical_args.last().and_then(|value| match value {
             Value::Closure(closure_id) => Some(*closure_id),
             _ => None,
         });
-        let path = logical_args
-            .first()
-            .map_or_else(String::new, |value| self.fs_value_argument(value));
+        let path = if matches!(
+            operation,
+            FsOperation::ReadFd | FsOperation::WriteFd | FsOperation::Fsync | FsOperation::CloseFd
+        ) {
+            logical_args
+                .first()
+                .map_or_else(String::new, |value| self.fs_value_argument(value))
+        } else {
+            match self.fs_path_argument(logical_args.first()) {
+                Ok(path) => path,
+                // existsSync is the non-throwing predicate. Invalid paths
+                // return false without crossing the host boundary; resource
+                // and engine faults still propagate.
+                Err(InterpreterError::TypeError { .. }) if operation == FsOperation::Exists => {
+                    return Ok(Value::Bool(false));
+                }
+                Err(error) => return Err(error),
+            }
+        };
         let second_arg_value = logical_args.get(1).cloned();
 
         // `writeFile[Sync](path, data, {flag:'a'})` is append-class I/O even
@@ -19247,18 +19340,17 @@ impl InterpreterCore {
         } else {
             None
         };
-        let operation_arguments = self.fs_operation_arguments(operation, logical_args);
+        let operation_arguments = self.fs_operation_arguments(operation, logical_args)?;
         let content = if matches!(
             operation,
             FsOperation::Write | FsOperation::Append | FsOperation::WriteFd
         ) {
-            Some(
-                logical_args
-                    .get(1)
-                    .map_or_else(|| Ok(Vec::new()), |value| self.fs_value_bytes(value))?,
-            )
+            Some(self.fs_write_data_bytes(logical_args.get(1))?)
         } else {
             None
+        };
+        let Some(provider) = self.host_io.clone() else {
+            return Ok(Value::Undefined);
         };
         let effect = create_fs_effect(operation, path, operation_arguments, content);
         // A host boundary is also a cancellation checkpoint. Check before
@@ -127922,6 +128014,103 @@ mod async_runtime_tests_current {
             alias_core.estimated_memory_bytes(),
             alias_core.recompute_estimated_memory_bytes()
         );
+    }
+
+    #[test]
+    fn filesystem_operation_discriminators_cannot_broaden_hostcall_authority() {
+        use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
+
+        let root = tempfile::tempdir().expect("sandbox");
+        let path = root.path().join("keep.txt");
+        std::fs::write(&path, b"unchanged").expect("input");
+        for (tag, operation, expected_denial) in [
+            ("fs:read", "write", "fs:write"),
+            ("fs:read", "open", "fs:write"),
+            ("fs:write", "read", "fs:read"),
+            ("fs:read", "unknown", "fs:unknown_operation"),
+            ("fs:write", "unknown", "fs:unknown_operation"),
+        ] {
+            let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+            let mut core = test_interpreter();
+            core.config
+                .granted_capabilities
+                .insert(if tag == "fs:read" {
+                    RuntimeCapability::FsRead
+                } else {
+                    RuntimeCapability::FsWrite
+                });
+            core.set_host_io(
+                Arc::new(SandboxedHostIo::with_root(root.path()).expect("provider")),
+                Some(recorder.clone()),
+            );
+            core.write_reg(0, Value::str(format!("\0fsop:{operation}")))
+                .unwrap();
+            core.write_reg(1, Value::str("keep.txt")).unwrap();
+            core.write_reg(2, Value::str("must not reach the provider"))
+                .unwrap();
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::HostCall {
+                        capability: CapabilityTag(tag.to_string()),
+                        args: RegRange { start: 0, count: 3 },
+                        dst: 3,
+                    },
+                    Ir3Instruction::Halt,
+                ],
+                Vec::new(),
+            );
+            let error = core
+                .execute(&module)
+                .expect_err("malformed operation must fail closed");
+            assert!(
+                matches!(error, InterpreterError::CapabilityDenied { ref capability }
+                    if capability == expected_denial),
+                "{tag} / {operation}: {error:?}"
+            );
+            assert!(
+                recorder.is_empty(),
+                "malformed operation reached the host seam"
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), b"unchanged");
+        }
+
+        // A valid discriminator still crosses the real provider under only
+        // its matching grant. The positive controls prevent a blanket refusal
+        // from satisfying the malformed-IR assertions above.
+        for (tag, operation, argument, capability) in [
+            ("fs:read", "read", "utf8", RuntimeCapability::FsRead),
+            ("fs:write", "write", "written", RuntimeCapability::FsWrite),
+        ] {
+            let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+            let mut core = test_interpreter();
+            core.config.granted_capabilities.insert(capability);
+            core.set_host_io(
+                Arc::new(SandboxedHostIo::with_root(root.path()).expect("provider")),
+                Some(recorder.clone()),
+            );
+            core.write_reg(0, Value::str(format!("\0fsop:{operation}")))
+                .unwrap();
+            core.write_reg(1, Value::str("keep.txt")).unwrap();
+            core.write_reg(2, Value::str(argument)).unwrap();
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::HostCall {
+                        capability: CapabilityTag(tag.to_string()),
+                        args: RegRange { start: 0, count: 3 },
+                        dst: 3,
+                    },
+                    Ir3Instruction::Halt,
+                ],
+                Vec::new(),
+            );
+            core.execute(&module).expect("matching operation and grant");
+            assert_eq!(recorder.len(), 1);
+            if operation == "read" {
+                assert_eq!(core.read_reg(3).unwrap(), Value::str("unchanged"));
+            } else {
+                assert_eq!(std::fs::read(&path).unwrap(), b"written");
+            }
+        }
     }
 
     /// bd-f5b04.2.7: when a sandboxed host-I/O provider is installed, the

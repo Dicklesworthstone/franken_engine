@@ -2951,9 +2951,12 @@ promises.pipeline([20, 22], new stream.Writable({
 }
 
 #[test]
-fn delivered_module_and_stream_namespaces_reject_export_replacement() {
+fn delivered_native_namespaces_reject_export_replacement() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         for (alias, key) in [
+            ("buffer", "Buffer"),
+            ("crypto", "createHash"),
+            ("zlib", "gzipSync"),
             ("module", "createRequire"),
             ("stream", "Readable"),
             ("stream/promises", "pipeline"),
@@ -2969,7 +2972,7 @@ let readonly = false;
 try {{ namespace[key] = replacement; }} catch (error) {{ readonly = error instanceof TypeError; }}
 console.log(readonly, Reflect.set(namespace, key, replacement),
     Reflect.defineProperty(namespace, key, {{value: replacement}}),
-    namespace[key] === original, nativeNamespace === namespace,
+    Reflect.deleteProperty(namespace, key), namespace[key] === original, nativeNamespace === namespace,
     Object.getOwnPropertyDescriptor(namespace, key).writable);
 const fake = {{}};
 fake[Symbol.toStringTag] = 'Module';
@@ -2997,7 +3000,7 @@ console.log(fake[key] === replacement, Reflect.set(fake, key, original),
                 .expect("native module namespaces reject export replacement without trusting a tag");
             assert_eq!(
                 lines(&result),
-                ["true false false true true true", "true true true true"],
+                ["true false false false true true true", "true true true true"],
                 "lane={lane:?}, alias={alias}"
             );
         }
@@ -3594,6 +3597,49 @@ fn filesystem_dependencies_use_effective_provider_and_recorder_exception_provena
                     assert!(engine.last_failed_console_output().is_empty());
                     assert!(transcript.is_empty());
                 }
+            }
+        }
+    }
+}
+
+
+#[test]
+fn delivered_native_imports_never_fall_back_after_resolver_refusal() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for alias in ["buffer", "crypto", "zlib", "path"] {
+            for (syntax, name, source_text) in [
+                (
+                    ModuleSyntax::CommonJs,
+                    "entry.cjs",
+                    format!("import('node:{alias}').then(function() {{ console.log('escaped'); }});"),
+                ),
+                (
+                    ModuleSyntax::EsModule,
+                    "entry.mjs",
+                    format!("import * as namespace from 'node:{alias}'; console.log('escaped');"),
+                ),
+            ] {
+                // No native route is captured. A real ordinary provider exists
+                // for this name, but the installed graph remains authoritative.
+                let resolver = Arc::new(OpaqueResolver::new(vec![(
+                    name,
+                    definition(syntax, &source_text),
+                )]));
+                let source = entry(&resolver, name, syntax);
+                let installed = ExecutionModuleResolver::new(
+                    &source.module.record.id,
+                    resolver,
+                    Arc::new(AllowAllPolicy),
+                );
+                let mut engine = orchestrator(lane, syntax);
+                let error = engine
+                    .execute_resolved_entry_with_resolver(&package(), &source, installed)
+                    .expect_err("an uncaptured native import must remain refused");
+                assert!(
+                    error.to_string().contains("closed-world module resolution refused"),
+                    "{lane:?} {alias} {syntax:?}: {error}"
+                );
+                assert!(engine.last_failed_console_output().is_empty());
             }
         }
     }

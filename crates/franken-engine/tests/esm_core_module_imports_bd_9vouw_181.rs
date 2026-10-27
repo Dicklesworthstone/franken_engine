@@ -5,9 +5,10 @@
 //! crypto, timers, events), and the path module object for the `require`
 //! forms the path facade does not recognize. Before, such an import loaded
 //! nothing at run time and its opaque result was TopSecret, so no program
-//! that printed anything derived from it ran. Expected lines are Node
-//! v22.2.0's output for the same file trees, captured programmatically; the
-//! refusals are planted negatives.
+//! that printed anything derived from it ran. The original fixtures use Node
+//! v22.2.0 output captured for the same file trees; refusals are planted
+//! negatives. The ordinary native import fixtures additionally exercise the
+//! engine's runtime provider identity and authority contracts.
 
 use std::path::Path;
 
@@ -21,6 +22,14 @@ use frankenengine_engine::execution_orchestrator::{
 /// Runs `app.mjs` as an ES module, or `app.cjs` as Node runs a CommonJS
 /// entry.
 fn run(root: &Path, lane: LaneChoice) -> Result<Vec<String>, String> {
+    run_with_capabilities(root, lane, &["module_load", "builtin", "timer"])
+}
+
+fn run_with_capabilities(
+    root: &Path,
+    lane: LaneChoice,
+    capabilities: &[&str],
+) -> Result<Vec<String>, String> {
     let commonjs = root.join("app.cjs").is_file();
     let entry = root.join(if commonjs { "app.cjs" } else { "app.mjs" });
     let package = ExtensionPackage {
@@ -28,11 +37,7 @@ fn run(root: &Path, lane: LaneChoice) -> Result<Vec<String>, String> {
         source: std::fs::read_to_string(&entry).expect("entry source"),
         source_file: Some(entry.display().to_string()),
         module_root: Some(root.display().to_string()),
-        capabilities: vec![
-            "module_load".to_string(),
-            "builtin".to_string(),
-            "timer".to_string(),
-        ],
+        capabilities: capabilities.iter().map(|grant| (*grant).to_string()).collect(),
         version: "1.0.0".to_string(),
         metadata: Default::default(),
     };
@@ -255,15 +260,16 @@ fn named_imports_of_member_modules() {
     );
 }
 
-/// Planted negative: the rewrite never routes an import through a `require` the program declares, so the import stays opaque and its result is refused at the console (Node prints a/b).
+/// A local require disables the legacy facade rewrite. The real static
+/// import still loads the native provider without calling that guest binding.
 #[test]
-fn a_program_with_its_own_require_keeps_the_import_opaque() {
-    assert_refused(
+fn a_program_with_its_own_require_uses_the_native_import_provider() {
+    assert_output(
         &[(
             "app.mjs",
-            "import path from 'node:path';\nfunction require(specifier) { return specifier; }\nconsole.log(path.join('a', 'b'));\n",
+            "import path from 'node:path';\nfunction require(specifier) { return specifier; }\nconsole.log(path.join('a', 'b'), require('local'));\n",
         )],
-        "unauthorized flow",
+        &["a/b local"],
     );
 }
 
@@ -327,4 +333,179 @@ fn a_reexport_of_an_unmodeled_core_module_stays_refused_bd_9vouw_221() {
         ],
         "bounded-import contract",
     );
+}
+
+
+/// Exercise runtime module loading, deliberately avoiding the legacy literal
+/// require rewrites. The same provider must serve both spellings and both
+/// import forms, including source-backed factories and callable CJS exports.
+#[test]
+fn ordinary_native_imports_share_runtime_require_identity() {
+    for (alias, key) in [
+        ("buffer", "Buffer"),
+        ("crypto", "createHash"),
+        ("zlib", "gzipSync"),
+        ("module", "createRequire"),
+        ("events", "EventEmitter"),
+        ("os", "platform"),
+        ("querystring", "stringify"),
+        ("url", "URL"),
+        ("timers", "setTimeout"),
+        ("perf_hooks", "performance"),
+        ("path", "join"),
+        ("path/posix", "join"),
+        ("path/win32", "join"),
+        ("util", "format"),
+        ("util/types", "isDate"),
+        ("assert", "ok"),
+        ("assert/strict", "ok"),
+        ("string_decoder", "StringDecoder"),
+        ("timers/promises", "setTimeout"),
+        ("stream", "Readable"),
+        ("stream/promises", "pipeline"),
+    ] {
+        let commonjs = format!(
+            r#"
+const load = require;
+const commonjs = load('{alias}');
+import('node:{alias}').then(async function(namespace) {{
+    const again = await import('{alias}');
+    console.log(namespace === again, namespace.default === commonjs,
+        commonjs === load('node:{alias}'),
+        namespace['{key}'] === commonjs['{key}'],
+        typeof namespace['{key}'] !== 'undefined');
+}});
+"#
+        );
+        assert_output(&[("app.cjs", &commonjs)], &["true true true true true"]);
+
+        let esm = format!(
+            r#"
+import load from './load.cjs';
+import * as namespace from '{alias}';
+import * as prefixed from 'node:{alias}';
+function require(specifier) {{ return 'local:' + specifier; }}
+const commonjs = load('node:{alias}');
+import('{alias}').then(function(again) {{
+    console.log(namespace === prefixed, namespace === again,
+        namespace.default === commonjs,
+        namespace['{key}'] === commonjs['{key}'],
+        typeof namespace['{key}'] !== 'undefined', require('sentinel'));
+}});
+"#
+        );
+        assert_output(
+            &[
+                ("app.mjs", &esm),
+                ("load.cjs", "module.exports = function(name) { return require(name); };"),
+            ],
+            &["true true true true true local:sentinel"],
+        );
+    }
+}
+
+/// These operations cross module boundaries; checking only import success or
+/// typeof would miss unusable function values and mismatched Buffer storage.
+#[test]
+fn ordinary_dynamic_imports_execute_crypto_compression_and_path_operations() {
+    assert_output(
+        &[(
+            "app.cjs",
+            r#"
+async function main() {
+    const buffer = await import('node:buffer');
+    const crypto = await import('crypto');
+    const zlib = await import('node:zlib');
+    const path = await import('path');
+    const bytes = buffer.Buffer.from('native');
+    console.log(bytes.toString('hex'));
+    console.log(crypto.createHash('sha256').update('abc').digest('hex'));
+    console.log(zlib.gunzipSync(zlib.gzipSync(bytes)).toString());
+    console.log(path.join('a', 'b', '..', 'c'));
+}
+main();
+"#,
+        )],
+        &[
+            "6e6174697665",
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            "native",
+            "a/c",
+        ],
+    );
+}
+
+/// Namespace exports snapshot the first load; the default export remains the
+/// mutable runtime CJS object. Neither assignment nor reflection can replace a
+/// namespace export, and a guest's @@toStringTag does not grant exotic behavior.
+#[test]
+fn ordinary_native_namespaces_keep_snapshots_and_reject_export_mutation() {
+    for (alias, key) in [
+        ("buffer", "Buffer"),
+        ("crypto", "createHash"),
+        ("zlib", "gzipSync"),
+        ("path", "join"),
+    ] {
+        let source = format!(
+            r#"
+const load = require;
+const commonjs = load('{alias}');
+import('node:{alias}').then(async function(namespace) {{
+    const original = namespace['{key}'];
+    const replacement = function() {{ return 'changed'; }};
+    commonjs['{key}'] = replacement;
+    commonjs.guestAdded = true;
+    const again = await import('{alias}');
+    console.log(again === namespace, again.default === commonjs,
+        again['{key}'] === original, again.default['{key}'](),
+        'guestAdded' in again);
+    console.log(Reflect.set(namespace, '{key}', replacement),
+        Reflect.defineProperty(namespace, '{key}', {{value: replacement}}),
+        Reflect.deleteProperty(namespace, '{key}'),
+        namespace['{key}'] === original,
+        Object.getPrototypeOf(namespace) === null, Object.isExtensible(namespace),
+        Object.getOwnPropertyDescriptor(namespace, '{key}').writable);
+    const fake = {{value: original}};
+    fake[Symbol.toStringTag] = 'Module';
+    console.log(Reflect.set(fake, 'value', replacement),
+        Reflect.defineProperty(fake, 'value', {{value: original}}),
+        Reflect.deleteProperty(fake, 'value'));
+}});
+"#
+        );
+        assert_output(
+            &[("app.cjs", &source)],
+            &[
+                "true true true changed false",
+                "false false false true true false true",
+                "true true true",
+            ],
+        );
+    }
+}
+
+/// Ordinary dynamic imports cannot acquire scheduling authority merely by
+/// reaching a native factory. The same contract is enforced for static imports.
+#[test]
+fn ordinary_native_imports_require_the_provider_capabilities() {
+    for alias in ["timers", "timers/promises", "stream", "stream/promises"] {
+        for (name, source) in [
+            ("app.cjs", format!("import('node:{alias}');")),
+            (
+                "app.mjs",
+                format!("import * as namespace from 'node:{alias}';\nfunction require(name) {{ return name; }}\n"),
+            ),
+        ] {
+            with_tree(&[(name, &source)], |root| {
+                for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+                    let error = run_with_capabilities(root, lane, &["module_load", "builtin"])
+                        .expect_err("native import must not confer Timer authority");
+                    assert!(
+                        error.to_ascii_lowercase().contains("timer"),
+                        "{lane:?} {alias} {name}: {error}"
+                    );
+                }
+            });
+        }
+    }
 }

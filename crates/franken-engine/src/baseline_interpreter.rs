@@ -40469,10 +40469,6 @@ impl InterpreterCore {
             .as_ref()
             .map(|_| self.resolve_installed_module(specifier, ImportStyle::Import))
             .transpose()?;
-        let resolved = match &delivered {
-            Some(source) => source.module.record.id.clone(),
-            None => self.resolve_module_specifier(specifier)?,
-        };
         // A unit lowered under the bounded-imports contract assumed this
         // module yields at most IFC_BOUNDED_IMPORT_LABEL.
         let import_bound = (crate::lowering_pipeline::is_bounded_import_specifier(specifier)
@@ -40483,6 +40479,20 @@ impl InterpreterCore {
         {
             return self.load_native_builtin_namespace(module, source, native, import_bound.as_ref());
         }
+        if delivered.is_none()
+            && let Some(native) = NativeBuiltinModule::from_specifier(specifier)
+        {
+            return self.load_ordinary_native_builtin_namespace(
+                module,
+                specifier,
+                native,
+                import_bound.as_ref(),
+            );
+        }
+        let resolved = match &delivered {
+            Some(source) => source.module.record.id.clone(),
+            None => self.resolve_module_specifier(specifier)?,
+        };
         self.load_module_resolved(
             module,
             &resolved,
@@ -41553,16 +41563,60 @@ impl InterpreterCore {
         Ok(false)
     }
 
-    /// Materialize one ESM namespace per authenticated native provider. Its default
-    /// export is the realm's CommonJS object; named exports snapshot the
-    /// supported properties only on the first ESM load. Resolution and policy
-    /// authorization have already run for this request, including cache hits.
-    /// Path and PathPosix share their default object but keep distinct facades.
+    /// Ordinary imports use the same native providers and authority contract as
+    /// an installed resolver. This path is entered only without a resolver;
+    /// a captured graph's refusal can never fall back to an ambient provider.
+    fn load_ordinary_native_builtin_namespace(
+        &mut self,
+        module: &Ir3Module,
+        request_specifier: &str,
+        native: NativeBuiltinModule,
+        import_bound: Option<&Label>,
+    ) -> Result<Value, InterpreterError> {
+        let descriptor = native.record(native.canonical_specifier());
+        if let Some(missing) = descriptor
+            .required_capabilities
+            .difference(&self.config.granted_capabilities)
+            .next()
+        {
+            return Err(InterpreterError::CapabilityDenied {
+                capability: missing.to_string(),
+            });
+        }
+        let value = self.native_builtin_module(module, native, import_bound)?;
+        self.native_builtin_namespace(module, request_specifier, native, value, import_bound)
+    }
+
+    /// Authenticate an installed resolver's native identity before consulting
+    /// the namespace cache, including repeated and aliased requests.
     fn load_native_builtin_namespace(
         &mut self,
         module: &Ir3Module,
         source: &ResolutionOutcome,
         native: NativeBuiltinModule,
+        import_bound: Option<&Label>,
+    ) -> Result<Value, InterpreterError> {
+        let value = self.load_native_builtin_resolved(module, source, native, import_bound)?;
+        self.native_builtin_namespace(
+            module,
+            &source.module.request_specifier,
+            native,
+            value,
+            import_bound,
+        )
+    }
+
+    /// Materialize one ESM namespace per native provider. Its default export
+    /// is the realm's runtime CommonJS object; named exports snapshot the
+    /// supported properties only on the first ESM load. Authorization has
+    /// already run for this request, including cache hits. Path and PathPosix
+    /// share their default object but keep distinct facades.
+    fn native_builtin_namespace(
+        &mut self,
+        module: &Ir3Module,
+        request_specifier: &str,
+        native: NativeBuiltinModule,
+        value: Value,
         import_bound: Option<&Label>,
     ) -> Result<Value, InterpreterError> {
         let specifier = match native {
@@ -41588,7 +41642,6 @@ impl InterpreterCore {
             NativeBuiltinModule::Stream => "\0franken-engine/native-stream/esm",
             NativeBuiltinModule::StreamPromises => "\0franken-engine/native-stream/promises/esm",
         };
-        let value = self.load_native_builtin_resolved(module, source, native, import_bound)?;
         let object = match &value {
             Value::Object(object) => *object,
             function => self
@@ -41603,13 +41656,13 @@ impl InterpreterCore {
             // mutable state reachable from that function's property storage.
             let selected_label = self.json_parse_context_label()?;
             Self::check_import_flow_bound(
-                &source.module.request_specifier,
+                request_specifier,
                 &selected_label,
                 import_bound,
             )?;
             let ceiling = self.native_builtin_state_label(module, object)?;
             Self::check_import_flow_bound(
-                &source.module.request_specifier,
+                request_specifier,
                 &ceiling,
                 import_bound,
             )?;
@@ -41618,7 +41671,7 @@ impl InterpreterCore {
         if let Some(record) = self.module_state.modules.get(specifier) {
             if record.resolved_source_hash != Some(content_hash) {
                 return Err(InterpreterError::ModuleLoweringFailed {
-                    specifier: source.module.request_specifier.clone(),
+                    specifier: request_specifier.to_string(),
                     error: "native namespace identity is already bound to another source"
                         .to_string(),
                 });
@@ -41665,7 +41718,7 @@ impl InterpreterCore {
                     if import_bound.is_some() {
                         let ceiling = self.native_builtin_state_label(module, namespace)?;
                         Self::check_import_flow_bound(
-                            &source.module.request_specifier,
+                            request_specifier,
                             &ceiling,
                             import_bound,
                         )?;
@@ -41731,7 +41784,7 @@ impl InterpreterCore {
                 if import_bound.is_some() {
                     let ceiling = self.native_builtin_state_label(module, namespace)?;
                     Self::check_import_flow_bound(
-                        &source.module.request_specifier,
+                        request_specifier,
                         &ceiling,
                         import_bound,
                     )?;
@@ -68726,6 +68779,8 @@ impl InterpreterCore {
         }
         [
             "\0franken-engine/native-buffer/esm",
+            "\0franken-engine/native-crypto/esm",
+            "\0franken-engine/native-zlib/esm",
             "\0franken-engine/native-module/esm",
             "\0franken-engine/native-events/esm",
             "\0franken-engine/native-os/esm",
@@ -72914,8 +72969,8 @@ impl InterpreterCore {
         self.run_pre_import_hook(module, specifier)?;
         // bd-j8f7q: a unit lowered under the bounded-imports contract assumed
         // every ImportCall yields at most IFC_BOUNDED_IMPORT_LABEL, whatever
-        // its specifier, so the module is checked against the bound before it
-        // runs; a core module has no code to check and is not loaded.
+        // its specifier. Native providers check their live export state, and
+        // source modules check their lowered flow ceiling before evaluation.
         let import_bound = Self::unit_declares_bounded_imports(module)
             .then_some(crate::lowering_pipeline::IFC_BOUNDED_IMPORT_LABEL);
         if self.module_resolver.is_some() {
@@ -72936,6 +72991,14 @@ impl InterpreterCore {
                 ModuleLoadKind::DynamicImport,
                 import_bound.as_ref(),
                 Some(delivered.module),
+            );
+        }
+        if let Some(native) = NativeBuiltinModule::from_specifier(specifier) {
+            return self.load_ordinary_native_builtin_namespace(
+                module,
+                specifier,
+                native,
+                import_bound.as_ref(),
             );
         }
         if import_bound.is_some()

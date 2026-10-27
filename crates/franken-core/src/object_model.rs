@@ -521,22 +521,10 @@ impl<V> OrderedStringMap<V> {
     /// `0..len`: every value moves down one index while each entry keeps its
     /// key, and the entry `len - 1` is removed. Returns the value that was at
     /// index 0. Returns `None`, changing nothing, unless the index keys are
-    /// exactly `0..len`. One swap per element, where re-setting each element
-    /// through a key built per write cost an allocation each (bd-9vouw.472).
+    /// exactly `0..len`. The first move prepares a dense queue; subsequent
+    /// front removals are amortized constant-time (bd-9vouw.472).
     pub fn shift_dense_index_values(&mut self, len: u32) -> Option<V> {
-        let last = len.checked_sub(1)?;
-        if !self.array_entries.is_dense_prefix(len) {
-            return None;
-        }
-        let mut values = self.array_entries.values_mut().map(|(_, value)| value);
-        // Swapping each value with its predecessor walks index 0's value to
-        // the last entry.
-        let mut previous = values.next()?;
-        for current in values {
-            std::mem::swap(previous, current);
-            previous = current;
-        }
-        self.array_entries.remove(&last).map(|(_, value)| value)
+        self.array_entries.shift_dense(len)
     }
 
     /// `Array.prototype.unshift` on an array whose index keys are exactly
@@ -546,31 +534,7 @@ impl<V> OrderedStringMap<V> {
     /// exactly `0..len` and the new length stays within the array index
     /// range (bd-9vouw.472).
     pub fn unshift_dense_index_values(&mut self, len: u32, items: Vec<V>) -> Result<(), Vec<V>> {
-        let Some(new_len) = u32::try_from(items.len())
-            .ok()
-            .and_then(|count| len.checked_add(count))
-        else {
-            return Err(items);
-        };
-        if !self.array_entries.is_dense_prefix(len) {
-            return Err(items);
-        }
-        let count = items.len();
-        for (index, item) in (len..new_len).zip(items) {
-            self.array_entries.insert(index, (index.to_string(), item));
-        }
-        // The items were appended; rotating every value right by `count`
-        // (reverse all, then each part) brings them to the front.
-        let mut values: Vec<&mut V> = self
-            .array_entries
-            .values_mut()
-            .map(|(_, value)| value)
-            .collect();
-        reverse_values(&mut values);
-        let (front, back) = values.split_at_mut(count);
-        reverse_values(front);
-        reverse_values(back);
-        Ok(())
+        self.array_entries.unshift_dense(len, items)
     }
 
     /// `Array.prototype.splice` on an array whose index keys are exactly

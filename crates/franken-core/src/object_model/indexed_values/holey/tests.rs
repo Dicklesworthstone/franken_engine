@@ -54,7 +54,7 @@ fn deletion_density_tail_release_and_remote_indices_are_bounded() {
     }
     values.remove(&64);
     assert!(matches!(values, IndexedValues::Dictionary(_)));
-    assert_eq!(values.get(&127).unwrap().1, 127);
+    assert_eq!(*values.get(&127).unwrap().1, 127);
     values.insert(u32::MAX - 1, ((u32::MAX - 1).to_string(), 7));
     assert_eq!(values.len(), 64);
     assert!(matches!(values, IndexedValues::Dictionary(_)));
@@ -86,7 +86,7 @@ fn regrowth_does_not_resize_every_append_or_retain_excess_capacity() {
     }
     assert!(reallocations < 16, "regrowth must be geometric, not per append");
     assert_eq!(values.get(&1), None);
-    assert_eq!(values.get(&4095).unwrap().1, 4095);
+    assert_eq!(*values.get(&4095).unwrap().1, 4095);
 }
 
 #[test]
@@ -160,7 +160,7 @@ fn retain_after_holes_matches_btree_at_every_predicate_panic() {
                 assert_eq!(seen_a, seen_b);
                 assert_eq!(actual.len(), expected.len());
                 assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
-                for i in 0..=length { assert_eq!(actual.get(&i), expected.get(&i)); }
+                for i in 0..=length { assert_eq!(actual.get(&i), expected.get(&i).map(|(key, value)| (key, value))); }
                 check_bounds(&actual);
             }
         }

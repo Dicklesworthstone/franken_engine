@@ -63,6 +63,7 @@ impl<V> IndexedValues<V> {
     /// entries, not the guest's index. Reserve before moving packed entries;
     /// refusal leaves their ownership intact for the dictionary fallback.
     pub(super) fn insert_forward_gap(&mut self, index: u32, entry: (String, V)) -> Option<V> {
+        self.queue_to_packed();
         let offset = index as usize;
         match self {
             Self::Packed(entries) => {
@@ -98,6 +99,7 @@ impl<V> IndexedValues<V> {
                 }
             }
             Self::Dictionary(_) => {}
+            Self::Queue(_) => unreachable!("queue converted before hole admission"),
         }
         // No index-sized allocation, payload clone or key renumbering. Once
         // sparse, ordinary backfill does not repeatedly migrate storage.
@@ -106,6 +108,7 @@ impl<V> IndexedValues<V> {
     }
 
     pub(super) fn make_holey(&mut self) {
+        self.queue_to_packed();
         let Self::Packed(entries) = self else {
             return;
         };
@@ -215,6 +218,12 @@ impl<V> IndexedValues<V> {
         }
         match self {
             Self::Packed(entries) => {
+                let end = (range.end as usize).min(entries.len());
+                let index = ((range.start as usize) < end)
+                    .then(|| if backwards { (end - 1) as u32 } else { range.start });
+                (index, 1)
+            }
+            Self::Queue(entries) => {
                 let end = (range.end as usize).min(entries.len());
                 let index = ((range.start as usize) < end)
                     .then(|| if backwards { (end - 1) as u32 } else { range.start });

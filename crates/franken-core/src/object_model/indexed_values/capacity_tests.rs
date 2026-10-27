@@ -9,6 +9,7 @@ use std::rc::Rc;
 fn storage_capacity<V>(values: &IndexedValues<V>) -> usize {
     match values {
         IndexedValues::Packed(entries) => entries.capacity(),
+        IndexedValues::Queue(_) => panic!("tail-only mutations must not select queue storage"),
         IndexedValues::Holey(entries) => entries.slots.capacity(),
         IndexedValues::Dictionary(_) => panic!("dense tail churn must not build a dictionary"),
     }
@@ -29,6 +30,7 @@ fn check_bound<V>(values: &IndexedValues<V>) {
             assert!(entries.is_bounded());
             assert!(entries.slots.capacity() <= 2 * entries.live);
         }
+        IndexedValues::Queue(_) => panic!("tail-only mutations must not select queue storage"),
         IndexedValues::Dictionary(_) => panic!("unexpected sparse migration"),
     }
 }
@@ -117,7 +119,7 @@ fn holey_append_two_pop_drain_preserves_absence_and_geometric_headroom() {
         assert_eq!(values.get(&0), None);
         assert_eq!(values.get(&1).unwrap().0.as_ptr(), key);
         for index in 1..length / 2 {
-            assert_eq!(values.get(&index).unwrap().1, u64::from(index));
+            assert_eq!(*values.get(&index).unwrap().1, u64::from(index));
         }
     }
 }
@@ -153,7 +155,7 @@ fn complete_tail_drains_release_the_backing_and_restart_as_packed() {
         assert!(matches!(values, IndexedValues::Packed(_)));
         assert_eq!(storage_capacity(&values), 0);
         assert_eq!(values.insert(0, ("0".into(), 99)), None);
-        assert_eq!(values.get(&0), Some(&("0".into(), 99)));
+        assert_eq!(values.get(&0), Some((&"0".into(), &99)));
     }
 }
 
@@ -225,7 +227,7 @@ fn removal_normalizes_capacity_before_a_returned_value_destructor_panics() {
         match &mut values {
             IndexedValues::Packed(entries) => entries.reserve_exact(256),
             IndexedValues::Holey(entries) => entries.slots.reserve_exact(256),
-            IndexedValues::Dictionary(_) => unreachable!(),
+            IndexedValues::Queue(_) | IndexedValues::Dictionary(_) => unreachable!(),
         }
         trigger.set(true);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

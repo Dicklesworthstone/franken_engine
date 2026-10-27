@@ -2,12 +2,13 @@
 //!
 //! This is storage, not Array semantics: lengths, descriptors, prototypes,
 //! labels and resource admission remain with the existing callers. Dense
-//! prefixes use direct indexing; interior deletion keeps bounded holey slots.
+//! prefixes use direct indexing; guarded front moves select a dense queue
+//! with separate logical keys. Interior deletion keeps bounded holey slots.
 //! Nearby forward gaps can also use bounded holey slots. Distant gaps and
 //! sufficiently sparse storage use the dictionary without index-sized allocation.
 //! No Value is cloned or replaced with undefined.
 
-use std::collections::{BTreeMap, btree_map};
+use std::collections::{BTreeMap, btree_map, vec_deque};
 use std::fmt;
 use std::ops::Range;
 use std::slice;
@@ -15,10 +16,14 @@ use std::vec;
 
 mod holey;
 use holey::{Counted, HoleyValues};
+mod queue;
+use queue::QueueValues;
 
 #[derive(Clone)]
 pub(super) enum IndexedValues<V> {
     Packed(Vec<(String, V)>),
+    // Boxed so ordinary packed arrays keep their original carrier size.
+    Queue(Box<QueueValues<V>>),
     Holey(Box<HoleyValues<V>>),
     Dictionary(BTreeMap<u32, (String, V)>),
 }
@@ -43,6 +48,7 @@ impl<V> IndexedValues<V> {
     pub(super) fn len(&self) -> usize {
         match self {
             Self::Packed(entries) => entries.len(),
+            Self::Queue(entries) => entries.len(),
             Self::Holey(entries) => entries.live,
             Self::Dictionary(entries) => entries.len(),
         }
@@ -53,20 +59,38 @@ impl<V> IndexedValues<V> {
     }
 
     #[inline]
-    pub(super) fn get(&self, index: &u32) -> Option<&(String, V)> {
+    pub(super) fn get(&self, index: &u32) -> Option<(&String, &V)> {
         match self {
-            Self::Packed(entries) => entries.get(*index as usize),
-            Self::Holey(entries) => entries.slots.get(*index as usize)?.as_ref(),
-            Self::Dictionary(entries) => entries.get(index),
+            Self::Packed(entries) => entries.get(*index as usize).map(|(key, value)| (key, value)),
+            Self::Queue(entries) => Some((
+                entries.keys.get(*index as usize)?,
+                entries.values.get(*index as usize)?,
+            )),
+            Self::Holey(entries) => entries
+                .slots
+                .get(*index as usize)?
+                .as_ref()
+                .map(|(key, value)| (key, value)),
+            Self::Dictionary(entries) => entries.get(index).map(|(key, value)| (key, value)),
         }
     }
 
     #[inline]
-    pub(super) fn get_mut(&mut self, index: &u32) -> Option<&mut (String, V)> {
+    pub(super) fn get_mut(&mut self, index: &u32) -> Option<(&mut String, &mut V)> {
         match self {
-            Self::Packed(entries) => entries.get_mut(*index as usize),
-            Self::Holey(entries) => entries.slots.get_mut(*index as usize)?.as_mut(),
-            Self::Dictionary(entries) => entries.get_mut(index),
+            Self::Packed(entries) => entries
+                .get_mut(*index as usize)
+                .map(|(key, value)| (key, value)),
+            Self::Queue(entries) => Some((
+                entries.keys.get_mut(*index as usize)?,
+                entries.values.get_mut(*index as usize)?,
+            )),
+            Self::Holey(entries) => entries
+                .slots
+                .get_mut(*index as usize)?
+                .as_mut()
+                .map(|(key, value)| (key, value)),
+            Self::Dictionary(entries) => entries.get_mut(index).map(|(key, value)| (key, value)),
         }
     }
 
@@ -89,6 +113,21 @@ impl<V> IndexedValues<V> {
                 }
                 // Admit nearby gaps by live occupancy before reserving slots.
                 // Distant writes still go straight to the sparse dictionary.
+                self.insert_forward_gap(index, (key, value))
+            }
+            Self::Queue(entries) => {
+                let offset = index as usize;
+                if let Some(slot) = entries.values.get_mut(offset) {
+                    return Some(std::mem::replace(slot, value));
+                }
+                if offset == entries.len() {
+                    entries.keys.reserve(1);
+                    entries.values.reserve(1);
+                    entries.keys.push(key);
+                    entries.values.push_back(value);
+                    return None;
+                }
+                self.queue_to_packed();
                 self.insert_forward_gap(index, (key, value))
             }
             Self::Holey(entries) => {
@@ -153,6 +192,23 @@ impl<V> IndexedValues<V> {
                 self.make_holey();
                 self.remove(index)
             }
+            Self::Queue(entries) => {
+                let offset = *index as usize;
+                if offset >= entries.len() {
+                    return None;
+                }
+                if offset == entries.len() - 1 {
+                    let removed = entries.keys.pop().zip(entries.values.pop_back());
+                    entries.shrink_spare_capacity();
+                    if entries.len() == 0 {
+                        self.clear();
+                    }
+                    return removed;
+                }
+                self.queue_to_packed();
+                self.make_holey();
+                self.remove(index)
+            }
             Self::Holey(entries) => {
                 let removed = entries.slots.get_mut(*index as usize)?.take()?;
                 entries.live -= 1;
@@ -186,6 +242,7 @@ impl<V> IndexedValues<V> {
             self.clear();
             return;
         }
+        self.queue_to_packed();
         if matches!(self, Self::Holey(_)) {
             self.retain_holey(0, &mut keep);
         } else if let Self::Packed(entries) = self {
@@ -263,7 +320,7 @@ impl<V> IndexedValues<V> {
             return false;
         }
         match self {
-            Self::Packed(_) => true,
+            Self::Packed(_) | Self::Queue(_) => true,
             Self::Holey(entries) => entries.slots.len() == len as usize,
             Self::Dictionary(entries) => {
                 len == 0
@@ -276,6 +333,7 @@ impl<V> IndexedValues<V> {
     pub(super) fn values(&self) -> Values<'_, V> {
         match self {
             Self::Packed(entries) => Values::Packed(entries.iter()),
+            Self::Queue(entries) => Values::Queue(entries.keys.iter().zip(entries.values.iter())),
             Self::Holey(entries) => Values::Holey(Counted::new(
                 entries.slots.iter().flatten(), entries.live,
             )),
@@ -286,6 +344,9 @@ impl<V> IndexedValues<V> {
     pub(super) fn values_mut(&mut self) -> ValuesMut<'_, V> {
         match self {
             Self::Packed(entries) => ValuesMut::Packed(entries.iter_mut()),
+            Self::Queue(entries) => {
+                ValuesMut::Queue(entries.keys.iter_mut().zip(entries.values.iter_mut()))
+            }
             Self::Holey(entries) => ValuesMut::Holey(Counted::new(
                 entries.slots.iter_mut().flatten(), entries.live,
             )),
@@ -304,6 +365,15 @@ impl<V> IndexedValues<V> {
                 let end = (range.end as usize).min(entries.len());
                 RangeValuesMut::Packed(entries[start..end].iter_mut())
             }
+            Self::Queue(entries) => {
+                let start = (range.start as usize).min(entries.len());
+                let end = (range.end as usize).min(entries.len());
+                RangeValuesMut::Queue(
+                    entries.keys[start..end]
+                        .iter_mut()
+                        .zip(entries.values.range_mut(start..end)),
+                )
+            }
             Self::Holey(entries) => {
                 let start = (range.start as usize).min(entries.slots.len());
                 let end = (range.end as usize).min(entries.slots.len());
@@ -316,6 +386,7 @@ impl<V> IndexedValues<V> {
     pub(super) fn into_values(self) -> IntoValues<V> {
         match self {
             Self::Packed(entries) => IntoValues::Packed(entries.into_iter()),
+            Self::Queue(entries) => IntoValues::Queue(entries.keys.into_iter().zip(entries.values)),
             Self::Holey(entries) => {
                 let HoleyValues { slots, live } = *entries;
                 IntoValues::Holey(Counted::new(slots.into_iter().flatten(), live))
@@ -325,6 +396,7 @@ impl<V> IndexedValues<V> {
     }
 
     fn promote(&mut self) {
+        self.queue_to_packed();
         if let Self::Holey(entries) = self {
             let dictionary = std::mem::take(&mut entries.slots)
                 .into_iter()
@@ -349,6 +421,14 @@ impl<V> IndexedValues<V> {
 impl<V: PartialEq> PartialEq for IndexedValues<V> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
+            (Self::Queue(left), _) => {
+                u32::try_from(left.len()).is_ok_and(|len| other.is_dense_prefix(len))
+                    && left.keys.iter().zip(left.values.iter()).eq(other.values())
+            }
+            (_, Self::Queue(right)) => {
+                u32::try_from(right.len()).is_ok_and(|len| self.is_dense_prefix(len))
+                    && self.values().eq(right.keys.iter().zip(right.values.iter()))
+            }
             (Self::Packed(left), Self::Packed(right)) => left == right,
             (Self::Holey(left), Self::Holey(right)) => {
                 left.live == right.live && left.slots == right.slots
@@ -385,6 +465,10 @@ impl<V: fmt::Debug> fmt::Debug for IndexedValues<V> {
                 .debug_map()
                 .entries(entries.iter().enumerate())
                 .finish(),
+            Self::Queue(entries) => formatter
+                .debug_map()
+                .entries(entries.keys.iter().zip(entries.values.iter()).enumerate())
+                .finish(),
             Self::Holey(entries) => formatter.debug_map().entries(
                 entries.slots.iter().enumerate()
                     .filter_map(|(index, entry)| entry.as_ref().map(|value| (index, value))),
@@ -400,24 +484,27 @@ type HoleyValueIntoIter<V> = Counted<std::iter::Flatten<vec::IntoIter<Option<(St
 
 pub(super) enum Values<'a, V> {
     Packed(slice::Iter<'a, (String, V)>),
+    Queue(std::iter::Zip<slice::Iter<'a, String>, vec_deque::Iter<'a, V>>),
     Holey(HoleyValueIter<'a, V>),
     Dictionary(btree_map::Values<'a, u32, (String, V)>),
 }
 
 impl<'a, V> Iterator for Values<'a, V> {
-    type Item = &'a (String, V);
+    type Item = (&'a String, &'a V);
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            Self::Packed(entries) => entries.next(),
-            Self::Holey(entries) => entries.next(),
-            Self::Dictionary(entries) => entries.next(),
+            Self::Packed(entries) => entries.next().map(|(key, value)| (key, value)),
+            Self::Queue(entries) => entries.next(),
+            Self::Holey(entries) => entries.next().map(|(key, value)| (key, value)),
+            Self::Dictionary(entries) => entries.next().map(|(key, value)| (key, value)),
         }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         match self {
             Self::Packed(entries) => entries.size_hint(),
+            Self::Queue(entries) => entries.size_hint(),
             Self::Holey(entries) => entries.size_hint(),
             Self::Dictionary(entries) => entries.size_hint(),
         }
@@ -427,9 +514,10 @@ impl<'a, V> Iterator for Values<'a, V> {
 impl<V> DoubleEndedIterator for Values<'_, V> {
     fn next_back(&mut self) -> Option<Self::Item> {
         match self {
-            Self::Packed(entries) => entries.next_back(),
-            Self::Holey(entries) => entries.next_back(),
-            Self::Dictionary(entries) => entries.next_back(),
+            Self::Packed(entries) => entries.next_back().map(|(key, value)| (key, value)),
+            Self::Queue(entries) => entries.next_back(),
+            Self::Holey(entries) => entries.next_back().map(|(key, value)| (key, value)),
+            Self::Dictionary(entries) => entries.next_back().map(|(key, value)| (key, value)),
         }
     }
 }
@@ -439,24 +527,27 @@ impl<V> std::iter::FusedIterator for Values<'_, V> {}
 
 pub(super) enum ValuesMut<'a, V> {
     Packed(slice::IterMut<'a, (String, V)>),
+    Queue(std::iter::Zip<slice::IterMut<'a, String>, vec_deque::IterMut<'a, V>>),
     Holey(HoleyValueIterMut<'a, V>),
     Dictionary(btree_map::ValuesMut<'a, u32, (String, V)>),
 }
 
 impl<'a, V> Iterator for ValuesMut<'a, V> {
-    type Item = &'a mut (String, V);
+    type Item = (&'a mut String, &'a mut V);
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            Self::Packed(entries) => entries.next(),
-            Self::Holey(entries) => entries.next(),
-            Self::Dictionary(entries) => entries.next(),
+            Self::Packed(entries) => entries.next().map(|(key, value)| (key, value)),
+            Self::Queue(entries) => entries.next(),
+            Self::Holey(entries) => entries.next().map(|(key, value)| (key, value)),
+            Self::Dictionary(entries) => entries.next().map(|(key, value)| (key, value)),
         }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         match self {
             Self::Packed(entries) => entries.size_hint(),
+            Self::Queue(entries) => entries.size_hint(),
             Self::Holey(entries) => entries.size_hint(),
             Self::Dictionary(entries) => entries.size_hint(),
         }
@@ -466,9 +557,10 @@ impl<'a, V> Iterator for ValuesMut<'a, V> {
 impl<V> DoubleEndedIterator for ValuesMut<'_, V> {
     fn next_back(&mut self) -> Option<Self::Item> {
         match self {
-            Self::Packed(entries) => entries.next_back(),
-            Self::Holey(entries) => entries.next_back(),
-            Self::Dictionary(entries) => entries.next_back(),
+            Self::Packed(entries) => entries.next_back().map(|(key, value)| (key, value)),
+            Self::Queue(entries) => entries.next_back(),
+            Self::Holey(entries) => entries.next_back().map(|(key, value)| (key, value)),
+            Self::Dictionary(entries) => entries.next_back().map(|(key, value)| (key, value)),
         }
     }
 }
@@ -478,24 +570,27 @@ impl<V> std::iter::FusedIterator for ValuesMut<'_, V> {}
 
 pub(super) enum RangeValuesMut<'a, V> {
     Packed(slice::IterMut<'a, (String, V)>),
+    Queue(std::iter::Zip<slice::IterMut<'a, String>, vec_deque::IterMut<'a, V>>),
     Holey(std::iter::Flatten<slice::IterMut<'a, Option<(String, V)>>>),
     Dictionary(btree_map::RangeMut<'a, u32, (String, V)>),
 }
 
 impl<'a, V> Iterator for RangeValuesMut<'a, V> {
-    type Item = &'a mut (String, V);
+    type Item = (&'a mut String, &'a mut V);
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            Self::Packed(entries) => entries.next(),
-            Self::Holey(entries) => entries.next(),
-            Self::Dictionary(entries) => entries.next().map(|(_, entry)| entry),
+            Self::Packed(entries) => entries.next().map(|(key, value)| (key, value)),
+            Self::Queue(entries) => entries.next(),
+            Self::Holey(entries) => entries.next().map(|(key, value)| (key, value)),
+            Self::Dictionary(entries) => entries.next().map(|(_, (key, value))| (key, value)),
         }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         match self {
             Self::Packed(entries) => entries.size_hint(),
+            Self::Queue(entries) => entries.size_hint(),
             Self::Holey(entries) => entries.size_hint(),
             Self::Dictionary(entries) => entries.size_hint(),
         }
@@ -505,9 +600,10 @@ impl<'a, V> Iterator for RangeValuesMut<'a, V> {
 impl<V> DoubleEndedIterator for RangeValuesMut<'_, V> {
     fn next_back(&mut self) -> Option<Self::Item> {
         match self {
-            Self::Packed(entries) => entries.next_back(),
-            Self::Holey(entries) => entries.next_back(),
-            Self::Dictionary(entries) => entries.next_back().map(|(_, entry)| entry),
+            Self::Packed(entries) => entries.next_back().map(|(key, value)| (key, value)),
+            Self::Queue(entries) => entries.next_back(),
+            Self::Holey(entries) => entries.next_back().map(|(key, value)| (key, value)),
+            Self::Dictionary(entries) => entries.next_back().map(|(_, (key, value))| (key, value)),
         }
     }
 }
@@ -516,6 +612,7 @@ impl<V> std::iter::FusedIterator for RangeValuesMut<'_, V> {}
 
 pub(super) enum IntoValues<V> {
     Packed(vec::IntoIter<(String, V)>),
+    Queue(std::iter::Zip<vec::IntoIter<String>, vec_deque::IntoIter<V>>),
     Holey(HoleyValueIntoIter<V>),
     Dictionary(btree_map::IntoValues<u32, (String, V)>),
 }
@@ -526,6 +623,7 @@ impl<V> Iterator for IntoValues<V> {
     fn next(&mut self) -> Option<Self::Item> {
         match self {
             Self::Packed(entries) => entries.next(),
+            Self::Queue(entries) => entries.next(),
             Self::Holey(entries) => entries.next(),
             Self::Dictionary(entries) => entries.next(),
         }
@@ -534,6 +632,7 @@ impl<V> Iterator for IntoValues<V> {
     fn size_hint(&self) -> (usize, Option<usize>) {
         match self {
             Self::Packed(entries) => entries.size_hint(),
+            Self::Queue(entries) => entries.size_hint(),
             Self::Holey(entries) => entries.size_hint(),
             Self::Dictionary(entries) => entries.size_hint(),
         }
@@ -544,6 +643,7 @@ impl<V> DoubleEndedIterator for IntoValues<V> {
     fn next_back(&mut self) -> Option<Self::Item> {
         match self {
             Self::Packed(entries) => entries.next_back(),
+            Self::Queue(entries) => entries.next_back(),
             Self::Holey(entries) => entries.next_back(),
             Self::Dictionary(entries) => entries.next_back(),
         }
@@ -575,7 +675,7 @@ mod tests {
     fn dense_reads_updates_and_pop_drain_stay_packed() {
         let mut values = dense(4096);
         for index in 0..4096 {
-            assert_eq!(values.get(&index).map(|entry| entry.1), Some(u64::from(index)));
+            assert_eq!(values.get(&index).map(|entry| *entry.1), Some(u64::from(index)));
             assert_eq!(
                 values.insert(index, (index.to_string(), 7)),
                 Some(u64::from(index))
@@ -606,7 +706,7 @@ mod tests {
         assert_eq!(values.remove(&1), Some(("1".into(), 1)));
         assert!(matches!(values, IndexedValues::Holey(_)));
         assert_eq!(values.get(&1), None);
-        assert_eq!(values.get(&2).map(|entry| entry.1), Some(2));
+        assert_eq!(values.get(&2).map(|entry| *entry.1), Some(2));
         assert!(!values.is_dense_prefix(4));
         values.insert(1, ("1".into(), 1));
         assert!(values.is_dense_prefix(5));
@@ -614,7 +714,7 @@ mod tests {
         assert!(matches!(values, IndexedValues::Holey(_)));
         values.insert(u32::MAX - 1, ((u32::MAX - 1).to_string(), 88));
         assert_eq!(values.len(), 6);
-        assert_eq!(values.get(&(u32::MAX - 1)).map(|entry| entry.1), Some(88));
+        assert_eq!(values.get(&(u32::MAX - 1)).map(|entry| *entry.1), Some(88));
         assert_eq!(
             values.values().map(|entry| entry.0.as_str()).collect::<Vec<_>>(),
             ["0", "1", "2", "3", "4", "4294967294"]
@@ -645,7 +745,7 @@ mod tests {
             assert!(dictionary.is_dense_prefix(len));
             assert!(!packed.is_dense_prefix(len + 1));
             if len > 0 {
-                dictionary.get_mut(&0).unwrap().1 = 99;
+                *dictionary.get_mut(&0).unwrap().1 = 99;
                 assert_ne!(packed, dictionary);
             }
         }
@@ -700,7 +800,7 @@ mod tests {
         assert_eq!(values.len(), 5);
         for index in 0..9 {
             assert_eq!(
-                values.get(&index).map(|entry| entry.1),
+                values.get(&index).map(|entry| *entry.1),
                 (index % 2 == 0).then_some(u64::from(index) + 10)
             );
         }
@@ -719,7 +819,7 @@ mod tests {
         assert!(matches!(values, IndexedValues::Holey(_)));
         assert_eq!(values.get(&1), None);
         for index in [0, 2, 3, 4, 5, 6, 7] {
-            assert_eq!(values.get(&index).map(|entry| entry.1), Some(u64::from(index)));
+            assert_eq!(values.get(&index).map(|entry| *entry.1), Some(u64::from(index)));
         }
     }
 
@@ -758,7 +858,7 @@ mod tests {
     }
 
     #[test]
-    fn guarded_dense_moves_keep_the_live_parent_carrier_packed() {
+    fn guarded_dense_moves_keep_the_live_parent_carrier_queued() {
         use super::super::OrderedStringMap;
 
         let mut expected: Vec<i64> = (0..32).collect();
@@ -768,13 +868,13 @@ mod tests {
             .map(|(index, value)| (index.to_string(), *value))
             .collect();
         assert_eq!(map.shift_dense_index_values(32), Some(expected.remove(0)));
-        assert!(matches!(map.array_entries, IndexedValues::Packed(_)));
+        assert!(matches!(map.array_entries, IndexedValues::Queue(_)));
         map.unshift_dense_index_values(31, vec![91, 92]).unwrap();
         drop(expected.splice(0..0, [91, 92]));
-        assert!(matches!(map.array_entries, IndexedValues::Packed(_)));
+        assert!(matches!(map.array_entries, IndexedValues::Queue(_)));
         let removed: Vec<_> = expected.splice(2..7, [99]).collect();
         assert_eq!(map.splice_dense_index_values(33, 2, 5, vec![99]), Ok(removed));
-        assert!(matches!(map.array_entries, IndexedValues::Packed(_)));
+        assert!(matches!(map.array_entries, IndexedValues::Queue(_)));
         assert_eq!(map.index_values().copied().collect::<Vec<_>>(), expected);
     }
 
@@ -820,12 +920,12 @@ mod tests {
                             key % 11 != index % 11
                         });
                     }
-                    _ => assert_eq!(values.get(&index), oracle.get(&index)),
+                    _ => assert_eq!(values.get(&index), oracle.get(&index).map(|(key, value)| (key, value))),
                 }
                 assert_eq!(values.len(), oracle.len(), "seed={seed}, step={step}");
                 assert_eq!(
                     values.values().collect::<Vec<_>>(),
-                    oracle.values().collect::<Vec<_>>()
+                    oracle.values().map(|(key, value)| (key, value)).collect::<Vec<_>>()
                 );
                 assert_eq!(values.contains_key(&index), oracle.contains_key(&index));
                 assert_eq!(values.get(&u32::MAX), None);
@@ -838,7 +938,7 @@ mod tests {
         let mut values = dense(4096);
         let (address, capacity) = match &values {
             IndexedValues::Packed(entries) => (entries.as_ptr(), entries.capacity()),
-            IndexedValues::Holey(_) | IndexedValues::Dictionary(_) => unreachable!(),
+            IndexedValues::Queue(_) | IndexedValues::Holey(_) | IndexedValues::Dictionary(_) => unreachable!(),
         };
         let key_addresses: Vec<_> = values.values().map(|entry| entry.0.as_ptr()).collect();
         let mut next = 0_u32;
@@ -860,7 +960,7 @@ mod tests {
         values.retain(|index, _| *index != 4095);
         assert_eq!(values.len(), 4095);
         assert!(matches!(values, IndexedValues::Packed(_)));
-        assert_eq!(values.get(&4094).map(|entry| entry.1), Some(4101));
+        assert_eq!(values.get(&4094).map(|entry| *entry.1), Some(4101));
     }
 
     #[test]
@@ -891,8 +991,8 @@ mod tests {
         sparse.retain(|index, _| *index != 1);
         assert!(matches!(sparse, IndexedValues::Dictionary(_)));
         assert_eq!(sparse.get(&1), None);
-        assert_eq!(sparse.get(&2).map(|entry| entry.1), Some(2));
-        assert_eq!(sparse.get(&(u32::MAX - 1)).map(|entry| entry.1), Some(99));
+        assert_eq!(sparse.get(&2).map(|entry| *entry.1), Some(2));
+        assert_eq!(sparse.get(&(u32::MAX - 1)).map(|entry| *entry.1), Some(99));
         sparse.insert(1, ("1".into(), 1));
         assert!(matches!(sparse, IndexedValues::Dictionary(_)), "insertion must not repack");
         sparse.retain(|index, _| *index < 8);
@@ -939,10 +1039,10 @@ mod tests {
                         assert_eq!(actual_visits, expected_visits);
                         assert_eq!(actual.len(), expected.len());
                         for index in 0..=len {
-                            assert_eq!(actual.get(&index), expected.get(&index),
+                            assert_eq!(actual.get(&index), expected.get(&index).map(|(key, value)| (key, value)),
                                 "len={len} mask={mask} panic_at={panic_at} dictionary={dictionary}");
                         }
-                        assert_eq!(actual.values().collect::<Vec<_>>(), expected.values().collect::<Vec<_>>());
+                        assert_eq!(actual.values().collect::<Vec<_>>(), expected.values().map(|(key, value)| (key, value)).collect::<Vec<_>>());
                         assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
                     }
                 }
@@ -1071,7 +1171,7 @@ mod tests {
         assert_eq!(map.shift_dense_index_values(8), Some(0));
         map.unshift_dense_index_values(7, vec![40, 41]).unwrap();
         assert_eq!(map.splice_dense_index_values(9, 2, 3, vec![50]), Ok(vec![1, 2, 3]));
-        assert!(matches!(map.array_entries, IndexedValues::Packed(_)));
+        assert!(matches!(map.array_entries, IndexedValues::Queue(_)));
         assert_eq!(map.index_values().copied().collect::<Vec<_>>(), [40, 41, 50, 4, 5, 6, 7]);
         let wire = serde_json::to_string(&map).unwrap();
         let decoded: OrderedStringMap<i64> = serde_json::from_str(&wire).unwrap();
@@ -1147,10 +1247,11 @@ mod tests {
                     assert_eq!(rejected_prefix, 128);
                     assert_eq!(entries.capacity(), 0);
                 }
+                IndexedValues::Queue(_) => unreachable!("retain uses ordinary indexed storage"),
             }
             for index in 0..128 {
                 assert_eq!(
-                    values.get(&index).map(|entry| entry.1),
+                    values.get(&index).map(|entry| *entry.1),
                     (index >= rejected_prefix).then_some(u64::from(index) + 1)
                 );
             }

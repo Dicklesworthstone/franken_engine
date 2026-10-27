@@ -86,7 +86,7 @@ fn seeking_excludes_non_index_and_exact_only_keys_and_preserves_key_backing() {
     let pointer = map.array_entries.get(&127).unwrap().0.as_ptr();
     map.remove("3");
     // Numeric identity belongs to the slot, not this private mutable spelling.
-    map.array_entries.get_mut(&127).unwrap().0 = "not-numeric".into();
+    *map.array_entries.get_mut(&127).unwrap().0 = "not-numeric".into();
     let replacement_pointer = map.array_entries.get(&127).unwrap().0.as_ptr();
     assert_ne!(pointer, replacement_pointer);
     assert_eq!(map.probe_index_key(127..u32::MAX, false), (Some(127), 1));

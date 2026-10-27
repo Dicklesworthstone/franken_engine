@@ -25,7 +25,7 @@ fn forward_gaps_keep_numeric_identity_and_existing_key_backing() {
     let mut values = dense(64);
     let addresses: Vec<_> = values.values().map(|(key, _)| key.as_ptr()).collect();
     // The private carrier's numeric identity is independent of spelling.
-    values.get_mut(&7).unwrap().0 = "not-an-index".into();
+    *values.get_mut(&7).unwrap().0 = "not-an-index".into();
     let changed_address = values.get(&7).unwrap().0.as_ptr();
     assert_eq!(values.insert(66, ("66".into(), 900)), None);
     assert_eq!(bounds(&values).0, 67);
@@ -36,7 +36,7 @@ fn forward_gaps_keep_numeric_identity_and_existing_key_backing() {
     }
     assert!(values.get(&64).is_none());
     assert!(values.get(&65).is_none());
-    assert_eq!(values.get(&66).unwrap().1, 900);
+    assert_eq!(*values.get(&66).unwrap().1, 900);
     let mut dictionary = values.clone();
     dictionary.promote();
     assert_eq!(values, dictionary);
@@ -65,7 +65,7 @@ fn mostly_dense_forward_builders_grow_geometrically_and_keep_real_holes() {
             let (_, capacity) = bounds(&values);
             if capacity != previous_capacity { growths += 1; }
             previous_capacity = capacity;
-            assert_eq!(values.get(&last).unwrap().1, u64::from(last));
+            assert_eq!(*values.get(&last).unwrap().1, u64::from(last));
             if step % 8 == 0 { assert!(values.get(&(last - 1)).is_none()); }
         }
         assert!(growths < 20, "geometric growth, not an allocation per gap: {growths}");
@@ -108,14 +108,14 @@ fn refused_gaps_preserve_payloads_in_dictionary_and_do_not_oscillate() {
         for target in [131_u32, 10_000, u32::MAX - 1, u32::MAX] {
             let mut values = dense(64);
             if start_holey { values.remove(&7); }
-            let before: Vec<_> = values.values().cloned().collect();
+            let before: Vec<_> = values.values().map(|(key, value)| (key.clone(), *value)).collect();
             assert_eq!(values.insert(target, (target.to_string(), 99)), None);
             assert!(matches!(values, IndexedValues::Dictionary(_)));
             assert_eq!(values.len(), before.len() + 1);
             for (key, value) in before {
-                assert_eq!(values.get(&key.parse().unwrap()).unwrap().1, value);
+                assert_eq!(*values.get(&key.parse().unwrap()).unwrap().1, value);
             }
-            assert_eq!(values.get(&target).unwrap().1, 99);
+            assert_eq!(*values.get(&target).unwrap().1, 99);
             values.remove(&target);
             values.insert(7, ("7".into(), 7));
             assert!(matches!(values, IndexedValues::Dictionary(_)));
@@ -226,10 +226,10 @@ fn forward_gap_churn_matches_btree_without_weakening_existing_retain_contracts()
                     actual.retain(|key, (_, value)| { *value ^= 7; key % 13 != index % 13 });
                     expected.retain(|key, (_, value)| { *value ^= 7; key % 13 != index % 13 });
                 }
-                _ => assert_eq!(actual.get(&index), expected.get(&index)),
+                _ => assert_eq!(actual.get(&index), expected.get(&index).map(|(key, value)| (key, value))),
             }
             assert_eq!(actual.len(), expected.len(), "seed {seed}, step {step}");
-            assert_eq!(actual.values().collect::<Vec<_>>(), expected.values().collect::<Vec<_>>());
+            assert_eq!(actual.values().collect::<Vec<_>>(), expected.values().map(|(key, value)| (key, value)).collect::<Vec<_>>());
             assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
             if step < 256 { bounds(&actual); }
         }

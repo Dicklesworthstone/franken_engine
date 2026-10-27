@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Unit tests for the external CLI driver, not JS-engine performance evidence."""
+"""Driver and real macro-workload regressions, not engine performance evidence."""
 import contextlib
 import importlib.util
 import io
 import json
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -174,6 +176,98 @@ class ComparisonTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 bench.main(self.arguments(manifest, output))
             self.assertEqual(marker.read_text(), "retain evidence")
+
+
+@unittest.skipUnless(shutil.which("node"), "macro algorithm regressions require Node")
+class MacroWorkloadTests(unittest.TestCase):
+    def run_workload_probe(self, filename, probe):
+        source = Path(__file__).resolve().parents[2] / "benchmarks" / "macro" / filename
+        harness = r"""
+const fs = require('node:fs'), vm = require('node:vm');
+const source = fs.readFileSync(process.argv[1], 'utf8');
+vm.runInThisContext("const assert = require('node:assert/strict');\n" + source +
+                    '\n' + process.argv[2], {filename: process.argv[1], timeout: 2000});
+"""
+        result = subprocess.run(
+            [shutil.which("node"), "-e", harness, str(source), probe],
+            capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "", "loading a workload must not run its full benchmark")
+
+    def test_quicksort_terminates_on_duplicates_and_matches_independent_sort(self):
+        self.run_workload_probe("recursive_algorithms.js", r"""
+function check(input) {
+    const original = input.slice();
+    const expected = input.slice().sort((a, b) => a - b);
+    const sorter = new QuickSort(input);
+    for (let repeat = 0; repeat < 2; repeat++) {
+        const result = sorter.sort();
+        assert.deepEqual(result.sortedArray, expected, JSON.stringify(input));
+        assert.equal(result.isSorted, true);
+        assert.deepEqual(input, original, 'sorting must not mutate the input');
+    }
+}
+// Exhaust every small duplicate/pivot arrangement, including the three equal
+// values that previously left i == j forever. The reference is Node's sort.
+for (let length = 0; length <= 7; length++) {
+    for (let code = 0; code < 3 ** length; code++) {
+        let value = code;
+        const input = [];
+        for (let i = 0; i < length; i++, value = Math.floor(value / 3)) {
+            input.push(value % 3 - 1);
+        }
+        check(input);
+    }
+}
+let seed = 911;
+for (let length = 8; length <= 256; length += 8) {
+    const input = Array.from({length}, () => {
+        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+        return seed % 21 - 10;
+    });
+    check(input);
+    check(input.slice().sort((a, b) => a - b));
+    check(input.slice().sort((a, b) => b - a));
+    check(Array(length).fill(1));
+}
+""")
+
+    def test_tree_builder_visits_every_heap_position_once_at_the_requested_depth(self):
+        self.run_workload_probe("tree_traversal.js", r"""
+for (const depth of [0, 1, 2, 3, 4, 8, 15]) {
+    const count = 2 ** depth - 1;
+    const generated = [];
+    const root = buildBalancedBinaryTree(depth, index => {
+        generated.push(index);
+        return index;
+    });
+    const expected = Array.from({length: count}, (_, i) => i + 1);
+    assert.deepEqual(generated, expected);
+    assert.equal(getDepth(root), depth);
+    const queue = root ? [root] : [];
+    let leaves = 0;
+    // An independent indexed walk checks unique nodes and exact child ranges.
+    for (let i = 0; i < queue.length; i++) {
+        const node = queue[i];
+        assert.equal(node.value, i + 1);
+        if (2 * i + 1 < count) {
+            assert.equal(node.left.value, 2 * i + 2);
+            assert.equal(node.right.value, 2 * i + 3);
+            queue.push(node.left, node.right);
+        } else {
+            assert.equal(node.left, null);
+            assert.equal(node.right, null);
+            leaves++;
+        }
+    }
+    assert.equal(new Set(queue).size, count);
+    assert.equal(queue.length, count);
+    assert.equal(leaves, depth ? 2 ** (depth - 1) : 0);
+    assert.deepEqual(breadthFirstSearch(root).result, expected);
+    assert.equal(depthFirstSearch(root).result.length, count);
+}
+""")
 
 
 if __name__ == "__main__":

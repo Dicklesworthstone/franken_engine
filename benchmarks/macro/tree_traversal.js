@@ -59,22 +59,22 @@ function buildBalancedBinaryTree(depth, valueGenerator = (i) => i) {
         if (values.length === 0) return null;
 
         const root = new TreeNode(values[0]);
-        const queue = [{ node: root, startIndex: 1 }];
+        const queue = [{ node: root, index: 0 }];
 
-        while (queue.length > 0) {
-            const { node, startIndex } = queue.shift();
-            const leftIndex = startIndex;
-            const rightIndex = startIndex + 1;
+        for (let head = 0; head < queue.length; head++) {
+            const { node, index } = queue[head];
+            // Each value owns one heap position; child ranges cannot overlap.
+            const leftIndex = 2 * index + 1;
+            const rightIndex = leftIndex + 1;
 
             if (leftIndex < values.length) {
                 node.left = new TreeNode(values[leftIndex]);
-                queue.push({ node: node.left, startIndex: rightIndex + 1 });
+                queue.push({ node: node.left, index: leftIndex });
             }
 
             if (rightIndex < values.length) {
                 node.right = new TreeNode(values[rightIndex]);
-                const nextLeftStart = rightIndex + 1 + Math.pow(2, getDepth(node.right));
-                queue.push({ node: node.right, startIndex: nextLeftStart });
+                queue.push({ node: node.right, index: rightIndex });
             }
         }
 

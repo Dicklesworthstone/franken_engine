@@ -159,7 +159,9 @@ class QuickSort {
                 this.comparisons++;
             }
 
-            if (i < j) {
+            // Equality must advance both cursors too: duplicate pivots can
+            // leave i === j after both scans, otherwise this loop never ends.
+            if (i <= j) {
                 this.swap(i, j);
                 i++;
                 j--;

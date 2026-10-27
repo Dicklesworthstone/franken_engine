@@ -886,10 +886,7 @@ impl<V> OrderedStringMap<V> {
     /// Borrow well-formed data entries in deterministic storage order:
     /// canonical array indices numerically, then the other keys sorted.
     pub fn well_formed_data_entries(&self) -> impl Iterator<Item = (&String, &V)> {
-        self.array_entries
-            .values()
-            .map(|(key, value)| (key, value))
-            .chain(self.by_key.iter())
+        self.array_entries.values().chain(self.by_key.iter())
     }
 
     /// Borrow exact-only data entries in deterministic storage order.

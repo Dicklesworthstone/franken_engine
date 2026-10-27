@@ -16,8 +16,8 @@ use super::{NativeModuleSource, loop_head_names, scoped_walk};
 #[cfg(test)]
 use crate::ast::ParseGoal;
 use crate::ast::{
-    BindingPattern, CatchClause, Expression, MethodDefinition, SourceSpan, Statement,
-    SwitchCase, SyntaxTree, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
+    BindingPattern, CatchClause, Expression, MethodDefinition, SourceSpan, Statement, SwitchCase,
+    SyntaxTree, UnaryOperator, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
 };
 #[cfg(test)]
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
@@ -102,9 +102,7 @@ pub(super) fn is_module_declaration(statement: &Statement) -> bool {
                 if name == MODULE_BINDING))
 }
 
-pub(super) fn has_ambient_fs_require(
-    tree: &SyntaxTree,
-) -> Result<bool, LoweringPipelineError> {
+pub(super) fn has_ambient_fs_require(tree: &SyntaxTree) -> Result<bool, LoweringPipelineError> {
     if !tree
         .body
         .iter()
@@ -113,7 +111,7 @@ pub(super) fn has_ambient_fs_require(
         return Ok(false);
     }
     // Call-only synchronous uses are already converted to the exact protected
-    // fs operation and retain their operation-specific capability. Only the
+    // fs operation; access constants are plain data. Only the
     // remaining first-class module-object path should surface the legacy raw
     // require boundary to static authority analysis.
     if direct_fs_calls(tree)?.is_some() {
@@ -181,7 +179,7 @@ pub(super) fn rewrite_fs_requires_with_runtime_sources(
     Ok(Some(rewritten))
 }
 
-/// Lower synchronous call-only uses at their original source sites. Inlining
+/// Lower synchronous call-only uses and access constants at their source sites. Inlining
 /// the entire filesystem facade made these programs inherit the potential
 /// flows of every unused method (bd-15w28). This uses the SAME native operation
 /// table and protected intrinsics as that facade, not a different I/O backend.
@@ -196,10 +194,19 @@ fn direct_fs_calls(tree: &SyntaxTree) -> Result<Option<SyntaxTree>, LoweringPipe
     }
     let mut walker = DirectFsCalls {
         compatible: true,
-        calls: 0,
+        rewrites: 0,
+        assignment_target: false,
     };
     walker.statements(&mut rewritten.body)?;
-    Ok((walker.compatible && walker.calls != 0).then_some(rewritten))
+    Ok((walker.compatible && walker.rewrites != 0).then_some(rewritten))
+}
+
+fn inline_fs_require() -> Expression {
+    Expression::Call {
+        callee: Box::new(Expression::Identifier("require".to_string())),
+        arguments: vec![Expression::StringLiteral("fs".into())],
+        span: None,
+    }
 }
 
 /// Expand call-only const namespaces and synchronous named destructures into
@@ -372,6 +379,30 @@ impl Walk for CallOnlyAliases {
         {
             return Ok(());
         }
+        if let Expression::Member {
+            object,
+            computed: false,
+            ..
+        } = expression
+            && let Expression::Member {
+                object,
+                property,
+                computed: false,
+                ..
+            } = object.as_mut()
+            && super::super::well_formed_static_name(property) == Some("constants")
+            && let Expression::Identifier(local) = object.as_ref()
+            && self.aliases.get(local) == Some(&None)
+            && self.function_depth == 0
+            && self.initialized.contains(local)
+        {
+            // Only expand the receiver here. DirectFsCalls recognizes the
+            // supported constants and excludes assignment/delete targets;
+            // unknown properties still discard the entire tentative rewrite.
+            self.used.insert(local.clone());
+            **object = inline_fs_require();
+            return Ok(());
+        }
         if let Expression::Call { callee, arguments, .. } = expression {
             let selected = match callee.as_ref() {
                 Expression::Identifier(local) => self.aliases.get(local)
@@ -399,11 +430,7 @@ impl Walk for CallOnlyAliases {
                 // DirectFsCalls receives the original arguments and call span;
                 // there is only one native operation/discriminator emitter.
                 **callee = Expression::Member {
-                    object: Box::new(Expression::Call {
-                        callee: Box::new(Expression::Identifier("require".to_string())),
-                        arguments: vec![Expression::StringLiteral("fs".into())],
-                        span: None,
-                    }),
+                    object: Box::new(inline_fs_require()),
                     property: Box::new(Expression::Identifier(method)),
                     computed: false,
                     span: None,
@@ -423,9 +450,12 @@ impl Walk for CallOnlyAliases {
             self.compatible = false;
         }
         // Reflection may recover code generation without spelling Function.
+        // Numeric literal keys cannot name constructor or invoke guest key
+        // coercion; still walk their receivers and any getter bodies below.
         if let Expression::Member { property, computed, .. }
             | Expression::OptionalMember { property, computed, .. } = expression
-            && (*computed || super::super::well_formed_static_name(property) == Some("constructor"))
+            && ((*computed && !matches!(property.as_ref(), Expression::NumericLiteral(_)))
+                || super::super::well_formed_static_name(property) == Some("constructor"))
         {
             self.compatible = false;
         }
@@ -435,7 +465,8 @@ impl Walk for CallOnlyAliases {
 
 struct DirectFsCalls {
     compatible: bool,
-    calls: usize,
+    rewrites: usize,
+    assignment_target: bool,
 }
 
 impl Walk for DirectFsCalls {
@@ -455,6 +486,16 @@ impl Walk for DirectFsCalls {
 
     fn pattern(&mut self, pattern: &mut BindingPattern) -> Outcome {
         if pattern.binding_names().contains(&"require") {
+            self.compatible = false;
+        }
+        if let BindingPattern::ObjectPattern(properties) = pattern
+            && properties.iter().any(|property| {
+                property.computed
+                    || super::super::well_formed_static_name(&property.key) == Some("constructor")
+            })
+        {
+            // A destructure can recover Function without ever spelling that
+            // global, and generated code can observe or replace fs methods.
             self.compatible = false;
         }
         walk_pattern(self, pattern)
@@ -487,6 +528,59 @@ impl Walk for DirectFsCalls {
     }
 
     fn expression(&mut self, expression: &mut Expression) -> Outcome {
+        if let Expression::Assignment { left, right, .. } = expression {
+            let previous = self.assignment_target;
+            self.assignment_target = true;
+            let outcome = self.expression(left);
+            self.assignment_target = previous;
+            outcome?;
+            return self.expression(right);
+        }
+        if let Expression::Unary {
+            operator: UnaryOperator::Delete | UnaryOperator::StrictDelete,
+            argument,
+        } = expression
+        {
+            let previous = self.assignment_target;
+            self.assignment_target = true;
+            let outcome = self.expression(argument);
+            self.assignment_target = previous;
+            return outcome;
+        }
+        if let Expression::Member {
+            object,
+            property,
+            computed,
+            ..
+        } = expression
+            && let Some(value) = super::super::fs_constants_member_value(
+                object,
+                property,
+                *computed,
+                &BTreeMap::new(),
+            )
+        {
+            if self.assignment_target {
+                self.compatible = false;
+            } else {
+                *expression = Expression::NumericLiteral(value);
+                self.rewrites += 1;
+            }
+            return Ok(());
+        }
+        if let Expression::Member {
+            object,
+            property,
+            computed: false,
+            ..
+        } = expression
+            && matches!(object.as_ref(), Expression::Identifier(name) if name == "process")
+            && super::super::well_formed_static_name(property) == Some("env")
+        {
+            // Preserve ordinary named environment inputs and their existing
+            // IFC rules. This read does not expose a second module loader.
+            return Ok(());
+        }
         if let Expression::Call { callee, arguments, .. } = expression
             && let Expression::Member { object, property, computed: false, .. } = callee.as_ref()
             && require_member(object) == Some(None)
@@ -527,7 +621,7 @@ impl Walk for DirectFsCalls {
                 }
                 .to_string(),
             );
-            self.calls += 1;
+            self.rewrites += 1;
             return Ok(());
         }
         if let Expression::Call {
@@ -545,10 +639,34 @@ impl Walk for DirectFsCalls {
             // source binding named require still invalidates the whole proof.
             return Ok(());
         }
-        if matches!(expression, Expression::Identifier(name) if name == "require") {
+        if matches!(expression, Expression::Identifier(name)
+            if matches!(name.as_str(), "require" | "eval" | "Function" | "globalThis" | "global"
+                | "self" | "window" | "Reflect" | "Object" | "process" | "module" | "exports"))
+            || matches!(
+                expression,
+                Expression::This | Expression::SloppyThis | Expression::Raw(_)
+            )
+        {
             // This includes escaping require, unclaimed/unknown methods,
-            // callback/Promise APIs and bare module values. Discard ALL
-            // tentative call-site rewrites if any such use is present.
+            // callback/Promise APIs, bare module values and alternate loaders.
+            // An inline require needs the same whole-program proof as a const
+            // alias: eval or another loader can replace a method between calls.
+            // Discard ALL tentative call-site rewrites in that case.
+            self.compatible = false;
+        }
+        if let Expression::Member {
+            property, computed, ..
+        }
+        | Expression::OptionalMember {
+            property, computed, ..
+        } = expression
+            && ((*computed && !matches!(property.as_ref(), Expression::NumericLiteral(_)))
+                || super::super::well_formed_static_name(property) == Some("constructor"))
+        {
+            // Reflection may recover dynamic evaluation without a named
+            // loader/global (for example, (() => {}).constructor(...)).
+            // Literal numeric indexing cannot recover that property. Its
+            // receiver remains subject to the ordinary escape/mutation walk.
             self.compatible = false;
         }
         walk_expression(self, expression)
@@ -1140,7 +1258,7 @@ mod tests {
                 .unwrap()
                 .expect("independent core facade");
             assert_eq!(rewritten.body.len(), tree.body.len());
-            assert_eq!(require_count(&rewritten), 1, "preserve the networking load");
+            assert_eq!(require_count(&rewritten), 0, "all filesystem loads are mediated");
             assert_eq!(rewritten.body[1], tree.body[1]);
             assert!(!rewritten.body.iter().any(is_module_declaration));
             let Statement::VariableDeclaration(declaration) = &rewritten.body[2] else {
@@ -1208,6 +1326,195 @@ mod tests {
             "with (object) { require('fs').readFileSync('x'); }",
         ] {
             assert!(direct_fs_calls(&parse(source)).unwrap().is_none(), "{source}");
+        }
+    }
+
+    #[test]
+    fn inline_calls_keep_module_values_when_dynamic_code_can_observe_them() {
+        for observer in [
+            "eval(\"require('fs').readFileSync = replacement\");",
+            "const load = Function('return require')(); load('fs').readFileSync = replacement;",
+            "globalThis.require('fs').readFileSync = replacement;",
+            "global.require('fs').readFileSync = replacement;",
+            "self.require('fs').readFileSync = replacement;",
+            "window.require('fs').readFileSync = replacement;",
+            "module.require('fs').readFileSync = replacement;",
+            "process.getBuiltinModule('fs').readFileSync = replacement;",
+            "this.require('fs').readFileSync = replacement;",
+            "Reflect.get(globalThis, 'require')('fs').readFileSync = replacement;",
+            "Object.getOwnPropertyDescriptor(globalThis, 'require').value('fs').readFileSync = replacement;",
+            "const load = (() => {}).constructor('return require')(); load('fs').readFileSync = replacement;",
+            "const {constructor: C} = function () {}; C('return require')()('fs').readFileSync = replacement;",
+            "const key = 'con' + 'structor'; const C = (() => {})[key]; C('return require')()('fs').readFileSync = replacement;",
+            "const key = 'constructor'; const {[key]: C} = function () {}; C('return require')()('fs').readFileSync = replacement;",
+        ] {
+            // No namespace alias: this used to skip CallOnlyAliases' loader
+            // guards and erase the observable lookup after the mutation.
+            let tree = parse(&format!(
+                "require('fs').readFileSync('before'); {observer} \
+                 require('node:fs').readFileSync('after');"
+            ));
+            let original = tree.clone();
+            assert!(direct_fs_calls(&tree).unwrap().is_none(), "{observer}");
+            let rewritten = rewrite_fs_requires(&tree).unwrap().expect("shared module");
+            assert!(is_module_declaration(&rewritten.body[0]), "{observer}");
+            assert_eq!(tree, original, "a failed proof must not mutate its input");
+        }
+    }
+
+    #[test]
+    fn dynamic_loader_guards_preserve_direct_named_environment_inputs() {
+        for source in [
+            "require('fs').readFileSync(process.env.CONFIG, 'utf8');",
+            "const fs = require('fs'); fs.writeFileSync('out', process.env.SECRET);",
+        ] {
+            let tree = parse(source);
+            let rewritten = direct_fs_calls(&tree)
+                .unwrap()
+                .expect("named environment input");
+            assert!(
+                !rewritten.body.iter().any(is_module_declaration),
+                "{source}"
+            );
+            assert_eq!(require_count(&rewritten), 0);
+            assert_eq!(tree, parse(source));
+        }
+    }
+
+    #[test]
+    fn numeric_result_indexing_keeps_inline_and_bound_reads_direct() {
+        for (prefix, receiver) in [
+            ("", "require('fs')"),
+            ("const fs = require('node:fs');", "fs"),
+        ] {
+            for suffix in ["[0]", ".split('\\n')[0]", "?.[0]"] {
+                let source =
+                    format!("{prefix} {receiver}.readFileSync('input.txt', 'utf8'){suffix};");
+                let tree = parse(&source);
+                let rewritten = direct_fs_calls(&tree)
+                    .unwrap()
+                    .expect("literal numeric index");
+                assert_eq!(require_count(&rewritten), 0, "{source}");
+                assert!(
+                    !rewritten.body.iter().any(is_module_declaration),
+                    "{source}"
+                );
+                assert_eq!(tree, parse(&source), "tentative rewrite changed the input");
+            }
+            for observer in [
+                "const key = 'constructor'; const dynamic = (() => {})[key];",
+                "const dynamic = (() => {})['constructor'];",
+                "const key = 0; value[key];",
+            ] {
+                let source =
+                    format!("{prefix} {receiver}.readFileSync('input.txt', 'utf8')[0]; {observer}");
+                assert!(
+                    direct_fs_calls(&parse(&source)).unwrap().is_none(),
+                    "{source}"
+                );
+            }
+            let mutation = format!(
+                "{prefix} {receiver}[0] = replacement; \
+                 {receiver}.readFileSync('input.txt', 'utf8')[0];"
+            );
+            assert!(
+                direct_fs_calls(&parse(&mutation)).unwrap().is_none(),
+                "{mutation}"
+            );
+        }
+    }
+
+    #[test]
+    fn access_constants_use_the_native_values_without_constructing_a_module() {
+        for (name, value) in [("F_OK", 0), ("X_OK", 1), ("W_OK", 2), ("R_OK", 4)] {
+            for specifier in ["fs", "node:fs"] {
+                for (prefix, module) in [
+                    (String::new(), format!("require('{specifier}')")),
+                    (
+                        format!("const io = require('{specifier}');"),
+                        "io".to_string(),
+                    ),
+                ] {
+                    let source = format!("{prefix} {module}.constants.{name};");
+                    let tree = parse(&source);
+                    let rewritten = direct_fs_calls(&tree).unwrap().expect("constant read");
+                    assert!(
+                        !rewritten.body.iter().any(is_module_declaration),
+                        "{source}"
+                    );
+                    let Some(Statement::Expression(statement)) = rewritten.body.last() else {
+                        panic!("constant expression");
+                    };
+                    assert_eq!(statement.expression, Expression::NumericLiteral(value));
+                    assert!(!has_ambient_fs_require(&tree).unwrap(), "{source}");
+                    assert_eq!(tree, parse(&source));
+                    assert!(rewrite_fs_requires(&rewritten).unwrap().is_none());
+                }
+            }
+        }
+        let tree = parse("const fs = require('fs'); fs.accessSync('x', fs.constants.R_OK);");
+        let rewritten = direct_fs_calls(&tree)
+            .unwrap()
+            .expect("access call and its mode");
+        let Statement::Expression(statement) = &rewritten.body[1] else {
+            panic!("access call");
+        };
+        let Expression::Call {
+            callee, arguments, ..
+        } = &statement.expression
+        else {
+            panic!("access call");
+        };
+        assert_eq!(callee.as_ref(), &Expression::Identifier("%FsRead".into()));
+        assert_eq!(
+            arguments,
+            &vec![
+                Expression::StringLiteral("\0fsop:access".into()),
+                Expression::StringLiteral("x".into()),
+                Expression::NumericLiteral(4),
+            ]
+        );
+    }
+
+    #[test]
+    fn access_constant_mutation_escape_and_lexical_reads_keep_the_module_path() {
+        for module in ["require('fs')", "fs"] {
+            for tail in [
+                format!("{module}.constants.R_OK = 8;"),
+                format!("{module}.constants.R_OK += 1;"),
+                format!("{module}.constants.R_OK++;"),
+                format!("delete {module}.constants.R_OK;"),
+                format!("({{mode: {module}.constants.R_OK}} = source);"),
+                format!("{module}.constants = replacement;"),
+                format!("consume({module}.constants);"),
+                format!("{module}.constants.UNKNOWN;"),
+                format!("{module}.constants[key];"),
+            ] {
+                let prefix = if module == "fs" {
+                    "const fs = require('fs');"
+                } else {
+                    ""
+                };
+                let source = format!("{prefix} {module}.constants.R_OK; {tail}");
+                let tree = parse(&source);
+                assert!(direct_fs_calls(&tree).unwrap().is_none(), "{source}");
+                assert!(is_module_declaration(
+                    &rewrite_fs_requires(&tree).unwrap().unwrap().body[0]
+                ));
+                assert_eq!(tree, parse(&source));
+            }
+        }
+        for source in [
+            "fs.constants.R_OK; const fs = require('fs');",
+            "const fs = require('fs'); function mode() { return fs.constants.R_OK; } mode();",
+            "const fs = require('fs'); { const fs = other; fs.constants.R_OK; }",
+            "'use strict'; const fs = require('fs'); delete fs.constants.R_OK;",
+            "'use strict'; delete require('fs').constants.R_OK;",
+        ] {
+            assert!(
+                direct_fs_calls(&parse(source)).unwrap().is_none(),
+                "{source}"
+            );
         }
     }
 

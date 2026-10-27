@@ -20,6 +20,14 @@ fn run(source: &str, root: &Path, filesystem_caps: &[&str]) -> Result<Vec<String
 
 /// Runs `source` holding exactly `capabilities`.
 fn run_granting(source: &str, root: &Path, capabilities: &[&str]) -> Result<Vec<String>, String> {
+    run_granting_with_effect_count(source, root, capabilities).map(|(output, _)| output)
+}
+
+fn run_granting_with_effect_count(
+    source: &str,
+    root: &Path,
+    capabilities: &[&str],
+) -> Result<(Vec<String>, usize), String> {
     let provider = Arc::new(SandboxedHostIo::with_root(root).expect("sandbox provider"));
     let recorder: Arc<dyn HostIoRecorder> = Arc::new(InMemoryHostIoTranscript::recording());
     let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
@@ -40,11 +48,14 @@ fn run_granting(source: &str, root: &Path, capabilities: &[&str]) -> Result<Vec<
     let result = orchestrator
         .execute(&package)
         .map_err(|error| format!("{error:?}"))?;
-    Ok(result
-        .console_output
-        .into_iter()
-        .map(|entry| entry.message)
-        .collect())
+    Ok((
+        result
+            .console_output
+            .into_iter()
+            .map(|entry| entry.message)
+            .collect(),
+        result.host_effect_transcript.len(),
+    ))
 }
 
 #[test]
@@ -158,6 +169,110 @@ fn invalid_callbacks_are_rejected_before_writing() {
     .expect("argument validation is catchable");
     assert_eq!(output, ["true ERR_INVALID_ARG_TYPE"]);
     assert!(!root.path().join("invalid.txt").exists());
+}
+
+#[test]
+fn invalid_write_data_never_truncates_or_records_a_host_effect() {
+    let root = tempfile::tempdir().expect("sandbox");
+    std::fs::write(root.path().join("keep.txt"), "unchanged").expect("input");
+    let (output, effects) = run_granting_with_effect_count(
+        "const fs = require('fs'); \
+         function attempt(write, value) { \
+           try { write('keep.txt', value); console.log('unexpected success'); } \
+           catch (error) { console.log(error instanceof TypeError); } \
+         } \
+         attempt(fs.writeFileSync, undefined); attempt(fs.writeFileSync, null); \
+         attempt(fs.writeFileSync, 17); attempt(fs.writeFileSync, true); \
+         attempt(fs.writeFileSync, {}); attempt(fs.writeFileSync, [65]); \
+         attempt(fs.appendFileSync, undefined); \
+         try { require('node:fs').writeFileSync('keep.txt'); } \
+         catch (error) { console.log(error instanceof TypeError); } \
+         try { fs.writeFile('keep.txt', undefined, () => console.log('unexpected callback')); } \
+         catch (error) { console.log(error instanceof TypeError); } \
+         require('fs/promises').writeFile('keep.txt', undefined) \
+           .then(() => console.log('unexpected promise success')) \
+           .catch(error => console.log(error instanceof TypeError));",
+        root.path(),
+        &[
+            "vm_dispatch",
+            "heap_allocate",
+            "builtin",
+            "console",
+            "fs_write",
+        ],
+    )
+    .expect("invalid arguments are catchable through all filesystem call forms");
+    assert_eq!(output, vec!["true"; 10]);
+    assert_eq!(effects, 0, "argument errors must precede provider dispatch");
+    assert_eq!(
+        std::fs::read(root.path().join("keep.txt")).unwrap(),
+        b"unchanged"
+    );
+}
+
+#[test]
+fn invalid_paths_never_reach_the_provider_or_coerce_guest_objects() {
+    let root = tempfile::tempdir().expect("sandbox");
+    std::fs::write(root.path().join("keep.txt"), "unchanged").expect("input");
+    // Reject unsupported path objects without running guest coercion code.
+    // Node v24 probes the fd overload and coerces the forged object once;
+    // the zero-coercion assertion here tests our explicit path boundary.
+    let (output, effects) = run_granting_with_effect_count(
+        "const fs = require('fs'); let coercions = 0; \
+         const forged = { toString() { coercions += 1; return 'keep.txt'; } }; \
+         for (const path of [undefined, null, true, forged, 'bad\\0path']) { \
+           try { fs.readFileSync(path); console.log('unexpected read'); } \
+           catch (error) { console.log(error instanceof TypeError); } \
+         } \
+         try { fs.renameSync('keep.txt', undefined); } \
+         catch (error) { console.log(error instanceof TypeError); } \
+         try { fs.copyFileSync('keep.txt', null); } \
+         catch (error) { console.log(error instanceof TypeError); } \
+         console.log(fs.existsSync(undefined), fs.existsSync(null), coercions);",
+        root.path(),
+        &[
+            "vm_dispatch",
+            "heap_allocate",
+            "builtin",
+            "console",
+            "fs_read",
+            "fs_write",
+        ],
+    )
+    .expect("invalid path arguments remain local validation failures");
+    let mut expected = vec!["true"; 7];
+    expected.push("false false 0");
+    assert_eq!(output, expected);
+    assert_eq!(effects, 0, "invalid paths must not consume host effects");
+    assert_eq!(
+        std::fs::read(root.path().join("keep.txt")).unwrap(),
+        b"unchanged"
+    );
+}
+
+#[test]
+fn filesystem_writes_preserve_typed_array_and_data_view_byte_windows() {
+    let root = tempfile::tempdir().expect("sandbox");
+    let output = run(
+        "const fs = require('fs'); \
+         const storage = new Uint8Array([0, 65, 66, 67, 68, 0]); \
+         const words = new Uint16Array(storage.buffer, 2, 1); \
+         const data = new DataView(storage.buffer, 1, 4); \
+         fs.writeFileSync('words.bin', words); fs.writeFileSync('view.bin', data); \
+         fs.appendFileSync('view.bin', new Uint8Array(storage.buffer, 4, 1)); \
+         console.log(fs.readFileSync('words.bin', 'hex'), fs.readFileSync('view.bin', 'hex')); \
+         fs.writeFileSync(Buffer.from('buffer-path.txt'), 'bytes'); \
+         console.log(fs.readFileSync(Buffer.from('buffer-path.txt'), 'utf8'));",
+        root.path(),
+        &["fs_read", "fs_write"],
+    )
+    .expect("native byte windows must not be stringified or narrowed per element");
+    assert_eq!(output, ["4243 4142434444", "bytes"]);
+    assert_eq!(std::fs::read(root.path().join("words.bin")).unwrap(), b"BC");
+    assert_eq!(
+        std::fs::read(root.path().join("view.bin")).unwrap(),
+        b"ABCDD"
+    );
 }
 
 #[test]

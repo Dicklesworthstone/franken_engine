@@ -2,16 +2,125 @@
 
 This is a synthesized, agent-facing changelog for the full history of `franken_engine`.
 
-## v0.3.0 — 2026-10-08
+## v0.3.0 — held candidate (prepared 2026-10-08)
 
-Second GitHub Release in the `v0.2.0` line of work. It covers about 2,270
-commits on `main` since `v0.2.0`, most of them JavaScript-semantics repairs
-found by running real npm packages. `frankenctl` reports `0.3.0` (the
-`frankenengine-core` and `frankenengine-engine` crates are staged at
-`0.3.0`). The release ships the same three native archives as `v0.2.0`,
-each with a `.sha256` sidecar: Linux x86_64 GNU (glibc 2.28 floor), macOS
-arm64 and Windows x86_64 MSVC, all built standalone
-(`--no-default-features`).
+The runtime crates carry the prepared `0.3.0` candidate; the latest published
+release remains `v0.2.0`. Publication is blocked by
+[#6](https://github.com/Dicklesworthstone/franken_engine/issues/6) / `bd-15w28`.
+The October 8 candidate covered about 2,270 commits since `v0.2.0`, chiefly
+JavaScript-semantics repairs found through real npm packages. Its planned
+standalone (`--no-default-features`) archives target Linux x86_64 GNU
+(glibc 2.28 floor), macOS arm64 and Windows x86_64 MSVC, with checksum sidecars.
+The sections below describe candidate work, not a published release.
+
+### October 27 regression repair and qualification checkpoint
+
+Three substantive increments were committed directly to `main`:
+
+- [761d36410](https://github.com/Dicklesworthstone/franken_engine/commit/761d36410ed25b38ee26a82d192b49c02ca3d592):
+  preserve observable Events module aliases, shared facade identity and
+  `once` options/spread/arity behavior; add positive and capability-denial tests.
+- [94aa53272](https://github.com/Dicklesworthstone/franken_engine/commit/94aa53272cb836d0a6c5d3f14ea9e3966c7c8157):
+  validate filesystem paths and write data before host effects, preserve native
+  typed-array/DataView byte windows, and reject internal operation/capability
+  mismatches. Native interpreter execution of these changes remains pending.
+- [1466ad9b1](https://github.com/Dicklesworthstone/franken_engine/commit/1466ad9b11f550452c16929fd537e850a04001cb):
+  restore constant/access-mode authority precision, guard observable module
+  mutation and dynamic evaluation, and retain safe numeric result indexing.
+
+The [bounded evidence snapshot](./artifacts/issue6_scoped_qualification_20261027.json)
+preserves all 33 inputs, complete analyzer reports for three revisions,
+source/test hashes, selected-test output, canonical gate attempt results,
+scope exclusions and remaining blockers. Its consumer is the v0.3.0 release
+qualifier; it prevents loss of this run's evidence and does not certify release.
+
+**Fresh native comparison.** The same 33 inputs were analyzed twice per
+revision with identical replay reports, using the actual parser, lowering
+pipeline and public authority analyzer under `nightly-2026-09-21`.
+
+| Source revision | Clean | FindingsPresent | Unanalyzable |
+|---|---:|---:|---:|
+| `v0.2.0`, `2b3bfb6366ba1bd267ce92bad5466b1c105a91ee` | 22 | 11 | 0 |
+| Starting main, `84e3c91b7684bd48a8fcc05f67a0fef7cd3c1a03` | 16 | 15 | 2 |
+| Patched source, `1466ad9b11f550452c16929fd537e850a04001cb` | 21 | 10 | 2 |
+
+These are **analyzer classifications, not test failure counts**: the inputs
+include deliberate security violations and unsupported forms. Five supported
+programs were clean on v0.2.0, falsely refused on starting main, and restored
+by the patch: three inline/bound filesystem constant cases and two
+`accessSync` cases using those constants. Constant-only programs require no
+filesystem authority; access calls require only `fs:read`. Numeric indexing
+of a read result remains clean. Both secret-to-filesystem probes remain
+refused versus starting main; no grant or confidentiality policy was widened.
+
+The scoped native crate contained 25 production modules plus exact extracted
+interpreter metadata/regexp helpers. It excluded interpreter execution and
+the unused `capability::trust_zone` submodule. **26 selected production AST
+test bodies passed unchanged** through temporary entrypoints (18 filesystem,
+8 Events). This is not execution of the canonical library test binary, the
+`frankenctl` executable, or the native interpreter integration tests.
+
+Reference checks on Node v24.22.1 matched all seven new positive Events
+fixtures, both directly and with the repository's actual Events facade hosted
+by Node. Two of three filesystem fixtures matched stdout exactly; all 17
+invalid-operation TypeErrors, two `existsSync=false` results, two preserved
+input files and three positive file-byte checks matched. The remaining
+difference is explicit: Node coerces an invalid path object once while
+probing its fd overload; the engine fixture requires zero guest coercions
+at its supported-path boundary. Node results do not prove engine execution
+or empty host-effect transcripts.
+
+**Remaining release blockers:**
+
+1. **Reproduced fs/promises authority regressions.** Both
+   `require('fs/promises').readFile('input.txt', 'utf8')` and
+   `const fs = require('node:fs/promises'); fs.readFile('input.txt', 'utf8')`
+   are clean on v0.2.0 with `fs:read` and `promise:resolve`, but still produce
+   `FE-CAP-0001` (`FindingsPresent`, ambient `require`) on the patched source.
+   Bare `fs` and `fs/promises` imports also have findings, but the same bare
+   probes already did so at v0.2.0; they are not newly measured regressions.
+2. **First-class Events authority underreport.** Several measured reports
+   are clean with an empty footprint although factory initialization requires
+   `Builtin`. IR2 aggregates only top-level operations and misses the nested
+   factory hostcall; IR3 rescans nested instructions but the report uses IR2.
+   Runtime capability enforcement remains in place. Unioning the complete
+   IR3 footprint would additionally demand `Timer` from unused
+   `addAbortListener` code. A correct initialization/selected-method summary
+   is still needed.
+3. **Retained finite EventsOnce semantics.** Source inspection shows that
+   exact-two-argument calls still use the legacy native waiter, bypassing
+   public listener registration and async Promise adoption. `newListener`,
+   overridden `once`, delivery order and invalid-target rejection need native
+   conformance evidence. These are unqualified source paths, not newly
+   measured runtime test failures.
+4. **Full runtime and release gate absent.** The complete first-class
+   filesystem facade, native invalid-argument/effect tests, capability
+   boundaries, orchestration and the full library/integration comparison
+   remain unqualified. Descriptor offset/length/position, write encodings and
+   access-mode compatibility are not established by this patch.
+
+The historical `InterpreterConfig::default()` and cross-module private-GC
+fixture references are absent from current source; no new compile workaround
+was needed for those specific references. The complete lib-test compilation
+could not be established: the native `--lib --no-run` attempt was stopped
+under memory pressure before producing a test binary. Subsequent
+`cargo check --all-targets --locked --offline` and
+`cargo clippy --all-targets --locked --offline -- -D warnings` attempts were
+stopped for exhausted disk space before a compiler verdict.
+`cargo fmt --check` emitted preexisting differences and then was stopped
+under shared-memory pressure. These attempts are **inconclusive**, not passes
+or source/test failure counts. Changed-line pinned rustfmt and
+`git diff --check` passed.
+
+Before publication, rerun the complete standalone library suite on the
+candidate and v0.2.0 and compare failures by name; run
+`fs_direct_calls`, `fs_module_objects` and
+`events_default_import_bd_9vouw_165` against the native interpreter, together
+with the affected orchestration/capability suites; then complete the required
+check/clippy/format, native installer and performance qualifications.
+The October 8 and October 14 issue counts remain historical evidence.
+**Issue #6 / bd-15w28 stay open; no v0.3.0 qualification, tag or publication
+is established by this checkpoint.**
 
 ### Language and runtime
 

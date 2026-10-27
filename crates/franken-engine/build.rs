@@ -36,6 +36,9 @@ fn profile_directory_from_out_dir(out_dir: &std::path::Path) -> Option<String> {
 }
 
 fn main() {
+    // Only Cargo's profile metadata is consumed. The default package-wide watch
+    // otherwise recompiles the engine even when only a JS test fixture changes.
+    println!("cargo:rerun-if-changed=build.rs");
     let profile_class = std::env::var("PROFILE").unwrap_or_else(|_| "unknown".to_string());
     let opt_level = std::env::var("OPT_LEVEL").unwrap_or_else(|_| "unknown".to_string());
     let debug_info = std::env::var("DEBUG").unwrap_or_else(|_| "unknown".to_string());

@@ -69175,6 +69175,53 @@ impl InterpreterCore {
                     }
                 }
             }
+            // OrdinarySetWithOwnDescriptor consults Receiver.[[GetOwnProperty]]
+            // and then Receiver.[[DefineOwnProperty]]. Unwrapping a Proxy here
+            // skips both traps, including splice's species-result length write.
+            // The descriptor walk above still owns inherited setter dispatch.
+            let proxy_receiver = match &receiver {
+                Value::Object(id) => Some(*id),
+                Value::BuiltinFunction(builtin)
+                    if builtin.kind == BuiltinFunctionKind::CallableProxy =>
+                {
+                    Some(Self::callable_proxy_record_id(builtin)?)
+                }
+                _ => None,
+            };
+            if let Some(receiver_id) = proxy_receiver
+                && self.proxy_record(receiver_id)?.is_some()
+            {
+                let current =
+                    self.proxy_target_descriptor_fields(module, receiver_id, key, depth + 1)?;
+                self.observe_scoped_callback_result()?;
+                if self.active_inline_callback_context_label.is_some() {
+                    self.reflect_admit_mutation_label(receiver_id)?;
+                }
+                let fields = if let Some(current) = current {
+                    if current.is_accessor() || current.writable != Some(true) {
+                        return Ok(false);
+                    }
+                    PropertyDescriptorFields {
+                        value: Some(value),
+                        ..PropertyDescriptorFields::default()
+                    }
+                } else {
+                    PropertyDescriptorFields {
+                        value: Some(value),
+                        writable: Some(true),
+                        enumerable: Some(true),
+                        configurable: Some(true),
+                        ..PropertyDescriptorFields::default()
+                    }
+                };
+                return self.proxy_aware_define_own_property(
+                    module,
+                    receiver_id,
+                    key.clone(),
+                    fields,
+                    depth + 1,
+                );
+            }
             // Resolve backing storage only after the descriptor walk has ruled
             // out an inherited setter: setters and Proxy traps must receive
             // the original callable, promise or iterator identity. A data
@@ -69276,9 +69323,9 @@ impl InterpreterCore {
     }
 
     /// Resolve the object on which ordinary `[[Set]]` creates/replaces a data
-    /// property. A transparent Proxy receiver forwards that define step to its
-    /// target in this baseline model, which has no separate defineProperty
-    /// trap carrier; a distinct ordinary Reflect receiver keeps its identity.
+    /// property when its Proxy receiver traps have already been handled. Other
+    /// callers use this only to inspect backing storage; a distinct ordinary
+    /// Reflect receiver keeps its identity.
     fn proxy_set_receiver_object(
         &self,
         receiver: &Value,
@@ -80233,21 +80280,7 @@ impl InterpreterCore {
         Ok(JsString::from_code_units(&result_units))
     }
 
-    fn require_object_coercible_to_string(value: &Value) -> Result<String, InterpreterError> {
-        match value {
-            Value::Null => Err(InterpreterError::TypeError {
-                expected: "object-coercible String.prototype receiver".to_string(),
-                got: "null".to_string(),
-            }),
-            Value::Undefined => Err(InterpreterError::TypeError {
-                expected: "object-coercible String.prototype receiver".to_string(),
-                got: "undefined".to_string(),
-            }),
-            _ => Ok(Self::value_to_primitive_string(value)),
-        }
-    }
-
-    /// Exact-code-unit variant of [`Self::require_object_coercible_to_string`].
+    /// RequireObjectCoercible for primitive String.prototype receiver paths.
     /// String receivers keep their real UTF-16 code units (including lone
     /// surrogates, bd-neika); non-string receivers coerce through the
     /// primitive-string path, which is always well-formed.
@@ -172679,8 +172712,9 @@ mod tests {
             ];
 
             for input in test_cases {
-                let expected = InterpreterCore::require_object_coercible_to_string(&input)
-                    .expect("require_object_coercible_to_string should handle non-null values");
+                // These fixtures are non-nullish: their primitive spelling is
+                // the casing expectation for every dispatched builtin ID.
+                let expected = InterpreterCore::value_to_primitive_string(&input);
 
                 for &builtin_id in all_builtin_ids.clone() {
                     interpreter.set_reg(0, input.clone());
@@ -172735,7 +172769,7 @@ mod tests {
         /// Keep helper-level RequireObjectCoercible behavior explicit and deterministic.
         #[test]
         fn string_case_conversion_require_object_coercible() {
-            let null_result = InterpreterCore::require_object_coercible_to_string(&Value::Null);
+            let null_result = InterpreterCore::require_object_coercible_to_js_string(&Value::Null);
             assert!(matches!(
                 null_result,
                 Err(InterpreterError::TypeError { expected, got })
@@ -172743,7 +172777,7 @@ mod tests {
             ));
 
             let undefined_result =
-                InterpreterCore::require_object_coercible_to_string(&Value::Undefined);
+                InterpreterCore::require_object_coercible_to_js_string(&Value::Undefined);
             assert!(matches!(
                 undefined_result,
                 Err(InterpreterError::TypeError { expected, got })
@@ -172762,7 +172796,7 @@ mod tests {
                 Value::Iterator(5),
                 Value::Object(ObjectId(6)),
             ] {
-                assert!(InterpreterCore::require_object_coercible_to_string(&valid).is_ok());
+                assert!(InterpreterCore::require_object_coercible_to_js_string(&valid).is_ok());
             }
         }
 

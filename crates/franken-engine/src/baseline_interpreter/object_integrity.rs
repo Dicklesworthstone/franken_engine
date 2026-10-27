@@ -1005,8 +1005,9 @@ impl InterpreterCore {
         true
     }
 
-    /// The target's own descriptor as fields, for the invariant checks.
-    fn proxy_target_descriptor_fields(
+    /// An object's own descriptor as fields, for invariant checks and [[Set]]
+    /// receiver checks. The completed descriptor must not read inherited fields.
+    pub(super) fn proxy_target_descriptor_fields(
         &mut self,
         module: Option<&Ir3Module>,
         target: ObjectId,

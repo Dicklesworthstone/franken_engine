@@ -262,10 +262,62 @@ out.join(' ');"#;
     );
 }
 
+#[test]
+fn callable_proxy_intrinsic_prototype_descriptors_are_checked() {
+    for (source, expected) in [
+        (
+            r#"var out = []; var keys = 0;
+function target() {}
+var original = target.prototype;
+var proxy = new Proxy(target, {
+  ownKeys(t) {keys++; return Reflect.ownKeys(t);},
+  getOwnPropertyDescriptor(t, k) {return Reflect.getOwnPropertyDescriptor(t, k);}
+});
+function record() {
+  var d = Object.getOwnPropertyDescriptor(proxy, 'prototype');
+  out.push([d.value === original, d.writable, d.enumerable, d.configurable].join(':'));
+  out.push(JSON.stringify(Object.keys(proxy)));
+}
+record(); Object.freeze(target); record(); out.push(keys); out.join('|');"#,
+            "true:true:false:false|[]|true:false:false:false|[]|2",
+        ),
+        (
+            r#"var out = [];
+function target() {} target.prototype = 7; Object.freeze(target);
+for (var guess of [7, 8]) {
+  var proxy = new Proxy(target, {
+    ownKeys(t) {return Reflect.ownKeys(t);},
+    getOwnPropertyDescriptor(t, k) {
+      if (k === 'prototype') {
+        return {value: guess, writable: false, enumerable: false, configurable: false};
+      }
+      return Reflect.getOwnPropertyDescriptor(t, k);
+    }
+  });
+  try {Object.keys(proxy); out.push(Object.getOwnPropertyDescriptor(proxy, 'prototype').value);}
+  catch (error) {out.push(error.name);}
+}
+out.join('|');"#,
+            "7|TypeError",
+        ),
+    ] {
+        assert_native_enumeration(source, expected);
+    }
+}
+
 /// A public descriptor guess against a frozen Secret value must retain that
 /// provenance both when enumeration succeeds and when its TypeError is caught.
 #[test]
 fn enumeration_invariant_checks_preserve_labels_and_memory_accounting() {
+    assert_descriptor_invariant_labels(false);
+}
+
+#[test]
+fn callable_prototype_invariants_preserve_labels_and_memory_accounting() {
+    assert_descriptor_invariant_labels(true);
+}
+
+fn assert_descriptor_invariant_labels(callable_target: bool) {
     use frankenengine_engine::ast::ParseGoal;
     use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore, Value};
     use frankenengine_engine::capability::RuntimeCapability;
@@ -310,13 +362,17 @@ fn enumeration_invariant_checks_preserve_labels_and_memory_accounting() {
                 .into_iter()
                 .collect();
                 let mut core = InterpreterCore::new(config, "enumeration-labels");
-                let target = core.alloc_object_with_prototype(None).unwrap();
+                let target = if callable_target {
+                    Value::Function(1)
+                } else {
+                    Value::Object(core.alloc_object_with_prototype(None).unwrap())
+                };
                 let handler = core.alloc_object_with_prototype(None).unwrap();
                 let descriptor = core.alloc_object_with_prototype(None).unwrap();
                 for (name, value) in [
                     ("value", Value::Int(guess)),
                     ("writable", Value::Bool(false)),
-                    ("enumerable", Value::Bool(true)),
+                    ("enumerable", Value::Bool(!callable_target)),
                     ("configurable", Value::Bool(false)),
                 ] {
                     core.set_object_property(descriptor, name.into(), value)
@@ -331,15 +387,22 @@ fn enumeration_invariant_checks_preserve_labels_and_memory_accounting() {
                 )
                 .unwrap();
                 for (register, value) in [
-                    (0, Value::Object(target)),
+                    (0, target),
                     (1, Value::Object(handler)),
                     (2, Value::Int(7)),
-                    (3, Value::str("x")),
+                    (
+                        3,
+                        Value::str(if callable_target { "prototype" } else { "x" }),
+                    ),
                     (9, Value::str("name")),
                 ] {
                     core.seed_register(register, value).unwrap();
                 }
                 core.set_register_label(2, property_label.clone()).unwrap();
+                if callable_target {
+                    core.seed_register(6, Value::str("prototype")).unwrap();
+                    core.seed_register(7, Value::str("value")).unwrap();
+                }
                 let mut module = template.clone();
                 module.instructions = vec![
                     Ir3Instruction::HostCall {
@@ -399,8 +462,39 @@ fn enumeration_invariant_checks_preserve_labels_and_memory_accounting() {
                     is_generator: false,
                     rest_param_index: None,
                 }];
+                if callable_target {
+                    module.instructions[4] = Ir3Instruction::HostCall {
+                        capability: CapabilityTag("builtin:ObjectGetOwnPropertyDescriptor".into()),
+                        args: RegRange { start: 5, count: 2 },
+                        dst: 8,
+                    };
+                    module.instructions[6] = Ir3Instruction::LoadInt { dst: 11, value: 0 };
+                    module.instructions[7] = Ir3Instruction::GetProperty {
+                        obj: 8,
+                        key: 7,
+                        dst: 10,
+                    };
+                    module.function_table.push(Ir3FunctionDesc {
+                        entry: 16,
+                        arity: 0,
+                        frame_size: 1,
+                        name: Some("target".into()),
+                        is_generator: false,
+                        rest_param_index: None,
+                    });
+                    module.instructions.extend([
+                        Ir3Instruction::LoadInt { dst: 0, value: 0 },
+                        Ir3Instruction::Return { value: 0 },
+                    ]);
+                }
                 let result = core.execute(&module).unwrap();
-                let expected = Value::str(if guess == 7 { "x" } else { "TypeError" });
+                let expected = if guess != 7 {
+                    Value::str("TypeError")
+                } else if callable_target {
+                    Value::Int(7)
+                } else {
+                    Value::str("x")
+                };
                 assert_eq!(result.value, expected, "guess={guess}");
                 assert_eq!(result.completion_label, property_label, "guess={guess}");
                 assert_eq!(core.get_register_label(5).unwrap(), &Label::Public);

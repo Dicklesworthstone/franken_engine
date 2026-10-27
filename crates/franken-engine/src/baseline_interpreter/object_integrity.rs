@@ -1023,6 +1023,11 @@ impl InterpreterCore {
         {
             self.integrity_step(target, depth)?;
             self.observe_own_property_descriptor_label(target, key)?;
+            if let Some(fields) =
+                self.function_backing_virtual_descriptor_fields(module, target, key)?
+            {
+                return Ok(Some(fields));
+            }
             return Ok(self.ordinary_own_property_descriptor_fields(target, key));
         }
         match self.proxy_aware_own_property_descriptor(module, target, key, depth)? {
@@ -1173,12 +1178,13 @@ impl InterpreterCore {
     pub(super) fn validate_proxy_own_keys_trap_result(
         &mut self,
         module: Option<&Ir3Module>,
+        proxy: ObjectId,
         target: ObjectId,
         mut keys: BTreeSet<RuntimePropertyKey>,
         depth: u32,
     ) -> Result<(), InterpreterError> {
         let extensible = self.object_is_extensible(module, target, depth)?;
-        let target_keys = self.proxy_aware_own_property_keys(module, target, depth)?;
+        let target_keys = self.proxy_target_own_property_keys(module, proxy, target, depth)?;
         let mut non_configurable = Vec::new();
         let mut configurable = Vec::new();
         for value in target_keys {
@@ -1233,6 +1239,11 @@ impl InterpreterCore {
         self.integrity_step(object_id, depth)?;
         self.observe_own_property_descriptor_label(object_id, key)?;
         let Some((target, handler)) = self.active_proxy_record(object_id)? else {
+            if let Some(fields) =
+                self.function_backing_virtual_descriptor_fields(module, object_id, key)?
+            {
+                return self.descriptor_object_from_fields(&fields, false);
+            }
             if let Some(descriptor) = self.typed_array_own_property_descriptor(object_id, key)? {
                 return Ok(descriptor);
             }

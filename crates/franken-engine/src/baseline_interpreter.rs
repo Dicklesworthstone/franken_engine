@@ -68209,44 +68209,6 @@ impl InterpreterCore {
         Ok(Value::Undefined)
     }
 
-    fn prototype_chain_has_runtime_key(
-        &self,
-        object_id: ObjectId,
-        key: &RuntimePropertyKey,
-    ) -> Result<bool, InterpreterError> {
-        self.validate_executable_property_key(key)?;
-        if let Some(key) = key.as_str()
-            && self.writable_state_view_value(object_id, key).is_some()
-        {
-            return Ok(true);
-        }
-        let mut current = Some(object_id);
-        let mut depth = 0u32;
-        let mut visited = ChainGuard::default();
-
-        while let Some(id) = current {
-            if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
-                return Ok(false);
-            }
-            if let Some(key) = key.as_str()
-                && self.writable_state_view_value(id, key).is_some()
-            {
-                return Ok(true);
-            }
-            let object = self
-                .heap
-                .get(id.0 as usize)
-                .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
-            if object.contains_own_runtime_property(key) {
-                return Ok(true);
-            }
-            current = self.observable_prototype_link(object, id);
-            depth += 1;
-        }
-
-        Ok(false)
-    }
-
     /// ES2020 19.1.2.3.1 ObjectDefineProperties, shared by
     /// `Object.defineProperties` and `Object.create`: every enumerable own
     /// descriptor is read and validated before any property is defined.
@@ -69780,11 +69742,24 @@ impl InterpreterCore {
                     });
                 }
             }
-            self.validate_proxy_own_keys_trap_result(module, target, seen, depth + 1)?;
+            self.validate_proxy_own_keys_trap_result(module, object_id, target, seen, depth + 1)?;
             return Ok(key_values);
         }
 
-        self.proxy_aware_own_property_keys(module, target, depth + 1)
+        self.proxy_target_own_property_keys(module, object_id, target, depth + 1)
+    }
+
+    fn proxy_target_own_property_keys(
+        &mut self,
+        module: Option<&Ir3Module>,
+        proxy: ObjectId,
+        target: ObjectId,
+        depth: u32,
+    ) -> Result<Vec<Value>, InterpreterError> {
+        match self.proxy_call_target(proxy) {
+            Some(function) => self.function_own_property_keys(module, &function, depth),
+            None => self.proxy_aware_own_property_keys(module, target, depth),
+        }
     }
 
     /// Whether `key` is an enumerable own String property of `object_id`.
@@ -88486,7 +88461,7 @@ impl InterpreterCore {
             }
             return self.get_v(module, descriptor, &key).map(Some);
         };
-        if !self.prototype_chain_has_runtime_key(descriptor_id, &key)? {
+        if !self.proxy_aware_has_runtime_property(module, descriptor_id, &key, 0)? {
             return Ok(None);
         }
         self.proxy_aware_get_property(module, descriptor_id, name, Value::Object(descriptor_id), 0)
@@ -112002,18 +111977,16 @@ impl InterpreterCore {
     /// object's (`length` and `name` first), plus the dedicated `prototype`
     /// after them when it has one. The backing object's label goes to the
     /// pending HostCall result.
-    fn function_own_property_names(
+    fn function_own_property_keys(
         &mut self,
         module: Option<&Ir3Module>,
         function: &Value,
+        depth: u32,
     ) -> Result<Vec<Value>, InterpreterError> {
         let mut names = match self.own_property_holder(module, function, true)? {
             Some(backing) => {
                 self.join_pending_hostcall_stream_label(backing)?;
-                self.proxy_aware_own_property_keys(module, backing, 0)?
-                    .into_iter()
-                    .filter(|key| matches!(key, Value::Str(_)))
-                    .collect::<Vec<_>>()
+                self.proxy_aware_own_property_keys(module, backing, depth)?
             }
             None => Vec::new(),
         };
@@ -112038,54 +112011,114 @@ impl InterpreterCore {
         Ok(names)
     }
 
+    fn function_own_property_names(
+        &mut self,
+        module: Option<&Ir3Module>,
+        function: &Value,
+    ) -> Result<Vec<Value>, InterpreterError> {
+        Ok(self
+            .function_own_property_keys(module, function, 0)?
+            .into_iter()
+            .filter(|key| matches!(key, Value::Str(_)))
+            .collect())
+    }
+
     /// `fn.prototype` described (bd-9vouw.109): the value a read gives,
     /// writable, neither enumerable nor configurable (ES2020 9.2.10
     /// MakeConstructor). Undefined when the function has no `prototype`.
     /// No-claim: a class's `prototype` is described as writable, though it
     /// is not (14.6.13 step 16).
+    fn function_prototype_descriptor_fields(
+        &mut self,
+        module: Option<&Ir3Module>,
+        function: &Value,
+    ) -> Result<Option<PropertyDescriptorFields>, InterpreterError> {
+        let Some(module) = module else {
+            return Ok(None);
+        };
+        if !self.object_own_property_contains(function, &Value::str("prototype")) {
+            return Ok(None);
+        }
+        let prototype_override = self.constructor_prototype_override(module, function)?;
+        let (value, mut writable) = if let Some((value, label)) = prototype_override {
+            self.join_into_pending_hostcall_result_label(Some(label))?;
+            self.observe_scoped_callback_result()?;
+            (value, true)
+        } else {
+            match function {
+                Value::Function(index) => (
+                    self.function_property_value(module, *index, "prototype")?,
+                    true,
+                ),
+                Value::Closure(id) => {
+                    (self.closure_property_value(module, *id, "prototype")?, true)
+                }
+                Value::GeneratorFunction(_) | Value::AsyncGeneratorFunction(_) => (
+                    self.generator_function_prototype(module, function)?
+                        .unwrap_or(Value::Undefined),
+                    true,
+                ),
+                // bd-9vouw.17: a built-in constructor's `prototype` is not
+                // writable (ES2020 19.1.2.19, 20.1.2.15, ...).
+                Value::BuiltinFunction(builtin) => {
+                    let value = match Self::materialized_global_prototype_name(builtin) {
+                        Some(name) => self.builtin_prototype_value(name)?,
+                        None if builtin.kind == BuiltinFunctionKind::StandardConstructor => {
+                            self.standard_constructor_property(builtin, "prototype")?
+                        }
+                        None => return Ok(None),
+                    };
+                    (value, false)
+                }
+                _ => return Ok(None),
+            }
+        };
+        if let Some(backing) = self.function_own_property_object(module, function)? {
+            let object = self
+                .heap
+                .get(backing.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: backing.0 })?;
+            writable &= !object.is_frozen;
+        }
+        Ok(Some(PropertyDescriptorFields {
+            value: Some(value),
+            writable: Some(writable),
+            enumerable: Some(false),
+            configurable: Some(false),
+            ..PropertyDescriptorFields::default()
+        }))
+    }
+
     fn function_prototype_descriptor(
         &mut self,
         module: Option<&Ir3Module>,
         function: &Value,
     ) -> Result<Value, InterpreterError> {
-        let Some(module) = module else {
-            return Ok(Value::Undefined);
-        };
-        if !self.object_own_property_contains(function, &Value::str("prototype")) {
-            return Ok(Value::Undefined);
+        match self.function_prototype_descriptor_fields(module, function)? {
+            Some(fields) => self.descriptor_object_from_fields(&fields, false),
+            None => Ok(Value::Undefined),
         }
-        let (value, writable) = match function {
-            Value::Function(index) => (
-                self.function_property_value(module, *index, "prototype")?,
-                true,
-            ),
-            Value::Closure(id) => (self.closure_property_value(module, *id, "prototype")?, true),
-            Value::GeneratorFunction(_) | Value::AsyncGeneratorFunction(_) => (
-                self.generator_function_prototype(module, function)?
-                    .unwrap_or(Value::Undefined),
-                true,
-            ),
-            // bd-9vouw.17: a built-in constructor's `prototype` is not
-            // writable (ES2020 19.1.2.19, 20.1.2.15, ...).
-            Value::BuiltinFunction(builtin) => {
-                let value = match Self::materialized_global_prototype_name(builtin) {
-                    Some(name) => self.builtin_prototype_value(name)?,
-                    None if builtin.kind == BuiltinFunctionKind::StandardConstructor => {
-                        self.standard_constructor_property(builtin, "prototype")?
-                    }
-                    None => return Ok(Value::Undefined),
-                };
-                (value, false)
-            }
-            _ => return Ok(Value::Undefined),
+    }
+
+    /// A callable target's backing stores `name` and `length`, while its
+    /// intrinsic `prototype` lives in the constructor-prototype registry.
+    /// Invariants and public reflection must observe the same descriptor.
+    fn function_backing_virtual_descriptor_fields(
+        &mut self,
+        module: Option<&Ir3Module>,
+        backing: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> Result<Option<PropertyDescriptorFields>, InterpreterError> {
+        if key.as_str() != Some("prototype") {
+            return Ok(None);
+        }
+        let Some(module) = module else {
+            return Ok(None);
         };
-        let descriptor = self.alloc_object_with_properties(&[
-            ("value", value),
-            ("writable", Value::Bool(writable)),
-            ("enumerable", Value::Bool(false)),
-            ("configurable", Value::Bool(false)),
-        ])?;
-        Ok(Value::Object(descriptor))
+        let Some(function) = self.function_value_for_backing(module, backing) else {
+            return Ok(None);
+        };
+        self.function_prototype_descriptor_fields(Some(module), &function)
     }
 
     /// The Symbol keys of a function's own properties (bd-9vouw.109), in
@@ -112095,11 +112128,8 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
         function: &Value,
     ) -> Result<Vec<Value>, InterpreterError> {
-        let Some(backing) = self.own_property_holder(module, function, true)? else {
-            return Ok(Vec::new());
-        };
         Ok(self
-            .proxy_aware_own_property_keys(module, backing, 0)?
+            .function_own_property_keys(module, function, 0)?
             .into_iter()
             .filter(|key| matches!(key, Value::Symbol(_)))
             .collect())
@@ -164599,8 +164629,13 @@ mod tests {
             Value::Int(8)
         );
         assert!(
-            core.prototype_chain_has_runtime_key(object, &RuntimePropertyKey::Symbol(second))
-                .unwrap()
+            core.proxy_aware_has_runtime_property(
+                None,
+                object,
+                &RuntimePropertyKey::Symbol(second),
+                0,
+            )
+            .unwrap()
         );
         assert_eq!(
             core.heap[object.0 as usize].own_runtime_property_keys(),

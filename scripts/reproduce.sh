@@ -72,14 +72,12 @@ FORMAT_STATUS="FAIL"
 FORMAT_DURATION=0
 TEST_STATUS="FAIL"
 TEST_COUNT=0
-TEST_PASS=0
-TEST_FAIL=0
 TEST_DURATION=0
 
 # Function to run remote rch command and capture timing.
 run_rch_timed() {
     local log_name="$1"
-    local log_path start_time end_time status
+    local log_path start_time end_time status duration
     shift
 
     log_path="${RCH_ARTIFACTS_DIR}/${log_name}.log"
@@ -100,7 +98,13 @@ run_rch_timed() {
         status=1
     fi
 
-    echo "$end_time - $start_time" | bc
+    duration=$(echo "$end_time - $start_time" | bc)
+    # bc omits the leading zero on fractions; JSON numbers require it.
+    case "$duration" in
+        .*) duration="0$duration" ;;
+        -.*) duration="-0${duration#-}" ;;
+    esac
+    printf '%s\n' "$duration"
     return "$status"
 }
 
@@ -147,14 +151,10 @@ if TEST_DURATION=$(run_rch_timed cargo_test_lib_no_run cargo test --lib --no-run
         log_warn "cargo test listing failed; keeping compiled-test count at 0"
         TEST_COUNT=0
     fi
-    TEST_PASS=$TEST_COUNT
-    TEST_FAIL=0
     log_info "cargo test build: PASS (${TEST_DURATION}s, $TEST_COUNT tests compiled)"
 else
     TEST_STATUS="FAIL"
     TEST_COUNT=0
-    TEST_PASS=0
-    TEST_FAIL=1
     log_error "cargo test build: FAIL (${TEST_DURATION}s)"
 fi
 
@@ -200,11 +200,13 @@ MANIFEST=$(cat <<EOF
       "duration_seconds": $FORMAT_DURATION
     },
     "test": {
-      "status": "$TEST_STATUS",
+      "status": "NOT_RUN",
+      "executed": false,
+      "build_status": "$TEST_STATUS",
       "duration_seconds": $TEST_DURATION,
-      "test_count": $TEST_COUNT,
-      "pass": $TEST_PASS,
-      "fail": $TEST_FAIL
+      "compiled_test_count": $TEST_COUNT,
+      "pass": 0,
+      "fail": 0
     }
   },
   "artifact": {
@@ -238,5 +240,5 @@ if [[ "$OVERALL_STATUS" != "PASS" ]]; then
     exit 1
 fi
 
-log_info "All checks passed! Reproducibility verified."
+log_info "Build, lint, format and test compilation checks passed; unit tests were not executed."
 exit $EXIT_SUCCESS

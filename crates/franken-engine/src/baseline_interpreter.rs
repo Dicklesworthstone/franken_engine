@@ -6473,10 +6473,6 @@ const GENERATED_REALM_OBJECT_GLOBALS: [&str; 8] = [
     "global",
 ];
 
-/// Seed-tracked slot (in `builtin_prototypes`) of the `require('buffer')`
-/// module object (bd-9vouw.193), so every require returns the same object.
-const BUFFER_MODULE_KEY: &str = "<module buffer>";
-
 /// Realm-owned provider objects, shared by bare and node-prefixed loads.
 const CRYPTO_MODULE_KEY: &str = "<module crypto>";
 const ZLIB_MODULE_KEY: &str = "<module zlib>";
@@ -6529,10 +6525,6 @@ const TIMERS_MODULE_KEY: &str = "<module timers>";
 /// (bd-9vouw.302).
 const PERF_HOOKS_MODULE_KEY: &str = "<module perf_hooks>";
 
-/// Seed-tracked slot marking that `require('events')`'s statics are on the
-/// EventEmitter constructor's backing object (bd-9vouw.210); it holds that
-/// backing object.
-const EVENTS_MODULE_KEY: &str = "<module events>";
 
 /// EventEmitter.prototype's methods, own enumerable properties in Node v22's
 /// order (bd-9vouw.210).
@@ -40569,49 +40561,6 @@ impl InterpreterCore {
         }
     }
 
-    /// `require('buffer')` (bd-9vouw.193): Node's buffer module over the
-    /// engine's own `Buffer`, `atob` and `btoa` values and Node v22's limits.
-    /// safe-buffer (under jws, jsonwebtoken and many more) reads
-    /// `require('buffer').Buffer` and returns the module itself; the require
-    /// was "Cannot find module 'buffer'". Its `Blob` is the global one
-    /// (bd-9vouw.226). Not provided: `SlowBuffer`, `File`, `transcode`,
-    /// `isUtf8`, `isAscii`, `resolveObjectURL`.
-    fn buffer_core_module(&mut self) -> Result<Value, InterpreterError> {
-        if let Some(object) = self.builtin_prototypes.get(BUFFER_MODULE_KEY) {
-            return Ok(Value::Object(*object));
-        }
-        let constants = self.alloc_object_with_properties(&[
-            ("MAX_LENGTH", Value::Int(MAX_SAFE_INTEGER)),
-            ("MAX_STRING_LENGTH", Value::Int(536_870_888)),
-        ])?;
-        let object = self.alloc_object_with_properties(&[
-            (
-                "Buffer",
-                Value::BuiltinFunction(BuiltinFunction::standard_constructor("Buffer")),
-            ),
-            (
-                "Blob",
-                Value::BuiltinFunction(BuiltinFunction::standard_constructor("Blob")),
-            ),
-            (
-                "atob",
-                Value::BuiltinFunction(BuiltinFunction::static_hostcall("builtin:Atob")),
-            ),
-            (
-                "btoa",
-                Value::BuiltinFunction(BuiltinFunction::static_hostcall("builtin:Btoa")),
-            ),
-            ("kMaxLength", Value::Int(MAX_SAFE_INTEGER)),
-            ("kStringMaxLength", Value::Int(536_870_888)),
-            ("constants", Value::Object(constants)),
-            ("INSPECT_MAX_BYTES", Value::Int(50)),
-        ])?;
-        self.mutate_builtin_prototypes(|prototypes| {
-            prototypes.insert(BUFFER_MODULE_KEY.to_string(), object);
-        });
-        Ok(Value::Object(object))
-    }
-
     /// The captured-graph `node:module` surface. `createRequire` itself is
     /// unbound: each call validates the executing module's trusted origin,
     /// then returns the ordinary require value bound to that opaque id.
@@ -40865,51 +40814,6 @@ impl InterpreterCore {
         Ok(Value::Object(object))
     }
 
-    /// `require('events')` (bd-9vouw.210): as in Node, the EventEmitter
-    /// constructor itself, whose own properties hold `EventEmitter` (itself),
-    /// `once`, `defaultMaxListeners` and `errorMonitor`. The events facade
-    /// lowers only the shapes it recognizes; xml2js's `events =
-    /// require('events')`, extended over CoffeeScript-style (statics copied by
-    /// for-in, `ctor.prototype = parent.prototype`), reached the runtime and
-    /// found no module. Not provided: `on`, `getEventListeners`,
-    /// `setMaxListeners`, `listenerCount`, `captureRejections`.
-    fn events_core_module(&mut self, module: &Ir3Module) -> Result<Value, InterpreterError> {
-        let constructor = Value::BuiltinFunction(BuiltinFunction::new_kind(
-            BuiltinFunctionKind::EventEmitterConstructor,
-        ));
-        if self.builtin_prototypes.contains_key(EVENTS_MODULE_KEY) {
-            return Ok(constructor);
-        }
-        self.ensure_builtin_prototype("EventEmitter")?;
-        let backing = self
-            .ensure_function_own_property_object(module, &constructor)?
-            .ok_or_else(|| InterpreterError::TypeError {
-                expected: "EventEmitter constructor with property storage".to_string(),
-                got: "none".to_string(),
-            })?;
-        let error_monitor =
-            self.allocate_private_symbol(Some(JsString::from("events.errorMonitor")))?;
-        for (key, value) in [
-            (
-                "once",
-                Value::BuiltinFunction(BuiltinFunction::static_hostcall("builtin:EventsOnce")),
-            ),
-            ("EventEmitter", constructor.clone()),
-            ("defaultMaxListeners", Value::Int(10)),
-            ("errorMonitor", Value::Symbol(error_monitor)),
-        ] {
-            self.set_object_runtime_property(
-                backing,
-                RuntimePropertyKey::String(JsString::from(key)),
-                value,
-            )?;
-        }
-        self.mutate_builtin_prototypes(|prototypes| {
-            prototypes.insert(EVENTS_MODULE_KEY.to_string(), backing);
-        });
-        Ok(constructor)
-    }
-
     /// `os.constants`: `{ signals, errno, priority }` (real POSIX numbers; see
     /// the NODE_OS_* tables).
     fn os_constants_object(&mut self) -> Result<Value, InterpreterError> {
@@ -41041,11 +40945,9 @@ impl InterpreterCore {
         import_bound: Option<&Label>,
     ) -> Result<Value, InterpreterError> {
         match native {
-            NativeBuiltinModule::Buffer => self.buffer_core_module(),
             NativeBuiltinModule::Crypto => self.crypto_core_module(),
             NativeBuiltinModule::Zlib => self.zlib_core_module(),
             NativeBuiltinModule::Module => self.module_core_module(),
-            NativeBuiltinModule::Events => self.events_core_module(module),
             NativeBuiltinModule::Os => self.os_core_module(),
             NativeBuiltinModule::Querystring => self.querystring_core_module(),
             NativeBuiltinModule::Url => self.url_core_module(),
@@ -41054,8 +40956,10 @@ impl InterpreterCore {
             NativeBuiltinModule::Path
             | NativeBuiltinModule::PathPosix
             | NativeBuiltinModule::PathWin32 => self.path_core_module(module, native),
-            NativeBuiltinModule::Util
+            NativeBuiltinModule::Buffer
+            | NativeBuiltinModule::Util
             | NativeBuiltinModule::UtilTypes
+            | NativeBuiltinModule::Events
             | NativeBuiltinModule::Fs
             | NativeBuiltinModule::FsPromises
             | NativeBuiltinModule::Assert
@@ -41107,22 +41011,33 @@ impl InterpreterCore {
                 .collect(),
             NativeBuiltinModule::Buffer => vec![
                 "Buffer",
-                "Blob",
-                "atob",
-                "btoa",
+                "SlowBuffer",
+                "transcode",
+                "isUtf8",
+                "isAscii",
                 "kMaxLength",
                 "kStringMaxLength",
+                "btoa",
+                "atob",
                 "constants",
                 "INSPECT_MAX_BYTES",
+                "Blob",
+                "resolveObjectURL",
+                "File",
             ],
-            NativeBuiltinModule::Events => {
-                vec![
-                    "once",
-                    "EventEmitter",
-                    "defaultMaxListeners",
-                    "errorMonitor",
-                ]
-            }
+            NativeBuiltinModule::Events => vec![
+                "EventEmitter",
+                "once",
+                "on",
+                "defaultMaxListeners",
+                "errorMonitor",
+                "captureRejections",
+                "listenerCount",
+                "getEventListeners",
+                "setMaxListeners",
+                "getMaxListeners",
+                "addAbortListener",
+            ],
             NativeBuiltinModule::Os => crate::lowering_pipeline::OS_METHOD_NAMES
                 .into_iter()
                 .chain(["constants", "EOL", "devNull"])
@@ -41441,9 +41356,10 @@ impl InterpreterCore {
             "\0franken-engine/native-string_decoder" => 1,
             "\0franken-engine/native-timers/promises" => 2,
             "\0franken-engine/native-stream" => 3,
+            "\0franken-engine/native-buffer" => 4,
             _ => return false,
         };
-        static FACTORY_HASHES: OnceLock<[ContentHash; 4]> = OnceLock::new();
+        static FACTORY_HASHES: OnceLock<[ContentHash; 5]> = OnceLock::new();
         let hashes = FACTORY_HASHES.get_or_init(|| {
             [
                 NativeBuiltinModule::Util
@@ -41457,6 +41373,9 @@ impl InterpreterCore {
                     .canonical_hash(),
                 NativeBuiltinModule::Stream
                     .record("\0franken-engine/native-stream")
+                    .canonical_hash(),
+                NativeBuiltinModule::Buffer
+                    .record("\0franken-engine/native-buffer")
                     .canonical_hash(),
             ]
         });
@@ -41482,6 +41401,26 @@ impl InterpreterCore {
         };
         if code.is_generator || code.rest_param_index.is_some() {
             return false;
+        }
+        if provider == 4 {
+            // File's two metadata getters are deferred until an actual File
+            // receiver is read. Authenticate their complete immutable bodies;
+            // the same program also contains lazy Web Stream accessors and
+            // ordinary callbacks that must not inherit this admission.
+            let source = program
+                .function_sources
+                .get(&closure.function_index)
+                .map(|source| source.as_str().trim());
+            return !setter
+                && code.arity == 0
+                && matches!(
+                    (code.name.as_deref(), source),
+                    (Some("name"), Some("get name() { return state(this).name; }"))
+                        | (
+                            Some("lastModified"),
+                            Some("get lastModified() { return state(this).lastModified; }")
+                        )
+                );
         }
         if provider == 3 {
             // Only stream's receiver-owned state accessors are deferred here.
@@ -42008,6 +41947,11 @@ impl InterpreterCore {
         import_bound: Option<&Label>,
     ) -> Result<Value, InterpreterError> {
         let (factory, id, member) = match native {
+            NativeBuiltinModule::Events => (
+                NativeBuiltinModule::Events,
+                "\0franken-engine/native-events",
+                None,
+            ),
             NativeBuiltinModule::Fs => (
                 NativeBuiltinModule::Fs,
                 "\0franken-engine/native-fs",
@@ -42017,6 +41961,11 @@ impl InterpreterCore {
                 NativeBuiltinModule::Fs,
                 "\0franken-engine/native-fs",
                 Some("promises"),
+            ),
+            NativeBuiltinModule::Buffer => (
+                NativeBuiltinModule::Buffer,
+                "\0franken-engine/native-buffer",
+                None,
             ),
             NativeBuiltinModule::Util => (
                 NativeBuiltinModule::Util,
@@ -98154,6 +98103,24 @@ impl InterpreterCore {
             // stringify/escape/unescape, shared by first-class querystring
             // module methods and direct hostcalls. No host effect;
             // semantics pinned against bun 1.3.14.
+            // Fixed primitive references for the retained binary factory.
+            // These never consult replaceable guest realm bindings.
+            "builtin:NativeBufferConstructor" | "builtin:NativeBlobConstructor" => {
+                if args.count != 0 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "zero native binary constructor arguments".to_string(),
+                        got: format!("{} argument(s)", args.count),
+                    });
+                }
+                let name = if cap == "builtin:NativeBufferConstructor" {
+                    "Buffer"
+                } else {
+                    "Blob"
+                };
+                Ok(Value::BuiltinFunction(BuiltinFunction::standard_constructor(
+                    name,
+                )))
+            }
             // Canonical dependencies of the retained native Stream factory.
             // These private calls share public module state and retain normal
             // runtime observation labels; they are not pure fresh aggregates.
@@ -98170,7 +98137,7 @@ impl InterpreterCore {
                     details: "native module dependency requires an executable caller".to_string(),
                 })?;
                 if cap == "builtin:NativeEventsModule" {
-                    self.events_core_module(module)
+                    self.source_builtin_module(module, NativeBuiltinModule::Events, None)
                 } else if cap == "builtin:NativeStreamModule" {
                     // The filesystem factory may load its canonical Stream
                     // dependency lazily. This private intrinsic preserves the
@@ -154426,27 +154393,197 @@ mod function_prototype_call_apply_tests_current {
 
     #[test]
     fn native_namespace_state_walk_handles_reflected_buffer_and_bounds_work() {
-        let module = test_module_with_functions(Vec::new(), Vec::new());
-        let mut core = test_interpreter();
-        core.ensure_function_own_property_object(
-            &module,
-            &Value::BuiltinFunction(BuiltinFunction::standard_constructor("Buffer")),
+        let stack_bytes = interpreter_execution_stack_bytes(
+            test_config().max_call_depth.min(MAX_NATIVE_RUN_LOOP_DEPTH),
         )
-        .expect("constructor reflection materializes intrinsic prototype accessors");
-        let Value::Object(object) = core.buffer_core_module().unwrap() else {
-            panic!("buffer");
-        };
-        core.set_object_property(object, "cycle".into(), Value::Object(object))
-            .unwrap();
-        assert_eq!(
-            core.native_builtin_state_label(&module, object).unwrap(),
-            Label::Internal
-        );
-        core.config.instruction_budget = core.instructions_executed + 1;
-        assert!(matches!(
-            core.native_builtin_state_label(&module, object),
-            Err(InterpreterError::BudgetExhausted { .. })
-        ));
+        .expect("production native execution stack");
+        std::thread::Builder::new()
+            .name("native-buffer-accessor-regression".into())
+            .stack_size(stack_bytes)
+            .spawn(|| {
+                const BUFFER_FACTORY: &str = "\0franken-engine/native-buffer";
+                let module = test_module_with_functions(Vec::new(), Vec::new());
+                let mut core = test_interpreter();
+                // A package may replace its realm globals before the first
+                // module load. The native module retains its original binary
+                // constructors and does not adopt the guest's File class.
+                core.put_realm_runtime_name("Buffer", Value::Int(7)).unwrap();
+                core.put_realm_runtime_name("Blob", Value::Int(8)).unwrap();
+                let guest_file =
+                    Value::BuiltinFunction(BuiltinFunction::standard_constructor("Error"));
+                core.put_realm_runtime_name("File", guest_file.clone())
+                    .unwrap();
+                core.config
+                    .granted_capabilities
+                    .insert(RuntimeCapability::ModuleLoad);
+                core.ensure_function_own_property_object(
+                    &module,
+                    &Value::BuiltinFunction(BuiltinFunction::standard_constructor("Buffer")),
+                )
+                .expect("constructor reflection materializes intrinsic prototype accessors");
+                let Value::Object(object) = core
+                    .source_builtin_module(&module, NativeBuiltinModule::Buffer, None)
+                    .expect("the complete canonical Buffer provider without process or timer grants")
+                else {
+                    panic!("buffer");
+                };
+                for name in ["Buffer", "Blob"] {
+                    assert_eq!(
+                        core.prototype_chain_get(object, name).unwrap(),
+                        Value::BuiltinFunction(BuiltinFunction::standard_constructor(name)),
+                        "the module exports the canonical binary constructor"
+                    );
+                }
+                assert_eq!(core.load_runtime_name("Buffer", false).unwrap(), Value::Int(7));
+                assert_eq!(core.load_runtime_name("Blob", false).unwrap(), Value::Int(8));
+                assert_eq!(core.load_runtime_name("File", false).unwrap(), guest_file);
+                core.set_object_property(object, "cycle".into(), Value::Object(object))
+                    .unwrap();
+                assert_eq!(
+                    core.native_builtin_state_label(&module, object).unwrap(),
+                    Label::Internal,
+                    "the complete Buffer namespace admits audited nested File metadata"
+                );
+                let file = core.prototype_chain_get(object, "File").unwrap();
+                assert!(matches!(&file, Value::Closure(_)));
+                let Value::Object(prototype) = core
+                    .get_v(
+                        &module,
+                        &file,
+                        &RuntimePropertyKey::String(JsString::from("prototype")),
+                    )
+                    .unwrap()
+                else {
+                    panic!("File.prototype");
+                };
+                for name in ["name", "lastModified"] {
+                    let key = RuntimePropertyKey::String(JsString::from(name));
+                    let Some(Value::Accessor {
+                        get: Some(getter), ..
+                    }) = core.heap[prototype.0 as usize].own_runtime_property_value(&key)
+                    else {
+                        panic!("the actual deferred File metadata getter: {name}");
+                    };
+                    assert!(core.is_deferred_native_factory_accessor(getter.as_ref(), false));
+                    assert!(!core.is_deferred_native_factory_accessor(getter.as_ref(), true));
+                }
+                let name = RuntimePropertyKey::String(JsString::from("name"));
+                core.set_own_runtime_property_label(prototype, &name, &Label::Secret)
+                    .unwrap();
+                assert_eq!(
+                    core.native_builtin_state_label(&module, object).unwrap(),
+                    Label::Secret,
+                    "admission of native getter code retains the descriptor label"
+                );
+
+                // Buffer retains a lazy Web Streams dependency in this same
+                // program. Its arbitrary accessors must not inherit File's
+                // narrowly authenticated deferred metadata admission.
+                let web_function_index = {
+                    let program = core.module_state.modules[BUFFER_FACTORY]
+                        .compiled_module
+                        .as_ref()
+                        .expect("retained Buffer program");
+                    program
+                        .function_table
+                        .iter()
+                        .enumerate()
+                        .find_map(|(index, code)| {
+                            let index = u32::try_from(index).expect("factory function index");
+                            (code.name.as_deref() == Some("closed")
+                                && code.arity == 0
+                                && program.function_sources.get(&index).is_some_and(|source| {
+                                    source.as_str().starts_with("get closed(")
+                                }))
+                            .then_some(index)
+                        })
+                        .expect("same-program Web writer closed getter")
+                };
+                let web_id = u32::try_from(core.closures.len()).unwrap();
+                core.closures.push(ClosureValue {
+                    function_index: web_function_index,
+                    captured_env: Vec::new(),
+                });
+                core.closure_module_origins
+                    .insert(web_id, BUFFER_FACTORY.to_string());
+                core.sync_estimated_memory_bytes().unwrap();
+                let web_getter = Value::Closure(web_id);
+                assert!(!core.is_deferred_native_factory_accessor(&web_getter, false));
+                core.set_object_runtime_property(
+                    prototype,
+                    name.clone(),
+                    Value::Accessor {
+                        get: Some(Arc::new(web_getter)),
+                        set: None,
+                    },
+                )
+                .unwrap();
+                assert_eq!(
+                    core.native_builtin_state_label(&module, object).unwrap(),
+                    Label::TopSecret,
+                    "same-program unaudited getters remain opaque without invocation"
+                );
+
+                // Identical name, arity and source text cannot confer native
+                // authority on a function compiled in a guest module.
+                let mut guest = test_module_with_functions(
+                    vec![
+                        Ir3Instruction::LoadInt { dst: 0, value: 7 },
+                        Ir3Instruction::Return { value: 0 },
+                    ],
+                    vec![Ir3FunctionDesc {
+                        entry: 0,
+                        arity: 0,
+                        frame_size: 1,
+                        name: Some("name".into()),
+                        is_generator: false,
+                        rest_param_index: None,
+                    }],
+                );
+                guest.header.source_label = "guest-buffer-getter.js".into();
+                guest
+                    .function_sources
+                    .insert(0, "get name() { return state(this).name; }".into());
+                core.ensure_module_record(&guest, &guest.header.source_label)
+                    .unwrap();
+                core.module_state
+                    .modules
+                    .get_mut(&guest.header.source_label)
+                    .unwrap()
+                    .status = ModuleRuntimeStatus::Evaluated;
+                let guest_id = u32::try_from(core.closures.len()).unwrap();
+                core.closures.push(ClosureValue {
+                    function_index: 0,
+                    captured_env: Vec::new(),
+                });
+                core.closure_module_origins
+                    .insert(guest_id, guest.header.source_label.clone());
+                core.sync_estimated_memory_bytes().unwrap();
+                let guest_getter = Value::Closure(guest_id);
+                assert!(!core.is_deferred_native_factory_accessor(&guest_getter, false));
+                core.set_object_runtime_property(
+                    prototype,
+                    name,
+                    Value::Accessor {
+                        get: Some(Arc::new(guest_getter)),
+                        set: None,
+                    },
+                )
+                .unwrap();
+                assert_eq!(
+                    core.native_builtin_state_label(&module, object).unwrap(),
+                    Label::TopSecret,
+                    "guest getter replacements never inherit the native admission"
+                );
+                core.config.instruction_budget = core.instructions_executed + 1;
+                assert!(matches!(
+                    core.native_builtin_state_label(&module, object),
+                    Err(InterpreterError::BudgetExhausted { .. })
+                ));
+            })
+            .expect("spawn native Buffer accessor regression")
+            .join()
+            .expect("native Buffer accessor regression");
     }
 
     #[test]

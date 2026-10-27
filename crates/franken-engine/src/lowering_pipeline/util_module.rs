@@ -179,6 +179,9 @@ pub(super) fn intrinsic_capability(name: &str) -> Option<&'static str> {
         "%QuerystringModule" => Some("builtin:QuerystringModule"),
         "%NativeEventsModule" => Some("builtin:NativeEventsModule"),
         "%NativeStringDecoderModule" => Some("builtin:NativeStringDecoderModule"),
+        "%NativeBufferPlatform" => Some("builtin:OsPlatform"),
+        "%NativeBufferConstructor" => Some("builtin:NativeBufferConstructor"),
+        "%NativeBlobConstructor" => Some("builtin:NativeBlobConstructor"),
         "%NativeStreamModule" => Some("builtin:NativeStreamModule"),
         _ => fs_module::intrinsic_capability(name)
             .or_else(|| zlib_module::intrinsic_capability(name)),
@@ -223,6 +226,12 @@ const BUFFER_SOURCE: &str = concat!(
     include_str!("buffer_module.js"),
     ")",
 );
+// The runtime provider keeps the intrinsic binary constructors even if a
+// package replaces realm globals before its first require. File belongs to
+// this retained factory; a guest global must not become its implementation.
+const NATIVE_BUFFER_BINDINGS_SOURCE: &str = "(function (Buffer, Blob, File) { \
+    return __franken_native_buffer_source; \
+    })(__franken_native_buffer_constructor(), __franken_native_blob_constructor(), undefined)";
 const BUFFER_PLACEHOLDERS: [(&str, &str); 1] =
     [("__franken_buffer_web_streams", WEB_STREAMS_BINDING)];
 // The factory reads no guest globals and returns the realm's cached module.
@@ -560,8 +569,8 @@ pub(super) fn rewrite_util_requires(
 }
 
 /// Authenticated CommonJS already owns a real runtime require. Preserve its
-/// filesystem loads so literal, aliased and cross-module calls share the same
-/// mutable native object. Script-only facades still use the ordinary rewrite.
+/// supported native source-module loads so literal, aliased and cross-module
+/// calls share mutable objects. Script-only facades retain their rewrite.
 pub(super) fn rewrite_commonjs_util_requires(
     tree: &SyntaxTree,
 ) -> Result<Option<SyntaxTree>, LoweringPipelineError> {
@@ -581,6 +590,10 @@ fn native_runtime_wrapper(native: NativeBuiltinModule) -> Option<(&'static str, 
     let loader_bytes = include_str!("native_module_loader.js").len();
     let util_bytes = UTIL_SOURCE.len() + include_str!("util_mime.js").len() + loader_bytes;
     match native {
+        NativeBuiltinModule::Events => Some((
+            "module.exports = require('events');",
+            EVENTS_SOURCE.len() + loader_bytes,
+        )),
         NativeBuiltinModule::Fs | NativeBuiltinModule::FsPromises => Some((
             "module.exports = require('fs');",
             // Admit the full temporary syntax before replacing the Stream,
@@ -595,6 +608,16 @@ fn native_runtime_wrapper(native: NativeBuiltinModule) -> Option<(&'static str, 
                 + include_str!("readline_cursor.js").len()
                 + native_module_loader::stream_bridge_source_bytes()
                 + loader_bytes * 6,
+        )),
+        NativeBuiltinModule::Buffer => Some((
+            "module.exports = require('buffer');",
+            // File metadata and Blob.stream use the same existing binary
+            // factory. Its Web Streams dependency stays lazy at execution,
+            // but both complete sources and loaders are admitted up front.
+            BUFFER_SOURCE.len()
+                + NATIVE_BUFFER_BINDINGS_SOURCE.len()
+                + WEB_STREAMS_SOURCE.len()
+                + loader_bytes * 2,
         )),
         NativeBuiltinModule::Util | NativeBuiltinModule::UtilTypes => {
             Some(("module.exports = require('util');", util_bytes))
@@ -752,9 +775,9 @@ fn rewrite_module_objects(tree: &SyntaxTree) -> Result<Option<SyntaxTree>, Lower
 fn rewrite_module_objects_with_runtime_sources(
     tree: &SyntaxTree,
     retain_runtime_sources: bool,
-    preserve_filesystem_requires: bool,
+    preserve_runtime_requires: bool,
 ) -> Result<Option<SyntaxTree>, LoweringPipelineError> {
-    let fs_rewritten = if preserve_filesystem_requires {
+    let fs_rewritten = if preserve_runtime_requires {
         None
     } else if retain_runtime_sources {
         fs_module::rewrite_fs_requires_with_runtime_sources(tree, true)?
@@ -787,6 +810,7 @@ fn rewrite_module_objects_with_runtime_sources(
     let mut rewriter = BuiltinRewriter {
         scopes: vec![root.clone()],
         modules: BTreeSet::new(),
+        preserve_runtime_requires,
     };
     // Keep an isolated facade program on its existing path. If this same
     // program also needs a first-class stream module, every stream binding
@@ -851,11 +875,25 @@ fn rewrite_module_objects_with_runtime_sources(
     );
     let mut declarations = Vec::new();
     for module in rewriter.modules {
+        // Source-only modules such as readline still use this transform in
+        // CommonJS. Their shared dependencies must use the retained providers
+        // too; a private Events initializer would reset public module state.
+        let native_dependency = match (preserve_runtime_requires, module) {
+            (true, PureModule::Events) => Some("%NativeEventsModule"),
+            (true, PureModule::StringDecoder) => Some("%NativeStringDecoderModule"),
+            _ => None,
+        };
         declarations.push(Statement::VariableDeclaration(VariableDeclaration {
             kind: VariableDeclarationKind::Const,
             declarations: vec![VariableDeclarator {
                 pattern: BindingPattern::Identifier(module.binding().to_string()),
-                initializer: Some(if retain_runtime_sources {
+                initializer: Some(if let Some(intrinsic) = native_dependency {
+                    Expression::Call {
+                        callee: Box::new(Expression::Identifier(intrinsic.to_string())),
+                        arguments: Vec::new(),
+                        span: Some(span),
+                    }
+                } else if retain_runtime_sources {
                     module_source_with_runtime_sources(&root, module, true)?
                 } else {
                     module_source(&root, module)?
@@ -1208,6 +1246,20 @@ fn module_source_with_runtime_sources(
     } else {
         parse_module_source(module)?
     };
+    if retain_runtime_sources && module == PureModule::Buffer {
+        // Binary File native endings depend on the engine's deterministic
+        // platform, not ambient process authority. Only this fixed factory
+        // receives the private operation; guest process reads keep their
+        // ordinary ProcessShapeRead requirement.
+        let mut platform = NativeBufferPlatform(0);
+        platform.expression(&mut expression)?;
+        if platform.0 != 1 {
+            return Err(LoweringPipelineError::InvariantViolation {
+                detail: "the native Buffer platform expression is invalid",
+            });
+        }
+        expression = native_buffer_bindings(expression)?;
+    }
     let globals: &[&str] = match module {
         PureModule::Util => &MODULE_GLOBALS,
         PureModule::Events => &EVENTS_GLOBALS,
@@ -1233,6 +1285,82 @@ fn module_source_with_runtime_sources(
     };
     renamer.expression(&mut expression)?;
     Ok(expression)
+}
+
+fn native_buffer_bindings(initializer: Expression) -> Result<Expression, LoweringPipelineError> {
+    static SOURCE: NativeModuleSource =
+        NativeModuleSource::new("franken:native-buffer-bindings", NATIVE_BUFFER_BINDINGS_SOURCE);
+    let invalid = || LoweringPipelineError::InvariantViolation {
+        detail: "the native Buffer constructor bindings are invalid",
+    };
+    let mut expression = SOURCE.runtime_expression()?;
+    struct Bindings {
+        initializer: Option<Expression>,
+        constructors: usize,
+    }
+    impl Walk for Bindings {
+        fn expression(&mut self, expression: &mut Expression) -> Outcome {
+            if let Expression::Identifier(name) = expression {
+                match name.as_str() {
+                    "__franken_native_buffer_source" => {
+                        *expression = self.initializer.take().ok_or(
+                            LoweringPipelineError::InvariantViolation {
+                                detail: "the native Buffer initializer occurs more than once",
+                            },
+                        )?;
+                        // Preserve the supplied source and its own lexical
+                        // bindings; only the fixed template is rewritten.
+                        return Ok(());
+                    }
+                    "__franken_native_buffer_constructor" => {
+                        *name = "%NativeBufferConstructor".into();
+                        self.constructors += 1;
+                    }
+                    "__franken_native_blob_constructor" => {
+                        *name = "%NativeBlobConstructor".into();
+                        self.constructors += 1;
+                    }
+                    _ => {}
+                }
+            }
+            walk_expression(self, expression)
+        }
+    }
+    let mut bindings = Bindings {
+        initializer: Some(initializer),
+        constructors: 0,
+    };
+    bindings.expression(&mut expression)?;
+    if bindings.initializer.is_some() || bindings.constructors != 2 {
+        return Err(invalid());
+    }
+    Ok(expression)
+}
+
+struct NativeBufferPlatform(usize);
+
+impl Walk for NativeBufferPlatform {
+    fn expression(&mut self, expression: &mut Expression) -> Outcome {
+        if let Expression::Member {
+            object,
+            property,
+            computed: false,
+            span,
+        } = expression
+            && matches!(object.as_ref(), Expression::Identifier(name) if name == "process")
+            && matches!(property.as_ref(), Expression::Identifier(name) if name == "platform")
+        {
+            let span = *span;
+            *expression = Expression::Call {
+                callee: Box::new(Expression::Identifier("%NativeBufferPlatform".into())),
+                arguments: Vec::new(),
+                span,
+            };
+            self.0 += 1;
+            return Ok(());
+        }
+        walk_expression(self, expression)
+    }
 }
 
 struct ModuleRenamer {
@@ -1274,6 +1402,7 @@ struct BuiltinRewriter {
     /// Names declared in each enclosing scope, innermost last.
     scopes: Vec<BTreeSet<String>>,
     modules: BTreeSet<PureModule>,
+    preserve_runtime_requires: bool,
 }
 
 impl BuiltinRewriter {
@@ -1296,7 +1425,22 @@ impl BuiltinRewriter {
         if self.scopes.iter().any(|scope| scope.contains("require")) {
             return None;
         }
-        builtin_require_member(expression)
+        let request = builtin_require_member(expression)?;
+        if self.preserve_runtime_requires
+            && matches!(
+                request.0,
+                PureModule::Util
+                    | PureModule::Events
+                    | PureModule::Assert
+                    | PureModule::Timers
+                    | PureModule::StringDecoder
+                    | PureModule::Buffer
+                    | PureModule::Stream
+            )
+        {
+            return None;
+        }
+        Some(request)
     }
 }
 
@@ -1556,6 +1700,111 @@ mod tests {
                 count.0, 0,
                 "runtime metadata cannot contaminate the legacy cache"
             );
+        }
+    }
+
+    #[test]
+    fn authenticated_commonjs_native_source_loads_keep_runtime_identity() {
+        for name in [
+            "util", "util/types", "events", "assert", "assert/strict", "timers",
+            "timers/promises", "string_decoder", "buffer", "stream", "stream/promises",
+        ] {
+            for specifier in [name.to_string(), format!("node:{name}")] {
+                assert!(NativeBuiltinModule::from_specifier(&specifier).is_some());
+                let source = format!("const api = require('{specifier}'); globalThis.api = api;");
+                let tree = crate::parser_api_stability::parse_script(&source).unwrap();
+                assert!(
+                    rewrite_commonjs_util_requires(&tree).unwrap().is_none(),
+                    "authenticated CommonJS must use the retained provider for {specifier}"
+                );
+            }
+        }
+        for specifier in ["events", "node:buffer"] {
+            let source = format!("const api = require('{specifier}'); globalThis.api = api;");
+            let tree = crate::parser_api_stability::parse_script(&source).unwrap();
+            assert!(rewrite_util_requires(&tree).unwrap().is_some());
+        }
+        assert!(native_runtime_module_tree(NativeBuiltinModule::Events).is_ok());
+        assert!(
+            native_runtime_module_source_bytes(NativeBuiltinModule::Events).unwrap()
+                > EVENTS_SOURCE.len()
+        );
+    }
+
+    #[test]
+    fn commonjs_source_only_modules_keep_canonical_dependencies() {
+        struct Dependencies {
+            events: usize,
+            decoder: usize,
+            private_constructor: usize,
+        }
+        impl Walk for Dependencies {
+            fn expression(&mut self, expression: &mut Expression) -> Outcome {
+                if let Expression::Identifier(name) = expression {
+                    match name.as_str() {
+                        "%NativeEventsModule" => self.events += 1,
+                        "%NativeStringDecoderModule" => self.decoder += 1,
+                        "%EventsConstructorRef" => self.private_constructor += 1,
+                        _ => {}
+                    }
+                }
+                walk_expression(self, expression)
+            }
+        }
+        for name in ["readline", "readline/promises"] {
+            assert!(NativeBuiltinModule::from_specifier(name).is_none());
+            let tree = crate::parser_api_stability::parse_script(&format!(
+                "const api = require('{name}'); globalThis.api = api;"
+            )).unwrap();
+            let mut rewritten = rewrite_commonjs_util_requires(&tree).unwrap()
+                .expect("source-only modules retain their supported CommonJS rewrite");
+            let mut dependencies = Dependencies {
+                events: 0,
+                decoder: 0,
+                private_constructor: 0,
+            };
+            dependencies.statements(&mut rewritten.body).unwrap();
+            assert_eq!(dependencies.events, 1, "{name}");
+            assert_eq!(dependencies.decoder, 1, "{name}");
+            assert_eq!(dependencies.private_constructor, 0, "{name}");
+        }
+    }
+
+    #[test]
+    fn native_buffer_factory_preserves_accessors_without_ambient_process_authority() {
+        let tree = native_runtime_module_tree(NativeBuiltinModule::Buffer)
+            .expect("the complete native Buffer factory");
+        let context =
+            super::super::LoweringContext::new("native-buffer", "source-metadata", "builtin-only")
+                .with_authenticated_commonjs_runtime_bindings()
+                .with_preserved_runtime_module_loads();
+        let ir0 =
+            crate::ir_contract::Ir0Module::from_syntax_tree(tree, "\0franken-engine/native-buffer");
+        let module = super::super::lower_ir0_to_ir3(&ir0, &context)
+            .expect("Buffer construction does not require process-shape authority")
+            .ir3;
+        for expected in [
+            "get name() { return state(this).name; }",
+            "get lastModified() { return state(this).lastModified; }",
+        ] {
+            assert!(
+                module
+                    .function_sources
+                    .values()
+                    .any(|source| source.as_str().trim() == expected),
+                "File accessors keep their immutable audit source: {expected}",
+            );
+        }
+        for expected in [
+            "builtin:OsPlatform",
+            "builtin:NativeBufferConstructor",
+            "builtin:NativeBlobConstructor",
+        ] {
+            assert!(module.instructions.iter().any(|instruction| matches!(
+                instruction,
+                crate::ir_contract::Ir3Instruction::HostCall { capability, .. }
+                    if capability.0 == expected
+            )));
         }
     }
 

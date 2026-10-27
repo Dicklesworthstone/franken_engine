@@ -25510,6 +25510,9 @@ fn is_require_timers_module_initializer(
     expr: &Expression,
     binding_lookup: &BTreeMap<String, BindingId>,
 ) -> bool {
+    if require_is_commonjs_wrapper(binding_lookup) {
+        return false;
+    }
     let Expression::Call {
         callee, arguments, ..
     } = expr
@@ -25531,6 +25534,9 @@ fn is_require_timers_promises_module_initializer(
     expr: &Expression,
     binding_lookup: &BTreeMap<String, BindingId>,
 ) -> bool {
+    if require_is_commonjs_wrapper(binding_lookup) {
+        return false;
+    }
     let Expression::Call {
         callee, arguments, ..
     } = expr
@@ -28054,6 +28060,9 @@ fn is_require_stream_module_initializer(
     expr: &Expression,
     binding_lookup: &BTreeMap<String, BindingId>,
 ) -> bool {
+    if require_is_commonjs_wrapper(binding_lookup) {
+        return false;
+    }
     let Expression::Call {
         callee, arguments, ..
     } = expr
@@ -28653,6 +28662,12 @@ fn is_require_events_module_initializer(
     expr: &Expression,
     binding_lookup: &BTreeMap<String, BindingId>,
 ) -> bool {
+    // Runtime CommonJS exports are shared and mutable. A finite script facade
+    // must not replace events.once or fold constructor/module settings after
+    // a package or another source module changes the retained provider.
+    if require_is_commonjs_wrapper(binding_lookup) {
+        return false;
+    }
     let Expression::Call {
         callee, arguments, ..
     } = expr
@@ -50253,6 +50268,72 @@ mod tests {
                 "literal, aliased and inline loads call the actual CommonJS binding for {name}"
             );
         }
+    }
+
+    #[test]
+    fn authenticated_events_keep_runtime_statics_and_methods() {
+        for name in ["events", "node:events"] {
+            let source = format!(
+                "const events = require('{name}');\n\
+                 const {{ EventEmitter: E, once }} = require('{name}');\n\
+                 E.defaultMaxListeners; events.captureRejections;\n\
+                 events.once(null, 'ready'); once(null, 'ready');"
+            );
+            let tree = crate::parser_api_stability::parse_script(&source).unwrap();
+            let output = lower_ir0_to_ir3(
+                &Ir0Module::from_syntax_tree(tree, "native-events-values.cjs"),
+                &LoweringContext::new("native-events-values", "cjs", "policy")
+                    .with_authenticated_commonjs_runtime_bindings(),
+            )
+            .expect("CommonJS Events operations read the retained module values");
+            assert_eq!(count_hostcall_deep(&output.ir1.ops, "builtin:EventsOnce"), 0);
+            assert_eq!(
+                count_hostcall_deep(&output.ir1.ops, "builtin:EventEmitterConstructorRef"),
+                0
+            );
+            assert_eq!(
+                count_ops_deep(&output.ir1.ops, &|op| matches!(
+                    op,
+                    Ir1Op::Call { arg_count: 1 }
+                )),
+                2,
+                "literal and destructured loads retain runtime require for {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn authenticated_stream_and_timer_methods_keep_runtime_dispatch() {
+        let source = "const { Readable, pipeline, promises } = require('stream');\n\
+            const stream = Readable.from([1]);\n\
+            pipeline(stream, stream, function () {});\n\
+            promises.pipeline(stream, stream);\n\
+            const timers = require('timers'); timers.setTimeout(function () {}, 0);\n\
+            const tp = require('timers/promises'); tp.setTimeout(0);";
+        let tree = crate::parser_api_stability::parse_script(source).unwrap();
+        let output = lower_ir0_to_ir3(
+            &Ir0Module::from_syntax_tree(tree, "native-stream-timers.cjs"),
+            &LoweringContext::new("native-stream-timers", "cjs", "policy")
+                .with_authenticated_commonjs_runtime_bindings(),
+        )
+        .expect("shared CommonJS module methods are read at runtime");
+        for capability in [
+            "builtin:StreamReadableFrom",
+            "builtin:StreamPipeline",
+            "builtin:StreamPromisesPipeline",
+            "builtin:SetTimeout",
+            "builtin:TimersPromisesSetTimeout",
+        ] {
+            assert_eq!(count_hostcall_deep(&output.ir1.ops, capability), 0, "{capability}");
+        }
+        assert_eq!(
+            count_ops_deep(&output.ir1.ops, &|op| matches!(
+                op,
+                Ir1Op::Call { arg_count: 1 }
+            )),
+            3,
+            "all three requests invoke the authenticated runtime require"
+        );
     }
 
     #[test]

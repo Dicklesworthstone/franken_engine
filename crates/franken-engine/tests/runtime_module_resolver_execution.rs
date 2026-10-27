@@ -1263,6 +1263,262 @@ console.log(require('node:crypto') === crypto, require('node:zlib') === zlib);
 }
 
 #[test]
+fn delivered_buffer_modules_expose_complete_binary_operations_without_host_authority() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![("entry.cjs", definition(ModuleSyntax::CommonJs, r#"
+const load = require;
+const binary = load('buffer');
+console.log(binary === load('node:buffer'), binary.Buffer === Buffer, binary.Blob === Blob);
+console.log(typeof binary.SlowBuffer, typeof binary.File, typeof binary.transcode,
+    typeof binary.isUtf8, typeof binary.isAscii, typeof binary.resolveObjectURL);
+console.log(binary.SlowBuffer(3).length,
+    binary.isUtf8(Buffer.from([195, 169])), binary.isUtf8(Buffer.from([255])),
+    binary.isAscii(Buffer.from([65])), binary.isAscii(Buffer.from([128])));
+console.log(binary.transcode(Buffer.from('hé€'), 'utf8', 'latin1').toString('latin1'));
+const file = new binary.File(['payload'], 'note.txt', {type: 'TEXT/PLAIN', lastModified: 17});
+file.text().then(function(text) { console.log(text, file.name, file.size, file.type, file.lastModified); });
+"#))])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let mut execution = package();
+        execution.capabilities.retain(|grant| grant != "timer");
+        let result = orchestrator(lane, ModuleSyntax::CommonJs)
+            .execute_resolved_entry_with_resolver(&execution, &source, installed)
+            .expect("the native Buffer module exposes the existing binary implementation");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true true",
+                "function function function function function function",
+                "3 true false true false",
+                "hé?",
+                "payload note.txt 7 text/plain 17",
+            ],
+            "{lane:?}"
+        );
+        assert!(result.host_effect_transcript.is_empty());
+    }
+}
+
+#[test]
+fn delivered_buffer_esm_names_share_the_canonical_commonjs_factory() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![
+                (
+                    "entry.mjs",
+                    definition(
+                        ModuleSyntax::EsModule,
+                        r#"
+import child from './child.cjs';
+import binary, {Buffer as NativeBuffer, Blob as NativeBlob, File, SlowBuffer,
+    transcode, isUtf8, isAscii, resolveObjectURL} from 'node:buffer';
+import * as namespace from 'buffer';
+console.log(binary === child, namespace.default === binary, NativeBuffer === Buffer,
+    NativeBlob === Blob, File === child.File, SlowBuffer === child.SlowBuffer);
+console.log(transcode(Buffer.from('abc'), 'utf8', 'utf16le').toString('hex'),
+    isUtf8(Buffer.from('hi')), isAscii(Buffer.from('hi')), typeof resolveObjectURL);
+console.log(Object.getPrototypeOf(namespace) === null, Object.isExtensible(namespace),
+    Reflect.set(namespace, 'File', null), Reflect.defineProperty(namespace, 'File', {value: null}));
+const original = File;
+binary.File = function Replacement() {};
+binary.guestAdded = 1;
+import('node:buffer').then(function(again) {
+    console.log(again === namespace, again.File === original,
+        again.default.File === binary.File, 'guestAdded' in again);
+});
+"#,
+                    )
+                    .with_dependency(ModuleDependency::new("./child.cjs", ImportStyle::Import)),
+                ),
+                (
+                    "child.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        "const load = require; module.exports = load('buffer');",
+                    ),
+                ),
+            ])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let mut execution = package();
+        execution.capabilities.retain(|grant| grant != "timer");
+        let result = orchestrator(lane, ModuleSyntax::EsModule)
+            .execute_resolved_entry_with_resolver(&execution, &source, installed)
+            .expect("complete Buffer names are admitted without process or timer authority");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true true true true true",
+                "610062006300 true true function",
+                "true false false false",
+                "true true true false",
+            ],
+            "{lane:?}"
+        );
+    }
+}
+
+#[test]
+fn delivered_buffer_esm_does_not_trust_guest_file_metadata_getters() {
+    for property in ["name", "lastModified"] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![
+                ("entry.mjs", definition(ModuleSyntax::EsModule,
+                    "import './mutator.cjs'; import {File} from 'node:buffer'; console.log(typeof File);")
+                    .with_dependency(ModuleDependency::new("./mutator.cjs", ImportStyle::Import))),
+                ("mutator.cjs", definition(ModuleSyntax::CommonJs, &format!(
+                    "const load = require; const binary = load('buffer'); Object.defineProperty(binary.File.prototype, '{property}', {{get: function() {{ console.log('guest getter ran'); return 'forged'; }} }});"
+                ))),
+            ])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let mut engine = orchestrator(LaneChoice::QuickJs, ModuleSyntax::EsModule);
+        let error = engine
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect_err("a native File prototype does not authenticate a replacement getter");
+        assert!(
+            error.to_string().contains("bounded-import contract"),
+            "{property}: {error}"
+        );
+        assert!(engine.last_failed_console_output().is_empty());
+    }
+}
+
+#[test]
+fn delivered_events_expose_async_iteration_and_listener_helpers() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![("entry.cjs", definition(ModuleSyntax::CommonJs, r#"
+const load = require;
+const events = load('events');
+const emitter = new events.EventEmitter();
+console.log(events === load('node:events'), events === events.EventEmitter,
+    typeof events.on, typeof events.addAbortListener);
+const iterator = events.on(emitter, 'data');
+emitter.emit('data', 7, 'value');
+console.log(events.listenerCount(emitter, 'data'), events.getEventListeners(emitter, 'data').length);
+events.setMaxListeners(23, emitter);
+console.log(events.getMaxListeners(emitter));
+iterator.next().then(function(item) {
+    console.log(item.value.join(':'), item.done);
+    return iterator.return();
+}).then(function(item) { console.log(item.done, events.listenerCount(emitter, 'data')); });
+const controller = new AbortController();
+let count = 0;
+const subscription = events.addAbortListener(controller.signal, function() { count++; });
+controller.abort();
+subscription[Symbol.dispose]();
+console.log('abort', count);
+"#))])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let result = orchestrator(lane, ModuleSyntax::CommonJs)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("captured Events executes the complete retained engine implementation");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true function function",
+                "1 1",
+                "23",
+                "abort 1",
+                "7:value false",
+                "true 0",
+            ],
+            "{lane:?}"
+        );
+    }
+}
+
+#[test]
+fn delivered_events_esm_helpers_share_mutable_commonjs_state() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![
+                (
+                    "entry.mjs",
+                    definition(
+                        ModuleSyntax::EsModule,
+                        r#"
+import child from './child.cjs';
+import EventEmitter, {EventEmitter as Named, on, once, addAbortListener,
+    listenerCount, getEventListeners, setMaxListeners, getMaxListeners} from 'node:events';
+import * as namespace from 'events';
+console.log(EventEmitter === child, Named === child, namespace.default === child,
+    on === child.on, once === child.once, addAbortListener === child.addAbortListener);
+const emitter = new EventEmitter();
+function listener() {}
+emitter.on('event', listener);
+setMaxListeners(19, emitter);
+console.log(listenerCount(emitter, 'event'), getEventListeners(emitter, 'event')[0] === listener,
+    getMaxListeners(emitter));
+const pending = once(emitter, 'ready');
+emitter.emit('ready', 42);
+pending.then(function(args) { console.log(args[0]); });
+console.log(Reflect.set(namespace, 'on', null), namespace.on === on);
+"#,
+                    )
+                    .with_dependency(ModuleDependency::new("./child.cjs", ImportStyle::Import)),
+                ),
+                (
+                    "child.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        "module.exports = require('events');",
+                    ),
+                ),
+            ])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let result = orchestrator(lane, ModuleSyntax::EsModule)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("native Events imports expose callable retained helpers and shared state");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true true true true true",
+                "1 true 19",
+                "false true",
+                "42"
+            ],
+            "{lane:?}"
+        );
+    }
+}
+
+#[test]
 fn delivered_filesystem_aliases_share_modules_without_io_authority() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         let resolver = Arc::new(

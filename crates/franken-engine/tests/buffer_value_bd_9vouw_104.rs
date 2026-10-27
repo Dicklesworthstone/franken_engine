@@ -28,6 +28,74 @@ fn eval(source: &str) -> String {
         .value
 }
 
+#[test]
+fn ordinary_buffer_import_lowers_without_process_authority_bd_h8s4j() {
+    use frankenengine_engine::ir_contract::{Ir0Module, Ir3Instruction};
+    use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+
+    for specifier in ["buffer", "node:buffer"] {
+        let source = format!("const {{ Blob, File }} = require('{specifier}'); [Blob, File];");
+        let tree = frankenengine_engine::parser_api_stability::parse_script(&source)
+            .expect("parse the ordinary Buffer import");
+        let context = LoweringContext::new("buffer-import", "source-metadata", "builtin-only")
+            .with_authenticated_commonjs_runtime_bindings();
+        let ir0 = Ir0Module::from_syntax_tree(tree, "buffer-import.cjs");
+        let module = lower_ir0_to_ir3(&ir0, &context)
+            .expect("the engine-owned File factory must not require guest process authority")
+            .ir3;
+        assert!(module.instructions.iter().any(|instruction| matches!(
+            instruction,
+            Ir3Instruction::HostCall { capability, .. } if capability.0 == "builtin:OsPlatform"
+        )));
+    }
+}
+
+#[test]
+fn buffer_import_does_not_authorize_guest_process_reads_bd_h8s4j() {
+    use frankenengine_engine::effect_set::EffectKind;
+    use frankenengine_engine::ir_contract::Ir0Module;
+    use frankenengine_engine::lowering_pipeline::{
+        LoweringContext, LoweringPipelineError, lower_ir0_to_ir3,
+    };
+
+    for source in [
+        "process.platform;",
+        "require('node:buffer'); process.platform;",
+        "require('node:buffer'); process.env.SECRET;",
+    ] {
+        let tree = frankenengine_engine::parser_api_stability::parse_script(source).unwrap();
+        let context = LoweringContext::new("guest-process", "source-metadata", "builtin-only")
+            .with_authenticated_commonjs_runtime_bindings();
+        let error = lower_ir0_to_ir3(
+            &Ir0Module::from_syntax_tree(tree, "guest-process.cjs"),
+            &context,
+        )
+        .expect_err("importing Buffer never grants guest process authority");
+        assert!(
+            matches!(
+                error,
+                LoweringPipelineError::AmbientAuthorityViolation { required_effect, .. }
+                    if required_effect == if source.ends_with("process.env.SECRET;") {
+                        EffectKind::EnvRead
+                    } else {
+                        EffectKind::ProcessShapeRead
+                    }
+            ),
+            "{source}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn buffer_import_preserves_local_process_binding_bd_h8s4j() {
+    assert_eq!(
+        eval(
+            "const process = { platform: 'guest-local' }; const { Blob } = require('node:buffer'); [process.platform, new Blob(['ok']).size].join(':');"
+        ),
+        "guest-local:2"
+    );
+}
+
 /// `Buffer` is a value: typeof, name, length, poolSize, an alias, and the global object's property.
 #[test]
 fn buffer_global_value() {

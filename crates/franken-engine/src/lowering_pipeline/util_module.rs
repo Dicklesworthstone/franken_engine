@@ -1305,7 +1305,7 @@ fn module_source_with_runtime_sources(
     } else {
         parse_module_source(module)?
     };
-    if retain_runtime_sources && module == PureModule::Buffer {
+    if module == PureModule::Buffer {
         // Binary File native endings depend on the engine's deterministic
         // platform, not ambient process authority. Only this fixed factory
         // receives the private operation; guest process reads keep their
@@ -1317,7 +1317,9 @@ fn module_source_with_runtime_sources(
                 detail: "the native Buffer platform expression is invalid",
             });
         }
-        expression = native_buffer_bindings(expression)?;
+        if retain_runtime_sources {
+            expression = native_buffer_bindings(expression)?;
+        }
     }
     let globals: &[&str] = match module {
         PureModule::Util => &MODULE_GLOBALS,

@@ -22,6 +22,9 @@ on:
       - 'crates/franken-engine/src/baseline_interpreter*'
       - 'crates/franken-engine/src/baseline_interpreter/**'
       - 'crates/franken-engine/src/lowering_pipeline.rs'
+      - 'crates/franken-engine/src/lowering_pipeline/**'
+      - 'crates/franken-engine/tests/buffer_value_bd_9vouw_104.rs'
+      - 'crates/franken-engine-control-plane-integration-tests/Cargo.toml'
       - 'crates/franken-engine/src/promise_model*.rs'
       - 'crates/franken-engine/tests/async_generator_execution.rs'
       - 'crates/franken-engine/tests/generator_next_bd_v6cv1_regression.rs'
@@ -44,6 +47,12 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
   workflow_dispatch:
+    inputs:
+      scope:
+        description: Validation scope; buffer runs the complete Buffer target only
+        type: choice
+        options: [all, buffer]
+        default: all
 
 permissions:
   contents: read
@@ -51,6 +60,7 @@ permissions:
 jobs:
   boundary-regressions:
     name: Native runtime boundary regressions
+    if: github.event_name != 'workflow_dispatch' || inputs.scope != 'buffer'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
@@ -123,6 +133,7 @@ jobs:
           retention-days: 7
   reflection:
     name: Native reflection and confidentiality
+    if: github.event_name != 'workflow_dispatch' || inputs.scope != 'buffer'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
@@ -151,6 +162,7 @@ jobs:
           path: reflection-tests.log
           retention-days: 7
   core:
+    if: github.event_name != 'workflow_dispatch' || inputs.scope != 'buffer'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -198,6 +210,7 @@ jobs:
   # substitute for the unchanged full-engine gates or native-core unit tests.
   async-generators:
     name: Native runtime semantics
+    if: github.event_name != 'workflow_dispatch' || inputs.scope != 'buffer'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -293,4 +306,63 @@ jobs:
         with:
           name: async-generator-validation
           path: async-generator-validation/
+          retention-days: 7
+  buffer:
+    name: Full-source Buffer values and authority
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      RUSTUP_TOOLCHAIN: nightly-2026-09-21
+      CARGO_BUILD_JOBS: '1'
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Bound compiler memory on the hosted runner
+        run: |
+          set -euo pipefail
+          sudo fallocate -l 16G /mnt/franken-buffer-swapfile
+          sudo chmod 600 /mnt/franken-buffer-swapfile
+          sudo mkswap /mnt/franken-buffer-swapfile
+          sudo swapon /mnt/franken-buffer-swapfile
+      - name: Install pinned Rust and record source inputs
+        run: |
+          set -euo pipefail
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+          {
+            git rev-parse HEAD
+            rustc --version --verbose
+            cargo --version
+            sha256sum Cargo.lock crates/franken-engine/Cargo.toml \
+              crates/franken-engine/src/lowering_pipeline/util_module.rs \
+              crates/franken-engine/tests/buffer_value_bd_9vouw_104.rs
+          } | tee native-buffer-inputs.log
+      - name: Require the actual parser and authority regression tests
+        run: |
+          set -euo pipefail
+          cargo test --locked -j1 -p frankenengine-control-plane-integration-tests \
+            --test buffer_value_bd_9vouw_104 -- --list 2>&1 | tee native-buffer-test-list.log
+          for test in \
+            ordinary_buffer_import_lowers_without_process_authority_bd_h8s4j \
+            buffer_import_does_not_authorize_guest_process_reads_bd_h8s4j \
+            buffer_import_preserves_local_process_binding_bd_h8s4j; do
+            grep -Fxq "$test: test" native-buffer-test-list.log
+          done
+      - name: Execute every original and new Buffer test without source rewriting
+        run: |
+          set -euo pipefail
+          cargo test --locked -j1 -p frankenengine-control-plane-integration-tests \
+            --test buffer_value_bd_9vouw_104 \
+            -- --nocapture --test-threads=1 2>&1 | tee native-buffer-tests.log
+      - name: Retain full-source Buffer test output
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-buffer-validation
+          path: native-buffer-*.log
+          if-no-files-found: error
           retention-days: 7

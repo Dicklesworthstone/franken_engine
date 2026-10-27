@@ -179,3 +179,84 @@ main();
         &["after", "caught ERR_MODULE_NOT_FOUND"],
     );
 }
+
+#[test]
+fn dynamic_import_defers_evaluation_but_not_specifier_coercion() {
+    assert_output(
+        &[
+            (
+                "dep.mjs",
+                "console.log('dependency'); export const answer = 42;",
+            ),
+            (
+                "entry.mjs",
+                "console.log('start');
+const pending = import({ toString() { console.log('coerce'); return './dep.mjs'; } });
+pending.then(ns => console.log(ns.answer));
+Promise.resolve().then(() => console.log('microtask'));
+console.log('end');",
+            ),
+        ],
+        "entry.mjs",
+        ParseGoal::Module,
+        &["start", "coerce", "end", "microtask", "dependency", "42"],
+    );
+}
+
+#[test]
+fn dynamic_import_coercion_throw_is_a_rejection_and_does_not_queue_a_load() {
+    assert_output(
+        &[(
+            "entry.mjs",
+            "const marker = {};
+let threw = false;
+let pending;
+try { pending = import({ toString() { console.log('coerce'); throw marker; } }); }
+catch (error) { threw = true; }
+console.log(threw, pending instanceof Promise);
+pending.catch(error => console.log(error === marker));
+console.log('end');",
+        )],
+        "entry.mjs",
+        ParseGoal::Module,
+        &["coerce", "false true", "end", "true"],
+    );
+}
+
+#[test]
+fn queued_imports_share_evaluation_and_namespace_after_the_current_job() {
+    assert_output(
+        &[
+            ("dep.mjs", "console.log('once'); export const value = 7;"),
+            (
+                "entry.mjs",
+                "const first = import('./dep.mjs');
+const second = import('./dep.mjs');
+Promise.all([first, second]).then(values => console.log(values[0] === values[1], values[1].value));
+console.log('scheduled');",
+            ),
+        ],
+        "entry.mjs",
+        ParseGoal::Module,
+        &["scheduled", "once", "true 7"],
+    );
+}
+
+#[test]
+fn top_level_await_drives_the_deferred_import_task() {
+    assert_output(
+        &[
+            (
+                "dep.mjs",
+                "await Promise.resolve(); console.log('dependency'); export const value = 9;",
+            ),
+            (
+                "entry.mjs",
+                "console.log('before'); const ns = await import('./dep.mjs'); console.log('after', ns.value);",
+            ),
+        ],
+        "entry.mjs",
+        ParseGoal::Module,
+        &["before", "dependency", "after 9"],
+    );
+}

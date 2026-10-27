@@ -430,6 +430,205 @@ fn delivered_commonjs_graph_preserves_cycles_cache_and_per_edge_authorization() 
 }
 
 #[test]
+fn delivered_dynamic_import_jobs_keep_the_initiating_opaque_referrer() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(OpaqueResolver::new(vec![
+            (
+                "entry.mjs",
+                definition(
+                    ModuleSyntax::EsModule,
+                    "import { load } from './nested/loader.mjs'; console.log('entry'); load().then(ns => console.log(ns.answer)); Promise.resolve().then(() => console.log('microtask'));",
+                )
+                .with_dependency(ModuleDependency::new("./nested/loader.mjs", ImportStyle::Import)),
+            ),
+            (
+                "nested/loader.mjs",
+                definition(
+                    ModuleSyntax::EsModule,
+                    "console.log('loader'); export function load() { return import('./dep.mjs'); }",
+                ),
+            ),
+            (
+                "nested/dep.mjs",
+                definition(
+                    ModuleSyntax::EsModule,
+                    "console.log('dependency'); export const answer = 42;",
+                ),
+            ),
+            (
+                "dep.mjs",
+                definition(ModuleSyntax::EsModule, "throw new Error('wrong referrer');"),
+            ),
+        ]));
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver.clone(),
+            Arc::new(RecordingPolicy::default()),
+        );
+        let result = orchestrator(lane, ModuleSyntax::EsModule)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("a deferred import retains the function's module identity");
+        assert_eq!(
+            lines(&result),
+            ["loader", "entry", "microtask", "dependency", "42"]
+        );
+        let requests = resolver.requests.lock().expect("request log");
+        let imported = requests
+            .iter()
+            .find(|request| request.specifier == "./dep.mjs")
+            .expect("the deferred dependency was resolved");
+        assert_eq!(
+            imported.referrer.as_deref(),
+            Some("captured:/captured-module-test/nested/loader.mjs")
+        );
+    }
+}
+
+#[test]
+fn delivered_dynamic_import_checks_live_policy_when_its_job_runs() {
+    struct RevokingPolicy(AtomicUsize);
+
+    impl ModulePolicyHook for RevokingPolicy {
+        fn authorize(
+            &self,
+            request: &ModuleRequest,
+            record: &ModuleRecord,
+            context: &ResolutionContext,
+        ) -> ResolutionResult<()> {
+            if request.specifier == "./revoke.cjs" {
+                self.0.store(1, Ordering::SeqCst);
+            }
+            let mut policy =
+                CapabilityPolicyHook::new(BTreeSet::from([RuntimeCapability::ModuleLoad]));
+            if request.specifier == "./dep.mjs" && self.0.load(Ordering::SeqCst) != 0 {
+                policy.denied_specifiers.insert(request.specifier.clone());
+            }
+            policy.authorize(request, record, context)
+        }
+    }
+
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(OpaqueResolver::new(vec![
+            (
+                "entry.cjs",
+                definition(
+                    ModuleSyntax::CommonJs,
+                    "import('./dep.mjs').catch(() => console.log('caught')); require('./revoke.cjs'); console.log('revoked');",
+                ),
+            ),
+            (
+                "revoke.cjs",
+                definition(ModuleSyntax::CommonJs, "exports.done = true;"),
+            ),
+            (
+                "dep.mjs",
+                definition(ModuleSyntax::EsModule, "console.log('must not evaluate');"),
+            ),
+        ]));
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver.clone(),
+            Arc::new(RevokingPolicy(AtomicUsize::new(0))),
+        );
+        let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
+        let error = engine
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect_err("revocation before the host turn denies the queued import");
+        assert!(
+            error
+                .to_string()
+                .contains("closed-world module resolution refused"),
+            "{error}"
+        );
+        assert_eq!(
+            engine
+                .last_failed_console_output()
+                .iter()
+                .map(|line| line.message.as_str())
+                .collect::<Vec<_>>(),
+            ["revoked"]
+        );
+        let requests = resolver.requests.lock().expect("request log");
+        assert_eq!(
+            requests
+                .iter()
+                .skip(1)
+                .map(|request| request.specifier.as_str())
+                .collect::<Vec<_>>(),
+            ["./revoke.cjs", "./dep.mjs"]
+        );
+    }
+}
+
+#[test]
+fn delivered_dynamic_import_jobs_stop_after_terminal_entry_or_checkpoint_failure() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for (syntax, entry_name) in [
+            (ModuleSyntax::EsModule, "entry.mjs"),
+            (ModuleSyntax::CommonJs, "entry.cjs"),
+        ] {
+            for (failure, message) in [
+                ("throw new Error('terminal entry');", "terminal entry"),
+                (
+                    "queueMicrotask(() => { throw new Error('terminal checkpoint'); });",
+                    "terminal checkpoint",
+                ),
+            ] {
+                let microtask = if syntax == ModuleSyntax::EsModule && message == "terminal entry" {
+                    "Promise.resolve().then(() => console.log('microtask'));"
+                } else {
+                    ""
+                };
+                let entry_source =
+                    format!("import('./dep.mjs'); console.log('entry'); {microtask} {failure}");
+                let resolver = Arc::new(OpaqueResolver::new(vec![
+                    (entry_name, definition(syntax, &entry_source)),
+                    (
+                        "dep.mjs",
+                        definition(ModuleSyntax::EsModule, "console.log('must not evaluate');"),
+                    ),
+                ]));
+                let source = entry(&resolver, entry_name, syntax);
+                let installed = ExecutionModuleResolver::new(
+                    &source.module.record.id,
+                    resolver.clone(),
+                    Arc::new(RecordingPolicy::default()),
+                );
+                let mut engine = orchestrator(lane, syntax);
+                let error = engine
+                    .execute_resolved_entry_with_resolver(&package(), &source, installed)
+                    .expect_err("terminal entry/checkpoint errors stop host jobs");
+                assert!(
+                    error.to_string().contains(message),
+                    "{lane:?} {syntax:?}: {error}"
+                );
+                let expected = if microtask.is_empty() {
+                    vec!["entry"]
+                } else {
+                    vec!["entry", "microtask"]
+                };
+                assert_eq!(
+                    engine
+                        .last_failed_console_output()
+                        .iter()
+                        .map(|line| line.message.as_str())
+                        .collect::<Vec<_>>(),
+                    expected,
+                    "{lane:?} {syntax:?} {message}"
+                );
+                assert_eq!(
+                    resolver.requests.lock().expect("request log").len(),
+                    1,
+                    "only entry admission may reach the resolver after {message}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn delivered_esm_graph_retains_live_bindings_dynamic_import_and_source_metadata() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         let resolver = Arc::new(OpaqueResolver::new(vec![

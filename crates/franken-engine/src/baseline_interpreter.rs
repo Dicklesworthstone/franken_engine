@@ -2239,6 +2239,21 @@ struct PendingTimerTask {
     kind: PendingTimerTaskKind,
 }
 
+/// A host module job owns the caller's resolution and IFC context until its
+/// deterministic I/O turn. The retained program is shared with the module
+/// registry; the result Promise stays rooted even if the guest discards it.
+#[derive(Debug, Clone)]
+struct PendingDynamicImportTask {
+    owner_module: Arc<Ir3Module>,
+    referrer: String,
+    specifier: String,
+    promise: crate::promise_model::PromiseHandle,
+    label: Label,
+    cjs_context: Option<CjsModuleContext>,
+    inline_context_label: Option<Label>,
+    source_ip: usize,
+}
+
 #[derive(Debug, Clone)]
 enum PendingTimerTaskKind {
     /// A JS callback timer (`setTimeout`/`setInterval`/`setImmediate`).
@@ -16008,6 +16023,9 @@ pub struct InterpreterCore {
     /// drains the entry by seq when it fires, so the map never retains completed
     /// callbacks.
     pending_io_callbacks: BTreeMap<u64, Vec<Value>>,
+    /// Deferred import() host jobs, keyed by the scheduler registration.
+    /// Entries remain present during evaluation to root their owned handles.
+    pending_dynamic_imports: BTreeMap<u64, Arc<PendingDynamicImportTask>>,
     /// Arguments transferred out of the deferred I/O callback queue remain
     /// owned by the invocation while guest code runs. Keep their charge in
     /// the memory oracle while nested collections are enabled.
@@ -17150,6 +17168,7 @@ impl InterpreterCore {
             builtin_dispatch_hit_unknown_member: false,
             next_tick_queue: std::collections::VecDeque::new(),
             pending_io_callbacks: BTreeMap::new(),
+            pending_dynamic_imports: BTreeMap::new(),
             deferred_callback_in_flight_bytes: 0,
             pending_child_process_tasks: BTreeMap::new(),
             child_process_task_in_flight_bytes: 0,
@@ -25984,6 +26003,7 @@ impl InterpreterCore {
             .event_listeners_memory_bytes()
             .saturating_add(self.event_promise_waiters_memory_bytes())
             .saturating_add(self.pending_io_callbacks_memory_bytes())
+            .saturating_add(self.pending_dynamic_imports_memory_bytes())
             .saturating_add(self.deferred_callback_in_flight_bytes)
             .saturating_add(self.completed_child_processes_memory_bytes())
             .saturating_add(self.child_process_streams_memory_bytes())
@@ -26002,6 +26022,10 @@ impl InterpreterCore {
             self.event_loop.cancel_registration(registration);
         }
         self.pending_io_callbacks.clear();
+        for registration in self.pending_dynamic_imports.keys().copied() {
+            self.event_loop.cancel_registration(registration);
+        }
+        self.pending_dynamic_imports.clear();
         self.deferred_callback_in_flight_bytes = 0;
         let released_promise_bytes =
             previous_promise_bytes.saturating_sub(self.promise_runtime_memory_bytes());
@@ -37573,8 +37597,8 @@ impl InterpreterCore {
         Ok(())
     }
 
-    /// The entry's first-tick checkpoint and then the event loop, run
-    /// after the top-level script completed (`script_ok`) or failed.
+    /// Drain the entry's first-tick checkpoint. A failed entry or checkpoint
+    /// never admits another host task, including queued dynamic imports.
     fn drain_after_top_level(
         &mut self,
         module: &Ir3Module,
@@ -37582,29 +37606,14 @@ impl InterpreterCore {
     ) -> Result<(), InterpreterError> {
         // Writable completion callbacks occupy Node's internal stream-tick
         // checkpoint ahead of Promise/nextTick work and Immediate macrotasks.
-        let checkpoint_error = self.drain_runtime_checkpoint(Some(module)).err();
-        if checkpoint_error
-            .as_ref()
-            .is_some_and(|error| Self::js_catchable_error_name(error).is_none())
-        {
-            return Err(checkpoint_error.expect("non-catchable checkpoint error was checked"));
+        self.drain_runtime_checkpoint(Some(module))?;
+        if !script_ok {
+            return Ok(());
         }
         // The end of the entry's first tick: a rejection nothing handled by
         // now fails the program before any timer runs, as in Node.
-        if script_ok && checkpoint_error.is_none() {
-            self.raise_unhandled_rejection()?;
-        }
-
-        // Run the event loop until all pending work is complete
-        // (macrotasks like timers, with microtask draining after each).
-        let event_loop_error = self
-            .run_event_loop_until_idle_with_module(Some(module))
-            .err();
-
-        match checkpoint_error.or(event_loop_error) {
-            Some(error) => Err(error),
-            None => Ok(()),
-        }
+        self.raise_unhandled_rejection()?;
+        self.run_event_loop_until_idle_with_module(Some(module))
     }
 
     fn run_top_level_execution(
@@ -37661,7 +37670,8 @@ impl InterpreterCore {
             .ok()
             .map(|completion| completion.value.clone());
         self.gc_arm_event_loop(completion);
-        let drained = self.drain_after_top_level(module, result.is_ok());
+        let script_ok = matches!(&result, Ok(_) | Err(InterpreterError::Halted));
+        let drained = self.drain_after_top_level(module, script_ok);
         self.gc_disarm_event_loop();
         drained?;
 
@@ -73093,11 +73103,9 @@ impl InterpreterCore {
     /// never throws at the call site; engine faults, resource limits and
     /// lowering refusals end the run, as they do for a static import.
     ///
-    /// The module resolves against the module containing the call and loads
-    /// through the static import's loader, cache and pre-import hook before
-    /// the call returns; only the promise settles later, through its reaction
-    /// jobs. (Node's loader is asynchronous, so there the imported module's
-    /// top-level code runs after the importer's current job instead.)
+    /// ToString is observable on the calling stack. Resolution, policy and
+    /// evaluation run as a host job after the current checkpoint, using the
+    /// initiating module's captured context and the ordinary loader/cache.
     fn dynamic_import(
         &mut self,
         args: RegRange,
@@ -73106,15 +73114,184 @@ impl InterpreterCore {
         let module = module.ok_or_else(|| InterpreterError::InternalError {
             details: "module:dynamic_import hostcall missing module context".to_string(),
         })?;
-        let specifier_label = self.join_arg_range_label(args)?;
-        self.pending_async_module_import = None;
-        let outcome = self.dynamic_import_namespace(module, args);
-        let async_evaluation = self.pending_async_module_import.take();
+        let mut specifier_label = self.join_arg_range_label(args)?;
+        let specifier = self
+            .builtin_search_js_string(module, args, 0)
+            .and_then(|specifier| {
+                let specifier = Self::utf8_module_specifier(&specifier)?;
+                self.check_temporary_memory_budget(Self::estimate_string_bytes(specifier))?;
+                Ok(specifier.to_string())
+            });
+        if let Some(label) = self.pending_hostcall_result_label.as_ref() {
+            specifier_label =
+                self.join_owned_label_with_temporary_budget(specifier_label, label)?;
+        }
+        // Intrinsic Promise allocation is unobservable. Do it after the
+        // arbitrary guest ToString callback, so no unrooted Promise spans it.
         let promise = self.create_promise()?;
+        let specifier = match specifier {
+            Ok(specifier) => specifier,
+            Err(error) => {
+                let result = self
+                    .dynamic_import_rejection(error, &specifier_label)
+                    .and_then(|(reason, label)| self.reject_promise(promise, reason, label));
+                if let Err(error) = result {
+                    self.rollback_fresh_promise(promise);
+                    return Err(error);
+                }
+                return Ok(Value::Promise(promise.0));
+            }
+        };
+        let referrer = self
+            .current_module_specifier
+            .as_deref()
+            .unwrap_or(&module.header.source_label);
+        let owner_module = self
+            .module_state
+            .modules
+            .get(referrer)
+            .and_then(|record| record.compiled_module.as_ref())
+            .filter(|program| program.header.source_label == module.header.source_label)
+            .cloned();
+        let Some(owner_module) = owner_module else {
+            let error = InterpreterError::ModuleEvaluationFailed {
+                specifier: referrer.to_string(),
+                reason: "dynamic import's initiating module program is not retained".to_string(),
+            };
+            self.rollback_fresh_promise(promise);
+            return Err(error);
+        };
+        let capture_bytes = Self::estimate_string_bytes(referrer)
+            .saturating_add(
+                self.active_cjs_context
+                    .as_ref()
+                    .map(|context| Self::estimate_string_bytes(&context.module_specifier))
+                    .unwrap_or(0),
+            )
+            .saturating_add(
+                self.active_execution_context_label()
+                    .map(Self::estimate_label_bytes)
+                    .unwrap_or(0),
+            );
+        if let Err(error) = self.check_temporary_memory_budget(capture_bytes) {
+            self.rollback_fresh_promise(promise);
+            return Err(error);
+        }
+        let task = PendingDynamicImportTask {
+            owner_module,
+            referrer: referrer.to_string(),
+            specifier,
+            promise,
+            label: specifier_label,
+            cjs_context: self.active_cjs_context.clone(),
+            inline_context_label: self.active_execution_context_label().cloned(),
+            source_ip: self.ip,
+        };
+        let retained_bytes = Self::pending_dynamic_import_task_bytes(&task);
+        if let Err(error) = self.apply_memory_component_delta(0, retained_bytes) {
+            self.rollback_fresh_promise(promise);
+            return Err(error);
+        }
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        let sequence = self.event_loop.schedule_io_completion(
+            crate::closure_model::ClosureHandle(u32::MAX),
+            task.label.clone(),
+        );
+        if let Err(error) = self.apply_promise_runtime_memory_delta(previous_promise_bytes) {
+            self.event_loop.rollback_last_scheduled(sequence);
+            self.estimated_memory_bytes =
+                self.estimated_memory_bytes.saturating_sub(retained_bytes);
+            self.rollback_fresh_promise(promise);
+            return Err(error);
+        }
+        self.pending_dynamic_imports
+            .insert(sequence, Arc::new(task));
+        Ok(Value::Promise(promise.0))
+    }
+
+    fn execute_pending_dynamic_import(
+        &mut self,
+        sequence: u64,
+    ) -> Option<Result<(), InterpreterError>> {
+        // Keep the map entry until completion. Nested module evaluation can
+        // collect, and both the Promise and the CJS context must stay rooted.
+        let task = Arc::clone(self.pending_dynamic_imports.get(&sequence)?);
+        let retained_bytes = Self::pending_dynamic_import_task_bytes(&task);
+        let frame_bytes = Self::estimate_string_bytes(&task.referrer).saturating_add(
+            task.cjs_context
+                .as_ref()
+                .map(|context| Self::estimate_string_bytes(&context.module_specifier))
+                .unwrap_or(0),
+        );
+        let next_context_bytes = task
+            .inline_context_label
+            .as_ref()
+            .map(Self::estimate_label_bytes)
+            .unwrap_or(0);
+        let additional_bytes = frame_bytes.saturating_add(next_context_bytes);
+        if let Err(error) = self.apply_memory_component_delta(0, additional_bytes) {
+            self.pending_dynamic_imports.remove(&sequence);
+            self.estimated_memory_bytes =
+                self.estimated_memory_bytes.saturating_sub(retained_bytes);
+            return Some(Err(error));
+        }
+        let previous_context_bytes = self.active_inline_callback_context_memory_bytes();
+        // The old label remains owned by this frame while the captured one
+        // occupies the accounted interpreter slot. Keep both live in the oracle.
+        let suspended_bytes = frame_bytes.saturating_add(previous_context_bytes);
+        self.module_snapshot_in_flight_bytes = self
+            .module_snapshot_in_flight_bytes
+            .saturating_add(suspended_bytes);
+        let previous_referrer = self.current_module_specifier.replace(task.referrer.clone());
+        let previous_cjs =
+            std::mem::replace(&mut self.active_cjs_context, task.cjs_context.clone());
+        let previous_context = std::mem::replace(
+            &mut self.active_inline_callback_context_label,
+            task.inline_context_label.clone(),
+        );
+        let previous_ip = std::mem::replace(&mut self.ip, task.source_ip);
+        let result = self.complete_dynamic_import(&task);
+        self.current_module_specifier = previous_referrer;
+        self.active_cjs_context = previous_cjs;
+        self.active_inline_callback_context_label = previous_context;
+        self.ip = previous_ip;
+        self.module_snapshot_in_flight_bytes = self
+            .module_snapshot_in_flight_bytes
+            .saturating_sub(suspended_bytes);
+        self.pending_dynamic_imports.remove(&sequence);
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(retained_bytes.saturating_add(additional_bytes));
+        Some(result)
+    }
+
+    fn complete_dynamic_import(
+        &mut self,
+        task: &PendingDynamicImportTask,
+    ) -> Result<(), InterpreterError> {
+        // Admission at import() time does not authorize a later host effect
+        // after revocation. Do this before hooks, resolution or cache access.
+        if !live_hostcall_decision(
+            crate::capability::DYNAMIC_IMPORT_CAPABILITY,
+            &self.config.granted_capabilities,
+        ) {
+            return Err(InterpreterError::CapabilityDenied {
+                capability: RuntimeCapability::ModuleLoad.to_string(),
+            });
+        }
+        check_hostcall_capability_gate(
+            self,
+            crate::capability::DYNAMIC_IMPORT_CAPABILITY,
+            u32::try_from(task.source_ip).unwrap_or(u32::MAX),
+        )?;
+        self.pending_async_module_import = None;
+        let module = task.owner_module.as_ref();
+        let outcome = self.dynamic_import_namespace(module, &task.specifier);
+        let async_evaluation = self.pending_async_module_import.take();
         match outcome {
             Ok(namespace) => {
                 let label = hostcall_result_contract(crate::capability::DYNAMIC_IMPORT_CAPABILITY)
-                    .result_label(&specifier_label, None);
+                    .result_label(&task.label, None);
                 // A module still suspended at a top-level await fulfills its
                 // evaluation promise with its namespace (or rejects it), so
                 // following that promise settles this one when it finishes.
@@ -73122,14 +73299,14 @@ impl InterpreterCore {
                     Some((_, evaluation_promise)) => Value::Promise(evaluation_promise.0),
                     None => namespace,
                 };
-                self.resolve_promise_with_value(Some(module), promise, value, label)?;
+                self.resolve_promise_with_value(Some(module), task.promise, value, label)?;
             }
             Err(error) => {
-                let (reason, label) = self.dynamic_import_rejection(error, &specifier_label)?;
-                self.reject_promise(promise, reason, label)?;
+                let (reason, label) = self.dynamic_import_rejection(error, &task.label)?;
+                self.reject_promise(task.promise, reason, label)?;
             }
         }
-        Ok(Value::Promise(promise.0))
+        Ok(())
     }
 
     /// Load the module an ImportCall names and return its namespace. The
@@ -73140,10 +73317,8 @@ impl InterpreterCore {
     fn dynamic_import_namespace(
         &mut self,
         module: &Ir3Module,
-        args: RegRange,
+        specifier: &str,
     ) -> Result<Value, InterpreterError> {
-        let specifier = self.builtin_search_js_string(module, args, 0)?;
-        let specifier = Self::utf8_module_specifier(&specifier)?;
         self.run_pre_import_hook(module, specifier)?;
         // bd-j8f7q: a unit lowered under the bounded-imports contract assumed
         // every ImportCall yields at most IFC_BOUNDED_IMPORT_LABEL, whatever
@@ -74711,6 +74886,11 @@ impl InterpreterCore {
                 result.map(|_| ())
             }
             crate::promise_model::MacrotaskSource::IoCompletion => {
+                if let Some(result) =
+                    self.execute_pending_dynamic_import(macrotask.registration_seq)
+                {
+                    return result;
+                }
                 if let Some(task) = self
                     .pending_child_process_tasks
                     .remove(&macrotask.registration_seq)
@@ -107019,6 +107199,35 @@ impl InterpreterCore {
         }))
     }
 
+    fn pending_dynamic_import_task_bytes(task: &PendingDynamicImportTask) -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(std::mem::size_of::<PendingDynamicImportTask>() as u64)
+            .saturating_add(std::mem::size_of::<[usize; 2]>() as u64)
+            .saturating_add(Self::estimate_string_bytes(&task.referrer))
+            .saturating_add(Self::estimate_string_bytes(&task.specifier))
+            .saturating_add(Self::estimate_label_bytes(&task.label))
+            .saturating_add(
+                task.cjs_context
+                    .as_ref()
+                    .map(|context| Self::estimate_string_bytes(&context.module_specifier))
+                    .unwrap_or(0),
+            )
+            .saturating_add(
+                task.inline_context_label
+                    .as_ref()
+                    .map(Self::estimate_label_bytes)
+                    .unwrap_or(0),
+            )
+    }
+
+    fn pending_dynamic_imports_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(
+            self.pending_dynamic_imports
+                .values()
+                .map(|task| Self::pending_dynamic_import_task_bytes(task)),
+        )
+    }
+
     fn pending_child_process_tasks_memory_bytes(&self) -> u64 {
         Self::saturating_sum(
             self.pending_child_process_tasks
@@ -108976,6 +109185,7 @@ impl InterpreterCore {
             .saturating_add(async_generator_bytes)
             .saturating_add(self.top_level_await_outcome_memory_bytes())
             .saturating_add(self.pending_io_callbacks_memory_bytes())
+            .saturating_add(self.pending_dynamic_imports_memory_bytes())
             .saturating_add(self.deferred_callback_in_flight_bytes)
             .saturating_add(self.pending_child_process_tasks_memory_bytes())
             .saturating_add(self.child_process_task_in_flight_bytes)
@@ -126685,6 +126895,204 @@ mod async_runtime_tests_current {
             .granted_capabilities
             .insert(RuntimeCapability::Console);
         core
+    }
+
+    #[test]
+    fn deferred_dynamic_imports_survive_collection_and_release_task_memory() {
+        let root = tempfile::tempdir().expect("dynamic import GC root");
+        let entry = root.path().join("entry.mjs");
+        let source =
+            "for (let i = 0; i < 8; i++) { import('./dep.mjs'); } console.log('scheduled');";
+        std::fs::write(&entry, source).expect("entry source");
+        std::fs::write(
+            root.path().join("dep.mjs"),
+            "const live = { answer: 42 }; console.log('dependency'); export { live };",
+        )
+        .expect("dependency source");
+        let module = lower_module_graph_entry_bd_yn3lv(&entry, source);
+        let mut core = async_module_graph_core_bd_yn3lv(root.path());
+        core.set_gc_stress_interval(Some(1));
+        for _ in 0..2 {
+            let result = core
+                .execute(&module)
+                .expect("dropped import Promises stay rooted");
+            assert_eq!(
+                result
+                    .console_output
+                    .iter()
+                    .map(|line| line.message.as_str())
+                    .collect::<Vec<_>>(),
+                ["scheduled", "dependency"]
+            );
+            assert!(core.gc_stats().collections > 0);
+            assert!(core.pending_dynamic_imports.is_empty());
+            assert_eq!(core.module_snapshot_in_flight_bytes, 0);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn discarded_dynamic_import_jobs_release_queue_and_retained_memory() {
+        let root = tempfile::tempdir().expect("discarded import root");
+        let entry = root.path().join("entry.mjs");
+        let source = "import('./dep.mjs'); console.log('scheduled');";
+        std::fs::write(&entry, source).expect("entry source");
+        std::fs::write(
+            root.path().join("dep.mjs"),
+            "throw new Error('discarded dependency must not evaluate');",
+        )
+        .expect("dependency source");
+        let module = lower_module_graph_entry_bd_yn3lv(&entry, source);
+        let mut core = async_module_graph_core_bd_yn3lv(root.path());
+        core.prepare_execution(&module).expect("entry preparation");
+        assert!(matches!(
+            core.run_loop(&module),
+            Ok(_) | Err(InterpreterError::Halted)
+        ));
+        assert_eq!(core.pending_dynamic_imports.len(), 1);
+        assert!(core.event_loop.has_pending_work());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        core.clear_residual_event_state()
+            .expect("discard queued import");
+        assert!(core.pending_dynamic_imports.is_empty());
+        assert!(!core.event_loop.has_pending_work());
+        core.run_event_loop_until_idle_with_module(Some(&module))
+            .expect("cancelled import cannot run");
+        assert_eq!(
+            core.console_output()
+                .iter()
+                .map(|line| line.message.as_str())
+                .collect::<Vec<_>>(),
+            ["scheduled"]
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn queued_dynamic_import_rechecks_module_load_and_releases_failed_task_memory() {
+        let root = tempfile::tempdir().expect("revoked import root");
+        let entry = root.path().join("entry.mjs");
+        let source = "import('./dep.mjs');";
+        std::fs::write(&entry, source).expect("entry source");
+        std::fs::write(
+            root.path().join("dep.mjs"),
+            "console.log('must not execute');",
+        )
+        .expect("dependency source");
+        let module = lower_module_graph_entry_bd_yn3lv(&entry, source);
+        let mut core = async_module_graph_core_bd_yn3lv(root.path());
+        core.prepare_execution(&module).expect("entry preparation");
+        assert!(matches!(
+            core.run_loop(&module),
+            Ok(_) | Err(InterpreterError::Halted)
+        ));
+        assert_eq!(core.pending_dynamic_imports.len(), 1);
+        core.config
+            .granted_capabilities
+            .remove(&RuntimeCapability::ModuleLoad);
+        assert!(matches!(
+            core.run_event_loop_until_idle_with_module(Some(&module)),
+            Err(InterpreterError::CapabilityDenied { capability }) if capability == "module_load"
+        ));
+        assert!(core.console_output().is_empty());
+        assert!(core.pending_dynamic_imports.is_empty());
+        assert_eq!(core.module_snapshot_in_flight_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn deferred_dynamic_import_rechecks_effect_only_hostcall_hooks() {
+        struct RevokedImportHook;
+
+        impl InterpreterHook for RevokedImportHook {
+            fn instruction_hooks_enabled(&self) -> bool {
+                false
+            }
+
+            fn pre_property_access(
+                &self,
+                _ctx: &HookContext,
+                _target: &ObjectRef,
+                _key: &PropertyKey,
+            ) -> HookAction {
+                HookAction::Allow
+            }
+
+            fn pre_call(
+                &self,
+                _ctx: &HookContext,
+                _callee: &FunctionRef,
+                _args: &[Value],
+            ) -> HookAction {
+                HookAction::Allow
+            }
+
+            fn pre_allocation(
+                &self,
+                _ctx: &HookContext,
+                _kind: AllocKind,
+                _size_hint: usize,
+            ) -> HookAction {
+                HookAction::Allow
+            }
+
+            fn pre_import(&self, _ctx: &HookContext, _specifier: &str) -> HookAction {
+                HookAction::Allow
+            }
+
+            fn pre_hostcall(
+                &self,
+                _ctx: &HookContext,
+                capability: &str,
+                allowed: bool,
+            ) -> HookAction {
+                assert!(allowed);
+                assert_eq!(capability, crate::capability::DYNAMIC_IMPORT_CAPABILITY);
+                HookAction::Terminate("module effect revoked".to_string())
+            }
+        }
+
+        let root = tempfile::tempdir().expect("revoked hostcall root");
+        let entry = root.path().join("entry.mjs");
+        let source = "import('./dep.mjs');";
+        std::fs::write(&entry, source).expect("entry source");
+        std::fs::write(
+            root.path().join("dep.mjs"),
+            "console.log('must not execute');",
+        )
+        .expect("dependency source");
+        let module = lower_module_graph_entry_bd_yn3lv(&entry, source);
+        let mut core = async_module_graph_core_bd_yn3lv(root.path());
+        core.prepare_execution(&module).expect("entry preparation");
+        assert!(matches!(
+            core.run_loop(&module),
+            Ok(_) | Err(InterpreterError::Halted)
+        ));
+        core.set_hook(Arc::new(RevokedImportHook));
+        assert!(matches!(
+            core.run_event_loop_until_idle_with_module(Some(&module)),
+            Err(InterpreterError::ContainmentActionRequested { action, reason })
+                if action == "terminate" && reason.as_deref() == Some("module effect revoked")
+        ));
+        assert!(core.console_output().is_empty());
+        assert!(core.pending_dynamic_imports.is_empty());
+        assert_eq!(core.module_snapshot_in_flight_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]

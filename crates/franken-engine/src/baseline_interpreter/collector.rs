@@ -1834,6 +1834,7 @@ impl InterpreterCore {
             next_promise_reaction_callable_id: _,
             builtin_dispatch_hit_unknown_member: _,
             pending_io_callbacks,
+            pending_dynamic_imports,
             // Queue arguments transferred to a running callback are pinned
             // by its invocation. This field holds only their memory charge.
             deferred_callback_in_flight_bytes: _,
@@ -2126,6 +2127,13 @@ impl InterpreterCore {
             .values()
             .flatten()
             .for_each(|value| m.value(value));
+        for task in pending_dynamic_imports.values() {
+            m.promise(task.promise.0);
+            if let Some(context) = &task.cjs_context {
+                m.object(context.module_object);
+                m.object(context.exports_object);
+            }
+        }
         promise_combinators
             .values()
             .for_each(|state| m.combinator(state));

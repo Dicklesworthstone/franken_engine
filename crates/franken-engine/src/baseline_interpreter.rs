@@ -23974,11 +23974,6 @@ impl InterpreterCore {
             .http_client_requests
             .get(&request)
             .map_or(Label::TopSecret, |state| state.egress_label.clone());
-        if !egress_label.can_flow_to(&Label::Public) {
-            return Err(InterpreterError::CapabilityDenied {
-                capability: "net:request:confidentiality".to_string(),
-            });
-        }
         let (work_bytes, header_count) = {
             let state = self
                 .http_client_requests
@@ -24037,6 +24032,25 @@ impl InterpreterCore {
             )
         };
         self.validate_http_client_terminal_slots(request)?;
+        if !egress_label.can_flow_to(&Label::Public) {
+            // Use the same exact-request refusal journal as the legacy facade.
+            // Reserve delivery first, then roll it back if evidence cannot be
+            // accepted. Neither a missing sink nor a replay mismatch may consume
+            // the request or turn an unrecorded refusal into handled completion.
+            let error_sequence = self.schedule_http_task(PendingHttpTask::ClientError {
+                request,
+                code: "ERR_NETWORK".to_string(),
+                label: lifecycle_label,
+            })?;
+            if let Err(error) =
+                self.record_deferred_network_ifc_denial(&url, &method, &headers, body.as_deref())
+            {
+                self.cancel_http_task_registration(error_sequence);
+                return Err(error);
+            }
+            self.mark_http_client_request_ended(request)?;
+            return Ok(Value::Undefined);
+        }
         let delivery_sequence =
             self.schedule_http_task(PendingHttpTask::DeliverExternalResponse {
                 request,
@@ -130047,6 +130061,305 @@ mod async_runtime_tests_current {
         assert_eq!(
             missing_evidence.estimated_memory_bytes(),
             missing_evidence.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn native_http_client_request_ifc_denial_is_recorded_and_deferred() {
+        use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
+
+        for secret_header in [false, true] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("egress sentinel");
+            listener
+                .set_nonblocking(true)
+                .expect("nonblocking sentinel");
+            let address = listener.local_addr().expect("sentinel address");
+            let root = tempfile::TempDir::new().expect("provider root");
+            let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+            let mut core = test_interpreter();
+            core.config
+                .granted_capabilities
+                .insert(RuntimeCapability::NetworkEgress);
+            core.set_host_io(
+                Arc::new(SandboxedHostIo::with_root(root.path()).expect("real provider")),
+                Some(recorder.clone()),
+            );
+            core.write_reg_with_label(
+                0,
+                Value::str(format!("http://{address}/refused")),
+                Label::Public,
+            )
+            .expect("public endpoint");
+            let Value::Object(request) = core
+                .construct_http_client_request(RegRange { start: 0, count: 1 }, false)
+                .expect("native request")
+            else {
+                panic!("expected native HTTP request")
+            };
+            core.write_reg_with_label(1, Value::str("X-Private"), Label::Public)
+                .expect("header name");
+            core.write_reg_with_label(2, Value::str("classified"), Label::Secret)
+                .expect("classified bytes");
+            if secret_header {
+                core.http_set_header(
+                    Some(Value::Object(request)),
+                    RegRange { start: 1, count: 2 },
+                    true,
+                    None,
+                )
+                .expect("buffer classified header");
+            } else {
+                core.http_client_write(
+                    Some(Value::Object(request)),
+                    RegRange { start: 2, count: 1 },
+                    None,
+                )
+                .expect("buffer classified body");
+            }
+            assert!(recorder.recorded_entries().is_empty());
+            assert_eq!(
+                core.finish_http_client_request(request),
+                Ok(Value::Undefined)
+            );
+            assert_eq!(
+                core.finish_http_client_request(request),
+                Ok(Value::Undefined)
+            );
+            assert!(core.http_client_requests[&request].ended);
+            assert!(
+                matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+            );
+            let entries = recorder.recorded_entries();
+            assert_eq!(
+                entries.len(),
+                1,
+                "repeated end must not repeat denial evidence"
+            );
+            let HostIoRequest::NetworkRequest {
+                endpoint,
+                payload,
+                use_tls,
+                ..
+            } = &entries[0].0
+            else {
+                panic!("expected exact typed network denial")
+            };
+            assert_eq!(endpoint, &address.to_string());
+            assert!(!use_tls);
+            if secret_header {
+                assert!(
+                    payload
+                        .windows(b"X-Private: classified\r\n".len())
+                        .any(|window| window == b"X-Private: classified\r\n")
+                );
+            } else {
+                assert!(payload.ends_with(b"\r\n\r\nclassified"));
+            }
+            assert_eq!(
+                entries[0].1,
+                Err(HostIoError::Denied {
+                    reason: DEFERRED_NETWORK_FLOW_POLICY_DENIAL.to_string()
+                })
+            );
+            assert_eq!(core.pending_http_tasks.len(), 1);
+            assert!(
+                matches!(core.pending_http_tasks.values().next(), Some(PendingHttpTask::ClientError { request: target, code, label })
+                if *target == request && code == "ERR_NETWORK" && label == &Label::Secret)
+            );
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn native_http_client_request_denial_evidence_failure_is_atomic() {
+        use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
+
+        // Missing evidence, a contradictory replay outcome, and revoked authority
+        // must all fail without publishing the reserved error task or ending the request.
+        for failure in 0..3 {
+            let root = tempfile::TempDir::new().expect("provider root");
+            let mut core = test_interpreter();
+            core.config
+                .granted_capabilities
+                .insert(RuntimeCapability::NetworkEgress);
+            let recorder = if failure == 1 {
+                Arc::new(InMemoryHostIoTranscript::replaying(vec![(
+                    create_network_host_io_request(
+                        "http://127.0.0.1:9/refused",
+                        "GET",
+                        &[],
+                        Some(b"classified"),
+                    ),
+                    Err(HostIoError::Denied {
+                        reason: "different-policy".to_string(),
+                    }),
+                )]))
+            } else {
+                Arc::new(InMemoryHostIoTranscript::recording())
+            };
+            recorder.begin_execution().expect("begin evidence session");
+            let evidence: Option<Arc<dyn HostIoRecorder>> = if failure == 0 {
+                None
+            } else {
+                Some(recorder.clone())
+            };
+            core.set_host_io(
+                Arc::new(SandboxedHostIo::with_root(root.path()).expect("real provider")),
+                evidence,
+            );
+            core.write_reg_with_label(0, Value::str("http://127.0.0.1:9/refused"), Label::Public)
+                .expect("endpoint");
+            let Value::Object(request) = core
+                .construct_http_client_request(RegRange { start: 0, count: 1 }, false)
+                .expect("request")
+            else {
+                panic!("expected native HTTP request")
+            };
+            core.write_reg_with_label(1, Value::str("classified"), Label::Secret)
+                .expect("classified body");
+            core.http_client_write(
+                Some(Value::Object(request)),
+                RegRange { start: 1, count: 1 },
+                None,
+            )
+            .expect("buffer body");
+            if failure == 2 {
+                core.config
+                    .granted_capabilities
+                    .remove(&RuntimeCapability::NetworkEgress);
+            }
+            let error = core
+                .finish_http_client_request(request)
+                .expect_err("unevidenced or unauthorized refusal must fail closed");
+            match failure {
+                0 => assert!(
+                    matches!(error, InterpreterError::InternalError { details } if details.contains("no host-effect evidence sink"))
+                ),
+                1 => assert!(
+                    matches!(error, InterpreterError::InternalError { details } if details.contains("transcript mismatch"))
+                ),
+                _ => assert!(
+                    matches!(error, InterpreterError::CapabilityDenied { capability } if capability == "net:request")
+                ),
+            }
+            assert!(!core.http_client_requests[&request].ended);
+            assert_eq!(
+                core.heap[request.0 as usize]
+                    .properties
+                    .get("writableEnded"),
+                Some(&Value::Bool(false))
+            );
+            assert!(core.pending_http_tasks.is_empty());
+            if failure != 1 {
+                assert!(recorder.recorded_entries().is_empty());
+            }
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn native_http_client_request_public_body_reaches_real_socket() {
+        use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
+        use std::io::{Read, Write};
+        use std::time::{Duration, Instant};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("public sink");
+        listener.set_nonblocking(true).expect("bounded accept");
+        let address = listener.local_addr().expect("sink address");
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("public request did not reach the socket: {error}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("read bound");
+            stream
+                .set_write_timeout(Some(Duration::from_secs(5)))
+                .expect("write bound");
+            let mut bytes = Vec::new();
+            (&mut stream)
+                .take(65536)
+                .read_to_end(&mut bytes)
+                .expect("request bytes");
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                .expect("response bytes");
+            bytes
+        });
+        let root = tempfile::TempDir::new().expect("provider root");
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+        let mut core = test_interpreter();
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::NetworkEgress);
+        core.set_host_io(
+            Arc::new(SandboxedHostIo::with_root(root.path()).expect("real provider")),
+            Some(recorder.clone()),
+        );
+        let options = core
+            .alloc_object_with_properties(&[("method", Value::str("POST"))])
+            .expect("POST options");
+        core.write_reg_with_label(
+            0,
+            Value::str(format!("http://{address}/public")),
+            Label::Public,
+        )
+        .expect("public endpoint");
+        core.write_reg_with_label(1, Value::Object(options), Label::Public)
+            .expect("public options");
+        let Value::Object(request) = core
+            .construct_http_client_request(RegRange { start: 0, count: 2 }, false)
+            .expect("public native request")
+        else {
+            panic!("expected native HTTP request")
+        };
+        core.write_reg_with_label(2, Value::str("Hello, "), Label::Public)
+            .expect("public first chunk");
+        core.http_client_write(
+            Some(Value::Object(request)),
+            RegRange { start: 2, count: 1 },
+            None,
+        )
+        .expect("first write");
+        core.write_reg_with_label(2, Value::str("world!"), Label::Public)
+            .expect("public final chunk");
+        assert_eq!(
+            core.http_client_end(
+                Some(Value::Object(request)),
+                RegRange { start: 2, count: 1 },
+                None,
+            ),
+            Ok(Value::Undefined)
+        );
+        let bytes = server.join().expect("bounded public sink");
+        assert!(bytes.starts_with(b"POST /public HTTP/1.1\r\n"));
+        assert!(bytes.ends_with(b"\r\n\r\nHello, world!"));
+        let entries = recorder.recorded_entries();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].1.is_ok());
+        assert!(core.http_client_requests[&request].ended);
+        assert!(
+            matches!(core.pending_http_tasks.values().next(), Some(PendingHttpTask::DeliverExternalResponse { request: target, response: Some(_) }) if *target == request)
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
         );
     }
 

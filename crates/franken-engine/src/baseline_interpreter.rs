@@ -12511,6 +12511,10 @@ pub enum ModuleResolutionFailureReason {
     MalformedSpecifier,
     /// Module not found in resolution paths.
     ModuleNotFound,
+    /// The captured package exports map does not expose this subpath.
+    PackagePathNotExported,
+    /// The captured package scope has no matching private imports mapping.
+    PackageImportNotDefined,
     /// Other resolution failure with descriptive reason.
     Other(String),
 }
@@ -12521,7 +12525,29 @@ impl ModuleResolutionFailureReason {
             Self::BareSpecifiersNotSupported => "bare specifiers not supported",
             Self::MalformedSpecifier => "malformed specifier",
             Self::ModuleNotFound => "module not found",
+            Self::PackagePathNotExported => "package subpath is not exported",
+            Self::PackageImportNotDefined => "package import is not defined",
             Self::Other(_) => "resolution failed",
+        }
+    }
+
+    /// Only these source-resolution outcomes are guest control flow. A
+    /// capability-policy denial, uncaptured route or invalid referrer is not.
+    fn from_captured_code(code: ResolutionErrorCode) -> Option<Self> {
+        match code {
+            ResolutionErrorCode::ModuleNotFound => Some(Self::ModuleNotFound),
+            ResolutionErrorCode::PackagePathNotExported => Some(Self::PackagePathNotExported),
+            ResolutionErrorCode::PackageImportNotDefined => Some(Self::PackageImportNotDefined),
+            _ => None,
+        }
+    }
+
+    fn guest_error_code(&self, style: ImportStyle) -> &'static str {
+        match self {
+            Self::PackagePathNotExported => "ERR_PACKAGE_PATH_NOT_EXPORTED",
+            Self::PackageImportNotDefined => "ERR_PACKAGE_IMPORT_NOT_DEFINED",
+            _ if style == ImportStyle::Import => "ERR_MODULE_NOT_FOUND",
+            _ => "MODULE_NOT_FOUND",
         }
     }
 }
@@ -12532,6 +12558,8 @@ impl fmt::Display for ModuleResolutionFailureReason {
             Self::BareSpecifiersNotSupported => write!(f, "bare specifiers not supported"),
             Self::MalformedSpecifier => write!(f, "malformed specifier"),
             Self::ModuleNotFound => write!(f, "module not found"),
+            Self::PackagePathNotExported => write!(f, "package subpath is not exported"),
+            Self::PackageImportNotDefined => write!(f, "package import is not defined"),
             Self::Other(reason) => write!(f, "{}", reason),
         }
     }
@@ -39559,15 +39587,16 @@ impl InterpreterCore {
             .resolver
             .resolve(&request, &installed.context)
             .map_err(|error| {
-                // A resolver can bind an observed absence into its closed
-                // world, allowing optional dependencies to use Node's normal
-                // MODULE_NOT_FOUND fallback. An unknown/unauthorized route
-                // must instead report UnsupportedSpecifier/PolicyDenied;
-                // those refusals remain outside guest exception handling.
-                if error.code == ResolutionErrorCode::ModuleNotFound {
+                // A resolver can bind an observed absence or package-map
+                // refusal into its closed world. Optional dependencies may
+                // catch those exact Node errors. Unknown routes and runtime
+                // policy denials remain outside guest exception handling.
+                if let Some(reason) =
+                    ModuleResolutionFailureReason::from_captured_code(error.code)
+                {
                     InterpreterError::ModuleResolutionFailed {
                         specifier: specifier.to_string(),
-                        reason: ModuleResolutionFailureReason::ModuleNotFound,
+                        reason,
                     }
                 } else {
                     InterpreterError::ModuleLoweringFailed {
@@ -72824,7 +72853,11 @@ impl InterpreterCore {
             let resolved = match self.resolve_installed_module(specifier, ImportStyle::Require) {
                 Ok(resolved) => resolved,
                 Err(InterpreterError::ModuleResolutionFailed { reason, .. }) => {
-                    return Err(self.throw_module_not_found(request.as_ref(), &reason));
+                    return Err(self.throw_module_resolution_failure(
+                        request.as_ref(),
+                        &reason,
+                        ImportStyle::Require,
+                    ));
                 }
                 Err(error) => return Err(error),
             };
@@ -72845,9 +72878,8 @@ impl InterpreterCore {
         }
         match self.resolve_require_specifier(specifier) {
             Ok(resolved) => Ok(Value::str(resolved)),
-            Err(InterpreterError::ModuleResolutionFailed { reason, .. }) => {
-                Err(self.throw_module_not_found(request.as_ref(), &reason))
-            }
+            Err(InterpreterError::ModuleResolutionFailed { reason, .. }) => Err(self
+                .throw_module_resolution_failure(request.as_ref(), &reason, ImportStyle::Require)),
             Err(error) => Err(error),
         }
     }
@@ -72875,32 +72907,45 @@ impl InterpreterCore {
         })?;
         match self.require_module(module, &specifier) {
             // Node names the request as written, not the resolved path.
-            Err(InterpreterError::ModuleResolutionFailed { reason, .. }) => {
-                Err(self.throw_module_not_found(specifier.as_ref(), &reason))
-            }
+            Err(InterpreterError::ModuleResolutionFailed { reason, .. }) => Err(self
+                .throw_module_resolution_failure(
+                    specifier.as_ref(),
+                    &reason,
+                    ImportStyle::Require,
+                )),
             result => result,
         }
     }
 
-    /// A `require` that does not resolve throws a catchable Error with code
-    /// `MODULE_NOT_FOUND`, as Node's does (bd-9vouw.188), so feature
-    /// detection falls back (`try { NodeBuffer = require('buffer').Buffer }
-    /// catch {}` in js-yaml, `freeModule.require('util')` in lodash) instead
-    /// of the run failing. The engine's reason follows the first line.
-    fn throw_module_not_found(
+    /// Preserve the catchable Node code of an admitted resolution outcome.
+    /// Package encapsulation and private imports errors must remain distinct
+    /// from absence so npm feature-detection can select the right fallback.
+    fn throw_module_resolution_failure(
         &mut self,
         specifier: &str,
         reason: &ModuleResolutionFailureReason,
+        style: ImportStyle,
     ) -> InterpreterError {
-        let error = self.throw_js_error(
-            "Error",
-            format!("Cannot find module '{specifier}'\n{reason}"),
-        );
+        let (name, message) = match reason {
+            ModuleResolutionFailureReason::PackagePathNotExported => (
+                "Error",
+                format!("Package subpath '{specifier}' is not exported"),
+            ),
+            ModuleResolutionFailureReason::PackageImportNotDefined => (
+                "TypeError",
+                format!("Package import specifier '{specifier}' is not defined"),
+            ),
+            _ => (
+                "Error",
+                format!("Cannot find module '{specifier}'\n{reason}"),
+            ),
+        };
+        let error = self.throw_js_error(name, message);
         if let Some(Value::Object(error_id)) = self.pending_exception.clone()
             && let Err(failure) = self.set_object_property(
                 error_id,
                 "code".to_string(),
-                Value::str("MODULE_NOT_FOUND"),
+                Value::str(reason.guest_error_code(style)),
             )
         {
             return failure;
@@ -73095,17 +73140,20 @@ impl InterpreterCore {
                 };
             }
             InterpreterError::ModuleResolutionFailed { specifier, reason } => {
-                let failure = self.throw_module_not_found(&specifier, &reason);
+                let failure = self.throw_module_resolution_failure(
+                    &specifier,
+                    &reason,
+                    ImportStyle::Import,
+                );
+                // Allocating the error or its code may exhaust a runtime
+                // budget. A partially constructed pending exception cannot
+                // turn that engine failure into a guest-catchable rejection.
+                if !matches!(failure, InterpreterError::UncaughtException { .. }) {
+                    return Err(failure);
+                }
                 let Some((thrown, _)) = self.take_pending_exception_slot() else {
                     return Err(failure);
                 };
-                if let Value::Object(error_id) = &thrown {
-                    self.set_object_property(
-                        *error_id,
-                        "code".to_string(),
-                        Value::str("ERR_MODULE_NOT_FOUND"),
-                    )?;
-                }
                 thrown
             }
             native @ (InterpreterError::ModuleReadFailed { .. }
@@ -107264,7 +107312,9 @@ impl InterpreterCore {
                     ModuleResolutionFailureReason::Other(reason) => string(reason),
                     ModuleResolutionFailureReason::BareSpecifiersNotSupported
                     | ModuleResolutionFailureReason::MalformedSpecifier
-                    | ModuleResolutionFailureReason::ModuleNotFound => 0,
+                    | ModuleResolutionFailureReason::ModuleNotFound
+                    | ModuleResolutionFailureReason::PackagePathNotExported
+                    | ModuleResolutionFailureReason::PackageImportNotDefined => 0,
                 }),
             InterpreterError::ModuleReadFailed { specifier, error }
             | InterpreterError::ModuleParseFailed { specifier, error }
@@ -123055,6 +123105,46 @@ mod module_resolution_security_tests {
     use super::*;
     use std::fs;
     use std::path::Path;
+
+    #[test]
+    fn captured_package_failure_codes_are_distinct_from_policy_and_absence() {
+        for (code, require_code, import_code) in [
+            (
+                ResolutionErrorCode::ModuleNotFound,
+                "MODULE_NOT_FOUND",
+                "ERR_MODULE_NOT_FOUND",
+            ),
+            (
+                ResolutionErrorCode::PackagePathNotExported,
+                "ERR_PACKAGE_PATH_NOT_EXPORTED",
+                "ERR_PACKAGE_PATH_NOT_EXPORTED",
+            ),
+            (
+                ResolutionErrorCode::PackageImportNotDefined,
+                "ERR_PACKAGE_IMPORT_NOT_DEFINED",
+                "ERR_PACKAGE_IMPORT_NOT_DEFINED",
+            ),
+        ] {
+            let reason = ModuleResolutionFailureReason::from_captured_code(code).unwrap();
+            assert_eq!(reason.guest_error_code(ImportStyle::Require), require_code);
+            assert_eq!(reason.guest_error_code(ImportStyle::Import), import_code);
+            assert_eq!(
+                serde_json::from_str::<ModuleResolutionFailureReason>(
+                    &serde_json::to_string(&reason).unwrap()
+                )
+                .unwrap(),
+                reason
+            );
+        }
+        for code in [
+            ResolutionErrorCode::PolicyDenied,
+            ResolutionErrorCode::UnsupportedSpecifier,
+            ResolutionErrorCode::InvalidReferrer,
+            ResolutionErrorCode::EmptySpecifier,
+        ] {
+            assert!(ModuleResolutionFailureReason::from_captured_code(code).is_none());
+        }
+    }
 
     fn core_with_root(root: &Path, entry: &Path) -> InterpreterCore {
         let mut config = InterpreterConfig::quickjs_defaults();

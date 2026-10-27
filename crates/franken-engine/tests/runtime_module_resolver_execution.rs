@@ -54,6 +54,7 @@ struct OpaqueResolver {
     requests: Mutex<Vec<ModuleRequest>>,
     corruption: Corruption,
     missing_routes: BTreeSet<String>,
+    package_errors: BTreeMap<String, ResolutionErrorCode>,
 }
 
 impl OpaqueResolver {
@@ -69,11 +70,22 @@ impl OpaqueResolver {
             requests: Mutex::new(Vec::new()),
             corruption: Corruption::None,
             missing_routes: BTreeSet::new(),
+            package_errors: BTreeMap::new(),
         }
     }
 
     fn with_missing_route(mut self, specifier: &str) -> Self {
         self.missing_routes.insert(specifier.to_string());
+        self
+    }
+
+    fn with_package_error(mut self, specifier: &str, code: ResolutionErrorCode) -> Self {
+        assert!(matches!(
+            code,
+            ResolutionErrorCode::PackagePathNotExported
+                | ResolutionErrorCode::PackageImportNotDefined
+        ));
+        self.package_errors.insert(specifier.to_string(), code);
         self
     }
 
@@ -153,7 +165,10 @@ impl ModuleResolver for OpaqueResolver {
                 // This fixture models a closed graph, rather than an open
                 // package resolver: only explicitly captured negative routes
                 // represent catchable absence. Unknown routes stay refused.
-                if error.code == ResolutionErrorCode::ModuleNotFound
+                if let Some(code) = self.package_errors.get(&request.specifier) {
+                    error.code = *code;
+                    error.event.error_code = code.stable_code().to_string();
+                } else if error.code == ResolutionErrorCode::ModuleNotFound
                     && !self.missing_routes.contains(&request.specifier)
                 {
                     error.code = ResolutionErrorCode::UnsupportedSpecifier;
@@ -1010,19 +1025,82 @@ console.log(require('./fallback.cjs').answer);
 }
 
 #[test]
+fn delivered_package_errors_are_catchable_and_keep_their_node_codes() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for (code, expected) in [
+            (
+                ResolutionErrorCode::PackagePathNotExported,
+                "Error ERR_PACKAGE_PATH_NOT_EXPORTED false",
+            ),
+            (
+                ResolutionErrorCode::PackageImportNotDefined,
+                "TypeError ERR_PACKAGE_IMPORT_NOT_DEFINED true",
+            ),
+        ] {
+            let resolver = Arc::new(
+                OpaqueResolver::new(vec![(
+                    "entry.cjs",
+                    definition(ModuleSyntax::CommonJs, r#"
+try { require('./sealed.cjs'); } catch (error) { console.log('require', error.name, error.code, error instanceof TypeError); }
+try { require.resolve('./sealed.cjs'); } catch (error) { console.log('resolve', error.name, error.code, error instanceof TypeError); }
+import('./sealed.cjs').catch(error => console.log('import', error.name, error.code, error instanceof TypeError));
+console.log('continued');
+"#),
+                )]).with_package_error("./sealed.cjs", code),
+            );
+            let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+            let installed = ExecutionModuleResolver::new(
+                &source.module.record.id,
+                resolver.clone(),
+                Arc::new(AllowAllPolicy),
+            );
+            let result = orchestrator(lane, ModuleSyntax::CommonJs)
+                .execute_resolved_entry_with_resolver(&package(), &source, installed)
+                .expect("admitted package errors permit guest fallback");
+            assert_eq!(
+                lines(&result),
+                [
+                    format!("require {expected}"),
+                    format!("resolve {expected}"),
+                    "continued".to_string(),
+                    format!("import {expected}"),
+                ]
+            );
+            assert_eq!(
+                resolver
+                    .requests
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|request| request.specifier == "./sealed.cjs")
+                    .count(),
+                3
+            );
+        }
+    }
+}
+
+#[test]
 fn delivered_policy_refusals_are_not_optional_dependency_fallbacks() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        for operation in ["require", "require.resolve"] {
+        for operation in ["require", "require.resolve", "import"] {
             for denial_code in [
                 ResolutionErrorCode::PolicyDenied,
                 ResolutionErrorCode::ModuleNotFound,
                 ResolutionErrorCode::UnsupportedSpecifier,
                 ResolutionErrorCode::InvalidReferrer,
                 ResolutionErrorCode::EmptySpecifier,
+                ResolutionErrorCode::PackagePathNotExported,
+                ResolutionErrorCode::PackageImportNotDefined,
             ] {
-                let code = format!(
-                    "try {{ {operation}('./dep.cjs'); }} catch (error) {{ console.log('must not catch policy'); }}"
-                );
+                let code = if operation == "import" {
+                    "import('./dep.cjs').catch(error => console.log('must not catch policy'));"
+                        .to_string()
+                } else {
+                    format!(
+                        "try {{ {operation}('./dep.cjs'); }} catch (error) {{ console.log('must not catch policy'); }}"
+                    )
+                };
                 let resolver = Arc::new(OpaqueResolver::new(vec![
                     ("entry.cjs", definition(ModuleSyntax::CommonJs, &code)),
                     (

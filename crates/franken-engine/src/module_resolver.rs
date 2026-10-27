@@ -987,6 +987,11 @@ pub enum ResolutionErrorCode {
     /// graph must not use this for routes outside its captured lookup domain.
     ModuleNotFound,
     PolicyDenied,
+    /// A captured package exports selection denied this subpath. This is a
+    /// guest-visible package boundary, not a runtime capability-policy denial.
+    PackagePathNotExported,
+    /// A captured package scope has no matching private imports mapping.
+    PackageImportNotDefined,
 }
 
 impl ResolutionErrorCode {
@@ -997,6 +1002,8 @@ impl ResolutionErrorCode {
             Self::UnsupportedSpecifier => "FE-MODRES-0003",
             Self::ModuleNotFound => "FE-MODRES-0004",
             Self::PolicyDenied => "FE-MODRES-0005",
+            Self::PackagePathNotExported => "FE-MODRES-0006",
+            Self::PackageImportNotDefined => "FE-MODRES-0007",
         }
     }
 }
@@ -3194,6 +3201,8 @@ mod tests {
             ResolutionErrorCode::UnsupportedSpecifier,
             ResolutionErrorCode::ModuleNotFound,
             ResolutionErrorCode::PolicyDenied,
+            ResolutionErrorCode::PackagePathNotExported,
+            ResolutionErrorCode::PackageImportNotDefined,
         ] {
             let error = resolver
                 .resolve(&request, &context(), &Refuse(code))
@@ -4562,6 +4571,8 @@ mod tests {
             ResolutionErrorCode::UnsupportedSpecifier,
             ResolutionErrorCode::ModuleNotFound,
             ResolutionErrorCode::PolicyDenied,
+            ResolutionErrorCode::PackagePathNotExported,
+            ResolutionErrorCode::PackageImportNotDefined,
         ];
         for code in &codes {
             let stable = code.stable_code();
@@ -4581,9 +4592,25 @@ mod tests {
             ResolutionErrorCode::UnsupportedSpecifier.stable_code(),
             ResolutionErrorCode::ModuleNotFound.stable_code(),
             ResolutionErrorCode::PolicyDenied.stable_code(),
+            ResolutionErrorCode::PackagePathNotExported.stable_code(),
+            ResolutionErrorCode::PackageImportNotDefined.stable_code(),
         ];
         let unique: BTreeSet<&str> = codes.iter().copied().collect();
         assert_eq!(unique.len(), codes.len(), "all stable codes must be unique");
+    }
+
+    #[test]
+    fn package_resolution_codes_from_policy_remain_uncatchable_denials() {
+        for code in [
+            ResolutionErrorCode::PackagePathNotExported,
+            ResolutionErrorCode::PackageImportNotDefined,
+        ] {
+            let error = ResolutionError::new(code, "policy hid an existing source", &context())
+                .into_policy_denial();
+            assert_eq!(error.code, ResolutionErrorCode::PolicyDenied);
+            assert_eq!(error.event.error_code, "FE-MODRES-0005");
+            assert!(error.message.contains(code.stable_code()));
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -4640,6 +4667,8 @@ mod tests {
             ResolutionErrorCode::UnsupportedSpecifier,
             ResolutionErrorCode::ModuleNotFound,
             ResolutionErrorCode::PolicyDenied,
+            ResolutionErrorCode::PackagePathNotExported,
+            ResolutionErrorCode::PackageImportNotDefined,
         ];
         for code in &codes {
             let json = serde_json::to_string(code).expect("serde serialization should succeed");
@@ -4941,9 +4970,11 @@ mod tests {
             ResolutionErrorCode::UnsupportedSpecifier,
             ResolutionErrorCode::ModuleNotFound,
             ResolutionErrorCode::PolicyDenied,
+            ResolutionErrorCode::PackagePathNotExported,
+            ResolutionErrorCode::PackageImportNotDefined,
         ];
         let stable: BTreeSet<String> = codes.iter().map(|c| c.stable_code().to_string()).collect();
-        assert_eq!(stable.len(), 5);
+        assert_eq!(stable.len(), codes.len());
     }
 
     // ── Enrichment: path normalization edge cases ───────────────

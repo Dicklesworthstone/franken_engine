@@ -237,3 +237,144 @@ fn bound_writes_retain_the_secret_flow_refusal() {
         }), "the original IFC boundary must reject this data flow: {report:?}");
     }
 }
+
+#[test]
+fn access_constant_reads_are_analyzable_without_filesystem_or_builtin_authority() {
+    for source in [
+        "require('fs').constants.R_OK;",
+        "const fs = require('node:fs'); fs.constants.F_OK | fs.constants.W_OK;",
+    ] {
+        let report = analyze_authority_footprint(source, "fs-constants.js", ParseGoal::Script);
+        assert_eq!(
+            report.outcome(),
+            CheckOutcome::Clean,
+            "{source}: {report:?}"
+        );
+        assert!(
+            !report.required_capabilities.iter().any(|requirement| {
+                matches!(
+                    requirement.capability,
+                    Some(
+                        RuntimeCapability::FsRead
+                            | RuntimeCapability::FsWrite
+                            | RuntimeCapability::Builtin
+                    )
+                )
+            }),
+            "constant data must not add module authority: {report:?}"
+        );
+        assert_eq!(
+            report,
+            analyze_authority_footprint(source, "fs-constants.js", ParseGoal::Script)
+        );
+    }
+}
+
+#[test]
+fn access_with_mode_constants_keeps_only_the_read_capability() {
+    for source in [
+        "require('fs').accessSync('input.txt', require('node:fs').constants.R_OK);",
+        "const fs = require('fs'); fs.accessSync('input.txt', fs.constants.F_OK | fs.constants.R_OK);",
+    ] {
+        let report = analyze_authority_footprint(source, "fs-access.js", ParseGoal::Script);
+        assert_eq!(
+            report.outcome(),
+            CheckOutcome::Clean,
+            "{source}: {report:?}"
+        );
+        assert!(
+            report
+                .required_capabilities
+                .iter()
+                .any(|requirement| { requirement.capability == Some(RuntimeCapability::FsRead) })
+        );
+        assert!(
+            !report.required_capabilities.iter().any(|requirement| {
+                matches!(
+                    requirement.capability,
+                    Some(RuntimeCapability::FsWrite | RuntimeCapability::Builtin)
+                )
+            }),
+            "unused facade methods must not add authority: {report:?}"
+        );
+    }
+}
+
+#[test]
+fn access_constants_need_no_filesystem_grant_but_access_still_does() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("input.txt"), "unchanged").unwrap();
+    let output = run(
+        "const fs = require('fs'); console.log(fs.constants.F_OK, fs.constants.X_OK, \
+         fs.constants.W_OK, fs.constants.R_OK);",
+        root.path(),
+        &["vm_dispatch", "heap_allocate", "console"],
+    )
+    .expect("access constants are inert data");
+    assert_eq!(output, ["0 1 2 4"]);
+    let source = "const fs = require('node:fs'); fs.accessSync('input.txt', fs.constants.R_OK);";
+    let denied = run(source, root.path(), &["vm_dispatch", "heap_allocate"])
+        .expect_err("access still requires read authority");
+    assert!(
+        denied.contains("CapabilityDenied") && denied.contains("fs:read"),
+        "{denied}"
+    );
+    run(
+        source,
+        root.path(),
+        &["vm_dispatch", "heap_allocate", "fs_read"],
+    )
+    .expect("access runs without unused builtin or writer grants");
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("input.txt")).unwrap(),
+        "unchanged"
+    );
+}
+
+#[test]
+fn literal_numeric_result_indexing_preserves_analyzable_read_authority() {
+    for (prefix, receiver) in [
+        ("", "require('fs')"),
+        ("const fs = require('node:fs');", "fs"),
+    ] {
+        for suffix in ["[0]", ".split('\\n')[0]"] {
+            let source = format!("{prefix} {receiver}.readFileSync('input.txt', 'utf8'){suffix};");
+            let report = analyze_authority_footprint(&source, "indexed-read.js", ParseGoal::Script);
+            assert_eq!(
+                report.outcome(),
+                CheckOutcome::Clean,
+                "{source}: {report:?}"
+            );
+            assert!(
+                report.required_capabilities.iter().any(|requirement| {
+                    requirement.capability == Some(RuntimeCapability::FsRead)
+                })
+            );
+            assert!(
+                !report.required_capabilities.iter().any(|requirement| {
+                    requirement.capability == Some(RuntimeCapability::FsWrite)
+                }),
+                "unused writer methods must not pollute an indexed read: {report:?}"
+            );
+        }
+        for observer in [
+            "const key = 'constructor'; const dynamic = (() => {})[key];",
+            "const dynamic = (() => {})['constructor'];",
+        ] {
+            let source =
+                format!("{prefix} {receiver}.readFileSync('input.txt', 'utf8')[0]; {observer}");
+            let report = analyze_authority_footprint(&source, "indexed-read.js", ParseGoal::Script);
+            assert_eq!(
+                report.outcome(),
+                CheckOutcome::FindingsPresent,
+                "{source}: {report:?}"
+            );
+            assert!(
+                report
+                    .findings
+                    .iter()
+                    .any(|finding| finding.error_code == "FE-CAP-0001")
+            );
+        }
+    }
+}

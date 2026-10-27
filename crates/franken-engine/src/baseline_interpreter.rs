@@ -56106,7 +56106,7 @@ impl InterpreterCore {
                         continue;
                     }
 
-                    let (func_idx, captured_env) = match &callee_val {
+                    let (func_idx, mut captured_env) = match &callee_val {
                         Value::Function(idx) => (*idx, None),
                         Value::Closure(closure_id)
                         | Value::GeneratorFunction(closure_id)
@@ -56459,6 +56459,15 @@ impl InterpreterCore {
 
                     self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
+                    // The callback trampoline, Function.prototype.call/apply,
+                    // and ordinary methods all enter through CallMethod. Use
+                    // the same verified scope-inert activation as Call: a
+                    // leaf that cannot observe bindings needs no scope swap,
+                    // while its virtual scope retains the exact budget charge
+                    // and is materialized at a terminal error boundary.
+                    let scope_inert_activation = compact_tier1
+                        .is_some_and(|plan| plan.scope_inert_leaf_function(func_idx));
+                    let has_captured_env = captured_env.is_some();
                     let captured_env_bytes = captured_env
                         .as_ref()
                         .map(|env| Self::estimate_scope_chain_bytes(env))
@@ -56481,15 +56490,33 @@ impl InterpreterCore {
                     let call_this_temporary_bytes = Self::estimate_value_bytes(&call_this)
                         .saturating_add(Self::estimate_label_bytes(&call_this_label));
                     let scope_depth = self.scope_chain.depth();
-                    let saved_chain = if captured_env.is_some() {
-                        Some(self.snapshot_scope_chain_with_temporary_budget(
-                            binding_temporary_bytes.saturating_add(call_this_temporary_bytes),
-                        )?)
+                    let virtual_scope_depth = captured_env
+                        .as_ref()
+                        .map_or(scope_depth, |environment| environment.len());
+                    let saved_chain = if has_captured_env {
+                        if scope_inert_activation {
+                            self.preflight_scope_chain_snapshot_with_temporary_budget(
+                                binding_temporary_bytes.saturating_add(call_this_temporary_bytes),
+                            )?;
+                            captured_env.take()
+                        } else {
+                            Some(self.snapshot_scope_chain_with_temporary_budget(
+                                binding_temporary_bytes.saturating_add(call_this_temporary_bytes),
+                            )?)
+                        }
                     } else {
                         None
                     };
-                    let previous_scope_bytes = self.scope_chain_memory_bytes();
-                    let previous_closure_bytes = self.closures_memory_bytes();
+                    if scope_inert_activation {
+                        ScopeChain::preflight_push_depth(
+                            virtual_scope_depth,
+                            self.config.max_scope_depth,
+                        )?;
+                    }
+                    let previous_scope_bytes =
+                        (!scope_inert_activation).then(|| self.scope_chain_memory_bytes());
+                    let previous_closure_bytes =
+                        (!scope_inert_activation).then(|| self.closures_memory_bytes());
                     let previous_call_stack_bytes = self.call_stack_memory_bytes();
                     let pushed_frame = CallFrame {
                         return_ip: self.ip + 1,
@@ -56519,27 +56546,40 @@ impl InterpreterCore {
                         saved_finally_mode_depth: self.finally_frames.len(),
                         saved_scope_depth: scope_depth,
                         saved_scope_chain: saved_chain,
-                        scope_inert_virtual_scope_bytes: 0,
+                        scope_inert_virtual_scope_bytes: if scope_inert_activation {
+                            MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES
+                        } else {
+                            0
+                        },
                         async_function_id: None,
                         native_boundary: false,
                     };
                     self.call_stack
                         .push(pushed_frame, &mut self.closures.cold_cells);
 
-                    if let Some(env) = captured_env {
-                        self.scope_chain.frames = env;
-                    }
-                    if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
-                        self.rollback_call_setup_state();
-                        return Err(err);
-                    }
-                    if let Err(err) = self.apply_scope_closure_call_stack_memory_delta(
-                        previous_scope_bytes,
-                        previous_closure_bytes,
-                        previous_call_stack_bytes,
-                    ) {
-                        self.rollback_call_setup_state();
-                        return Err(err);
+                    if scope_inert_activation {
+                        if let Err(err) =
+                            self.apply_call_stack_memory_delta(previous_call_stack_bytes)
+                        {
+                            self.rollback_call_setup_state();
+                            return Err(err);
+                        }
+                    } else {
+                        if let Some(env) = captured_env {
+                            self.scope_chain.frames = env;
+                        }
+                        if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
+                            self.rollback_call_setup_state();
+                            return Err(err);
+                        }
+                        if let Err(err) = self.apply_scope_closure_call_stack_memory_delta(
+                            previous_scope_bytes.expect("ordinary scope accounting"),
+                            previous_closure_bytes.expect("ordinary closure accounting"),
+                            previous_call_stack_bytes,
+                        ) {
+                            self.rollback_call_setup_state();
+                            return Err(err);
+                        }
                     }
 
                     self.enter_stacked_register_frame_for_function(
@@ -157597,6 +157637,246 @@ mod tests {
             baseline_core.estimated_memory_bytes(),
             baseline_core.recompute_estimated_memory_bytes()
         );
+    }
+
+    fn scope_inert_leaf_method_module() -> Ir3Module {
+        let mut module = scope_inert_leaf_call_module();
+        // Read a seeded argument so the test can carry a non-Public label
+        // through the same function with either dispatch tier.
+        module.instructions[0] = Ir3Instruction::Move { dst: 1, src: 3 };
+        module.instructions[3] = Ir3Instruction::CallMethod {
+            receiver: 4,
+            callee: 0,
+            args: RegRange { start: 1, count: 2 },
+            dst: 0,
+        };
+        module.function_table[0].frame_size = 5;
+        module
+    }
+
+    fn seed_scope_inert_method(core: &mut InterpreterCore, argument: Value) {
+        seed_scope_inert_captured_binding(core);
+        core.set_reg(3, argument);
+        core.set_register_label(3, Label::Secret)
+            .expect("seeded argument label fits");
+        core.set_reg(4, Value::Str(JsString::from("retained method receiver")));
+        core.set_register_label(
+            4,
+            Label::Custom {
+                name: "receiver-context".to_string(),
+                level: 1,
+            },
+        )
+        .expect("seeded receiver label fits");
+    }
+
+    #[test]
+    fn compact_tier1_scope_inert_method_preserves_labels_and_accounting() {
+        let module = scope_inert_leaf_method_module();
+        let plan = CompactTier1Program::compile(&module).expect("compact method leaf plan");
+        assert_eq!(&*plan.verified_scope_inert_leaf_functions, &[false, true]);
+        let config = test_quickjs_config();
+        let mut compact_core = InterpreterCore::new(config.clone(), "tier-i-method-leaf");
+        let mut baseline_core = InterpreterCore::new(config, "tier-i-method-leaf");
+        seed_scope_inert_method(&mut compact_core, Value::Int(20));
+        seed_scope_inert_method(&mut baseline_core, Value::Int(20));
+        let compact = compact_core
+            .execute_with_trace_handoff(&module, Some(&plan), TraceHandoff::RetainInCore)
+            .expect("compact method call");
+        let baseline = baseline_core.execute(&module).expect("baseline method call");
+
+        assert_execution_semantics_equal(&compact, &baseline);
+        assert_eq!(compact.value, Value::Int(42));
+        assert_eq!(compact.completion_label, Label::Secret);
+        assert!(compact_core.call_stack.is_empty());
+        assert_scope_inert_terminal_state_equal(&mut compact_core, &mut baseline_core, &module);
+    }
+
+    #[test]
+    fn compact_tier1_scope_inert_method_without_captured_environment() {
+        let mut module = scope_inert_leaf_method_module();
+        module.instructions[2] = Ir3Instruction::Move { dst: 0, src: 5 };
+        module.function_table[0].frame_size = 6;
+        let plan = CompactTier1Program::compile(&module).expect("compact plain method plan");
+        assert_eq!(&*plan.verified_scope_inert_leaf_functions, &[false, true]);
+
+        for argument in [Value::Int(20), Value::BigInt(Arc::from("20"))] {
+            let mut compact_core =
+                InterpreterCore::new(test_quickjs_config(), "tier-i-plain-method");
+            let mut baseline_core =
+                InterpreterCore::new(test_quickjs_config(), "tier-i-plain-method");
+            for core in [&mut compact_core, &mut baseline_core] {
+                seed_scope_inert_method(core, argument.clone());
+                core.set_reg(5, Value::Function(1));
+            }
+            let compact = compact_core.execute_with_trace_handoff(
+                &module,
+                Some(&plan),
+                TraceHandoff::RetainInCore,
+            );
+            let baseline = baseline_core.execute(&module);
+            if matches!(argument, Value::Int(_)) {
+                let compact = compact.expect("compact plain method returns");
+                let baseline = baseline.expect("baseline plain method returns");
+                assert_execution_semantics_equal(&compact, &baseline);
+                assert_eq!(compact.value, Value::Int(42));
+                assert_eq!(compact.completion_label, Label::Secret);
+                assert!(compact_core.call_stack.is_empty());
+            } else {
+                let compact_error = compact.expect_err("compact mixed numeric method refuses");
+                let baseline_error = baseline.expect_err("baseline mixed numeric method refuses");
+                assert_eq!(compact_error, baseline_error);
+                assert!(matches!(compact_error, InterpreterError::TypeError { .. }));
+            }
+            assert_eq!(
+                compact_core.instructions_executed,
+                baseline_core.instructions_executed
+            );
+            assert_scope_inert_terminal_state_equal(&mut compact_core, &mut baseline_core, &module);
+        }
+    }
+
+    #[test]
+    fn compact_tier1_scope_inert_method_preserves_exact_entry_memory_boundary() {
+        let module = scope_inert_leaf_method_module();
+        let plan = CompactTier1Program::compile(&module).expect("compact method memory plan");
+        assert_eq!(&*plan.verified_scope_inert_leaf_functions, &[false, true]);
+        let make_core = || {
+            let mut config = test_quickjs_config();
+            config.instruction_budget = 3;
+            let mut core = InterpreterCore::new(config, "tier-i-method-memory");
+            seed_scope_inert_method(&mut core, Value::Int(20));
+            // A large captured key makes the two scope snapshots the entry
+            // peak, above the subsequent small frame and argument charges.
+            core.scope_chain
+                .current_mut()
+                .expect("caller scope")
+                .insert_binding(
+                    "snapshot-boundary-".repeat(256),
+                    ScopeBinding::with_state(BindingKind::Let, Value::Undefined, true),
+                );
+            core.sync_estimated_memory_bytes()
+                .expect("method memory fixture fits");
+            assert_eq!(
+                core.run_loop_labeled(&module)
+                    .expect_err("pause immediately before method entry"),
+                InterpreterError::BudgetExhausted {
+                    executed: 3,
+                    budget: 3,
+                }
+            );
+            assert_eq!(core.ip, 3);
+            assert!(core.call_stack.is_empty());
+            core.config.instruction_budget = 100;
+            core
+        };
+        let probe = make_core();
+        let Value::Closure(closure_id) = probe.read_reg(0).expect("created callee") else {
+            panic!("fixture must enter a captured method");
+        };
+        let captured_bytes = InterpreterCore::estimate_scope_chain_bytes(
+            &probe.closures[closure_id as usize].captured_env,
+        );
+        let receiver_bytes =
+            InterpreterCore::estimate_value_bytes(&probe.read_reg(4).expect("method receiver"))
+                .saturating_add(InterpreterCore::estimate_label_bytes(
+                    probe.get_register_label(4).expect("receiver label"),
+                ));
+        let exact_peak = probe
+            .estimated_memory_bytes()
+            .saturating_add(captured_bytes)
+            .saturating_add(InterpreterCore::estimate_label_bytes(&Label::Public))
+            .saturating_add(receiver_bytes)
+            .saturating_add(InterpreterCore::estimate_scope_chain_bytes(
+                &probe.scope_chain.frames,
+            ));
+
+        for one_byte_short in [true, false] {
+            let mut compact_core = make_core();
+            let mut baseline_core = make_core();
+            let before_bytes = baseline_core.estimated_memory_bytes();
+            let limit = exact_peak - u64::from(one_byte_short);
+            compact_core.config.max_total_memory_bytes = limit;
+            baseline_core.config.max_total_memory_bytes = limit;
+            let compact = compact_core.run_loop_labeled_with_compact_tier1(&module, Some(&plan));
+            let baseline = baseline_core.run_loop_labeled(&module);
+            if one_byte_short {
+                let compact_error = compact.expect_err("virtual entry must preserve the peak");
+                let baseline_error = baseline.expect_err("full entry must refuse one byte short");
+                assert_eq!(compact_error, baseline_error);
+                assert!(matches!(
+                    compact_error,
+                    InterpreterError::MemoryBudgetExceeded {
+                        requested_bytes,
+                        max_bytes,
+                        ..
+                    } if requested_bytes == exact_peak && max_bytes == limit
+                ));
+                assert_eq!(compact_core.ip, 3);
+                assert_eq!(baseline_core.ip, 3);
+                assert_eq!(compact_core.instructions_executed, 4);
+                assert!(compact_core.call_stack.is_empty());
+                assert_eq!(compact_core.estimated_memory_bytes(), before_bytes);
+            } else {
+                let compact = compact.expect("virtual entry fits at the exact ceiling");
+                let baseline = baseline.expect("full entry fits at the exact ceiling");
+                assert_eq!(compact.value, baseline.value);
+                assert_eq!(compact.label, baseline.label);
+                assert_eq!(compact.value, Value::Int(42));
+                assert_eq!(compact.label, Label::Secret);
+                assert!(compact_core.call_stack.is_empty());
+            }
+            assert_eq!(
+                compact_core.instructions_executed,
+                baseline_core.instructions_executed
+            );
+            assert_scope_inert_terminal_state_equal(&mut compact_core, &mut baseline_core, &module);
+        }
+    }
+
+    #[test]
+    fn compact_tier1_scope_inert_method_preserves_terminal_refusals() {
+        let module = scope_inert_leaf_method_module();
+        let plan = CompactTier1Program::compile(&module).expect("compact method leaf plan");
+        for case in ["type-error", "instruction-budget", "cancellation", "scope-depth"] {
+            let mut config = test_quickjs_config();
+            let argument = match case {
+                "type-error" => Value::BigInt(Arc::from("20")),
+                "instruction-budget" => {
+                    config.instruction_budget = 5;
+                    Value::Int(20)
+                }
+                "cancellation" => {
+                    let token = CancellationToken::new();
+                    token.cancel();
+                    config.cancellation_token = Some(token);
+                    config.checkpoint_density = 5;
+                    Value::Int(20)
+                }
+                "scope-depth" => {
+                    config.max_scope_depth = 1;
+                    Value::Int(20)
+                }
+                _ => unreachable!("fixed refusal cases"),
+            };
+            let mut compact_core = InterpreterCore::new(config.clone(), "tier-i-method-refusal");
+            let mut baseline_core = InterpreterCore::new(config, "tier-i-method-refusal");
+            seed_scope_inert_method(&mut compact_core, argument.clone());
+            seed_scope_inert_method(&mut baseline_core, argument);
+            let compact_error = compact_core
+                .execute_with_trace_handoff(&module, Some(&plan), TraceHandoff::RetainInCore)
+                .expect_err("compact method must refuse");
+            let baseline_error = baseline_core
+                .execute(&module)
+                .expect_err("baseline method must refuse");
+
+            assert_eq!(compact_error, baseline_error, "{case}");
+            assert_eq!(
+                compact_core.instructions_executed, baseline_core.instructions_executed,
+                "{case} must stop at the same deterministic instruction"
+            );
+            assert_scope_inert_terminal_state_equal(&mut compact_core, &mut baseline_core, &module);
+        }
     }
 
     #[test]

@@ -97,3 +97,40 @@ fn receivers_arguments_and_early_exits() {
         "9,2,true",
     );
 }
+
+#[test]
+fn scope_inert_methods_and_array_callbacks_preserve_results() {
+    check(
+        "function add(a,b) { return a+b; } var o={add}; \
+         [o.add(20,22), add.call(o,19,23), add.apply(o,[18,24]), \
+          [1,2,3,4].map(x=>x*3).filter(x=>x>6).reduce((a,b)=>a+b,0), \
+          [1,2,3].every(x=>x>0), [1,2,3].findIndex(x=>x>1)].join('|')",
+        "42|42|42|21|true|1",
+    );
+    check(
+        "function make() { let kept = 40; return [x=>x+2, ()=>kept]; } \
+         var fs=make(); var before=fs[1](); \
+         var result=[1,2,3].map(fs[0]).join(); \
+         before+'|'+result+'|'+fs[1]()",
+        "40|3,4,5|40",
+    );
+}
+
+#[test]
+fn scope_inert_callbacks_keep_coercion_and_caught_errors() {
+    check(
+        "var seen=[]; function add(x) { return x+1; } \
+         var obj={valueOf(){seen.push('coerce'); return 41;}}; \
+         var first=[obj].map(add)[0]; \
+         try { [1n].map(add); } catch(e) { seen.push(e instanceof TypeError); } \
+         first+'|'+seen.join()+'|'+[2].map(add)[0]",
+        "42|coerce,true|3",
+    );
+    check(
+        "var seen=[]; function add(x) { return x+1; } \
+         var obj={valueOf(){seen.push('coerce'); throw 'stop';}}; \
+         try { [obj,2].map(add); } catch(e) { seen.push(e); } \
+         seen.join()+'|'+[3].map(add)[0]",
+        "coerce,stop|4",
+    );
+}

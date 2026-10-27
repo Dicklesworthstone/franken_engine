@@ -31,6 +31,7 @@ on:
       - 'crates/franken-engine/tests/promise_reaction_label_conformance.rs'
       - 'crates/franken-engine/tests/gc_reclaim_bd_9vouw_57.rs'
       - 'crates/franken-engine/tests/process_spawn_foundation_bd_x85a7.rs'
+      - 'crates/franken-engine/tests/nested_callback_semantics.rs'
       - 'crates/franken-engine/tests/reflect_*.rs'
       - 'crates/franken-engine/tests/querystring_os_builtin_bd_qmy52.rs'
       - 'crates/franken-engine/tests/js_string*.rs'
@@ -269,6 +270,7 @@ jobs:
             --test promise_subclass_bd_9vouw_137 --test promise_reaction_label_conformance \
             --test gc_reclaim_bd_9vouw_57 \
             --test process_spawn_foundation_bd_x85a7 \
+            --test nested_callback_semantics \
             -- --nocapture > async-generator-validation/tests.log 2>&1 || status=$?
           tail -n 220 async-generator-validation/tests.log
           exit "$status"

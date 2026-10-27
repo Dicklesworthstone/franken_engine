@@ -1,4 +1,4 @@
-//! Conditional reachability for WeakMap entries and URL side-table links.
+//! Conditional reachability for WeakMap entries, URLs and child-process pipes.
 //!
 //! Eligibility depends on object marks, but a value may first enqueue a
 //! closure, promise, carrier, iterator or generator. Always drain every
@@ -82,13 +82,7 @@ impl<'a> ConditionalIndex<'a> {
         true
     }
 
-    fn add(
-        &mut self,
-        marker: &mut GcMarker,
-        owner: u32,
-        key: Option<u32>,
-        target: EdgeTarget<'a>,
-    ) {
+    fn add(&mut self, marker: &mut GcMarker, owner: u32, key: Option<u32>, target: EdgeTarget<'a>) {
         let index = self.edges.len();
         self.edges.push(ConditionalEdge {
             owner,
@@ -137,8 +131,7 @@ impl InterpreterCore {
     /// them here releases inline strings as well as obsolete object handles.
     fn gc_purge_weakmap_storage(&mut self, marker: &GcMarker) {
         let has_dead_entries = self.weakmap_storage.iter().any(|(owner, storage)| {
-            !marker.is_marked(owner.0)
-                || storage.entries.keys().any(|key| !marker.is_marked(*key))
+            !marker.is_marked(owner.0) || storage.entries.keys().any(|key| !marker.is_marked(*key))
         });
         if !has_dead_entries {
             return;
@@ -183,7 +176,8 @@ impl InterpreterCore {
         let mut count = self
             .url_objects
             .len()
-            .checked_add(self.url_search_params.len())?;
+            .checked_add(self.url_search_params.len())?
+            .checked_add(self.child_process_streams.len())?;
         for storage in self.weakmap_storage.values() {
             count = count
                 .checked_add(storage.entries.len())?
@@ -207,6 +201,14 @@ impl InterpreterCore {
             if let Some(owner) = state.owner_url {
                 index.add(marker, params.0, None, EdgeTarget::Object(owner));
             }
+        }
+        // The native lifecycle still addresses its original pipe facades
+        // when guest code replaces/deletes child.stdout, stderr or stdin.
+        // A reachable child therefore retains those private edges as well
+        // as its ordinary properties. The reverse stream -> child edge is
+        // traced directly by gc_trace_network_object.
+        for (stream, (child, _)) in &self.child_process_streams {
+            index.add(marker, child.0, None, EdgeTarget::Object(*stream));
         }
         index.watchers.sort_unstable();
         Some(index)
@@ -242,6 +244,11 @@ impl InterpreterCore {
                     marker.object(owner);
                 }
             }
+            for (stream, (child, _)) in &self.child_process_streams {
+                if marker.is_marked(child.0) {
+                    marker.object(*stream);
+                }
+            }
 
             // A closure or settled promise can reveal the next key without
             // having added anything to the object queue above. The drain
@@ -272,7 +279,10 @@ mod tests {
     }
 
     fn store(core: &mut InterpreterCore, map: ObjectId, key: ObjectId, value: Value) {
-        core.weakmap_storage.entry(map).or_default().set(key.0, value);
+        core.weakmap_storage
+            .entry(map)
+            .or_default()
+            .set(key.0, value);
     }
 
     fn captured(core: &mut InterpreterCore, payload: ObjectId) -> u32 {
@@ -443,6 +453,34 @@ mod tests {
     }
 
     #[test]
+    fn a_child_reached_through_a_weakmap_retains_native_pipe_edges_in_both_paths() {
+        let mut core = core();
+        let map = object(&mut core);
+        let key = object(&mut core);
+        let child = core
+            .allocate_child_process_facade(&ProcessCallOptions::default())
+            .expect("child");
+        let pipes = core
+            .child_process_streams
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        for name in ["stdout", "stderr", "stdin"] {
+            core.set_object_property(child, name.to_string(), Value::Null)
+                .expect("replace public pipe field");
+        }
+        let closure = captured(&mut core, child);
+        store(&mut core, map, key, Value::Closure(closure));
+        let mut indexed = roots(&core, &[map, key]);
+        let mut fallback = roots(&core, &[map, key]);
+        core.gc_mark_ephemerons_with_limit(&mut indexed, MAX_EPHEMERON_SCRATCH_BYTES);
+        core.gc_mark_ephemerons_with_limit(&mut fallback, 0);
+        assert_same_marks(&core, &indexed, &fallback);
+        assert!(indexed.is_marked(child.0));
+        assert!(pipes.iter().all(|pipe| indexed.is_marked(pipe.0)));
+    }
+
+    #[test]
     fn reverse_chains_examine_each_dependency_a_bounded_number_of_times() {
         for length in [32, 512, 4096] {
             let mut core = core();
@@ -535,8 +573,7 @@ mod tests {
         for key_first in [false, true] {
             let mut marker = GcMarker::new(8, 0, 0, 0, 0, 0, 0);
             let value = Value::Object(ObjectId(3));
-            let mut index =
-                ConditionalIndex::try_new(2, MAX_EPHEMERON_SCRATCH_BYTES).unwrap();
+            let mut index = ConditionalIndex::try_new(2, MAX_EPHEMERON_SCRATCH_BYTES).unwrap();
             index.add(&mut marker, 1, Some(2), EdgeTarget::Value(&value));
             index.add(&mut marker, 4, Some(4), EdgeTarget::Object(ObjectId(5)));
             index.watchers.sort_unstable();
@@ -588,11 +625,13 @@ mod tests {
                 .unwrap()
                 .set_symbol(8, Value::str("orphan".repeat(4096)));
         });
-        core.seed_register(0, Value::Object(map)).expect("seed root");
-        core.seed_register(1, Value::Object(key)).expect("seed root");
+        core.seed_register(0, Value::Object(map))
+            .expect("seed root");
+        core.seed_register(1, Value::Object(key))
+            .expect("seed root");
         let before = core.estimated_memory_bytes;
         let weak_before = core.weakmap_storage_memory_bytes();
-        core.collect_garbage().expect("collect");
+        core.collect_garbage();
         let weak_after = core.weakmap_storage_memory_bytes();
         let storage = &core.weakmap_storage[&map];
         assert_eq!(storage.get(key.0), Some(&Value::Object(payload)));
@@ -618,7 +657,7 @@ mod tests {
         );
         let retained = core.estimated_memory_bytes;
         let reclaimed = core.gc_stats().reclaimed_bytes;
-        core.collect_garbage().expect("collect again");
+        core.collect_garbage();
         assert_eq!(core.estimated_memory_bytes, retained);
         assert_eq!(core.gc_stats().reclaimed_bytes, reclaimed);
     }
@@ -630,8 +669,10 @@ mod tests {
         let map = object(&mut core);
         let key = object(&mut core);
         accounted_entries(&mut core, |core| store(core, map, key, Value::Int(42)));
-        core.seed_register(0, Value::Object(map)).expect("seed root");
-        core.seed_register(1, Value::Object(key)).expect("seed root");
+        core.seed_register(0, Value::Object(map))
+            .expect("seed root");
+        core.seed_register(1, Value::Object(key))
+            .expect("seed root");
         let retained_table_bytes = core.weakmap_storage_memory_bytes();
         // 32 MiB of historical payload under a 2 MiB budget. No register
         // roots the temporary keys; only the persistent entry may survive.
@@ -642,7 +683,7 @@ mod tests {
                     store(core, map, temporary, Value::str("x".repeat(4096)));
                 }
             });
-            core.collect_garbage().expect("collect churn");
+            core.collect_garbage();
             assert_eq!(core.weakmap_storage_memory_bytes(), retained_table_bytes);
             assert_eq!(core.weakmap_storage[&map].entries.len(), 1);
             assert_eq!(core.weakmap_storage[&map].weak_key_objects.len(), 1);
@@ -676,7 +717,7 @@ mod tests {
             .expect("seed root");
         core.seed_register(1, Value::Object(root_key))
             .expect("seed root");
-        core.collect_garbage().expect("collect");
+        core.collect_garbage();
         assert_eq!(
             core.weakmap_storage[&later].get(later_key.0),
             Some(&Value::Object(payload))

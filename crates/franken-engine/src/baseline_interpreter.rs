@@ -15979,6 +15979,10 @@ pub struct InterpreterCore {
     /// drains the entry by seq when it fires, so the map never retains completed
     /// callbacks.
     pending_io_callbacks: BTreeMap<u64, Vec<Value>>,
+    /// Arguments transferred out of the deferred I/O callback queue remain
+    /// owned by the invocation while guest code runs. Keep their charge in
+    /// the memory oracle while nested collections are enabled.
+    deferred_callback_in_flight_bytes: u64,
     /// Lifecycle process waits scheduled after the guest receives its
     /// `ChildProcess` facade. The provider `Spawn` crossing happens on the
     /// initiating stack; `Wait` runs on the deterministic I/O lane so listener
@@ -17117,6 +17121,7 @@ impl InterpreterCore {
             builtin_dispatch_hit_unknown_member: false,
             next_tick_queue: std::collections::VecDeque::new(),
             pending_io_callbacks: BTreeMap::new(),
+            deferred_callback_in_flight_bytes: 0,
             pending_child_process_tasks: BTreeMap::new(),
             child_process_task_in_flight_bytes: 0,
             event_listeners: BTreeMap::new(),
@@ -19785,6 +19790,12 @@ impl InterpreterCore {
                     (ObjectId, ChildProcessStreamKind),
                 )>() as u64),
             )
+    }
+
+    fn child_process_handles_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(self.child_process_handles.values().map(|handle| {
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(Self::estimate_string_bytes(handle))
+        }))
     }
 
     fn schedule_child_process_wait(
@@ -25944,8 +25955,10 @@ impl InterpreterCore {
             .event_listeners_memory_bytes()
             .saturating_add(self.event_promise_waiters_memory_bytes())
             .saturating_add(self.pending_io_callbacks_memory_bytes())
+            .saturating_add(self.deferred_callback_in_flight_bytes)
             .saturating_add(self.completed_child_processes_memory_bytes())
             .saturating_add(self.child_process_streams_memory_bytes())
+            .saturating_add(self.child_process_handles_memory_bytes())
             .saturating_add(self.pending_child_process_tasks_memory_bytes())
             .saturating_add(self.child_process_task_in_flight_bytes);
         let pending_tasks = std::mem::take(&mut self.pending_child_process_tasks);
@@ -25960,6 +25973,7 @@ impl InterpreterCore {
             self.event_loop.cancel_registration(registration);
         }
         self.pending_io_callbacks.clear();
+        self.deferred_callback_in_flight_bytes = 0;
         let released_promise_bytes =
             previous_promise_bytes.saturating_sub(self.promise_runtime_memory_bytes());
         self.event_listeners.clear();
@@ -25967,6 +25981,7 @@ impl InterpreterCore {
         self.next_event_promise_waiter_id = 0;
         self.completed_child_processes.clear();
         self.child_process_streams.clear();
+        self.child_process_handles.clear();
         self.child_process_task_in_flight_bytes = 0;
         self.estimated_memory_bytes = self
             .estimated_memory_bytes
@@ -74457,18 +74472,27 @@ impl InterpreterCore {
                 got: format!("closure#{closure_id} not found"),
             }));
         }
+        self.deferred_callback_in_flight_bytes = self
+            .deferred_callback_in_flight_bytes
+            .saturating_add(retained_bytes);
         let result = match module {
-            Some(module) => self
-                .invoke_inline_method_call_with_argument_label(
+            // The invocation pins its callee and full argument vector. No
+            // other values are held by this dispatch frame after transfer.
+            Some(module) => self.with_event_job_gc_request(Vec::new(), |core| {
+                core.invoke_inline_method_call_with_argument_label(
                     Some(module),
                     Value::Closure(closure_id),
                     Value::Undefined,
                     callback_args,
                     Some(macrotask.label.clone()),
                 )
-                .map(|_| ()),
+                .map(|_| ())
+            }),
             None => Ok(()),
         };
+        self.deferred_callback_in_flight_bytes = self
+            .deferred_callback_in_flight_bytes
+            .saturating_sub(retained_bytes);
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(retained_bytes);
         Some(result)
     }
@@ -74538,7 +74562,9 @@ impl InterpreterCore {
                     self.child_process_task_in_flight_bytes = self
                         .child_process_task_in_flight_bytes
                         .saturating_add(retained_bytes);
+                    let gc_checkpoint = self.gc_pin_child_process_task(&task);
                     let result = self.execute_pending_child_process_task(task, module);
+                    self.gc_unpin_network_values(gc_checkpoint);
                     self.child_process_task_in_flight_bytes = self
                         .child_process_task_in_flight_bytes
                         .saturating_sub(retained_bytes);
@@ -108723,10 +108749,12 @@ impl InterpreterCore {
             .saturating_add(async_generator_bytes)
             .saturating_add(self.top_level_await_outcome_memory_bytes())
             .saturating_add(self.pending_io_callbacks_memory_bytes())
+            .saturating_add(self.deferred_callback_in_flight_bytes)
             .saturating_add(self.pending_child_process_tasks_memory_bytes())
             .saturating_add(self.child_process_task_in_flight_bytes)
             .saturating_add(self.completed_child_processes_memory_bytes())
             .saturating_add(self.child_process_streams_memory_bytes())
+            .saturating_add(self.child_process_handles_memory_bytes())
             .saturating_add(self.pending_timer_tasks_memory_bytes())
             .saturating_add(self.atomics_async_waiters_memory_bytes())
             .saturating_add(promise_runtime_bytes)

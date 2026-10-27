@@ -69736,38 +69736,19 @@ impl InterpreterCore {
                 got: format!("depth {depth}"),
             });
         }
-        let Some((target, handler)) = self.active_proxy_record(object_id)? else {
+        if self.active_proxy_record(object_id)?.is_none() {
             return Ok(self.ordinary_own_string_key_is_enumerable(object_id, key));
-        };
-        let descriptor = self.invoke_proxy_trap(
-            module,
-            handler,
-            "getOwnPropertyDescriptor",
-            vec![
-                self.proxy_trap_target(object_id, target),
-                Value::Str(key.clone()),
-            ],
-        )?;
-        match descriptor {
-            // Trap absent: the target governs the descriptor.
-            None => self.own_string_key_is_enumerable(module, target, key, depth + 1),
-            // Property reported absent.
-            Some(Value::Undefined) => Ok(false),
-            Some(Value::Object(descriptor_id)) => {
-                let enumerable = self.proxy_aware_get_runtime_property(
-                    module,
-                    descriptor_id,
-                    &RuntimePropertyKey::String(JsString::from("enumerable")),
-                    Value::Object(descriptor_id),
-                    0,
-                )?;
-                Ok(enumerable.is_truthy())
-            }
-            Some(other) => Err(InterpreterError::TypeError {
-                expected: "object or undefined from Proxy.getOwnPropertyDescriptor".to_string(),
-                got: other.type_name().to_string(),
-            }),
         }
+        // Enumeration consumes [[GetOwnProperty]], including the complete
+        // descriptor conversion and target invariants, not just an unchecked
+        // Get of the trap result's `enumerable` field (bd-9vouw.513).
+        let descriptor = self.proxy_target_descriptor_fields(
+            module,
+            object_id,
+            &RuntimePropertyKey::String(key.clone()),
+            depth,
+        )?;
+        Ok(descriptor.is_some_and(|fields| fields.enumerable == Some(true)))
     }
 
     /// Own enumerable String keys of `object_id` in ES order, honoring the
@@ -69782,6 +69763,7 @@ impl InterpreterCore {
         &mut self,
         module: Option<&Ir3Module>,
         object_id: ObjectId,
+        receiver: &Value,
     ) -> Result<Vec<(JsString, Value)>, InterpreterError> {
         // Guest traps run while native locals hold their results: no
         // collection until this returns.
@@ -69796,7 +69778,7 @@ impl InterpreterCore {
                     module,
                     object_id,
                     &RuntimePropertyKey::String(key.clone()),
-                    Value::Object(object_id),
+                    receiver.clone(),
                     0,
                 )?;
                 entries.push((key, value));
@@ -69848,27 +69830,6 @@ impl InterpreterCore {
                 got: other.type_name().to_string(),
             }),
         }
-    }
-
-    /// Snapshot a source object's typed own-key order, read each value through
-    /// ordinary `[[Get]]` (so Symbol accessors and Proxy traps execute), and
-    /// copy it to the target. Object spread defines plain data properties;
-    /// `Object.assign` uses ordinary `[[Set]]` and therefore honors target
-    /// setters and Proxy `set` traps.
-    fn copy_own_runtime_properties(
-        &mut self,
-        module: Option<&Ir3Module>,
-        target_id: ObjectId,
-        source_id: ObjectId,
-        use_target_set: bool,
-    ) -> Result<(), InterpreterError> {
-        self.copy_data_properties(
-            module,
-            target_id,
-            Value::Object(source_id),
-            &BTreeSet::new(),
-            use_target_set,
-        )
     }
 
     /// CopyDataProperties excludes keys *before* consulting a descriptor or
@@ -69987,35 +69948,11 @@ impl InterpreterCore {
                 got: format!("depth {depth}"),
             });
         }
-        if let Some((target, handler)) = self.active_proxy_record(object_id)? {
-            return match self.invoke_proxy_trap(
-                module,
-                handler,
-                "getOwnPropertyDescriptor",
-                vec![self.proxy_trap_target(object_id, target), key.value()],
-            )? {
-                None => self.copy_own_key_is_enumerable(module, target, key, depth + 1),
-                Some(Value::Undefined) => Ok(false),
-                Some(value) if value.is_object_like() => {
-                    let Some(descriptor_id) = self
-                        .iterator_carrier_backing_id(&value, "Proxy property descriptor object")?
-                    else {
-                        return Ok(false);
-                    };
-                    let enumerable = self.proxy_aware_get_property(
-                        module,
-                        descriptor_id,
-                        "enumerable",
-                        value,
-                        0,
-                    )?;
-                    Ok(enumerable.is_truthy())
-                }
-                Some(other) => Err(InterpreterError::TypeError {
-                    expected: "object or undefined from Proxy.getOwnPropertyDescriptor".to_string(),
-                    got: other.type_name().to_string(),
-                }),
-            };
+        if self.active_proxy_record(object_id)?.is_some() {
+            // Copying consumes the same checked [[GetOwnProperty]] operation
+            // as key/value enumeration, including Symbol-keyed descriptors.
+            let descriptor = self.proxy_target_descriptor_fields(module, object_id, key, depth)?;
+            return Ok(descriptor.is_some_and(|fields| fields.enumerable == Some(true)));
         }
         let object = self
             .heap
@@ -97385,6 +97322,11 @@ impl InterpreterCore {
                         if function.is_callable() || Self::has_exotic_backing_object(function) =>
                     {
                         let key_values = match self.own_property_holder(module, function, false)? {
+                            Some(backing) if self.active_proxy_record(backing)?.is_some() => self
+                                .proxy_own_enumerable_string_keys(module, backing)?
+                                .into_iter()
+                                .map(Value::Str)
+                                .collect::<Vec<_>>(),
                             Some(backing) => self
                                 .heap
                                 .get(backing.0 as usize)
@@ -97437,7 +97379,7 @@ impl InterpreterCore {
                         // the get trap, in ownKeys-trap order, right after its
                         // descriptor (bd-9vouw.347).
                         let values = self
-                            .proxy_enumerable_own_entries(module, obj_id)?
+                            .proxy_enumerable_own_entries(module, obj_id, &Value::Object(obj_id))?
                             .into_iter()
                             .map(|(_, value)| value)
                             .collect::<Vec<_>>();
@@ -97465,7 +97407,10 @@ impl InterpreterCore {
                         let array_id = self.alloc_array_from_values(&values)?;
                         Ok(Value::Object(array_id))
                     }
-                    ref holder if Self::stores_own_properties_on_backing(holder) => {
+                    ref holder
+                        if Self::stores_own_properties_on_backing(holder)
+                            || Self::is_callable_proxy(holder) =>
+                    {
                         let values = self
                             .backing_enumerable_own_entries(module, holder)?
                             .into_iter()
@@ -97499,7 +97444,11 @@ impl InterpreterCore {
                         // bd-9trje: [key, value] pairs for each enumerable Proxy key,
                         // key order from the ownKeys trap, each value from the get
                         // trap right after its descriptor (bd-9vouw.347).
-                        let entries = self.proxy_enumerable_own_entries(module, obj_id)?;
+                        let entries = self.proxy_enumerable_own_entries(
+                            module,
+                            obj_id,
+                            &Value::Object(obj_id),
+                        )?;
                         let mut entry_values = Vec::with_capacity(entries.len());
                         for (key, value) in entries {
                             let entry_array_id =
@@ -97532,7 +97481,10 @@ impl InterpreterCore {
                         let array_id = self.alloc_array_from_values(&entry_values)?;
                         Ok(Value::Object(array_id))
                     }
-                    ref holder if Self::stores_own_properties_on_backing(holder) => {
+                    ref holder
+                        if Self::stores_own_properties_on_backing(holder)
+                            || Self::is_callable_proxy(holder) =>
+                    {
                         let entries = self.backing_enumerable_own_entries(module, holder)?;
                         let mut entry_values = Vec::with_capacity(entries.len());
                         for (key, value) in entries {
@@ -97689,22 +97641,18 @@ impl InterpreterCore {
                         holder
                             if holder.is_callable() || Self::has_exotic_backing_object(holder) =>
                         {
-                            match module {
-                                Some(module) => {
-                                    self.function_own_property_object(module, holder)?
-                                }
-                                None => None,
-                            }
+                            self.own_property_holder(module, holder, false)?
                         }
                         // Skip non-object sources (null, undefined, primitives)
                         _ => None,
                     };
                     if let Some(source_obj_id) = source_obj_id {
                         self.join_pending_hostcall_stream_label(source_obj_id)?;
-                        self.copy_own_runtime_properties(
+                        self.copy_data_properties(
                             module,
                             target_obj_id,
-                            source_obj_id,
+                            source_val,
+                            &BTreeSet::new(),
                             true,
                         )?;
                     }
@@ -114846,6 +114794,9 @@ impl InterpreterCore {
             return Ok(Vec::new());
         };
         self.join_pending_hostcall_stream_label(backing)?;
+        if self.active_proxy_record(backing)?.is_some() {
+            return self.proxy_enumerable_own_entries(module, backing, value);
+        }
         let keys = self
             .heap
             .get(backing.0 as usize)

@@ -2085,6 +2085,7 @@ name = "frankenengine-test-support"
 version = "0.1.0"
 dependencies = [
  "frankenengine-engine",
+ "serde_json",
 ]
 
 [[package]]

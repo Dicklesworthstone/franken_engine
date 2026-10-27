@@ -13,13 +13,48 @@ engine-defaults = ["frankenengine-engine/default"]
 [lib]
 path = "src/lib.rs"
 
-# Compile the original source directly, preserving all five tests, fixtures,
-# lane profiles and default runtime budgets. These probes use the real engine
-# API, not this crate's mock adapters. Selecting this package avoids linking
+# Compile canonical integration sources directly, preserving their tests,
+# fixtures, lane profiles and default runtime budgets. These probes use the real
+# engine API, not this crate's mock adapters. Selecting this package avoids linking
 # every engine artifact-tool binary before a focused runtime test can execute.
 [[test]]
 name = "array_mutation_property_operations"
 path = "../franken-engine/tests/array_mutation_property_operations.rs"
+required-features = ["engine-defaults"]
+
+[[test]]
+name = "proxy_descriptor_traps_bd_9vouw_147"
+path = "../franken-engine/tests/proxy_descriptor_traps_bd_9vouw_147.rs"
+required-features = ["engine-defaults"]
+
+[[test]]
+name = "proxy_trap_invariants_bd_9vouw_306"
+path = "../franken-engine/tests/proxy_trap_invariants_bd_9vouw_306.rs"
+required-features = ["engine-defaults"]
+
+[[test]]
+name = "own_property_descriptors_proxy_bd_9vouw_347"
+path = "../franken-engine/tests/own_property_descriptors_proxy_bd_9vouw_347.rs"
+required-features = ["engine-defaults"]
+
+[[test]]
+name = "typescript_function_execution"
+path = "../franken-engine/tests/typescript_function_execution.rs"
+required-features = ["engine-defaults"]
+
+[[test]]
+name = "typescript_class_execution"
+path = "../franken-engine/tests/typescript_class_execution.rs"
+required-features = ["engine-defaults"]
+
+[[test]]
+name = "typescript_annotation_execution"
+path = "../franken-engine/tests/typescript_annotation_execution.rs"
+required-features = ["engine-defaults"]
+
+[[test]]
+name = "ts_normalization_integration"
+path = "../franken-engine/tests/ts_normalization_integration.rs"
 required-features = ["engine-defaults"]
 
 [dependencies]
@@ -29,3 +64,6 @@ required-features = ["engine-defaults"]
 frankenengine-engine = { path = "../franken-engine", default-features = false, features = [
     "asupersync-integration",
 ] }
+
+[dev-dependencies]
+serde_json.workspace = true

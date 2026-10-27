@@ -1263,7 +1263,7 @@ impl InterpreterCore {
                 what,
             )
         };
-        if !matches!(result, Value::Undefined | Value::Object(_)) {
+        if !matches!(result, Value::Undefined | Value::Object(_)) && !result.is_callable() {
             return Err(invariant(&format!("{} result", result.type_name())));
         }
         let target_fields = self.proxy_target_descriptor_fields(module, target, key, depth + 1)?;
@@ -1281,7 +1281,21 @@ impl InterpreterCore {
             return Ok(Value::Undefined);
         }
         let extensible = self.object_is_extensible(module, target, depth + 1)?;
-        let fields = self.read_property_descriptor(module, &result)?;
+        let mut fields = self.read_property_descriptor(module, &result)?;
+        // Proxy [[GetOwnProperty]] completes its returned descriptor BEFORE
+        // compatibility checks. Missing value/writable/accessor fields must
+        // participate in the invariants, including the non-writable report
+        // of a still-writable non-configurable target property (bd-9vouw.513).
+        // [[DefineOwnProperty]] deliberately retains partial descriptors.
+        if fields.is_accessor() {
+            fields.get.get_or_insert(Value::Undefined);
+            fields.set.get_or_insert(Value::Undefined);
+        } else {
+            fields.value.get_or_insert(Value::Undefined);
+            fields.writable.get_or_insert(false);
+        }
+        fields.enumerable.get_or_insert(false);
+        fields.configurable.get_or_insert(false);
         if !Self::descriptor_is_compatible(extensible, &fields, target_fields.as_ref()) {
             return Err(invariant("a descriptor incompatible with the target's"));
         }

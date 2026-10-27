@@ -3145,6 +3145,7 @@ impl QuoteState {
     fn open_regex_at(&mut self, s: &str, slash: usize) -> bool {
         match regex_literal_len_at(s, slash) {
             Some(len) if len > 1 => {
+                self.set_substitution_last(b'"');
                 self.stack.push(QuoteContext::Regex(len - 1));
                 true
             }
@@ -8349,7 +8350,16 @@ fn parse_template_literal(
             // skipping strings and nested templates (bd-9vouw.41).
             let mut substitution = QuoteState::in_substitution();
             while i < bytes.len() {
-                substitution.advance(bytes[i]);
+                // A control head starts a statement, so its following slash
+                // can open a regex. Reuse the ordinary expression scanner;
+                // a keyword-named method call still ends an operand.
+                if bytes[i] != b'/'
+                    || !substitution.in_substitution_code()
+                    || !closes_control_statement_head(inner[start..i].trim_end())
+                    || !substitution.open_regex_at(&inner[start..], i - start)
+                {
+                    substitution.advance(bytes[i]);
+                }
                 if !substitution.active() {
                     break;
                 }

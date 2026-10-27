@@ -50,19 +50,135 @@ const SHARED_LENGTH: &str = "length";
 const SHARED_REMAINING: &str = "remaining";
 
 impl InterpreterCore {
-    /// Whether %Array.prototype% or %Object.prototype% has an own `then`, so
-    /// resolving a combinator's result with its values array reads it (the
-    /// Promise Resolve Function's Get(resolution, "then")): the native
-    /// combinator, which settles with the array directly, would skip it
-    /// (bd-9vouw.350: a poisoned or thenable Array.prototype.then).
-    fn arrays_inherit_then(&self) -> bool {
+    /// A fresh intrinsic result Array can bypass Get(then) only while its
+    /// CURRENT canonical prototype chain proves the read inert. Any changed
+    /// link, labeled metadata, or own then requires the observable path.
+    /// Inspect only the two intrinsic objects: never walk a guest-supplied
+    /// chain or invoke a Proxy merely to select the native implementation.
+    fn fresh_array_resolution_is_inert(&self) -> bool {
         let then = RuntimePropertyKey::String(JsString::from("then"));
-        ["Array", "Object"].iter().any(|name| {
-            self.builtin_prototypes
-                .get(*name)
-                .and_then(|prototype| self.heap.get(prototype.0 as usize))
-                .is_some_and(|prototype| prototype.contains_own_runtime_property(&then))
-        })
+        let object_prototype = self.builtin_prototypes.get("Object").copied();
+        for name in ["Array", "Object"] {
+            let Some(&id) = self.builtin_prototypes.get(name) else {
+                continue;
+            };
+            let Some(object) = self.heap.get(id.0 as usize) else {
+                return false;
+            };
+            let expected_parent = if name == "Array" {
+                object_prototype
+            } else {
+                None
+            };
+            if !self.promise_combinator_metadata_is_public(id)
+                || object.contains_own_runtime_property(&then)
+                || self.observable_prototype_link(object, id) != expected_parent
+            {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Native element jobs call the aggregate's resolve function, not
+    /// FulfillPromise. Recheck a newly built Array at SETTLEMENT time: guest
+    /// code may have changed its prototypes since combinator registration.
+    /// Race/any may likewise deliver an object whose then changed after its
+    /// input promise fulfilled. Keep direct primitive/pristine-Array settlement
+    /// and the existing native element jobs; only observable reads enter the
+    /// shared resolver, with no extra reaction or hidden promise.
+    pub(super) fn resolve_native_combinator_result(
+        &mut self,
+        module: Option<&Ir3Module>,
+        promise: crate::promise_model::PromiseHandle,
+        value: crate::object_model::JsValue,
+        label: Label,
+        fresh_array: bool,
+    ) -> Result<(), InterpreterError> {
+        // A Function carrier may hold a primitive (BigInt or an exact
+        // malformed string). Inspect its borrowed value before decoding:
+        // primitive winners reuse their carrier without copying its payload.
+        let (object_like, value_bytes) = match &value {
+            crate::object_model::JsValue::Object(_) => (true, 0),
+            crate::object_model::JsValue::Function(id) if *id >= PROMISE_VALUE_CARRIER_BASE => {
+                let carried = self
+                    .promise_value_carriers
+                    .get(id)
+                    .expect("native result carrier remains retained by its input");
+                let object_like = carried.is_object_like();
+                (
+                    object_like,
+                    if object_like {
+                        Self::estimate_value_bytes(carried)
+                    } else {
+                        0
+                    },
+                )
+            }
+            crate::object_model::JsValue::Function(_) => (true, 0),
+            _ => (false, 0),
+        };
+        if !object_like || (fresh_array && self.fresh_array_resolution_is_inert()) {
+            return self.fulfill_promise(promise, value, label);
+        }
+        // The decoded local and its GC root are separate logical owners.
+        // Reserve both payloads and the scoped label clone before creating
+        // them; the carrier stored in the input remains independently owned.
+        let temporary_bytes = value_bytes
+            .saturating_mul(2)
+            .saturating_add(Self::estimate_label_bytes(&label));
+        self.json_reserve_temporary(temporary_bytes)?;
+        let value = self.js_value_to_value(&value);
+        // The aggregate has not yet retained its new result. A then getter
+        // may collect, so root both native locals through that observation.
+        let held = vec![Value::Promise(promise.0), value.clone()];
+        let outcome = self.with_event_job_gc_request(held, |core| {
+            core.in_promise_resolution_context(&label, |core| {
+                core.resolve_promise_with_value(module, promise, value, label.clone())
+            })
+        });
+        drop(label);
+        self.json_release_temporary(temporary_bytes);
+        outcome
+    }
+
+    /// PromiseResolve reads run under the triggering observation's label.
+    /// Shared by observable then reads, async-generator awaits and native
+    /// combinator completion so
+    /// getters, traps, throws and zero-argument effects retain that floor.
+    /// Restore the caller's context and temporary ownership on every exit.
+    pub(super) fn in_promise_resolution_context<T>(
+        &mut self,
+        floor: &Label,
+        read: impl FnOnce(&mut Self) -> Result<T, InterpreterError>,
+    ) -> Result<T, InterpreterError> {
+        let context = self.json_parse_context_label()?;
+        let context = self.join_owned_label_with_temporary_budget(context, floor)?;
+        let saved_bytes = self
+            .active_inline_callback_context_label
+            .as_ref()
+            .map(Self::estimate_label_bytes)
+            .unwrap_or(0);
+        self.json_reserve_temporary(saved_bytes)?;
+        if let Err(error) =
+            self.apply_memory_component_delta(saved_bytes, Self::estimate_label_bytes(&context))
+        {
+            self.json_release_temporary(saved_bytes);
+            return Err(error);
+        }
+        let saved_context = self.active_inline_callback_context_label.replace(context);
+        let outcome = read(self);
+        let context = self
+            .active_inline_callback_context_label
+            .take()
+            .expect("nested then getters restore the Promise resolution context");
+        self.active_inline_callback_context_label = saved_context;
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(Self::estimate_label_bytes(&context))
+            .saturating_add(saved_bytes);
+        self.json_release_temporary(saved_bytes);
+        outcome
     }
 
     /// Whether `value` is this realm's %Promise%.
@@ -726,7 +842,7 @@ impl InterpreterCore {
                 if builtin.kind == BuiltinFunctionKind::PromiseResolve
                     && builtin.bound_object.is_none())
             && self.promise_prototype_then_is_intrinsic()
-            && !self.arrays_inherit_then()
+            && self.fresh_array_resolution_is_inert()
             && self.promise_combinator_has_native_inputs(module, &constructor, &iterable)?
         {
             return self.dispatch_promise_hostcall(capability_tag, args, Some(module));

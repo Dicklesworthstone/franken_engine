@@ -385,3 +385,592 @@ fn any_aggregate_uses_exact_native_values_and_retains_the_shared_label() {
     }
     assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
 }
+
+const NATIVE_RESOLUTION_0_SOURCE: &str = r#"
+(async () => {
+  let checks = 0;
+  for (const method of ['all', 'allSettled']) {
+    const kinds = method === 'all' ? ['primitive', 'fulfilled', 'pending']
+      : ['primitive', 'fulfilled', 'pending', 'rejected'];
+    for (const kind of kinds) {
+      for (const mode of ['callable', 'throw', 'noncallable']) {
+        let release;
+        const input = kind === 'primitive' ? 4
+          : kind === 'fulfilled' ? Promise.resolve(4)
+          : kind === 'rejected' ? Promise.reject(4)
+          : new Promise(resolve => { release = resolve; });
+        const promise = Promise[method]([input]);
+        const events = []; const reason = {}; let receiver, reads = 0, calls = 0;
+        Object.defineProperty(Array.prototype, 'then', {
+          configurable: true,
+          get() {
+            reads++; receiver = this; events.push('get');
+            if (this.length !== 1) throw Error('result array receiver');
+            if (method === 'all' && this[0] !== 4) throw Error('all payload');
+            if (method === 'allSettled') {
+              const entry = this[0];
+              if (entry.status !== (kind === 'rejected' ? 'rejected' : 'fulfilled')
+                || entry[kind === 'rejected' ? 'reason' : 'value'] !== 4)
+                throw Error('allSettled payload');
+            }
+            if (mode === 'throw') throw reason;
+            if (mode === 'noncallable') return 17;
+            return function (resolve, reject) {
+              calls++; events.push('call');
+              if (this !== receiver) throw Error('then receiver');
+              resolve(73); reject(reason); resolve(99);
+            };
+          }
+        });
+        if (release) release(4);
+        Promise.resolve().then(() => events.push('tick'));
+        let rejected = false;
+        try {
+          const value = await promise;
+          events.push('after');
+          if (mode === 'throw' || value !== (mode === 'callable' ? 73 : receiver))
+            throw Error('result resolution');
+        } catch (error) {
+          rejected = true; events.push('catch');
+          if (mode !== 'throw' || error !== reason) throw error;
+        } finally {
+          delete Array.prototype.then;
+        }
+        const expected = mode === 'throw' ? 'get:tick:catch'
+          : mode === 'callable' ? 'get:tick:call:after' : 'get:tick:after';
+        if (reads !== 1 || calls !== (mode === 'callable' ? 1 : 0)
+          || rejected !== (mode === 'throw') || events.join(':') !== expected)
+          throw Error('late order ' + method + ':' + kind + ':' + mode + ':' + events.join(':'));
+        checks++;
+      }
+    }
+  }
+  console.log('late arrays', checks);
+})().catch(error => console.log('FAIL', error.message));
+"#;
+
+#[test]
+fn native_array_results_observe_late_then_changes() {
+    assert_fixture(NATIVE_RESOLUTION_0_SOURCE, "late arrays 21");
+}
+
+const NATIVE_RESOLUTION_1_SOURCE: &str = r#"
+(async () => {
+  let checks = 0;
+  for (const method of ['race', 'any']) {
+    for (const kind of ['object', 'function', 'bound', 'iterator']) {
+      for (const mode of ['callable', 'throw']) {
+        const value = kind === 'object' ? {} : kind === 'function' ? function () {}
+          : kind === 'bound' ? (function () {}).bind(null) : [1].values();
+        const input = Promise.resolve(value);
+        const promise = Promise[method]([input]);
+        const reason = {}; const events = []; let reads = 0, calls = 0;
+        Object.defineProperty(value, 'then', { configurable: true, get() {
+          reads++; events.push('get');
+          if (this !== value) throw Error('getter receiver');
+          if (mode === 'throw') throw reason;
+          return function (resolve, reject) {
+            calls++; events.push('call');
+            if (this !== value) throw Error('call receiver');
+            resolve(91); reject(reason); throw reason;
+          };
+        } });
+        Promise.resolve().then(() => events.push('tick'));
+        let rejected = false;
+        try {
+          if (await promise !== 91) throw Error('late value not adopted');
+          events.push('after');
+          if (mode === 'throw') throw Error('missing rejection');
+        } catch (error) {
+          rejected = true; events.push('catch');
+          if (mode !== 'throw' || error !== reason) throw error;
+        } finally { delete value.then; }
+        if (reads !== 1 || calls !== (mode === 'callable' ? 1 : 0)
+          || rejected !== (mode === 'throw')
+          || events.join(':') !== (mode === 'throw' ? 'get:tick:catch' : 'get:tick:call:after'))
+          throw Error('race/any resolution ' + method + ':' + kind + ':' + events.join(':'));
+        checks++;
+      }
+    }
+  }
+  console.log('late winners', checks);
+})().catch(error => console.log('FAIL', error.message));
+"#;
+
+#[test]
+fn native_race_and_any_resolve_winner_values_again() {
+    assert_fixture(NATIVE_RESOLUTION_1_SOURCE, "late winners 16");
+}
+
+const NATIVE_RESOLUTION_2_SOURCE: &str = r#"
+(async () => {
+  let checks = 0;
+  for (const route of ['resolve', 'executor', 'reaction', 'async', 'await']) {
+    for (const kind of ['function', 'bound', 'asyncFunction', 'generatorFunction', 'iterator']) {
+      for (const callable of [false, true]) {
+        const value = kind === 'function' ? function () {}
+          : kind === 'bound' ? (function () {}).bind(null)
+          : kind === 'asyncFunction' ? async function () {}
+          : kind === 'generatorFunction' ? function* () {}
+          : [1].values();
+        let reads = 0, calls = 0;
+        Object.defineProperty(value, 'then', { configurable: true, get() {
+          reads++;
+          if (this !== value) throw Error('Get receiver');
+          if (!callable) return 7;
+          return function (resolve, reject) {
+            calls++;
+            if (this !== value) throw Error('Call receiver');
+            resolve(88); reject(0); resolve(99);
+          };
+        } });
+        const promise = route === 'resolve' ? Promise.resolve(value)
+          : route === 'executor' ? new Promise(resolve => resolve(value))
+          : route === 'reaction' ? Promise.resolve().then(() => value)
+          : route === 'async' ? (async () => value)()
+          : value;
+        const result = await promise;
+        if (result !== (callable ? 88 : value) || reads !== 1 || calls !== (callable ? 1 : 0))
+          throw Error('object-like resolve ' + route + ':' + kind);
+        delete value.then;
+        checks++;
+      }
+    }
+  }
+  for (const value of [undefined, null, false, -0, NaN, 7n, Symbol('s'), '\ud800']) {
+    if (!Object.is(await new Promise(resolve => resolve(value)), value))
+      throw Error('primitive identity');
+  }
+  console.log('object-like resolution', checks);
+})().catch(error => console.log('FAIL', error.message));
+"#;
+
+#[test]
+fn all_resolve_entrypoints_assimilate_object_like_representations() {
+    assert_fixture(NATIVE_RESOLUTION_2_SOURCE, "object-like resolution 50");
+}
+
+const NATIVE_RESOLUTION_3_SOURCE: &str = r#"
+(async () => {
+  let checks = 0;
+  for (const method of ['all', 'allSettled']) {
+    for (const timing of ['before', 'after']) {
+      for (const length of [0, 1]) {
+        for (const exotic of [false, true]) {
+          const parent = Object.getPrototypeOf(Array.prototype);
+          const events = []; let reads = 0, calls = 0, receiver;
+          const getThen = function () {
+            reads++; receiver = this; events.push('get');
+            if (!Array.isArray(this) || this.length !== length) throw Error('inherited receiver');
+            return function (resolve) {
+              calls++; events.push('call');
+              if (this !== receiver) throw Error('inherited then receiver');
+              resolve(62);
+            };
+          };
+          const middle = Object.create(parent);
+          let inherited;
+          if (exotic) {
+            inherited = new Proxy(middle, {
+              get(target, key, actualReceiver) {
+                return key === 'then' ? getThen.call(actualReceiver) : Reflect.get(target, key, actualReceiver);
+              },
+              getPrototypeOf() { throw Error('speculative prototype trap'); }
+            });
+          } else {
+            Object.defineProperty(middle, 'then', { get: getThen });
+            inherited = middle;
+          }
+          if (timing === 'before') Object.setPrototypeOf(Array.prototype, inherited);
+          const promise = Promise[method](length === 0 ? [] : [8]);
+          if (timing === 'after') Object.setPrototypeOf(Array.prototype, inherited);
+          Promise.resolve().then(() => events.push('tick'));
+          try {
+            const result = await promise;
+            events.push('after');
+            const alreadyFulfilled = timing === 'after' && length === 0;
+            if (alreadyFulfilled) {
+              if (!Array.isArray(result) || result.length !== 0 || reads !== 0 || calls !== 0
+                || events.join(':') !== 'tick:after') throw Error('empty settlement observed later change');
+            } else {
+              const order = length === 0 ? 'get:call:tick:after' : 'get:tick:call:after';
+              if (result !== 62 || reads !== 1 || calls !== 1 || events.join(':') !== order)
+                throw Error('inherited result ' + method + ':' + timing + ':' + length + ':' + events.join(':'));
+            }
+            checks++;
+          } finally {
+            Object.setPrototypeOf(Array.prototype, parent);
+          }
+        }
+      }
+    }
+  }
+  console.log('inherited arrays', checks);
+})().catch(error => console.log('FAIL', error.message));
+"#;
+
+#[test]
+fn native_array_resolution_observes_actual_prototypes_at_the_correct_time() {
+    assert_fixture(NATIVE_RESOLUTION_3_SOURCE, "inherited arrays 16");
+}
+
+fn pending_native_resolution_fixture(
+    getter_body: &str,
+) -> (
+    InterpreterCore,
+    Ir3Module,
+    crate::promise_model::PromiseHandle,
+    crate::promise_model::PromiseHandle,
+    ObjectId,
+) {
+    let source = format!(
+        "const state = {{marker: 9471, calls: 0}}; \
+         const input = new Promise(function () {{}}); \
+         const aggregate = Promise.all([input]); \
+         const holder = {{marker: 9472, state, input, aggregate}}; \
+         Object.defineProperty(Array.prototype, 'then', {{configurable: true, \
+           get: function () {{state.calls++; {getter_body}}} \
+         }});"
+    );
+    let module = module(&source);
+    let mut core = InterpreterCore::new(config(false), "native-combinator-resolution");
+    core.execute(&module).expect("pending native aggregate setup");
+    assert_eq!(
+        core.promise_combinators.len(),
+        1,
+        "exercise native registration"
+    );
+    let holder = core
+        .heap
+        .iter()
+        .find(|object| object.properties.get("marker") == Some(&Value::Int(9472)))
+        .expect("retained holder");
+    let Value::Object(state) = holder.properties.get("state").unwrap().clone() else {
+        panic!("state object");
+    };
+    let Value::Promise(input) = holder.properties.get("input").unwrap().clone() else {
+        panic!("input promise");
+    };
+    let Value::Promise(result) = holder.properties.get("aggregate").unwrap().clone() else {
+        panic!("aggregate promise");
+    };
+    (
+        core,
+        module,
+        crate::promise_model::PromiseHandle(input),
+        crate::promise_model::PromiseHandle(result),
+        state,
+    )
+}
+
+#[test]
+fn native_resolution_getter_throws_reject_with_exact_value_and_observation_label() {
+    for label in [Label::Public, Label::Secret] {
+        let (mut core, module, input, result, state) =
+            pending_native_resolution_fixture("throw 23;");
+        core.fulfill_promise(input, crate::object_model::JsValue::Int(4), label.clone())
+            .expect("input fulfillment");
+        core.drain_microtasks(Some(&module))
+            .expect("catchable getter error rejects aggregate");
+        let record = core.promise_store.get(result).unwrap();
+        assert_eq!(
+            record.state,
+            PromiseState::Rejected(crate::object_model::JsValue::Int(23))
+        );
+        assert_eq!(record.label, label);
+        assert_eq!(
+            core.heap[state.0 as usize].properties.get("calls"),
+            Some(&Value::Int(1))
+        );
+        assert_eq!(core.own_property_label(state, "calls"), label);
+        assert!(core.pending_exception.is_none());
+        assert!(core.active_inline_callback_context_label.is_none());
+        assert!(core.promise_combinators.is_empty());
+        assert!(core.promise_combinator_watchers.is_empty());
+        assert_eq!(core.promise_in_flight_task_bytes, 0);
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+}
+
+#[test]
+fn native_resolution_getter_effects_use_the_aggregate_floor_and_fatal_cleanup() {
+    for label in [Label::Public, Label::Secret] {
+        let (mut core, module, input, result, state) =
+            pending_native_resolution_fixture("console.log(); return undefined;");
+        let dependent = core
+            .register_promise_then(result, None, None, Label::Public)
+            .expect("aggregate dependent");
+        core.fulfill_promise(input, crate::object_model::JsValue::Int(4), label.clone())
+            .expect("input fulfillment");
+        let outcome = core.drain_microtasks(Some(&module));
+        if label == Label::Secret {
+            assert!(
+                matches!(outcome, Err(InterpreterError::CapabilityDenied { ref capability })
+                    if capability == "console:log:confidentiality")
+            );
+            assert!(core.console_output.is_empty());
+            for promise in [result, dependent] {
+                let record = core.promise_store.get(promise).unwrap();
+                assert_eq!(
+                    record.state,
+                    PromiseState::Rejected(crate::object_model::JsValue::Undefined)
+                );
+                assert_eq!(record.label, Label::Secret);
+                assert!(record.reactions.is_empty());
+            }
+        } else {
+            outcome.expect("Public getter effect is admitted");
+            assert_eq!(core.console_output.len(), 1);
+            assert_eq!(core.console_output[0].message, "");
+            for promise in [result, dependent] {
+                assert!(
+                    core.promise_store
+                        .get(promise)
+                        .unwrap()
+                        .state
+                        .is_fulfilled()
+                );
+            }
+        }
+        assert_eq!(
+            core.heap[state.0 as usize].properties.get("calls"),
+            Some(&Value::Int(1))
+        );
+        assert_eq!(core.own_property_label(state, "calls"), label);
+        assert!(core.active_inline_callback_context_label.is_none());
+        assert!(core.promise_combinators.is_empty());
+        assert!(core.promise_combinator_watchers.is_empty());
+        assert_eq!(core.promise_in_flight_task_bytes, 0);
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+}
+
+#[test]
+fn object_like_resolution_getters_preserve_the_input_label_for_effects() {
+    for expression in [
+        "function value() {}",
+        "(function value() {}).bind(null)",
+        "async function value() {}",
+        "function* value() {}",
+        "(function* value() { yield 1; })()",
+    ] {
+        for label in [Label::Public, Label::Secret] {
+            let source = format!(
+                "const state = {{marker: 9481, calls: 0}}; \
+                 const value = {expression}; \
+                 const result = new Promise(function () {{}}); \
+                 const holder = {{marker: 9482, state, value, result}}; \
+                 Object.defineProperty(value, 'then', {{configurable: true, \
+                   get: function () {{state.calls++; console.log(); return undefined;}} \
+                 }});"
+            );
+            let module = module(&source);
+            let mut core =
+                InterpreterCore::new(config(false), "object-like-resolution-label");
+            core.execute(&module).expect("object-like resolution setup");
+            let holder = core
+                .heap
+                .iter()
+                .find(|object| object.properties.get("marker") == Some(&Value::Int(9482)))
+                .expect("retained holder");
+            let Value::Object(state) = holder.properties.get("state").unwrap().clone() else {
+                panic!("state object");
+            };
+            let value = holder.properties.get("value").unwrap().clone();
+            let Value::Promise(result) = holder.properties.get("result").unwrap().clone() else {
+                panic!("result promise");
+            };
+            let result = crate::promise_model::PromiseHandle(result);
+            let outcome =
+                core.resolve_promise_with_value(Some(&module), result, value, label.clone());
+            if label == Label::Secret {
+                assert!(
+                    matches!(outcome, Err(InterpreterError::CapabilityDenied { ref capability })
+                        if capability == "console:log:confidentiality"),
+                    "{expression}"
+                );
+                assert!(core.console_output.is_empty());
+            } else {
+                outcome.expect("Public getter effect is admitted");
+                assert_eq!(core.console_output.len(), 1);
+                assert!(core.promise_store.get(result).unwrap().state.is_fulfilled());
+            }
+            assert_eq!(
+                core.heap[state.0 as usize].properties.get("calls"),
+                Some(&Value::Int(1)),
+                "{expression}"
+            );
+            assert_eq!(core.own_property_label(state, "calls"), label);
+            assert!(core.pending_exception.is_none());
+            assert!(core.active_inline_callback_context_label.is_none());
+            assert_eq!(core.json_parse_temporary_bytes, 0);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+}
+
+#[test]
+fn native_primitive_carriers_are_reused_without_payload_copies() {
+    for value in [
+        Value::BigInt("9".repeat(32_768).into()),
+        Value::Str(JsString::from_code_units(&vec![0xd800; 16_384])),
+    ] {
+        let mut core = InterpreterCore::new(config(false), "native-primitive-carrier-budget");
+        let result = core.create_promise().expect("result promise");
+        let carrier = core.promise_value(&value).expect("exact carrier");
+        drop(value);
+        let before = core.estimated_memory_bytes();
+        let carriers_before = core.promise_value_carriers.len();
+        let next_before = core.next_promise_value_carrier;
+        core.config.max_total_memory_bytes = before;
+        core.resolve_native_combinator_result(
+            None,
+            result,
+            carrier.clone(),
+            Label::Public,
+            false,
+        )
+        .expect("primitive winner needs no extra payload ownership");
+        assert_eq!(
+            core.promise_store.get(result).unwrap().state,
+            PromiseState::Fulfilled(carrier)
+        );
+        assert_eq!(core.promise_value_carriers.len(), carriers_before);
+        assert_eq!(core.next_promise_value_carrier, next_before);
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(core.estimated_memory_bytes(), before);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+}
+
+#[test]
+fn native_object_like_carrier_copies_are_preflighted_before_resolution() {
+    let mut core = InterpreterCore::new(config(false), "native-object-carrier-budget");
+    let result = core.create_promise().expect("result promise");
+    let value = Value::BuiltinFunction(BuiltinFunction::require("x".repeat(32_768)));
+    let payload_bytes = InterpreterCore::estimate_value_bytes(&value);
+    assert!(payload_bytes >= 32_768);
+    let carrier = core.promise_value(&value).expect("builtin carrier");
+    drop(value);
+    let before = core.estimated_memory_bytes();
+    let carriers_before = core.promise_value_carriers.len();
+    let next_before = core.next_promise_value_carrier;
+    let required = before.saturating_add(payload_bytes.saturating_mul(2));
+    core.config.max_total_memory_bytes = required - 1;
+    let error = core
+        .resolve_native_combinator_result(None, result, carrier, Label::Public, false)
+        .expect_err("both decoded and rooted payload owners require budget");
+    assert!(matches!(
+        error,
+        InterpreterError::MemoryBudgetExceeded { requested_bytes, max_bytes, .. }
+            if requested_bytes == required && max_bytes == required - 1
+    ));
+    assert_eq!(core.promise_store.get(result).unwrap().state, PromiseState::Pending);
+    assert_eq!(core.promise_value_carriers.len(), carriers_before);
+    assert_eq!(core.next_promise_value_carrier, next_before);
+    assert!(core.active_inline_callback_context_label.is_none());
+    assert_eq!(core.json_parse_temporary_bytes, 0);
+    assert_eq!(core.estimated_memory_bytes(), before);
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+}
+
+#[test]
+fn module_await_assimilates_object_like_values_with_exact_order_and_abrupt_completions() {
+    let source = r#"
+let checks = 0;
+for (const kind of ['function', 'bound', 'asyncFunction', 'generatorFunction', 'iterator']) {
+  for (const mode of ['callable', 'noncallable', 'getThrow', 'thenThrow']) {
+    const value = kind === 'function' ? function () {}
+      : kind === 'bound' ? (function () {}).bind(null)
+      : kind === 'asyncFunction' ? async function () {}
+      : kind === 'generatorFunction' ? function* () {}
+      : [1].values();
+    const reason = {};
+    const events = [];
+    let reads = 0, calls = 0;
+    Object.defineProperty(value, 'then', { configurable: true, get() {
+      reads++; events.push('get');
+      if (this !== value) throw Error('Get receiver');
+      if (mode === 'getThrow') throw reason;
+      if (mode === 'noncallable') return 17;
+      return function (resolve, reject) {
+        calls++; events.push('call');
+        if (this !== value) throw Error('Call receiver');
+        if (mode === 'thenThrow') throw reason;
+        resolve(91); reject(reason); resolve(92);
+      };
+    } });
+    Promise.resolve().then(() => events.push('tick'));
+    let result, caught = false;
+    try { result = await value; events.push('resume'); }
+    catch (error) { caught = error === reason; events.push('catch'); }
+    const rejects = mode === 'getThrow' || mode === 'thenThrow';
+    const expected = mode === 'getThrow' ? 'get,tick,catch'
+      : mode === 'noncallable' ? 'get,tick,resume'
+      : mode === 'thenThrow' ? 'get,tick,call,catch'
+      : 'get,tick,call,resume';
+    if (caught !== rejects || reads !== 1 || calls !== (mode === 'callable' || mode === 'thenThrow' ? 1 : 0)
+        || (!rejects && result !== (mode === 'callable' ? 91 : value))
+        || events.join(',') !== expected)
+      throw Error('module await ' + kind + ':' + mode + ':' + events.join(','));
+    delete value.then;
+    checks++;
+  }
+}
+console.log('module object-like await', checks);
+"#;
+    let tree = crate::parser_api_stability::parse_module(source).expect("module source parses");
+    let module = lower_ir0_to_ir3(
+        &Ir0Module::from_syntax_tree(tree, "promise-object-like-await.mjs"),
+        &LoweringContext::new("promise-await", "object-like-resolution", "module-await"),
+    )
+    .expect("module source lowers")
+    .ir3;
+    assert!(
+        module
+            .instructions
+            .iter()
+            .any(|instruction| matches!(instruction, Ir3Instruction::ModuleAwaitValue { .. })),
+        "exercise the module-await instruction"
+    );
+    for throughput in [false, true] {
+        for stress in [None, Some(7)] {
+            let mut core = InterpreterCore::new(config(throughput), "module-object-like-await");
+            core.set_gc_stress_interval(stress);
+            let result = core.execute(&module).expect("module await executes");
+            let actual = result
+                .console_output
+                .iter()
+                .map(|entry| entry.message.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert_eq!(
+                actual, "module object-like await 20",
+                "throughput={throughput}, stress={stress:?}"
+            );
+            assert!(core.top_level_await_resumption_contexts.is_empty());
+            assert!(core.active_inline_callback_context_label.is_none());
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+}

@@ -545,7 +545,7 @@ impl InterpreterCore {
     ) -> Result<(PromiseHandle, Label), InterpreterError> {
         let backing = self.async_generators[id as usize].generator_id;
         let owner = Arc::clone(&self.generators[backing as usize].owner_module);
-        self.in_async_generator_await_context(floor, |this| {
+        self.in_promise_resolution_context(floor, |this| {
             this.json_charge_work()?;
             let promise = this.create_promise()?;
             let resolution = (|| {
@@ -653,7 +653,7 @@ impl InterpreterCore {
         if self.promise_constructor_read_is_inert(owner.as_ref(), &Value::Promise(handle))? {
             return Ok((None, floor.clone()));
         }
-        self.in_async_generator_await_context(floor, |this| {
+        self.in_promise_resolution_context(floor, |this| {
             this.json_charge_work()?;
             let keeps = this
                 .await_keeps_promise(owner.as_ref(), handle)
@@ -696,44 +696,6 @@ impl InterpreterCore {
                 }
             }
         })
-    }
-
-    /// Runs an await's PromiseResolve reads (a promise's `constructor`, a
-    /// thenable's `then`) under the await's context label, the current
-    /// context joined with `floor`, so a getter they run is labeled by it;
-    /// the caller's inline-callback context is restored afterwards.
-    fn in_async_generator_await_context<T>(
-        &mut self,
-        floor: &Label,
-        read: impl FnOnce(&mut Self) -> Result<T, InterpreterError>,
-    ) -> Result<T, InterpreterError> {
-        let context = self.json_parse_context_label()?;
-        let context = self.join_owned_label_with_temporary_budget(context, floor)?;
-        let saved_bytes = self
-            .active_inline_callback_context_label
-            .as_ref()
-            .map(Self::estimate_label_bytes)
-            .unwrap_or(0);
-        self.json_reserve_temporary(saved_bytes)?;
-        if let Err(error) =
-            self.apply_memory_component_delta(saved_bytes, Self::estimate_label_bytes(&context))
-        {
-            self.json_release_temporary(saved_bytes);
-            return Err(error);
-        }
-        let saved_context = self.active_inline_callback_context_label.replace(context);
-        let outcome = read(self);
-        let context = self
-            .active_inline_callback_context_label
-            .take()
-            .expect("nested then getters restore the await context");
-        self.active_inline_callback_context_label = saved_context;
-        self.estimated_memory_bytes = self
-            .estimated_memory_bytes
-            .saturating_sub(Self::estimate_label_bytes(&context))
-            .saturating_add(saved_bytes);
-        self.json_release_temporary(saved_bytes);
-        outcome
     }
 
     pub(super) fn resume_async_generator_task(

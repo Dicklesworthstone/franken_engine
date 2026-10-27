@@ -59830,14 +59830,15 @@ impl InterpreterCore {
                                 handle
                             }
                         }
-                        // await an object: PromiseResolve adopts a thenable
-                        // through a PromiseResolveThenableJob (bd-9vouw.174).
-                        Value::Object(_) => {
+                        // PromiseResolve observes then on every object-like
+                        // representation, including callable and iterator
+                        // values, before queuing a thenable job.
+                        value if value.is_object_like() => {
                             let handle = self.create_promise()?;
                             self.resolve_promise_with_value(
                                 Some(module),
                                 handle,
-                                awaited_value,
+                                value,
                                 awaited_label.clone(),
                             )?;
                             handle
@@ -71210,8 +71211,8 @@ impl InterpreterCore {
     }
 
     /// Count scratch ownership alongside the currently dequeued job, so even
-    /// a nested memory reconciliation retains the reservation. Native result
-    /// construction calls no guest code and releases it on every exit.
+    /// a nested memory reconciliation retains the reservation. Release it on
+    /// every exit; callers must root their locals before any observable call.
     fn with_promise_temporary_bytes<T>(
         &mut self,
         bytes: u64,
@@ -71835,6 +71836,7 @@ impl InterpreterCore {
 
     fn update_combinator_fulfillment(
         &mut self,
+        module: Option<&Ir3Module>,
         combinator_id: u64,
         index: u32,
         value: &crate::object_model::JsValue,
@@ -71906,7 +71908,13 @@ impl InterpreterCore {
                     } else {
                         value.clone()
                     };
-                    core.fulfill_promise(handle, value, label)
+                    core.resolve_native_combinator_result(
+                        module,
+                        handle,
+                        value,
+                        label,
+                        materialize,
+                    )
                 },
             )?;
             self.remove_combinator_and_watchers(combinator_id)?;
@@ -71916,6 +71924,7 @@ impl InterpreterCore {
 
     fn update_combinator_rejection(
         &mut self,
+        module: Option<&Ir3Module>,
         combinator_id: u64,
         index: u32,
         reason: &crate::object_model::JsValue,
@@ -71986,7 +71995,7 @@ impl InterpreterCore {
                         reason.clone()
                     };
                     if fulfill {
-                        core.fulfill_promise(handle, value, label)
+                        core.resolve_native_combinator_result(module, handle, value, label, true)
                     } else {
                         core.reject_promise(handle, value, label)
                     }
@@ -73629,7 +73638,7 @@ impl InterpreterCore {
         if let Value::Promise(source_handle) = value {
             return self.resolve_promise_with_native(module, promise, source_handle, label);
         }
-        if !matches!(value, Value::Object(_)) {
+        if !value.is_object_like() {
             let value = self.promise_value(&value)?;
             return self.fulfill_promise(promise, value, label);
         }
@@ -73654,18 +73663,21 @@ impl InterpreterCore {
         // aside so this read neither joins into nor clears it.
         let saved_result_label = self.take_pending_hostcall_result_label();
         let key = RuntimePropertyKey::String(JsString::from("then"));
-        let then = match &value {
+        // Resolution can resume after a reaction's callback context has been
+        // restored. The value's label must govern the Get itself, including
+        // getters that ignore their receiver and perform zero-argument effects.
+        let then = self.in_promise_resolution_context(&label, |core| match &value {
             Value::Object(object) => {
-                self.iterator_protocol_property(module, *object, &key, value.clone())
+                core.iterator_protocol_property(module, *object, &key, value.clone())
             }
             _ => match module {
-                Some(module) => self.get_v(module, &value, &key),
+                Some(module) => core.get_v(module, &value, &key),
                 None => Err(InterpreterError::TypeError {
                     expected: "module-backed PromiseResolve property read".to_string(),
                     got: "missing module context".to_string(),
                 }),
             },
-        };
+        });
         let observed = self.take_pending_hostcall_result_label();
         if let Some(saved) = saved_result_label {
             self.replace_pending_hostcall_result_label(Some(saved))?;
@@ -74099,6 +74111,7 @@ impl InterpreterCore {
                         let result = match kind {
                             crate::promise_model::ReactionKind::Fulfill => self
                                 .update_combinator_fulfillment(
+                                    module,
                                     combinator.combinator_id,
                                     combinator.index,
                                     argument,
@@ -74106,6 +74119,7 @@ impl InterpreterCore {
                                 ),
                             crate::promise_model::ReactionKind::Reject => self
                                 .update_combinator_rejection(
+                                    module,
                                     combinator.combinator_id,
                                     combinator.index,
                                     argument,

@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
@@ -303,6 +303,46 @@ impl ModuleRecord {
     }
 }
 
+/// Immutable execution payload with an engine-computed canonical hash.
+///
+/// Construction only moves the record; it does not hash or grant authority.
+/// Native execution checks its source and memory budgets before requesting the
+/// hash. Fields are private and access is read-only, so a cached digest cannot
+/// outlive a mutation of the record it identifies. This is not a serialized
+/// proof or a cached policy decision.
+#[derive(Debug)]
+pub struct SharedModuleRecord {
+    record: ModuleRecord,
+    canonical_hash: OnceLock<ContentHash>,
+}
+
+impl SharedModuleRecord {
+    pub fn new(record: ModuleRecord) -> Self {
+        Self {
+            record,
+            canonical_hash: OnceLock::new(),
+        }
+    }
+
+    pub fn record(&self) -> &ModuleRecord {
+        &self.record
+    }
+
+    pub fn canonical_hash(&self) -> ContentHash {
+        *self
+            .canonical_hash
+            .get_or_init(|| self.record.canonical_hash())
+    }
+}
+
+impl std::ops::Deref for SharedModuleRecord {
+    type Target = ModuleRecord;
+
+    fn deref(&self) -> &Self::Target {
+        self.record()
+    }
+}
+
 /// Native CommonJS objects implemented by the interpreter itself.
 ///
 /// This is deliberately narrower than Node's builtin name inventory. A
@@ -528,12 +568,54 @@ pub struct ResolvedModule {
     pub probe_sequence: Vec<String>,
 }
 
+/// Execution delivery of shared immutable bytes, with fresh request metadata.
+///
+/// `content_hash` is still the provider's claim. The interpreter must compare
+/// it with `record.canonical_hash()` after its resource checks; moving an owned
+/// result here never authenticates or silently repairs an incorrect digest.
+#[derive(Debug, Clone)]
+pub struct SharedResolvedModule {
+    pub request_specifier: String,
+    pub canonical_specifier: String,
+    pub record: Arc<SharedModuleRecord>,
+    pub content_hash: ContentHash,
+    pub probe_sequence: Vec<String>,
+}
+
+impl From<ResolvedModule> for SharedResolvedModule {
+    fn from(module: ResolvedModule) -> Self {
+        Self {
+            request_specifier: module.request_specifier,
+            canonical_specifier: module.canonical_specifier,
+            record: Arc::new(SharedModuleRecord::new(module.record)),
+            content_hash: module.content_hash,
+            probe_sequence: module.probe_sequence,
+        }
+    }
+}
+
 pub const MODULE_RESOLUTION_TRACE_SCHEMA_VERSION: &str = "rgc.module-resolution.trace.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolutionOutcome {
     pub module: ResolvedModule,
     pub event: ResolutionEvent,
+}
+
+/// Source sharing never shares a request's authorization or event context.
+#[derive(Debug, Clone)]
+pub struct SharedResolutionOutcome {
+    pub module: SharedResolvedModule,
+    pub event: ResolutionEvent,
+}
+
+impl From<ResolutionOutcome> for SharedResolutionOutcome {
+    fn from(outcome: ResolutionOutcome) -> Self {
+        Self {
+            module: outcome.module.into(),
+            event: outcome.event,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1329,6 +1411,19 @@ pub trait ModuleResolver {
         policy: &dyn ModulePolicyHook,
     ) -> ResolutionResult<ResolutionOutcome>;
 
+    /// Resolve an exact runtime request while permitting immutable source
+    /// sharing. Implementations must authorize every request, including cache
+    /// hits. The default retains the owned resolver's claimed hash unchanged;
+    /// native execution verifies it after enforcing its source/memory budgets.
+    fn resolve_shared(
+        &self,
+        request: &ModuleRequest,
+        context: &ResolutionContext,
+        policy: &dyn ModulePolicyHook,
+    ) -> ResolutionResult<SharedResolutionOutcome> {
+        self.resolve(request, context, policy).map(Into::into)
+    }
+
     fn resolve_chain(
         &self,
         entry_request: &ModuleRequest,
@@ -1429,6 +1524,18 @@ impl ExecutionModuleResolver {
     ) -> ResolutionResult<ResolutionOutcome> {
         self.resolver
             .resolve(request, context, &ExecutionModulePolicy(self.policy.as_ref()))
+    }
+
+    pub fn resolve_shared(
+        &self,
+        request: &ModuleRequest,
+        context: &ResolutionContext,
+    ) -> ResolutionResult<SharedResolutionOutcome> {
+        self.resolver.resolve_shared(
+            request,
+            context,
+            &ExecutionModulePolicy(self.policy.as_ref()),
+        )
     }
 }
 
@@ -2656,6 +2763,73 @@ mod tests {
     }
 
     #[test]
+    fn shared_records_move_source_and_hash_immutable_bytes_lazily() {
+        let record = ModuleRecord::from_definition(
+            "captured:dependency".into(),
+            ModuleSourceKind::Workspace,
+            ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = 42;"),
+        );
+        let source = record.source.as_ptr();
+        let expected = ContentHash::compute(&encode_value(&record.canonical_value()));
+        let shared = Arc::new(SharedModuleRecord::new(record));
+        assert_eq!(shared.source.as_ptr(), source);
+        assert!(shared.canonical_hash.get().is_none());
+        let mut owned = shared.record().clone();
+        owned.source = "module.exports = 99;".into();
+        assert_ne!(owned.canonical_hash(), expected);
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                let shared = Arc::clone(&shared);
+                std::thread::spawn(move || shared.canonical_hash())
+            })
+            .collect();
+        for worker in workers {
+            assert_eq!(worker.join().unwrap(), expected);
+        }
+        assert_eq!(shared.canonical_hash.get(), Some(&expected));
+        assert_eq!(shared.source.as_ptr(), source);
+        assert_eq!(shared.source, "module.exports = 42;");
+    }
+
+    #[test]
+    fn owned_to_shared_delivery_preserves_unverified_hash_and_request_metadata() {
+        let record = NativeBuiltinModule::Buffer.record("captured:buffer");
+        let claimed_hash = ContentHash::compute(b"forged provider claim");
+        let shared: SharedResolutionOutcome = ResolutionOutcome {
+            module: ResolvedModule {
+                request_specifier: "buffer".into(),
+                canonical_specifier: record.id.clone(),
+                record,
+                content_hash: claimed_hash,
+                probe_sequence: vec!["buffer".into(), "node:buffer".into()],
+            },
+            event: ResolutionEvent {
+                trace_id: "current-trace".into(),
+                decision_id: "current-decision".into(),
+                policy_id: "current-policy".into(),
+                component: "module_resolver".into(),
+                event: "module_resolution".into(),
+                outcome: "allow".into(),
+                error_code: String::new(),
+            },
+        }
+        .into();
+        assert!(shared.module.record.canonical_hash.get().is_none());
+        assert_eq!(shared.module.content_hash, claimed_hash);
+        assert_eq!(shared.module.request_specifier, "buffer");
+        assert_eq!(shared.module.canonical_specifier, "captured:buffer");
+        assert_eq!(shared.module.probe_sequence, ["buffer", "node:buffer"]);
+        assert_eq!(shared.event.trace_id, "current-trace");
+        let repeated = shared.clone();
+        assert!(Arc::ptr_eq(&shared.module.record, &repeated.module.record));
+        assert_ne!(shared.module.record.canonical_hash(), claimed_hash);
+        assert_eq!(
+            NativeBuiltinModule::from_record(&shared.module.record),
+            Some(NativeBuiltinModule::Buffer)
+        );
+    }
+
+    #[test]
     fn create_require_origin_matches_exact_trusted_file_metadata() {
         let location = ModuleSourceLocation {
             filename: PathBuf::from("/original project/nested/entry.mjs"),
@@ -3225,6 +3399,16 @@ mod tests {
             if code != ResolutionErrorCode::PolicyDenied {
                 assert!(error.message.contains(code.stable_code()));
             }
+            let installed = ExecutionModuleResolver::new(
+                "/app/entry.cjs",
+                Arc::new(resolver.clone()),
+                Arc::new(Refuse(code)),
+            );
+            let shared_error = installed
+                .resolve_shared(&request, &context())
+                .expect_err("shared delivery must preserve policy refusal normalization");
+            assert_eq!(shared_error.code, ResolutionErrorCode::PolicyDenied);
+            assert_eq!(shared_error.request_specifier, "/app/dep.cjs");
         }
     }
 

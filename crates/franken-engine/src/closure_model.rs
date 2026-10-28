@@ -224,7 +224,7 @@ impl EnvironmentRecord {
     pub fn is_var_scope(&self) -> bool {
         matches!(
             self.scope_kind,
-            ScopeKind::Function | ScopeKind::Global | ScopeKind::Module
+            ScopeKind::Function | ScopeKind::Global | ScopeKind::StrictGlobal | ScopeKind::Module
         )
     }
 }
@@ -375,7 +375,7 @@ impl ScopeChain {
     /// Push a new scope onto the chain. Returns the handle.
     pub fn push_scope(&mut self, scope_id: ScopeId, scope_kind: ScopeKind) -> EnvironmentHandle {
         let env_kind = match scope_kind {
-            ScopeKind::Global => EnvironmentKind::Global,
+            ScopeKind::Global | ScopeKind::StrictGlobal => EnvironmentKind::Global,
             ScopeKind::Module => EnvironmentKind::Module,
             ScopeKind::Function => EnvironmentKind::Function,
             ScopeKind::Block | ScopeKind::Catch => EnvironmentKind::Declarative,

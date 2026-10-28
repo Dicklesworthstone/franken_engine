@@ -107,6 +107,9 @@ jobs:
             crates/franken-engine/tests/builtin_prototype_own_methods.rs \
             crates/franken-engine/tests/arguments_object_bd_9vouw_25.rs \
             crates/franken-engine/tests/builtin_brands_bd_9vouw_150.rs \
+            crates/franken-engine/tests/script_global_declarations.rs \
+            crates/franken-engine/tests/ir_contract_integration.rs \
+            crates/franken-engine/tests/ir_contract_enrichment_integration.rs \
             crates/franken-engine/tests/module_namespace_to_string_tag_bd_9vouw_399.rs \
             crates/franken-engine/tests/object_json_globals_bd9a8cz2.rs
 
@@ -117,7 +120,7 @@ jobs:
           set -euo pipefail
           cargo check --locked --no-default-features -p frankenengine-engine --lib
 
-      - name: Execute builtin, arguments, and property lookup regressions
+      - name: Execute builtin, global binding, and property lookup regressions
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         shell: bash
         run: |
@@ -126,9 +129,20 @@ jobs:
             --test builtin_prototype_own_methods \
             --test arguments_object_bd_9vouw_25 \
             --test builtin_brands_bd_9vouw_150 \
+            --test script_global_declarations \
+            --test ir_contract_integration \
+            --test ir_contract_enrichment_integration \
             --test module_namespace_to_string_tag_bd_9vouw_399 \
             --test object_json_globals_bd9a8cz2 \
             -- --nocapture --test-threads=1
+
+      - name: Verify IR schema and global declaration invariants
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --no-default-features -p frankenengine-engine --lib \
+            ir_contract::tests:: -- --nocapture --test-threads=1
 
       - name: Verify Date slot serialization and memory admission
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
@@ -137,6 +151,15 @@ jobs:
           set -euo pipefail
           cargo test --locked --no-default-features -p frankenengine-engine --lib \
             date_private_value_ -- --nocapture --test-threads=1
+
+      - name: Verify global getter result provenance
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --no-default-features -p frankenengine-engine --lib \
+            global_name_getters_preserve_runtime_result_labels \
+            -- --nocapture --test-threads=1
 
       - name: Verify labels on inherited constructor properties
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}

@@ -1054,7 +1054,11 @@ fn run_library_compile(
         }
     };
 
-    let ir0 = Ir0Module::from_syntax_tree(syntax_tree, specimen.source_file_name);
+    let ir0 = Ir0Module::from_syntax_tree_with_source(
+        syntax_tree,
+        specimen.source_file_name,
+        &prepared.prepared_source,
+    );
     let lowering = match lower_ir0_to_ir3(
         &ir0,
         &LoweringContext::new(

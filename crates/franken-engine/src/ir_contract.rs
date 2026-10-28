@@ -33,6 +33,9 @@ pub struct IrSchemaVersion {
 }
 
 impl IrSchemaVersion {
+    /// `0.17.0` adds optional Script strictness to IR0, strict global scopes
+    /// and assignment modes to IR1/IR2, and global var/function declarations
+    /// to IR3.
     /// `0.16.0` adds the explicit `Contained` execution outcome to serialized
     /// IR4 witnesses. Engine minor `0.15.0` is intentionally skipped because it
     /// identifies the incompatible native `franken-core` IR wire.
@@ -54,7 +57,7 @@ impl IrSchemaVersion {
     /// lone-surrogate values use `$wtf16`.
     pub const CURRENT: Self = Self {
         major: 0,
-        minor: 16,
+        minor: 17,
         patch: 0,
     };
 
@@ -157,6 +160,10 @@ impl IrHeader {
 pub struct Ir0Module {
     pub header: IrHeader,
     pub tree: SyntaxTree,
+    /// The exact source's directive-prologue mode. Legacy/handcrafted trees
+    /// omit it; their assignment annotations retain the previous inference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script_strict: Option<bool>,
 }
 
 impl Ir0Module {
@@ -170,14 +177,35 @@ impl Ir0Module {
                 source_label: source_label.into(),
             },
             tree,
+            script_strict: None,
         }
     }
 
+    /// Preserve source strictness that the canonical AST does not otherwise
+    /// carry (notably a Script consisting only of variable initializers).
+    /// Use the same raw directive parser as source parsing: escaped or
+    /// parenthesized strings must not enable strict mode.
+    pub fn from_syntax_tree_with_source(
+        tree: SyntaxTree,
+        source_label: impl Into<String>,
+        source: &str,
+    ) -> Self {
+        let strict = tree.goal == crate::ast::ParseGoal::Module
+            || crate::parser::source_has_use_strict_directive(source, tree.goal);
+        let mut module = Self::from_syntax_tree(tree, source_label);
+        module.script_strict = Some(strict);
+        module
+    }
+
     pub fn canonical_value(&self) -> CanonicalValue {
-        CanonicalValue::map_from_entries([
-            ("header", self.header.canonical_value()),
-            ("tree", self.tree.canonical_value()),
-        ])
+        CanonicalValue::map_from_entries(
+            [
+                ("header", self.header.canonical_value()),
+                ("tree", self.tree.canonical_value()),
+            ]
+            .into_iter()
+            .chain(self.script_strict.map(|strict| ("script_strict", CanonicalValue::Bool(strict)))),
+        )
     }
 
     pub fn canonical_bytes(&self) -> Vec<u8> {
@@ -345,6 +373,9 @@ impl ScopeNode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScopeKind {
     Global,
+    /// A classic script's global environment with a strict directive.
+    /// Its object bindings reject failed assignments instead of ignoring them.
+    StrictGlobal,
     Module,
     Function,
     Block,
@@ -355,6 +386,7 @@ impl ScopeKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Global => "global",
+            Self::StrictGlobal => "strict_global",
             Self::Module => "module",
             Self::Function => "function",
             Self::Block => "block",
@@ -513,6 +545,10 @@ pub enum Ir1Op {
     AssignOp {
         binding_id: BindingId,
         operator: AssignmentOperator,
+        /// Source-reference strictness when a resolved binding lives in the
+        /// global object record. None preserves legacy scope-mode inference.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        strict: Option<bool>,
     },
     /// Jump label marker (jump target in linear IR).
     Label { id: u32 },
@@ -864,11 +900,16 @@ impl Ir1Op {
             Self::AssignOp {
                 binding_id,
                 operator,
-            } => CanonicalValue::map_from_entries([
-                ("op", CanonicalValue::str("assign_op")),
-                ("binding_id", CanonicalValue::U64(u64::from(*binding_id))),
-                ("operator", CanonicalValue::str(operator.as_str())),
-            ]),
+                strict,
+            } => CanonicalValue::map_from_entries(
+                [
+                    ("op", CanonicalValue::str("assign_op")),
+                    ("binding_id", CanonicalValue::U64(u64::from(*binding_id))),
+                    ("operator", CanonicalValue::str(operator.as_str())),
+                ]
+                .into_iter()
+                .chain(strict.map(|strict| ("strict", CanonicalValue::Bool(strict)))),
+            ),
             Self::Label { id } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("label")),
                 ("id", CanonicalValue::U64(u64::from(*id))),
@@ -1490,6 +1531,12 @@ pub type Reg = u32;
 /// Instruction index into the flat instruction array.
 pub type InstrIndex = u32;
 
+/// `DeclareBinding` modes for a classic script's global object record.
+/// These declarations form a contiguous prelude and create ordinary data
+/// properties; they never create a copied lexical/capture cell.
+pub const GLOBAL_VAR_BINDING_KIND: u8 = 6;
+pub const GLOBAL_FUNCTION_BINDING_KIND: u8 = 7;
+
 /// Register range [start, start+count).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RegRange {
@@ -1763,7 +1810,9 @@ pub enum Ir3Instruction {
     /// Pop the innermost scope/environment from the runtime scope chain.
     PopScope,
     /// Declare a variable binding in the current scope.
-    /// `kind`: 0=var, 1=let, 2=const, 3=parameter, 4=function.
+    /// `kind`: 0=var, 1=let, 2=const, 3=parameter, 4=function, 5=import.
+    /// Kinds 6/7 instantiate global var/function properties in a Script's
+    /// declaration prelude (`GLOBAL_*_BINDING_KIND`), after joint validation.
     DeclareBinding { name_pool_index: u32, kind: u8 },
     /// Load a variable from the scope chain by name (walking outward).
     LoadScoped { dst: Reg, name_pool_index: u32 },
@@ -3176,6 +3225,7 @@ impl std::error::Error for IrError {}
 /// Verify that an IR0 module's content hash matches an expected value.
 pub fn verify_ir0_hash(module: &Ir0Module, expected: &ContentHash) -> Result<(), IrError> {
     verify_schema_version(&module.header)?;
+    verify_ir0_script_global_schema(module)?;
     let actual = module.content_hash();
     if &actual != expected {
         return Err(IrError::new(
@@ -3196,6 +3246,7 @@ pub fn verify_ir1_source(module: &Ir1Module, ir0_hash: &ContentHash) -> Result<(
     verify_schema_version(&module.header)?;
     verify_ir1_derived_constructor_schema(module)?;
     verify_ir1_object_method_schema(module)?;
+    verify_ir1_script_global_schema(module)?;
     match &module.header.source_hash {
         Some(source_hash) if source_hash == ir0_hash => Ok(()),
         Some(source_hash) => Err(IrError::new(
@@ -3220,6 +3271,30 @@ pub fn verify_ir3_specialization(module: &Ir3Module) -> Result<(), IrError> {
     verify_schema_version(&module.header)?;
     verify_ir3_derived_constructor_schema(module)?;
     verify_ir3_object_method_schema(module)?;
+    let mut global_prelude = true;
+    let mut global_names = std::collections::BTreeSet::new();
+    for instruction in &module.instructions {
+        if let Ir3Instruction::DeclareBinding { name_pool_index, kind } = instruction
+            && matches!(*kind, GLOBAL_VAR_BINDING_KIND | GLOBAL_FUNCTION_BINDING_KIND)
+        {
+            require_script_global_schema(&module.header)?;
+            let name = module.constant_pool.get(*name_pool_index as usize);
+            if !global_prelude
+                || name.is_none_or(|name| {
+                    name.as_str().is_none_or(|name| name.is_empty() || name.contains('\0'))
+                })
+                || !global_names.insert(name)
+            {
+                return Err(IrError::new(
+                    IrErrorCode::InvalidSpecializationLinkage,
+                    "global declarations require unique valid names in the instruction prelude",
+                    IrLevel::Ir3,
+                ));
+            }
+        } else {
+            global_prelude = false;
+        }
+    }
     if let Some(spec) = &module.specialization {
         if spec.proof_input_ids.is_empty() {
             return Err(IrError::new(
@@ -3372,6 +3447,73 @@ const OBJECT_METHOD_SCHEMA_VERSION: IrSchemaVersion = IrSchemaVersion {
     minor: 14,
     patch: 0,
 };
+
+const SCRIPT_GLOBAL_SCHEMA_VERSION: IrSchemaVersion = IrSchemaVersion {
+    major: 0,
+    minor: 17,
+    patch: 0,
+};
+
+fn require_script_global_schema(header: &IrHeader) -> Result<(), IrError> {
+    if header.schema_version < SCRIPT_GLOBAL_SCHEMA_VERSION {
+        return Err(IrError::new(
+            IrErrorCode::SchemaVersionMismatch,
+            format!(
+                "Script global metadata and declarations require schema {}, provided {}",
+                SCRIPT_GLOBAL_SCHEMA_VERSION, header.schema_version,
+            ),
+            header.level,
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn verify_ir0_script_global_schema(module: &Ir0Module) -> Result<(), IrError> {
+    if module.script_strict.is_some() {
+        require_script_global_schema(&module.header)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn verify_script_global_scope_schema(
+    header: &IrHeader,
+    scopes: &[ScopeNode],
+) -> Result<(), IrError> {
+    if scopes.iter().any(|scope| scope.kind == ScopeKind::StrictGlobal) {
+        require_script_global_schema(header)?;
+    }
+    Ok(())
+}
+
+fn ir1_op_uses_script_global_schema(op: &Ir1Op) -> bool {
+    match op {
+        Ir1Op::AssignOp { strict: Some(_), .. } => true,
+        Ir1Op::DeclareFunction { body_ops, .. } | Ir1Op::CreateFunction { body_ops, .. } => {
+            body_ops.iter().any(ir1_op_uses_script_global_schema)
+        }
+        _ => false,
+    }
+}
+
+pub(crate) fn verify_ir1_script_global_schema(module: &Ir1Module) -> Result<(), IrError> {
+    verify_script_global_scope_schema(&module.header, &module.scopes)?;
+    if module.ops.iter().any(ir1_op_uses_script_global_schema) {
+        require_script_global_schema(&module.header)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn verify_ir2_script_global_schema(module: &Ir2Module) -> Result<(), IrError> {
+    verify_script_global_scope_schema(&module.header, &module.scopes)?;
+    if module
+        .ops
+        .iter()
+        .any(|op| ir1_op_uses_script_global_schema(&op.inner))
+    {
+        require_script_global_schema(&module.header)?;
+    }
+    Ok(())
+}
 
 fn ir1_op_uses_derived_constructor_schema(op: &Ir1Op) -> bool {
     match op {
@@ -3728,7 +3870,7 @@ mod tests {
 
     #[test]
     fn schema_version_display() {
-        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.16.0");
+        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.17.0");
     }
 
     #[test]
@@ -3854,6 +3996,125 @@ mod tests {
             verify_ir3_specialization(&ir3).expect_err("0.12 IR3 must not carry DefineMethod");
         assert_eq!(error.code, IrErrorCode::SchemaVersionMismatch);
         assert!(error.message.contains("require schema 0.14.0"));
+    }
+
+    #[test]
+    fn script_global_metadata_and_declarations_require_engine_017_schema() {
+        let source_hash = ContentHash::compute(b"script-global-schema");
+        let legacy = IrSchemaVersion {
+            major: 0,
+            minor: 16,
+            patch: u32::MAX,
+        };
+        let mut ir0 = Ir0Module::from_syntax_tree(make_syntax_tree(), "script.js");
+        ir0.script_strict = Some(false);
+        ir0.header.schema_version = legacy;
+        assert_eq!(
+            verify_ir0_hash(&ir0, &ir0.content_hash()).unwrap_err().code,
+            IrErrorCode::SchemaVersionMismatch,
+        );
+        ir0.script_strict = None;
+        verify_ir0_hash(&ir0, &ir0.content_hash()).expect("legacy trees remain readable");
+
+        let scope = ScopeNode {
+            scope_id: ScopeId { depth: 0, index: 0 },
+            parent: None,
+            kind: ScopeKind::StrictGlobal,
+            bindings: Vec::new(),
+        };
+        let mut ir1 = Ir1Module::new(source_hash, "script.js");
+        ir1.header.schema_version = legacy;
+        ir1.scopes.push(scope.clone());
+        assert_eq!(
+            verify_ir1_source(&ir1, &source_hash).unwrap_err().code,
+            IrErrorCode::SchemaVersionMismatch,
+        );
+        let mut ir2 = Ir2Module::new(source_hash, "script.js");
+        ir2.header.schema_version = legacy;
+        ir2.scopes.push(scope);
+        assert_eq!(
+            verify_script_global_scope_schema(&ir2.header, &ir2.scopes).unwrap_err().code,
+            IrErrorCode::SchemaVersionMismatch,
+        );
+
+        let assignment = Ir1Op::AssignOp {
+            binding_id: 0,
+            operator: AssignmentOperator::Assign,
+            strict: Some(true),
+        };
+        ir1.scopes.clear();
+        ir1.ops.push(assignment.clone());
+        assert_eq!(
+            verify_ir1_source(&ir1, &source_hash).unwrap_err().code,
+            IrErrorCode::SchemaVersionMismatch,
+        );
+        ir2.scopes.clear();
+        ir2.ops.push(Ir2Op {
+            inner: assignment,
+            effect: EffectBoundary::Pure,
+            required_capability: None,
+            flow: None,
+            span: None,
+        });
+        assert_eq!(
+            verify_ir2_script_global_schema(&ir2).unwrap_err().code,
+            IrErrorCode::SchemaVersionMismatch,
+        );
+
+        for kind in [GLOBAL_VAR_BINDING_KIND, GLOBAL_FUNCTION_BINDING_KIND] {
+            let mut ir3 = Ir3Module::new(source_hash, "script.js");
+            ir3.constant_pool.push("globalName".into());
+            ir3.instructions.push(Ir3Instruction::DeclareBinding { name_pool_index: 0, kind });
+            verify_ir3_specialization(&ir3).expect("current global prelude");
+            ir3.header.schema_version = legacy;
+            assert_eq!(
+                verify_ir3_specialization(&ir3).unwrap_err().code,
+                IrErrorCode::SchemaVersionMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn global_declaration_prelude_rejects_duplicate_names_and_late_declarations() {
+        let mut module = Ir3Module::new(ContentHash::compute(b"globals"), "script.js");
+        module.constant_pool = vec!["same".into(), "same".into()];
+        let declaration = |name_pool_index| Ir3Instruction::DeclareBinding {
+            name_pool_index,
+            kind: GLOBAL_VAR_BINDING_KIND,
+        };
+        for instructions in [
+            vec![declaration(0), declaration(1)],
+            vec![Ir3Instruction::Halt, declaration(0)],
+            vec![declaration(2)],
+        ] {
+            module.instructions = instructions;
+            assert_eq!(
+                verify_ir3_specialization(&module).unwrap_err().code,
+                IrErrorCode::InvalidSpecializationLinkage,
+            );
+        }
+    }
+
+    #[test]
+    fn ir0_preserves_exact_script_directives_in_serialization_and_hashes() {
+        for (source, expected) in [
+            ("'use strict'; var value = 1;", true),
+            ("/* lead */ 'other'; /* gap */ 'use strict'; var value = 1;", true),
+            ("'use strict'\nvar value = 1;", true),
+            ("'use\\x20strict'; var value = 1;", false),
+            ("('use strict'); var value = 1;", false),
+            ("'use strict' + ''; var value = 1;", false),
+            ("var value = 1; 'use strict';", false),
+        ] {
+            let tree = crate::parser_api_stability::parse_script(source).expect("parse script");
+            let module = Ir0Module::from_syntax_tree_with_source(tree, "script.js", source);
+            assert_eq!(module.script_strict, Some(expected), "{source}");
+            let serialized = serde_json::to_string(&module).expect("serialize IR0");
+            let mut restored: Ir0Module = serde_json::from_str(&serialized).expect("restore IR0");
+            assert_eq!(restored, module);
+            restored.script_strict = Some(!expected);
+            assert_ne!(restored.content_hash(), module.content_hash());
+        }
     }
 
     // -- IR Level --
@@ -5992,7 +6253,7 @@ mod tests {
     fn schema_version_current_value() {
         let v = IrSchemaVersion::CURRENT;
         assert_eq!(v.major, 0);
-        assert_eq!(v.minor, 16);
+        assert_eq!(v.minor, 17);
         assert_eq!(v.patch, 0);
     }
 
@@ -6945,7 +7206,7 @@ mod tests {
 
         // Verify error message contains specific version numbers
         assert!(err.message.contains("99.88.77"));
-        assert!(err.message.contains("0.16.0")); // current version
+        assert!(err.message.contains("0.17.0")); // current version
 
         // Verify error can be displayed and contains IR level
         let display = err.to_string();

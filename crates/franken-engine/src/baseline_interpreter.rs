@@ -167,6 +167,7 @@ use crate::intrinsics_table::{IfcPropagation, ImplBinding, ThisCoercion};
 use crate::ir_contract::{
     AccessorKind, CapabilityTag, HostcallDecisionRecord, Ir0Module, Ir3Instruction, Ir3Module,
     IrHeader, IteratorCloseReason, RegRange, WitnessEvent, WitnessEventKind,
+    GLOBAL_FUNCTION_BINDING_KIND, GLOBAL_VAR_BINDING_KIND,
 };
 use crate::iterator_protocol::{
     CloseReason, IterationCompletion, IterationEvent, IterationKind, IterationOperation,
@@ -16367,6 +16368,121 @@ impl InterpreterCore {
                     self.realm_dynamic_globals.get(name).cloned()
                 }
             })
+    }
+
+    /// Validate the complete Script declaration list before mutating the global
+    /// object. A later forbidden function declaration must not leave the earlier
+    /// var/function names partially instantiated.
+    fn validate_script_global_declarations(
+        &mut self,
+        module: &Ir3Module,
+    ) -> Result<(), InterpreterError> {
+        let object_id = self
+            .realm_global_object
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "script global declarations require a realm global object".to_string(),
+            })?;
+        for instruction in &module.instructions {
+            let Ir3Instruction::DeclareBinding {
+                name_pool_index,
+                kind,
+            } = instruction
+            else {
+                break;
+            };
+            if !matches!(*kind, GLOBAL_VAR_BINDING_KIND | GLOBAL_FUNCTION_BINDING_KIND) {
+                break;
+            }
+            let name = Self::scoped_constant_name(module, *name_pool_index);
+            let key = RuntimePropertyKey::String(name.as_ref().into());
+            let object = self
+                .heap
+                .get(object_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+            let permitted = match object.own_runtime_property_descriptor(&key) {
+                None => object.extensible(),
+                Some(_) if *kind == GLOBAL_VAR_BINDING_KIND => true,
+                Some(descriptor) => {
+                    let attributes = object.own_property_attributes(&key);
+                    attributes.configurable
+                        || (attributes.writable
+                            && attributes.enumerable
+                            && matches!(descriptor, BaselineSymbolProperty::Data(_)))
+                }
+            };
+            if !permitted {
+                return Err(self.throw_js_error(
+                    "TypeError",
+                    format!(
+                        "cannot declare global {} {name}",
+                        if *kind == GLOBAL_FUNCTION_BINDING_KIND {
+                            "function"
+                        } else {
+                            "variable"
+                        },
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn instantiate_script_global_binding(
+        &mut self,
+        name: &str,
+        kind: u8,
+    ) -> Result<(), InterpreterError> {
+        let object_id = self
+            .realm_global_object
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "script global declarations require a realm global object".to_string(),
+            })?;
+        let key = RuntimePropertyKey::String(name.into());
+        let object = self
+            .heap
+            .get(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        let exists = object.contains_own_runtime_property(&key);
+        let redefine = !exists
+            || (kind == GLOBAL_FUNCTION_BINDING_KIND
+                && object.own_property_attributes(&key).configurable);
+        if redefine {
+            // Global function declarations replace a configurable accessor
+            // with a data property; the declaration never calls its setter.
+            let accepted = self.define_own_property_from_descriptor(
+                object_id,
+                key,
+                PropertyDescriptorFields {
+                    value: Some(Value::Undefined),
+                    writable: Some(true),
+                    enumerable: Some(true),
+                    configurable: Some(false),
+                    ..PropertyDescriptorFields::default()
+                },
+            )?;
+            if !accepted {
+                return Err(self.throw_js_error("TypeError", format!("cannot declare global {name}")));
+            }
+        }
+        // The injected globals historically also had private scope cells.
+        // A source declaration must resolve through the object record, so a
+        // stale injected cell cannot hide a later globalThis property write.
+        let previous_scope_bytes = self.scope_chain_memory_bytes();
+        let previous_closure_bytes = self.closures_memory_bytes();
+        let previous_call_stack_bytes = self.call_stack_memory_bytes();
+        let previous_realm_global_bytes = self.realm_dynamic_globals_memory_bytes();
+        let previous_generated_realm_global_bytes =
+            self.generated_function_realm_globals_memory_bytes();
+        self.scope_chain.current_mut()?.remove_binding(name);
+        self.realm_dynamic_globals.remove(name);
+        self.apply_scope_closure_call_stack_realm_memory_delta(
+            previous_scope_bytes,
+            previous_closure_bytes,
+            previous_call_stack_bytes,
+            previous_realm_global_bytes,
+            previous_generated_realm_global_bytes,
+        )?;
+        Ok(())
     }
 
     fn capture_runtime_name_reference(&mut self, name: &str) -> Result<u32, InterpreterError> {
@@ -39009,17 +39125,23 @@ impl InterpreterCore {
         // name map, not in the replaceable module scope. Seed each one exactly
         // once so assignments, aliases, and nested module execution all observe
         // the same mutable binding and object identity.
-        let promise = if self.realm_dynamic_globals.contains_key("Promise") {
+        let promise = if self.realm_global_object.is_some()
+            || self.realm_dynamic_globals.contains_key("Promise")
+        {
             None
         } else {
             Some(self.alloc_promise_global()?)
         };
-        let math = if self.realm_dynamic_globals.contains_key("Math") {
+        let math = if self.realm_global_object.is_some()
+            || self.realm_dynamic_globals.contains_key("Math")
+        {
             None
         } else {
             Some(self.alloc_math_global()?)
         };
-        let date = if self.realm_dynamic_globals.contains_key("Date") {
+        let date = if self.realm_global_object.is_some()
+            || self.realm_dynamic_globals.contains_key("Date")
+        {
             None
         } else {
             Some(self.alloc_date_global()?)
@@ -40409,6 +40531,8 @@ impl InterpreterCore {
         } else {
             source
         };
+        let source_has_use_strict =
+            crate::parser::source_has_use_strict_directive(&source, ParseGoal::Script);
         let (parse_goal, parsed) = match declared_goal {
             Some(goal) => (
                 goal,
@@ -40534,7 +40658,8 @@ impl InterpreterCore {
                     span: syntax_tree.span,
                 }));
         }
-        let ir0 = Ir0Module::from_syntax_tree(syntax_tree, resolved);
+        let mut ir0 = Ir0Module::from_syntax_tree(syntax_tree, resolved);
+        ir0.script_strict = Some(parse_goal == ParseGoal::Module || source_has_use_strict);
         // Dependencies execute in this same admitted cell. Preserve its
         // explicit process-shape grant and effective host/replay provenance
         // instead of lowering every dependency under fresh deny-all/unknown
@@ -60345,6 +60470,14 @@ impl InterpreterCore {
                     kind,
                 } => {
                     let name = Self::scoped_constant_name(module, name_pool_index);
+                    if matches!(kind, GLOBAL_VAR_BINDING_KIND | GLOBAL_FUNCTION_BINDING_KIND) {
+                        if self.ip == 0 {
+                            self.validate_script_global_declarations(module)?;
+                        }
+                        self.instantiate_script_global_binding(name.as_ref(), kind)?;
+                        self.ip += 1;
+                        continue;
+                    }
                     let binding_kind = BindingKind::from_u8(kind)?;
                     let existing = self.scope_chain.current()?.get(name.as_ref()).is_some();
                     // bd-9vouw.31: a new name adds its entry plus one fresh
@@ -60443,10 +60576,34 @@ impl InterpreterCore {
                     let name = Self::scoped_constant_name(module, name_pool_index);
                     match self.load_runtime_name_labeled(name.as_ref(), false) {
                         Err(InterpreterError::UndefinedBinding { .. }) => {
-                            match self.load_global_object_name(Some(module), name.as_ref())? {
+                            // A global binding performs a real property read:
+                            // descriptor/prototype observations and a getter's
+                            // return label belong to this instruction. The
+                            // scope also seals catchable callback errors before
+                            // returning to an enclosing native invocation.
+                            self.clear_pending_hostcall_result_label();
+                            let observation = self.begin_property_observation([])?;
+                            let loaded =
+                                match self.load_global_object_name(Some(module), name.as_ref()) {
+                                    Ok(None) if !allow_missing => {
+                                        Err(InterpreterError::UndefinedBinding {
+                                            name: name.to_string(),
+                                        })
+                                    }
+                                    loaded => loaded,
+                                };
+                            let loaded =
+                                self.finish_property_read_observation(observation, loaded)?;
+                            match loaded {
                                 Some((val, label)) => {
-                                    // As a property read: the stored label,
-                                    // never lowering what dst already holds.
+                                    let label = if let Some(observed) =
+                                        self.take_pending_hostcall_result_label()
+                                    {
+                                        self.join_owned_label_with_temporary_budget(label, &observed)?
+                                    } else {
+                                        label
+                                    };
+                                    // Never lower what dst already holds.
                                     let prior_dst_label = self.get_register_label(dst)?;
                                     let label = self.join_owned_label_with_temporary_budget(
                                         label,
@@ -60454,11 +60611,17 @@ impl InterpreterCore {
                                     )?;
                                     self.write_reg_with_label(dst, val, label)?;
                                 }
-                                None if allow_missing => self.write_reg(dst, Value::Undefined)?,
                                 None => {
-                                    return Err(InterpreterError::UndefinedBinding {
-                                        name: name.into_owned(),
-                                    });
+                                    debug_assert!(allow_missing);
+                                    let label = self
+                                        .take_pending_hostcall_result_label()
+                                        .unwrap_or(Label::Public);
+                                    let prior_dst_label = self.get_register_label(dst)?;
+                                    let label = self.join_owned_label_with_temporary_budget(
+                                        label,
+                                        prior_dst_label,
+                                    )?;
+                                    self.write_reg_with_label(dst, Value::Undefined, label)?;
                                 }
                             }
                         }
@@ -65982,13 +66145,21 @@ impl InterpreterCore {
     /// handlers by constructor). `None` once a program has replaced the
     /// global.
     fn materialized_intrinsic_constructor(&self, name: &str) -> Option<Value> {
-        let value = self
-            .realm_dynamic_globals
-            .get(name)?
-            .state
-            .borrow()
-            .value
-            .clone();
+        let value = if let Some(binding) = self.realm_dynamic_globals.get(name) {
+            binding.state.borrow().value.clone()
+        } else {
+            // A Script declaration moves this name from its injected cell to
+            // the global object record. Retain the intrinsic identity there
+            // until the program replaces the constructor.
+            let global = self.realm_global_object?;
+            let key = RuntimePropertyKey::String(name.into());
+            if self.runtime_property_label(global, &key) != Label::Public {
+                return None;
+            }
+            self.heap
+                .get(global.0 as usize)?
+                .own_runtime_property_value(&key)?
+        };
         matches!(
             &value,
             Value::BuiltinFunction(builtin)
@@ -170129,6 +170300,122 @@ mod tests {
             &Label::Secret,
             "LoadScoped of the same cell (the reference behaviour)"
         );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn global_name_getters_preserve_runtime_result_labels() {
+        // Keep the descriptor, receiver and closure Public. Only the value
+        // returned by the getter is Secret, through a captured runtime cell.
+        // Source-level taint inference cannot mask a missing LoadName join.
+        let mut module = test_module_with_pool(
+            vec![
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 0,
+                    kind: BindingKind::Var as u8,
+                },
+                Ir3Instruction::CreateClosure {
+                    dst: 2,
+                    function_index: 0,
+                    capture_count: 0,
+                },
+                Ir3Instruction::StoreScoped {
+                    src: 0,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::LoadName {
+                    dst: 3,
+                    name_pool_index: 1,
+                    allow_missing: false,
+                },
+                Ir3Instruction::LoadStr {
+                    dst: 4,
+                    pool_index: 2,
+                },
+                Ir3Instruction::DefineAccessor {
+                    obj: 3,
+                    key: 4,
+                    func: 2,
+                    kind: AccessorKind::Get,
+                },
+                Ir3Instruction::LoadInt { dst: 5, value: 7 },
+                Ir3Instruction::PutName {
+                    src: 5,
+                    name_pool_index: 3,
+                    strict: false,
+                },
+                Ir3Instruction::LoadName {
+                    dst: 6,
+                    name_pool_index: 2,
+                    allow_missing: false,
+                },
+                Ir3Instruction::LoadName {
+                    dst: 7,
+                    name_pool_index: 3,
+                    allow_missing: false,
+                },
+                Ir3Instruction::LoadName {
+                    dst: 8,
+                    name_pool_index: 4,
+                    allow_missing: true,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadScoped {
+                    dst: 0,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![
+                "global_getter_secret_cell".to_string(),
+                "globalThis".to_string(),
+                "global_getter_classified_value".to_string(),
+                "global_getter_public_value".to_string(),
+                "global_getter_missing_value".to_string(),
+            ],
+        );
+        module.function_table.push(Ir3FunctionDesc {
+            entry: 12,
+            arity: 0,
+            frame_size: 1,
+            name: Some("classified_global_getter".to_string()),
+            is_generator: false,
+            rest_param_index: None,
+        });
+        let mut core = quickjs_test_core();
+        core.mutate_registers(|registers| registers[0] = Value::Int(42));
+        core.set_register_label(0, Label::Secret)
+            .expect("seed classified runtime cell");
+        core.execute(&module).expect("read global accessor");
+
+        assert_eq!(core.get_register_label(2).unwrap(), &Label::Public);
+        assert_eq!(core.get_register_label(3).unwrap(), &Label::Public);
+        let Value::Object(global) = core.read_reg(3).unwrap() else {
+            panic!("globalThis must be an object");
+        };
+        assert_eq!(
+            core.runtime_property_label(
+                global,
+                &RuntimePropertyKey::from("global_getter_classified_value"),
+            ),
+            Label::Public,
+            "the accessor descriptor itself carries no classified label"
+        );
+        assert_eq!(core.read_reg(6).unwrap(), Value::Int(42));
+        assert_eq!(
+            core.get_register_label(6).unwrap(),
+            &Label::Secret,
+            "LoadName must retain the getter's returned runtime label"
+        );
+        assert_eq!(core.read_reg(7).unwrap(), Value::Int(7));
+        assert_eq!(core.get_register_label(7).unwrap(), &Label::Public);
+        assert_eq!(core.read_reg(8).unwrap(), Value::Undefined);
+        assert_eq!(core.get_register_label(8).unwrap(), &Label::Public);
+        assert!(core.pending_hostcall_result_label.is_none());
+        assert!(core.active_inline_callback_context_label.is_none());
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()

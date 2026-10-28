@@ -837,7 +837,11 @@ pub fn ingest_typescript_to_pipeline_artifacts(
         }
     };
 
-    let ir0 = Ir0Module::from_syntax_tree(syntax_tree, source_label);
+    let ir0 = Ir0Module::from_syntax_tree_with_source(
+        syntax_tree,
+        source_label,
+        &normalization_output.normalized_source,
+    );
     let lowering_context = LoweringContext::new(trace_id, decision_id, policy_id);
     let lowering_output = match lower_ir0_to_ir3(&ir0, &lowering_context) {
         Ok(output) => {

@@ -25,7 +25,9 @@ on:
       - 'crates/franken-engine/src/lowering_pipeline/**'
       - 'crates/franken-engine/tests/buffer_value_bd_9vouw_104.rs'
       - 'crates/franken-engine/tests/diagnostics_channel.rs'
+      - 'crates/franken-engine/tests/timers_module_objects.rs'
       - 'scripts/tests/diagnostics_channel.cjs'
+      - 'scripts/tests/timers_module.cjs'
       - 'crates/franken-engine-control-plane-integration-tests/Cargo.toml'
       - 'crates/franken-engine/src/promise_model*.rs'
       - 'crates/franken-engine/tests/async_generator_execution.rs'
@@ -51,12 +53,12 @@ on:
   workflow_dispatch:
     inputs:
       scope:
-        description: Validation scope; buffer runs complete Buffer and diagnostics targets plus native HTTP controls
+        description: Validation scope; buffer runs Buffer diagnostics timers and native HTTP controls
         type: choice
         options: [all, buffer]
         default: all
       runner:
-        description: Hosted runner for the focused Buffer diagnostics and HTTP job
+        description: Hosted runner for the focused Buffer diagnostics timers and HTTP job
         type: choice
         options: [ubuntu-24.04, ubuntu-24.04-arm]
         default: ubuntu-24.04
@@ -315,7 +317,7 @@ jobs:
           path: async-generator-validation/
           retention-days: 7
   buffer:
-    name: Full-source Buffer HTTP and diagnostics evidence
+    name: Full-source Buffer timers diagnostics and HTTP evidence
     runs-on: ${{ inputs.runner || 'ubuntu-24.04' }}
     timeout-minutes: 40
     env:
@@ -358,7 +360,10 @@ jobs:
               crates/franken-engine/src/lowering_pipeline/util_module.rs \
               crates/franken-engine/tests/buffer_value_bd_9vouw_104.rs \
               crates/franken-engine/src/lowering_pipeline/diagnostics_channel_module.js \
-              crates/franken-engine/tests/diagnostics_channel.rs
+              crates/franken-engine/tests/diagnostics_channel.rs \
+              crates/franken-engine/src/lowering_pipeline/timers_module.js \
+              crates/franken-engine/tests/timers_module_objects.rs \
+              crates/franken-engine/tests/runtime_module_resolver_execution.rs
           } | tee native-buffer-inputs.log
       - name: Require the actual parser and authority regression tests
         run: |
@@ -394,6 +399,43 @@ jobs:
           set -euo pipefail
           cargo test --locked -j1 -p frankenengine-engine --test diagnostics_channel \
             -- --nocapture --test-threads=1 2>&1 | tee native-buffer-diagnostics-tests.log
+      - name: Require the complete timer target and retained-factory security controls
+        if: always()
+        run: |
+          set -euo pipefail
+          cargo test --locked -j1 -p frankenengine-engine --test timers_module_objects \
+            -- --list 2>&1 | tee native-buffer-timers-test-list.log
+          for test in \
+            timer_promisify_getters_are_nonconstructible_without_timer_authority \
+            loading_timer_modules_schedules_nothing_and_needs_no_timer_authority \
+            first_class_invocation_does_not_grant_timer_authority \
+            scheduler_invocation_retains_timer_capability_boundary; do
+            grep -Fxq "$test: test" native-buffer-timers-test-list.log
+          done
+          cargo test --locked -j1 -p frankenengine-engine --test runtime_module_resolver_execution \
+            delivered_timer_ -- --list 2>&1 | tee native-buffer-timer-resolver-test-list.log
+          for test in \
+            delivered_timer_promises_share_parent_aliases_and_retained_closures \
+            delivered_timer_esm_imports_preserve_promisify_getter_identity \
+            delivered_timer_esm_imports_refuse_guest_promisify_getters_with_native_names \
+            delivered_timer_promises_esm_runs_timers_scheduler_and_interval_return \
+            delivered_timer_promises_requires_timer_authority_at_policy_and_runtime \
+            delivered_timer_promises_cache_reauthorizes_commonjs_and_esm_requests; do
+            grep -Fxq "$test: test" native-buffer-timer-resolver-test-list.log
+          done
+      - name: Execute the complete native timer module target
+        if: always()
+        run: |
+          set -euo pipefail
+          cargo test --locked -j1 -p frankenengine-engine --test timers_module_objects \
+            -- --nocapture --test-threads=1 2>&1 | tee native-buffer-timers-tests.log
+      - name: Execute all retained timer resolver and authority controls
+        if: always()
+        run: |
+          set -euo pipefail
+          cargo test --locked -j1 -p frankenengine-engine --test runtime_module_resolver_execution \
+            delivered_timer_ -- --nocapture --test-threads=1 \
+            2>&1 | tee native-buffer-timer-resolver-tests.log
       - name: Require the native HTTP evidence and real-socket tests
         if: always()
         run: |
@@ -423,7 +465,9 @@ jobs:
           status=0
           for log in native-buffer-inputs.log native-buffer-test-list.log native-buffer-tests.log \
             native-buffer-http-test-list.log native-buffer-http-tests.log \
-            native-buffer-diagnostics-test-list.log native-buffer-diagnostics-tests.log; do
+            native-buffer-diagnostics-test-list.log native-buffer-diagnostics-tests.log \
+            native-buffer-timers-test-list.log native-buffer-timers-tests.log \
+            native-buffer-timer-resolver-test-list.log native-buffer-timer-resolver-tests.log; do
             if test -s "$log"; then
               sha256sum "$log"
             else

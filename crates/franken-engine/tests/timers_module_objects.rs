@@ -241,6 +241,30 @@ fn first_class_invocation_does_not_grant_timer_authority() {
 }
 
 #[test]
+fn timer_promisify_getters_are_nonconstructible_without_timer_authority() {
+    let source = r#"
+const timers=require('node:timers'), promises=require('node:timers/promises');
+const custom=Symbol.for('nodejs.util.promisify.custom');
+for(const name of ['setTimeout','setImmediate']) {
+ const descriptor=Object.getOwnPropertyDescriptor(timers[name],custom), get=descriptor.get;
+ let construction=false, newTarget=false;
+ try{Reflect.construct(get,[]);}catch(error){construction=error instanceof TypeError;}
+ try{Reflect.construct(function(){},[],get);}catch(error){newTarget=error instanceof TypeError;}
+ console.log('GETTER',name,get.name==='get',get.length===0,
+  !Object.prototype.hasOwnProperty.call(get,'prototype'),
+  descriptor.enumerable && !descriptor.configurable && descriptor.set===undefined,
+  get.call(null)===promises[name],construction,newTarget);
+}
+"#;
+    assert_eq!(
+        execute(source, ParseGoal::Script, false).as_deref(),
+        Ok(
+            "GETTER setTimeout true true true true true true true\nGETTER setImmediate true true true true true true true"
+        )
+    );
+}
+
+#[test]
 fn scheduler_exports_share_native_timer_operations() {
     check(
         r#"
@@ -285,6 +309,9 @@ console.log(typeof timers.promises.scheduler.wait,
     ] {
         let error = execute(source, ParseGoal::Script, false)
             .expect_err("timer authority remains required");
-        assert!(error.to_lowercase().contains("capability"), "{source}: {error}");
+        assert!(
+            error.to_lowercase().contains("capability"),
+            "{source}: {error}"
+        );
     }
 }

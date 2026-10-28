@@ -83597,36 +83597,6 @@ impl InterpreterCore {
         Ok(stored)
     }
 
-    /// Overwrite the existing internal slot `slot` of `object_id` in place.
-    /// An internal slot is not a property, so the object's integrity level
-    /// does not apply: a frozen Map can still `set`. A missing slot is
-    /// created as an ordinary write. Date uses the private `date_value` field
-    /// instead of this legacy property-backed storage.
-    fn write_internal_slot(
-        &mut self,
-        object_id: ObjectId,
-        slot: &str,
-        value: Value,
-    ) -> Result<(), InterpreterError> {
-        let index = object_id.0 as usize;
-        let Some(previous) = self
-            .heap
-            .get(index)
-            .and_then(|object| object.properties.get(slot))
-            .map(Self::estimate_value_bytes)
-        else {
-            return self.set_object_property(object_id, slot.to_string(), value);
-        };
-        self.apply_memory_component_delta(previous, Self::estimate_value_bytes(&value))?;
-        self.mutate_heap(|heap| {
-            if let Some(stored) = heap[index].properties.get_mut(slot) {
-                *stored = value;
-            }
-        });
-        self.gc_write_barrier(object_id);
-        Ok(())
-    }
-
     /// ES2020 20.4.2.2 `new Date(value)`: another Date's time value; else
     /// ToPrimitive(value), and a string is parsed like Date.parse (it used to
     /// give NaN for every string, `new Date('2020-03-04')` included) while

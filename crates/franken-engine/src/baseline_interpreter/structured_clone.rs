@@ -488,13 +488,12 @@ impl InterpreterCore {
                 let time = self
                     .heap
                     .get(id.0 as usize)
-                    .and_then(|object| object.properties.get("__timestamp").cloned())
-                    .unwrap_or(Value::Float(Float64::new(f64::NAN)));
+                    .and_then(HeapObject::date_time)
+                    .expect("Date brand inspection requires its private time slot");
                 let prototype = self.ensure_builtin_prototype("Date")?;
                 let clone = self.alloc_object_with_prototype(Some(prototype))?;
                 self.set_object_brand(clone, "Date")?;
-                self.set_object_property(clone, "__timestamp".to_string(), time)?;
-                self.hide_internal_slots(clone, &["__timestamp"])?;
+                self.set_date_value(clone, time)?;
                 state.memory.insert(id, clone);
                 return Ok(Some(Value::Object(clone)));
             }

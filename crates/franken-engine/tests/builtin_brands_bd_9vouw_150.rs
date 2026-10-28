@@ -11,16 +11,131 @@
 //! programs.
 //!
 //! No-claim: the other internal slots (`__entries`, `__values`, `__size`,
-//! `__timestamp`, `__target`, ...) are still non-enumerable own properties of
+//! `__target`, ...) are still non-enumerable own properties of
 //! the real objects; reflection lists them and guest writes reach them.
+//! Date and RegExp store their state in private heap slots.
 
-use frankenengine_engine::HybridRouter;
+use frankenengine_engine::{
+    HybridRouter, JsEngine, QuickJsInspiredNativeEngine, V8InspiredNativeEngine,
+};
 
 fn eval(source: &str) -> String {
     HybridRouter::default()
         .eval(source)
         .unwrap_or_else(|error| panic!("evaluation failed: {error}\nsource: {source}"))
         .value
+}
+
+fn assert_date_value(source: &str, expected: &str) {
+    for (profile, result) in [
+        ("baseline", QuickJsInspiredNativeEngine.eval(source)),
+        ("throughput", V8InspiredNativeEngine.eval(source)),
+    ] {
+        let result = result.unwrap_or_else(|error| panic!("{profile}: {error}\n{source}"));
+        assert_eq!(result.value, expected, "{profile}\n{source}");
+    }
+}
+
+/// [[DateValue]] is absent from reflection and cannot be intercepted or
+/// corrupted by an ordinary property with the former storage key. Expected
+/// outputs of these Date tests were captured from Node v24.22.1.
+#[test]
+fn date_value_is_private_across_guest_property_operations() {
+    assert_date_value(
+        r#"var d = new Date(5);
+var out = [Reflect.ownKeys(d).length, Object.getOwnPropertyNames(d).length,
+           d.hasOwnProperty('__timestamp'), '__timestamp' in d, String(d.__timestamp)];
+d.__timestamp = 99;
+out.push(d.getTime(), d.__timestamp, Reflect.ownKeys(d).join());
+Object.defineProperty(d, '__timestamp', {
+    get() { throw 'guest read'; }, set(v) { throw 'guest write'; }, configurable: true
+});
+out.push(d.getTime(), d.setTime(8), d.getTime());
+out.push(delete d.__timestamp, Reflect.ownKeys(d).length);
+out.join('|');"#,
+        "0|0|false|false|undefined|5|99|__timestamp|5|8|8|true|0",
+    );
+}
+
+#[test]
+fn date_constructor_and_structured_clone_copy_private_value() {
+    assert_date_value(
+        r#"var d = new Date(86400007);
+Object.defineProperty(d, '__timestamp', {
+    get() { throw 'private slot read'; }, set(v) { throw 'private slot write'; }
+});
+d.valueOf = function () { throw 'copy invoked valueOf'; };
+Object.defineProperty(d, Symbol.toPrimitive, {
+    value: function () { throw 'copy invoked conversion'; }
+});
+var copy = new Date(d);
+var clone = structuredClone(d);
+var invalid = structuredClone(new Date(NaN));
+[copy.getTime(), clone.getTime(), Object.getOwnPropertyNames(clone).length,
+ clone instanceof Date, copy.toISOString(), clone.getUTCDate(),
+ Number.isNaN(invalid.getTime()), invalid.toString(),
+ new Date(-0).getTime() === 0, 1 / new Date(-0).getTime()].join('|');"#,
+        "86400007|86400007|0|true|1970-01-02T00:00:00.007Z|2|true|Invalid Date|true|Infinity",
+    );
+}
+
+#[test]
+fn date_private_value_remains_mutable_under_object_integrity_levels() {
+    assert_date_value(
+        r#"var out = [];
+for (var transform of [Object.freeze, Object.seal, Object.preventExtensions]) {
+    var d = new Date(0);
+    transform(d);
+    out.push(d.setTime(7), d.getTime(), d.setUTCFullYear(2000),
+             d.toISOString(), Reflect.ownKeys(d).length);
+}
+var invalid = Object.freeze(new Date(NaN));
+out.push(invalid.setTime(0), invalid.toISOString());
+out.join('|');"#,
+        "7|7|946684800007|2000-01-01T00:00:00.007Z|0|7|7|946684800007|2000-01-01T00:00:00.007Z|0|7|7|946684800007|2000-01-01T00:00:00.007Z|0|0|1970-01-01T00:00:00.000Z",
+    );
+}
+
+#[test]
+fn intl_date_format_converts_objects_instead_of_reading_guest_storage_keys() {
+    assert_date_value(
+        r#"var calls = [];
+var format = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'UTC', year: 'numeric', month: '2-digit', day: '2-digit'
+});
+var date = new Date(0);
+Object.defineProperty(date, '__timestamp', {get() { throw 'guest timestamp'; }});
+date.valueOf = function () { calls.push('date'); return 172800000; };
+var first = format.format(date);
+var fake = {__timestamp: 0, valueOf() { calls.push('object'); return 259200000; }};
+var second = format.format(fake);
+Object.defineProperty(date, Symbol.toPrimitive, {
+    value: function(hint) { calls.push(hint); return 345600000; }
+});
+var third = format.format(date);
+[first, second, third, calls.join(',')].join('|');"#,
+        "01/03/1970|01/04/1970|01/05/1970|date,object,number",
+    );
+}
+
+#[test]
+fn date_inspection_and_conversion_use_the_private_value_and_exact_receiver() {
+    assert_date_value(
+        r#"var util = require('util');
+function attempt(f) { try { return f(); } catch (e) { return e.name; } }
+var d = new Date(5);
+d.__timestamp = 99;
+var found = util.inspect(d).includes('1970-01-01T00:00:00.005Z');
+var guestProperty = util.inspect(d).includes('__timestamp: 99');
+delete d.__timestamp;
+var inspected = util.inspect(d);
+[util.types.isDate(d), found, guestProperty, inspected, JSON.stringify(d), +d,
+ attempt(() => Date.prototype.getTime.call(Object.create(d))),
+ attempt(() => Date.prototype.getTime.call(new Proxy(d, {}))),
+ attempt(() => Date.prototype.getTime.call({__timestamp: 1})),
+ attempt(() => Date.prototype.getTime.call(Date.prototype))].join('|');"#,
+        "true|true|true|1970-01-01T00:00:00.005Z|\"1970-01-01T00:00:00.005Z\"|5|TypeError|TypeError|TypeError|TypeError",
+    );
 }
 
 /// A guest object with a `__type` property is not a Date, Map or Set to their methods or to Object.prototype.toString.

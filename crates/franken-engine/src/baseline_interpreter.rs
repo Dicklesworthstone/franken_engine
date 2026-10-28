@@ -38755,12 +38755,12 @@ impl InterpreterCore {
                 Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::DateNow)),
             ),
             (
-                "UTC",
-                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::DateUtc)),
-            ),
-            (
                 "parse",
                 Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::DateParse)),
+            ),
+            (
+                "UTC",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::DateUtc)),
             ),
         ])?;
         self.mark_builtin_members_non_enumerable(properties)?;

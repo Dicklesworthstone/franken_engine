@@ -40008,6 +40008,10 @@ impl InterpreterCore {
                 configurable: false,
             },
         )?;
+        // Namespace [[IsExtensible]] is false from creation, including when a
+        // cycle exposes it before evaluation finishes. Export publication is
+        // an internal binding update, not an ordinary property definition.
+        self.mutate_heap(|heap| heap[namespace_object.0 as usize].is_non_extensible = true);
         Ok(namespace_object)
     }
 
@@ -49474,10 +49478,11 @@ impl InterpreterCore {
             record.exports.insert(name.clone(), value.clone())
         };
         // A star re-exporter republishes the value below.
-        match self.set_object_runtime_property(
+        match self.set_module_namespace_export(
             namespace_object,
-            RuntimePropertyKey::String(name.clone()),
+            name.clone(),
             value.clone(),
+            &label,
         ) {
             Ok(()) => {
                 let record = self
@@ -49555,6 +49560,73 @@ impl InterpreterCore {
                 Err(error)
             }
         }
+    }
+
+    /// Publish an exported binding into its namespace's private carrier.
+    /// Guests see a non-extensible exotic object with writable, enumerable,
+    /// non-configurable data descriptors; only the exporting module can
+    /// change their values. Project the value, label and descriptor together
+    /// so a budget refusal cannot leave a partially published property.
+    fn set_module_namespace_export(
+        &mut self,
+        namespace: ObjectId,
+        name: JsString,
+        value: Value,
+        label: &Label,
+    ) -> Result<(), InterpreterError> {
+        let key = RuntimePropertyKey::String(name.clone());
+        self.validate_executable_property_key(&key)?;
+        validate_symbol_value(&self.symbol_state, &value).map_err(|got| {
+            InterpreterError::TypeError {
+                expected: "resolved Symbol value".to_string(),
+                got,
+            }
+        })?;
+        let object = self
+            .heap
+            .get(namespace.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: namespace.0 })?;
+        let previous_bytes = Self::estimate_ordered_property_map_bytes(&object.properties)
+            .saturating_add(Self::estimate_execution_seed_ordered_label_map_bytes(
+                &object.property_labels,
+            ));
+        let attribute_bytes = if object.property_attributes.contains_key(&key) {
+            0
+        } else {
+            Self::estimate_property_attributes_entry_bytes(&key)
+        };
+        self.check_temporary_memory_budget(previous_bytes)?;
+        let mut properties = object.properties.clone();
+        let mut labels = object.property_labels.clone();
+        properties.insert_exact(name.clone(), value);
+        if matches!(label, Label::Public) {
+            labels.remove_exact(&name);
+        } else {
+            labels.insert_exact(name, label.clone());
+        }
+        let next_bytes = Self::estimate_ordered_property_map_bytes(&properties).saturating_add(
+            Self::estimate_execution_seed_ordered_label_map_bytes(&labels),
+        );
+        self.check_temporary_memory_budget(next_bytes.saturating_add(attribute_bytes))?;
+        self.apply_memory_component_delta(
+            previous_bytes,
+            next_bytes.saturating_add(attribute_bytes),
+        )?;
+        self.mutate_heap(|heap| {
+            let object = &mut heap[namespace.0 as usize];
+            object.properties = properties;
+            object.property_labels = labels;
+            object.property_attributes.insert(
+                key,
+                PropertyAttributes {
+                    writable: true,
+                    enumerable: true,
+                    configurable: false,
+                },
+            );
+        });
+        self.gc_write_barrier(namespace);
+        Ok(())
     }
 
     /// Record `cell`, a scope binding of module `specifier` that an
@@ -57910,14 +57982,14 @@ impl InterpreterCore {
                                         label_owner,
                                         &property_key,
                                     );
-                                    // Native namespace writes never replace an export,
+                                    // Namespace writes never replace an export,
                                     // including through a transparent Proxy. Preserve
                                     // export labels on refused writes; SameValue checks
                                     // belong to [[DefineOwnProperty]] and observe the
                                     // retained label there.
-                                    let preserve_native_export_label =
-                                        self.is_native_module_namespace(label_owner);
-                                    if !preserve_native_export_label {
+                                    let preserve_export_label =
+                                        self.is_module_namespace(label_owner);
+                                    if !preserve_export_label {
                                         self.set_own_runtime_property_label(
                                             label_owner,
                                             &property_key,
@@ -57935,7 +58007,7 @@ impl InterpreterCore {
                                     let committed = match set_result {
                                         Ok(committed) => committed,
                                         Err(error) => {
-                                            if !preserve_native_export_label {
+                                            if !preserve_export_label {
                                                 self.set_own_runtime_property_label(
                                                     label_owner,
                                                     &property_key,
@@ -57946,7 +58018,7 @@ impl InterpreterCore {
                                         }
                                     };
                                     if !committed && strict {
-                                        if !preserve_native_export_label {
+                                        if !preserve_export_label {
                                             self.set_own_runtime_property_label(
                                                 label_owner,
                                                 &property_key,
@@ -57966,7 +58038,7 @@ impl InterpreterCore {
                                             },
                                         );
                                     // ([[Set]] itself grows an array's length.)
-                                    if !owns_property && !preserve_native_export_label {
+                                    if !owns_property && !preserve_export_label {
                                         // Prototype accessors and successful traps
                                         // need not create an own data property.
                                         self.set_own_runtime_property_label(
@@ -69031,13 +69103,13 @@ impl InterpreterCore {
         Ok(blocking.map(|index| i64::from(index) + 1))
     }
 
-    /// Native module namespaces retain writable data descriptors for ESM
+    /// Module namespaces retain writable data descriptors for ESM
     /// reflection, but their exotic [[Set]] and [[DefineOwnProperty]] methods
     /// do not let guests replace exports. Authenticate the heap identity
     /// against the private runtime records; a forged @@toStringTag is not a
     /// namespace. The tag check keeps ordinary property stores on their fast
-    /// path, and the fixed provider inventory bounds even a forged-tag lookup.
-    fn is_native_module_namespace(&self, object_id: ObjectId) -> bool {
+    /// path. Source modules and native providers use the same exotic methods.
+    fn is_module_namespace(&self, object_id: ObjectId) -> bool {
         let tag = RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id());
         if !matches!(
             self.heap.get(object_id.0 as usize)
@@ -69046,40 +69118,10 @@ impl InterpreterCore {
         ) {
             return false;
         }
-        [
-            "\0franken-engine/native-buffer/esm",
-            "\0franken-engine/native-crypto/esm",
-            "\0franken-engine/native-zlib/esm",
-            "\0franken-engine/native-fs/esm",
-            "\0franken-engine/native-fs/promises/esm",
-            "\0franken-engine/native-module/esm",
-            "\0franken-engine/native-events/esm",
-            "\0franken-engine/native-os/esm",
-            "\0franken-engine/native-querystring/esm",
-            "\0franken-engine/native-url/esm",
-            "\0franken-engine/native-timers/esm",
-            "\0franken-engine/native-perf_hooks/esm",
-            PATH_ESM_MODULE_ID,
-            PATH_POSIX_ESM_MODULE_ID,
-            PATH_WIN32_ESM_MODULE_ID,
-            "\0franken-engine/native-util/esm",
-            "\0franken-engine/native-util/types/esm",
-            "\0franken-engine/native-assert/esm",
-            "\0franken-engine/native-assert/strict/esm",
-            "\0franken-engine/native-string_decoder/esm",
-            "\0franken-engine/native-timers/promises/esm",
-            "\0franken-engine/native-stream/esm",
-            "\0franken-engine/native-stream/promises/esm",
-            "\0franken-engine/native-stream/consumers/esm",
-            "\0franken-engine/native-stream/web/esm",
-        ]
-        .into_iter()
-        .any(|specifier| {
-            self.module_state
-                .modules
-                .get(specifier)
-                .is_some_and(|record| record.namespace_object == object_id)
-        })
+        self.module_state
+            .modules
+            .values()
+            .any(|record| record.namespace_object == object_id)
     }
 
     /// When `[[Set]]` of `key` on `object_id` (its own receiver) takes the
@@ -69127,7 +69169,7 @@ impl InterpreterCore {
                 || object.data_view.is_some()
                 || object.brand() == Some(PROXY_TYPE_TAG)
                 || self.object_mutation_labels.contains_key(&id)
-                || self.is_native_module_namespace(id))
+                || self.is_module_namespace(id))
         };
         let receiver = self.heap.get(object_id.0 as usize)?;
         if !ordinary(receiver, object_id)
@@ -69189,7 +69231,7 @@ impl InterpreterCore {
         // transparent Proxy forwarding. Writable export descriptors support
         // reflection and do not authorize the ordinary descriptor path.
         // [[DefineOwnProperty]] retains its separate SameValue behavior.
-        if self.is_native_module_namespace(object_id) {
+        if self.is_module_namespace(object_id) {
             return Ok(false);
         }
         // bd-9vouw.504: the ordinary store with nothing to observe. Its
@@ -69297,7 +69339,7 @@ impl InterpreterCore {
                     // (ES2024 10.4.5.5).
                     if owner != object_id
                         && (self.proxy_record(owner)?.is_some()
-                            || self.is_native_module_namespace(owner)
+                            || self.is_module_namespace(owner)
                             || self
                                 .heap
                                 .get(owner.0 as usize)
@@ -69436,7 +69478,7 @@ impl InterpreterCore {
             let Some(receiver_id) = receiver_id else {
                 return Ok(false);
             };
-            if self.is_native_module_namespace(receiver_id) {
+            if self.is_module_namespace(receiver_id) {
                 // A transparent Proxy receiver forwards an unchanged data
                 // value through [[DefineOwnProperty]], as Node does. A bare
                 // namespace receiver still rejects even a SameValue write.
@@ -70227,9 +70269,9 @@ impl InterpreterCore {
             )
             .join(&self.clone_active_execution_context_label()?);
         self.join_object_mutation_label(target_id, &label)?;
-        // Object.assign uses [[Set]], which cannot replace a native export.
+        // Object.assign uses [[Set]], which cannot replace a module export.
         // Preserve the export's provenance even when the caller catches refusal.
-        if !use_target_set || !self.is_native_module_namespace(target_id) {
+        if !use_target_set || !self.is_module_namespace(target_id) {
             self.set_own_runtime_property_label(target_id, &key, &label)?;
         }
         if use_target_set {
@@ -88902,7 +88944,7 @@ impl InterpreterCore {
         key: RuntimePropertyKey,
         descriptor: PropertyDescriptorFields,
     ) -> Result<bool, InterpreterError> {
-        if key.string().is_some() && self.is_native_module_namespace(obj_id) {
+        if key.string().is_some() && self.is_module_namespace(obj_id) {
             // SameValue exposes the retained export through a success boolean
             // (or a caught refusal), including through Reflect and proxies.
             self.reflect_observe_selected_property(obj_id, &key)?;
@@ -98155,11 +98197,18 @@ impl InterpreterCore {
                 }
                 match obj_val {
                     Value::Object(obj_id) => {
-                        if self.is_native_module_namespace(obj_id) {
-                            return Err(InterpreterError::TypeError {
-                                expected: "an object Object.freeze can freeze".to_string(),
-                                got: "module namespace exports cannot become non-writable".to_string(),
-                            });
+                        if self.is_module_namespace(obj_id) {
+                            if self.heap[obj_id.0 as usize].properties.exact_len() > 0 {
+                                return Err(InterpreterError::TypeError {
+                                    expected: "an object Object.freeze can freeze".to_string(),
+                                    got: "module namespace exports cannot become non-writable"
+                                        .to_string(),
+                                });
+                            }
+                            // An empty namespace has only the already frozen
+                            // @@toStringTag property. Do not freeze its private
+                            // binding carrier while a module cycle is evaluating.
+                            return Ok(Value::Object(obj_id));
                         }
                         // ES2020 9.4.5.3: a typed array's elements cannot be
                         // made non-writable, so freezing one with elements is

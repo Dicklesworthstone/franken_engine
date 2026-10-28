@@ -26,12 +26,12 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: '0'
       CARGO_PROFILE_TEST_DEBUG: '0'
       CARGO_TERM_COLOR: never
-      CARGO_HTTP_USER_AGENT: 'OpenAI File Downloader, XaiImageApiFetch/1.0'
+      CARGO_HTTP_USER_AGENT: 'franken_engine-agent (+https://github.com/Dicklesworthstone/franken_engine)'
       CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
       GIT_TERMINAL_PROMPT: '0'
       GIT_CONFIG_COUNT: '1'
       GIT_CONFIG_KEY_0: http.userAgent
-      GIT_CONFIG_VALUE_0: 'OpenAI File Downloader, XaiImageApiFetch/1.0'
+      GIT_CONFIG_VALUE_0: 'franken_engine-agent (+https://github.com/Dicklesworthstone/franken_engine)'
     steps:
       - name: Check out the exact public repository revision
         id: checkout
@@ -99,6 +99,7 @@ jobs:
             crates/franken-engine/src/lowering_pipeline.rs \
             crates/franken-engine/tests/builtin_prototype_own_methods.rs \
             crates/franken-engine/tests/arguments_object_bd_9vouw_25.rs \
+            crates/franken-engine/tests/module_namespace_to_string_tag_bd_9vouw_399.rs \
             crates/franken-engine/tests/object_json_globals_bd9a8cz2.rs
 
       - name: Check the complete production engine library
@@ -116,6 +117,7 @@ jobs:
           cargo test --locked --no-default-features -p frankenengine-engine --no-fail-fast \
             --test builtin_prototype_own_methods \
             --test arguments_object_bd_9vouw_25 \
+            --test module_namespace_to_string_tag_bd_9vouw_399 \
             --test object_json_globals_bd9a8cz2 \
             -- --nocapture --test-threads=1
 

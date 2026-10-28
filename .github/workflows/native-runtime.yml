@@ -24,6 +24,8 @@ on:
       - 'crates/franken-engine/src/lowering_pipeline.rs'
       - 'crates/franken-engine/src/lowering_pipeline/**'
       - 'crates/franken-engine/tests/buffer_value_bd_9vouw_104.rs'
+      - 'crates/franken-engine/tests/diagnostics_channel.rs'
+      - 'scripts/tests/diagnostics_channel.cjs'
       - 'crates/franken-engine-control-plane-integration-tests/Cargo.toml'
       - 'crates/franken-engine/src/promise_model*.rs'
       - 'crates/franken-engine/tests/async_generator_execution.rs'
@@ -49,12 +51,12 @@ on:
   workflow_dispatch:
     inputs:
       scope:
-        description: Validation scope; buffer runs complete Buffer and focused native HTTP regressions
+        description: Validation scope; buffer runs complete Buffer and diagnostics targets plus native HTTP controls
         type: choice
         options: [all, buffer]
         default: all
       runner:
-        description: Hosted runner for the focused Buffer and HTTP job
+        description: Hosted runner for the focused Buffer diagnostics and HTTP job
         type: choice
         options: [ubuntu-24.04, ubuntu-24.04-arm]
         default: ubuntu-24.04
@@ -313,7 +315,7 @@ jobs:
           path: async-generator-validation/
           retention-days: 7
   buffer:
-    name: Full-source Buffer values and native HTTP evidence
+    name: Full-source Buffer HTTP and diagnostics evidence
     runs-on: ${{ inputs.runner || 'ubuntu-24.04' }}
     timeout-minutes: 40
     env:
@@ -324,9 +326,15 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: '0'
       CARGO_TERM_COLOR: never
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
+      - name: Check out the exact source using the runner's Git
+        run: |
+          set -euo pipefail
+          test -z "$(find . -mindepth 1 -maxdepth 1 -print -quit)"
+          git init --initial-branch=main .
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          GIT_TERMINAL_PROMPT=0 git fetch --no-tags --depth=1 origin "$GITHUB_SHA"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - name: Bound compiler memory on the hosted runner
         run: |
           set -euo pipefail
@@ -348,7 +356,9 @@ jobs:
             sha256sum Cargo.lock crates/franken-engine/Cargo.toml \
               crates/franken-engine/src/baseline_interpreter.rs \
               crates/franken-engine/src/lowering_pipeline/util_module.rs \
-              crates/franken-engine/tests/buffer_value_bd_9vouw_104.rs
+              crates/franken-engine/tests/buffer_value_bd_9vouw_104.rs \
+              crates/franken-engine/src/lowering_pipeline/diagnostics_channel_module.js \
+              crates/franken-engine/tests/diagnostics_channel.rs
           } | tee native-buffer-inputs.log
       - name: Require the actual parser and authority regression tests
         run: |
@@ -367,6 +377,23 @@ jobs:
           cargo test --locked -j1 -p frankenengine-control-plane-integration-tests \
             --test buffer_value_bd_9vouw_104 \
             -- --nocapture --test-threads=1 2>&1 | tee native-buffer-tests.log
+      - name: Require the native diagnostics prototype and reentrancy tests
+        if: always()
+        run: |
+          set -euo pipefail
+          cargo test --locked -j1 -p frankenengine-engine \
+            --test diagnostics_channel -- --list 2>&1 | tee native-buffer-diagnostics-test-list.log
+          for test in \
+            subscriber_snapshots_resist_inherited_indices_and_species_on_both_lanes \
+            reentrant_publication_uses_stable_subscriber_snapshots_on_both_lanes; do
+            grep -Fxq "$test: test" native-buffer-diagnostics-test-list.log
+          done
+      - name: Execute the complete native diagnostics target
+        if: always()
+        run: |
+          set -euo pipefail
+          cargo test --locked -j1 -p frankenengine-engine --test diagnostics_channel \
+            -- --nocapture --test-threads=1 2>&1 | tee native-buffer-diagnostics-tests.log
       - name: Require the native HTTP evidence and real-socket tests
         if: always()
         run: |
@@ -387,11 +414,22 @@ jobs:
           cargo test --locked -j1 -p frankenengine-engine --lib \
             native_http_client_request_ -- --nocapture --test-threads=1 \
             2>&1 | tee native-buffer-http-tests.log
-      - name: Retain full-source Buffer test output
+      - name: Require complete source-bound output in native workflow logs
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: native-buffer-validation
-          path: native-buffer-*.log
-          if-no-files-found: error
-          retention-days: 7
+        run: |
+          set -euo pipefail
+          test "$GITHUB_RETENTION_DAYS" -ge 7
+          printf 'Native workflow log retention: %s days\n' "$GITHUB_RETENTION_DAYS"
+          status=0
+          for log in native-buffer-inputs.log native-buffer-test-list.log native-buffer-tests.log \
+            native-buffer-http-test-list.log native-buffer-http-tests.log \
+            native-buffer-diagnostics-test-list.log native-buffer-diagnostics-tests.log; do
+            if test -s "$log"; then
+              sha256sum "$log"
+            else
+              printf '::error::Missing or empty evidence log: %s\n' "$log"
+              status=1
+            fi
+          done
+          git diff --exit-code || status=1
+          exit "$status"

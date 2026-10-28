@@ -43,6 +43,11 @@ path = "../franken-engine/tests/typescript_function_execution.rs"
 required-features = ["engine-defaults"]
 
 [[test]]
+name = "script_global_declarations"
+path = "../franken-engine/tests/script_global_declarations.rs"
+required-features = ["engine-defaults"]
+
+[[test]]
 name = "typescript_class_execution"
 path = "../franken-engine/tests/typescript_class_execution.rs"
 required-features = ["engine-defaults"]

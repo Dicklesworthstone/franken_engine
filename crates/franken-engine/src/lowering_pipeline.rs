@@ -9421,11 +9421,11 @@ fn lower_ir2_to_ir3_with_input_hash(
     // names are instantiated first; a var redeclaration of a function does not
     // replace it with undefined. The runtime validates the entire prelude
     // before creating any property.
-    let mut declared_global_ids = BTreeSet::new();
+    let mut declared_global_names = BTreeSet::new();
     for op in &ir2.ops {
         if let Ir1Op::DeclareFunction { binding_id, .. } = &op.inner
             && let Some(name) = script_global_bindings.get(binding_id)
-            && declared_global_ids.insert(*binding_id)
+            && declared_global_names.insert(name)
         {
             let name_pool_index = push_constant_optimized(&mut constant_pool, name);
             ir3.instructions.push(Ir3Instruction::DeclareBinding {
@@ -9434,8 +9434,8 @@ fn lower_ir2_to_ir3_with_input_hash(
             });
         }
     }
-    for (binding_id, name) in &script_global_bindings {
-        if declared_global_ids.insert(*binding_id) {
+    for name in script_global_bindings.values() {
+        if declared_global_names.insert(name) {
             let name_pool_index = push_constant_optimized(&mut constant_pool, name);
             ir3.instructions.push(Ir3Instruction::DeclareBinding {
                 name_pool_index,

@@ -85,6 +85,25 @@ console.log(readCounter());
 }
 
 #[test]
+fn same_named_block_functions_share_one_global_declaration() {
+    assert_script_output(
+        r#"
+console.log(typeof repeated);
+try {
+    missingDeclaration;
+    function repeated() { return 1; }
+} catch (error) { console.log(error.name); }
+try {
+    function repeated() { return 2; }
+    console.log(repeated(), globalThis.repeated === repeated);
+} catch (error) { console.log(error.name); }
+console.log('after');
+"#,
+        &["undefined", "ReferenceError", "2 true", "after"],
+    );
+}
+
+#[test]
 fn block_vars_hoist_and_shadowed_locals_do_not_alias_global_properties() {
     assert_script_output(
         r#"

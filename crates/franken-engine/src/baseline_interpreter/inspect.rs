@@ -1380,7 +1380,9 @@ impl InterpreterCore {
             .exact_keys()
             .into_iter()
             .filter(|key| {
-                !(internal.is_some()
+                // Date stores its value privately; even the former storage
+                // key is now an ordinary guest property that inspection shows.
+                !(internal.as_deref().is_some_and(|kind| kind != "Date")
                     && key
                         .as_str()
                         .is_some_and(|text| text.starts_with("__") || hidden.contains(&text)))
@@ -1410,10 +1412,7 @@ impl InterpreterCore {
         let native = match kind.as_str() {
             "Map" => self.collection_storage_id(id, "Map", "__entries").is_some(),
             "Set" => self.collection_storage_id(id, "Set", "__values").is_some(),
-            "Date" => matches!(
-                object.properties.get("__timestamp"),
-                Some(Value::Int(_) | Value::Float(_))
-            ),
+            "Date" => object.date_value.is_some(),
             "RegExp"
             | "WeakMap"
             | "WeakSet"
@@ -1442,17 +1441,7 @@ impl InterpreterCore {
         if self.inspect_internal_type(id).as_deref() != Some("Date") {
             return None;
         }
-        Some(
-            match self
-                .heap
-                .get(id.0 as usize)
-                .and_then(|object| object.properties.get("__timestamp"))
-            {
-                Some(Value::Int(time)) => *time as f64,
-                Some(Value::Float(time)) => time.inner(),
-                _ => f64::NAN,
-            },
-        )
+        self.heap.get(id.0 as usize).and_then(HeapObject::date_time)
     }
 
     fn inspect_iso_date(time: f64) -> String {

@@ -472,7 +472,11 @@ pub fn scan_source(
         Err(error) => return syntax_refused(base, format!("parse failed: {error}"), None),
     };
 
-    let ir0 = Ir0Module::from_syntax_tree(syntax_tree, source_label);
+    let ir0 = Ir0Module::from_syntax_tree_with_source(
+        syntax_tree,
+        source_label,
+        &prepared.prepared_source,
+    );
     let context = LoweringContext::new(
         SCAN_TRACE_ID.to_string(),
         SCAN_DECISION_ID.to_string(),

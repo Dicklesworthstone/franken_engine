@@ -167,6 +167,7 @@ use crate::intrinsics_table::{IfcPropagation, ImplBinding, ThisCoercion};
 use crate::ir_contract::{
     AccessorKind, CapabilityTag, HostcallDecisionRecord, Ir0Module, Ir3Instruction, Ir3Module,
     IrHeader, IteratorCloseReason, RegRange, WitnessEvent, WitnessEventKind,
+    GLOBAL_FUNCTION_BINDING_KIND, GLOBAL_VAR_BINDING_KIND,
 };
 use crate::iterator_protocol::{
     CloseReason, IterationCompletion, IterationEvent, IterationKind, IterationOperation,
@@ -3169,7 +3170,7 @@ pub enum BuiltinFunctionKind {
     /// `undefined` (bd-juodx).
     SetClear,
     /// `Date.prototype.getTime()` — receiver-aware; returns the Date object's
-    /// internal `__timestamp` in milliseconds and throws a TypeError for a
+    /// private [[DateValue]] in milliseconds and throws a TypeError for a
     /// non-Date receiver (bd-cseei, bd-9vouw.150).
     DateGetTime,
     /// bd-3894s slice (2b): `ClientRequest.prototype.write(chunk)` — receiver-aware;
@@ -8942,6 +8943,10 @@ pub struct HeapObject {
     /// `flags` neither change nor reveal them, and reflection lists only
     /// `lastIndex`.
     regexp: Option<Box<RegExpSlots>>,
+    /// A Date's [[DateValue]], independent of guest properties and integrity
+    /// levels (ES2020 20.4.5). A boxed Number keeps ordinary objects small
+    /// and preserves NaN exactly in execution seeds and serialized heaps.
+    date_value: Option<Box<Float64>>,
 }
 
 /// A RegExp's pattern, escaped as `source` reads it back (bd-9vouw.243),
@@ -9211,6 +9216,7 @@ impl Serialize for HeapObject {
                 + usize::from(!self.deleted_virtual_keys.is_empty())
                 + usize::from(self.blob.is_some())
                 + usize::from(self.regexp.is_some())
+                + usize::from(self.date_value.is_some())
                 + if has_constructor_metadata { 4 } else { 0 },
         )?;
         object.serialize_field("properties", &self.properties)?;
@@ -9258,6 +9264,9 @@ impl Serialize for HeapObject {
         }
         if let Some(regexp) = &self.regexp {
             object.serialize_field("regexp", regexp)?;
+        }
+        if let Some(date_value) = &self.date_value {
+            object.serialize_field("date_value", date_value)?;
         }
         if !self.private_elements.is_empty() {
             let elements = self
@@ -9366,6 +9375,8 @@ impl<'de> Deserialize<'de> for HeapObject {
             blob: Option<Box<blob::BlobData>>,
             #[serde(default)]
             regexp: Option<Box<RegExpSlots>>,
+            #[serde(default)]
+            date_value: Option<Box<Float64>>,
         }
 
         #[derive(Deserialize)]
@@ -9488,6 +9499,7 @@ impl<'de> Deserialize<'de> for HeapObject {
             deleted_virtual_keys,
             blob: wire.blob,
             regexp: wire.regexp,
+            date_value: wire.date_value,
         };
         for record in wire.symbol_properties {
             let symbol = SymbolId(record.symbol_id);
@@ -9692,6 +9704,10 @@ impl HeapObject {
     /// `None` for an ordinary object whatever its properties say.
     fn brand(&self) -> Option<&str> {
         self.brand.as_deref().map(|brand| &**brand)
+    }
+
+    fn date_time(&self) -> Option<f64> {
+        self.date_value.as_deref().map(|value| value.inner())
     }
 
     /// Effective attributes of the own property `key` (assumed present). A
@@ -16354,6 +16370,121 @@ impl InterpreterCore {
             })
     }
 
+    /// Validate the complete Script declaration list before mutating the global
+    /// object. A later forbidden function declaration must not leave the earlier
+    /// var/function names partially instantiated.
+    fn validate_script_global_declarations(
+        &mut self,
+        module: &Ir3Module,
+    ) -> Result<(), InterpreterError> {
+        let object_id = self
+            .realm_global_object
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "script global declarations require a realm global object".to_string(),
+            })?;
+        for instruction in &module.instructions {
+            let Ir3Instruction::DeclareBinding {
+                name_pool_index,
+                kind,
+            } = instruction
+            else {
+                break;
+            };
+            if !matches!(*kind, GLOBAL_VAR_BINDING_KIND | GLOBAL_FUNCTION_BINDING_KIND) {
+                break;
+            }
+            let name = Self::scoped_constant_name(module, *name_pool_index);
+            let key = RuntimePropertyKey::String(name.as_ref().into());
+            let object = self
+                .heap
+                .get(object_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+            let permitted = match object.own_runtime_property_descriptor(&key) {
+                None => object.extensible(),
+                Some(_) if *kind == GLOBAL_VAR_BINDING_KIND => true,
+                Some(descriptor) => {
+                    let attributes = object.own_property_attributes(&key);
+                    attributes.configurable
+                        || (attributes.writable
+                            && attributes.enumerable
+                            && matches!(descriptor, BaselineSymbolProperty::Data(_)))
+                }
+            };
+            if !permitted {
+                return Err(self.throw_js_error(
+                    "TypeError",
+                    format!(
+                        "cannot declare global {} {name}",
+                        if *kind == GLOBAL_FUNCTION_BINDING_KIND {
+                            "function"
+                        } else {
+                            "variable"
+                        },
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn instantiate_script_global_binding(
+        &mut self,
+        name: &str,
+        kind: u8,
+    ) -> Result<(), InterpreterError> {
+        let object_id = self
+            .realm_global_object
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "script global declarations require a realm global object".to_string(),
+            })?;
+        let key = RuntimePropertyKey::String(name.into());
+        let object = self
+            .heap
+            .get(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        let exists = object.contains_own_runtime_property(&key);
+        let redefine = !exists
+            || (kind == GLOBAL_FUNCTION_BINDING_KIND
+                && object.own_property_attributes(&key).configurable);
+        if redefine {
+            // Global function declarations replace a configurable accessor
+            // with a data property; the declaration never calls its setter.
+            let accepted = self.define_own_property_from_descriptor(
+                object_id,
+                key,
+                PropertyDescriptorFields {
+                    value: Some(Value::Undefined),
+                    writable: Some(true),
+                    enumerable: Some(true),
+                    configurable: Some(false),
+                    ..PropertyDescriptorFields::default()
+                },
+            )?;
+            if !accepted {
+                return Err(self.throw_js_error("TypeError", format!("cannot declare global {name}")));
+            }
+        }
+        // The injected globals historically also had private scope cells.
+        // A source declaration must resolve through the object record, so a
+        // stale injected cell cannot hide a later globalThis property write.
+        let previous_scope_bytes = self.scope_chain_memory_bytes();
+        let previous_closure_bytes = self.closures_memory_bytes();
+        let previous_call_stack_bytes = self.call_stack_memory_bytes();
+        let previous_realm_global_bytes = self.realm_dynamic_globals_memory_bytes();
+        let previous_generated_realm_global_bytes =
+            self.generated_function_realm_globals_memory_bytes();
+        self.scope_chain.current_mut()?.remove_binding(name);
+        self.realm_dynamic_globals.remove(name);
+        self.apply_scope_closure_call_stack_realm_memory_delta(
+            previous_scope_bytes,
+            previous_closure_bytes,
+            previous_call_stack_bytes,
+            previous_realm_global_bytes,
+            previous_generated_realm_global_bytes,
+        )?;
+        Ok(())
+    }
+
     fn capture_runtime_name_reference(&mut self, name: &str) -> Result<u32, InterpreterError> {
         let reference = if let Some((_, binding)) = self.scope_chain.resolve(name) {
             RuntimeNameReference::Resolved(binding.clone())
@@ -18906,10 +19037,10 @@ impl InterpreterCore {
             Value::Object(object_id) => self
                 .heap
                 .get(object_id.0 as usize)
-                .and_then(|object| object.properties.get("__timestamp"))
+                .and_then(HeapObject::date_time)
                 .map_or_else(
                     || self.value_to_string(value),
-                    |timestamp| self.value_to_string(timestamp),
+                    |timestamp| self.value_to_string(&Value::Float(Float64::new(timestamp))),
                 ),
             other => self.value_to_string(other),
         }
@@ -19010,17 +19141,12 @@ impl InterpreterCore {
         let date_prototype = self.ensure_builtin_prototype("Date")?;
         let date_id = self.alloc_object_with_prototype(Some(date_prototype))?;
         self.set_object_brand(date_id, "Date")?;
-        self.set_object_property(
-            date_id,
-            "__timestamp".to_string(),
-            Value::Int(modified_millis),
-        )?;
-        self.hide_internal_slots(date_id, &["__timestamp"])?;
+        self.set_date_value(date_id, modified_millis as f64)?;
         Ok(Value::Object(date_id))
     }
 
-    /// Engine-internal slots stored as own properties (`__type`, collection
-    /// storage, a Date's time value, a Map/Set `size`) stay out of
+    /// Engine-internal slots still stored as own properties (collection
+    /// storage, a Map/Set's cached size) stay out of
     /// Object.keys, for-in, JSON.stringify, spread and Object.assign, like the
     /// internal slots they stand in for.
     fn hide_internal_slots(
@@ -38999,17 +39125,23 @@ impl InterpreterCore {
         // name map, not in the replaceable module scope. Seed each one exactly
         // once so assignments, aliases, and nested module execution all observe
         // the same mutable binding and object identity.
-        let promise = if self.realm_dynamic_globals.contains_key("Promise") {
+        let promise = if self.realm_global_object.is_some()
+            || self.realm_dynamic_globals.contains_key("Promise")
+        {
             None
         } else {
             Some(self.alloc_promise_global()?)
         };
-        let math = if self.realm_dynamic_globals.contains_key("Math") {
+        let math = if self.realm_global_object.is_some()
+            || self.realm_dynamic_globals.contains_key("Math")
+        {
             None
         } else {
             Some(self.alloc_math_global()?)
         };
-        let date = if self.realm_dynamic_globals.contains_key("Date") {
+        let date = if self.realm_global_object.is_some()
+            || self.realm_dynamic_globals.contains_key("Date")
+        {
             None
         } else {
             Some(self.alloc_date_global()?)
@@ -40008,6 +40140,10 @@ impl InterpreterCore {
                 configurable: false,
             },
         )?;
+        // Namespace [[IsExtensible]] is false from creation, including when a
+        // cycle exposes it before evaluation finishes. Export publication is
+        // an internal binding update, not an ordinary property definition.
+        self.mutate_heap(|heap| heap[namespace_object.0 as usize].is_non_extensible = true);
         Ok(namespace_object)
     }
 
@@ -40395,6 +40531,8 @@ impl InterpreterCore {
         } else {
             source
         };
+        let source_has_use_strict =
+            crate::parser::source_has_use_strict_directive(&source, ParseGoal::Script);
         let (parse_goal, parsed) = match declared_goal {
             Some(goal) => (
                 goal,
@@ -40520,7 +40658,8 @@ impl InterpreterCore {
                     span: syntax_tree.span,
                 }));
         }
-        let ir0 = Ir0Module::from_syntax_tree(syntax_tree, resolved);
+        let mut ir0 = Ir0Module::from_syntax_tree(syntax_tree, resolved);
+        ir0.script_strict = Some(parse_goal == ParseGoal::Module || source_has_use_strict);
         // Dependencies execute in this same admitted cell. Preserve its
         // explicit process-shape grant and effective host/replay provenance
         // instead of lowering every dependency under fresh deny-all/unknown
@@ -44705,16 +44844,10 @@ impl InterpreterCore {
                 };
                 let options = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
                 let time = match &receiver {
-                    Value::Object(id) => match self
+                    Value::Object(id) => self
                         .heap
                         .get(id.0 as usize)
-                        .filter(|object| object.brand() == Some("Date"))
-                        .and_then(|object| object.properties.get("__timestamp"))
-                    {
-                        Some(Value::Int(value)) => Some(*value as f64),
-                        Some(Value::Float(value)) => Some(value.inner()),
-                        _ => None,
-                    },
+                        .and_then(HeapObject::date_time),
                     _ => None,
                 };
                 if let (Some(caller), Some(time)) = (caller, time)
@@ -47355,24 +47488,20 @@ impl InterpreterCore {
                 // thisTimeValue throws for a receiver that is not a Date, as
                 // every other Date.prototype method does (bd-9vouw.150).
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let date_obj = match &receiver {
+                let time = match &receiver {
                     Value::Object(date_id) => self
                         .heap
                         .get(date_id.0 as usize)
-                        .filter(|object| object.brand() == Some("Date")),
+                        .and_then(HeapObject::date_time),
                     _ => None,
                 };
-                let Some(date_obj) = date_obj else {
+                let Some(time) = time else {
                     return Err(InterpreterError::TypeError {
                         expected: "Date receiver for Date.prototype.getTime".to_string(),
                         got: receiver.type_name().to_string(),
                     });
                 };
-                match date_obj.properties.get("__timestamp") {
-                    Some(Value::Float(ts)) => Ok(Value::Float(*ts)),
-                    Some(Value::Int(ts)) => Ok(Value::Int(*ts)),
-                    _ => Ok(Value::Float(f64::NAN.into())),
-                }
+                Ok(Value::Float(Float64::new(time)))
             }
             BuiltinFunctionKind::UrlSearchParamsGet => {
                 let object_id = self.url_search_params_receiver_id(receiver, "get")?;
@@ -49474,10 +49603,11 @@ impl InterpreterCore {
             record.exports.insert(name.clone(), value.clone())
         };
         // A star re-exporter republishes the value below.
-        match self.set_object_runtime_property(
+        match self.set_module_namespace_export(
             namespace_object,
-            RuntimePropertyKey::String(name.clone()),
+            name.clone(),
             value.clone(),
+            &label,
         ) {
             Ok(()) => {
                 let record = self
@@ -49555,6 +49685,73 @@ impl InterpreterCore {
                 Err(error)
             }
         }
+    }
+
+    /// Publish an exported binding into its namespace's private carrier.
+    /// Guests see a non-extensible exotic object with writable, enumerable,
+    /// non-configurable data descriptors; only the exporting module can
+    /// change their values. Project the value, label and descriptor together
+    /// so a budget refusal cannot leave a partially published property.
+    fn set_module_namespace_export(
+        &mut self,
+        namespace: ObjectId,
+        name: JsString,
+        value: Value,
+        label: &Label,
+    ) -> Result<(), InterpreterError> {
+        let key = RuntimePropertyKey::String(name.clone());
+        self.validate_executable_property_key(&key)?;
+        validate_symbol_value(&self.symbol_state, &value).map_err(|got| {
+            InterpreterError::TypeError {
+                expected: "resolved Symbol value".to_string(),
+                got,
+            }
+        })?;
+        let object = self
+            .heap
+            .get(namespace.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: namespace.0 })?;
+        let previous_bytes = Self::estimate_ordered_property_map_bytes(&object.properties)
+            .saturating_add(Self::estimate_execution_seed_ordered_label_map_bytes(
+                &object.property_labels,
+            ));
+        let attribute_bytes = if object.property_attributes.contains_key(&key) {
+            0
+        } else {
+            Self::estimate_property_attributes_entry_bytes(&key)
+        };
+        self.check_temporary_memory_budget(previous_bytes)?;
+        let mut properties = object.properties.clone();
+        let mut labels = object.property_labels.clone();
+        properties.insert_exact(name.clone(), value);
+        if matches!(label, Label::Public) {
+            labels.remove_exact(&name);
+        } else {
+            labels.insert_exact(name, label.clone());
+        }
+        let next_bytes = Self::estimate_ordered_property_map_bytes(&properties).saturating_add(
+            Self::estimate_execution_seed_ordered_label_map_bytes(&labels),
+        );
+        self.check_temporary_memory_budget(next_bytes.saturating_add(attribute_bytes))?;
+        self.apply_memory_component_delta(
+            previous_bytes,
+            next_bytes.saturating_add(attribute_bytes),
+        )?;
+        self.mutate_heap(|heap| {
+            let object = &mut heap[namespace.0 as usize];
+            object.properties = properties;
+            object.property_labels = labels;
+            object.property_attributes.insert(
+                key,
+                PropertyAttributes {
+                    writable: true,
+                    enumerable: true,
+                    configurable: false,
+                },
+            );
+        });
+        self.gc_write_barrier(namespace);
+        Ok(())
     }
 
     /// Record `cell`, a scope binding of module `specifier` that an
@@ -57910,14 +58107,14 @@ impl InterpreterCore {
                                         label_owner,
                                         &property_key,
                                     );
-                                    // Native namespace writes never replace an export,
+                                    // Namespace writes never replace an export,
                                     // including through a transparent Proxy. Preserve
                                     // export labels on refused writes; SameValue checks
                                     // belong to [[DefineOwnProperty]] and observe the
                                     // retained label there.
-                                    let preserve_native_export_label =
-                                        self.is_native_module_namespace(label_owner);
-                                    if !preserve_native_export_label {
+                                    let preserve_export_label =
+                                        self.is_module_namespace(label_owner);
+                                    if !preserve_export_label {
                                         self.set_own_runtime_property_label(
                                             label_owner,
                                             &property_key,
@@ -57935,7 +58132,7 @@ impl InterpreterCore {
                                     let committed = match set_result {
                                         Ok(committed) => committed,
                                         Err(error) => {
-                                            if !preserve_native_export_label {
+                                            if !preserve_export_label {
                                                 self.set_own_runtime_property_label(
                                                     label_owner,
                                                     &property_key,
@@ -57946,7 +58143,7 @@ impl InterpreterCore {
                                         }
                                     };
                                     if !committed && strict {
-                                        if !preserve_native_export_label {
+                                        if !preserve_export_label {
                                             self.set_own_runtime_property_label(
                                                 label_owner,
                                                 &property_key,
@@ -57966,7 +58163,7 @@ impl InterpreterCore {
                                             },
                                         );
                                     // ([[Set]] itself grows an array's length.)
-                                    if !owns_property && !preserve_native_export_label {
+                                    if !owns_property && !preserve_export_label {
                                         // Prototype accessors and successful traps
                                         // need not create an own data property.
                                         self.set_own_runtime_property_label(
@@ -60273,6 +60470,14 @@ impl InterpreterCore {
                     kind,
                 } => {
                     let name = Self::scoped_constant_name(module, name_pool_index);
+                    if matches!(kind, GLOBAL_VAR_BINDING_KIND | GLOBAL_FUNCTION_BINDING_KIND) {
+                        if self.ip == 0 {
+                            self.validate_script_global_declarations(module)?;
+                        }
+                        self.instantiate_script_global_binding(name.as_ref(), kind)?;
+                        self.ip += 1;
+                        continue;
+                    }
                     let binding_kind = BindingKind::from_u8(kind)?;
                     let existing = self.scope_chain.current()?.get(name.as_ref()).is_some();
                     // bd-9vouw.31: a new name adds its entry plus one fresh
@@ -60371,10 +60576,34 @@ impl InterpreterCore {
                     let name = Self::scoped_constant_name(module, name_pool_index);
                     match self.load_runtime_name_labeled(name.as_ref(), false) {
                         Err(InterpreterError::UndefinedBinding { .. }) => {
-                            match self.load_global_object_name(Some(module), name.as_ref())? {
+                            // A global binding performs a real property read:
+                            // descriptor/prototype observations and a getter's
+                            // return label belong to this instruction. The
+                            // scope also seals catchable callback errors before
+                            // returning to an enclosing native invocation.
+                            self.clear_pending_hostcall_result_label();
+                            let observation = self.begin_property_observation([])?;
+                            let loaded =
+                                match self.load_global_object_name(Some(module), name.as_ref()) {
+                                    Ok(None) if !allow_missing => {
+                                        Err(InterpreterError::UndefinedBinding {
+                                            name: name.to_string(),
+                                        })
+                                    }
+                                    loaded => loaded,
+                                };
+                            let loaded =
+                                self.finish_property_read_observation(observation, loaded)?;
+                            match loaded {
                                 Some((val, label)) => {
-                                    // As a property read: the stored label,
-                                    // never lowering what dst already holds.
+                                    let label = if let Some(observed) =
+                                        self.take_pending_hostcall_result_label()
+                                    {
+                                        self.join_owned_label_with_temporary_budget(label, &observed)?
+                                    } else {
+                                        label
+                                    };
+                                    // Never lower what dst already holds.
                                     let prior_dst_label = self.get_register_label(dst)?;
                                     let label = self.join_owned_label_with_temporary_budget(
                                         label,
@@ -60382,11 +60611,17 @@ impl InterpreterCore {
                                     )?;
                                     self.write_reg_with_label(dst, val, label)?;
                                 }
-                                None if allow_missing => self.write_reg(dst, Value::Undefined)?,
                                 None => {
-                                    return Err(InterpreterError::UndefinedBinding {
-                                        name: name.into_owned(),
-                                    });
+                                    debug_assert!(allow_missing);
+                                    let label = self
+                                        .take_pending_hostcall_result_label()
+                                        .unwrap_or(Label::Public);
+                                    let prior_dst_label = self.get_register_label(dst)?;
+                                    let label = self.join_owned_label_with_temporary_budget(
+                                        label,
+                                        prior_dst_label,
+                                    )?;
+                                    self.write_reg_with_label(dst, Value::Undefined, label)?;
                                 }
                             }
                         }
@@ -65910,13 +66145,21 @@ impl InterpreterCore {
     /// handlers by constructor). `None` once a program has replaced the
     /// global.
     fn materialized_intrinsic_constructor(&self, name: &str) -> Option<Value> {
-        let value = self
-            .realm_dynamic_globals
-            .get(name)?
-            .state
-            .borrow()
-            .value
-            .clone();
+        let value = if let Some(binding) = self.realm_dynamic_globals.get(name) {
+            binding.state.borrow().value.clone()
+        } else {
+            // A Script declaration moves this name from its injected cell to
+            // the global object record. Retain the intrinsic identity there
+            // until the program replaces the constructor.
+            let global = self.realm_global_object?;
+            let key = RuntimePropertyKey::String(name.into());
+            if self.runtime_property_label(global, &key) != Label::Public {
+                return None;
+            }
+            self.heap
+                .get(global.0 as usize)?
+                .own_runtime_property_value(&key)?
+        };
         matches!(
             &value,
             Value::BuiltinFunction(builtin)
@@ -69031,13 +69274,13 @@ impl InterpreterCore {
         Ok(blocking.map(|index| i64::from(index) + 1))
     }
 
-    /// Native module namespaces retain writable data descriptors for ESM
+    /// Module namespaces retain writable data descriptors for ESM
     /// reflection, but their exotic [[Set]] and [[DefineOwnProperty]] methods
     /// do not let guests replace exports. Authenticate the heap identity
     /// against the private runtime records; a forged @@toStringTag is not a
     /// namespace. The tag check keeps ordinary property stores on their fast
-    /// path, and the fixed provider inventory bounds even a forged-tag lookup.
-    fn is_native_module_namespace(&self, object_id: ObjectId) -> bool {
+    /// path. Source modules and native providers use the same exotic methods.
+    fn is_module_namespace(&self, object_id: ObjectId) -> bool {
         let tag = RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id());
         if !matches!(
             self.heap.get(object_id.0 as usize)
@@ -69046,40 +69289,10 @@ impl InterpreterCore {
         ) {
             return false;
         }
-        [
-            "\0franken-engine/native-buffer/esm",
-            "\0franken-engine/native-crypto/esm",
-            "\0franken-engine/native-zlib/esm",
-            "\0franken-engine/native-fs/esm",
-            "\0franken-engine/native-fs/promises/esm",
-            "\0franken-engine/native-module/esm",
-            "\0franken-engine/native-events/esm",
-            "\0franken-engine/native-os/esm",
-            "\0franken-engine/native-querystring/esm",
-            "\0franken-engine/native-url/esm",
-            "\0franken-engine/native-timers/esm",
-            "\0franken-engine/native-perf_hooks/esm",
-            PATH_ESM_MODULE_ID,
-            PATH_POSIX_ESM_MODULE_ID,
-            PATH_WIN32_ESM_MODULE_ID,
-            "\0franken-engine/native-util/esm",
-            "\0franken-engine/native-util/types/esm",
-            "\0franken-engine/native-assert/esm",
-            "\0franken-engine/native-assert/strict/esm",
-            "\0franken-engine/native-string_decoder/esm",
-            "\0franken-engine/native-timers/promises/esm",
-            "\0franken-engine/native-stream/esm",
-            "\0franken-engine/native-stream/promises/esm",
-            "\0franken-engine/native-stream/consumers/esm",
-            "\0franken-engine/native-stream/web/esm",
-        ]
-        .into_iter()
-        .any(|specifier| {
-            self.module_state
-                .modules
-                .get(specifier)
-                .is_some_and(|record| record.namespace_object == object_id)
-        })
+        self.module_state
+            .modules
+            .values()
+            .any(|record| record.namespace_object == object_id)
     }
 
     /// When `[[Set]]` of `key` on `object_id` (its own receiver) takes the
@@ -69127,7 +69340,7 @@ impl InterpreterCore {
                 || object.data_view.is_some()
                 || object.brand() == Some(PROXY_TYPE_TAG)
                 || self.object_mutation_labels.contains_key(&id)
-                || self.is_native_module_namespace(id))
+                || self.is_module_namespace(id))
         };
         let receiver = self.heap.get(object_id.0 as usize)?;
         if !ordinary(receiver, object_id)
@@ -69189,7 +69402,7 @@ impl InterpreterCore {
         // transparent Proxy forwarding. Writable export descriptors support
         // reflection and do not authorize the ordinary descriptor path.
         // [[DefineOwnProperty]] retains its separate SameValue behavior.
-        if self.is_native_module_namespace(object_id) {
+        if self.is_module_namespace(object_id) {
             return Ok(false);
         }
         // bd-9vouw.504: the ordinary store with nothing to observe. Its
@@ -69297,7 +69510,7 @@ impl InterpreterCore {
                     // (ES2024 10.4.5.5).
                     if owner != object_id
                         && (self.proxy_record(owner)?.is_some()
-                            || self.is_native_module_namespace(owner)
+                            || self.is_module_namespace(owner)
                             || self
                                 .heap
                                 .get(owner.0 as usize)
@@ -69436,7 +69649,7 @@ impl InterpreterCore {
             let Some(receiver_id) = receiver_id else {
                 return Ok(false);
             };
-            if self.is_native_module_namespace(receiver_id) {
+            if self.is_module_namespace(receiver_id) {
                 // A transparent Proxy receiver forwards an unchanged data
                 // value through [[DefineOwnProperty]], as Node does. A bare
                 // namespace receiver still rejects even a SameValue write.
@@ -70227,9 +70440,9 @@ impl InterpreterCore {
             )
             .join(&self.clone_active_execution_context_label()?);
         self.join_object_mutation_label(target_id, &label)?;
-        // Object.assign uses [[Set]], which cannot replace a native export.
+        // Object.assign uses [[Set]], which cannot replace a module export.
         // Preserve the export's provenance even when the caller catches refusal.
-        if !use_target_set || !self.is_native_module_namespace(target_id) {
+        if !use_target_set || !self.is_module_namespace(target_id) {
             self.set_own_runtime_property_label(target_id, &key, &label)?;
         }
         if use_target_set {
@@ -70436,13 +70649,12 @@ impl InterpreterCore {
             if let Some(primitive) = self.primitive_wrapper_value(object_id) {
                 return Ok(primitive.clone());
             }
-            if let Some(object) = self.heap.get(object_id.0 as usize)
-                && object.brand() == Some("Date")
+            if let Some(time) = self
+                .heap
+                .get(object_id.0 as usize)
+                .and_then(HeapObject::date_time)
             {
-                return Ok(match object.properties.get("__timestamp") {
-                    Some(time @ (Value::Float(_) | Value::Int(_))) => time.clone(),
-                    _ => Value::Float(f64::NAN.into()),
-                });
+                return Ok(Value::Float(Float64::new(time)));
             }
             return self.engine_object_string_primitive(module, object_id);
         }
@@ -82926,7 +83138,7 @@ impl InterpreterCore {
     }
 
     /// Date.prototype getters, setters and formatters (ES2020 20.4.4) over the
-    /// receiver's `__timestamp`. Local time is UTC in this hermetic engine.
+    /// receiver's [[DateValue]]. Local time is UTC in this hermetic engine.
     /// The locale tag and options of a Date toLocale*String call. Local
     /// time is UTC, so a `timeZone` option must name UTC; component and
     /// style options (`month: 'long'`, `dateStyle`, `hour12`, ...) are not
@@ -83040,6 +83252,29 @@ impl InterpreterCore {
         self.invoke_inline_method_call(Some(module), to_iso_string, object, Vec::new())
     }
 
+    /// Store [[DateValue]] without invoking a guest property, setter, Proxy
+    /// trap, or the receiver's integrity checks. The Number has no heap
+    /// references to trace; its allocation is charged before publication.
+    fn set_date_value(&mut self, date_id: ObjectId, time: f64) -> Result<(), InterpreterError> {
+        let index = date_id.0 as usize;
+        let object = self
+            .heap
+            .get(index)
+            .ok_or(InterpreterError::ObjectNotFound { id: date_id.0 })?;
+        let previous_bytes = if object.date_value.is_some() {
+            std::mem::size_of::<Float64>() as u64
+        } else {
+            0
+        };
+        self.apply_memory_component_delta(previous_bytes, std::mem::size_of::<Float64>() as u64)?;
+        let time = Float64::new(time);
+        self.mutate_heap(|heap| match heap[index].date_value.as_deref_mut() {
+            Some(stored) => *stored = time,
+            None => heap[index].date_value = Some(Box::new(time)),
+        });
+        Ok(())
+    }
+
     fn date_prototype_method(
         &mut self,
         module: Option<&Ir3Module>,
@@ -83056,7 +83291,7 @@ impl InterpreterCore {
                 if self
                     .heap
                     .get(id.0 as usize)
-                    .is_some_and(|object| object.brand() == Some("Date")) =>
+                    .is_some_and(|object| object.date_value.is_some()) =>
             {
                 *id
             }
@@ -83067,15 +83302,11 @@ impl InterpreterCore {
                 });
             }
         };
-        let t = match self
+        let t = self
             .heap
             .get(date_id.0 as usize)
-            .and_then(|object| object.properties.get("__timestamp"))
-        {
-            Some(Value::Int(value)) => *value as f64,
-            Some(Value::Float(value)) => value.inner(),
-            _ => f64::NAN,
-        };
+            .and_then(HeapObject::date_time)
+            .expect("Date receiver was validated above");
         let number = js_number_to_value;
         let getter = |part: fn(f64) -> f64| {
             if t.is_nan() { f64::NAN } else { part(t) }
@@ -83291,15 +83522,15 @@ impl InterpreterCore {
         } else {
             js_number_to_value(result)
         };
-        self.write_internal_slot(date_id, "__timestamp", stored.clone())?;
+        self.set_date_value(date_id, result)?;
         Ok(stored)
     }
 
     /// Overwrite the existing internal slot `slot` of `object_id` in place.
     /// An internal slot is not a property, so the object's integrity level
-    /// does not apply: `Object.freeze(date).setTime(5)` sets [[DateValue]]
-    /// (ES2020 20.4.4.27), as a frozen Map still `set`s. A missing slot is
-    /// created as an ordinary write.
+    /// does not apply: a frozen Map can still `set`. A missing slot is
+    /// created as an ordinary write. Date uses the private `date_value` field
+    /// instead of this legacy property-backed storage.
     fn write_internal_slot(
         &mut self,
         object_id: ObjectId,
@@ -83337,14 +83568,11 @@ impl InterpreterCore {
     ) -> Result<f64, InterpreterError> {
         let value = self.read_reg(register)?;
         if let Value::Object(date_id) = &value
-            && let Some(object) = self.heap.get(date_id.0 as usize)
-            && object.brand() == Some("Date")
+            && let Some(time) = self
+                .heap
+                .get(date_id.0 as usize)
+                .and_then(HeapObject::date_time)
         {
-            let time = match object.properties.get("__timestamp") {
-                Some(Value::Int(millis)) => *millis as f64,
-                Some(Value::Float(millis)) => millis.inner(),
-                _ => f64::NAN,
-            };
             return Ok(date_math::time_clip(time));
         }
         let primitive = if value.is_object_like() && module.is_some() {
@@ -88902,7 +89130,7 @@ impl InterpreterCore {
         key: RuntimePropertyKey,
         descriptor: PropertyDescriptorFields,
     ) -> Result<bool, InterpreterError> {
-        if key.string().is_some() && self.is_native_module_namespace(obj_id) {
+        if key.string().is_some() && self.is_module_namespace(obj_id) {
             // SameValue exposes the retained export through a success boolean
             // (or a caught refusal), including through Reflect and proxies.
             self.reflect_observe_selected_property(obj_id, &key)?;
@@ -98155,11 +98383,18 @@ impl InterpreterCore {
                 }
                 match obj_val {
                     Value::Object(obj_id) => {
-                        if self.is_native_module_namespace(obj_id) {
-                            return Err(InterpreterError::TypeError {
-                                expected: "an object Object.freeze can freeze".to_string(),
-                                got: "module namespace exports cannot become non-writable".to_string(),
-                            });
+                        if self.is_module_namespace(obj_id) {
+                            if self.heap[obj_id.0 as usize].properties.exact_len() > 0 {
+                                return Err(InterpreterError::TypeError {
+                                    expected: "an object Object.freeze can freeze".to_string(),
+                                    got: "module namespace exports cannot become non-writable"
+                                        .to_string(),
+                                });
+                            }
+                            // An empty namespace has only the already frozen
+                            // @@toStringTag property. Do not freeze its private
+                            // binding carrier while a module cycle is evaluating.
+                            return Ok(Value::Object(obj_id));
                         }
                         // ES2020 9.4.5.3: a typed array's elements cannot be
                         // made non-writable, so freezing one with elements is
@@ -98970,9 +99205,8 @@ impl InterpreterCore {
                     _ => self.date_components_time_value(args, module)?,
                 };
 
-                // Create a new Date object. Tag it with `__type:"Date"` so the
-                // `Date.prototype.*` host methods (getTime/toString/…) recognize
-                // it as a Date receiver. The timestamp stays a `Float` (matching
+                // Create a new Date object with a private [[DateValue]].
+                // The timestamp stays a `Float` (matching
                 // the existing Date unit tests); `Float64`'s JS-style Display
                 // renders an integral value like `0` (not `0.0`), so
                 // `new Date(0).getTime()` stringifies to "0". Use the
@@ -98980,12 +99214,7 @@ impl InterpreterCore {
                 let date_prototype = self.ensure_builtin_prototype("Date")?;
                 let date_id = self.alloc_object_with_prototype(Some(date_prototype))?;
                 self.set_object_brand(date_id, "Date")?;
-                self.set_object_property(
-                    date_id,
-                    "__timestamp".to_string(),
-                    Value::Float(Float64::new(millis)),
-                )?;
-                self.hide_internal_slots(date_id, &["__timestamp"])?;
+                self.set_date_value(date_id, millis)?;
                 Ok(Value::Object(date_id))
             }
             "builtin:ArrayBuffer" | "builtin:SharedArrayBuffer" => {
@@ -101340,17 +101569,9 @@ impl InterpreterCore {
                 };
 
                 // Check if it's actually a Date
-                if let Some(date_obj) = self.heap.get(date_id.0 as usize)
-                    && date_obj.brand() == Some("Date")
+                if let Some(time) = self.heap.get(date_id.0 as usize).and_then(HeapObject::date_time)
                 {
-                    // Get the timestamp value
-                    if let Some(Value::Float(timestamp)) = date_obj.properties.get("__timestamp") {
-                        return Ok(Value::Float(*timestamp));
-                    } else if let Some(Value::Int(timestamp)) =
-                        date_obj.properties.get("__timestamp")
-                    {
-                        return Ok(Value::Int(*timestamp));
-                    }
+                    return Ok(Value::Float(Float64::new(time)));
                 }
 
                 // Invalid date or not a date object
@@ -105467,15 +105688,9 @@ impl InterpreterCore {
         }
         // A Date converts through Date.prototype.toString: its
         // @@toPrimitive treats the "default" hint as "string".
-        if let Some(object) = self.heap.get(id.0 as usize)
-            && object.brand() == Some("Date")
+        if let Some(time) = self.heap.get(id.0 as usize).and_then(HeapObject::date_time)
         {
-            let t = match object.properties.get("__timestamp") {
-                Some(Value::Int(millis)) => *millis as f64,
-                Some(Value::Float(millis)) => millis.inner(),
-                _ => f64::NAN,
-            };
-            return date_math::to_date_string(t);
+            return date_math::to_date_string(time);
         }
         // Everything else converts through Object.prototype.toString: the
         // builtin or @@toStringTag tag (`'' + new Map()` is "[object Map]").
@@ -106684,6 +106899,9 @@ impl InterpreterCore {
             .saturating_add(Self::estimate_execution_seed_ordered_label_map_bytes(
                 &object.property_labels,
             ))
+            .saturating_add(object.date_value.as_ref().map_or(0, |_| {
+                std::mem::size_of::<Float64>() as u64
+            }))
             .saturating_add(
                 object
                     .array_buffer
@@ -108186,6 +108404,9 @@ impl InterpreterCore {
             .saturating_add(properties)
             .saturating_add(property_labels)
             .saturating_add(property_attributes)
+            .saturating_add(object.date_value.as_ref().map_or(0, |_| {
+                std::mem::size_of::<Float64>() as u64
+            }))
             .saturating_add(array_buffer_bytes)
             .saturating_add(typed_array_bytes)
             .saturating_add(data_view_bytes)
@@ -120357,17 +120578,12 @@ impl InterpreterCore {
         };
 
         // Check if it's actually a Date object
-        if let Some(date_obj) = self.heap.get(date_id.0 as usize)
-            && date_obj.brand() == Some("Date")
+        if let Some(time) = self.heap.get(date_id.0 as usize).and_then(HeapObject::date_time)
         {
-            let timestamp =
-                if let Some(Value::Float(timestamp)) = date_obj.properties.get("__timestamp") {
-                    timestamp.inner() as i64
-                } else if let Some(Value::Int(timestamp)) = date_obj.properties.get("__timestamp") {
-                    *timestamp
-                } else {
-                    return Ok(Value::str("Invalid Date"));
-                };
+            if !time.is_finite() {
+                return Ok(Value::str("Invalid Date"));
+            }
+            let timestamp = time as i64;
 
             let locale_data = Self::get_locale_data(locale);
             let formatted = self.format_timestamp_with_locale(timestamp, locale_data, format_type);
@@ -170091,6 +170307,122 @@ mod tests {
     }
 
     #[test]
+    fn global_name_getters_preserve_runtime_result_labels() {
+        // Keep the descriptor, receiver and closure Public. Only the value
+        // returned by the getter is Secret, through a captured runtime cell.
+        // Source-level taint inference cannot mask a missing LoadName join.
+        let mut module = test_module_with_pool(
+            vec![
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 0,
+                    kind: BindingKind::Var as u8,
+                },
+                Ir3Instruction::CreateClosure {
+                    dst: 2,
+                    function_index: 0,
+                    capture_count: 0,
+                },
+                Ir3Instruction::StoreScoped {
+                    src: 0,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::LoadName {
+                    dst: 3,
+                    name_pool_index: 1,
+                    allow_missing: false,
+                },
+                Ir3Instruction::LoadStr {
+                    dst: 4,
+                    pool_index: 2,
+                },
+                Ir3Instruction::DefineAccessor {
+                    obj: 3,
+                    key: 4,
+                    func: 2,
+                    kind: AccessorKind::Get,
+                },
+                Ir3Instruction::LoadInt { dst: 5, value: 7 },
+                Ir3Instruction::PutName {
+                    src: 5,
+                    name_pool_index: 3,
+                    strict: false,
+                },
+                Ir3Instruction::LoadName {
+                    dst: 6,
+                    name_pool_index: 2,
+                    allow_missing: false,
+                },
+                Ir3Instruction::LoadName {
+                    dst: 7,
+                    name_pool_index: 3,
+                    allow_missing: false,
+                },
+                Ir3Instruction::LoadName {
+                    dst: 8,
+                    name_pool_index: 4,
+                    allow_missing: true,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadScoped {
+                    dst: 0,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![
+                "global_getter_secret_cell".to_string(),
+                "globalThis".to_string(),
+                "global_getter_classified_value".to_string(),
+                "global_getter_public_value".to_string(),
+                "global_getter_missing_value".to_string(),
+            ],
+        );
+        module.function_table.push(Ir3FunctionDesc {
+            entry: 12,
+            arity: 0,
+            frame_size: 1,
+            name: Some("classified_global_getter".to_string()),
+            is_generator: false,
+            rest_param_index: None,
+        });
+        let mut core = quickjs_test_core();
+        core.mutate_registers(|registers| registers[0] = Value::Int(42));
+        core.set_register_label(0, Label::Secret)
+            .expect("seed classified runtime cell");
+        core.execute(&module).expect("read global accessor");
+
+        assert_eq!(core.get_register_label(2).unwrap(), &Label::Public);
+        assert_eq!(core.get_register_label(3).unwrap(), &Label::Public);
+        let Value::Object(global) = core.read_reg(3).unwrap() else {
+            panic!("globalThis must be an object");
+        };
+        assert_eq!(
+            core.runtime_property_label(
+                global,
+                &RuntimePropertyKey::from("global_getter_classified_value"),
+            ),
+            Label::Public,
+            "the accessor descriptor itself carries no classified label"
+        );
+        assert_eq!(core.read_reg(6).unwrap(), Value::Int(42));
+        assert_eq!(
+            core.get_register_label(6).unwrap(),
+            &Label::Secret,
+            "LoadName must retain the getter's returned runtime label"
+        );
+        assert_eq!(core.read_reg(7).unwrap(), Value::Int(7));
+        assert_eq!(core.get_register_label(7).unwrap(), &Label::Public);
+        assert_eq!(core.read_reg(8).unwrap(), Value::Undefined);
+        assert_eq!(core.get_register_label(8).unwrap(), &Label::Public);
+        assert!(core.pending_hostcall_result_label.is_none());
+        assert!(core.active_inline_callback_context_label.is_none());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
     fn put_name_strict_missing_throws_and_sloppy_missing_creates_global() {
         let strict = test_module_with_pool(
             vec![
@@ -175130,20 +175462,76 @@ mod tests {
             // Should create Date object with deterministic timestamp
             if let Value::Object(date_id) = core.registers[10] {
                 let date_obj = &core.heap[date_id.0 as usize];
-                let timestamp = date_obj
-                    .properties
-                    .get("__timestamp")
-                    .expect("operation should succeed for valid inputs");
-
-                if let Value::Float(f) = timestamp {
-                    assert_eq!(f.inner(), deterministic_epoch_ms);
-                } else {
-                    panic!("Date timestamp should be a float");
-                }
+                assert_eq!(date_obj.date_time(), Some(deterministic_epoch_ms));
+                assert!(!date_obj.properties.contains_key("__timestamp"));
             } else {
                 panic!("Date constructor should return an object");
             }
         }
+    }
+
+    #[test]
+    fn date_private_value_round_trips_separately_from_guest_properties() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
+        let date = core.alloc_object_with_prototype(None).expect("date object");
+        core.set_object_brand(date, "Date").expect("Date brand");
+        core.set_object_property(date, "__timestamp".to_string(), Value::str("guest"))
+            .expect("ordinary guest property");
+        for time in [0.0, -123.0, 8.64e15, f64::NAN] {
+            core.set_date_value(date, time).expect("private date value");
+            let object = &core.heap[date.0 as usize];
+            let wire = serde_json::to_value(object).expect("serialize heap object");
+            assert_eq!(wire["date_value"].as_u64(), Some(time.to_bits()));
+            let restored: HeapObject = serde_json::from_value(wire).expect("restore heap object");
+            assert_eq!(restored, *object);
+            assert_eq!(restored.date_time().unwrap().to_bits(), time.to_bits());
+            assert_eq!(
+                restored.properties.get("__timestamp"),
+                Some(&Value::str("guest"))
+            );
+        }
+    }
+
+    #[test]
+    fn date_private_value_budget_admission_is_atomic_and_matches_heap_accounting() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
+        let date = core.alloc_object_with_prototype(None).expect("date object");
+        core.set_object_brand(date, "Date").expect("Date brand");
+        let before_bytes = core.estimated_memory_bytes;
+        let before_seed_bytes =
+            InterpreterCore::estimate_execution_seed_heap_object_bytes(&core.heap[date.0 as usize]);
+        let before_epoch = core.seed_epoch;
+        let value_bytes = std::mem::size_of::<Float64>() as u64;
+        core.config.max_total_memory_bytes = before_bytes + value_bytes - 1;
+        assert!(matches!(
+            core.set_date_value(date, 7.0),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.heap[date.0 as usize].date_time(), None);
+        assert_eq!(core.estimated_memory_bytes, before_bytes);
+        assert_eq!(core.seed_epoch, before_epoch);
+
+        core.config.max_total_memory_bytes = before_bytes + value_bytes;
+        core.set_date_value(date, 7.0)
+            .expect("exact-budget slot allocation");
+        assert_eq!(core.estimated_memory_bytes, before_bytes + value_bytes);
+        assert_eq!(
+            core.estimated_memory_bytes,
+            core.recompute_estimated_memory_bytes()
+        );
+        assert_eq!(
+            InterpreterCore::estimate_execution_seed_heap_object_bytes(&core.heap[date.0 as usize]),
+            before_seed_bytes + value_bytes,
+        );
+        // Replacing the Number reuses its slot, even at the exact limit.
+        core.set_date_value(date, f64::NAN)
+            .expect("in-place date mutation");
+        assert!(core.heap[date.0 as usize].date_time().unwrap().is_nan());
+        assert_eq!(core.estimated_memory_bytes, before_bytes + value_bytes);
+        assert_eq!(
+            core.estimated_memory_bytes,
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]

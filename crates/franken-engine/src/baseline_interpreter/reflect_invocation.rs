@@ -99,11 +99,11 @@ impl InterpreterCore {
     /// A native read publishes its observed descriptor, shape and callback
     /// labels into the hostcall result. A write only needs them on failure.
     /// Both forms restore the caller's scope without allocating on cleanup.
-    pub(super) fn finish_property_read_observation(
+    pub(super) fn finish_property_read_observation<T>(
         &mut self,
         saved: PropertyWriteObservation,
-        outcome: Result<Value, InterpreterError>,
-    ) -> Result<Value, InterpreterError> {
+        outcome: Result<T, InterpreterError>,
+    ) -> Result<T, InterpreterError> {
         self.finish_property_observation(saved, outcome, true)
     }
 

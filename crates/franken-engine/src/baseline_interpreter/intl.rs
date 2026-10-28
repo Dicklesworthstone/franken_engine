@@ -307,23 +307,10 @@ impl InterpreterCore {
                         )?;
                         self.intl_to_number(module, now)?
                     }
-                    Value::Object(id)
-                        if self
-                            .heap
-                            .get(id.0 as usize)
-                            .and_then(|object| object.properties.get("__timestamp"))
-                            .is_some() =>
-                    {
-                        match self
-                            .heap
-                            .get(id.0 as usize)
-                            .and_then(|object| object.properties.get("__timestamp"))
-                        {
-                            Some(Value::Int(value)) => *value as f64,
-                            Some(Value::Float(value)) => value.inner(),
-                            _ => f64::NAN,
-                        }
-                    }
+                    // ECMA-402 DateTimeFormat converts even a Date through
+                    // ToNumber: an own valueOf/@@toPrimitive must run. Reading
+                    // the former __timestamp property here both skipped that
+                    // conversion and let plain objects forge a Date value.
                     other => self.intl_to_number(module, other)?,
                 };
                 if !time.is_finite() || time.abs() > 8.64e15 {

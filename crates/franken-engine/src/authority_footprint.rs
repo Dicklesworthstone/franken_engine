@@ -485,7 +485,11 @@ pub fn analyze_authority_footprint(
         }
     }
 
-    let ir0 = Ir0Module::from_syntax_tree(syntax_tree, source_label);
+    let ir0 = Ir0Module::from_syntax_tree_with_source(
+        syntax_tree,
+        source_label,
+        &prepared.prepared_source,
+    );
     let context = LoweringContext::new(
         CHECK_TRACE_ID.to_string(),
         CHECK_DECISION_ID.to_string(),

@@ -3608,6 +3608,8 @@ impl ExecutionOrchestrator {
             )?;
             (prepared.source_ingestion, prepared.prepared_source)
         };
+        let script_strict = self.config.parse_goal == ParseGoal::Module
+            || crate::parser::source_has_use_strict_directive(&parse_source, self.config.parse_goal);
         let parser_source = ParserSource {
             label: effective_source_label.to_string(),
             text: parse_source,
@@ -3625,7 +3627,8 @@ impl ExecutionOrchestrator {
         } else {
             &source_label
         };
-        let ir0 = Ir0Module::from_syntax_tree(syntax_tree, ir0_source_label);
+        let mut ir0 = Ir0Module::from_syntax_tree(syntax_tree, ir0_source_label);
+        ir0.script_strict = Some(script_strict);
         // bd-9vouw.115: with no provider, recorder or process-spawn attempt
         // installed, nothing outside the engine can supply a hostcall's
         // exceptional completion, so the failures are engine-owned

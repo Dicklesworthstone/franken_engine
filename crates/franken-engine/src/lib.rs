@@ -2270,7 +2270,11 @@ fn compile_prepared_eval_source(
     .with_host_io_exception_provenance(
         frankenengine_extension_host::host_io::HostIoExceptionProvenance::ProviderInternal,
     );
-    let ir0 = Ir0Module::from_syntax_tree(syntax_tree, "<eval>");
+    let ir0 = Ir0Module::from_syntax_tree_with_source(
+        syntax_tree,
+        "<eval>",
+        &prepared.prepared_source,
+    );
     let lowering_output = lower_ir0_to_ir3(&ir0, &lowering_context)
         .map_err(map_lowering_error)
         .map_err(|error| {

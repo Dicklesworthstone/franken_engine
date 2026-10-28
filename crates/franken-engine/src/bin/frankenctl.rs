@@ -4222,7 +4222,11 @@ fn execute_compile(args: CompileArgs) -> Result<i32, String> {
     );
     let syntax_tree = parse_result.map_err(|error| format!("parse failed: {error}"))?;
 
-    let ir0 = Ir0Module::from_syntax_tree(syntax_tree, &source_label);
+    let ir0 = Ir0Module::from_syntax_tree_with_source(
+        syntax_tree,
+        &source_label,
+        &prepared.prepared_source,
+    );
     let lowering = lower_ir0_to_ir3(
         &ir0,
         &LoweringContext::new(
@@ -9513,7 +9517,11 @@ fn build_replay_debug_state_producer(
             &ParserOptions::default(),
         )
         .map_err(|error| format!("parse failed for `{source_label}`: {error}"))?;
-    let ir0 = Ir0Module::from_syntax_tree(syntax_tree, &source_label);
+    let ir0 = Ir0Module::from_syntax_tree_with_source(
+        syntax_tree,
+        &source_label,
+        &prepared.prepared_source,
+    );
     let lowering = lower_ir0_to_ir3(
         &ir0,
         &LoweringContext::new(

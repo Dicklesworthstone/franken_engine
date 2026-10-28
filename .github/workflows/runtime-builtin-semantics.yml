@@ -19,20 +19,27 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      CARGO_HOME: ${{ runner.temp }}/franken-builtin-cargo
-      CARGO_TARGET_DIR: ${{ runner.temp }}/franken-builtin-target-${{ github.run_id }}-${{ github.run_attempt }}
       CARGO_BUILD_JOBS: '1'
       CARGO_INCREMENTAL: '0'
       CARGO_PROFILE_DEV_DEBUG: '0'
       CARGO_PROFILE_TEST_DEBUG: '0'
       CARGO_TERM_COLOR: never
-      CARGO_HTTP_USER_AGENT: 'OpenAI File Downloader, XaiImageApiFetch/1.0'
+      CARGO_HTTP_USER_AGENT: 'franken_engine-agent (+https://github.com/Dicklesworthstone/franken_engine)'
       CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
       GIT_TERMINAL_PROMPT: '0'
       GIT_CONFIG_COUNT: '1'
       GIT_CONFIG_KEY_0: http.userAgent
-      GIT_CONFIG_VALUE_0: 'OpenAI File Downloader, XaiImageApiFetch/1.0'
+      GIT_CONFIG_VALUE_0: 'franken_engine-agent (+https://github.com/Dicklesworthstone/franken_engine)'
     steps:
+      - name: Configure isolated build paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' \
+            "CARGO_HOME=$RUNNER_TEMP/franken-builtin-cargo" \
+            "CARGO_TARGET_DIR=$RUNNER_TEMP/franken-builtin-target-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            >> "$GITHUB_ENV"
+
       - name: Check out the exact public repository revision
         id: checkout
         shell: bash
@@ -99,6 +106,11 @@ jobs:
             crates/franken-engine/src/lowering_pipeline.rs \
             crates/franken-engine/tests/builtin_prototype_own_methods.rs \
             crates/franken-engine/tests/arguments_object_bd_9vouw_25.rs \
+            crates/franken-engine/tests/builtin_brands_bd_9vouw_150.rs \
+            crates/franken-engine/tests/script_global_declarations.rs \
+            crates/franken-engine/tests/ir_contract_integration.rs \
+            crates/franken-engine/tests/ir_contract_enrichment_integration.rs \
+            crates/franken-engine/tests/module_namespace_to_string_tag_bd_9vouw_399.rs \
             crates/franken-engine/tests/object_json_globals_bd9a8cz2.rs
 
       - name: Check the complete production engine library
@@ -108,7 +120,7 @@ jobs:
           set -euo pipefail
           cargo check --locked --no-default-features -p frankenengine-engine --lib
 
-      - name: Execute builtin, arguments, and property lookup regressions
+      - name: Execute builtin, global binding, and property lookup regressions
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         shell: bash
         run: |
@@ -116,7 +128,37 @@ jobs:
           cargo test --locked --no-default-features -p frankenengine-engine --no-fail-fast \
             --test builtin_prototype_own_methods \
             --test arguments_object_bd_9vouw_25 \
+            --test builtin_brands_bd_9vouw_150 \
+            --test script_global_declarations \
+            --test ir_contract_integration \
+            --test ir_contract_enrichment_integration \
+            --test module_namespace_to_string_tag_bd_9vouw_399 \
             --test object_json_globals_bd9a8cz2 \
+            -- --nocapture --test-threads=1
+
+      - name: Verify IR schema and global declaration invariants
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --no-default-features -p frankenengine-engine --lib \
+            ir_contract::tests:: -- --nocapture --test-threads=1
+
+      - name: Verify Date slot serialization and memory admission
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --no-default-features -p frankenengine-engine --lib \
+            date_private_value_ -- --nocapture --test-threads=1
+
+      - name: Verify global getter result provenance
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --no-default-features -p frankenengine-engine --lib \
+            global_name_getters_preserve_runtime_result_labels \
             -- --nocapture --test-threads=1
 
       - name: Verify labels on inherited constructor properties

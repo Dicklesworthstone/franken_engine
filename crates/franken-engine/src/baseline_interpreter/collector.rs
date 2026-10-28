@@ -1607,6 +1607,8 @@ impl InterpreterCore {
                 blob: _,
                 // A pattern and flags: no references.
                 regexp: _,
+                // A Date's Number: no references.
+                date_value: _,
             } = object;
             for value in private_elements.values().flat_map(PrivateElement::values) {
                 marker.value(value);

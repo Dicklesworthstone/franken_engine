@@ -14290,6 +14290,14 @@ fn reject_use_strict_with_non_simple_params(
     Ok(())
 }
 
+/// Classify the exact source with the parser's directive-prologue rules.
+/// Lowering preserves this mode separately because SyntaxTree stores decoded
+/// string literals and cannot distinguish `"use\\x20strict"` from a directive.
+pub(crate) fn source_has_use_strict_directive(source: &str, goal: ParseGoal) -> bool {
+    let (stripped, _) = strip_comments_to_whitespace_for_goal(source, goal);
+    has_use_strict_directive(&stripped)
+}
+
 fn has_use_strict_directive(source: &str) -> bool {
     let mut source = strip_initial_hashbang(source);
     loop {

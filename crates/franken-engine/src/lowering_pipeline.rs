@@ -58,10 +58,13 @@ use crate::hash_tiers::ContentHash;
 use crate::ifc_artifacts::{Label, ProofMethod};
 use crate::ir_contract::{
     AccessorKind, BindingId, BindingKind, CapabilityTag, EffectBoundary, FlowAnnotation, Ir0Module,
+    GLOBAL_FUNCTION_BINDING_KIND, GLOBAL_VAR_BINDING_KIND,
     Ir1Literal, Ir1Module, Ir1Op, Ir1OpSpanEntry, Ir1PropertyKey, Ir2Module, Ir2Op,
     Ir3FunctionDesc, Ir3Instruction, Ir3Module, IrError, IrLevel, IteratorCloseReason, Reg,
     RegRange, ResolvedBinding, ScopeId, ScopeKind, ScopeNode,
-    verify_ir1_derived_constructor_schema, verify_ir1_object_method_schema, verify_ir1_source,
+    verify_ir0_script_global_schema, verify_ir1_derived_constructor_schema,
+    verify_ir1_object_method_schema, verify_ir1_script_global_schema, verify_ir1_source,
+    verify_ir2_script_global_schema,
     verify_ir2_derived_constructor_schema, verify_ir2_object_method_schema,
     verify_ir3_specialization, verify_schema_version,
 };
@@ -92,6 +95,8 @@ const IFC_FLOW_PROOF_SCHEMA_VERSION: &str = "frankenengine.ir2_flow_proof_witnes
 const LEXICAL_BINDING_SENTINEL_PREFIX: &str = "\0lexical\0";
 const CAPTURE_ORIGIN_SENTINEL_PREFIX: &str = "\0capture-origin\0";
 const CAPTURE_CELL_NAME_PREFIX: &str = "\0capture-cell\0";
+const GLOBAL_OBJECT_CAPTURE_PREFIX: &str = "\0global-object-binding\0";
+const STRICT_ASSIGNMENT_CONTEXT_SENTINEL: &str = "\0strict-assignment-context";
 const CLASS_EXPRESSION_SELF_CAPTURE_PREFIX: &str = "\0class-expression-self\0";
 const CHILD_CAPTURE_BINDING_SENTINEL_PREFIX: &str = "\0child-capture\0";
 const RUNTIME_LEXICAL_BINDING_NAME_PREFIX: &str = "\0runtime-lexical\0";
@@ -201,6 +206,28 @@ fn parse_capture_cell_name(name: &str) -> Option<(BindingId, &str)> {
     let encoded = name.strip_prefix(CAPTURE_CELL_NAME_PREFIX)?;
     let (origin_id, source_name) = encoded.split_once('\0')?;
     Some((origin_id.parse().ok()?, source_name))
+}
+
+fn script_global_binding_sentinel(name: &str) -> String {
+    format!("{LEXICAL_BINDING_SENTINEL_PREFIX}\0script-global-binding\0{name}")
+}
+
+fn is_script_global_binding(binding_lookup: &BTreeMap<String, BindingId>, name: &str) -> bool {
+    binding_lookup
+        .get(&script_global_binding_sentinel(name))
+        .is_some_and(|origin| binding_lookup.get(&capture_origin_sentinel(name)) == Some(origin))
+}
+
+fn known_assignment_strictness(strictness: AssignmentStrictness) -> Option<bool> {
+    match strictness {
+        AssignmentStrictness::Strict => Some(true),
+        AssignmentStrictness::Sloppy => Some(false),
+        AssignmentStrictness::Unknown => None,
+    }
+}
+
+fn global_object_capture_name(name: &str) -> Option<&str> {
+    name.strip_prefix(GLOBAL_OBJECT_CAPTURE_PREFIX)
 }
 
 fn class_expression_self_capture_name(name: &str, origin_id: BindingId) -> String {
@@ -1213,6 +1240,7 @@ fn lower_ir0_to_ir1_on_current_stack(
     bounded_imports: bool,
     preserve_runtime_module_loads: bool,
 ) -> Result<LoweringPassResult<Ir1Module>, LoweringPipelineError> {
+    verify_ir0_script_global_schema(ir0).map_err(lowering_error_from_ir_error)?;
     if ir0.tree.body.is_empty() {
         return Err(LoweringPipelineError::EmptyIr0Body);
     }
@@ -1229,6 +1257,7 @@ fn lower_ir0_to_ir1_on_current_stack(
             rewritten = Ir0Module {
                 header: ir0.header.clone(),
                 tree,
+                script_strict: ir0.script_strict,
             };
             &rewritten
         }
@@ -1246,6 +1275,7 @@ fn lower_ir0_to_ir1_on_current_stack(
             imports_rewritten = Ir0Module {
                 header: ir0.header.clone(),
                 tree,
+                script_strict: ir0.script_strict,
             };
             &imports_rewritten
         }
@@ -1263,6 +1293,7 @@ fn lower_ir0_to_ir1_on_current_stack(
             path_rewritten = Ir0Module {
                 header: ir0.header.clone(),
                 tree,
+                script_strict: ir0.script_strict,
             };
             &path_rewritten
         }
@@ -1281,6 +1312,7 @@ fn lower_ir0_to_ir1_on_current_stack(
             util_rewritten = Ir0Module {
                 header: ir0.header.clone(),
                 tree,
+                script_strict: ir0.script_strict,
             };
             &util_rewritten
         }
@@ -1300,6 +1332,11 @@ fn lower_ir0_to_ir1_on_current_stack(
     let mut binding_index = 0u32;
     let root_scope_id = ScopeId { depth: 0, index: 0 };
     let root_scope_kind = match ir0.tree.goal {
+        // This parser wrapper only produces a callable descriptor; its own
+        // declaration never participates in the caller's global environment.
+        ParseGoal::Script if ir0.header.source_label == "<function-constructor>" => {
+            ScopeKind::Function
+        }
         ParseGoal::Script => ScopeKind::Global,
         ParseGoal::Module => ScopeKind::Module,
     };
@@ -1356,6 +1393,24 @@ fn lower_ir0_to_ir1_on_current_stack(
         reserve_root_scope_bindings(&ir0.tree.body, &mut binding_lookup, &mut binding_index);
     let source_hoisted_bindings =
         reserve_hoisted_var_bindings(&ir0.tree.body, &mut binding_lookup, &mut binding_index);
+    let script_object_names = if root_scope_kind == ScopeKind::Global
+        && !authenticated_commonjs_runtime_bindings
+        && !Path::new(&ir0.header.source_label)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("cjs"))
+    {
+        source_hoisted_bindings
+            .iter()
+            .cloned()
+            .chain(ir0.tree.body.iter().filter_map(|statement| match statement {
+                Statement::FunctionDeclaration(function) => function.name.clone(),
+                _ => None,
+            }))
+            .collect::<BTreeSet<_>>()
+    } else {
+        BTreeSet::new()
+    };
     // A root-level source declaration of `require` reuses the wrapper's
     // binding id, so it must be excluded here rather than by id comparison.
     if authenticated_commonjs_runtime_bindings
@@ -1376,6 +1431,9 @@ fn lower_ir0_to_ir1_on_current_stack(
             .get(name)
             .expect("reserved root source binding must have an exact id");
         binding_lookup.insert(capture_origin_sentinel(name), binding_id);
+        if script_object_names.contains(name) {
+            binding_lookup.insert(script_global_binding_sentinel(name), binding_id);
+        }
         if ir0.tree.goal == ParseGoal::Script
             && !authenticated_commonjs_runtime_bindings
             && global_value_literal(name).is_some()
@@ -2520,7 +2578,15 @@ fn lower_ir0_to_ir1_on_current_stack(
     ir1.scopes.push(ScopeNode {
         scope_id: root_scope_id,
         parent: None,
-        kind: root_scope_kind,
+        kind: if root_scope_kind == ScopeKind::Global
+            && ir0.script_strict.unwrap_or_else(|| {
+                binding_lookup.contains_key(STRICT_ASSIGNMENT_CONTEXT_SENTINEL)
+            })
+        {
+            ScopeKind::StrictGlobal
+        } else {
+            root_scope_kind
+        },
         bindings,
     });
     // bd-j8f7q: a bounded unit declares its import contract first, so the
@@ -3395,6 +3461,7 @@ fn prepare_function_body_bindings(
     // that global declaration's id in the enclosing lowering unit.
     for name in local_names.iter().map(String::as_str).chain(self_name) {
         body_lookup.remove(&script_global_value_sentinel(name));
+        body_lookup.remove(&script_global_binding_sentinel(name));
     }
 
     // Buffer object provenance is intentionally not inherited from the outer
@@ -3898,6 +3965,7 @@ fn push_destructuring_target_store(
                 ops.push(Ir1Op::AssignOp {
                     binding_id: resolved_binding_id()?,
                     operator: AssignmentOperator::Assign,
+                    strict: known_assignment_strictness(assignment_strictness),
                 });
             } else {
                 let prepared_status =
@@ -5507,6 +5575,7 @@ fn lower_statement_to_ir1_with_flow(
             ops.push(Ir1Op::AssignOp {
                 binding_id: var_binding,
                 operator: AssignmentOperator::Assign,
+                strict: Some(false),
             });
             ops.push(Ir1Op::Discard);
         }
@@ -6323,6 +6392,7 @@ fn lower_statement_to_ir1_with_flow(
                     (None, Some(binding_id)) => Ir1Op::AssignOp {
                         binding_id,
                         operator: AssignmentOperator::Assign,
+                        strict: known_assignment_strictness(for_in_stmt.assignment_strictness),
                     },
                     (None, None) => Ir1Op::PutName {
                         name: name.clone(),
@@ -6574,6 +6644,7 @@ fn lower_statement_to_ir1_with_flow(
                     (None, Some(binding_id)) => Ir1Op::AssignOp {
                         binding_id,
                         operator: AssignmentOperator::Assign,
+                        strict: known_assignment_strictness(for_of_stmt.assignment_strictness),
                     },
                     (None, None) => Ir1Op::PutName {
                         name: name.clone(),
@@ -8402,6 +8473,7 @@ fn lower_ir1_to_ir2_with_input_hash(
     verify_schema_version(&ir1.header).map_err(lowering_error_from_ir_error)?;
     verify_ir1_derived_constructor_schema(ir1).map_err(lowering_error_from_ir_error)?;
     verify_ir1_object_method_schema(ir1).map_err(lowering_error_from_ir_error)?;
+    verify_ir1_script_global_schema(ir1).map_err(lowering_error_from_ir_error)?;
     let ir1_hash = input_hash.unwrap_or_else(|| ir1.content_hash());
     debug_assert_eq!(
         ir1_hash,
@@ -8595,7 +8667,8 @@ fn right_side_runs_no_code(
         | Expression::NullLiteral
         | Expression::UndefinedLiteral => true,
         Expression::Identifier(name) => {
-            has_source_lexical_binding(binding_lookup, name)
+            (has_source_lexical_binding(binding_lookup, name)
+                && !is_script_global_binding(binding_lookup, name))
                 || unshadowed_global_value(binding_lookup, name).is_some()
         }
         _ => false,
@@ -8728,6 +8801,51 @@ fn lower_postfix_update_to_ir3(
     (new, old)
 }
 
+/// Store a classic-script object binding without creating a detached capture
+/// cell. Static binding and IFC identities remain in IR1/IR2; runtime reads and
+/// writes observe the realm object's ordinary property descriptors and labels.
+fn lower_global_assignment_to_ir3(
+    operator: AssignmentOperator,
+    src: Reg,
+    name_pool_index: u32,
+    strict: bool,
+    cursor: &mut Reg,
+    instructions: &mut Vec<Ir3Instruction>,
+) -> Result<Reg, LoweringPipelineError> {
+    let (stored, value) = if operator == AssignmentOperator::Assign {
+        (src, src)
+    } else if matches!(
+        operator,
+        AssignmentOperator::LogicalAndAssign
+            | AssignmentOperator::LogicalOrAssign
+            | AssignmentOperator::NullishCoalescingAssign
+    ) {
+        return Err(LoweringPipelineError::InvariantViolation {
+            detail: "logical compound assignments must be short-circuit lowered before IR3",
+        });
+    } else {
+        let lhs = alloc_register(cursor);
+        instructions.push(Ir3Instruction::LoadName {
+            dst: lhs,
+            name_pool_index,
+            allow_missing: false,
+        });
+        if operator.is_postfix_update() {
+            lower_postfix_update_to_ir3(operator, lhs, cursor, instructions)
+        } else {
+            let result = alloc_register(cursor);
+            instructions.push(lower_assign_op_to_ir3(operator, result, lhs, src));
+            (result, result)
+        }
+    };
+    instructions.push(Ir3Instruction::PutName {
+        src: stored,
+        name_pool_index,
+        strict,
+    });
+    Ok(value)
+}
+
 fn pop_lowering_value(stack: &mut ArenaVec<'_, Reg>) -> Result<Reg, LoweringPipelineError> {
     stack
         .pop()
@@ -8786,6 +8904,7 @@ fn lower_ir2_to_ir3_with_input_hash(
     let program_label_ceiling = ir2_flow_label_ceiling(&ir2.ops, host_io_exception_provenance);
     verify_ir2_derived_constructor_schema(ir2).map_err(lowering_error_from_ir_error)?;
     verify_ir2_object_method_schema(ir2).map_err(lowering_error_from_ir_error)?;
+    verify_ir2_script_global_schema(ir2).map_err(lowering_error_from_ir_error)?;
     enum PendingJump {
         Unconditional {
             instruction_index: usize,
@@ -8932,7 +9051,29 @@ fn lower_ir2_to_ir3_with_input_hash(
             .and_then(|ext| ext.to_str())
             .map(|ext| ext.eq_ignore_ascii_case("cjs"))
             .unwrap_or(false);
+    // Classic scripts have an object environment for source `var` and
+    // top-level function declarations. Keep the IR1 binding identity for
+    // static flow analysis, then route its runtime operations to that object.
+    // Modules and CommonJS wrappers retain their private lexical environment.
+    let script_scope = ir2.scopes.iter().find(|scope| {
+        !is_commonjs
+            && scope.parent.is_none()
+            && matches!(scope.kind, ScopeKind::Global | ScopeKind::StrictGlobal)
+    });
+    let script_strict = script_scope.is_some_and(|scope| scope.kind == ScopeKind::StrictGlobal);
+    let script_global_bindings = script_scope
+        .into_iter()
+        .flat_map(|scope| scope.bindings.iter().map(move |binding| (scope, binding)))
+        .filter(|(scope, binding)| {
+            !is_internal_lowering_binding(&binding.name)
+                && (binding.kind == BindingKind::Var
+                    || (binding.kind == BindingKind::FunctionDecl
+                        && binding.scope == scope.scope_id))
+        })
+        .map(|(_, binding)| (binding.binding_id, binding.name.clone()))
+        .collect::<BTreeMap<_, _>>();
     let mut scoped_runtime_binding_ids = BTreeSet::<BindingId>::new();
+    scoped_runtime_binding_ids.extend(script_global_bindings.keys());
     if is_commonjs {
         if let Some(binding_id) = name_to_binding_id.get("require") {
             scoped_runtime_binding_ids.insert(*binding_id);
@@ -9231,6 +9372,7 @@ fn lower_ir2_to_ir3_with_input_hash(
         .chain(captured_lexical_binding_ids)
         .chain(import_binding_ids)
         .chain(exported_binding_ids)
+        .filter(|id| !script_global_bindings.contains_key(id))
         .collect::<BTreeSet<_>>();
     for id in &runtime_lexical_binding_ids {
         scoped_runtime_binding_ids.insert(*id);
@@ -9274,6 +9416,33 @@ fn lower_ir2_to_ir3_with_input_hash(
             (*id, name, kind)
         })
         .collect();
+
+    // GlobalDeclarationInstantiation precedes every source statement. Function
+    // names are instantiated first; a var redeclaration of a function does not
+    // replace it with undefined. The runtime validates the entire prelude
+    // before creating any property.
+    let mut declared_global_ids = BTreeSet::new();
+    for op in &ir2.ops {
+        if let Ir1Op::DeclareFunction { binding_id, .. } = &op.inner
+            && let Some(name) = script_global_bindings.get(binding_id)
+            && declared_global_ids.insert(*binding_id)
+        {
+            let name_pool_index = push_constant_optimized(&mut constant_pool, name);
+            ir3.instructions.push(Ir3Instruction::DeclareBinding {
+                name_pool_index,
+                kind: GLOBAL_FUNCTION_BINDING_KIND,
+            });
+        }
+    }
+    for (binding_id, name) in &script_global_bindings {
+        if declared_global_ids.insert(*binding_id) {
+            let name_pool_index = push_constant_optimized(&mut constant_pool, name);
+            ir3.instructions.push(Ir3Instruction::DeclareBinding {
+                name_pool_index,
+                kind: GLOBAL_VAR_BINDING_KIND,
+            });
+        }
+    }
 
     let main_scope_pushed =
         !shared_top_level_capture_names.is_empty() || !runtime_lexical_declarations.is_empty();
@@ -9554,7 +9723,12 @@ fn lower_ir2_to_ir3_with_input_hash(
                 value_stack.push(dst);
             }
             Ir1Op::LoadBinding { binding_id } => {
-                if scoped_runtime_binding_ids.contains(binding_id) {
+                if let Some(name) = script_global_bindings.get(binding_id) {
+                    let dst = alloc_register(&mut register_cursor);
+                    let name_pool_index = push_constant_optimized(&mut constant_pool, name);
+                    ir3.instructions.push(Ir3Instruction::LoadName { dst, name_pool_index, allow_missing: false });
+                    value_stack.push(dst);
+                } else if scoped_runtime_binding_ids.contains(binding_id) {
                     let name =
                         runtime_scope_binding_name(*binding_id, &runtime_scope_binding_names_by_id);
                     let dst = alloc_register(&mut register_cursor);
@@ -9649,7 +9823,15 @@ fn lower_ir2_to_ir3_with_input_hash(
             }
             Ir1Op::InitializeBinding { binding_id } => {
                 let src = pop_lowering_value(&mut value_stack)?;
-                if scoped_runtime_binding_ids.contains(binding_id) {
+                if let Some(name) = script_global_bindings.get(binding_id) {
+                    let name_pool_index = push_constant_optimized(&mut constant_pool, name);
+                    ir3.instructions.push(Ir3Instruction::PutName {
+                        src,
+                        name_pool_index,
+                        strict: script_strict,
+                    });
+                    value_stack.push(src);
+                } else if scoped_runtime_binding_ids.contains(binding_id) {
                     let name =
                         runtime_scope_binding_name(*binding_id, &runtime_scope_binding_names_by_id);
                     let pool_index = push_constant_optimized(&mut constant_pool, &name);
@@ -9696,7 +9878,14 @@ fn lower_ir2_to_ir3_with_input_hash(
                 // Peeked, not popped: a short-lived temporary's register is
                 // chosen below while the stored value is still on the stack.
                 let src = peek_lowering_value(&value_stack)?;
-                if runtime_lexical_binding_ids.contains(binding_id) {
+                if let Some(name) = script_global_bindings.get(binding_id) {
+                    let name_pool_index = push_constant_optimized(&mut constant_pool, name);
+                    ir3.instructions.push(Ir3Instruction::PutName {
+                        src,
+                        name_pool_index,
+                        strict: script_strict,
+                    });
+                } else if runtime_lexical_binding_ids.contains(binding_id) {
                     // Declaration stores initialize scope-routed lexical
                     // bindings. Bare loop-head updates use AssignOp below and
                     // can therefore never clear a TDZ or reinitialize a const.
@@ -10187,7 +10376,18 @@ fn lower_ir2_to_ir3_with_input_hash(
             Ir1Op::AssignOp {
                 binding_id,
                 operator,
+                strict,
             } => {
+                if let Some(name) = script_global_bindings.get(binding_id) {
+                    let src = pop_lowering_value(&mut value_stack)?;
+                    let name_pool_index = push_constant_optimized(&mut constant_pool, name);
+                    let value = lower_global_assignment_to_ir3(
+                        *operator, src, name_pool_index, strict.unwrap_or(script_strict),
+                        &mut register_cursor, &mut ir3.instructions,
+                    )?;
+                    value_stack.push(value);
+                    continue;
+                }
                 // bd-8enww.4.4: a closure-captured / runtime / TDZ-tracked binding
                 // lives in the scope chain, not a register. Its reads already lower
                 // to `LoadScoped` (see `Ir1Op::LoadBinding` above); without the
@@ -10899,7 +11099,8 @@ fn lower_ir2_to_ir3_with_input_hash(
                 };
                 let temp_free_vars: Vec<&String> = free_vars
                     .iter()
-                    .filter(|fv| !shared_top_level_capture_names.contains(*fv))
+                    .filter(|fv| !shared_top_level_capture_names.contains(*fv)
+                        && global_object_capture_name(fv).is_none())
                     .collect();
                 {
                     // If the function has free variables, put the current
@@ -10999,7 +11200,13 @@ fn lower_ir2_to_ir3_with_input_hash(
                         );
                         let name_pool_index = push_constant_optimized(&mut constant_pool, &name);
                         ir3.instructions.push(
-                            if runtime_lexical_binding_ids.contains(binding_id) {
+                            if script_global_bindings.contains_key(binding_id) {
+                                Ir3Instruction::PutName {
+                                    src: dst,
+                                    name_pool_index,
+                                    strict: script_strict,
+                                }
+                            } else if runtime_lexical_binding_ids.contains(binding_id) {
                                 Ir3Instruction::InitBinding {
                                     name_pool_index,
                                     src: dst,
@@ -11038,8 +11245,9 @@ fn lower_ir2_to_ir3_with_input_hash(
                 let temp_free_vars: Vec<&String> = free_vars
                     .iter()
                     .filter(|fv| {
-                        self_capture_name == Some(*fv)
-                            || !shared_top_level_capture_names.contains(*fv)
+                        global_object_capture_name(fv).is_none()
+                            && (self_capture_name == Some(*fv)
+                                || !shared_top_level_capture_names.contains(*fv))
                     })
                     .collect();
                 // If the function has free variables, put them on the
@@ -12118,7 +12326,14 @@ fn lower_ir2_to_ir3_with_input_hash(
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::LoadBinding { binding_id } => {
-                    if let Some(name) = fv_id_to_name
+                    if let Some(name) = fv_id_to_name.get(binding_id)
+                        .and_then(|name| global_object_capture_name(name))
+                    {
+                        let dst = alloc_register(&mut fn_reg);
+                        let name_pool_index = push_constant_optimized(&mut constant_pool, name);
+                        ir3.instructions.push(Ir3Instruction::LoadName { dst, name_pool_index, allow_missing: false });
+                        fn_value_stack.push(dst);
+                    } else if let Some(name) = fv_id_to_name
                         .get(binding_id)
                         .or_else(|| runtime_local_id_to_name.get(binding_id))
                     {
@@ -12237,6 +12452,16 @@ fn lower_ir2_to_ir3_with_input_hash(
                 }
                 Ir1Op::InitializeBinding { binding_id } => {
                     let src = pop_lowering_value(&mut fn_value_stack)?;
+                    if let Some(name) = fv_id_to_name.get(binding_id)
+                        .and_then(|name| global_object_capture_name(name))
+                    {
+                        let name_pool_index = push_constant_optimized(&mut constant_pool, name);
+                        ir3.instructions.push(Ir3Instruction::PutName {
+                            src, name_pool_index, strict: !fn_sloppy,
+                        });
+                        fn_value_stack.push(src);
+                        continue;
+                    }
                     if let Some(name) = fv_id_to_name.get(binding_id) {
                         let pool_idx = push_constant_optimized(&mut constant_pool, name);
                         ir3.instructions.push(Ir3Instruction::InitBinding {
@@ -12298,6 +12523,17 @@ fn lower_ir2_to_ir3_with_input_hash(
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::StoreBinding { binding_id } => {
+                    if let Some(name) = fv_id_to_name.get(binding_id)
+                        .and_then(|name| global_object_capture_name(name))
+                    {
+                        let src = pop_lowering_value(&mut fn_value_stack)?;
+                        let name_pool_index = push_constant_optimized(&mut constant_pool, name);
+                        ir3.instructions.push(Ir3Instruction::PutName {
+                            src, name_pool_index, strict: !fn_sloppy,
+                        });
+                        fn_value_stack.push(src);
+                        continue;
+                    }
                     if let Some(name) = fv_id_to_name.get(binding_id) {
                         let src = pop_lowering_value(&mut fn_value_stack)?;
                         // A named function expression's own name is an
@@ -12704,8 +12940,20 @@ fn lower_ir2_to_ir3_with_input_hash(
                 Ir1Op::AssignOp {
                     binding_id,
                     operator,
+                    strict,
                 } => {
                     let src = pop_lowering_value(&mut fn_value_stack)?;
+                    if let Some(name) = fv_id_to_name.get(binding_id)
+                        .and_then(|name| global_object_capture_name(name))
+                    {
+                        let name_pool_index = push_constant_optimized(&mut constant_pool, name);
+                        let value = lower_global_assignment_to_ir3(
+                            *operator, src, name_pool_index, strict.unwrap_or(!fn_sloppy),
+                            &mut fn_reg, &mut ir3.instructions,
+                        )?;
+                        fn_value_stack.push(value);
+                        continue;
+                    }
                     // bd-9vouw.328: a postfix update whose value is discarded
                     // (`n++;`) is the prefix one, with no old value to keep.
                     // A function body has no completion value to preserve.
@@ -13268,7 +13516,8 @@ fn lower_ir2_to_ir3_with_input_hash(
                         .collect();
                     let temp_free_vars: Vec<&String> = inner_fv
                         .iter()
-                        .filter(|name| !available_capture_names.contains(name.as_str()))
+                        .filter(|name| !available_capture_names.contains(name.as_str())
+                            && global_object_capture_name(name).is_none())
                         .collect();
                     if !temp_free_vars.is_empty() {
                         ir3.instructions.push(Ir3Instruction::PushScope);
@@ -13393,8 +13642,9 @@ fn lower_ir2_to_ir3_with_input_hash(
                     let temp_free_vars: Vec<&String> = inner_fv
                         .iter()
                         .filter(|name| {
-                            self_capture_name == Some(*name)
-                                || !available_capture_names.contains(name.as_str())
+                            global_object_capture_name(name).is_none()
+                                && (self_capture_name == Some(*name)
+                                    || !available_capture_names.contains(name.as_str()))
                         })
                         .collect();
                     if !temp_free_vars.is_empty() {
@@ -14655,6 +14905,11 @@ fn append_free_var_capture(
         // arrow a copied capture alias would split subsequent assignments in
         // the parent, the arrow, and parameter-default closures.
         "arguments".to_string()
+    } else if is_script_global_binding(outer_lookup, name) {
+        // A script's object record remains the authority across closures.
+        // The distinct alias cannot collide with a same-named function local
+        // whose fresh binding-id space happens to reuse the root id.
+        format!("{GLOBAL_OBJECT_CAPTURE_PREFIX}{name}")
     } else {
         let runtime_name = capture_cell_name(name, origin_id);
         outer_lookup.insert(
@@ -15482,13 +15737,18 @@ fn lower_typeof_operand_suppressing_ambient(
         return Ok(true);
     }
     match argument {
-        Expression::Identifier(name) if !has_source_lexical_binding(binding_lookup, name) => {
+        Expression::Identifier(name)
+            if !has_source_lexical_binding(binding_lookup, name)
+                || is_script_global_binding(binding_lookup, name) =>
+        {
             // `typeof` is the one identifier-read form that tolerates a missing
             // dynamic name. The runtime still resolves an injected or previously
             // created global before falling back to undefined. Remember that the
             // name was only probed dynamically so a later builtin shortcut does
             // not reinterpret the probe as a user declaration; the later
             // ordinary identifier path must still perform its ambient check.
+            // An object binding created by `var` can also disappear when it
+            // reused a configurable global property and the guest deleted it.
             binding_lookup.insert(typeof_dynamic_name_sentinel(name), 0);
             ops.push(Ir1Op::LoadName {
                 name: name.clone(),
@@ -17321,7 +17581,8 @@ fn lower_expression_to_ir1_inner(
                         ops.push(Ir1Op::DeleteProperty { key });
                     }
                     Expression::Identifier(name)
-                        if !has_source_lexical_binding(binding_lookup, name) =>
+                        if !has_source_lexical_binding(binding_lookup, name)
+                            || is_script_global_binding(binding_lookup, name) =>
                     {
                         // `delete` does not perform GetValue on an
                         // unresolvable identifier reference. In sloppy code it
@@ -17332,6 +17593,9 @@ fn lower_expression_to_ir1_inner(
                         // still evaluate to `true` (bd-74yvt), so route through
                         // a name-delete seam rather than an unconditional
                         // literal `true` that would leave the global resident.
+                        // A Script `var` can reuse an existing configurable
+                        // global (for example Math), so its deletion also
+                        // consults the object record's actual descriptor.
                         ops.push(Ir1Op::DeleteName { name: name.clone() });
                     }
                     // A declared binding (var, function, class, let/const,
@@ -17426,6 +17690,13 @@ fn lower_expression_to_ir1_inner(
             right,
             assignment_strictness,
         } => {
+            // Use the parser's strictness annotation, not the decoded value of
+            // a string directive ("use\x20strict" is not a strict directive).
+            // Function bodies lower with cloned lookups and retain their own
+            // strictness metadata, so their annotations cannot affect Script.
+            if *assignment_strictness == AssignmentStrictness::Strict {
+                binding_lookup.insert(STRICT_ASSIGNMENT_CONTEXT_SENTINEL.to_string(), 0);
+            }
             if *operator == AssignmentOperator::Assign
                 && is_process_exit_code_target(left, binding_lookup)
             {
@@ -17510,6 +17781,18 @@ fn lower_expression_to_ir1_inner(
                     | AssignmentOperator::NullishCoalescingAssign => {
                         let eval_rhs_label = alloc_label(label_counter);
                         let end_label = alloc_label(label_counter);
+                        // A global accessor may return a different value on
+                        // each Get, and its setter need not store the RHS.
+                        // Preserve the expression result instead of re-reading
+                        // the property at the control-flow join.
+                        let result_binding = if is_script_global_binding(binding_lookup, name) {
+                            Some(alloc_internal_binding(
+                                bindings, binding_lookup, binding_index, root_scope_id,
+                                "global_logical_assignment_result",
+                            )?)
+                        } else {
+                            None
+                        };
 
                         if let Some(binding_id) = resolved_binding_id {
                             ops.push(Ir1Op::LoadBinding { binding_id });
@@ -17522,6 +17805,9 @@ fn lower_expression_to_ir1_inner(
                                 name: name.clone(),
                                 allow_missing: false,
                             });
+                        }
+                        if let Some(binding_id) = result_binding {
+                            ops.push(Ir1Op::StoreBinding { binding_id });
                         }
                         match operator {
                             AssignmentOperator::LogicalAndAssign => {
@@ -17565,6 +17851,7 @@ fn lower_expression_to_ir1_inner(
                             ops.push(Ir1Op::AssignOp {
                                 binding_id,
                                 operator: AssignmentOperator::Assign,
+                                strict: known_assignment_strictness(*assignment_strictness),
                             });
                         } else {
                             ops.push(Ir1Op::PutNameWithStatus {
@@ -17573,9 +17860,12 @@ fn lower_expression_to_ir1_inner(
                                 strict: dynamic_strict.expect("dynamic target strictness exists"),
                             });
                         }
+                        if let Some(binding_id) = result_binding {
+                            ops.push(Ir1Op::StoreBinding { binding_id });
+                        }
                         ops.push(Ir1Op::Pop);
                         ops.push(Ir1Op::Label { id: end_label });
-                        if let Some(binding_id) = resolved_binding_id {
+                        if let Some(binding_id) = result_binding.or(resolved_binding_id) {
                             ops.push(Ir1Op::LoadBinding { binding_id });
                         } else {
                             ops.push(Ir1Op::LoadName {
@@ -17596,7 +17886,8 @@ fn lower_expression_to_ir1_inner(
                     // runs no code, so `i += 1` still steps in place
                     // (bd-9vouw.327).
                     let read_first = compound_assignment_binary_operator(*operator).is_ok()
-                        && !right_side_runs_no_code(right, binding_lookup);
+                        && (is_script_global_binding(binding_lookup, name)
+                            || !right_side_runs_no_code(right, binding_lookup));
                     if read_first {
                         ops.push(Ir1Op::LoadBinding { binding_id });
                     }
@@ -17621,11 +17912,13 @@ fn lower_expression_to_ir1_inner(
                         ops.push(Ir1Op::AssignOp {
                             binding_id,
                             operator: AssignmentOperator::Assign,
+                            strict: known_assignment_strictness(*assignment_strictness),
                         });
                     } else {
                         ops.push(Ir1Op::AssignOp {
                             binding_id,
                             operator: *operator,
+                            strict: known_assignment_strictness(*assignment_strictness),
                         });
                     }
                 } else if *operator == AssignmentOperator::Assign {
@@ -33720,6 +34013,7 @@ fn simulate_ir2_flow_labels<O: FlowOp>(
             Ir1Op::AssignOp {
                 binding_id,
                 operator,
+                ..
             } => {
                 if matches!(
                     operator,
@@ -36800,6 +37094,7 @@ fn compound_left_operand_reads_in_place(
                     Some(Ir1Op::AssignOp {
                         binding_id: assigned,
                         operator: AssignmentOperator::Assign,
+                        ..
                     }) if *assigned == binding_id
                 );
         }
@@ -50690,6 +50985,7 @@ mod tests {
                         Ir1Op::AssignOp {
                             binding_id,
                             operator: AssignmentOperator::Assign,
+                            ..
                         } if *binding_id == binding.binding_id
                     )
                 })
@@ -52090,6 +52386,7 @@ mod tests {
                 source_hash: None,
                 source_label: "test_oversized".to_string(),
             },
+            script_strict: None,
             tree: SyntaxTree {
                 goal: ParseGoal::Script,
                 body: large_body,
@@ -52136,6 +52433,7 @@ mod tests {
                 source_hash: None,
                 source_label: "test_oversized_bindings".to_string(),
             },
+            script_strict: None,
             tree: SyntaxTree {
                 goal: ParseGoal::Script,
                 body: large_body,
@@ -52195,6 +52493,7 @@ mod tests {
                 source_hash: None,
                 source_label: "regression_test_bd_2zyj5".to_string(),
             },
+            script_strict: None,
             tree: SyntaxTree {
                 goal: ParseGoal::Script,
                 body: vec![function_with_literal],

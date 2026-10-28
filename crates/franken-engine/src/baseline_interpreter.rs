@@ -112710,7 +112710,16 @@ impl InterpreterCore {
             None => Vec::new(),
         };
         let prototype = Value::str("prototype");
-        if self.object_own_property_contains(function, &prototype) && !names.contains(&prototype) {
+        let materialized = matches!(function, Value::BuiltinFunction(builtin)
+            if Self::materialized_global_prototype_name(builtin).is_some());
+        if self.object_own_property_contains(function, &prototype)
+            && (materialized || !names.contains(&prototype))
+        {
+            if materialized {
+                // Lazy storage can be seeded after a constructor's static
+                // methods. Its intrinsic prototype predates those methods.
+                names.retain(|key| *key != prototype);
+            }
             // Integer keys come first, then string keys in creation order:
             // `length` and `name`, then `prototype` (made before any static
             // member), so `prototype` goes after the leading integer keys
@@ -115668,22 +115677,34 @@ impl InterpreterCore {
         if let Value::Object(id) = value {
             return Ok(Some(*id));
         }
-        if let Value::BuiltinFunction(builtin) = value
+        let holder = if let Value::BuiltinFunction(builtin) = value
             && let Some(object) = Self::builtin_function_property_object(builtin)
         {
-            return Ok(Some(object));
-        }
-        if !value.is_callable() && !Self::has_exotic_backing_object(value) {
-            return Ok(None);
-        }
-        let Some(module) = module else {
-            return Ok(None);
-        };
-        if create {
-            self.ensure_function_own_property_object(module, value)
+            Some(object)
         } else {
-            self.function_own_property_object(module, value)
+            if !value.is_callable() && !Self::has_exotic_backing_object(value) {
+                return Ok(None);
+            }
+            let Some(module) = module else {
+                return Ok(None);
+            };
+            if create {
+                self.ensure_function_own_property_object(module, value)?
+            } else {
+                self.function_own_property_object(module, value)?
+            }
+        };
+        if create
+            && let Some(backing) = holder
+            && let Value::BuiltinFunction(builtin) = value
+            && let Some(name) = Self::materialized_global_prototype_name(builtin)
+        {
+            // Proxy targets and integrity operations must see the same
+            // intrinsic descriptor as direct reflection, including before
+            // a constructor's backing object becomes non-extensible.
+            self.ensure_materialized_prototype_property(backing, name)?;
         }
+        Ok(holder)
     }
 
     /// bd-9vouw.17: whether a function value has the own property `key`, or

@@ -305,6 +305,56 @@ out.join('|');"#,
     }
 }
 
+#[test]
+fn builtin_proxy_prototype_descriptors_use_canonical_values() {
+    for (source, expected) in [
+        (
+            r#"var out=[];
+[Array,Object,Number,Boolean,String,RegExp,Function,Date].forEach(function(F) {
+  var p=new Proxy(F,{});
+  var d=Object.getOwnPropertyDescriptor(p,'prototype');
+  out.push(typeof d+':'+(!!d&&d.value===F.prototype)+':'+(d&&d.writable)+':'+(d&&d.enumerable)+':'+(d&&d.configurable));
+});
+out.join('|');"#,
+            "object:true:false:false:false|object:true:false:false:false|object:true:false:false:false|object:true:false:false:false|object:true:false:false:false|object:true:false:false:false|object:true:false:false:false|object:true:false:false:false",
+        ),
+        (
+            r#"var out=[];
+[Array,Object,Number,Boolean,String,RegExp,Function,Date].forEach(function(F) {
+  var p=new Proxy(F,{getOwnPropertyDescriptor:function(t,k) {
+    return Reflect.getOwnPropertyDescriptor(t,k);
+  }});
+  var d=Object.getOwnPropertyDescriptor(p,'prototype');
+  out.push(typeof d+':'+(!!d&&d.value===F.prototype)+':'+(d&&d.writable)+':'+JSON.stringify(Object.keys(p)));
+});
+out.join('|');"#,
+            "object:true:false:[]|object:true:false:[]|object:true:false:[]|object:true:false:[]|object:true:false:[]|object:true:false:[]|object:true:false:[]|object:true:false:[]",
+        ),
+    ] {
+        assert_native_enumeration(source, expected);
+    }
+}
+
+#[test]
+fn frozen_builtin_constructor_proxies_keep_intrinsic_values_and_key_order() {
+    assert_native_enumeration(
+        r#"var out = []; Object.freeze(Function); Object.freeze(Date);
+for (var C of [Function, Date]) {
+  var proxy = new Proxy(C, {});
+  var d = Object.getOwnPropertyDescriptor(proxy, 'prototype');
+  out.push([C.name, typeof d.value, d.value === C.prototype, d.writable, d.enumerable, d.configurable].join(':'));
+  out.push(Object.getOwnPropertyNames(proxy).join(','));
+  var hidden = new Proxy(C, {getOwnPropertyDescriptor(t, k) {
+    if (k === 'prototype') return undefined;
+    return Reflect.getOwnPropertyDescriptor(t, k);
+  }});
+  try {Object.keys(hidden); out.push('accepted');} catch (error) {out.push(error.name);}
+}
+out.join('|');"#,
+        "Function:function:true:false:false:false|length,name,prototype|TypeError|Date:object:true:false:false:false|length,name,prototype,now,parse,UTC|TypeError",
+    );
+}
+
 /// A public descriptor guess against a frozen Secret value must retain that
 /// provenance both when enumeration succeeds and when its TypeError is caught.
 #[test]

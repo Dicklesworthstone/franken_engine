@@ -397,7 +397,7 @@ impl InterpreterCore {
     /// Materialize `C.prototype` as an own ES2020 data property (non-writable,
     /// non-enumerable, non-configurable) on a materialized constructor's
     /// property storage, pointing at the intrinsic the direct read returns.
-    fn ensure_materialized_prototype_property(
+    pub(super) fn ensure_materialized_prototype_property(
         &mut self,
         backing: ObjectId,
         name: &'static str,
@@ -410,8 +410,8 @@ impl InterpreterCore {
         {
             return Ok(());
         }
-        let prototype = self.ensure_builtin_prototype(name)?;
-        self.set_object_property(backing, "prototype".to_string(), Value::Object(prototype))?;
+        let prototype = self.builtin_prototype_value(name)?;
+        self.set_object_property(backing, "prototype".to_string(), prototype)?;
         self.set_own_property_attributes(
             backing,
             &key,

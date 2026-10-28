@@ -2606,11 +2606,53 @@ fn delivered_source_factory_esm_does_not_admit_guest_or_snapshot_getters() {
 
 #[test]
 fn delivered_strict_alias_bounds_first_getter_but_keeps_cached_identity() {
+    use frankenengine_engine::ir_contract::{Ir0Module, Ir3Instruction};
+    use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+
+    let declares_bound = |source, name| {
+        let tree = frankenengine_engine::parser_api_stability::parse_module(source)
+            .expect("strict consumer parses");
+        let lowered = lower_ir0_to_ir3(
+            &Ir0Module::from_syntax_tree(tree, name),
+            &LoweringContext::new("strict-alias", "strict-alias", "strict-alias")
+                .with_preserved_runtime_module_loads(),
+        )
+        .expect("strict consumer lowers with delivered imports");
+        lowered.ir3.instructions.iter().any(|instruction| {
+            matches!(instruction, Ir3Instruction::HostCall { capability, .. }
+                if capability.0 == "builtin:IfcBoundedImportsContract")
+        })
+    };
+    // Keep the original probe as a negative control for the setup defect.
+    assert!(!declares_bound(
+        "import './mutator.cjs'; import strict from 'node:assert/strict'; console.log(strict.equal(7, 7) || typeof strict);",
+        "entry.mjs",
+    ));
+
     for cached in [false, true] {
+        // The first selection must satisfy a real data-import bound.
+        // Cached identity is deliberately checked by an unbounded consumer.
+        let consumer_source = if cached {
+            "import strict from 'node:assert/strict'; const result = strict.equal(7, 7); console.log(result === undefined ? typeof strict : 'unexpected result');"
+        } else {
+            "import strict from 'node:assert/strict'; import { value } from './value.mjs'; const result = strict.equal(value(), 7); console.log(value()); console.log(result === undefined ? typeof strict : 'unexpected result');"
+        };
+        assert_eq!(
+            declares_bound(consumer_source, "consumer.mjs"),
+            !cached,
+            "cached={cached}: consumer contract"
+        );
+
         let initialize_alias = if cached {
             "require('assert/strict');"
         } else {
             ""
+        };
+        let consumer = definition(ModuleSyntax::EsModule, consumer_source);
+        let consumer = if cached {
+            consumer
+        } else {
+            consumer.with_dependency(ModuleDependency::new("./value.mjs", ImportStyle::Import))
         };
         let resolver = Arc::new(
             OpaqueResolver::new(vec![
@@ -2618,9 +2660,10 @@ fn delivered_strict_alias_bounds_first_getter_but_keeps_cached_identity() {
                     "entry.mjs",
                     definition(
                         ModuleSyntax::EsModule,
-                        "import './mutator.cjs'; import strict from 'node:assert/strict'; console.log(strict.equal(7, 7) || typeof strict);",
+                        "import './mutator.cjs'; import './consumer.mjs';",
                     )
-                    .with_dependency(ModuleDependency::new("./mutator.cjs", ImportStyle::Import)),
+                    .with_dependency(ModuleDependency::new("./mutator.cjs", ImportStyle::Import))
+                    .with_dependency(ModuleDependency::new("./consumer.mjs", ImportStyle::Import)),
                 ),
                 (
                     "mutator.cjs",
@@ -2636,6 +2679,14 @@ fn delivered_strict_alias_bounds_first_getter_but_keeps_cached_identity() {
                                  console.log('strict getter ran'); return original; \
                              }} }});"
                         ),
+                    ),
+                ),
+                ("consumer.mjs", consumer),
+                (
+                    "value.mjs",
+                    definition(
+                        ModuleSyntax::EsModule,
+                        "export function value() { return 7; }",
                     ),
                 ),
             ])

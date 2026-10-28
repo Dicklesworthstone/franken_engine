@@ -54,14 +54,16 @@ fn ordinary_buffer_import_lowers_without_process_authority_bd_h8s4j() {
 #[test]
 fn buffer_import_does_not_authorize_guest_process_reads_bd_h8s4j() {
     use frankenengine_engine::effect_set::EffectKind;
-    use frankenengine_engine::ir_contract::Ir0Module;
+    use frankenengine_engine::ifc_artifacts::Label;
+    use frankenengine_engine::ir_contract::{Ir0Module, Ir1Op};
     use frankenengine_engine::lowering_pipeline::{
-        LoweringContext, LoweringPipelineError, lower_ir0_to_ir3,
+        LoweringContext, LoweringPipelineError, lower_ir0_to_ir1, lower_ir0_to_ir3,
     };
 
     for source in [
         "process.platform;",
         "require('node:buffer'); process.platform;",
+        "require('node:buffer'); process.env;",
         "require('node:buffer'); process.env.SECRET;",
     ] {
         let tree = frankenengine_engine::parser_api_stability::parse_script(source).unwrap();
@@ -71,11 +73,28 @@ fn buffer_import_does_not_authorize_guest_process_reads_bd_h8s4j() {
             &context,
         )
         .expect_err("importing Buffer never grants guest process authority");
+        if source.ends_with("process.env.SECRET;") {
+            // bd-omckp admits a named environment read as an explicit runtime
+            // HostCall, not ambient possession of process.env. Its TopSecret
+            // value cannot pass this program's Internal flow clearance.
+            assert!(
+                matches!(
+                    error,
+                    LoweringPipelineError::UnauthorizedFlow {
+                        source_label: Label::TopSecret,
+                        sink_clearance: Label::Internal,
+                        ..
+                    }
+                ),
+                "{source}: {error:?}"
+            );
+            continue;
+        }
         assert!(
             matches!(
                 error,
                 LoweringPipelineError::AmbientAuthorityViolation { required_effect, .. }
-                    if required_effect == if source.ends_with("process.env.SECRET;") {
+                    if required_effect == if source.ends_with("process.env;") {
                         EffectKind::EnvRead
                     } else {
                         EffectKind::ProcessShapeRead
@@ -84,6 +103,18 @@ fn buffer_import_does_not_authorize_guest_process_reads_bd_h8s4j() {
             "{source}: {error:?}"
         );
     }
+
+    // Positive control for that boundary distinction: deny-all *ambient*
+    // lowering still emits a named read's explicit capability-gated operation.
+    let tree = frankenengine_engine::parser_api_stability::parse_script("process.env.SECRET;")
+        .expect("parse a named environment read");
+    let ir1 = lower_ir0_to_ir1(&Ir0Module::from_syntax_tree(tree, "named-env.cjs"))
+        .expect("named reads use explicit runtime authority")
+        .module;
+    assert!(ir1.ops.iter().any(|op| matches!(
+        op,
+        Ir1Op::HostCall { capability, arg_count: 1 } if capability == "env:read"
+    )));
 }
 
 #[test]

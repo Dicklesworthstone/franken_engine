@@ -2623,13 +2623,7 @@ fn delivered_strict_alias_bounds_first_getter_but_keeps_cached_identity() {
                 if capability.0 == "builtin:IfcBoundedImportsContract")
         })
     };
-    // Keep the original probe as a negative control for the setup defect.
-    assert!(!declares_bound(
-        "import './mutator.cjs'; import strict from 'node:assert/strict'; console.log(strict.equal(7, 7) || typeof strict);",
-        "entry.mjs",
-    ));
-
-    for cached in [false, true] {
+    for (cached, recovered) in [(false, false), (true, false), (false, true), (true, true)] {
         // The first selection must satisfy a real data-import bound.
         // Cached identity is deliberately checked by an unbounded consumer.
         let consumer_source = if cached {
@@ -2637,50 +2631,62 @@ fn delivered_strict_alias_bounds_first_getter_but_keeps_cached_identity() {
         } else {
             "import strict from 'node:assert/strict'; import { value } from './value.mjs'; const result = strict.equal(value(), 7); console.log(value()); console.log(result === undefined ? typeof strict : 'unexpected result');"
         };
-        assert_eq!(
-            declares_bound(consumer_source, "consumer.mjs"),
-            !cached,
-            "cached={cached}: consumer contract"
-        );
+        if recovered {
+            assert_eq!(
+                declares_bound(consumer_source, "consumer.mjs"),
+                !cached,
+                "cached={cached}: consumer contract"
+            );
+        }
 
         let initialize_alias = if cached {
             "require('assert/strict');"
         } else {
             ""
         };
-        let consumer = definition(ModuleSyntax::EsModule, consumer_source);
-        let consumer = if cached {
-            consumer
+        // Retain the original runtime program in addition to the recovered
+        // consumer. Its local side-effect import can itself install a bound;
+        // the test must not assume that this original program is unbounded.
+        let entry_source = if recovered {
+            "import './mutator.cjs'; import './consumer.mjs';"
         } else {
-            consumer.with_dependency(ModuleDependency::new("./value.mjs", ImportStyle::Import))
+            "import './mutator.cjs'; import strict from 'node:assert/strict'; console.log(strict.equal(7, 7) || typeof strict);"
         };
-        let resolver = Arc::new(
-            OpaqueResolver::new(vec![
-                (
-                    "entry.mjs",
-                    definition(
-                        ModuleSyntax::EsModule,
-                        "import './mutator.cjs'; import './consumer.mjs';",
-                    )
-                    .with_dependency(ModuleDependency::new("./mutator.cjs", ImportStyle::Import))
-                    .with_dependency(ModuleDependency::new("./consumer.mjs", ImportStyle::Import)),
-                ),
-                (
-                    "mutator.cjs",
-                    definition(
-                        ModuleSyntax::CommonJs,
-                        // Isolate cached alias selection from the mutable parent
-                        // that the strict export normally exposes through `.ok`.
-                        &format!(
-                            "const assert = require('assert'); const original = assert.strict; \
-                             original.ok = original; \
-                             {initialize_alias} \
-                             Object.defineProperty(assert, 'strict', {{ get: function () {{ \
-                                 console.log('strict getter ran'); return original; \
-                             }} }});"
-                        ),
+        let entry_definition = definition(ModuleSyntax::EsModule, entry_source)
+            .with_dependency(ModuleDependency::new("./mutator.cjs", ImportStyle::Import));
+        let entry_definition = if recovered {
+            entry_definition
+                .with_dependency(ModuleDependency::new("./consumer.mjs", ImportStyle::Import))
+        } else {
+            entry_definition
+        };
+        let mut modules = vec![
+            ("entry.mjs", entry_definition),
+            (
+                "mutator.cjs",
+                definition(
+                    ModuleSyntax::CommonJs,
+                    // Isolate cached alias selection from the mutable parent
+                    // that the strict export normally exposes through `.ok`.
+                    &format!(
+                        "const assert = require('assert'); const original = assert.strict; \
+                         original.ok = original; \
+                         {initialize_alias} \
+                         Object.defineProperty(assert, 'strict', {{ get: function () {{ \
+                             console.log('strict getter ran'); return original; \
+                         }} }});"
                     ),
                 ),
+            ),
+        ];
+        if recovered {
+            let consumer = definition(ModuleSyntax::EsModule, consumer_source);
+            let consumer = if cached {
+                consumer
+            } else {
+                consumer.with_dependency(ModuleDependency::new("./value.mjs", ImportStyle::Import))
+            };
+            modules.extend([
                 ("consumer.mjs", consumer),
                 (
                     "value.mjs",
@@ -2689,9 +2695,9 @@ fn delivered_strict_alias_bounds_first_getter_but_keeps_cached_identity() {
                         "export function value() { return 7; }",
                     ),
                 ),
-            ])
-            .with_native_builtins(),
-        );
+            ]);
+        }
+        let resolver = Arc::new(OpaqueResolver::new(modules).with_native_builtins());
         let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
         let installed = ExecutionModuleResolver::new(
             &source.module.record.id,
@@ -2702,7 +2708,7 @@ fn delivered_strict_alias_bounds_first_getter_but_keeps_cached_identity() {
         let outcome = engine.execute_resolved_entry_with_resolver(&package(), &source, installed);
         if cached {
             let result = outcome.expect("a cached alias never rereads the mutable parent property");
-            assert_eq!(lines(&result), ["function"]);
+            assert_eq!(lines(&result), ["function"], "recovered={recovered}");
         } else {
             let error = outcome.expect_err("bound admission precedes the first strict getter");
             assert!(

@@ -3356,7 +3356,9 @@ impl ExecutionOrchestrator {
                             committed_evidence_chain = Some(evidence.artifact.clone());
                             failure.uncommitted_evidence_chain = None;
                         }
-                        Err(error) => failure.additional_errors.push(OrchestratorError::Ledger(error)),
+                        Err(error) => failure
+                            .additional_errors
+                            .push(OrchestratorError::Ledger(error)),
                     }
                 }
                 let (finalize_result, close_error) = match close_result {
@@ -6181,12 +6183,17 @@ mod tests {
         assert!(lifecycle.additional_errors.is_empty());
         assert!(error.uncommitted_evidence_chain().is_none());
         assert_eq!(orchestrator.execution_count(), 0);
-        let committed = lifecycle.committed_evidence_chain.as_ref().expect("portable denial batch");
-        committed.verify_genesis(
-            &orchestrator.evidence_verification_identity(),
-            orchestrator.evidence_ledger_id(),
-            &lifecycle.cleanup.trace_id,
-        ).expect("committed batch retains its independently verifiable signed chain receipt");
+        let committed = lifecycle
+            .committed_evidence_chain
+            .as_ref()
+            .expect("portable denial batch");
+        committed
+            .verify_genesis(
+                &orchestrator.evidence_verification_identity(),
+                orchestrator.evidence_ledger_id(),
+                &lifecycle.cleanup.trace_id,
+            )
+            .expect("committed batch retains its independently verifiable signed chain receipt");
         let entries = orchestrator.ledger().entries();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries, committed.entries.as_slice());
@@ -6212,13 +6219,23 @@ mod tests {
             .verify_with_trusted_identity(&orchestrator.evidence_verification_identity())
             .expect("committed denial must retain its runtime signature");
         let mut tampered = entry.clone();
-        tampered.metadata.insert("denied_capability".into(), "fs.read".into());
-        assert!(tampered.verify_with_trusted_identity(
-            &orchestrator.evidence_verification_identity()
-        ).is_err());
+        tampered
+            .metadata
+            .insert("denied_capability".into(), "fs.read".into());
+        assert!(
+            tampered
+                .verify_with_trusted_identity(&orchestrator.evidence_verification_identity())
+                .is_err()
+        );
         assert_eq!(orchestrator.ledger().evidence_chain_next_sequence(), 1);
-        let denial_head = orchestrator.ledger().evidence_chain_head().unwrap().to_string();
-        let follow_up = orchestrator.execute(&simple_package()).expect("follow-up run");
+        let denial_head = orchestrator
+            .ledger()
+            .evidence_chain_head()
+            .unwrap()
+            .to_string();
+        let follow_up = orchestrator
+            .execute(&simple_package())
+            .expect("follow-up run");
         EvidenceChainArtifact::new(
             follow_up.evidence_entries.clone(),
             follow_up.evidence_chain_receipt.clone(),
@@ -6253,7 +6270,9 @@ mod tests {
                 ..OrchestratorConfig::default()
             });
             orchestrator.ledger_commit_failure_override = commit_failure;
-            let error = orchestrator.execute(&package).expect_err("denial remains a failure");
+            let error = orchestrator
+                .execute(&package)
+                .expect_err("denial remains a failure");
             assert!(matches!(
                 error.primary_error(),
                 OrchestratorError::Interpreter(InterpreterError::CapabilityDenied { capability })
@@ -6262,22 +6281,28 @@ mod tests {
             let failure = error.post_cell_failure().expect("cleanup evidence");
             assert!(failure.committed_evidence_chain.is_none());
             assert_eq!(failure.cleanup.close_succeeded(), commit_failure);
-            assert!(matches!(
-                failure.additional_errors.as_slice(),
-                [OrchestratorError::Ledger(_)] if commit_failure
-            ) || matches!(
-                failure.additional_errors.as_slice(),
-                [OrchestratorError::Cell(_)] if !commit_failure
-            ));
-            let evidence = error.uncommitted_evidence_chain().expect("exact staged batch");
-            evidence.verify_with_context(
-                &orchestrator.evidence_verification_identity(),
-                orchestrator.evidence_chain_instance_id(),
-                orchestrator.evidence_ledger_id(),
-                &failure.cleanup.trace_id,
-                0,
-                None,
-            ).expect("uncommitted denial retains its signature and unchanged chain position");
+            assert!(
+                matches!(
+                    failure.additional_errors.as_slice(),
+                    [OrchestratorError::Ledger(_)] if commit_failure
+                ) || matches!(
+                    failure.additional_errors.as_slice(),
+                    [OrchestratorError::Cell(_)] if !commit_failure
+                )
+            );
+            let evidence = error
+                .uncommitted_evidence_chain()
+                .expect("exact staged batch");
+            evidence
+                .verify_with_context(
+                    &orchestrator.evidence_verification_identity(),
+                    orchestrator.evidence_chain_instance_id(),
+                    orchestrator.evidence_ledger_id(),
+                    &failure.cleanup.trace_id,
+                    0,
+                    None,
+                )
+                .expect("uncommitted denial retains its signature and unchanged chain position");
             assert_eq!(evidence.artifact.entries.len(), 1);
             assert_eq!(evidence.commit_state, EvidenceChainCommitState::Uncommitted);
             assert!(orchestrator.ledger().is_empty());

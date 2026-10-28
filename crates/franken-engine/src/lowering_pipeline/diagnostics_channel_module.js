@@ -16,7 +16,6 @@
   const Weak = WeakMap;
   const weakGet = WeakMap.prototype.get;
   const weakSet = WeakMap.prototype.set;
-  const slice = Array.prototype.slice;
   const splice = Array.prototype.splice;
   const at = Array.prototype.at;
   const Type = TypeError;
@@ -41,6 +40,14 @@
   function validName(name) {
     if (typeof name !== 'string' && typeof name !== 'symbol') throw invalid('channel');
   }
+  function subscriberList() {
+    // These snapshots never escape the module. Ordinary arrays let inherited
+    // numeric setters intercept registration and species hooks observe copies.
+    // Null-prototype storage keeps every indexed read/write module-owned.
+    const list = create(null);
+    list.length = 0;
+    return list;
+  }
   function publish(channel, message) {
     const subscribers = state(channel).subscribers;
     // Subscription changes replace the list, so a publish sees one immutable
@@ -55,7 +62,7 @@
     constructor(name) {
       validName(name);
       this.name = name;
-      apply(weakSet, states, [this, { subscribers: [], stores: new MapClass(), storeCount: 0 }]);
+      apply(weakSet, states, [this, { subscribers: subscriberList(), stores: new MapClass(), storeCount: 0 }]);
       apply(mapSet, registry, [name, this]);
     }
     get hasSubscribers() {
@@ -64,16 +71,21 @@
     }
     subscribe(subscription) {
       if (typeof subscription !== 'function') throw invalid('subscription');
-      const s = state(this), next = apply(slice, s.subscribers, []);
-      next[next.length] = subscription;
+      const s = state(this), current = s.subscribers, next = subscriberList();
+      for (let i = 0; i < current.length; i++) next[i] = current[i];
+      next[current.length] = subscription;
+      next.length = current.length + 1;
       s.subscribers = next;
     }
     unsubscribe(subscription) {
       const s = state(this), current = s.subscribers;
       for (let i = 0; i < current.length; i++) {
         if (current[i] === subscription) {
-          const next = apply(slice, current, []);
-          apply(splice, next, [i, 1]); s.subscribers = next;
+          const next = subscriberList();
+          for (let j = 0; j < i; j++) next[j] = current[j];
+          for (let j = i + 1; j < current.length; j++) next[j - 1] = current[j];
+          next.length = current.length - 1;
+          s.subscribers = next;
           return true;
         }
       }

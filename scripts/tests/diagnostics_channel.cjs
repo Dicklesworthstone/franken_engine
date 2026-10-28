@@ -141,6 +141,69 @@ test('replaced Map methods cannot hijack registry or bound-store bookkeeping', (
   assert.equal(c.runStores('context',()=>42),42);
   assert.equal(c.unbindStore(store),true); assert.equal(c.hasSubscribers,false);
 });
+test('private subscriber snapshots ignore inherited index setters before and after initialization', () => {
+  for (const prototype of ['Array', 'Object']) for (const before of [false, true]) for (const index of [0, 1]) {
+    let interceptions = 0;
+    const realm = vm.createContext({queueMicrotask, intercept() { interceptions++; }});
+    const poison = `Object.defineProperty(${prototype}.prototype, '${index}', {
+      configurable: true, set(value) { intercept(value, this); }
+    });`;
+    if (before) vm.runInContext(poison, realm);
+    const dc = vm.runInContext(fs.readFileSync(source, 'utf8'), realm);
+    if (!before) vm.runInContext(poison, realm);
+    const c = dc.channel('isolated snapshots'), rows = [];
+    let nested = false;
+    const second = value => rows.push('second:' + value);
+    const third = value => rows.push('third:' + value);
+    const first = value => {
+      rows.push('first:' + value);
+      if (!nested) { nested = true; c.unsubscribe(second); c.subscribe(third); c.publish(2); }
+    };
+    c.subscribe(first); c.subscribe(second);
+    assert.equal(c.hasSubscribers, true);
+    c.publish(1); c.publish(3);
+    assert.deepEqual(rows, ['first:1', 'first:2', 'third:2', 'second:1', 'first:3', 'third:3']);
+    assert.equal(c.unsubscribe(first), true); assert.equal(c.unsubscribe(third), true);
+    assert.equal(c.hasSubscribers, false);
+    assert.equal(interceptions, 0, `${prototype}, before=${before}, index=${index}`);
+  }
+});
+test('private subscriber snapshots ignore frozen inherited indices and array species hooks', () => {
+  for (const prototype of ['Array', 'Object']) for (const before of [false, true]) {
+    const realm = vm.createContext({queueMicrotask});
+    const poison = `Object.defineProperty(${prototype}.prototype, '0', {
+      value: 'blocked', writable: false, configurable: true
+    });`;
+    if (before) vm.runInContext(poison, realm);
+    const dc = vm.runInContext(fs.readFileSync(source, 'utf8'), realm);
+    if (!before) vm.runInContext(poison, realm);
+    const c = dc.channel('frozen inherited index'); let calls = 0;
+    function subscriber() { calls++; }
+    c.subscribe(subscriber); c.subscribe(subscriber); c.publish(1);
+    assert.equal(c.unsubscribe(subscriber), true); c.publish(2);
+    assert.equal(c.unsubscribe(subscriber), true); assert.equal(c.unsubscribe(subscriber), false);
+    assert.equal(calls, 3); assert.equal(c.hasSubscribers, false);
+  }
+  for (const before of [false, true]) {
+    let constructors = 0, species = 0;
+    const realm = vm.createContext({queueMicrotask,
+      constructorRead() { constructors++; }, speciesRead() { species++; }});
+    const poison = `Object.defineProperty(Array.prototype, 'constructor', {
+      configurable: true, get() { constructorRead(this); return {
+        get [Symbol.species]() { speciesRead(); throw Error('private array escaped'); }
+      }; }
+    });`;
+    if (before) vm.runInContext(poison, realm);
+    const dc = vm.runInContext(fs.readFileSync(source, 'utf8'), realm);
+    if (!before) vm.runInContext(poison, realm);
+    const c = dc.channel('private species'); let calls = 0;
+    const subscriber = () => { calls++; };
+    c.subscribe(subscriber); c.subscribe(subscriber); c.publish(1);
+    assert.equal(c.unsubscribe(subscriber), true); c.publish(2);
+    assert.equal(c.unsubscribe(subscriber), true); assert.equal(calls, 3);
+    assert.equal(constructors, 0); assert.equal(species, 0);
+  }
+});
 compare('large repeated publication does not lose subscribers or messages', (dc, name) => {
   const c=dc.channel(name), message={value:0};let sum=0,count=0;
   function add(x){sum+=x.value;count++;}

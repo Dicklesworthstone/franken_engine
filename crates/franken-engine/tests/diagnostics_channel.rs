@@ -72,6 +72,50 @@ fn reentrant_publication_uses_stable_subscriber_snapshots_on_both_lanes() {
     }
 }
 
+const PRIVATE_SUBSCRIBERS: &str = r#"
+const dc=require('diagnostics_channel');
+let interceptions=0, rows='', nested=false;
+const c=dc.channel('private-snapshots');
+function second(value){rows+='b'+value+',';}
+function third(value){rows+='c'+value+',';}
+function first(value){
+ rows+='a'+value+',';
+ if(!nested){nested=true;c.unsubscribe(second);c.subscribe(third);c.publish(2);}
+}
+Object.defineProperty(Array.prototype,'0',{configurable:true,set(value){interceptions++;}});
+try {
+ c.subscribe(first);c.subscribe(second);c.publish(1);c.publish(3);
+ c.unsubscribe(first);c.unsubscribe(third);
+} finally {delete Array.prototype[0];}
+console.log('PRIVATE_SUBSCRIBERS',interceptions,rows,c.hasSubscribers);
+let calls=0, removed=false;
+function subscriber(){calls++;}
+Object.defineProperty(Object.prototype,'0',{value:'blocked',writable:false,configurable:true});
+try {c.subscribe(subscriber);c.subscribe(subscriber);c.publish(1);c.unsubscribe(subscriber);c.publish(2);removed=c.unsubscribe(subscriber);}
+finally {delete Object.prototype[0];}
+console.log('FROZEN_SUBSCRIBERS',calls,removed,c.hasSubscribers);
+let constructors=0;
+const original=Object.getOwnPropertyDescriptor(Array.prototype,'constructor');
+Object.defineProperty(Array.prototype,'constructor',{configurable:true,get(){constructors++;throw new Error('private array escaped');}});
+try {c.subscribe(subscriber);c.publish(3);c.unsubscribe(subscriber);}
+finally {Object.defineProperty(Array.prototype,'constructor',original);}
+console.log('PRIVATE_SPECIES',constructors,calls,c.hasSubscribers);
+"#;
+
+#[test]
+fn subscriber_snapshots_resist_inherited_indices_and_species_on_both_lanes() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        assert_eq!(
+            run(PRIVATE_SUBSCRIBERS, lane),
+            [
+                "PRIVATE_SUBSCRIBERS 0 a1,a2,c2,b1,a3,c3, false",
+                "FROZEN_SUBSCRIBERS 3 true false",
+                "PRIVATE_SPECIES 0 4 false",
+            ]
+        );
+    }
+}
+
 #[test]
 fn store_scopes_and_sync_tracing_preserve_result_receiver_and_falsy_errors() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {

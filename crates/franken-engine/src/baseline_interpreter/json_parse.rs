@@ -1390,7 +1390,10 @@ mod tests {
         let Some(Value::Object(error)) = core.pending_exception.as_ref() else {
             panic!("the JS boundary must retain the actual RangeError object");
         };
-        assert_eq!(core.chain_data_property(*error, "name"), Some(&Value::str("RangeError")));
+        assert_eq!(
+            core.chain_data_property(*error, "name"),
+            Some(&Value::str("RangeError"))
+        );
         assert_eq!(core.pending_exception_label, Label::Public);
         assert!(core.active_inline_callback_context_label.is_none());
         assert_eq!(

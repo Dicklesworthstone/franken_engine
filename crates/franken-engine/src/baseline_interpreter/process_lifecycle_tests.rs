@@ -302,14 +302,22 @@ fn stdin_preserves_scalar_backing_storage_and_callback_confidentiality() {
             let recorded = fixture.journal.finish_execution().unwrap();
             let replay = Arc::new(InMemoryHostEffectJournal::replaying(recorded.clone()));
             replay.begin_execution().unwrap();
-            fixture.core.set_process_spawn(fixture.provider.clone(), replay.clone());
-            assert!(matches!(
-                fixture.invoke(BuiltinFunctionKind::ChildProcessStdinWrite),
-                Err(InterpreterError::HostProcess { code, message, .. })
-                    if code == "EACCES" && message.contains("FLOW_POLICY_BLOCKED")
-            ), "replay must preserve the actual IFC denial: {source}");
+            fixture
+                .core
+                .set_process_spawn(fixture.provider.clone(), replay.clone());
+            assert!(
+                matches!(
+                    fixture.invoke(BuiltinFunctionKind::ChildProcessStdinWrite),
+                    Err(InterpreterError::HostProcess { code, message, .. })
+                        if code == "EACCES" && message.contains("FLOW_POLICY_BLOCKED")
+                ),
+                "replay must preserve the actual IFC denial: {source}"
+            );
             assert_eq!(replay.finish_execution().unwrap(), recorded, "{source}");
-            assert!(fixture.provider.requests.lock().unwrap().is_empty(), "{source}");
+            assert!(
+                fixture.provider.requests.lock().unwrap().is_empty(),
+                "{source}"
+            );
         }
     }
 }
@@ -347,24 +355,39 @@ fn ifc_denial_replay_rejects_wrong_outcome_request_and_unused_suffix() {
             };
             let replay = Arc::new(InMemoryHostEffectJournal::replaying(entries));
             replay.begin_execution().unwrap();
-            fixture.core.set_process_spawn(fixture.provider.clone(), replay.clone());
+            fixture
+                .core
+                .set_process_spawn(fixture.provider.clone(), replay.clone());
             assert!(
-                fixture.invoke(BuiltinFunctionKind::ChildProcessStdinWrite).is_err(),
+                fixture
+                    .invoke(BuiltinFunctionKind::ChildProcessStdinWrite)
+                    .is_err(),
                 "{mutation}"
             );
-            let error = replay.finish_execution().expect_err("altered denial cannot certify");
+            let error = replay
+                .finish_execution()
+                .expect_err("altered denial cannot certify");
             if mutation == "suffix" {
-                assert!(matches!(
-                    error,
-                    HostEffectJournalError::UnusedReplaySuffix { index: 1, remaining: 1 }
-                ), "{error}");
+                assert!(
+                    matches!(
+                        error,
+                        HostEffectJournalError::UnusedReplaySuffix {
+                            index: 1,
+                            remaining: 1
+                        }
+                    ),
+                    "{error}"
+                );
             } else {
-                assert!(matches!(
-                    error,
-                    HostEffectJournalError::ReplayDivergence { .. }
-                ), "{mutation}: {error}");
+                assert!(
+                    matches!(error, HostEffectJournalError::ReplayDivergence { .. }),
+                    "{mutation}: {error}"
+                );
             }
-            assert!(fixture.provider.requests.lock().unwrap().is_empty(), "{mutation}");
+            assert!(
+                fixture.provider.requests.lock().unwrap().is_empty(),
+                "{mutation}"
+            );
         }
     }
 }

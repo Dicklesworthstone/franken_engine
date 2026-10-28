@@ -2,12 +2,13 @@
 //! declarations, modules, and function locals keep their own environments.
 
 use frankenengine_engine::ast::ParseGoal;
+use frankenengine_engine::baseline_interpreter::InterpreterError;
 use frankenengine_engine::execution_orchestrator::LabFixtureExecutionOrchestratorExt as _;
 use frankenengine_engine::execution_orchestrator::{
-    ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig,
+    ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorError,
 };
 
-fn run(source: &str, goal: ParseGoal) -> Result<Vec<String>, String> {
+fn run(source: &str, goal: ParseGoal) -> Result<Vec<String>, OrchestratorError> {
     let package = ExtensionPackage {
         extension_id: "script-global-declarations".to_string(),
         source: source.to_string(),
@@ -29,7 +30,13 @@ fn run(source: &str, goal: ParseGoal) -> Result<Vec<String>, String> {
             .map(|line| line.message)
             .collect()
     })
-    .map_err(|error| error.to_string())
+}
+
+fn is_native_type_error(error: &OrchestratorError) -> bool {
+    matches!(
+        error.primary_error(),
+        OrchestratorError::Interpreter(InterpreterError::TypeError { .. })
+    )
 }
 
 fn assert_script_output(source: &str, expected: &[&str]) {
@@ -155,7 +162,7 @@ fn a_function_cannot_replace_a_restricted_global_property() {
     // CanDeclareGlobalFunction is false (Node's vm adapter differs here).
     let error = run("function Infinity() {}", ParseGoal::Script)
         .expect_err("a nonconfigurable, nonwritable global rejects a function declaration");
-    assert!(error.contains("TypeError"), "{error}");
+    assert!(error.to_string().contains("TypeError"), "{error}");
 }
 
 #[test]
@@ -233,7 +240,7 @@ fn strict_script_initializers_preserve_exact_directive_semantics() {
         let source = format!("{directive} var undefined = 1;");
         let error = run(&source, ParseGoal::Script)
             .expect_err("strict initialization must reject the readonly global");
-        assert!(error.contains("TypeError"), "{source}: {error}");
+        assert!(is_native_type_error(&error), "{source}: {error}");
     }
     for prefix in [
         "'use\\x20strict';",
@@ -246,6 +253,19 @@ fn strict_script_initializers_preserve_exact_directive_semantics() {
             &["undefined"],
         );
     }
+}
+
+#[test]
+fn strict_initializer_error_checks_reject_a_misleading_reference_error() {
+    let error =
+        run("notATypeError;", ParseGoal::Script).expect_err("the missing identifier must fail");
+    assert!(matches!(
+        error.primary_error(),
+        OrchestratorError::Interpreter(InterpreterError::UndefinedBinding { name })
+            if name == "notATypeError"
+    ));
+    assert!(error.to_string().contains("TypeError"), "{error}");
+    assert!(!is_native_type_error(&error), "{error}");
 }
 
 #[test]

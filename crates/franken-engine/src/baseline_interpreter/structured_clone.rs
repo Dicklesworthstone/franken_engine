@@ -493,6 +493,7 @@ impl InterpreterCore {
                 let prototype = self.ensure_builtin_prototype("Date")?;
                 let clone = self.alloc_object_with_prototype(Some(prototype))?;
                 self.set_object_brand(clone, "Date")?;
+                self.join_object_mutation_label(clone, &state.label)?;
                 self.set_date_value(clone, time)?;
                 state.memory.insert(id, clone);
                 return Ok(Some(Value::Object(clone)));

@@ -44380,6 +44380,17 @@ impl InterpreterCore {
                 args,
                 builtin.kind == BuiltinFunctionKind::FunctionPrototypeApply,
             ),
+            BuiltinFunctionKind::DateGetTime
+            | BuiltinFunctionKind::DatePrototypeMethod
+            | BuiltinFunctionKind::DatePrototypeToPrimitive => {
+                self.dispatch_date_builtin_function(
+                    module,
+                    builtin,
+                    args,
+                    receiver,
+                    receiver_register,
+                )
+            }
             BuiltinFunctionKind::StreamWritableWrite
             | BuiltinFunctionKind::StreamWritableEnd
             | BuiltinFunctionKind::StreamWritableCork
@@ -44410,6 +44421,35 @@ impl InterpreterCore {
             self.label_legacy_regexp_match(legacy_regexp_generation, &label);
         }
         result
+    }
+
+    /// Date's time belongs to the object, so a Public alias must still
+    /// observe the provenance of an earlier setter. This boundary is shared
+    /// by direct calls and call/apply/Reflect's isolated invocation paths.
+    fn dispatch_date_builtin_function(
+        &mut self,
+        module: &Ir3Module,
+        builtin: &BuiltinFunction,
+        args: RegRange,
+        receiver: Option<Value>,
+        receiver_register: Option<u32>,
+    ) -> Result<Value, InterpreterError> {
+        let end =
+            args.start
+                .checked_add(args.count)
+                .ok_or(InterpreterError::RegisterOutOfBounds {
+                    register: args.start,
+                    max: self.config.max_registers,
+                })?;
+        let observation =
+            self.begin_property_observation(receiver_register.into_iter().chain(args.start..end))?;
+        let outcome = (|| {
+            if let Some(receiver) = receiver.as_ref() {
+                self.observe_date_value_label(receiver)?;
+            }
+            self.dispatch_builtin_function_inner(module, builtin, args, receiver, receiver_register)
+        })();
+        self.finish_property_read_observation(observation, outcome)
     }
 
     #[inline(never)]
@@ -45997,7 +46037,10 @@ impl InterpreterCore {
                 let separator = match self.builtin_arg(args, 0)? {
                     None | Some(Value::Undefined) => JsString::from(","),
                     Some(Value::Str(text)) => text,
-                    Some(value) => JsString::from(self.value_to_string(&value)),
+                    Some(value) => {
+                        self.observe_date_value_label(&value)?;
+                        JsString::from(self.value_to_string(&value))
+                    }
                 };
                 Ok(Value::Str(self.array_join_observable(
                     module,
@@ -70654,6 +70697,7 @@ impl InterpreterCore {
                 .get(object_id.0 as usize)
                 .and_then(HeapObject::date_time)
             {
+                self.observe_date_value_label(&value)?;
                 return Ok(Value::Float(Float64::new(time)));
             }
             return self.engine_object_string_primitive(module, object_id);
@@ -70716,6 +70760,7 @@ impl InterpreterCore {
         module: &Ir3Module,
         object_id: ObjectId,
     ) -> Result<Value, InterpreterError> {
+        self.observe_date_value_label(&Value::Object(object_id))?;
         if self
             .heap
             .get(object_id.0 as usize)
@@ -83275,6 +83320,27 @@ impl InterpreterCore {
         Ok(())
     }
 
+    fn observe_date_value_label(&mut self, value: &Value) -> Result<(), InterpreterError> {
+        let Value::Object(date_id) = value else {
+            return Ok(());
+        };
+        if self
+            .heap
+            .get(date_id.0 as usize)
+            .and_then(HeapObject::date_time)
+            .is_none()
+        {
+            return Ok(());
+        }
+        let Some(label) = self.object_mutation_labels.get(date_id) else {
+            return Ok(());
+        };
+        self.check_temporary_memory_budget(Self::estimate_label_bytes(label))?;
+        let label = label.clone();
+        self.join_into_pending_hostcall_result_label(Some(label))?;
+        self.observe_scoped_callback_result()
+    }
+
     fn date_prototype_method(
         &mut self,
         module: Option<&Ir3Module>,
@@ -83522,6 +83588,11 @@ impl InterpreterCore {
         } else {
             js_number_to_value(result)
         };
+        // Admit the persistent provenance before publishing a new time. A
+        // failing label allocation must not leave an unlabelled classified
+        // value available through another reference to this Date.
+        let label = self.json_parse_context_label()?;
+        self.join_object_mutation_label(date_id, &label)?;
         self.set_date_value(date_id, result)?;
         Ok(stored)
     }
@@ -83573,6 +83644,7 @@ impl InterpreterCore {
                 .get(date_id.0 as usize)
                 .and_then(HeapObject::date_time)
         {
+            self.observe_date_value_label(&value)?;
             return Ok(date_math::time_clip(time));
         }
         let primitive = if value.is_object_like() && module.is_some() {
@@ -95276,6 +95348,14 @@ impl InterpreterCore {
             // every Reflect reentry; keep GC and telemetry in this wrapper.
             "builtin:ReflectApply" => self.reflect_invocation_builtin(module, args, false),
             "builtin:ReflectConstruct" => self.reflect_invocation_builtin(module, args, true),
+            "builtin:Date"
+            | "builtin:DatePrototypeGetTime"
+            | "builtin:DatePrototypeToString"
+            | "builtin:DatePrototypeToLocaleString"
+            | "builtin:DatePrototypeToLocaleDateString"
+            | "builtin:DatePrototypeToLocaleTimeString" => {
+                self.dispatch_date_hostcall(cap, args, module)
+            }
             "builtin:DestructureIteratorInit"
             | "builtin:DestructureIteratorNext"
             | "builtin:DestructureIteratorElide"
@@ -95302,6 +95382,30 @@ impl InterpreterCore {
             }
         }
         outcome
+    }
+
+    fn dispatch_date_hostcall(
+        &mut self,
+        cap: &str,
+        args: RegRange,
+        module: Option<&Ir3Module>,
+    ) -> Result<Value, InterpreterError> {
+        let end =
+            args.start
+                .checked_add(args.count)
+                .ok_or(InterpreterError::RegisterOutOfBounds {
+                    register: args.start,
+                    max: self.config.max_registers,
+                })?;
+        let observation = self.begin_property_observation(args.start..end)?;
+        let outcome = (|| {
+            if args.count > 0 {
+                let value = self.read_reg(args.start)?;
+                self.observe_date_value_label(&value)?;
+            }
+            self.dispatch_builtin_hostcall_inner(cap, args, module)
+        })();
+        self.finish_property_read_observation(observation, outcome)
     }
 
     /// Deterministic wall-clock reading in epoch milliseconds: the fixed
@@ -99214,6 +99318,8 @@ impl InterpreterCore {
                 let date_prototype = self.ensure_builtin_prototype("Date")?;
                 let date_id = self.alloc_object_with_prototype(Some(date_prototype))?;
                 self.set_object_brand(date_id, "Date")?;
+                let label = self.json_parse_context_label()?;
+                self.join_object_mutation_label(date_id, &label)?;
                 self.set_date_value(date_id, millis)?;
                 Ok(Value::Object(date_id))
             }
@@ -105776,6 +105882,7 @@ impl InterpreterCore {
                 .array_index_get(Some(module), current, index)?
                 .unwrap_or(Value::Undefined);
             self.join_element_stored_label(current, index as u64)?;
+            self.observe_date_value_label(&element)?;
             let rendered = match element {
                 Value::Undefined | Value::Null => JsString::from(""),
                 Value::Str(text) => text,
@@ -175530,6 +175637,553 @@ mod tests {
         assert_eq!(core.estimated_memory_bytes, before_bytes + value_bytes);
         assert_eq!(
             core.estimated_memory_bytes,
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    fn date_value_provenance_fixture(
+        config: InterpreterConfig,
+    ) -> (InterpreterCore, ObjectId, ObjectId) {
+        let mut core = InterpreterCore::new(config, "date-value-provenance");
+        let prototype = core.ensure_builtin_prototype("Date").unwrap();
+        let date = core.alloc_object_with_prototype(Some(prototype)).unwrap();
+        core.set_object_brand(date, "Date").unwrap();
+        core.set_date_value(date, 0.0).unwrap();
+        let public = core.alloc_object_with_prototype(Some(prototype)).unwrap();
+        core.set_object_brand(public, "Date").unwrap();
+        core.set_date_value(public, 7.0).unwrap();
+        (core, date, public)
+    }
+
+    #[test]
+    fn date_value_provenance_survives_aliases_and_indirect_invocation() {
+        for config in [test_quickjs_config(), test_v8_config()] {
+            for setter_route in 0..4 {
+                for getter_route in 0..4 {
+                    let (mut core, date, public) = date_value_provenance_fixture(config.clone());
+                    let arguments = core.alloc_array_from_values(&[Value::Int(1234)]).unwrap();
+                    core.set_own_runtime_property_label(
+                        arguments,
+                        &RuntimePropertyKey::from("0"),
+                        &Label::Secret,
+                    )
+                    .unwrap();
+                    let empty = core.alloc_array_from_values(&[]).unwrap();
+                    let setter = Value::BuiltinFunction(
+                        InterpreterCore::collection_prototype_method("Date", "setTime").unwrap(),
+                    );
+                    let getter = Value::BuiltinFunction(BuiltinFunction::date_get_time());
+                    core.mutate_registers(|registers| {
+                        registers[0] = Value::Object(date);
+                        registers[1] = Value::Object(date);
+                        registers[2] = setter.clone();
+                        registers[3] = getter.clone();
+                        registers[4] = Value::BuiltinFunction(BuiltinFunction::new_kind(
+                            BuiltinFunctionKind::FunctionPrototypeCall,
+                        ));
+                        registers[5] = Value::BuiltinFunction(BuiltinFunction::new_kind(
+                            BuiltinFunctionKind::FunctionPrototypeApply,
+                        ));
+                        registers[7] = Value::Int(1234);
+                        registers[12] = Value::Object(public);
+                        registers[20] = setter;
+                        registers[21] = Value::Object(date);
+                        registers[22] = if setter_route < 2 {
+                            Value::Int(1234)
+                        } else {
+                            Value::Object(arguments)
+                        };
+                        registers[29] = getter;
+                        registers[30] = Value::Object(date);
+                        registers[31] = Value::Object(empty);
+                    });
+                    core.set_register_label(7, Label::Secret).unwrap();
+                    if setter_route < 2 {
+                        core.set_register_label(22, Label::Secret).unwrap();
+                    }
+                    let setter_call = match setter_route {
+                        0 => Ir3Instruction::CallMethod {
+                            receiver: 0,
+                            callee: 2,
+                            args: RegRange { start: 7, count: 1 },
+                            dst: 10,
+                        },
+                        1 | 2 => Ir3Instruction::CallMethod {
+                            receiver: 2,
+                            callee: if setter_route == 1 { 4 } else { 5 },
+                            args: RegRange {
+                                start: 21,
+                                count: 2,
+                            },
+                            dst: 10,
+                        },
+                        _ => Ir3Instruction::HostCall {
+                            capability: CapabilityTag("builtin:ReflectApply".to_string()),
+                            args: RegRange {
+                                start: 20,
+                                count: 3,
+                            },
+                            dst: 10,
+                        },
+                    };
+                    let getter_call = match getter_route {
+                        0 => Ir3Instruction::CallMethod {
+                            receiver: 1,
+                            callee: 3,
+                            args: RegRange { start: 0, count: 0 },
+                            dst: 11,
+                        },
+                        1 | 2 => Ir3Instruction::CallMethod {
+                            receiver: 3,
+                            callee: if getter_route == 1 { 4 } else { 5 },
+                            args: RegRange {
+                                start: 30,
+                                count: if getter_route == 1 { 1 } else { 2 },
+                            },
+                            dst: 11,
+                        },
+                        _ => Ir3Instruction::HostCall {
+                            capability: CapabilityTag("builtin:ReflectApply".to_string()),
+                            args: RegRange {
+                                start: 29,
+                                count: 3,
+                            },
+                            dst: 11,
+                        },
+                    };
+                    let module = test_module(vec![
+                        setter_call,
+                        getter_call,
+                        Ir3Instruction::CallMethod {
+                            receiver: 12,
+                            callee: 3,
+                            args: RegRange { start: 0, count: 0 },
+                            dst: 13,
+                        },
+                        Ir3Instruction::Halt,
+                    ]);
+                    core.execute(&module).unwrap();
+                    assert_eq!(core.get_register_label(1).unwrap(), &Label::Public);
+                    assert_eq!(
+                        core.read_reg(11).unwrap(),
+                        Value::Float(Float64::new(1234.0))
+                    );
+                    assert_eq!(
+                        core.get_register_label(11).unwrap(),
+                        &Label::Secret,
+                        "setter route {setter_route}, getter route {getter_route}"
+                    );
+                    assert_eq!(core.object_mutation_labels.get(&date), Some(&Label::Secret));
+                    assert_eq!(core.read_reg(13).unwrap(), Value::Float(Float64::new(7.0)));
+                    assert_eq!(core.get_register_label(13).unwrap(), &Label::Public);
+                    assert!(core.pending_hostcall_result_label.is_none());
+                    assert!(core.active_inline_callback_context_label.is_none());
+                    assert_eq!(
+                        core.estimated_memory_bytes(),
+                        core.recompute_estimated_memory_bytes()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn date_value_provenance_retains_coercion_callback_results() {
+        let (mut core, date, public) = date_value_provenance_fixture(test_quickjs_config());
+        let argument = core.alloc_object_with_prototype(None).unwrap();
+        let public_argument = core.alloc_object_with_prototype(None).unwrap();
+        core.mutate_registers(|registers| {
+            registers[0] = Value::Object(date);
+            registers[2] = Value::BuiltinFunction(
+                InterpreterCore::collection_prototype_method("Date", "setUTCFullYear").unwrap(),
+            );
+            registers[3] = Value::BuiltinFunction(BuiltinFunction::date_get_time());
+            registers[4] = Value::Int(2001);
+            registers[8] = Value::Object(public);
+            registers[10] = Value::Object(argument);
+            registers[11] = Value::Object(public_argument);
+        });
+        core.set_register_label(4, Label::Secret).unwrap();
+        let mut module = test_module_with_pool(
+            vec![
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 0,
+                    kind: BindingKind::Var as u8,
+                },
+                Ir3Instruction::CreateClosure {
+                    dst: 6,
+                    function_index: 0,
+                    capture_count: 0,
+                },
+                Ir3Instruction::StoreScoped {
+                    src: 4,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::LoadStr {
+                    dst: 7,
+                    pool_index: 1,
+                },
+                Ir3Instruction::DefineMethod {
+                    obj: 10,
+                    key: 7,
+                    func: 6,
+                },
+                Ir3Instruction::CreateClosure {
+                    dst: 9,
+                    function_index: 1,
+                    capture_count: 0,
+                },
+                Ir3Instruction::DefineMethod {
+                    obj: 11,
+                    key: 7,
+                    func: 9,
+                },
+                Ir3Instruction::CallMethod {
+                    receiver: 0,
+                    callee: 2,
+                    args: RegRange {
+                        start: 10,
+                        count: 2,
+                    },
+                    dst: 12,
+                },
+                Ir3Instruction::CallMethod {
+                    receiver: 0,
+                    callee: 3,
+                    args: RegRange { start: 0, count: 0 },
+                    dst: 13,
+                },
+                Ir3Instruction::CallMethod {
+                    receiver: 8,
+                    callee: 3,
+                    args: RegRange { start: 0, count: 0 },
+                    dst: 14,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadScoped {
+                    dst: 0,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::Return { value: 0 },
+                Ir3Instruction::LoadInt { dst: 0, value: 0 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![
+                "classified_date_component".to_string(),
+                "valueOf".to_string(),
+            ],
+        );
+        module.function_table.push(Ir3FunctionDesc {
+            entry: 11,
+            arity: 0,
+            frame_size: 1,
+            name: Some("date_component".to_string()),
+            is_generator: false,
+            rest_param_index: None,
+        });
+        module.function_table.push(Ir3FunctionDesc {
+            entry: 13,
+            arity: 0,
+            frame_size: 1,
+            name: Some("public_month".to_string()),
+            is_generator: false,
+            rest_param_index: None,
+        });
+        core.execute(&module).unwrap();
+        assert_eq!(core.get_register_label(0).unwrap(), &Label::Public);
+        assert_eq!(core.get_register_label(10).unwrap(), &Label::Public);
+        assert_eq!(core.get_register_label(11).unwrap(), &Label::Public);
+        assert_eq!(core.get_register_label(6).unwrap(), &Label::Public);
+        assert_eq!(
+            core.read_reg(13).unwrap(),
+            Value::Float(Float64::new(978_307_200_000.0))
+        );
+        assert_eq!(core.get_register_label(13).unwrap(), &Label::Secret);
+        assert_eq!(core.get_register_label(14).unwrap(), &Label::Public);
+        assert!(core.pending_hostcall_result_label.is_none());
+        assert!(core.active_inline_callback_context_label.is_none());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn date_value_provenance_survives_conversion_formatting_and_copying() {
+        for config in [test_quickjs_config(), test_v8_config()] {
+            let (mut core, date, public) = date_value_provenance_fixture(config);
+            let date_array = core
+                .alloc_array_from_values(&[Value::Object(date)])
+                .unwrap();
+            let number_array = core
+                .alloc_array_from_values(&[Value::Int(1), Value::Int(2)])
+                .unwrap();
+            let empty_module = test_module(Vec::new());
+            let Value::Object(formatter) = core
+                .construct_intl_service(
+                    &empty_module,
+                    "DateTimeFormat",
+                    RegRange { start: 0, count: 0 },
+                )
+                .unwrap()
+            else {
+                panic!("Intl constructor must return an object");
+            };
+            let format = core.prototype_chain_get(formatter, "format").unwrap();
+            core.mutate_registers(|registers| {
+                registers[0] = Value::Object(date);
+                registers[1] = Value::Object(date);
+                for (register, method) in [
+                    (2, "setTime"),
+                    (5, "valueOf"),
+                    (6, "toISOString"),
+                    (9, "toJSON"),
+                    (11, "toLocaleString"),
+                ] {
+                    registers[register] = Value::BuiltinFunction(
+                        InterpreterCore::collection_prototype_method("Date", method).unwrap(),
+                    );
+                }
+                registers[3] = Value::BuiltinFunction(BuiltinFunction::date_get_time());
+                registers[4] = Value::Int(1234);
+                registers[7] = Value::Int(0);
+                registers[8] = Value::str("");
+                registers[10] = format;
+                registers[14] = Value::Object(public);
+                registers[16] = Value::Object(date_array);
+                registers[17] = Value::BuiltinFunction(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::ArrayJoin,
+                ));
+                registers[18] = Value::Object(number_array);
+            });
+            core.set_register_label(4, Label::Secret).unwrap();
+            let module = test_module(vec![
+                Ir3Instruction::CallMethod {
+                    receiver: 0,
+                    callee: 2,
+                    args: RegRange { start: 4, count: 1 },
+                    dst: 15,
+                },
+                Ir3Instruction::UnaryPlus { dst: 20, src: 1 },
+                Ir3Instruction::Sub {
+                    dst: 21,
+                    lhs: 1,
+                    rhs: 7,
+                },
+                Ir3Instruction::Add {
+                    dst: 22,
+                    lhs: 1,
+                    rhs: 8,
+                },
+                Ir3Instruction::CallMethod {
+                    receiver: 1,
+                    callee: 5,
+                    args: RegRange { start: 0, count: 0 },
+                    dst: 23,
+                },
+                Ir3Instruction::CallMethod {
+                    receiver: 1,
+                    callee: 6,
+                    args: RegRange { start: 0, count: 0 },
+                    dst: 24,
+                },
+                Ir3Instruction::CallMethod {
+                    receiver: 1,
+                    callee: 9,
+                    args: RegRange { start: 0, count: 0 },
+                    dst: 25,
+                },
+                Ir3Instruction::CallMethod {
+                    receiver: 1,
+                    callee: 11,
+                    args: RegRange { start: 0, count: 0 },
+                    dst: 26,
+                },
+                Ir3Instruction::Call {
+                    callee: 10,
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 27,
+                },
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("builtin:Date".to_string()),
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 28,
+                },
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("builtin:StructuredClone".to_string()),
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 29,
+                },
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("builtin:DatePrototypeGetTime".to_string()),
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 30,
+                },
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("builtin:DatePrototypeToString".to_string()),
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 31,
+                },
+                Ir3Instruction::CallMethod {
+                    receiver: 16,
+                    callee: 17,
+                    args: RegRange { start: 0, count: 0 },
+                    dst: 33,
+                },
+                Ir3Instruction::CallMethod {
+                    receiver: 18,
+                    callee: 17,
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 34,
+                },
+                Ir3Instruction::CallMethod {
+                    receiver: 14,
+                    callee: 3,
+                    args: RegRange { start: 0, count: 0 },
+                    dst: 32,
+                },
+                Ir3Instruction::Halt,
+            ]);
+            core.execute(&module).unwrap();
+            for register in (20..=31).chain([33, 34]) {
+                assert_eq!(
+                    core.get_register_label(register).unwrap(),
+                    &Label::Secret,
+                    "Date conversion/copy result r{register} must retain the time's provenance"
+                );
+            }
+            assert_eq!(core.get_register_label(1).unwrap(), &Label::Public);
+            assert_eq!(core.get_register_label(32).unwrap(), &Label::Public);
+            for register in [20, 21, 23, 30] {
+                assert_eq!(
+                    InterpreterCore::coerce_to_float(&core.read_reg(register).unwrap()),
+                    Some(1234.0)
+                );
+            }
+            for register in [24, 25] {
+                assert_eq!(
+                    core.read_reg(register).unwrap(),
+                    Value::str("1970-01-01T00:00:01.234Z")
+                );
+            }
+            for register in [28, 29] {
+                let Value::Object(copy) = core.read_reg(register).unwrap() else {
+                    panic!("Date copy must be an object");
+                };
+                assert_ne!(copy, date);
+                assert_eq!(core.object_mutation_labels.get(&copy), Some(&Label::Secret));
+                // An isolated invocation supplies an unlabelled receiver value,
+                // independently of the classified copy-result register.
+                let (value, label) = core
+                    .invoke_inline_method_call_with_argument_label(
+                        Some(&module),
+                        Value::BuiltinFunction(BuiltinFunction::date_get_time()),
+                        Value::Object(copy),
+                        Vec::new(),
+                        None,
+                    )
+                    .unwrap();
+                assert_eq!(value, Value::Float(Float64::new(1234.0)));
+                assert_eq!(label, Label::Secret);
+            }
+            assert!(core.pending_hostcall_result_label.is_none());
+            assert!(core.active_inline_callback_context_label.is_none());
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn date_value_provenance_labels_invalid_time_errors() {
+        let (mut core, date, _) = date_value_provenance_fixture(test_quickjs_config());
+        core.mutate_registers(|registers| {
+            registers[0] = Value::Object(date);
+            registers[1] = Value::Float(Float64::new(f64::NAN));
+            registers[2] = Value::BuiltinFunction(
+                InterpreterCore::collection_prototype_method("Date", "setTime").unwrap(),
+            );
+            registers[3] = Value::BuiltinFunction(
+                InterpreterCore::collection_prototype_method("Date", "toISOString").unwrap(),
+            );
+        });
+        core.set_register_label(1, Label::Secret).unwrap();
+        let module = test_module(vec![
+            Ir3Instruction::CallMethod {
+                receiver: 0,
+                callee: 2,
+                args: RegRange { start: 1, count: 1 },
+                dst: 4,
+            },
+            Ir3Instruction::BeginTry {
+                catch_target: 4,
+                finally_target: None,
+            },
+            Ir3Instruction::CallMethod {
+                receiver: 0,
+                callee: 3,
+                args: RegRange { start: 0, count: 0 },
+                dst: 5,
+            },
+            Ir3Instruction::Halt,
+            Ir3Instruction::EnterCatch { dst: 6 },
+            Ir3Instruction::Halt,
+        ]);
+        core.execute(&module).unwrap();
+        assert!(matches!(core.read_reg(6).unwrap(), Value::Object(_)));
+        assert_eq!(core.get_register_label(6).unwrap(), &Label::Secret);
+        assert!(core.active_inline_callback_context_label.is_none());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn date_value_provenance_is_admitted_before_setter_publication() {
+        let (mut core, date, _) = date_value_provenance_fixture(test_quickjs_config());
+        core.mutate_registers(|registers| {
+            registers[0] = Value::Object(date);
+            registers[1] = Value::Int(1234);
+        });
+        core.set_register_label(1, Label::Secret).unwrap();
+        let baseline = core.estimated_memory_bytes();
+        let label_bytes =
+            InterpreterCore::estimate_object_mutation_label_entry_bytes(&Label::Secret);
+        let setter = InterpreterCore::collection_prototype_method("Date", "setTime").unwrap();
+        let module = test_module(Vec::new());
+        core.config.max_total_memory_bytes = baseline + label_bytes - 1;
+        assert!(matches!(
+            core.dispatch_builtin_function(
+                &module,
+                &setter,
+                RegRange { start: 1, count: 1 },
+                Some(Value::Object(date)),
+                Some(0),
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.heap[date.0 as usize].date_time(), Some(0.0));
+        assert!(!core.object_mutation_labels.contains_key(&date));
+        assert!(core.pending_hostcall_result_label.is_none());
+        assert!(core.active_inline_callback_context_label.is_none());
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+
+        core.config.max_total_memory_bytes = baseline + label_bytes;
+        core.dispatch_builtin_function(
+            &module,
+            &setter,
+            RegRange { start: 1, count: 1 },
+            Some(Value::Object(date)),
+            Some(0),
+        )
+        .expect("exact-budget Date provenance admission");
+        assert_eq!(core.heap[date.0 as usize].date_time(), Some(1234.0));
+        assert_eq!(core.object_mutation_labels.get(&date), Some(&Label::Secret));
+        assert_eq!(core.estimated_memory_bytes(), baseline + label_bytes);
+        assert_eq!(
+            core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
         );
     }

@@ -152,6 +152,14 @@ jobs:
           cargo test --locked --no-default-features -p frankenengine-engine --lib \
             date_private_value_ -- --nocapture --test-threads=1
 
+      - name: Verify Date value provenance across aliases and copies
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --no-default-features -p frankenengine-engine --lib \
+            date_value_provenance_ -- --nocapture --test-threads=1
+
       - name: Verify global getter result provenance
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         shell: bash

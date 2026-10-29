@@ -232,7 +232,10 @@ fn first_class_invocation_does_not_grant_timer_authority() {
         "const t = require('timers'); const run = t.setImmediate; run(() => {});",
         "const t = require('timers/promises'); const run = t.setTimeout; run(1);",
     ] {
-        let error = execute(source, ParseGoal::Script, false).expect_err("Timer grant is required");
+        let error = match execute(source, ParseGoal::Script, false) {
+            Err(error) => error,
+            Ok(output) => panic!("Timer grant is required: {source}; got {output:?}"),
+        };
         assert!(
             error.to_lowercase().contains("capability"),
             "{source}: {error}"
@@ -307,8 +310,10 @@ console.log(typeof timers.promises.scheduler.wait,
         "require('timers').setTimeout[Symbol.for('nodejs.util.promisify.custom')](1);",
         "require('timers').setImmediate[Symbol.for('nodejs.util.promisify.custom')]();",
     ] {
-        let error = execute(source, ParseGoal::Script, false)
-            .expect_err("timer authority remains required");
+        let error = match execute(source, ParseGoal::Script, false) {
+            Err(error) => error,
+            Ok(output) => panic!("timer authority remains required: {source}; got {output:?}"),
+        };
         assert!(
             error.to_lowercase().contains("capability"),
             "{source}: {error}"

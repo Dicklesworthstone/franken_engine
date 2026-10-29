@@ -401,7 +401,10 @@ pub fn hostcall_registry_row(tag: &str) -> Option<HostcallRegistryRow<'_>> {
         | "builtin:SetImmediate"
         | "builtin:ClearImmediate"
         | "builtin:QueueMicrotask"
-        | "builtin:ProcessNextTick" => (
+        | "builtin:ProcessNextTick"
+        | "builtin:TimersPromisesSetTimeout"
+        | "builtin:TimersPromisesSetImmediate"
+        | "builtin:TimersPromisesSetInterval" => (
             Some(RuntimeCapability::Timer),
             result_contract_for_authority(RuntimeCapability::Timer),
             HostcallDispatchBinding::Builtin,
@@ -2247,6 +2250,9 @@ mod tests {
             "builtin:ClearImmediate",
             "builtin:QueueMicrotask",
             "builtin:ProcessNextTick",
+            "builtin:TimersPromisesSetTimeout",
+            "builtin:TimersPromisesSetImmediate",
+            "builtin:TimersPromisesSetInterval",
         ] {
             assert_eq!(
                 RuntimeCapability::from_tag_str(tag),

@@ -129,12 +129,59 @@ fn generated_function_supports_nested_builtin_calls() {
 }
 
 #[test]
-fn generated_function_plain_call_this_is_undefined() {
-    // A plain call binds `this = undefined`; no construction-site/global-this leak.
-    assert_eq!(
-        eval_value(r#"new Function("return typeof this;")();"#),
-        "undefined"
-    );
+fn generated_function_this_obeys_body_strictness_and_contained_realm() {
+    // OrdinaryCallBindThis uses the callee's realm for a sloppy null/undefined
+    // receiver, and preserves the receiver for a strict body. Generated code
+    // has its own sanitized realm; returning its global must not expose the
+    // caller's ambient or recursive-codegen bindings.
+    for (source, expected) in [
+        // Retain the exact formerly failing program. Node and the pre-change
+        // engine both return "object"; the old "undefined" assertion was stale.
+        (r#"new Function("return typeof this;")();"#, "object"),
+        (
+            r#"new Function("'use strict'; return typeof this;")();"#,
+            "undefined",
+        ),
+        (
+            r#"(function () {'use strict'; return new Function("return typeof this;")();})();"#,
+            "object",
+        ),
+        (
+            r#"var F = new Function("return this;");
+            [F() === F.call(null), F() === new Function("return this;")(),
+             F.call(7).valueOf() === 7, F.call("x").valueOf() === "x"].join(":");"#,
+            "true:true:true:true",
+        ),
+        (
+            r#"var F = new Function("'use strict'; return this;");
+            [F() === undefined, F.call(null) === null,
+             F.call(7) === 7, F.call("x") === "x"].join(":");"#,
+            "true:true:true:true",
+        ),
+        (
+            r#"var receiver = {}; var F = new Function("return this;");
+            function caller() {return F();}
+            [caller.call(receiver) === F(), caller.call(receiver) === receiver,
+             F.call(receiver) === receiver].join(":");"#,
+            "true:false:true",
+        ),
+        (
+            r#"var realm = new Function("return this;")();
+            typeof realm.Function === "undefined" && typeof realm.eval === "undefined" &&
+                typeof realm.process === "undefined" && typeof realm.require === "undefined";"#,
+            "true",
+        ),
+        // Planted caller-realm substitution: the same safe-global predicate
+        // must reject the caller's real Function binding.
+        (
+            r#"var realm = globalThis;
+            typeof realm.Function === "undefined" && typeof realm.eval === "undefined" &&
+                typeof realm.process === "undefined" && typeof realm.require === "undefined";"#,
+            "false",
+        ),
+    ] {
+        assert_constructor_value(source, expected);
+    }
 }
 
 // --- AC#2: global-scope binding (globals visible, locals not) -----------------

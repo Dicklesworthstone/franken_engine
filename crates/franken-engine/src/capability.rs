@@ -2241,6 +2241,8 @@ mod tests {
 
     #[test]
     fn from_tag_str_timer_builtin_aliases_are_exact_and_bounded() {
+        let builtin_only = BTreeSet::from([RuntimeCapability::Builtin]);
+        let timer_only = BTreeSet::from([RuntimeCapability::Timer]);
         for tag in [
             "builtin:SetTimeout",
             "builtin:ClearTimeout",
@@ -2258,6 +2260,14 @@ mod tests {
                 RuntimeCapability::from_tag_str(tag),
                 Some(RuntimeCapability::Timer),
                 "source-lowered timer tag {tag} must require Timer authority"
+            );
+            assert!(
+                !crate::baseline_interpreter::live_hostcall_decision(tag, &builtin_only),
+                "Builtin alone must not authorize {tag}"
+            );
+            assert!(
+                crate::baseline_interpreter::live_hostcall_decision(tag, &timer_only),
+                "Timer authority must authorize {tag}"
             );
         }
         assert_eq!(

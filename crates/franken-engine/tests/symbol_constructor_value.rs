@@ -38,6 +38,18 @@ const CASES: &[(&str, &str, &str)] = &[
         r#"var root = { Symbol: Symbol }; var Sym = root.Symbol; var symToStringTag = Sym ? Sym.toStringTag : undefined; console.log(typeof symToStringTag, Object.prototype.toString.call({ [symToStringTag]: 'Tagged' }));"#,
         "symbol [object Tagged]",
     ),
+    // These Node 22.14.0 extensions use the global registry. Later Node
+    // versions use different well-known disposal identities.
+    (
+        "node22_disposal_symbol_descriptors",
+        r#"for (const key of ['dispose', 'asyncDispose']) { const value = Symbol[key]; const descriptor = Object.getOwnPropertyDescriptor(Symbol, key); console.log(key, typeof value, value.description, Symbol.keyFor(value), value === Symbol.for('nodejs.' + key), descriptor.value === value, descriptor.writable, descriptor.enumerable, descriptor.configurable, Object.getOwnPropertyNames(Symbol).includes(key)); }"#,
+        "dispose symbol nodejs.dispose nodejs.dispose true true false false false true\nasyncDispose symbol nodejs.asyncDispose nodejs.asyncDispose true true false false false true",
+    ),
+    (
+        "node22_disposal_symbol_identity_survives_materialization",
+        r#"const S = Symbol; const dispose = Symbol.for('nodejs.dispose'), asyncDispose = Symbol.for('nodejs.asyncDispose'); Object.freeze(S); console.log(S.dispose === dispose, S.asyncDispose === asyncDispose, dispose !== asyncDispose, Reflect.get(S, 'dispose') === dispose, Reflect.set(S, 'dispose', Symbol('replacement')), Reflect.deleteProperty(S, 'asyncDispose'), S.dispose === dispose, S.asyncDispose === asyncDispose);"#,
+        "true true true true false false true true",
+    ),
 ];
 fn console_output(source: &str) -> Result<String, String> {
     let tree = CanonicalEs2020Parser

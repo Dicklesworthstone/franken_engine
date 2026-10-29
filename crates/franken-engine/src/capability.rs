@@ -370,12 +370,19 @@ pub fn hostcall_registry_row(tag: &str) -> Option<HostcallRegistryRow<'_>> {
         ),
         "net:client_request" => (
             Some(RuntimeCapability::NetworkEgress),
-            result_contract_for_authority(RuntimeCapability::NetworkEgress),
+            // Construction only retains guest inputs in an engine-local
+            // handle. The deferred effect and its response have their own
+            // authority and source-provenance checks at dispatch time.
+            HostcallResultContract::JoinInputs,
             HostcallDispatchBinding::ClientRequest,
         ),
+        "builtin:HttpRequest" => (
+            Some(RuntimeCapability::NetworkEgress),
+            HostcallResultContract::JoinInputs,
+            HostcallDispatchBinding::Builtin,
+        ),
         "builtin:HttpCreateServer"
-        | "builtin:HttpGet"
-        | "builtin:HttpRequest" => (
+        | "builtin:HttpGet" => (
             Some(RuntimeCapability::NetworkEgress),
             result_contract_for_authority(RuntimeCapability::NetworkEgress),
             HostcallDispatchBinding::Builtin,
@@ -2302,6 +2309,33 @@ mod tests {
 
     #[test]
     fn hostcall_result_contracts_are_source_aware_and_fail_closed_bd_z1peg() {
+        for tag in ["net:client_request", "builtin:HttpRequest"] {
+            assert_eq!(
+                RuntimeCapability::from_tag_str(tag),
+                Some(RuntimeCapability::NetworkEgress),
+                "local construction still requires network authority"
+            );
+            assert_eq!(
+                hostcall_result_contract(tag).result_label(&Label::Public, None),
+                Label::Public,
+                "a local request handle introduces no network response bytes"
+            );
+            assert_eq!(
+                hostcall_result_contract(tag).result_label(&Label::Secret, None),
+                Label::Secret,
+                "construction cannot declassify its inputs"
+            );
+            assert_eq!(
+                hostcall_result_contract(tag).result_label(&Label::Public, Some(&Label::Internal)),
+                Label::Internal,
+                "precise runtime provenance may still raise the local handle"
+            );
+        }
+        assert_eq!(
+            hostcall_result_contract("net:request").result_label(&Label::Public, None),
+            Label::Internal,
+            "actual network response data retains its source floor"
+        );
         for tag in [
             "builtin:CryptoRandomBytes",
             "builtin:CryptoRandomUUID",

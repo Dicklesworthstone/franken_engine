@@ -287,6 +287,102 @@ fn deferred_request_end_checks_live_hostcall_guard_in_both_lanes_bd_9vouw_7() {
 }
 
 #[test]
+fn request_construction_preserves_input_labels_without_introducing_a_network_source() {
+    use frankenengine_engine::baseline_interpreter::{
+        InterpreterConfig, LaneChoice, LaneRouter, Value,
+    };
+    use frankenengine_engine::capability::RuntimeCapability;
+    use frankenengine_engine::hash_tiers::ContentHash;
+    use frankenengine_engine::ifc_artifacts::Label;
+    use frankenengine_engine::ir_contract::{CapabilityTag, Ir3Instruction, Ir3Module, RegRange};
+    use frankenengine_extension_host::host_io::{
+        EnvironmentSnapshotHostIo, HostIoRecorder, HostIoRequest, InMemoryHostIoTranscript,
+    };
+    use std::sync::Arc;
+
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for capability in ["net:client_request", "builtin:HttpRequest"] {
+            for secret in [false, true] {
+                let mut module = Ir3Module::new(
+                    ContentHash::compute(b"local-request-provenance"),
+                    "local-request-provenance",
+                );
+                module.constant_pool = vec![if secret {
+                    "REQUEST_URL".into()
+                } else {
+                    "http://127.0.0.1:9/public".into()
+                }];
+                module.instructions.push(Ir3Instruction::LoadStr {
+                    dst: 0,
+                    pool_index: 0,
+                });
+                if secret {
+                    module.instructions.push(Ir3Instruction::HostCall {
+                        capability: CapabilityTag("env:read".into()),
+                        args: RegRange { start: 0, count: 1 },
+                        dst: 0,
+                    });
+                }
+                module.instructions.extend([
+                    Ir3Instruction::HostCall {
+                        capability: CapabilityTag(capability.into()),
+                        args: RegRange { start: 0, count: 1 },
+                        dst: 1,
+                    },
+                    Ir3Instruction::Return { value: 1 },
+                ]);
+                let grants = BTreeSet::from([
+                    RuntimeCapability::VmDispatch,
+                    RuntimeCapability::HeapAllocate,
+                    RuntimeCapability::NetworkEgress,
+                    RuntimeCapability::EnvRead,
+                ]);
+                let mut deterministic = InterpreterConfig::quickjs_defaults();
+                deterministic.granted_capabilities = grants.clone();
+                let mut throughput = InterpreterConfig::v8_defaults();
+                throughput.granted_capabilities = grants;
+                let mut router = LaneRouter::with_configs(deterministic, throughput);
+                let transcript = Arc::new(InMemoryHostIoTranscript::recording());
+                let recorder: Arc<dyn HostIoRecorder> = transcript.clone();
+                router.set_host_io(
+                    Arc::new(
+                        EnvironmentSnapshotHostIo::new(BTreeMap::from([(
+                            "REQUEST_URL".to_string(),
+                            "http://127.0.0.1:9/secret".to_string(),
+                        )]))
+                        .expect("explicit environment snapshot"),
+                    ),
+                    Some(recorder),
+                );
+                let result = router
+                    .execute(&module, "local-request-provenance", Some(lane))
+                    .expect("request construction does not contact the endpoint");
+                assert!(matches!(result.result.value, Value::Object(_)));
+                assert_eq!(
+                    result.result.completion_label,
+                    if secret { Label::Secret } else { Label::Public },
+                    "{lane:?}, {capability}, secret={secret}: a local handle preserves its inputs"
+                );
+                let entries = transcript.entries();
+                assert_eq!(entries.len(), usize::from(secret));
+                if secret {
+                    assert!(matches!(
+                        &entries[0].0,
+                        HostIoRequest::EnvRead { name } if name == "REQUEST_URL"
+                    ));
+                    assert!(entries[0].1.is_ok());
+                }
+                assert!(
+                    result.result.hostcall_decisions.iter().any(|decision| {
+                        decision.capability.0 == capability && decision.allowed
+                    })
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn environment_hook_preserves_exact_denials_and_canonical_authority_bd_9vouw_7() {
     use frankenengine_engine::baseline_interpreter::{
         InterpreterConfig, LaneChoice, LaneRouter, Value,

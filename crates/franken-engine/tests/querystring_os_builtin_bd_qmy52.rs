@@ -523,6 +523,12 @@ fn os_platform_matches_injected_process_platform_shape() {
         console.log(os.platform() === process.platform);
     "#;
     assert_eq!(eval_console(src), "true");
+    assert_eq!(
+        eval_console(
+            "const os = require('os'); console.log(os.arch() === process.arch, process.arch === 'x64');"
+        ),
+        "true true"
+    );
 }
 
 #[test]

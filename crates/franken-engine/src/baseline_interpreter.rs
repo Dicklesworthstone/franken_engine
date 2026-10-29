@@ -1935,6 +1935,8 @@ fn node_qs_parse(
 /// `os.platform()` — also mirrored by the injected `process.platform` shape
 /// value so `os.platform() === process.platform` holds (Node/linux).
 const NODE_OS_PLATFORM: &str = "linux";
+/// `os.arch()` — also exposed by the granted `process.arch` shape read.
+const NODE_OS_ARCH: &str = "x64";
 /// `os.release()` — fixed plausible kernel release string.
 const NODE_OS_RELEASE: &str = "6.0.0-franken";
 /// `os.version()` — fixed plausible kernel version string.
@@ -39095,10 +39097,10 @@ impl InterpreterCore {
             .collect();
         let argv = Value::Object(self.alloc_array_from_values(&argv_values)?);
         let env = Value::Object(self.alloc_object_with_properties(&[])?);
-        // bd-qmy52/bd-y30zw: `platform` and `pid` are benign process-SHAPE
+        // bd-qmy52/bd-y30zw: platform, architecture and pid are process-SHAPE
         // descriptors readable only through a statically allowlisted member
-        // under the trusted `ProcessShapeRead` grant. Both are FIXED,
-        // engine-contained values: platform matches `os.platform()` and pid is
+        // under the trusted `ProcessShapeRead` grant. All are FIXED,
+        // engine-contained values: platform/arch match the os builtins and pid is
         // a positive synthetic sentinel, never the nondeterministic host PID.
         // No env VALUES are exposed (env stays empty and env reads stay denied
         // at lowering).
@@ -39106,6 +39108,7 @@ impl InterpreterCore {
             ("argv", argv),
             ("env", env),
             ("platform", Value::str(NODE_OS_PLATFORM)),
+            ("arch", Value::str(NODE_OS_ARCH)),
             ("pid", Value::Int(1)),
         ])
     }
@@ -99015,7 +99018,7 @@ impl InterpreterCore {
             // (TypeError ERR_INVALID_ARG_TYPE / RangeError ERR_OUT_OF_RANGE,
             // both JS-catchable) and then return fixed/no-op results.
             "builtin:OsPlatform" => Ok(Value::str(NODE_OS_PLATFORM)),
-            "builtin:OsArch" => Ok(Value::str("x64")),
+            "builtin:OsArch" => Ok(Value::str(NODE_OS_ARCH)),
             "builtin:OsType" => Ok(Value::str("Linux")),
             "builtin:OsEndianness" => Ok(Value::str("LE")),
             "builtin:OsMachine" => Ok(Value::str("x86_64")),
@@ -115844,11 +115847,14 @@ impl InterpreterCore {
                 "NEGATIVE_INFINITY",
                 "POSITIVE_INFINITY",
             ]),
-            "Symbol" => keys.extend(
-                crate::object_model::WellKnownSymbol::ALL
-                    .into_iter()
-                    .filter_map(|symbol| symbol.name().strip_prefix("@@")),
-            ),
+            "Symbol" => {
+                keys.extend(
+                    crate::object_model::WellKnownSymbol::ALL
+                        .into_iter()
+                        .filter_map(|symbol| symbol.name().strip_prefix("@@")),
+                );
+                keys.extend(["dispose", "asyncDispose"]);
+            }
             "Error" => keys.push("stackTraceLimit"),
             _ if TypedArrayKind::from_type_name(name).is_some() => keys.push("BYTES_PER_ELEMENT"),
             _ => {}
@@ -115940,6 +115946,15 @@ impl InterpreterCore {
             }
             "asIntN" if name == "BigInt" => {
                 Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::BigIntAsIntN))
+            }
+            // The pinned Node 22 surface uses registered symbols, unlike
+            // later ECMAScript well-known disposal symbols. Reuse the charged,
+            // replayed registry without changing the thirteen ES2020 IDs.
+            "dispose" if name == "Symbol" => {
+                Value::Symbol(self.intern_global_symbol(JsString::from("nodejs.dispose"))?)
+            }
+            "asyncDispose" if name == "Symbol" => {
+                Value::Symbol(self.intern_global_symbol(JsString::from("nodejs.asyncDispose"))?)
             }
             // Symbol.iterator, Symbol.toStringTag, ... (ES2020 19.4.2).
             key if name == "Symbol"

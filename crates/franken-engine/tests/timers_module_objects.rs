@@ -231,6 +231,8 @@ fn first_class_invocation_does_not_grant_timer_authority() {
         "const t = require('timers'); const run = t.setTimeout; run(() => {}, 1);",
         "const t = require('timers'); const run = t.setImmediate; run(() => {});",
         "const t = require('timers/promises'); const run = t.setTimeout; run(1);",
+        "const t = require('timers/promises'); const run = t.setImmediate; run();",
+        "const t = require('timers/promises'); const run = t.setInterval; run(1);",
     ] {
         let error = match execute(source, ParseGoal::Script, false) {
             Err(error) => error,

@@ -1736,6 +1736,46 @@ console.log('abort', count);
 }
 
 #[test]
+fn delivered_events_disposal_unsubscribes_idempotently() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for abort_first in [false, true] {
+            let source = format!(
+                "const events = require('node:events');\n\
+                 const controller = new AbortController();\n\
+                 let calls = 0;\n\
+                 const subscription = events.addAbortListener(controller.signal, () => {{ calls++; }});\n\
+                 if ({abort_first}) controller.abort();\n\
+                 subscription[Symbol.dispose]();\n\
+                 subscription[Symbol.dispose]();\n\
+                 controller.abort();\n\
+                 console.log(calls);"
+            );
+            let resolver = Arc::new(
+                OpaqueResolver::new(vec![(
+                    "entry.cjs",
+                    definition(ModuleSyntax::CommonJs, &source),
+                )])
+                .with_native_builtins(),
+            );
+            let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+            let installed = ExecutionModuleResolver::new(
+                &source.module.record.id,
+                resolver,
+                Arc::new(AllowAllPolicy),
+            );
+            let result = orchestrator(lane, ModuleSyntax::CommonJs)
+                .execute_resolved_entry_with_resolver(&package(), &source, installed)
+                .expect("disposal removes the real native abort listener");
+            assert_eq!(
+                lines(&result),
+                [if abort_first { "1" } else { "0" }],
+                "{lane:?}, abort_first={abort_first}"
+            );
+        }
+    }
+}
+
+#[test]
 fn delivered_events_esm_helpers_share_mutable_commonjs_state() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         let resolver = Arc::new(

@@ -63,6 +63,8 @@ fn buffer_import_does_not_authorize_guest_process_reads_bd_h8s4j() {
     for source in [
         "process.platform;",
         "require('node:buffer'); process.platform;",
+        "process.arch;",
+        "require('node:buffer'); process.arch;",
         "require('node:buffer'); process.env;",
         "require('node:buffer'); process.env.SECRET;",
     ] {

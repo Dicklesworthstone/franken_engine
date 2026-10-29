@@ -306,6 +306,135 @@ out.join('|');"#,
 }
 
 #[test]
+fn class_proxy_prototype_descriptors_are_checked() {
+    for (source, expected) in [
+        (
+            r#"class C{} var p=new Proxy(C,{getOwnPropertyDescriptor:function(t,k){return Reflect.getOwnPropertyDescriptor(t,k);}});var out=[];try{var d=Object.getOwnPropertyDescriptor(p,'prototype');out.push('ok:'+d.writable+':'+(d.value===C.prototype));}catch(e){out.push(e.name);}out.push(Object.getOwnPropertyDescriptor(C,'prototype').writable);out.join('|');"#,
+            "ok:false:true|false",
+        ),
+        (
+            r#"class C{} var p=new Proxy(C,{getOwnPropertyDescriptor:function(t,k){if(k==='prototype')return {value:17,writable:true,enumerable:false,configurable:false};return Reflect.getOwnPropertyDescriptor(t,k);}});var result='accepted';try{Object.keys(p);}catch(e){result=e.name;}result;"#,
+            "TypeError",
+        ),
+    ] {
+        assert_native_enumeration(source, expected);
+    }
+}
+
+#[test]
+fn class_prototypes_are_readonly_before_static_initialization() {
+    assert_native_enumeration(
+        r#"class Base {}
+var Expression = class {};
+class Derived extends Base {}
+class Explicit { constructor() {} }
+class Static { static writable = Object.getOwnPropertyDescriptor(this, 'prototype').writable; }
+var out = [Static.writable];
+for (var C of [Base, Expression, Derived, Explicit, Static]) {
+  var original = C.prototype;
+  var d = Object.getOwnPropertyDescriptor(C, 'prototype');
+  out.push([d.writable, d.enumerable, d.configurable, new C() instanceof C].join(':'));
+  C.prototype = {};
+  out.push(C.prototype === original);
+  try {(function () {'use strict'; C.prototype = {};})();}
+  catch (error) {out.push(error.name);}
+  out.push(Reflect.set(C, 'prototype', {}));
+}
+out.join('|');"#,
+        "false|false:false:false:true|true|TypeError|false|false:false:false:true|true|TypeError|false|false:false:false:true|true|TypeError|false|false:false:false:true|true|TypeError|false|false:false:false:true|true|TypeError|false",
+    );
+}
+
+#[test]
+fn function_prototype_definitions_retain_attributes_and_instance_links() {
+    assert_native_enumeration(
+        r#"function F() {this.created = true;}
+var first = new F(); var initial = F.prototype; var replacement = {tag: 9};
+var out = [Object.getOwnPropertyDescriptor(F, 'prototype').writable];
+out.push(Reflect.defineProperty(F, 'prototype', {value: replacement}));
+out.push(F.prototype === replacement, new F().tag);
+out.push(Object.getPrototypeOf(first) === initial);
+out.push(Object.getPrototypeOf(new F()) === replacement);
+Object.defineProperty(F, 'prototype', {writable: false});
+out.push(Object.getOwnPropertyDescriptor(F, 'prototype').writable);
+out.push(Object.getOwnPropertyDescriptor(new Proxy(F, {}), 'prototype').writable);
+out.push(Reflect.set(F, 'prototype', {}));
+F.prototype = {}; out.push(F.prototype === replacement);
+try {(function () {'use strict'; F.prototype = {};})();}
+catch (error) {out.push(error.name);}
+out.push(Reflect.defineProperty(F, 'prototype', {value: replacement}));
+out.push(Reflect.defineProperty(F, 'prototype', {value: {}}));
+out.push(Reflect.defineProperty(F, 'prototype', {writable: true}));
+out.push(Reflect.defineProperty(F, 'prototype', {enumerable: true}));
+try {Object.defineProperty(F, 'prototype', {get() {return replacement;}});}
+catch (error) {out.push(error.name);}
+out.join('|');"#,
+        "true|true|true|9|true|true|false|false|false|true|TypeError|true|false|false|false|TypeError",
+    );
+}
+
+#[test]
+fn class_prototype_proxy_writes_obey_the_target_descriptor() {
+    assert_native_enumeration(
+        r#"class C {} var original = C.prototype; var out = [];
+var forwarded = new Proxy(C, {defineProperty(t, k, d) {return Reflect.defineProperty(t, k, d);}});
+out.push(Reflect.defineProperty(forwarded, 'prototype', {value: original}));
+out.push(Reflect.defineProperty(forwarded, 'prototype', {value: {}}));
+try {Reflect.get(new Proxy(C, {get() {return {};}}), 'prototype');}
+catch (error) {out.push(error.name);}
+try {Reflect.set(new Proxy(C, {set() {return true;}}), 'prototype', {});}
+catch (error) {out.push(error.name);}
+try {Reflect.defineProperty(new Proxy(C, {defineProperty() {return true;}}), 'prototype', {value: {}});}
+catch (error) {out.push(error.name);}
+out.push(Reflect.set(new Proxy(C, {set() {return true;}}), 'prototype', original));
+out.join('|');"#,
+        "true|false|TypeError|TypeError|TypeError|true",
+    );
+}
+
+#[test]
+fn function_prototype_storage_preserves_ordinary_function_kinds() {
+    for (source, expected) in [
+        (
+            r#"var out = [];
+for (var F of [function ordinary() {}, function* generator() {}, Function('return 1;')]) {
+  out.push(Object.getOwnPropertyDescriptor(F, 'prototype').writable);
+  var replacement = {};
+  out.push(Reflect.defineProperty(F, 'prototype', {value: replacement}));
+  out.push(F.prototype === replacement);
+}
+var arrow = () => 0; arrow.prototype = 17;
+var d = Object.getOwnPropertyDescriptor(arrow, 'prototype');
+out.push([d.value, d.writable, d.enumerable, d.configurable].join(':'));
+out.join('|');"#,
+            "true|true|true|true|true|true|true|true|true|17:true:true:true",
+        ),
+        (
+            r#"function F() {} var replacement = {tag: 3};
+var proxy = new Proxy(F, {}); var out = [Reflect.set(proxy, 'prototype', replacement)];
+out.push(F.prototype === replacement, new F().tag);
+Object.defineProperties(F, {prototype: {value: {tag: 7}}}); out.push(new F().tag);
+function G() {} var original = G.prototype;
+Object.setPrototypeOf(G, F);
+out.push(G.prototype === original, Reflect.get(G, 'prototype') === original);
+out.join('|');"#,
+            "true|true|3|7|true|true",
+        ),
+        (
+            r#"'use strict'; function F() {} F.extra = 1;
+var out = [Object.getOwnPropertyNames(F).join(',')];
+Object.getOwnPropertyDescriptor(F, 'prototype');
+out.push(Object.getOwnPropertyNames(F).join(','));
+out.push(Reflect.ownKeys(new Proxy(F, {})).join(','));
+out.join('|');"#,
+            "length,name,prototype,extra|length,name,prototype,extra|length,name,prototype,extra",
+        ),
+    ] {
+        assert_native_enumeration(source, expected);
+    }
+}
+
+#[test]
 fn builtin_proxy_prototype_descriptors_use_canonical_values() {
     for (source, expected) in [
         (

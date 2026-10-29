@@ -1008,66 +1008,50 @@ impl InterpreterCore {
 }
 
 impl InterpreterCore {
-    // A private, domain-separated property cell reuses the existing seed-tracked
-    // function-owner registry. It is not the default instance prototype: class
-    // metadata and previously constructed instances must survive replacement.
-    fn constructor_prototype_override_key(
-        &self,
-        module: &Ir3Module,
-        function: &Value,
-    ) -> Result<Option<(ContentHash, u32)>, InterpreterError> {
-        let foreign = self.foreign_closure_module(function, module)?;
-        let owner = foreign.as_deref().unwrap_or(module);
-        let ids = self.prototype_owner_ids(owner);
-        Ok(match function {
-            Value::Function(index) => Some((ids.constructor_override[0], *index)),
-            // Generator functions index the closure table too (bd-9vouw.120).
-            Value::Closure(index)
-            | Value::GeneratorFunction(index)
-            | Value::AsyncGeneratorFunction(index) => Some((ids.constructor_override[1], *index)),
-            _ => None,
-        })
-    }
-
-    /// The owner of the constructor-prototype override cells of a module's
-    /// IR3 functions (`base` is their prototype owner) or closures.
-    pub(super) fn constructor_override_owner(base: &ContentHash) -> ContentHash {
-        let mut digest = Sha256::new();
-        digest.update(b"FrankenEngine.ConstructorPrototypeProperty.v1");
-        digest.update(base.as_bytes());
-        ContentHash::from_bytes(digest.finalize().into())
-    }
-
+    /// A materialized intrinsic property shares the function's ordinary
+    /// descriptor storage. The default instance prototype remains separate:
+    /// replacing this value must preserve old instances and class metadata.
     pub(super) fn constructor_prototype_override(
         &self,
         module: &Ir3Module,
         function: &Value,
     ) -> Result<Option<(Value, Label)>, InterpreterError> {
-        let Some(key) = self.constructor_prototype_override_key(module, function)? else {
+        // Bound/generated constructors keep their observable [[Get]] path;
+        // their ordinary prototype property may be a guest accessor.
+        if !matches!(
+            function,
+            Value::Function(_)
+                | Value::Closure(_)
+                | Value::GeneratorFunction(_)
+                | Value::AsyncGeneratorFunction(_)
+        ) || !self.function_has_intrinsic_prototype(function)
+        {
             return Ok(None);
-        };
-        let Some(cell) = self.function_prototypes.get(&key) else {
+        }
+        let Some(backing) = self.function_own_property_object(module, function)? else {
             return Ok(None);
         };
         let object = self
             .heap
-            .get(cell.0 as usize)
-            .ok_or(InterpreterError::ObjectNotFound { id: cell.0 })?;
-        let value =
-            object
-                .properties
-                .get("value")
-                .ok_or_else(|| InterpreterError::InternalError {
-                    details: "constructor prototype cell has no value".into(),
-                })?;
+            .get(backing.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: backing.0 })?;
+        let Some(value) = object.properties.get("prototype") else {
+            return Ok(None);
+        };
         let label = object
             .property_labels
-            .get("value")
+            .get("prototype")
+            .unwrap_or(&Label::Public);
+        let mutation_label = self
+            .object_mutation_labels
+            .get(&backing)
             .unwrap_or(&Label::Public);
         self.check_temporary_memory_budget(
-            Self::estimate_value_bytes(value).saturating_add(Self::estimate_label_bytes(label)),
+            Self::estimate_value_bytes(value)
+                .saturating_add(Self::estimate_label_bytes(label))
+                .saturating_add(Self::estimate_label_bytes(mutation_label)),
         )?;
-        Ok(Some((value.clone(), label.clone())))
+        Ok(Some((value.clone(), label.join(mutation_label))))
     }
 
     pub(super) fn set_constructor_prototype_override(
@@ -1077,17 +1061,13 @@ impl InterpreterCore {
         value: Value,
         label: Label,
     ) -> Result<(), InterpreterError> {
-        let key = self
-            .constructor_prototype_override_key(module, function)?
+        let backing = self
+            .own_property_holder(Some(module), function, true)?
             .ok_or_else(|| InterpreterError::TypeError {
                 expected: "ordinary function prototype property".into(),
                 got: function.type_name().into(),
             })?;
-        let cell = match self.function_prototypes.get(&key) {
-            Some(cell) => *cell,
-            None => self.alloc_object_with_prototype(None)?,
-        };
-        let previous = &self.heap[cell.0 as usize];
+        let previous = &self.heap[backing.0 as usize];
         let previous_bytes = Self::estimate_heap_object_bytes(previous);
         self.check_temporary_memory_budget(
             previous_bytes
@@ -1095,14 +1075,13 @@ impl InterpreterCore {
                 .saturating_add(Self::estimate_label_bytes(&label)),
         )?;
         let mut projected = previous.clone();
-        projected.properties.insert("value".into(), value);
-        projected.property_labels.insert("value".into(), label);
+        projected.properties.insert("prototype".into(), value);
+        projected.property_labels.insert("prototype".into(), label);
         self.apply_memory_component_delta(
             previous_bytes,
             Self::estimate_heap_object_bytes(&projected),
         )?;
-        self.mutate_heap(|heap| heap[cell.0 as usize] = projected);
-        self.mutate_function_prototypes(|registry| registry.insert(key, cell));
+        self.mutate_heap(|heap| heap[backing.0 as usize] = projected);
         Ok(())
     }
 }

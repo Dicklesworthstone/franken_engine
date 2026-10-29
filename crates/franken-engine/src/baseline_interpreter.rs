@@ -9958,9 +9958,6 @@ struct PrototypeOwnerIds {
     /// [`InterpreterCore::function_own_property_owner`] of kinds 0-4: the
     /// IR3 function over `function`, the closure kinds over `closure`.
     own_property: [ContentHash; 5],
-    /// [`InterpreterCore::constructor_override_owner`] of `function` and of
-    /// `closure`.
-    constructor_override: [ContentHash; 2],
 }
 
 /// Module headers [`InterpreterCore::prototype_owner_ids`] remembers; the
@@ -41617,11 +41614,9 @@ impl InterpreterCore {
         Ok(false)
     }
 
-    /// An ordinary function's intrinsic `prototype` uses a different registry
-    /// cell from its named own properties. Visit existing observable state
-    /// without invoking a getter or materializing a previously unread prototype.
-    /// A replacement cell includes both the replacement value and its label;
-    /// the superseded intrinsic object is no longer this property's value.
+    /// Visit a lazily created intrinsic prototype only while it remains outside
+    /// the function's ordinary property storage. Materialized properties are
+    /// already visited with the backing object, including replacement labels.
     fn existing_function_prototype_state_object(
         &self,
         module: &Ir3Module,
@@ -41637,16 +41632,17 @@ impl InterpreterCore {
         if !self.function_has_intrinsic_prototype(function) {
             return Ok(None);
         }
+        if let Some(backing) = self.function_own_property_object(module, function)?
+            && self
+                .heap
+                .get(backing.0 as usize)
+                .is_some_and(|object| object.properties.contains_key("prototype"))
+        {
+            return Ok(None);
+        }
         let foreign = self.foreign_closure_module(function, module)?;
         let ids = self.prototype_owner_ids(foreign.as_deref().unwrap_or(module));
-        let (intrinsic_owner, replacement_owner) = if closure {
-            (ids.closure, ids.constructor_override[1])
-        } else {
-            (ids.function, ids.constructor_override[0])
-        };
-        if let Some(cell) = self.function_prototypes.get(&(replacement_owner, index)) {
-            return Ok(Some((*cell, false)));
-        }
+        let intrinsic_owner = if closure { ids.closure } else { ids.function };
         Ok(self
             .function_prototypes
             .get(&(intrinsic_owner, index))
@@ -57317,7 +57313,12 @@ impl InterpreterCore {
                         | Value::AsyncGeneratorFunction(_)
                         | Value::BuiltinFunction(_)
                             if property_key.as_str() != Some("prototype")
-                                || !self.function_has_intrinsic_prototype(&obj_val) =>
+                                || !self.function_has_intrinsic_prototype(&obj_val)
+                                || self.function_backing_has_own_property(
+                                    module,
+                                    &obj_val,
+                                    &property_key,
+                                )? =>
                         {
                             match self.function_own_property_object(module, &obj_val)? {
                                 // Own `name`/`length` are the function's (never
@@ -58221,15 +58222,23 @@ impl InterpreterCore {
                             | Value::Closure(_)
                             | Value::GeneratorFunction(_)
                             | Value::AsyncGeneratorFunction(_))
-                                if property_key.as_str() == Some("prototype") =>
+                                if property_key.as_str() == Some("prototype")
+                                    && self.function_has_intrinsic_prototype(&function) =>
                             {
-                                let label = self
-                                    .get_register_label(obj)?
-                                    .join(self.get_register_label(key)?)
-                                    .join(self.get_register_label(val)?);
-                                self.set_constructor_prototype_override(
-                                    module, &function, set_val, label,
-                                )?;
+                                let writable = self
+                                    .function_prototype_descriptor_fields(Some(module), &function)?
+                                    .is_some_and(|fields| fields.writable == Some(true));
+                                if writable {
+                                    let label = self
+                                        .get_register_label(obj)?
+                                        .join(self.get_register_label(key)?)
+                                        .join(self.get_register_label(val)?);
+                                    self.set_constructor_prototype_override(
+                                        module, &function, set_val, label,
+                                    )?;
+                                } else if strict {
+                                    return Err(Self::read_only_property_error(&property_key));
+                                }
                             }
                             // bd-9vouw.17: a built-in's own `name` and `length`
                             // are non-writable too.
@@ -58263,9 +58272,10 @@ impl InterpreterCore {
                                         // Other built-ins keep assigned properties
                                         // (`fn.displayName = ...`) on a backing object.
                                         None => self
-                                            .ensure_function_own_property_object(
-                                                module,
+                                            .own_property_holder(
+                                                Some(module),
                                                 &Value::BuiltinFunction(builtin.clone()),
+                                                true,
                                             )?
                                             .ok_or_else(|| InterpreterError::TypeError {
                                                 expected: "object with writable properties"
@@ -71334,10 +71344,9 @@ impl InterpreterCore {
             };
         }
         let name_or_length = matches!(key.as_str(), Some("name" | "length"));
-        // `prototype` has dedicated storage only on a function that has an
-        // intrinsic one; another function's is an ordinary own property
-        // (bd-9vouw.277).
-        if (key.as_str() != Some("prototype") || !self.function_has_intrinsic_prototype(function))
+        if (key.as_str() != Some("prototype")
+            || !self.function_has_intrinsic_prototype(function)
+            || self.function_backing_has_own_property(module, function, key)?)
             && let Some(backing) = self.function_own_property_object(module, function)?
         {
             let own = self
@@ -71367,7 +71376,8 @@ impl InterpreterCore {
                 )?
             }
             Value::BuiltinFunction(builtin)
-                if builtin.kind == BuiltinFunctionKind::GeneratedFunction && name == "prototype" =>
+                if builtin.kind == BuiltinFunctionKind::GeneratedFunction
+                    && name == "prototype" =>
             {
                 Value::Object(self.ensure_generated_function_prototype(builtin)?)
             }
@@ -97164,7 +97174,8 @@ impl InterpreterCore {
             }
             "builtin:ClassMembersNonEnumerable" => {
                 // ES2020 14.6.13: class methods and accessors are
-                // non-enumerable. args = (constructor, constructor.prototype).
+                // non-enumerable and the constructor's prototype is readonly.
+                // args = (constructor, constructor.prototype).
                 let constructor = self.arg_or_undefined(args, 0)?;
                 let prototype = self.arg_or_undefined(args, 1)?;
                 let mut targets = Vec::with_capacity(2);
@@ -97173,8 +97184,17 @@ impl InterpreterCore {
                 }
                 if let Some(module) = module
                     && let Some(backing) =
-                        self.ensure_function_own_property_object(module, &constructor)?
+                        self.own_property_holder(Some(module), &constructor, true)?
                 {
+                    self.set_own_property_attributes(
+                        backing,
+                        &RuntimePropertyKey::String(JsString::from("prototype")),
+                        PropertyAttributes {
+                            writable: false,
+                            enumerable: false,
+                            configurable: false,
+                        },
+                    )?;
                     targets.push(backing);
                 }
                 for target in targets {
@@ -100530,35 +100550,6 @@ impl InterpreterCore {
                 };
                 let prop_name = self.executable_property_key_from_value(&prop_val);
                 let descriptor_val = self.arg_or_undefined(args, 2)?;
-                // bd-9vouw.17: a function target defines on its backing object
-                // (static members in transpiled classes). `prototype` keeps
-                // its dedicated storage: a new value replaces it, attribute-only
-                // changes (Babel's `{ writable: false }`) are accepted as is.
-                // A function without an intrinsic `prototype` (bound,
-                // arrow, method, accessor, async) defines it as an
-                // ordinary own property below (bd-9vouw.277).
-                if !matches!(obj_val, Value::Object(_))
-                    && obj_val.is_callable()
-                    && prop_name.as_str() == Some("prototype")
-                    && self.function_has_intrinsic_prototype(&obj_val)
-                    && let Some(module) = module
-                {
-                    let descriptor =
-                        self.read_property_descriptor(Some(module), &descriptor_val)?;
-                    if let Some(value) = descriptor.value
-                        && matches!(
-                            obj_val,
-                            Value::Function(_)
-                                | Value::Closure(_)
-                                | Value::GeneratorFunction(_)
-                                | Value::AsyncGeneratorFunction(_)
-                        )
-                    {
-                        let label = self.join_arg_range_with_object_mutation_label(args)?;
-                        self.set_constructor_prototype_override(module, &obj_val, value, label)?;
-                    }
-                    return Ok(obj_val);
-                }
                 let Some(obj_id) = self.own_property_holder(module, &obj_val, true)? else {
                     return Err(InterpreterError::TypeError {
                         expected: "object target for Object.defineProperty".to_string(),
@@ -111798,10 +111789,6 @@ impl InterpreterCore {
             function,
             closure,
             own_property,
-            constructor_override: [
-                Self::constructor_override_owner(&function),
-                Self::constructor_override_owner(&closure),
-            ],
         };
         let mut memo = self.prototype_owner_ids.borrow_mut();
         if memo.len() >= PROTOTYPE_OWNER_MEMO_ENTRIES {
@@ -112680,8 +112667,7 @@ impl InterpreterCore {
             None => Vec::new(),
         };
         let prototype = Value::str("prototype");
-        let materialized = matches!(function, Value::BuiltinFunction(builtin)
-            if Self::materialized_global_prototype_name(builtin).is_some());
+        let materialized = self.function_has_intrinsic_prototype(function);
         if self.object_own_property_contains(function, &prototype)
             && (materialized || !names.contains(&prototype))
         {
@@ -112721,11 +112707,9 @@ impl InterpreterCore {
             .collect())
     }
 
-    /// `fn.prototype` described (bd-9vouw.109): the value a read gives,
-    /// writable, neither enumerable nor configurable (ES2020 9.2.10
-    /// MakeConstructor). Undefined when the function has no `prototype`.
-    /// No-claim: a class's `prototype` is described as writable, though it
-    /// is not (14.6.13 step 16).
+    /// The same intrinsic descriptor used by reads, definitions and Proxy
+    /// invariants. Ordinary property storage owns materialized attributes,
+    /// including a class's readonly prototype and a frozen function.
     fn function_prototype_descriptor_fields(
         &mut self,
         module: Option<&Ir3Module>,
@@ -112736,6 +112720,15 @@ impl InterpreterCore {
         };
         if !self.object_own_property_contains(function, &Value::str("prototype")) {
             return Ok(None);
+        }
+        if let Some(backing) = self.function_own_property_object(module, function)? {
+            self.join_pending_hostcall_stream_label(backing)?;
+            if let Some(fields) = self.ordinary_own_property_descriptor_fields(
+                backing,
+                &RuntimePropertyKey::String(JsString::from("prototype")),
+            ) {
+                return Ok(Some(fields));
+            }
         }
         let prototype_override = self.constructor_prototype_override(module, function)?;
         let (value, mut writable) = if let Some((value, label)) = prototype_override {
@@ -112759,6 +112752,17 @@ impl InterpreterCore {
                 // bd-9vouw.17: a built-in constructor's `prototype` is not
                 // writable (ES2020 19.1.2.19, 20.1.2.15, ...).
                 Value::BuiltinFunction(builtin) => {
+                    if builtin.kind == BuiltinFunctionKind::GeneratedFunction {
+                        return Ok(Some(PropertyDescriptorFields {
+                            value: Some(Value::Object(
+                                self.ensure_generated_function_prototype(builtin)?,
+                            )),
+                            writable: Some(true),
+                            enumerable: Some(false),
+                            configurable: Some(false),
+                            ..PropertyDescriptorFields::default()
+                        }));
+                    }
                     let value = match Self::materialized_global_prototype_name(builtin) {
                         Some(name) => self.builtin_prototype_value(name)?,
                         None if builtin.kind == BuiltinFunctionKind::StandardConstructor => {
@@ -112808,6 +112812,13 @@ impl InterpreterCore {
         key: &RuntimePropertyKey,
     ) -> Result<Option<PropertyDescriptorFields>, InterpreterError> {
         if key.as_str() != Some("prototype") {
+            return Ok(None);
+        }
+        if self
+            .heap
+            .get(backing.0 as usize)
+            .is_some_and(|object| object.properties.contains_key("prototype"))
+        {
             return Ok(None);
         }
         let Some(module) = module else {
@@ -115673,6 +115684,27 @@ impl InterpreterCore {
             // intrinsic descriptor as direct reflection, including before
             // a constructor's backing object becomes non-extensible.
             self.ensure_materialized_prototype_property(backing, name)?;
+        }
+        if create
+            && let (Some(module), Some(backing)) = (module, holder)
+            && self.function_has_intrinsic_prototype(value)
+            && !self
+                .heap
+                .get(backing.0 as usize)
+                .is_some_and(|object| object.properties.contains_key("prototype"))
+            && let Some(fields) = self.function_prototype_descriptor_fields(Some(module), value)?
+        {
+            // Install once through the existing descriptor machinery. Default
+            // instance prototypes keep their separate class/constructor state.
+            if !self.define_own_property_from_descriptor(
+                backing,
+                RuntimePropertyKey::String(JsString::from("prototype")),
+                fields,
+            )? {
+                return Err(InterpreterError::InternalError {
+                    details: "intrinsic function prototype could not be materialized".into(),
+                });
+            }
         }
         Ok(holder)
     }

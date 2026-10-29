@@ -7958,6 +7958,7 @@ fn lower_statement_to_ir1_with_flow(
             // — corrupting the extends arm's LoadBinding{Parent} (bd-ppfds, same
             // r0-completion-clobber as the bd-62un6 method-attach fix).
             ops.push(Ir1Op::Discard);
+            push_class_constructor_attributes(ops, bid);
 
             // Set up inheritance if this class extends another
             if let Some(super_class) = &cls.super_class {
@@ -22172,6 +22173,7 @@ fn lower_expression_to_ir1_inner(
             // — corrupting the extends arm's LoadBinding{Parent} (bd-ppfds, same
             // r0-completion-clobber as the bd-62un6 method-attach fix).
             ops.push(Ir1Op::Discard);
+            push_class_constructor_attributes(ops, bid);
 
             if let Some(super_class) = super_class {
                 let builtin_parent = builtin_constructor_name(super_class, binding_lookup);
@@ -22833,6 +22835,13 @@ fn push_class_members_non_enumerable(
     }) {
         return;
     }
+    push_class_constructor_attributes(ops, class_binding);
+}
+
+/// MakeConstructor(F, false, prototype) makes the class's prototype readonly
+/// before computed members or static initializers can observe the constructor.
+/// The same intrinsic later clears enumerable on newly installed methods.
+fn push_class_constructor_attributes(ops: &mut Vec<Ir1Op>, class_binding: BindingId) {
     ops.push(Ir1Op::LoadBinding {
         binding_id: class_binding,
     });

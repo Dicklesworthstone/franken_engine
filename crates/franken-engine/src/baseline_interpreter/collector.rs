@@ -1235,6 +1235,17 @@ impl InterpreterCore {
 
         let mut reclaimed_objects = 0u64;
         let mut reclaimed_bytes = 0u64;
+        // Parameter maps are strong only from their arguments object. A
+        // captured parameter cell must not keep a dead arguments object alive
+        // through the weak reverse alias; release that alias before sweeping.
+        let dead_arguments = self.mapped_argument_bindings.keys().copied()
+            .filter(|object| !marker.objects.is_marked(object.0 as usize))
+            .collect::<Vec<_>>();
+        let before_arguments = self.estimated_memory_bytes;
+        for object in dead_arguments {
+            self.disconnect_all_mapped_arguments(object);
+        }
+        let released_arguments = before_arguments.saturating_sub(self.estimated_memory_bytes);
         self.mutate_heap(|heap| {
             heap.sweep(
                 |index| marker.objects.is_marked(index),
@@ -1246,6 +1257,7 @@ impl InterpreterCore {
             );
         });
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(reclaimed_bytes);
+        reclaimed_bytes = reclaimed_bytes.saturating_add(released_arguments);
 
         // Mutation labels of reclaimed objects can never be read again, but
         // they stay charged against the memory budget until purged.
@@ -1577,6 +1589,11 @@ impl InterpreterCore {
                 continue;
             };
             self.gc_trace_network_object(marker, ObjectId(index));
+            if let Some(bindings) = self.mapped_argument_bindings.get(&ObjectId(index)) {
+                for binding in bindings.values() {
+                    marker.binding(binding);
+                }
+            }
             let HeapObject {
                 properties,
                 property_labels: _,
@@ -1741,6 +1758,10 @@ impl InterpreterCore {
             // whole heap.
             pending_lazy_seeds: _,
             pending_arguments_object,
+            // Traced from a live arguments object, never as unconditional roots.
+            mapped_argument_bindings: _,
+            // Weak reverse aliases, no root.
+            mapped_argument_aliases: _,
             argument_overflow,
             argument_overflow_bytes: _,
             execution_seed_reservation_ledger: _,

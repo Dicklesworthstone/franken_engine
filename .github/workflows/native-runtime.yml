@@ -470,6 +470,20 @@ jobs:
           cargo test --locked -j1 -p frankenengine-engine --lib \
             baseline_interpreter::regexp_ -- --nocapture --test-threads=1 \
             2>&1 | tee native-buffer-regexp-tests.log
+      - name: Execute arguments object source regressions
+        if: always()
+        run: |
+          set -euo pipefail
+          cargo test --locked -j1 -p frankenengine-engine \
+            --test arguments_object_bd_9vouw_25 \
+            -- --nocapture --test-threads=1 2>&1 | tee native-buffer-arguments-source-tests.log
+      - name: Execute mapped parameter accounting and ownership regressions
+        if: always()
+        run: |
+          set -euo pipefail
+          cargo test --locked -j1 -p frankenengine-engine --lib \
+            baseline_interpreter::arguments::tests:: -- --nocapture --test-threads=1 \
+            2>&1 | tee native-buffer-arguments-tests.log
       - name: Require complete source-bound output in native workflow logs
         if: always()
         run: |
@@ -480,6 +494,7 @@ jobs:
           for log in native-buffer-inputs.log native-buffer-test-list.log native-buffer-tests.log \
             native-buffer-http-test-list.log native-buffer-http-tests.log \
             native-buffer-regexp-source-tests.log native-buffer-regexp-tests.log \
+            native-buffer-arguments-source-tests.log native-buffer-arguments-tests.log \
             native-buffer-diagnostics-test-list.log native-buffer-diagnostics-tests.log \
             native-buffer-timers-test-list.log native-buffer-timers-tests.log \
             native-buffer-timer-resolver-test-list.log native-buffer-timer-resolver-tests.log; do

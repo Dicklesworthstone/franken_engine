@@ -11812,6 +11812,13 @@ fn lower_ir2_to_ir3_with_input_hash(
                 dst: register,
             });
         }
+        // ES2020 9.4.4.6: only sloppy functions with simple parameters
+        // alias their parameter cells. Strict/default/rest/destructured
+        // functions keep the existing unmapped object and register fast path.
+        let mapped_arguments = arguments_register.is_some()
+            && fn_sloppy
+            && fn_rest_param_index.is_none()
+            && !param_names.iter().any(|name| name.starts_with(SYNTHETIC_PARAM_SLOT_PREFIX));
         // bd-9vouw.118: a non-strict, non-arrow function that reads `this`
         // (itself or through an arrow) binds it once here, after the
         // `arguments` marker that must stay first: an undefined or null this
@@ -11991,6 +11998,9 @@ fn lower_ir2_to_ir3_with_input_hash(
             .copied()
             .collect::<BTreeSet<_>>();
         runtime_local_binding_ids.extend(child_capture_id_to_name.keys().copied());
+        if mapped_arguments {
+            runtime_local_binding_ids.extend(param_binding_ids.values().copied());
+        }
         // bd-9vouw.23: every other local that is not short-lived (below) pins
         // a frame register for the whole body. A body with more locals than
         // a frame holds failed at runtime ("register N out of bounds");
@@ -12126,6 +12136,8 @@ fn lower_ir2_to_ir3_with_input_hash(
                     capture_name.clone()
                 } else if let Some(spilled_name) = spilled_local_names.get(binding_id) {
                     spilled_name.clone()
+                } else if mapped_arguments && let Some((name, _)) = param_binding_ids.iter().find(|(_, id)| *id == binding_id) {
+                    runtime_lexical_binding_name(*binding_id, name)
                 } else {
                     let binding = local_lexical_binding_by_id.get(binding_id)?;
                     runtime_lexical_binding_name(*binding_id, &binding.name)
@@ -12171,6 +12183,31 @@ fn lower_ir2_to_ir3_with_input_hash(
                         src,
                     });
                 }
+            }
+        }
+
+        if mapped_arguments {
+            let arguments_register = arguments_register.expect("mapped arguments has an object");
+            let object_reg = alloc_register(&mut fn_reg);
+            let index_reg = alloc_register(&mut fn_reg);
+            let name_reg = alloc_register(&mut fn_reg);
+            let mut mapped_names = BTreeSet::new();
+            // Visit all formals from the right, including formals without an
+            // actual argument. An earlier duplicate must never acquire the
+            // mapping that belongs to that absent last occurrence.
+            for (index, name) in param_names.iter().enumerate().rev() {
+                if !mapped_names.insert(name) { continue; }
+                let binding_id = param_binding_ids[name.as_str()];
+                let cell_name = &runtime_local_id_to_name[&binding_id];
+                ir3.instructions.push(Ir3Instruction::Move { dst: object_reg, src: arguments_register });
+                ir3.instructions.push(Ir3Instruction::LoadInt { dst: index_reg, value: index as i64 });
+                let pool_index = push_constant_optimized(&mut constant_pool, cell_name);
+                ir3.instructions.push(Ir3Instruction::LoadStr { dst: name_reg, pool_index });
+                ir3.instructions.push(Ir3Instruction::HostCall {
+                    capability: CapabilityTag("builtin:MapArgument".to_string()),
+                    args: RegRange { start: object_reg, count: 3 },
+                    dst: arguments_register,
+                });
             }
         }
 
@@ -13605,6 +13642,16 @@ fn lower_ir2_to_ir3_with_input_hash(
                         ir3.instructions.push(Ir3Instruction::PopScope);
                     }
                     if let Some(name) = spilled_name {
+                        let pool_idx = push_constant_optimized(&mut constant_pool, name);
+                        ir3.instructions.push(publish(pool_idx));
+                    } else if mapped_arguments
+                        && !child_capture_id_to_name.contains_key(inner_bid)
+                        && param_binding_ids.values().any(|id| id == inner_bid)
+                        && let Some(name) = runtime_local_id_to_name.get(inner_bid)
+                    {
+                        // A function declaration may replace a sloppy formal.
+                        // Its mapped index must observe that initialization,
+                        // just as it observes a var initializer or assignment.
                         let pool_idx = push_constant_optimized(&mut constant_pool, name);
                         ir3.instructions.push(publish(pool_idx));
                     }

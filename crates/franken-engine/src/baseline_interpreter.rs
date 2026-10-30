@@ -77,6 +77,7 @@ use subtle::ConstantTimeEq;
 use url::{Url, form_urlencoded};
 use zeroize::Zeroizing;
 
+mod arguments;
 mod array_from;
 mod array_generic;
 mod array_reduce;
@@ -15779,6 +15780,11 @@ pub struct InterpreterCore {
     /// `arguments` object staged by call setup for the callee's entry marker
     /// (bd-9vouw.25): (call-stack depth of the callee frame, object, label).
     pending_arguments_object: Option<(usize, Value, Label)>,
+    /// Private [[ParameterMap]] of sloppy simple-parameter arguments objects.
+    /// Indexed properties mirror these cells; aliases never expose accessors.
+    mapped_argument_bindings: BTreeMap<ObjectId, BTreeMap<u32, ScopeBinding>>,
+    /// Weak reverse index: a live parameter alone does not root its arguments.
+    mapped_argument_aliases: BTreeMap<usize, (ObjectId, u32)>,
     /// Out-of-band argument lists of the active synthetic call sites, one
     /// entry per site (empty when its list fits the frame), innermost last
     /// (bd-9vouw.50). Only the last is readable; every entry is a GC root.
@@ -16824,6 +16830,9 @@ impl InterpreterCore {
                 name: name.to_string(),
             });
         }
+        if self.mapped_argument_aliases.contains_key(&ColdBindingCells::key(&binding.state)) {
+            return self.set_mapped_argument_value(binding, Some(value), None);
+        }
         binding.state_mut()?.value = value;
         self.closures.refresh_cell(&binding.state);
         if let Err(error) = self.apply_scope_closure_call_stack_realm_memory_delta(
@@ -17094,6 +17103,9 @@ impl InterpreterCore {
         strict: bool,
     ) -> Result<(), InterpreterError> {
         if let Some(binding) = self.resolve_runtime_name_binding(name) {
+            if self.mapped_argument_aliases.contains_key(&ColdBindingCells::key(&binding.state)) {
+                return self.set_mapped_argument_value(binding, Some(value), Some(label));
+            }
             self.put_resolved_runtime_name_binding(name, binding, value)
         } else if let Some(outcome) = Self::put_read_only_global_value(name, strict) {
             outcome
@@ -17197,6 +17209,9 @@ impl InterpreterCore {
         }
         match reference {
             RuntimeNameReference::Resolved(binding) => {
+                if self.mapped_argument_aliases.contains_key(&ColdBindingCells::key(&binding.state)) {
+                    return self.set_mapped_argument_value(binding, Some(value), Some(label));
+                }
                 self.put_resolved_runtime_name_binding(name, binding, value)
             }
             RuntimeNameReference::RealmGlobal => {
@@ -17274,6 +17289,8 @@ impl InterpreterCore {
             seed_epoch: 0,
             pending_lazy_seeds: Vec::new(),
             pending_arguments_object: None,
+            mapped_argument_bindings: BTreeMap::new(),
+            mapped_argument_aliases: BTreeMap::new(),
             argument_overflow: Vec::new(),
             argument_overflow_bytes: 0,
             execution_seed_reservation_ledger: std::rc::Rc::new(
@@ -37920,6 +37937,9 @@ impl InterpreterCore {
         // only come into existence during execution, and any caller mutation
         // between runs routes through the non-repeat fresh-seed path.
         self.iterators.clear();
+        for object_id in self.mapped_argument_bindings.keys().copied().collect::<Vec<_>>() {
+            self.disconnect_all_mapped_arguments(object_id);
+        }
         self.closures.clear();
         self.closure_method_metadata.clear();
         self.closure_lexical_super_metadata.clear();
@@ -89442,6 +89462,7 @@ impl InterpreterCore {
                 message: "invalid array length accessor".to_string(),
             });
         }
+        let mapped_key = key.as_str().filter(|key| self.mapped_argument_binding(object_id, key).is_some()).map(str::to_string);
         let (get, set) = match object.properties.get_exact(&key) {
             Some(Value::Accessor { get, set }) => (get.clone(), set.clone()),
             _ => (None, None),
@@ -89562,6 +89583,9 @@ impl InterpreterCore {
             });
         }
         self.estimated_memory_bytes = requested_bytes;
+        if let Some(key) = mapped_key {
+            self.disconnect_mapped_argument(object_id, &key);
+        }
         self.gc_write_barrier(object_id);
         Ok(())
     }
@@ -95884,6 +95908,13 @@ impl InterpreterCore {
         }
         self.gc_enter_builtin();
         let outcome = match cap {
+            "builtin:ObjectDefineProperty"
+            | "builtin:ObjectDefineProperties"
+            | "builtin:ReflectDefineProperty"
+                if self.has_mapped_arguments_target(args) =>
+            {
+                self.dispatch_mapped_arguments_definition(cap, args, module)
+            }
             // These already have narrow helpers and can invoke nested guest
             // callbacks. Avoid reserving the broad handler's stack frame at
             // every Reflect reentry; keep GC and telemetry in this wrapper.
@@ -97484,6 +97515,7 @@ impl InterpreterCore {
                     )),
                 }
             }
+            "builtin:MapArgument" => self.map_argument_to_parameter(args),
             "builtin:ClassPrototypeLink" => {
                 // ES2020 14.6.13 ClassDefinitionEvaluation: a derived class's
                 // prototype object inherits from the superclass prototype.
@@ -99073,6 +99105,7 @@ impl InterpreterCore {
                             });
                         }
                         // Actually freeze the object by setting the is_frozen flag
+                        self.disconnect_all_mapped_arguments(obj_id);
                         let obj_index = obj_id.0 as usize;
                         let mut object_found = false;
                         self.mutate_heap(|heap| {
@@ -101117,6 +101150,14 @@ impl InterpreterCore {
                     });
                 };
                 let mut descriptor = self.read_property_descriptor(module, &descriptor_val)?;
+                // A mapped arguments index writes a parameter cell as well
+                // as this property. Admit descriptor provenance before that
+                // write, including when writable:false disconnects the map.
+                let mapped_target = self.has_mapped_arguments_target(args);
+                if mapped_target {
+                    let mutation_label = self.join_arg_range_with_object_mutation_label(args)?;
+                    self.join_object_mutation_label(obj_id, &mutation_label)?;
+                }
                 // ES2020 9.4.2.4 steps 3-5 for an array's `length`:
                 // ToUint32(value), then ToNumber(value), each observable (an
                 // object's valueOf runs twice); a RangeError when they differ
@@ -101140,9 +101181,10 @@ impl InterpreterCore {
                         got: "non-configurable, non-writable or non-extensible target".to_string(),
                     });
                 }
-                let mutation_label = self.join_arg_range_with_object_mutation_label(args)?;
-                self.join_object_mutation_label(obj_id, &mutation_label)?;
-
+                if !mapped_target {
+                    let mutation_label = self.join_arg_range_with_object_mutation_label(args)?;
+                    self.join_object_mutation_label(obj_id, &mutation_label)?;
+                }
                 Ok(obj_val) // Return the original object
             }
             "builtin:ObjectDefineProperties" => {
@@ -101155,14 +101197,21 @@ impl InterpreterCore {
                     });
                 };
                 let props_val = self.arg_or_undefined(args, 1)?;
+                let mapped_target = self.has_mapped_arguments_target(args);
+                if mapped_target {
+                    let mutation_label = self.join_arg_range_with_object_mutation_label(args)?;
+                    self.join_object_mutation_label(obj_id, &mutation_label)?;
+                }
                 self.object_define_properties(
                     module,
                     obj_id,
                     props_val,
                     "Object.defineProperties",
                 )?;
-                let mutation_label = self.join_arg_range_with_object_mutation_label(args)?;
-                self.join_object_mutation_label(obj_id, &mutation_label)?;
+                if !mapped_target {
+                    let mutation_label = self.join_arg_range_with_object_mutation_label(args)?;
+                    self.join_object_mutation_label(obj_id, &mutation_label)?;
+                }
                 Ok(obj_val)
             }
             "builtin:Proxy" => {
@@ -108846,6 +108895,11 @@ impl InterpreterCore {
                     ));
             }
         }
+        for binding in self.mapped_argument_bindings.values().flat_map(|bindings| bindings.values()) {
+            if seen_cells.insert(ColdBindingCells::key(&binding.state)) {
+                total = total.saturating_add(Self::estimate_binding_cell_payload_bytes(&binding.state));
+            }
+        }
         total
     }
 
@@ -110113,6 +110167,7 @@ impl InterpreterCore {
             ))
             .saturating_add(self.register_context_labels_memory_bytes())
             .saturating_add(scope_chain_bytes)
+            .saturating_add(self.mapped_argument_bindings_memory_bytes())
             .saturating_add(self.realm_dynamic_globals_memory_bytes())
             .saturating_add(self.generated_function_realm_globals_memory_bytes())
             .saturating_add(closure_bytes)
@@ -110213,6 +110268,11 @@ impl InterpreterCore {
         previous_payload_bytes: u64,
         cell: &Rc<RefCell<ScopeBindingState>>,
     ) -> Result<u64, InterpreterError> {
+        if !self.mapped_argument_aliases.is_empty()
+            && let Some(&(object_id, index)) = self.mapped_argument_aliases.get(&ColdBindingCells::key(cell))
+        {
+            return self.publish_mapped_argument_cell(object_id, index, previous_payload_bytes, cell);
+        }
         self.apply_memory_component_delta(
             previous_payload_bytes,
             Self::estimate_binding_cell_payload_bytes(cell),
@@ -111593,15 +111653,18 @@ impl InterpreterCore {
             return Ok(());
         }
         self.apply_memory_component_delta(previous_bytes, next_bytes)?;
-        let key = key.clone();
+        let stored_key = key.clone();
         self.mutate_heap(|heap| {
             let attributes_map = &mut heap[heap_index].property_attributes;
             if attributes == PropertyAttributes::DEFAULT {
-                attributes_map.remove(&key);
+                attributes_map.remove(&stored_key);
             } else {
-                attributes_map.insert(key, attributes);
+                attributes_map.insert(stored_key, attributes);
             }
         });
+        if !attributes.writable && let Some(key) = key.as_str() {
+            self.disconnect_mapped_argument(object_id, key);
+        }
         Ok(())
     }
 
@@ -111615,6 +111678,9 @@ impl InterpreterCore {
         key: &RuntimePropertyKey,
         label: &Label,
     ) -> Result<(), InterpreterError> {
+        if let Some(binding) = key.as_str().and_then(|key| self.mapped_argument_binding(object_id, key)) {
+            return self.set_mapped_argument_value(binding, None, Some(label));
+        }
         let heap_index = object_id.0 as usize;
         let Some(current) = self.heap.get(heap_index) else {
             return Err(InterpreterError::ObjectNotFound { id: object_id.0 });
@@ -111934,6 +112000,13 @@ impl InterpreterCore {
             });
         }
 
+        let mapped_accessor_key = if let Some(binding) = key.as_str().and_then(|key| self.mapped_argument_binding(object_id, key)) {
+            if !matches!(value, Value::Accessor { .. }) {
+                return self.set_mapped_argument_value(binding, Some(value), None);
+            }
+            Some(key.as_str().expect("mapped index").to_string())
+        } else { None };
+
         let array_length_assignment = if object.is_array && key.as_str() == Some("length") {
             Some(Self::normalize_array_length_assignment(&value)?)
         } else {
@@ -111994,6 +112067,9 @@ impl InterpreterCore {
             object.properties = projected_properties;
             object.cached_dense_length = projected_cached_dense_length;
         });
+        if let Some(key) = mapped_accessor_key {
+            self.disconnect_mapped_argument(object_id, &key);
+        }
         for deleted_key in &deleted_index_keys {
             self.mark_deleted_for_in_iterators(object_id, &JsString::from(deleted_key.as_str()));
             let deleted_key = RuntimePropertyKey::String(JsString::from(deleted_key.as_str()));
@@ -112035,6 +112111,12 @@ impl InterpreterCore {
                 got: "frozen object".to_string(),
             });
         }
+        let mapped_accessor_key = if let Some(binding) = self.mapped_argument_binding(object_id, &key) {
+            if !matches!(value, Value::Accessor { .. }) {
+                return self.set_mapped_argument_value(binding, Some(value), None);
+            }
+            Some(key.clone())
+        } else { None };
         let array_length_assignment = if object.is_array && key == "length" {
             Some(Self::normalize_array_length_assignment(&value)?)
         } else {
@@ -112093,6 +112175,9 @@ impl InterpreterCore {
             }
         });
         self.estimated_memory_bytes = requested_bytes;
+        if let Some(key) = mapped_accessor_key {
+            self.disconnect_mapped_argument(object_id, &key);
+        }
         for deleted_key in &deleted_index_keys {
             self.mark_deleted_for_in_iterators(object_id, &JsString::from(deleted_key.as_str()));
             let deleted_key = RuntimePropertyKey::String(JsString::from(deleted_key.as_str()));
@@ -112176,6 +112261,7 @@ impl InterpreterCore {
         });
         if removed.is_some() {
             self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(removed_bytes);
+            self.disconnect_mapped_argument(object_id, key);
             let removed_key = RuntimePropertyKey::String(JsString::from(key));
             self.set_own_runtime_property_label(object_id, &removed_key, &Label::Public)?;
             self.set_own_property_attributes(object_id, &removed_key, PropertyAttributes::DEFAULT)?;
@@ -112283,6 +112369,9 @@ impl InterpreterCore {
         let next_property_bytes =
             Self::estimate_ordered_property_map_bytes(&self.heap[heap_index].properties);
         self.apply_memory_component_delta(previous_property_bytes, next_property_bytes)?;
+        if let Some(key) = key.as_str() {
+            self.disconnect_mapped_argument(object_id, key);
+        }
         let removed_key = RuntimePropertyKey::String(key.clone());
         self.set_own_runtime_property_label(object_id, &removed_key, &Label::Public)?;
         self.set_own_property_attributes(object_id, &removed_key, PropertyAttributes::DEFAULT)?;
@@ -114958,8 +115047,8 @@ impl InterpreterCore {
     /// non-enumerable `length`, a non-enumerable own @@iterator that is
     /// %Array.prototype.values%, so `[...arguments]`, `Array.from(arguments)`
     /// and `for (const a of arguments)` iterate it, and its `callee`
-    /// (bd-9vouw.272). No-claim: its indices are not mapped to the
-    /// parameters (bd-9vouw.281).
+    /// (bd-9vouw.272). Sloppy, simple-parameter functions attach their
+    /// initialized parameter cells at function entry (bd-9vouw.281).
     fn alloc_arguments_object(
         &mut self,
         values: &[Value],

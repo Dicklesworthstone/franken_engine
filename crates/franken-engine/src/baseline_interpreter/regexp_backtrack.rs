@@ -2008,6 +2008,7 @@ fn budget_error(error: BacktrackError) -> InterpreterError {
 #[cfg(test)]
 mod tests {
     use super::super::regexp_input::RegExpInput;
+    use super::super::{InterpreterConfig, InterpreterCore};
     use super::{
         BacktrackError, BacktrackRegExp, CaptureRetention, CompiledRegExp, GlobalMatchError,
         MAX_GLOBAL_MATCH_RETAINED_BYTES, MAX_GROUP_NESTING, PreparedInput, RetentionBudget,
@@ -2041,9 +2042,18 @@ mod tests {
         let spans = regexp
             .exec_at(&PreparedInput::new(input.text()), 0, flags.contains('y'))
             .expect("within budget")?;
+        let core = InterpreterCore::new(
+            InterpreterConfig::quickjs_defaults(),
+            "regexp-backtrack-units",
+        );
         let groups = spans
             .iter()
-            .map(|span| span.map(|(from, to)| input.slice(from, to)))
+            .map(|span| {
+                span.map(|(from, to)| {
+                    core.decode_regexp_text(&input, &input.text()[from..to])
+                        .expect("capture decoding within budget")
+                })
+            })
             .collect();
         Some((
             spans[0].map_or(0, |(from, _)| input.unit_index(from)),

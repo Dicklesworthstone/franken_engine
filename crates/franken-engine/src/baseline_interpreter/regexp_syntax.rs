@@ -2117,6 +2117,7 @@ fn valid_property_escape(body: &str, negated: bool, unicode_sets: bool) -> bool 
 #[cfg(test)]
 mod tests {
     use super::super::regexp_input::RegExpInput;
+    use super::super::{InterpreterConfig, InterpreterCore};
     use super::{
         GENERAL_CATEGORY_VALUES, LONE_PROPERTY_NAMES, SCRIPT_VALUES, STRING_PROPERTY_NAMES,
         group_modifier_error, has_nested_quantifier, js_pattern_to_rust, unicode_mode_syntax_error,
@@ -2915,12 +2916,16 @@ mod tests {
         let input = RegExpInput::new(&text, false);
         let regex = rust_with(pattern, "");
         let captures = regex.captures(input.text()).expect("two UTF-16 units");
+        let core =
+            InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "regexp-syntax-units");
         assert_eq!(
-            input.decode(captures.name("𝒜").expect("Unicode name").as_str()),
+            core.decode_regexp_text(&input, captures.name("𝒜").expect("Unicode name").as_str())
+                .expect("capture decoding within budget"),
             high
         );
         assert_eq!(
-            input.decode(captures.name("tail").expect("low unit").as_str()),
+            core.decode_regexp_text(&input, captures.name("tail").expect("low unit").as_str())
+                .expect("capture decoding within budget"),
             JsString::from_code_units(&[0xDE00])
         );
     }

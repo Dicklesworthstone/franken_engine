@@ -15,7 +15,9 @@ use std::borrow::Cow;
 use std::cell::Cell;
 use std::rc::Rc;
 
-use super::{Captures, InterpreterCore, InterpreterError, JsString};
+use super::{
+    Captures, InterpreterCore, InterpreterError, JsString, MEMORY_ESTIMATE_STRING_BASE_BYTES,
+};
 
 const SURROGATE_BASE: u32 = 0xF0000;
 
@@ -43,6 +45,17 @@ pub(super) fn encode_code_unit(unit: u16) -> char {
         value
     })
     .expect("a UTF-16 unit maps to a valid scalar")
+}
+
+fn decode_code_unit(character: char) -> u16 {
+    let value = u32::from(character);
+    if (SURROGATE_BASE..SURROGATE_BASE + 0x800).contains(&value) {
+        (value - SURROGATE_BASE + 0xD800) as u16
+    } else {
+        // Non-Unicode matching text contains only BMP scalars and the
+        // encoded surrogate interval.
+        u16::try_from(value).expect("encoded RegExp code unit")
+    }
 }
 
 pub(super) struct RegExpInput<'a> {
@@ -100,30 +113,6 @@ impl<'a> RegExpInput<'a> {
             Cow::Borrowed(_) => 0,
             Cow::Owned(text) => text.capacity() as u64,
         }
-    }
-
-    pub(super) fn decode(&self, text: &str) -> JsString {
-        if self.full_unicode || !text.bytes().any(|byte| byte >= 0xF0) {
-            return JsString::from(text);
-        }
-        let units: Vec<u16> = text
-            .chars()
-            .map(|character| {
-                let value = u32::from(character);
-                if (SURROGATE_BASE..SURROGATE_BASE + 0x800).contains(&value) {
-                    (value - SURROGATE_BASE + 0xD800) as u16
-                } else {
-                    // Non-Unicode matching text contains only BMP scalars
-                    // and the encoded surrogate interval.
-                    u16::try_from(value).expect("encoded RegExp code unit")
-                }
-            })
-            .collect();
-        JsString::from_code_units(&units)
-    }
-
-    pub(super) fn slice(&self, from: usize, to: usize) -> JsString {
-        self.decode(&self.text[from..to])
     }
 
     pub(super) fn unit_index(&self, byte: usize) -> usize {
@@ -239,6 +228,55 @@ impl RegExpOutput {
 }
 
 impl InterpreterCore {
+    /// Decode matcher units only after admitting their synchronous conversion
+    /// peak. The input/output carrier reservations are still live here, and a
+    /// single encoded surrogate makes the entire text need a UTF-16 scratch
+    /// vector. Ordinary borrowed text keeps its existing direct Arc path.
+    pub(super) fn decode_regexp_text(
+        &self,
+        input: &RegExpInput<'_>,
+        text: &str,
+    ) -> Result<JsString, InterpreterError> {
+        if input.full_unicode || !text.bytes().any(|byte| byte >= 0xF0) {
+            return Ok(JsString::from(text));
+        }
+        let unit_count = text.chars().count();
+        let unit_bytes = (unit_count as u64).saturating_mul(2);
+        let mut projection_bytes = 0u64;
+        let mut exact_units = false;
+        for decoded in char::decode_utf16(text.chars().map(decode_code_unit)) {
+            let character = decoded.unwrap_or_else(|_| {
+                exact_units = true;
+                char::REPLACEMENT_CHARACTER
+            });
+            projection_bytes = projection_bytes.saturating_add(character.len_utf8() as u64);
+        }
+        // The canonical constructor builds a growable UTF-8 String before
+        // its Arc. Twice the projection covers String capacity growth; the
+        // Arc allowance also covers the old buffer during reallocation.
+        // Include the exact-unit Arc conservatively even though it is made
+        // after the UTF-8 scratch has gone away. No guest code runs during
+        // this conversion, so the preflight needs no persistent ledger owner.
+        let conversion_bytes = projection_bytes
+            .saturating_mul(2)
+            .max(8)
+            .saturating_add(MEMORY_ESTIMATE_STRING_BASE_BYTES)
+            .saturating_add(projection_bytes)
+            .saturating_add(if exact_units {
+                MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_add(unit_bytes)
+            } else {
+                0
+            });
+        self.check_temporary_memory_budget(unit_bytes.saturating_add(conversion_bytes))?;
+        let mut units = Vec::with_capacity(unit_count);
+        let actual_unit_bytes = (units.capacity() as u64).saturating_mul(2);
+        if actual_unit_bytes != unit_bytes {
+            self.check_temporary_memory_budget(actual_unit_bytes.saturating_add(conversion_bytes))?;
+        }
+        units.extend(text.chars().map(decode_code_unit));
+        Ok(JsString::from_code_units(&units))
+    }
+
     fn reserve_regexp_temporary(
         &self,
         bytes: u64,
@@ -458,12 +496,56 @@ mod tests {
     }
 
     #[test]
+    fn encoded_decode_peak_is_admitted_while_input_and_output_remain_live() {
+        let mut core = core();
+        let before = core.estimated_memory_bytes();
+        let subject = JsString::from_code_units(&[b'a' as u16, 0xD83D, 0xDE00, 0xD800]);
+        let input = core.prepare_regexp_input(&subject, false).unwrap();
+        let mut output = core
+            .prepare_regexp_output(input.text().len(), false)
+            .unwrap();
+        core.append_regexp_output(&mut output, input.text())
+            .unwrap();
+        let carriers = core.estimated_memory_bytes();
+        let reservations = core.regexp_temporary_bytes.get();
+
+        // Eight bytes admit the four-unit scratch alone, but not its live
+        // UTF-8 conversion and exact-unit backing. Both existing carriers
+        // must stay charged while the result is materialized.
+        core.config.max_total_memory_bytes = carriers + 8;
+        assert!(matches!(
+            core.decode_regexp_text(&input, output.text()),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(output.text(), input.text());
+        assert_eq!(core.estimated_memory_bytes(), carriers);
+        assert_eq!(core.regexp_temporary_bytes.get(), reservations);
+
+        // Ordinary text still uses the preexisting direct Arc path, even
+        // when its surrounding input required a surrogate carrier.
+        assert_eq!(core.decode_regexp_text(&input, "a").unwrap(), "a");
+        core.config.max_total_memory_bytes = u64::MAX;
+        assert_eq!(
+            core.decode_regexp_text(&input, output.text()).unwrap(),
+            subject
+        );
+        assert_eq!(core.regexp_temporary_bytes.get(), reservations);
+        drop(output);
+        drop(input);
+        assert_eq!(core.estimated_memory_bytes(), before);
+        assert_eq!(core.regexp_temporary_bytes.get(), 0);
+    }
+
+    #[test]
     fn all_units_round_trip_without_private_use_collisions() {
         let units: Vec<u16> = (0..=u16::MAX).collect();
         let input = JsString::from_code_units(&units);
         let encoded = RegExpInput::new(&input, false);
         assert_eq!(encoded.text().chars().count(), units.len());
-        assert_eq!(encoded.decode(encoded.text()), input);
+        assert_eq!(
+            core().decode_regexp_text(&encoded, encoded.text()).unwrap(),
+            input
+        );
         assert_eq!(encoded.unit_index(encoded.text().len()), units.len());
     }
 
@@ -477,7 +559,12 @@ mod tests {
             assert_eq!(encoded.unit_index(encoded.byte_index(index)), index);
         }
         assert_eq!(
-            encoded.slice(encoded.byte_index(2), encoded.byte_index(3)),
+            core()
+                .decode_regexp_text(
+                    &encoded,
+                    &encoded.text()[encoded.byte_index(2)..encoded.byte_index(3)],
+                )
+                .unwrap(),
             JsString::from_code_units(&[0xDE00])
         );
         for text in ["", "ascii", "é日本\u{E000}"] {
@@ -503,7 +590,9 @@ mod tests {
         assert_eq!(output.utf8_len, 4);
         let subject = JsString::from("");
         assert_eq!(
-            RegExpInput::new(&subject, false).decode(output.text()),
+            core()
+                .decode_regexp_text(&RegExpInput::new(&subject, false), output.text())
+                .unwrap(),
             JsString::from("😀")
         );
     }

@@ -64975,15 +64975,22 @@ impl InterpreterCore {
                 })
                 .saturating_add(spans.len().saturating_mul(std::mem::size_of::<Value>()));
             self.regexp_charge_retained(&mut budget, piece_bytes)?;
-            pieces.push(Value::Str(prepared.slice(last, start)));
+            pieces.push(Value::Str(
+                self.decode_regexp_text(&prepared, &input[last..start])?,
+            ));
             for group in &spans[1..] {
-                pieces.push(group.map_or(Value::Undefined, |(from, to)| {
-                    Value::Str(prepared.slice(from, to))
-                }));
+                pieces.push(match group {
+                    Some((from, to)) => {
+                        Value::Str(self.decode_regexp_text(&prepared, &input[*from..*to])?)
+                    }
+                    None => Value::Undefined,
+                });
             }
             last = end;
         }
-        pieces.push(Value::Str(prepared.slice(last, input.len())));
+        pieces.push(Value::Str(
+            self.decode_regexp_text(&prepared, &input[last..])?,
+        ));
         Ok(pieces)
     }
 
@@ -66048,7 +66055,7 @@ impl InterpreterCore {
                 self.set_object_property(
                     result_id,
                     count.to_string(),
-                    Value::Str(prepared.slice(from, to)),
+                    Value::Str(self.decode_regexp_text(&prepared, &input[from..to])?),
                 )?;
                 count = count.saturating_add(1);
             }
@@ -66449,12 +66456,13 @@ impl InterpreterCore {
             let matched = &input[start..end];
             if let Some(subject_value) = &subject_value {
                 let mut arguments = Vec::with_capacity(groups.len() + 3);
-                arguments.push(Value::Str(prepared.decode(matched)));
-                arguments.extend(groups.iter().map(|group| {
-                    group
-                        .as_ref()
-                        .map_or(Value::Undefined, |text| Value::Str(prepared.decode(text)))
-                }));
+                arguments.push(Value::Str(self.decode_regexp_text(&prepared, matched)?));
+                for group in &groups {
+                    arguments.push(match group {
+                        Some(text) => Value::Str(self.decode_regexp_text(&prepared, text)?),
+                        None => Value::Undefined,
+                    });
+                }
                 let (cursor_byte, cursor_units) = position_cursor;
                 let offset = cursor_units + prepared.unit_length(&input[cursor_byte..start]);
                 position_cursor = (start, offset);
@@ -66467,10 +66475,9 @@ impl InterpreterCore {
                     // (bd-9vouw.365): `None` alone links Object.prototype.
                     let named = self.alloc_object_with_prototype(None)?;
                     self.store_prototype_link(named, None);
-                    for (name, group) in group_names.iter().zip(&groups) {
+                    for (name, value) in group_names.iter().zip(&arguments[1..1 + groups.len()]) {
                         if let Some(name) = name {
-                            let value = group.as_ref().map_or(Value::Undefined, |text| Value::Str(prepared.decode(text)));
-                            self.set_object_property(named, name.clone(), value)?;
+                            self.set_object_property(named, name.clone(), value.clone())?;
                         }
                     }
                     arguments.push(Value::Object(named));
@@ -66512,8 +66519,9 @@ impl InterpreterCore {
             last = end;
         }
         self.append_regexp_output(&mut output, &input[last..])?;
+        let result = self.decode_regexp_text(&prepared, output.text())?;
         self.replace_pending_hostcall_result_label(Some(label))?;
-        Ok(Value::Str(prepared.decode(output.text())))
+        Ok(Value::Str(result))
     }
 
     /// ES2020 21.1.3.17.1 GetSubstitution: `$$`, `$&`, `` $` ``, `$'`, `$n`,
@@ -84783,12 +84791,17 @@ impl InterpreterCore {
             return Ok(None);
         };
         self.record_legacy_regexp_input_match(subject, &input, &spans);
-        let group_value = |span: Option<(usize, usize)>| {
-            span.map_or(Value::Undefined, |(from, to)| {
-                Value::Str(input.slice(from, to))
+        let values: Vec<Value> = spans
+            .iter()
+            .map(|span| {
+                Ok(match span {
+                    Some((from, to)) => {
+                        Value::Str(self.decode_regexp_text(&input, &input.text()[*from..*to])?)
+                    }
+                    None => Value::Undefined,
+                })
             })
-        };
-        let values: Vec<Value> = spans.iter().map(|span| group_value(*span)).collect();
+            .collect::<Result<_, InterpreterError>>()?;
         let result = self.alloc_array_from_values(&values)?;
         let utf16_offset = |offset: usize| input.unit_index(offset);
         let index = utf16_offset(whole_start);
@@ -84804,7 +84817,7 @@ impl InterpreterCore {
             .group_names()
             .into_iter()
             .enumerate()
-            .filter_map(|(slot, name)| name.map(|name| (name, group_value(spans[slot]))))
+            .filter_map(|(slot, name)| name.map(|name| (name, values[slot].clone())))
             .collect();
         // A match's `groups` is OrdinaryObjectCreate(null) (ES2020 21.2.5.2.2
         // step 25): no inherited members, and a group named `__proto__` is

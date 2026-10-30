@@ -379,6 +379,8 @@ pub enum NativeBuiltinModule {    Buffer,
     Readline,
     ReadlinePromises,
     DiagnosticsChannel,
+    Http,
+    Https,
 }
 
 impl NativeBuiltinModule {
@@ -390,6 +392,8 @@ impl NativeBuiltinModule {
             "fs" | "node:fs" => Some(Self::Fs),
             "fs/promises" | "node:fs/promises" => Some(Self::FsPromises),
             "module" | "node:module" => Some(Self::Module),
+            "http" | "node:http" => Some(Self::Http),
+            "https" | "node:https" => Some(Self::Https),
             "events" | "node:events" => Some(Self::Events),
             "os" | "node:os" => Some(Self::Os),
             "querystring" | "node:querystring" => Some(Self::Querystring),
@@ -424,6 +428,8 @@ impl NativeBuiltinModule {
             Self::Fs => "node:fs",
             Self::FsPromises => "node:fs/promises",
             Self::Module => "node:module",
+            Self::Http => "node:http",
+            Self::Https => "node:https",
             Self::Events => "node:events",
             Self::Os => "node:os",
             Self::Querystring => "node:querystring",
@@ -2889,6 +2895,8 @@ mod tests {
             "buffer",
             "crypto",
             "zlib",
+            "http",
+            "https",
             "fs",
             "fs/promises",
             "module",
@@ -2942,10 +2950,14 @@ mod tests {
                     .contains(&RuntimeCapability::RandomRead),
                 "loading {name} must not require or grant entropy authority"
             );
-            for effect in [RuntimeCapability::FsRead, RuntimeCapability::FsWrite] {
+            for effect in [
+                RuntimeCapability::FsRead,
+                RuntimeCapability::FsWrite,
+                RuntimeCapability::NetworkEgress,
+            ] {
                 assert!(
                     !record.required_capabilities.contains(&effect),
-                    "loading {name} must not require or grant filesystem authority"
+                    "loading {name} must not require or grant {effect:?} authority"
                 );
             }
             assert_eq!(
@@ -2993,6 +3005,8 @@ mod tests {
             NativeBuiltinModule::Buffer,
             NativeBuiltinModule::Crypto,
             NativeBuiltinModule::Zlib,
+            NativeBuiltinModule::Http,
+            NativeBuiltinModule::Https,
             NativeBuiltinModule::Fs,
             NativeBuiltinModule::FsPromises,
             NativeBuiltinModule::StreamConsumers,

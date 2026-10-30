@@ -94,6 +94,8 @@ impl OpaqueResolver {
             NativeBuiltinModule::Buffer,
             NativeBuiltinModule::Crypto,
             NativeBuiltinModule::Zlib,
+            NativeBuiltinModule::Http,
+            NativeBuiltinModule::Https,
             NativeBuiltinModule::Module,
             NativeBuiltinModule::Events,
             NativeBuiltinModule::Fs,
@@ -1462,6 +1464,465 @@ console.log(require.resolve('querystring'), require.resolve('node:querystring'))
             11,
             "aliases, cached objects and require.resolve must all authorize their route"
         );
+    }
+}
+
+#[test]
+fn delivered_http_modules_share_objects_and_preserve_mutable_exports_without_network_authority() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![
+                ("entry.cjs", definition(ModuleSyntax::CommonJs, r#"
+const http = require('http');
+const https = require('https');
+const child = require('./child.cjs');
+console.log(http === child.http, https === child.https, http !== https);
+console.log(http === require('node:http'), https === require('node:https'));
+console.log(http.createServer.name, http.createServer.length, http.get.length, http.request.length);
+console.log(https.get.name, https.get.length, https.request.name, https.request.length);
+const Agent = http.Agent;
+const SecureAgent = https.Agent;
+const plain = new Agent({ keepAlive: true });
+const secure = new SecureAgent();
+console.log(plain instanceof Agent, plain.keepAlive, plain.protocol, plain.defaultPort);
+console.log(secure instanceof SecureAgent, secure instanceof Agent, secure.protocol, secure.defaultPort);
+console.log(Object.getOwnPropertyDescriptor(Agent, 'prototype').writable,
+    Object.getOwnPropertyDescriptor(http.request, 'prototype').configurable);
+console.log(http.STATUS_CODES[200], http.METHODS.includes('POST'));
+http.request = function () { return 'changed'; };
+https.get = function () { return 'secure-changed'; };
+console.log(http.request(), child.http.request(), child.https.get());
+console.log(typeof http.createServer, typeof https.request);
+"#).with_dependency(ModuleDependency::new("./child.cjs", ImportStyle::Require))),
+                ("child.cjs", definition(ModuleSyntax::CommonJs,
+                    "function load(name) { return require(name); } exports.http = load('node:http'); exports.https = load('node:https');")),
+            ])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let policy = Arc::new(RecordingPolicy {
+            allow_native_builtins: true,
+            ..RecordingPolicy::default()
+        });
+        let installed = ExecutionModuleResolver::new(&source.module.record.id, resolver, policy);
+        let result = orchestrator(lane, ModuleSyntax::CommonJs)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("module values and local Agent construction need no network grant");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true true",
+                "true true",
+                "createServer 2 3 3",
+                "get 3 request 0",
+                "true true http: 80",
+                "true true https: 443",
+                "true false",
+                "OK true",
+                "changed changed secure-changed",
+                "function function",
+            ]
+        );
+        assert!(result.host_effect_transcript.is_empty());
+    }
+}
+
+#[test]
+fn delivered_http_esm_namespaces_share_commonjs_exports_and_have_distinct_protocols() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![
+                ("entry.mjs", definition(ModuleSyntax::EsModule, r#"
+import http, { request, Agent, STATUS_CODES } from 'node:http';
+import https, { request as secureRequest, Agent as SecureAgent } from 'https';
+import child from './child.cjs';
+console.log(http === child.http, https === child.https);
+console.log(request === http.request, secureRequest === https.request, request !== secureRequest);
+console.log(Agent === http.Agent, SecureAgent === https.Agent, STATUS_CODES === http.STATUS_CODES);
+import('http').then(namespace => console.log(namespace.default === http, namespace.request === request));
+"#).with_dependency(ModuleDependency::new("./child.cjs", ImportStyle::Import))),
+                ("child.cjs", definition(ModuleSyntax::CommonJs,
+                    "exports.http = require('http'); exports.https = require('node:https');")),
+            ])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let result = orchestrator(lane, ModuleSyntax::EsModule)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("static and dynamic imports use the same authenticated providers");
+        assert_eq!(
+            lines(&result),
+            ["true true", "true true true", "true true true", "true true"]
+        );
+        assert!(result.host_effect_transcript.is_empty());
+    }
+}
+
+#[test]
+fn delivered_http_function_values_cannot_acquire_network_authority() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for (name, invocation) in [
+            ("http", "api.createServer(() => {});"),
+            ("http", "const get = api.get; get('http://127.0.0.1:9/');"),
+            ("http", "api.request.call(null, 'http://127.0.0.1:9/');"),
+            ("https", "api.get.apply(null, ['https://127.0.0.1:9/']);"),
+            (
+                "https",
+                "const request = api.request.bind(null); request('https://127.0.0.1:9/');",
+            ),
+        ] {
+            let resolver = Arc::new(
+                OpaqueResolver::new(vec![("entry.cjs", definition(ModuleSyntax::CommonJs,
+                    &format!("const load = require; const api = load('{name}'); console.log('loaded'); {invocation}")))])
+                    .with_native_builtins(),
+            );
+            let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+            let installed = ExecutionModuleResolver::new(
+                &source.module.record.id,
+                resolver,
+                Arc::new(AllowAllPolicy),
+            );
+            let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
+            let error = engine
+                .execute_resolved_entry_with_resolver(&package(), &source, installed)
+                .expect_err(
+                    "loading a module never grants authority to invoke its network methods",
+                );
+            assert!(
+                error.to_string().contains("capability denied"),
+                "{name} {invocation}: {error}"
+            );
+            assert_eq!(
+                engine
+                    .last_failed_console_output()
+                    .iter()
+                    .map(|entry| entry.message.as_str())
+                    .collect::<Vec<_>>(),
+                ["loaded"]
+            );
+        }
+    }
+}
+
+#[test]
+fn delivered_http_protocol_mismatches_throw_before_any_provider_effect() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![(
+                "entry.cjs",
+                definition(
+                    ModuleSyntax::CommonJs,
+                    r#"
+const load = require;
+const http = load('http');
+const https = load('https');
+for (const operation of [
+    () => http.request('https://127.0.0.1:9/'),
+    () => https.request('http://127.0.0.1:9/'),
+    () => http.request({ protocol: 'https:', host: '127.0.0.1', port: 9 }),
+    () => https.request({ protocol: 'http:', host: '127.0.0.1', port: 9 }),
+    () => http.request('http://127.0.0.1:9/', { protocol: 'https:' }),
+    () => https.request('https://127.0.0.1:9/', { protocol: 'http:' })
+]) {
+    try { operation(); } catch (error) {
+        console.log(error instanceof TypeError, error.code);
+    }
+}
+"#,
+                ),
+            )])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let mut execution = package();
+        execution.capabilities.push("network_egress".into());
+        let result = orchestrator(lane, ModuleSyntax::CommonJs)
+            .execute_resolved_entry_with_resolver(&execution, &source, installed)
+            .expect("protocol selection remains specific to the imported provider");
+        assert_eq!(lines(&result), ["true ERR_INVALID_PROTOCOL"; 6]);
+        assert!(result.host_effect_transcript.is_empty());
+    }
+}
+
+#[test]
+fn delivered_http_request_values_send_public_post_to_real_socket() {
+    use std::io::{Read, Write};
+    use std::time::{Duration, Instant};
+
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for invocation in [
+            "request(url, options, onResponse)",
+            "http.request(url, options, onResponse)",
+            "request.call(null, url, options, onResponse)",
+            "request.apply(null, [url, options, onResponse])",
+            "request.bind(null)(url, options, onResponse)",
+            "new request(url, options, onResponse)",
+            "Reflect.construct(request, [url, options, onResponse])",
+        ] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("public sink");
+            listener.set_nonblocking(true).expect("bounded accept");
+            let address = listener.local_addr().expect("sink address");
+            let server = std::thread::spawn(move || {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error)
+                            if error.kind() == std::io::ErrorKind::WouldBlock
+                                && Instant::now() < deadline =>
+                        {
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(error) => {
+                            panic!("native module request did not reach the socket: {error}")
+                        }
+                    }
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .expect("read bound");
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(5)))
+                    .expect("write bound");
+                let mut bytes = Vec::new();
+                (&mut stream)
+                    .take(65536)
+                    .read_to_end(&mut bytes)
+                    .expect("request bytes");
+                stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                    .expect("response bytes");
+                bytes
+            });
+            let root = tempfile::tempdir().expect("provider root");
+            let transcript = Arc::new(InMemoryHostIoTranscript::recording());
+            let resolver = Arc::new(
+                OpaqueResolver::new(vec![(
+                    "entry.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        &format!(
+                            r#"
+const http = require('http');
+const request = http.request;
+const url = 'http://{address}/native-module';
+const options = {{ method: 'POST' }};
+const onResponse = response => {{
+    console.log(response.statusCode);
+    response.setEncoding('utf8');
+    let body = '';
+    response.on('data', chunk => {{ body += chunk; }});
+    response.on('end', () => console.log(body));
+}};
+const outgoing = {invocation};
+outgoing.on('error', error => console.log(error.code));
+outgoing.write('Hello, ');
+outgoing.end('world!');
+"#
+                        ),
+                    ),
+                )])
+                .with_native_builtins(),
+            );
+            let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+            let installed = ExecutionModuleResolver::new(
+                &source.module.record.id,
+                resolver,
+                Arc::new(AllowAllPolicy),
+            );
+            let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
+            engine.set_host_io(
+                Arc::new(SandboxedHostIo::with_root(root.path()).expect("real provider")),
+                Some(transcript.clone()),
+            );
+            let mut execution = package();
+            execution.capabilities.push("network_egress".into());
+            let result = engine
+                .execute_resolved_entry_with_resolver(&execution, &source, installed)
+                .expect("public bytes traverse the native module and the real host I/O seam");
+            let bytes = server.join().expect("bounded public sink");
+            assert!(bytes.starts_with(b"POST /native-module HTTP/1.1\r\n"));
+            assert!(bytes.ends_with(b"\r\n\r\nHello, world!"));
+            assert_eq!(lines(&result), ["200", "ok"]);
+            let entries = transcript.recorded_entries();
+            assert_eq!(entries.len(), 1);
+            assert!(entries[0].1.is_ok());
+            assert_eq!(result.host_effect_transcript.len(), 1);
+        }
+    }
+}
+
+#[test]
+fn delivered_http_request_values_preserve_ifc_denial_and_exact_evidence() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for (name, expected_tls) in [("http", false), ("https", true)] {
+            for (setup, body, expected_body, invocation) in [
+                (
+                    "const request = http.request;",
+                    "privateBytes",
+                    "classified",
+                    "request(options)",
+                ),
+                (
+                    "http.privateState = privateBytes; const request = load(moduleName).request;",
+                    "'public'",
+                    "public",
+                    "request(options)",
+                ),
+                (
+                    "http.privateState = privateBytes;",
+                    "'public'",
+                    "public",
+                    "load(moduleName).request(options)",
+                ),
+                (
+                    "http.privateState = privateBytes; const request = load(moduleName).request;",
+                    "'public'",
+                    "public",
+                    "request.call(null, options)",
+                ),
+                (
+                    "http.privateState = privateBytes; const request = load(moduleName).request;",
+                    "'public'",
+                    "public",
+                    "request.apply(null, [options])",
+                ),
+                (
+                    "http.privateState = privateBytes; const request = load(moduleName).request;",
+                    "'public'",
+                    "public",
+                    "request.bind(null)(options)",
+                ),
+                (
+                    "http.privateState = privateBytes; const request = load(moduleName).request;",
+                    "'public'",
+                    "public",
+                    "new request(options)",
+                ),
+                (
+                    "http.privateState = privateBytes; const request = load(moduleName).request;",
+                    "'public'",
+                    "public",
+                    "Reflect.construct(request, [options])",
+                ),
+                (
+                    "const request = load('./reexport.cjs').request;",
+                    "'public'",
+                    "public",
+                    "request(options)",
+                ),
+                (
+                    "const request = load('./reexport.cjs').request;",
+                    "'public'",
+                    "public",
+                    "request.bind(null)(options)",
+                ),
+            ] {
+                let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("egress sentinel");
+                listener
+                    .set_nonblocking(true)
+                    .expect("nonblocking sentinel");
+                let address = listener.local_addr().expect("sentinel address");
+                let root = tempfile::tempdir().expect("provider root");
+                std::fs::write(root.path().join("private.txt"), "classified")
+                    .expect("private input");
+                let transcript = Arc::new(InMemoryHostIoTranscript::recording());
+                let resolver = Arc::new(
+                    OpaqueResolver::new(vec![
+                        (
+                            "entry.cjs",
+                            definition(
+                                ModuleSyntax::CommonJs,
+                                &format!(
+                                    r#"
+const load = require;
+const moduleName = '{name}';
+const http = load(moduleName);
+const fs = load('fs');
+const privateBytes = fs.readFileSync('private.txt', 'utf8');
+{setup}
+const options = {{ host: '127.0.0.1', port: {}, path: '/refused', method: 'POST' }};
+const outgoing = {invocation};
+outgoing.on('error', error => console.log(error.code));
+outgoing.end({body});
+outgoing.end();
+"#,
+                                    address.port()
+                                ),
+                            )
+                            .with_dependency(ModuleDependency::new(
+                                "./reexport.cjs",
+                                ImportStyle::Require,
+                            )),
+                        ),
+                        (
+                            "reexport.cjs",
+                            definition(
+                                ModuleSyntax::CommonJs,
+                                &format!("module.exports = require('{name}');"),
+                            ),
+                        ),
+                    ])
+                    .with_native_builtins(),
+                );
+                let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+                let installed = ExecutionModuleResolver::new(
+                    &source.module.record.id,
+                    resolver,
+                    Arc::new(AllowAllPolicy),
+                );
+                let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
+                engine.set_host_io(
+                    Arc::new(SandboxedHostIo::with_root(root.path()).expect("real provider")),
+                    Some(transcript.clone()),
+                );
+                let mut execution = package();
+                execution
+                    .capabilities
+                    .extend(["network_egress".into(), "fs_read".into()]);
+                let result = engine
+                    .execute_resolved_entry_with_resolver(&execution, &source, installed)
+                    .expect(
+                        "classified bytes, cached mutations and source modules retain their labels",
+                    );
+                assert_eq!(lines(&result), ["ERR_NETWORK"]);
+                assert!(matches!(listener.accept(), Err(error)
+            if error.kind() == std::io::ErrorKind::WouldBlock));
+                let entries = transcript.recorded_entries();
+                assert_eq!(
+                    entries.len(),
+                    2,
+                    "one input read and one one-shot network denial"
+                );
+                let (
+                    HostIoRequest::NetworkRequest {
+                        endpoint,
+                        payload,
+                        use_tls,
+                        ..
+                    },
+                    outcome,
+                ) = &entries[1]
+                else {
+                    panic!("expected exact typed network denial");
+                };
+                assert_eq!(endpoint, &address.to_string());
+                assert_eq!(*use_tls, expected_tls);
+                assert!(payload.ends_with(format!("\r\n\r\n{expected_body}").as_bytes()));
+                assert!(matches!(outcome, Err(HostIoError::Denied { .. })));
+                assert_eq!(result.host_effect_transcript.len(), 2);
+            }
+        }
     }
 }
 

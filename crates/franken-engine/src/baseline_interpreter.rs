@@ -3898,6 +3898,10 @@ pub enum BuiltinFunctionKind {
     /// `node:module.createRequire` for the executing captured origin. The
     /// returned require retains the opaque module id. Append only.
     ModuleCreateRequire,
+    /// First-class HTTP module exports retain their exact hostcall identity.
+    /// Node exposes ordinary constructible functions here. Append only:
+    /// builtin ordinals participate in deterministic register hashing.
+    NativeHttpFunction,
 }
 
 /// Annex B B.2.2.2-14: each String HTML method's tag and attribute name.
@@ -3935,6 +3939,7 @@ impl BuiltinFunctionKind {
                 | Self::PromiseConstructor
                 | Self::StandardConstructor
                 | Self::IntlConstructor
+                | Self::NativeHttpFunction
                 // Whether a callable proxy constructs depends on its target;
                 // `construct_callable_proxy` checks that.
                 | Self::CallableProxy
@@ -4066,6 +4071,15 @@ impl BuiltinFunction {
     fn static_hostcall(tag: &'static str) -> Self {
         Self {
             kind: BuiltinFunctionKind::StaticHostcall,
+            module_specifier: BuiltinModuleSpecifier::from_nonempty(tag),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn native_http_function(tag: &'static str) -> Self {
+        Self {
+            kind: BuiltinFunctionKind::NativeHttpFunction,
             module_specifier: BuiltinModuleSpecifier::from_nonempty(tag),
             iterator_handle: None,
             bound_object: None,
@@ -5837,6 +5851,10 @@ impl BuiltinFunction {
             BuiltinFunctionKind::StaticHostcall => {
                 static_hostcall_name(&self.module_specifier).unwrap_or("anonymous")
             }
+            BuiltinFunctionKind::NativeHttpFunction => {
+                native_http_function_metadata(&self.module_specifier)
+                    .map_or("anonymous", |(_, name, _)| name)
+            }
             BuiltinFunctionKind::PrototypeGetter => self
                 .module_specifier
                 .0
@@ -6141,6 +6159,10 @@ impl BuiltinFunction {
     /// lengths; kinds the engine does not model return `None`.
     fn spec_length(&self) -> Option<i64> {
         use BuiltinFunctionKind as K;
+        if self.kind == K::NativeHttpFunction {
+            return native_http_function_metadata(&self.module_specifier)
+                .map(|(_, _, length)| length);
+        }
         let fixed = match self.kind {
             K::GeneratorNext
             | K::GeneratorReturn
@@ -6499,6 +6521,23 @@ const GENERATED_REALM_OBJECT_GLOBALS: [&str; 8] = [
 /// Realm-owned provider objects, shared by bare and node-prefixed loads.
 const CRYPTO_MODULE_KEY: &str = "<module crypto>";
 const ZLIB_MODULE_KEY: &str = "<module zlib>";
+const HTTP_MODULE_KEY: &str = "<module http>";
+const HTTPS_MODULE_KEY: &str = "<module https>";
+
+/// Exact finite provider surface. These are the same operations as direct
+/// HTTP lowering, including the separate TLS request path.
+fn native_http_function_metadata(tag: &str) -> Option<(&'static str, &'static str, i64)> {
+    Some(match tag {
+        "builtin:HttpCreateServer" => ("builtin:HttpCreateServer", "createServer", 2),
+        "builtin:HttpGet" => ("builtin:HttpGet", "get", 3),
+        "builtin:HttpRequest" => ("builtin:HttpRequest", "request", 3),
+        "builtin:HttpAgent" => ("builtin:HttpAgent", "Agent", 1),
+        "builtin:HttpsGet" => ("builtin:HttpsGet", "get", 3),
+        "builtin:HttpsRequest" => ("builtin:HttpsRequest", "request", 0),
+        "builtin:HttpsAgent" => ("builtin:HttpsAgent", "Agent", 1),
+        _ => return None,
+    })
+}
 
 /// Retained native `module` provider shared by bare and `node:` aliases.
 const MODULE_MODULE_KEY: &str = "<module module>";
@@ -10574,6 +10613,7 @@ enum DispatchOutcome {
     Complete(LabeledReturn),
     BuiltinCall {
         builtin: BuiltinFunction,
+        callee: u32,
         args: RegRange,
         dst: u32,
         receiver: Option<(Value, u32)>,
@@ -23259,6 +23299,15 @@ impl InterpreterCore {
         args: RegRange,
         force_get: bool,
     ) -> Result<ResolvedHttpRequest, InterpreterError> {
+        self.resolve_http_request_for_protocol(args, force_get, false)
+    }
+
+    fn resolve_http_request_for_protocol(
+        &mut self,
+        args: RegRange,
+        force_get: bool,
+        use_tls: bool,
+    ) -> Result<ResolvedHttpRequest, InterpreterError> {
         let first = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         let response_callback = self.last_callable_arg(args)?.and_then(|value| match value {
             Value::Closure(closure_id) => Some(closure_id),
@@ -23266,7 +23315,7 @@ impl InterpreterCore {
         });
         let mut host: String;
         let port: u16;
-        let mut use_tls = false;
+        let expected_protocol = if use_tls { "https:" } else { "http:" };
         let mut path: String;
         let mut method = "GET".to_string();
         let mut headers = BTreeMap::new();
@@ -23283,15 +23332,19 @@ impl InterpreterCore {
                     expected: "absolute HTTP URL".to_string(),
                     got: source.to_string(),
                 })?;
-                if !matches!(parsed.scheme(), "http" | "https") {
-                    return Err(InterpreterError::TypeError {
-                        expected: "http: or https: URL".to_string(),
-                        got: parsed.scheme().to_string(),
-                    });
+                if parsed.scheme() != expected_protocol.trim_end_matches(':') {
+                    return Err(self.throw_legacy_url_type_error(
+                        "ERR_INVALID_PROTOCOL",
+                        format!(
+                            "Protocol \"{}:\" not supported. Expected \"{expected_protocol}\"",
+                            parsed.scheme()
+                        ),
+                    ));
                 }
                 host = parsed.host_str().unwrap_or_default().to_string();
-                use_tls = parsed.scheme() == "https";
-                port = parsed.port_or_known_default().unwrap_or(80);
+                port = parsed
+                    .port_or_known_default()
+                    .unwrap_or(if use_tls { 443 } else { 80 });
                 path = parsed.path().to_string();
                 if let Some(query) = parsed.query() {
                     path.push('?');
@@ -23300,6 +23353,20 @@ impl InterpreterCore {
                 if let Some(options) = self.builtin_arg(args, 1)?
                     && matches!(options, Value::Object(_))
                 {
+                    if let Some(protocol) = self.fs_object_property(&options, "protocol")
+                        && !matches!(protocol, Value::Undefined)
+                    {
+                        let protocol =
+                            self.bounded_http_primitive_string(&protocol, 16, "protocol")?;
+                        if protocol != expected_protocol {
+                            return Err(self.throw_legacy_url_type_error(
+                                "ERR_INVALID_PROTOCOL",
+                                format!(
+                                    "Protocol \"{protocol}\" not supported. Expected \"{expected_protocol}\""
+                                ),
+                            ));
+                        }
+                    }
                     if !force_get {
                         method = match self.fs_object_property(&options, "method") {
                             Some(value) => self
@@ -23320,6 +23387,19 @@ impl InterpreterCore {
                 }
             }
             Value::Object(_) => {
+                if let Some(protocol) = self.fs_object_property(&first, "protocol")
+                    && !matches!(protocol, Value::Undefined)
+                {
+                    let protocol = self.bounded_http_primitive_string(&protocol, 16, "protocol")?;
+                    if protocol != expected_protocol {
+                        return Err(self.throw_legacy_url_type_error(
+                            "ERR_INVALID_PROTOCOL",
+                            format!(
+                                "Protocol \"{protocol}\" not supported. Expected \"{expected_protocol}\""
+                            ),
+                        ));
+                    }
+                }
                 host = match self
                     .fs_object_property(&first, "host")
                     .or_else(|| self.fs_object_property(&first, "hostname"))
@@ -23332,7 +23412,7 @@ impl InterpreterCore {
                 port = self
                     .fs_object_property(&first, "port")
                     .and_then(|value| u16::try_from(Self::value_as_integer(&value)).ok())
-                    .unwrap_or(80);
+                    .unwrap_or(if use_tls { 443 } else { 80 });
                 path = match self.fs_object_property(&first, "path") {
                     Some(value) => {
                         self.bounded_http_primitive_string(&value, MAX_HTTP_PATH_BYTES, "path")?
@@ -23481,7 +23561,20 @@ impl InterpreterCore {
         args: RegRange,
         auto_end: bool,
     ) -> Result<Value, InterpreterError> {
-        let resolved = self.resolve_http_request(args, auto_end)?;
+        self.construct_http_client_request_for_protocol(args, auto_end, false)
+    }
+
+    fn construct_http_client_request_for_protocol(
+        &mut self,
+        args: RegRange,
+        auto_end: bool,
+        use_tls: bool,
+    ) -> Result<Value, InterpreterError> {
+        let resolved = if use_tls {
+            self.resolve_http_request_for_protocol(args, auto_end, true)?
+        } else {
+            self.resolve_http_request(args, auto_end)?
+        };
         let lifecycle_label = self.join_arg_range_with_object_mutation_label(args)?;
         let state = HttpClientRequestState {
             host: resolved.host,
@@ -23538,6 +23631,14 @@ impl InterpreterCore {
     }
 
     fn construct_http_agent(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        self.construct_http_agent_for_protocol(args, false)
+    }
+
+    fn construct_http_agent_for_protocol(
+        &mut self,
+        args: RegRange,
+        use_tls: bool,
+    ) -> Result<Value, InterpreterError> {
         let keep_alive = self
             .builtin_arg(args, 0)?
             .and_then(|options| self.fs_object_property(&options, "keepAlive"))
@@ -23546,9 +23647,20 @@ impl InterpreterCore {
             "HttpAgent",
             &[
                 ("keepAlive", Value::Bool(keep_alive)),
-                ("protocol", Value::str("http:")),
+                (
+                    "protocol",
+                    Value::str(if use_tls { "https:" } else { "http:" }),
+                ),
+                ("defaultPort", Value::Int(if use_tls { 443 } else { 80 })),
             ],
         )?;
+        let tag = if use_tls {
+            "builtin:HttpsAgent"
+        } else {
+            "builtin:HttpAgent"
+        };
+        let prototype = self.native_http_function_prototype(tag)?;
+        self.store_prototype_link(agent, Some(prototype));
         self.apply_memory_component_delta(0, MEMORY_ESTIMATE_HTTP_AGENT_BASE_BYTES)?;
         self.http_agents.insert(agent);
         Ok(Value::Object(agent))
@@ -40958,6 +41070,96 @@ impl InterpreterCore {
         Ok(Value::Object(object))
     }
 
+    /// First-class HTTP modules share the already implemented request,
+    /// listener and Agent kernels. Loading either module grants no network
+    /// authority and performs no I/O. Every invocation checks its exact tag.
+    fn http_core_module(
+        &mut self,
+        module: &Ir3Module,
+        use_tls: bool,
+    ) -> Result<Value, InterpreterError> {
+        let key = if use_tls {
+            HTTPS_MODULE_KEY
+        } else {
+            HTTP_MODULE_KEY
+        };
+        if let Some(object) = self.builtin_prototypes.get(key) {
+            return Ok(Value::Object(*object));
+        }
+        let tags: &[&'static str] = if use_tls {
+            &[
+                "builtin:HttpsGet",
+                "builtin:HttpsRequest",
+                "builtin:HttpsAgent",
+            ]
+        } else {
+            &[
+                "builtin:HttpCreateServer",
+                "builtin:HttpGet",
+                "builtin:HttpRequest",
+                "builtin:HttpAgent",
+            ]
+        };
+        let mut members = Vec::with_capacity(tags.len() + 2);
+        for &tag in tags {
+            let (_, name, _) = native_http_function_metadata(tag)
+                .expect("the native HTTP export table contains known operations");
+            let function = Value::BuiltinFunction(BuiltinFunction::native_http_function(tag));
+            let prototype = self.native_http_function_prototype(tag)?;
+            let backing = self
+                .ensure_function_own_property_object(module, &function)?
+                .ok_or_else(|| InterpreterError::InternalError {
+                    details: "native HTTP function has no property storage".to_string(),
+                })?;
+            self.set_object_property(backing, "prototype".to_string(), Value::Object(prototype))?;
+            self.set_own_property_attributes(
+                backing,
+                &RuntimePropertyKey::String(JsString::from("prototype")),
+                PropertyAttributes {
+                    writable: true,
+                    enumerable: false,
+                    configurable: false,
+                },
+            )?;
+            members.push((name, function));
+        }
+        if !use_tls {
+            members.push(("STATUS_CODES", self.http_status_codes()?));
+            members.push(("METHODS", self.http_methods()?));
+        }
+        let object = self.alloc_object_with_properties(&members)?;
+        self.mutate_builtin_prototypes(|prototypes| {
+            prototypes.insert(key.to_string(), object);
+        });
+        Ok(Value::Object(object))
+    }
+
+    fn native_http_function_prototype(&mut self, tag: &str) -> Result<ObjectId, InterpreterError> {
+        let (tag, _, _) =
+            native_http_function_metadata(tag).ok_or_else(|| InterpreterError::TypeError {
+                expected: "known native HTTP function".to_string(),
+                got: tag.to_string(),
+            })?;
+        let key = format!("\0franken-engine/native-http/prototype/{tag}");
+        if let Some(object) = self.builtin_prototypes.get(&key) {
+            return Ok(*object);
+        }
+        let parent = match tag {
+            "builtin:HttpAgent" => self.ensure_builtin_prototype("EventEmitter")?,
+            "builtin:HttpsAgent" => self.native_http_function_prototype("builtin:HttpAgent")?,
+            _ => self.ensure_builtin_prototype("Object")?,
+        };
+        let prototype = self.alloc_object_with_prototype(Some(parent))?;
+        self.install_prototype_constructor(
+            prototype,
+            Value::BuiltinFunction(BuiltinFunction::native_http_function(tag)),
+        )?;
+        self.mutate_builtin_prototypes(|prototypes| {
+            prototypes.insert(key, prototype);
+        });
+        Ok(prototype)
+    }
+
     /// The codec functions retain their existing work, output, memory and
     /// callback-label checks when passed across a module or invoked indirectly.
     fn zlib_core_module(&mut self) -> Result<Value, InterpreterError> {
@@ -41179,17 +41381,33 @@ impl InterpreterCore {
         Ok(Value::Object(object_id))
     }
 
+    #[cfg(test)]
     fn require_module(
         &mut self,
         module: &Ir3Module,
         specifier: &JsString,
     ) -> Result<Value, InterpreterError> {
+        self.require_module_with_http_provenance(module, specifier, &mut false)
+    }
+
+    fn require_module_with_http_provenance(
+        &mut self,
+        module: &Ir3Module,
+        specifier: &JsString,
+        native_http: &mut bool,
+    ) -> Result<Value, InterpreterError> {
+        *native_http = false;
         let specifier = Self::utf8_module_specifier(specifier)?;
         self.run_pre_import_hook(module, specifier)?;
         if self.module_resolver.is_none()
             && let Some(native) = NativeBuiltinModule::from_specifier(specifier)
         {
-            return self.native_builtin_module(module, native, None);
+            let value = self.native_builtin_module(module, native, None)?;
+            *native_http = matches!(
+                native,
+                NativeBuiltinModule::Http | NativeBuiltinModule::Https
+            );
+            return Ok(value);
         }
         let delivered = self
             .module_resolver
@@ -41203,7 +41421,12 @@ impl InterpreterCore {
         if let Some(source) = delivered.as_ref()
             && let Some(native) = NativeBuiltinModule::from_record(&source.module.record)
         {
-            return self.load_native_builtin_resolved(module, source, native, None);
+            let value = self.load_native_builtin_resolved(module, source, native, None)?;
+            *native_http = matches!(
+                native,
+                NativeBuiltinModule::Http | NativeBuiltinModule::Https
+            );
+            return Ok(value);
         }
         let is_json = delivered.is_none()
             && Path::new(&resolved)
@@ -41298,6 +41521,8 @@ impl InterpreterCore {
         match native {
             NativeBuiltinModule::Crypto => self.crypto_core_module(),
             NativeBuiltinModule::Zlib => self.zlib_core_module(),
+            NativeBuiltinModule::Http => self.http_core_module(module, false),
+            NativeBuiltinModule::Https => self.http_core_module(module, true),
             NativeBuiltinModule::Module => self.module_core_module(),
             NativeBuiltinModule::Os => self.os_core_module(),
             NativeBuiltinModule::Querystring => self.querystring_core_module(),
@@ -41329,12 +41554,23 @@ impl InterpreterCore {
         }
     }
 
-/// Keep named exports tied to the engine's supported provider surface.
+    /// Keep named exports tied to the engine's supported provider surface.
     /// CommonJS mutations change the values read on first ESM initialization,
     /// but adding an arbitrary property cannot add a module export. Reuse the
     /// facade inventories where the provider itself is table-driven.
     fn native_builtin_export_names(native: NativeBuiltinModule) -> Vec<&'static str> {
         match native {
+            NativeBuiltinModule::Http => {
+                vec![
+                    "Agent",
+                    "METHODS",
+                    "STATUS_CODES",
+                    "createServer",
+                    "get",
+                    "request",
+                ]
+            }
+            NativeBuiltinModule::Https => vec!["Agent", "get", "request"],
             NativeBuiltinModule::Fs => vec![
                 "readFileSync", "writeFileSync", "appendFileSync", "existsSync",
                 "statSync", "lstatSync", "readdirSync", "mkdirSync", "unlinkSync",
@@ -41518,6 +41754,15 @@ impl InterpreterCore {
         module: &Ir3Module,
         root: ObjectId,
     ) -> Result<Label, InterpreterError> {
+        self.native_builtin_state_label_with_floor(module, root, Label::Internal)
+    }
+
+    fn native_builtin_state_label_with_floor(
+        &mut self,
+        module: &Ir3Module,
+        root: ObjectId,
+        mut label: Label,
+    ) -> Result<Label, InterpreterError> {
         // Only the root and its prototype chain can supply properties read
         // during the namespace snapshot. Nested accessors remain deferred
         // code, like methods, but only audited native factory code is admitted.
@@ -41525,7 +41770,6 @@ impl InterpreterCore {
         // not their implementation carrier's implicit Object prototype.
         let mut pending = vec![(root, true, true)];
         let mut visited = BTreeSet::new();
-        let mut label = Label::Internal;
         while let Some((object_id, snapshot_lookup, follow_prototype)) = pending.pop() {
             self.charge_property_copy_work()?;
             if visited.contains(&(object_id, snapshot_lookup, follow_prototype)) {
@@ -42037,6 +42281,8 @@ impl InterpreterCore {
             NativeBuiltinModule::Buffer => "\0franken-engine/native-buffer/esm",
             NativeBuiltinModule::Crypto => "\0franken-engine/native-crypto/esm",
             NativeBuiltinModule::Zlib => "\0franken-engine/native-zlib/esm",
+            NativeBuiltinModule::Http => "\0franken-engine/native-http/esm",
+            NativeBuiltinModule::Https => "\0franken-engine/native-https/esm",
             NativeBuiltinModule::Fs => "\0franken-engine/native-fs/esm",
             NativeBuiltinModule::FsPromises => "\0franken-engine/native-fs/promises/esm",
             NativeBuiltinModule::Module => "\0franken-engine/native-module/esm",
@@ -44414,6 +44660,9 @@ impl InterpreterCore {
     /// capability and live-hook boundary as direct HostCall instructions.
     fn native_value_host_effect_tag(builtin: &BuiltinFunction) -> Option<Cow<'static, str>> {
         let tag = match builtin.kind {
+            BuiltinFunctionKind::NativeHttpFunction => {
+                native_http_function_metadata(&builtin.module_specifier)?.0
+            }
             BuiltinFunctionKind::ConsoleLog => "console:log",
             BuiltinFunctionKind::ConsoleError => "console:error",
             BuiltinFunctionKind::ConsoleWarn => "console:warn",
@@ -44433,6 +44682,35 @@ impl InterpreterCore {
             _ => return None,
         };
         Some(Cow::Borrowed(tag))
+    }
+
+    /// A native HTTP function selected from a classified module or property
+    /// must carry that selection into its request state and immediate effects,
+    /// not only the eventual destination register. Other builtins retain their
+    /// existing invocation contract. The observation scope accounts its label
+    /// and restores the caller on successful, thrown and resource-limit exits.
+    fn dispatch_builtin_function_with_callee_register(
+        &mut self,
+        module: &Ir3Module,
+        builtin: &BuiltinFunction,
+        args: RegRange,
+        receiver: Option<Value>,
+        receiver_register: Option<u32>,
+        callee: u32,
+    ) -> Result<Value, InterpreterError> {
+        if builtin.kind != BuiltinFunctionKind::NativeHttpFunction {
+            return self.dispatch_builtin_function(
+                module,
+                builtin,
+                args,
+                receiver,
+                receiver_register,
+            );
+        }
+        let observation = self.begin_property_observation([callee])?;
+        let outcome =
+            self.dispatch_builtin_function(module, builtin, args, receiver, receiver_register);
+        self.finish_property_read_observation(observation, outcome)
     }
 
     /// Keep the Writable lifecycle lane out of the monolithic builtin
@@ -45075,11 +45353,33 @@ impl InterpreterCore {
                     WitnessEventKind::HostcallDispatched,
                     Some("cap:module_load"),
                 );
-                let result = self.dispatch_require_hostcall(args, Some(module));
+                let mut native_http = false;
+                let result = self.dispatch_require_hostcall_with_http_provenance(
+                    args,
+                    Some(module),
+                    &mut native_http,
+                );
                 self.current_module_specifier = previous_module_specifier;
-                if result.is_ok() {
-                    let result_label = hostcall_result_contract("module_load")
-                        .result_label(&args_label, None);
+                if let Ok(value) = &result {
+                    // An authenticated engine-local HTTP namespace reads no
+                    // host module bytes. Its initial contents are Public, but
+                    // a cached load must retain all guest-written state and
+                    // opaque accessors. Ordinary source loads keep their
+                    // existing Internal floor, including source re-exports.
+                    let result_label = if native_http {
+                        let Value::Object(object) = value else {
+                            return Err(InterpreterError::InternalError {
+                                details: "native HTTP provider returned a non-object".to_string(),
+                            });
+                        };
+                        args_label.join(&self.native_builtin_state_label_with_floor(
+                            module,
+                            *object,
+                            Label::Public,
+                        )?)
+                    } else {
+                        hostcall_result_contract("module_load").result_label(&args_label, None)
+                    };
                     self.replace_pending_hostcall_result_label(Some(result_label))?;
                 }
                 result
@@ -47434,6 +47734,30 @@ impl InterpreterCore {
                 } else {
                     self.call_static_hostcall(module, builtin, args)
                 }
+            }
+            BuiltinFunctionKind::NativeHttpFunction => {
+                let (tag, _, _) = native_http_function_metadata(&builtin.module_specifier)
+                    .ok_or_else(|| InterpreterError::TypeError {
+                        expected: "known native HTTP function".to_string(),
+                        got: builtin.module_specifier.to_string(),
+                    })?;
+                let inputs = self.join_arg_range_with_object_mutation_label(args)?;
+                let input_bytes = Self::estimate_label_bytes(&inputs);
+                self.apply_memory_component_delta(0, input_bytes)?;
+                // This value call is the underlying hostcall, so it owns one
+                // builtin frame. Keep the input label charged until the
+                // delegated publication has copied its winner.
+                self.gc_exit_builtin();
+                let result = self.dispatch_builtin_hostcall(tag, args, Some(module));
+                self.gc_enter_builtin();
+                let result = result.and_then(|value| {
+                    self.publish_delegated_hostcall_result_label(tag, &inputs)?;
+                    Ok(value)
+                });
+                drop(inputs);
+                self.estimated_memory_bytes =
+                    self.estimated_memory_bytes.saturating_sub(input_bytes);
+                result
             }
             BuiltinFunctionKind::PrototypeGetter => {
                 self.call_prototype_getter(module, builtin, receiver.unwrap_or(Value::Undefined))
@@ -52703,11 +53027,13 @@ impl InterpreterCore {
                     BuiltinFunctionKind::BoundFunction | BuiltinFunctionKind::GeneratedFunction
                 ) =>
             {
-                Some(self.construct_builtin_with_new_target(
+                Some(self.construct_builtin_with_new_target_and_labels(
                     module,
                     builtin,
                     args,
                     &new_target_value,
+                    &active_callee_label,
+                    &new_target_label,
                 )?)
             }
             _ => None,
@@ -52763,6 +53089,16 @@ impl InterpreterCore {
             let result_label = match &foreign_parent_label {
                 Some(label) => self.join_owned_label_with_temporary_budget(result_label, label)?,
                 None => result_label,
+            };
+            let result_label = if matches!(&active_callee, Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::NativeHttpFunction)
+            {
+                let observed = self
+                    .take_pending_hostcall_result_label()
+                    .unwrap_or(Label::Public);
+                self.join_owned_label_with_temporary_budget(observed, &result_label)?
+            } else {
+                result_label
             };
             if initialize_derived_this_on_return {
                 let frame =
@@ -54714,6 +55050,7 @@ impl InterpreterCore {
         &mut self,
         module: &Ir3Module,
         builtin: BuiltinFunction,
+        callee: u32,
         args: RegRange,
         dst: u32,
         receiver: Option<(Value, u32)>,
@@ -54726,12 +55063,13 @@ impl InterpreterCore {
             // frame (bd-8enww.4.7).
             self.clear_pending_hostcall_result_label();
             self.mark_inline_callback_started();
-            let result = match self.dispatch_builtin_function(
+            let result = match self.dispatch_builtin_function_with_callee_register(
                 module,
                 &builtin,
                 args,
                 Some(receiver_val.clone()),
                 Some(receiver),
+                callee,
             ) {
                 Ok(value) => value,
                 Err(err) => match self.route_isolated_explicit_throw(module, err)? {
@@ -54804,7 +55142,9 @@ impl InterpreterCore {
         // rather than letting `?` escape the caller's try/catch
         // (bd-8enww.4.7).
         self.clear_pending_hostcall_result_label();
-        let result = match self.dispatch_builtin_function(module, &builtin, args, None, None) {
+        let result = match self.dispatch_builtin_function_with_callee_register(
+            module, &builtin, args, None, None, callee,
+        ) {
             Ok(value) => value,
             Err(err) => match self.route_isolated_explicit_throw(module, err)? {
                 None => {
@@ -55518,11 +55858,12 @@ impl InterpreterCore {
                 Ok(DispatchOutcome::Complete(completion)) => Ok(Some(completion)),
                 Ok(DispatchOutcome::BuiltinCall {
                     builtin,
+                    callee,
                     args,
                     dst,
                     receiver,
                 }) => self
-                    .finish_builtin_dispatch(module, builtin, args, dst, receiver)
+                    .finish_builtin_dispatch(module, builtin, callee, args, dst, receiver)
                     .map(|()| None),
                 Ok(DispatchOutcome::GeneratorDelegate { source, resume_dst }) => {
                     self.finish_generator_delegate_dispatch(module, source, resume_dst)
@@ -55908,6 +56249,7 @@ impl InterpreterCore {
                         }
                         return Ok(DispatchOutcome::BuiltinCall {
                             builtin,
+                            callee,
                             args,
                             dst,
                             receiver: None,
@@ -56618,6 +56960,7 @@ impl InterpreterCore {
                     if let Value::BuiltinFunction(builtin) = callee_val {
                         return Ok(DispatchOutcome::BuiltinCall {
                             builtin,
+                            callee,
                             args,
                             dst,
                             receiver: Some((receiver_val, receiver)),
@@ -59351,11 +59694,13 @@ impl InterpreterCore {
                     }
 
                     if let Value::BuiltinFunction(builtin) = &callee_value {
-                        let constructed = self.construct_builtin_with_new_target(
+                        let constructed = self.construct_builtin_with_new_target_and_labels(
                             module,
                             builtin,
                             args,
                             &new_target_value,
+                            &callee_label,
+                            &new_target_label,
                         )?;
                         let result_label = self.join_arg_range_label(args)?;
                         let result_label = self
@@ -59364,6 +59709,16 @@ impl InterpreterCore {
                             result_label,
                             &new_target_label,
                         )?;
+                        let result_label = if builtin.kind
+                            == BuiltinFunctionKind::NativeHttpFunction
+                        {
+                            let observed = self
+                                .take_pending_hostcall_result_label()
+                                .unwrap_or(Label::Public);
+                            self.join_owned_label_with_temporary_budget(observed, &result_label)?
+                        } else {
+                            result_label
+                        };
                         self.write_reg_with_label(dst, constructed, result_label)?;
                         self.ip += 1;
                         continue;
@@ -59491,6 +59846,9 @@ impl InterpreterCore {
                         if standard_name == Some("Iterator") {
                             return Err(self.abstract_iterator_construction_error());
                         }
+                        if builtin.kind == BuiltinFunctionKind::NativeHttpFunction {
+                            self.clear_pending_hostcall_result_label();
+                        }
                         let mut result = match standard_name {
                             _ if builtin.kind == BuiltinFunctionKind::DateConstructor => {
                                 self.dispatch_builtin_hostcall("builtin:Date", args, Some(module))?
@@ -59525,9 +59883,9 @@ impl InterpreterCore {
                                 args,
                                 Some(module),
                             )?,
-                            _ => {
-                                self.dispatch_builtin_function(module, builtin, args, None, None)?
-                            }
+                            _ => self.dispatch_builtin_function_with_callee_register(
+                                module, builtin, args, None, None, callee,
+                            )?,
                         };
                         // ES2020 20.1.1.1, 21.1.1.1, 19.3.1.1: `new Number(x)`,
                         // `new String(x)` and `new Boolean(x)` wrap the converted
@@ -59549,7 +59907,16 @@ impl InterpreterCore {
                         // a later egress hostcall (same under-tainting family as
                         // bd-n2mjy / bd-0zybl / bd-ooaka.1).
                         let args_label = self.join_arg_range_label(args)?;
-                        self.write_reg_with_label(dst, result, args_label)?;
+                        let result_label =
+                            if builtin.kind == BuiltinFunctionKind::NativeHttpFunction {
+                                let observed = self
+                                    .take_pending_hostcall_result_label()
+                                    .unwrap_or(Label::Public);
+                                self.join_owned_label_with_temporary_budget(observed, &args_label)?
+                            } else {
+                                args_label
+                            };
+                        self.write_reg_with_label(dst, result, result_label)?;
                         self.ip += 1;
                         continue;
                     }
@@ -73387,8 +73754,17 @@ impl InterpreterCore {
         args: RegRange,
         module: Option<&Ir3Module>,
     ) -> Result<Value, InterpreterError> {
+        self.dispatch_require_hostcall_with_http_provenance(args, module, &mut false)
+    }
+
+    fn dispatch_require_hostcall_with_http_provenance(
+        &mut self,
+        args: RegRange,
+        module: Option<&Ir3Module>,
+        native_http: &mut bool,
+    ) -> Result<Value, InterpreterError> {
         let args_hash = self.hostcall_arguments_hash(args);
-        let outcome = self.dispatch_require_hostcall_inner(args, module);
+        let outcome = self.dispatch_require_hostcall_inner(args, module, native_http);
         // Module evaluation can recursively complete another module hostcall.
         // Record in completion order so nested records remain timestamp-
         // monotonic while retaining deterministic instruction-clock time.
@@ -73501,6 +73877,7 @@ impl InterpreterCore {
         &mut self,
         args: RegRange,
         module: Option<&Ir3Module>,
+        native_http: &mut bool,
     ) -> Result<Value, InterpreterError> {
         let spec_val = if args.count > 0 {
             self.read_reg(args.start)?
@@ -73518,7 +73895,7 @@ impl InterpreterCore {
         let module = module.ok_or_else(|| InterpreterError::InternalError {
             details: "module:require apply hostcall missing module context".to_string(),
         })?;
-        match self.require_module(module, &specifier) {
+        match self.require_module_with_http_provenance(module, &specifier, native_http) {
             // Node names the request as written, not the resolved path.
             Err(InterpreterError::ModuleResolutionFailed { reason, .. }) => Err(self
                 .throw_module_resolution_failure(
@@ -97556,9 +97933,14 @@ impl InterpreterCore {
             "builtin:HttpCreateServer" => self.construct_http_server(args),
             "builtin:HttpGet" => self.construct_http_client_request(args, true),
             "builtin:HttpRequest" => self.construct_http_client_request(args, false),
+            "builtin:HttpsGet" => self.construct_http_client_request_for_protocol(args, true, true),
+            "builtin:HttpsRequest" => {
+                self.construct_http_client_request_for_protocol(args, false, true)
+            }
             "builtin:HttpStatusCodes" => self.http_status_codes(),
             "builtin:HttpMethods" => self.http_methods(),
             "builtin:HttpAgent" => self.construct_http_agent(args),
+            "builtin:HttpsAgent" => self.construct_http_agent_for_protocol(args, true),
             "builtin:NetSocket" => {
                 let lifecycle_label = self.writable_invocation_label(args)?;
                 let socket = self.construct_loopback_socket(false, None, lifecycle_label)?;
@@ -112001,6 +112383,32 @@ impl InterpreterCore {
         Ok(prototype)
     }
 
+    /// Native HTTP factories also retain the selected constructor and
+    /// new.target provenance while allocating their request/server state.
+    /// This includes Reflect.construct and a derived class's super() path.
+    fn construct_builtin_with_new_target_and_labels(
+        &mut self,
+        module: &Ir3Module,
+        builtin: &BuiltinFunction,
+        args: RegRange,
+        new_target: &Value,
+        callee_label: &Label,
+        new_target_label: &Label,
+    ) -> Result<Value, InterpreterError> {
+        if builtin.kind != BuiltinFunctionKind::NativeHttpFunction {
+            return self.construct_builtin_with_new_target(module, builtin, args, new_target);
+        }
+        self.clear_pending_hostcall_result_label();
+        let observation = self.begin_property_observation([])?;
+        let outcome = (|| {
+            let selection =
+                self.clone_dominant_label_with_temporary_budget(callee_label, new_target_label, 0)?;
+            self.json_observe_label(selection)?;
+            self.construct_builtin_with_new_target(module, builtin, args, new_target)
+        })();
+        self.finish_property_read_observation(observation, outcome)
+    }
+
     /// [[Construct]] of a builtin constructor with an explicit new.target
     /// (`Reflect.construct(B, args, F)`, or `B` as a class's parent): the
     /// builtin's own construction, then new.target's prototype. `Number`,
@@ -112122,6 +112530,17 @@ impl InterpreterCore {
             && !result.is_object_like()
         {
             result = Value::Object(self.alloc_primitive_wrapper(result)?);
+        }
+        // Node's HTTP factories are ordinary functions that explicitly
+        // return a request or server. [[Construct]] must keep that result's
+        // prototype rather than install createServer/get/request.prototype.
+        if builtin.kind == BuiltinFunctionKind::NativeHttpFunction
+            && !matches!(
+                &*builtin.module_specifier,
+                "builtin:HttpAgent" | "builtin:HttpsAgent"
+            )
+        {
+            return Ok(result);
         }
         // bd-9vouw.137: a promise has no ordinary object of its own; a
         // subclass's prototype goes on its backing object, which its
@@ -112675,6 +113094,11 @@ impl InterpreterCore {
                 if builtin.kind == BuiltinFunctionKind::GeneratedFunction =>
             {
                 self.ensure_generated_function_prototype(builtin)
+            }
+            Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::NativeHttpFunction =>
+            {
+                self.native_http_function_prototype(&builtin.module_specifier)
             }
             Value::BuiltinFunction(builtin) if builtin.kind.is_constructible() => {
                 self.ensure_builtin_prototype(builtin.display_name())
@@ -182739,10 +183163,15 @@ mod memory_accounting_tests {
         core.write_reg(0, Value::str("https://example.test/secure"))
             .expect("TLS URL");
         let tls = core
-            .resolve_http_request(RegRange { start: 0, count: 1 }, true)
+            .resolve_http_request_for_protocol(RegRange { start: 0, count: 1 }, true, true)
             .expect("TLS external request");
         assert!(tls.use_tls);
         assert!(!tls.internal_loopback_candidate);
+        assert_eq!(tls.port, 443);
+        assert!(
+            core.resolve_http_request(RegRange { start: 0, count: 1 }, true)
+                .is_err()
+        );
     }
 
     #[test]

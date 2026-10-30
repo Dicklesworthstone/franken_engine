@@ -376,13 +376,14 @@ pub fn hostcall_registry_row(tag: &str) -> Option<HostcallRegistryRow<'_>> {
             HostcallResultContract::JoinInputs,
             HostcallDispatchBinding::ClientRequest,
         ),
-        "builtin:HttpRequest" => (
+        "builtin:HttpRequest" | "builtin:HttpsRequest" => (
             Some(RuntimeCapability::NetworkEgress),
             HostcallResultContract::JoinInputs,
             HostcallDispatchBinding::Builtin,
         ),
         "builtin:HttpCreateServer"
-        | "builtin:HttpGet" => (
+        | "builtin:HttpGet"
+        | "builtin:HttpsGet" => (
             Some(RuntimeCapability::NetworkEgress),
             result_contract_for_authority(RuntimeCapability::NetworkEgress),
             HostcallDispatchBinding::Builtin,
@@ -2309,7 +2310,11 @@ mod tests {
 
     #[test]
     fn hostcall_result_contracts_are_source_aware_and_fail_closed_bd_z1peg() {
-        for tag in ["net:client_request", "builtin:HttpRequest"] {
+        for tag in [
+            "net:client_request",
+            "builtin:HttpRequest",
+            "builtin:HttpsRequest",
+        ] {
             assert_eq!(
                 RuntimeCapability::from_tag_str(tag),
                 Some(RuntimeCapability::NetworkEgress),

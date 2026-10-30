@@ -29733,6 +29733,9 @@ fn http_property_capability(property: &str) -> Option<&'static str> {
 }
 
 fn is_http_module_object(expr: &Expression, binding_lookup: &BTreeMap<String, BindingId>) -> bool {
+    if require_is_commonjs_wrapper(binding_lookup) {
+        return false;
+    }
     match expr {
         Expression::Identifier(alias) => {
             binding_lookup.contains_key(&http_module_alias_sentinel(alias))
@@ -29743,6 +29746,9 @@ fn is_http_module_object(expr: &Expression, binding_lookup: &BTreeMap<String, Bi
 }
 
 fn is_https_module_object(expr: &Expression, binding_lookup: &BTreeMap<String, BindingId>) -> bool {
+    if require_is_commonjs_wrapper(binding_lookup) {
+        return false;
+    }
     match expr {
         Expression::Identifier(alias) => {
             binding_lookup.contains_key(&https_module_alias_sentinel(alias))
@@ -29829,6 +29835,11 @@ fn confirmed_http_like_module_aliases(
     initializer_matches: fn(&Expression, &BTreeMap<String, BindingId>) -> bool,
     surface: LoweringOnlyModuleAliasSurface,
 ) -> BTreeSet<String> {
+    // Authenticated CommonJS owns mutable, first-class module objects. A
+    // const binding does not make its exported methods immutable.
+    if require_is_commonjs_wrapper(binding_lookup) {
+        return BTreeSet::new();
+    }
     let mut candidates = BTreeMap::new();
     for (statement_index, statement) in body.iter().enumerate() {
         if let Statement::VariableDeclaration(declaration) = statement {
@@ -50494,11 +50505,49 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_http_calls_preserve_mutable_runtime_module_objects() {
+        for name in ["http", "node:http", "https", "node:https"] {
+            let source = format!(
+                "const api = require('{name}'); const load = require;\n\
+                 const again = load('{name}');\n\
+                 api.request = function () {{ return 'replacement'; }};\n\
+                 api.request('unused'); again.request('unused');\n\
+                 require('{name}').request('unused');"
+            );
+            let tree = crate::parser_api_stability::parse_script(&source).unwrap();
+            let ir0 = Ir0Module::from_syntax_tree(tree, "native-http-values.cjs");
+            let output = lower_ir0_to_ir3(
+                &ir0,
+                &LoweringContext::new("native-http-values", "cjs", "policy")
+                    .with_authenticated_commonjs_runtime_bindings(),
+            )
+            .expect("HTTP module exports remain mutable values");
+            for capability in [
+                "builtin:HttpRequest",
+                "builtin:HttpsRequest",
+                "net:client_request",
+            ] {
+                assert_eq!(count_hostcall_deep(&output.ir1.ops, capability), 0);
+            }
+            assert_eq!(
+                count_ops_deep(&output.ir1.ops, &|op| matches!(
+                    op,
+                    Ir1Op::Call { arg_count: 1 }
+                )),
+                3,
+                "literal, aliased and inline loads call the authenticated require for {name}"
+            );
+        }
+    }
+
+    #[test]
     fn preserved_commonjs_builtin_loads_reach_the_runtime_callee() {
         for name in [
             "buffer",
             "crypto",
             "zlib",
+            "http",
+            "https",
             "events",
             "os",
             "querystring",

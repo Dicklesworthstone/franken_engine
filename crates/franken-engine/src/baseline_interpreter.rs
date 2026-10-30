@@ -69,6 +69,7 @@ use regexp_backtrack::{
     BacktrackRegExp, CaptureRetention, Captures, CompiledRegExp, GlobalMatchError, MAX_PATTERN_LEN,
     PATTERN_TOO_LARGE, RetentionBudget,
 };
+use regexp_input::{RegExpInput, RegExpOutput};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha1::Sha1;
 use sha2::{Digest, Sha256, Sha512};
@@ -106,6 +107,7 @@ mod promise_capability;
 mod prototype_getters;
 mod reflect_invocation;
 mod regexp_backtrack;
+mod regexp_input;
 mod regexp_protocol;
 mod regexp_syntax;
 mod resizable_buffers;
@@ -15686,6 +15688,9 @@ pub struct InterpreterCore {
     /// JSON parser/reviver scratch retained on the Rust stack across guest
     /// callbacks. A nested accounting resync must not erase this ownership.
     json_parse_temporary_bytes: u64,
+    /// Owned RegExp input/output carriers live across native and guest calls.
+    /// Their RAII reservations survive nested accounting resynchronization.
+    regexp_temporary_bytes: Rc<Cell<u64>>,
     /// Resident ownership held by nested module/callback snapshots while the
     /// corresponding active core fields are temporarily replaced.
     module_snapshot_in_flight_bytes: u64,
@@ -17213,6 +17218,7 @@ impl InterpreterCore {
             call_argument_value_scratch: Vec::new(),
             call_argument_label_scratch: Vec::new(),
             json_parse_temporary_bytes: 0,
+            regexp_temporary_bytes: Rc::new(Cell::new(0)),
             module_snapshot_in_flight_bytes: 0,
             temporarily_suspended_execution_bytes: 0,
             iterators: ReclaimableTable::new("iterator", Self::estimate_iterator_bytes),
@@ -35385,6 +35391,7 @@ impl InterpreterCore {
             .saturating_add(self.live_execution_seed_reserved_bytes())
             .saturating_add(self.simple_callback_temporary_bytes)
             .saturating_add(self.json_parse_temporary_bytes)
+            .saturating_add(self.regexp_temporary_bytes.get())
             .saturating_add(self.argument_overflow_bytes)
     }
 
@@ -64362,7 +64369,7 @@ impl InterpreterCore {
         let label = self.join_arg_range_label(args)?;
         self.string_replace_js(
             module,
-            this_str.as_ref(),
+            this_str,
             &search,
             &replacement,
             true,
@@ -64495,11 +64502,14 @@ impl InterpreterCore {
     /// splits at either end of the input or directly after a previous match.
     fn regexp_split_pieces(
         &mut self,
-        input: &str,
+        subject: &JsString,
         source: &str,
         flags: &str,
     ) -> Result<Vec<Value>, InterpreterError> {
         let regex = self.compile_regexp_pattern(source, flags)?;
+        let prepared =
+            self.prepare_regexp_input(subject, flags.contains('u') || flags.contains('v'))?;
+        let input = prepared.text();
         let mut pieces = Vec::new();
         if input.is_empty() {
             if !regex.is_match("")? {
@@ -64518,7 +64528,7 @@ impl InterpreterCore {
             false,
         )?;
         if let Some(spans) = matches.last() {
-            self.record_legacy_regexp_match(input, spans);
+            self.record_legacy_regexp_input_match(subject, &prepared, spans);
         }
         for spans in matches {
             let Some((start, end)) = spans[0] else {
@@ -64537,15 +64547,15 @@ impl InterpreterCore {
                 })
                 .saturating_add(spans.len().saturating_mul(std::mem::size_of::<Value>()));
             self.regexp_charge_retained(&mut budget, piece_bytes)?;
-            pieces.push(Value::str(&input[last..start]));
+            pieces.push(Value::Str(prepared.slice(last, start)));
             for group in &spans[1..] {
-                pieces.push(
-                    group.map_or(Value::Undefined, |(from, to)| Value::str(&input[from..to])),
-                );
+                pieces.push(group.map_or(Value::Undefined, |(from, to)| {
+                    Value::Str(prepared.slice(from, to))
+                }));
             }
             last = end;
         }
-        pieces.push(Value::str(&input[last..]));
+        pieces.push(Value::Str(prepared.slice(last, input.len())));
         Ok(pieces)
     }
 
@@ -64580,7 +64590,7 @@ impl InterpreterCore {
             return Ok(Value::Object(self.alloc_array_from_values(&[])?));
         }
         if let Some((source, flags)) = regexp {
-            let mut pieces = self.regexp_split_pieces(this_str.as_ref(), &source, &flags)?;
+            let mut pieces = self.regexp_split_pieces(this_str, &source, &flags)?;
             pieces.truncate(limit);
             return Ok(Value::Object(self.alloc_array_from_values(&pieces)?));
         }
@@ -64904,7 +64914,7 @@ impl InterpreterCore {
         let label = self.join_arg_range_label(args)?;
         self.string_replace_js(
             module,
-            this_str.as_ref(),
+            this_str,
             &search,
             &replacement,
             false,
@@ -65547,20 +65557,25 @@ impl InterpreterCore {
             return Ok(Value::Bool(!matches!(result, Value::Null)));
         }
         let regex = self.compile_regexp_pattern(&source, &flags)?;
-        let input = Self::value_to_primitive_string(input);
+        let subject = match input {
+            Value::Str(text) => text.clone(),
+            other => JsString::from(Self::value_to_primitive_string(other)),
+        };
+        let prepared =
+            self.prepare_regexp_input(&subject, flags.contains('u') || flags.contains('v'))?;
         // bd-9vouw.113: a successful test records the legacy statics, so it
         // needs the capture spans, not only a yes/no.
-        let found = regex.captures_at(&input, 0, false)?;
+        let found = regex.captures_at(prepared.text(), 0, false)?;
         let matched = found.as_ref().is_some_and(|spans| spans[0].is_some());
         if let Some(spans) = &found {
-            self.record_legacy_regexp_match(&input, spans);
+            self.record_legacy_regexp_input_match(&subject, &prepared, spans);
         }
         Ok(Value::Bool(matched))
     }
 
     fn string_match_value(
         &mut self,
-        input: &str,
+        subject: &JsString,
         pattern: &Value,
     ) -> Result<Value, InterpreterError> {
         if let Some((source, flags)) = self.regexp_source_flags_from_value(pattern) {
@@ -65569,12 +65584,15 @@ impl InterpreterCore {
             // `lastIndex`; a global one first sets `lastIndex` to 0, which
             // is where the exec loop leaves it.
             if !flags.contains('g') {
-                return self.regexp_prototype_exec(pattern.clone(), &Value::str(input));
+                return self.regexp_prototype_exec(pattern.clone(), &Value::Str(subject.clone()));
             }
             if let Value::Object(regexp_id) = pattern {
                 self.set_regexp_last_index(*regexp_id, 0)?;
             }
             let regex = self.compile_regexp_pattern(&source, &flags)?;
+            let prepared =
+                self.prepare_regexp_input(subject, flags.contains('u') || flags.contains('v'))?;
+            let input = prepared.text();
             let result_id = self.alloc_array_with_prototype(None)?;
             let mut count = 0usize;
             let mut budget = self.regexp_retention_budget();
@@ -65593,7 +65611,7 @@ impl InterpreterCore {
                 sticky,
             )?;
             if let Some(spans) = matches.last() {
-                self.record_legacy_regexp_match(input, spans);
+                self.record_legacy_regexp_input_match(subject, &prepared, spans);
             }
             for spans in matches {
                 let Some((from, to)) = spans[0] else {
@@ -65602,7 +65620,7 @@ impl InterpreterCore {
                 self.set_object_property(
                     result_id,
                     count.to_string(),
-                    Value::str(&input[from..to]),
+                    Value::Str(prepared.slice(from, to)),
                 )?;
                 count = count.saturating_add(1);
             }
@@ -65620,7 +65638,7 @@ impl InterpreterCore {
         // ES2020 21.1.3.11 step 3: any other value is `new RegExp(value)`.
         let regex = self.compile_regexp_pattern(&self.regexp_create_source(pattern), "")?;
         Ok(self
-            .regexp_exec_at(&regex, &JsString::from(input), 0, false, false)?
+            .regexp_exec_at(&regex, subject, 0, false, false, false)?
             .map_or(Value::Null, |(result, _)| result))
     }
 
@@ -65815,22 +65833,24 @@ impl InterpreterCore {
     /// `new RegExp(value)`.
     fn string_search_value(
         &mut self,
-        input: &str,
+        subject: &JsString,
         pattern: &Value,
     ) -> Result<Value, InterpreterError> {
         let (source, flags) = self
             .regexp_source_flags_from_value(pattern)
             .unwrap_or_else(|| (self.regexp_create_source(pattern), String::new()));
         let regex = self.compile_regexp_pattern(&source, &flags)?;
+        let prepared =
+            self.prepare_regexp_input(subject, flags.contains('u') || flags.contains('v'))?;
         // ES2020 21.2.5.9 @@search: RegExpExec with lastIndex 0, so a sticky
         // pattern matches only at the start (bd-9vouw.315).
-        let found = regex.captures_at(input, 0, flags.contains('y'))?;
+        let found = regex.captures_at(prepared.text(), 0, flags.contains('y'))?;
         if let Some(spans) = &found {
-            self.record_legacy_regexp_match(input, spans);
+            self.record_legacy_regexp_input_match(subject, &prepared, spans);
         }
         Ok(Value::Int(
             found.and_then(|spans| spans[0]).map_or(-1, |(from, _)| {
-                i64::try_from(input[..from].encode_utf16().count()).unwrap_or(i64::MAX)
+                i64::try_from(prepared.unit_index(from)).unwrap_or(i64::MAX)
             }),
         ))
     }
@@ -65846,25 +65866,32 @@ impl InterpreterCore {
         &mut self,
         module: Option<&Ir3Module>,
         value: &Value,
-    ) -> Result<String, InterpreterError> {
+    ) -> Result<JsString, InterpreterError> {
+        if let Value::Str(text) = value {
+            return Ok(text.clone());
+        }
         if value.is_object_like() || matches!(value, Value::Symbol(_)) {
             let value = value.clone();
-            return Ok(self
-                .scoped_conversion(|this| this.conversion_to_string(module, value))?
-                .to_string());
+            return self.scoped_conversion(|this| this.conversion_to_string(module, value));
         }
-        Ok(self.value_to_string(value))
+        Ok(JsString::from(self.value_to_string(value)))
     }
 
     fn string_replace_js(
         &mut self,
         module: Option<&Ir3Module>,
-        input: &str,
+        subject: &JsString,
         search: &Value,
         replace: &Value,
         all: bool,
         label: Label,
     ) -> Result<Value, InterpreterError> {
+        let regexp = self.regexp_source_flags_from_value(search);
+        let full_unicode = regexp
+            .as_ref()
+            .is_some_and(|(_, flags)| flags.contains('u') || flags.contains('v'));
+        let prepared = self.prepare_regexp_input(subject, full_unicode)?;
+        let input = prepared.text();
         let mut matches: Vec<(usize, usize, Vec<Option<String>>)> = Vec::new();
         let mut group_names: Vec<Option<String>> = Vec::new();
         // Every match is held natively until the output is built, so the
@@ -65876,14 +65903,15 @@ impl InterpreterCore {
         // `re[Symbol.replace](s, obj)` read it as "[object Object]"
         // (bd-9vouw.358).
         let callable = replace.is_callable();
-        let template = if callable {
-            String::new()
+        let template_value = if callable {
+            JsString::from("")
         } else {
             self.replacement_to_string(module, replace)?
         };
+        let template = self.prepare_regexp_input(&template_value, full_unicode)?;
         let mut budget = self.regexp_retention_budget();
         let match_entry_bytes = std::mem::size_of::<(usize, usize, Vec<Option<String>>)>();
-        if let Some((source, flags)) = self.regexp_source_flags_from_value(search) {
+        if let Some((source, flags)) = regexp {
             let regex = self.compile_regexp_pattern(&source, &flags)?;
             group_names = regex.group_names().into_iter().skip(1).collect();
             // ES2020 21.2.5.8 @@replace: a global pattern first sets
@@ -65909,14 +65937,14 @@ impl InterpreterCore {
             } else if flags.contains('y')
                 && let Some(regexp_id) = regexp_id
             {
-                self.sticky_regexp_captures(regexp_id, &regex, input)?
+                self.sticky_regexp_captures(regexp_id, &regex, &prepared)?
                     .into_iter()
                     .collect()
             } else {
                 regex.captures_at(input, 0, false)?.into_iter().collect()
             };
             if let Some(spans) = found.last() {
-                self.record_legacy_regexp_match(input, spans);
+                self.record_legacy_regexp_input_match(subject, &prepared, spans);
             }
             for spans in found {
                 let Some((start, end)) = spans[0] else {
@@ -65942,9 +65970,15 @@ impl InterpreterCore {
                 matches.push((start, end, groups));
             }
         } else {
-            let needle = self.value_to_string(search);
+            let needle_value = match search {
+                Value::Str(text) => text.clone(),
+                other => JsString::from(self.value_to_string(other)),
+            };
+            let needle = self.prepare_regexp_input(&needle_value, full_unicode)?;
+            self.regexp_charge_retained(&mut budget, needle.retained_bytes() as usize)?;
+            let needle = needle.text();
             if !all {
-                if let Some(index) = input.find(needle.as_str()) {
+                if let Some(index) = input.find(needle) {
                     matches.push((index, index + needle.len(), Vec::new()));
                 }
             } else if needle.is_empty() {
@@ -65955,7 +65989,7 @@ impl InterpreterCore {
                 matches.push((input.len(), input.len(), Vec::new()));
             } else {
                 let mut position = 0;
-                while let Some(offset) = input[position..].find(needle.as_str()) {
+                while let Some(offset) = input[position..].find(needle) {
                     self.regexp_charge_retained(&mut budget, match_entry_bytes)?;
                     let start = position + offset;
                     matches.push((start, start + needle.len(), Vec::new()));
@@ -65963,27 +65997,38 @@ impl InterpreterCore {
                 }
             }
         }
-        let mut output = String::with_capacity(input.len());
+        let mut output = self.prepare_regexp_output(input.len(), full_unicode)?;
         let mut last = 0usize;
+        // Names are identifiers, not matcher units. The replacement template
+        // uses the encoded carrier too, so compare it with encoded names
+        // while keeping the original names on a callback's groups object.
+        let substitution_names: Vec<Option<String>> = group_names
+            .iter()
+            .map(|name| {
+                name.as_ref().map(|name| {
+                    RegExpInput::encode(&JsString::from(name.as_str()), full_unicode).into_owned()
+                })
+            })
+            .collect();
         // The replacer's position (UTF-16) is counted on from the previous
         // match (matches come in order) and its string argument is made
         // once: decoding the prefix and copying the subject per call made a
         // callback replace over a long string quadratic (bd-9vouw.480).
         let mut position_cursor = (0usize, 0usize);
-        let subject_value = callable.then(|| Value::str(input));
+        let subject_value = callable.then(|| Value::Str(subject.clone()));
         for (start, end, groups) in matches {
-            output.push_str(&input[last..start]);
+            self.append_regexp_output(&mut output, &input[last..start])?;
             let matched = &input[start..end];
-            let replacement = if let Some(subject_value) = &subject_value {
+            if let Some(subject_value) = &subject_value {
                 let mut arguments = Vec::with_capacity(groups.len() + 3);
-                arguments.push(Value::str(matched));
-                arguments.extend(
-                    groups
-                        .iter()
-                        .map(|group| group.clone().map_or(Value::Undefined, Value::str)),
-                );
+                arguments.push(Value::Str(prepared.decode(matched)));
+                arguments.extend(groups.iter().map(|group| {
+                    group
+                        .as_ref()
+                        .map_or(Value::Undefined, |text| Value::Str(prepared.decode(text)))
+                }));
                 let (cursor_byte, cursor_units) = position_cursor;
-                let offset = cursor_units + input[cursor_byte..start].encode_utf16().count();
+                let offset = cursor_units + prepared.unit_length(&input[cursor_byte..start]);
                 position_cursor = (start, offset);
                 arguments.push(Value::Int(i64::try_from(offset).unwrap_or(i64::MAX)));
                 arguments.push(subject_value.clone());
@@ -65996,7 +66041,7 @@ impl InterpreterCore {
                     self.store_prototype_link(named, None);
                     for (name, group) in group_names.iter().zip(&groups) {
                         if let Some(name) = name {
-                            let value = group.clone().map_or(Value::Undefined, Value::str);
+                            let value = group.as_ref().map_or(Value::Undefined, |text| Value::Str(prepared.decode(text)));
                             self.set_object_property(named, name.clone(), value)?;
                         }
                     }
@@ -66018,33 +66063,29 @@ impl InterpreterCore {
                 // ToString of the replacer's result (ES2020 21.1.3.17 step
                 // 6.e, 21.2.5.8 step 14.l.iii): an object's own toString
                 // runs, and a Symbol is a TypeError (bd-9vouw.358).
-                self.replacement_to_string(module, &result)?
+                let text = self.replacement_to_string(module, &result)?;
+                let replacement = self.prepare_regexp_input(&text, full_unicode)?;
+                self.append_regexp_output(&mut output, replacement.text())?;
             } else {
                 // A template can expand far beyond its own length (`$'`
-                // repeated), so the expansion is bounded while it is built.
-                let budget = self.config.max_string_size.saturating_sub(output.len());
-                Self::get_substitution(
+                // repeated). Append directly with decoded-length admission
+                // for each piece, avoiding a second replacement allocation.
+                self.get_substitution(
                     matched,
                     input,
                     start,
                     end,
                     &groups,
-                    &group_names,
-                    &template,
-                    budget,
-                )
-                .map_err(|length| InterpreterError::StringLimitExceeded {
-                    length: output.len().saturating_add(length),
-                    max: self.config.max_string_size,
-                })?
-            };
-            output.push_str(&replacement);
-            self.check_string_limit(output.len())?;
+                    &substitution_names,
+                    template.text(),
+                    &mut output,
+                )?;
+            }
             last = end;
         }
-        output.push_str(&input[last..]);
+        self.append_regexp_output(&mut output, &input[last..])?;
         self.replace_pending_hostcall_result_label(Some(label))?;
-        Ok(Value::str(output))
+        Ok(Value::Str(prepared.decode(output.text())))
     }
 
     /// ES2020 21.1.3.17.1 GetSubstitution: `$$`, `$&`, `` $` ``, `$'`, `$n`,
@@ -66053,11 +66094,11 @@ impl InterpreterCore {
     /// `>`, or with no named groups, stays literal). `names[i]` names
     /// `groups[i]`.
     ///
-    /// The result never exceeds `max_len` bytes: each piece is checked before
-    /// it is appended, and `Err(length)` reports the length that would have
-    /// been reached (franken_engine#2 follow-up).
+    /// Each borrowed piece is admitted against decoded string length and
+    /// live native capacity before it is appended (franken_engine#2).
     #[allow(clippy::too_many_arguments)]
     fn get_substitution(
+        &self,
         matched: &str,
         input: &str,
         start: usize,
@@ -66065,34 +66106,33 @@ impl InterpreterCore {
         groups: &[Option<String>],
         names: &[Option<String>],
         template: &str,
-        max_len: usize,
-    ) -> Result<String, usize> {
+        output: &mut RegExpOutput,
+    ) -> Result<(), InterpreterError> {
         let has_named_groups = names.iter().any(Option::is_some);
         let bytes = template.as_bytes();
         let group = |index: usize| {
             (1..=groups.len())
                 .contains(&index)
-                .then(|| groups[index - 1].clone().unwrap_or_default())
+                .then(|| groups[index - 1].as_deref().unwrap_or_default())
         };
-        let mut output = String::with_capacity(template.len());
         let mut index = 0usize;
         while index < template.len() {
             if bytes[index] == b'$' && index + 1 < template.len() {
                 let next = bytes[index + 1];
                 let expansion = match next {
-                    b'$' => Some(("$".to_string(), 2)),
+                    b'$' => Some(("$", 2)),
                     b'<' if has_named_groups => template[index + 2..].find('>').map(|close| {
                         let name = &template[index + 2..index + 2 + close];
                         let text = names
                             .iter()
                             .position(|candidate| candidate.as_deref() == Some(name))
-                            .and_then(|position| groups.get(position).cloned().flatten())
+                            .and_then(|position| groups.get(position).and_then(Option::as_deref))
                             .unwrap_or_default();
                         (text, close + 3)
                     }),
-                    b'&' => Some((matched.to_string(), 2)),
-                    b'`' => Some((input[..start].to_string(), 2)),
-                    b'\'' => Some((input[end..].to_string(), 2)),
+                    b'&' => Some((matched, 2)),
+                    b'`' => Some((&input[..start], 2)),
+                    b'\'' => Some((&input[end..], 2)),
                     b'0'..=b'9' => {
                         let first = usize::from(next - b'0');
                         let two_digit = bytes
@@ -66107,24 +66147,16 @@ impl InterpreterCore {
                     _ => None,
                 };
                 if let Some((text, width)) = expansion {
-                    let length = output.len().saturating_add(text.len());
-                    if length > max_len {
-                        return Err(length);
-                    }
-                    output.push_str(&text);
+                    self.append_regexp_output(output, text)?;
                     index += width;
                     continue;
                 }
             }
             let ch = template[index..].chars().next().unwrap_or('\u{fffd}');
-            let length = output.len().saturating_add(ch.len_utf8());
-            if length > max_len {
-                return Err(length);
-            }
-            output.push(ch);
+            self.append_regexp_output(output, &template[index..index + ch.len_utf8()])?;
             index += ch.len_utf8().max(1);
         }
-        Ok(output)
+        Ok(())
     }
 
     /// Coerce a `Number.prototype` receiver to an `f64`, mirroring the
@@ -84273,27 +84305,13 @@ impl InterpreterCore {
         )
     }
 
-    /// The UTF-8 byte offset of UTF-16 index `index` in `text`; an index
-    /// inside a surrogate pair rounds up to the next character.
-    fn utf16_index_to_byte_offset(text: &str, index: usize) -> usize {
-        let mut units = 0usize;
-        for (offset, ch) in text.char_indices() {
-            if units >= index {
-                return offset;
-            }
-            units += ch.len_utf16();
-        }
-        text.len()
-    }
-
     /// RegExpBuiltinExec's result (ES2020 21.2.5.2.2) for the first match at
-    /// or after byte offset `start` (exactly at `start` when `sticky`): the
+    /// or after UTF-16 offset `start` (exactly at `start` when `sticky`): the
     /// match array with every capture, `index` (UTF-16), `input` and
     /// `groups`, and with the `d` flag `indices` (ES2022 MakeIndicesArray:
     /// each capture's UTF-16 `[start, end]` or undefined, and `groups`),
-    /// plus the match's end byte offset.
-    /// RegExpBuiltinExec's match and result object for `subject` from byte
-    /// offset `start` of its UTF-8 projection. An ASCII subject's byte
+    /// plus the match's end UTF-16 offset.
+    /// An ASCII subject's byte
     /// offsets are its UTF-16 offsets, and the subject is the result's
     /// `input` and the legacy statics' input as it is, shared, not copied:
     /// an exec loop over a long string decoded and copied the whole string
@@ -84305,28 +84323,24 @@ impl InterpreterCore {
         start: usize,
         sticky: bool,
         has_indices: bool,
+        full_unicode: bool,
     ) -> Result<Option<(Value, usize)>, InterpreterError> {
-        let input = subject.as_utf8_projection();
-        let ascii = subject.is_ascii();
-        let Some(spans) = regex.captures_at(input, start, sticky)? else {
+        let input = self.prepare_regexp_input(subject, full_unicode)?;
+        let Some(spans) = regex.captures_at(input.text(), input.byte_index(start), sticky)? else {
             return Ok(None);
         };
         let Some((whole_start, whole_end)) = spans[0] else {
             return Ok(None);
         };
-        self.record_legacy_regexp_match_shared(subject, &spans);
+        self.record_legacy_regexp_input_match(subject, &input, &spans);
         let group_value = |span: Option<(usize, usize)>| {
-            span.map_or(Value::Undefined, |(from, to)| Value::str(&input[from..to]))
+            span.map_or(Value::Undefined, |(from, to)| {
+                Value::Str(input.slice(from, to))
+            })
         };
         let values: Vec<Value> = spans.iter().map(|span| group_value(*span)).collect();
         let result = self.alloc_array_from_values(&values)?;
-        let utf16_offset = |offset: usize| {
-            if ascii {
-                offset
-            } else {
-                input[..offset].encode_utf16().count()
-            }
-        };
+        let utf16_offset = |offset: usize| input.unit_index(offset);
         let index = utf16_offset(whole_start);
         self.set_object_property(
             result,
@@ -84388,7 +84402,7 @@ impl InterpreterCore {
             self.set_object_property(indices, "groups".to_string(), index_groups)?;
             self.set_object_property(result, "indices".to_string(), Value::Object(indices))?;
         }
-        Ok(Some((Value::Object(result), whole_end)))
+        Ok(Some((Value::Object(result), utf16_offset(whole_end))))
     }
 
     /// RegExp.prototype[@@match], [@@matchAll], [@@replace], [@@search] and
@@ -84451,12 +84465,15 @@ impl InterpreterCore {
                 got: "symbol".to_string(),
             });
         }
-        let input = self.value_to_string(&input);
+        let input = match input {
+            Value::Str(text) => text,
+            other => JsString::from(self.value_to_string(&other)),
+        };
         match method {
             "@@match" => self.string_match_value(&input, &receiver),
             "@@matchAll" => {
                 let label = self.join_arg_range_label(args)?;
-                self.string_match_all_value(&JsString::from(input), &receiver, &label)
+                self.string_match_all_value(&input, &receiver, &label)
             }
             "@@search" => self.string_search_value(&input, &receiver),
             "@@split" => {
@@ -84845,8 +84862,6 @@ impl InterpreterCore {
             Value::Str(text) => text.clone(),
             other => JsString::from(self.value_to_string(other)),
         };
-        let text = subject.as_utf8_projection();
-        let ascii = subject.is_ascii();
         let regex = self.compile_regexp_pattern(&source, &flags)?;
         let sticky = flags.contains('y');
         let tracks_last_index = sticky || flags.contains('g');
@@ -84858,12 +84873,14 @@ impl InterpreterCore {
         let found = if last_index > subject.utf16_len() {
             None
         } else {
-            let start = if ascii {
-                last_index
-            } else {
-                Self::utf16_index_to_byte_offset(text, last_index)
-            };
-            self.regexp_exec_at(&regex, &subject, start, sticky, flags.contains('d'))?
+            self.regexp_exec_at(
+                &regex,
+                &subject,
+                last_index,
+                sticky,
+                flags.contains('d'),
+                flags.contains('u') || flags.contains('v'),
+            )?
         };
         match found {
             None => {
@@ -84874,12 +84891,7 @@ impl InterpreterCore {
             }
             Some((result, end)) => {
                 if tracks_last_index {
-                    let end_units = if ascii {
-                        end
-                    } else {
-                        text[..end].encode_utf16().count()
-                    };
-                    self.set_regexp_last_index(regexp_id, end_units)?;
+                    self.set_regexp_last_index(regexp_id, end)?;
                 }
                 Ok(result)
             }
@@ -85022,18 +85034,18 @@ impl InterpreterCore {
         &mut self,
         regexp_id: ObjectId,
         regex: &CompiledRegExp,
-        input: &str,
+        input: &RegExpInput<'_>,
     ) -> Result<Option<Captures>, InterpreterError> {
         let start = self.regexp_last_index_start(regexp_id);
-        let found = if start > input.encode_utf16().count() {
+        let found = if start > input.unit_index(input.text().len()) {
             None
         } else {
-            regex.captures_at(input, Self::utf16_index_to_byte_offset(input, start), true)?
+            regex.captures_at(input.text(), input.byte_index(start), true)?
         };
         let next = found
             .as_ref()
             .and_then(|spans| spans[0])
-            .map_or(0, |(_, end)| input[..end].encode_utf16().count());
+            .map_or(0, |(_, end)| input.unit_index(end));
         self.set_regexp_last_index(regexp_id, next)?;
         Ok(found)
     }
@@ -99782,14 +99794,8 @@ impl InterpreterCore {
                 // 21.1.3.17: a callable replacer or a GetSubstitution template.
                 let this_val = self.arg_or_undefined(args, 0)?;
                 let str_text = match this_val {
-                    Value::Str(s) => s.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::Object(_) => "[object Object]".to_string(),
-                    _ => "[object Object]".to_string(),
+                    Value::Str(s) => s,
+                    other => JsString::from(self.value_to_string(&other)),
                 };
                 let search_val = self.arg_or_undefined(args, 1)?;
                 let replace_val = self.arg_or_undefined(args, 2)?;
@@ -100393,12 +100399,12 @@ impl InterpreterCore {
                 // Get the this value (should be a string)
                 let this_val = self.read_reg(args.start)?;
                 let this_str = match this_val {
-                    Value::Str(s) => s.to_string(),
-                    Value::Int(i) => i.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
+                    Value::Str(s) => s.clone(),
+                    Value::Int(i) => JsString::from(i.to_string()),
+                    Value::Float(f) => JsString::from(f.to_string()),
+                    Value::Bool(b) => JsString::from(b.to_string()),
+                    Value::Null => JsString::from("null"),
+                    Value::Undefined => JsString::from("undefined"),
                     _ => return Ok(Value::Null),
                 };
 
@@ -102620,14 +102626,8 @@ impl InterpreterCore {
                 // occurrence; a non-global RegExp search is a TypeError.
                 let this_val = self.arg_or_undefined(args, 0)?;
                 let str_text = match this_val {
-                    Value::Str(s) => s.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::Object(_) => "[object Object]".to_string(),
-                    _ => "[object Object]".to_string(),
+                    Value::Str(s) => s,
+                    other => JsString::from(self.value_to_string(&other)),
                 };
                 let search_val = self.arg_or_undefined(args, 1)?;
                 let replace_val = self.arg_or_undefined(args, 2)?;
@@ -103444,13 +103444,8 @@ impl InterpreterCore {
             "builtin:StringPrototypeSearch" => {
                 let this_val = self.read_reg(args.start)?;
                 let str_text = match this_val {
-                    Value::Str(s) => s.to_string(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => "[object Object]".to_string(),
+                    Value::Str(s) => s.clone(),
+                    other => JsString::from(self.value_to_string(&other)),
                 };
 
                 let pattern_val = if args.count > 1 {
@@ -104029,14 +104024,8 @@ impl InterpreterCore {
                 // number of elements (bd-9vouw.40).
                 let this_val = self.read_reg(args.start)?;
                 let str_text = match this_val {
-                    Value::Str(s) => s.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::Object(_) => "[object Object]".to_string(),
-                    _ => "[object Object]".to_string(),
+                    Value::Str(s) => s.clone(),
+                    other => JsString::from(self.value_to_string(&other)),
                 };
                 let separator = self.arg_or_undefined(args, 1)?;
                 let limit = Self::split_limit(self.arg_or_undefined(args, 2)?);
@@ -104047,7 +104036,7 @@ impl InterpreterCore {
                 } else if let Some((source, flags)) = regexp_separator {
                     pieces = self.regexp_split_pieces(&str_text, &source, &flags)?;
                 } else if matches!(separator, Value::Undefined) {
-                    pieces.push(Value::str(str_text));
+                    pieces.push(Value::Str(str_text));
                 } else {
                     let separator_text = match &separator {
                         Value::Str(text) => text.to_string(),

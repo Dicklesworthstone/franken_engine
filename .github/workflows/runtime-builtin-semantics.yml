@@ -128,6 +128,7 @@ jobs:
           cargo test --locked --no-default-features -p frankenengine-engine --no-fail-fast \
             --test builtin_prototype_own_methods \
             --test arguments_object_bd_9vouw_25 \
+            --test regexp_surrogate_pair_quantifier_bd_9vouw_156 \
             --test builtin_brands_bd_9vouw_150 \
             --test script_global_declarations \
             --test ir_contract_integration \

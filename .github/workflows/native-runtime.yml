@@ -456,6 +456,20 @@ jobs:
           cargo test --locked -j1 -p frankenengine-engine --lib \
             native_http_client_request_ -- --nocapture --test-threads=1 \
             2>&1 | tee native-buffer-http-tests.log
+      - name: Execute UTF-16 RegExp source regressions
+        if: always()
+        run: |
+          set -euo pipefail
+          cargo test --locked -j1 -p frankenengine-engine \
+            --test regexp_surrogate_pair_quantifier_bd_9vouw_156 \
+            -- --nocapture --test-threads=1 2>&1 | tee native-buffer-regexp-source-tests.log
+      - name: Execute RegExp matcher and temporary allocation regressions
+        if: always()
+        run: |
+          set -euo pipefail
+          cargo test --locked -j1 -p frankenengine-engine --lib \
+            baseline_interpreter::regexp_ -- --nocapture --test-threads=1 \
+            2>&1 | tee native-buffer-regexp-tests.log
       - name: Require complete source-bound output in native workflow logs
         if: always()
         run: |
@@ -465,6 +479,7 @@ jobs:
           status=0
           for log in native-buffer-inputs.log native-buffer-test-list.log native-buffer-tests.log \
             native-buffer-http-test-list.log native-buffer-http-tests.log \
+            native-buffer-regexp-source-tests.log native-buffer-regexp-tests.log \
             native-buffer-diagnostics-test-list.log native-buffer-diagnostics-tests.log \
             native-buffer-timers-test-list.log native-buffer-timers-tests.log \
             native-buffer-timer-resolver-test-list.log native-buffer-timer-resolver-tests.log; do

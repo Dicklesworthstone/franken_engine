@@ -18,22 +18,22 @@
 //! - Annex B literals: a `{` that starts no quantifier, and identity escapes
 //!   such as `\a`, `\z` or `\<` (a bell, an end anchor and a word boundary
 //!   in `regex`).
-//! - Surrogates. The haystack is UTF-8, so only whole characters exist.
-//!   A `\uHHHH` high/low pair is the supplementary character it encodes.
-//!   Without `u`, a surrogate half matches the characters containing it:
-//!   `[\uD800-\uDFFF]` is U+10000..=U+10FFFF, `\uD83C[\uDFFB-\uDFFF]` is
-//!   U+1F3FB..=U+1F3FF, and so is the idiom `[\uD800-\uDBFF][\uDC00-\uDFFF]`.
-//!   With `u`, a lone surrogate matches nothing.
+//! - Without `u`/`v`, each pattern atom matches one UTF-16 code unit.
+//!   Surrogate units use the same injective scalar encoding as
+//!   `regexp_input`, so a dot, class or escaped half consumes exactly one
+//!   unit. A quantifier after a literal supplementary character applies to
+//!   its low half. Unicode capture names remain Unicode identifiers.
+//! - With `u`/`v`, a `\uHHHH` high/low pair is the supplementary character
+//!   it encodes. The existing scalar matcher cannot match a lone surrogate.
 //!
-//! Known differences that remain: without `u`, JavaScript matches UTF-16
-//! code units, so `.` or a lone surrogate half consumes half of a
-//! supplementary character there and all of it here (`/^.$/` rejects "😀" in
-//! JavaScript). Constructs `regex` does not support at all (look-around,
+//! Constructs `regex` does not support at all (look-around,
 //! backreferences) are left as they are: `regex` rejects such a pattern and
 //! `compile_regexp_pattern` runs it on the backtracking matcher
 //! (`regexp_backtrack`) instead.
 
 use std::borrow::Cow;
+
+use super::regexp_input::encode_code_unit;
 
 /// ECMAScript WhiteSpace and LineTerminator code points (ES2020 11.2, 11.3),
 /// as the body of a character class.
@@ -44,7 +44,6 @@ const WORD_CLASS_BODY: &str = "0-9A-Za-z_";
 const JS_DOT: &str = r"[^\n\r\x{2028}\x{2029}]";
 const NEVER: &str = r"[^\s\S]";
 const ANY: &str = r"[\s\S]";
-const SUPPLEMENTARY_RANGE: &str = r"\x{10000}-\x{10FFFF}";
 const HIGH_SURROGATES: (u32, u32) = (0xD800, 0xDBFF);
 const LOW_SURROGATES: (u32, u32) = (0xDC00, 0xDFFF);
 
@@ -110,6 +109,16 @@ impl Translator {
             match c {
                 '\\' if self.peek(1).is_some() => self.atom_escape(),
                 '[' => self.class(),
+                '(' if self.peek(1) == Some('?')
+                    && self.peek(2) == Some('<')
+                    && self.peek(3).is_some_and(|c| !matches!(c, '=' | '!')) =>
+                {
+                    // RegExpIdentifierName is Unicode even without `u`.
+                    // Do not encode a supplementary letter in a name as
+                    // two pattern atoms. Escaped names remain for the
+                    // backtracking parser when `regex` does not admit them.
+                    self.copy_group_name();
+                }
                 '{' if !self.is_braced_quantifier() => {
                     self.out.push_str(r"\{");
                     self.index += 1;
@@ -118,22 +127,33 @@ impl Translator {
                     self.out.push_str(JS_DOT);
                     self.index += 1;
                 }
-                // Without `u` a literal astral character is a surrogate pair
-                // and a quantifier after it applies to its low half, as for
-                // the escaped pair (bd-9vouw.156): `/😀?/` matches the pair
-                // once, never the empty string.
                 _ if !self.unicode && u32::from(c) > 0xFFFF => {
+                    // Leave the following quantifier in the token stream:
+                    // it binds to the emitted low unit, not the pair.
+                    self.push_code_point_units(c);
                     self.index += 1;
-                    if self.take_low_half_quantifier() {
-                        self.out.push(c);
-                    } else {
-                        self.out.push_str(NEVER);
-                    }
                 }
                 _ => {
                     self.out.push(c);
                     self.index += 1;
                 }
+            }
+        }
+    }
+
+    fn push_code_point_units(&mut self, character: char) {
+        for &unit in character.encode_utf16(&mut [0; 2]).iter() {
+            push_char(&mut self.out, u32::from(encode_code_unit(unit)));
+        }
+    }
+
+    /// Copy a capture name or named backreference through its closing `>`.
+    fn copy_group_name(&mut self) {
+        while let Some(character) = self.peek(0) {
+            self.out.push(character);
+            self.index += 1;
+            if character == '>' {
+                break;
             }
         }
     }
@@ -205,6 +225,7 @@ impl Translator {
                 self.out.push('k');
                 self.index += 2;
             }
+            'k' if self.peek(2) == Some('<') => self.copy_group_name(),
             'p' | 'P' if !self.unicode => {
                 self.out.push(escaped);
                 self.index += 2;
@@ -237,6 +258,10 @@ impl Translator {
                 });
                 self.index += 2;
             }
+            other if !self.unicode && u32::from(other) > 0xFFFF => {
+                self.push_code_point_units(other);
+                self.index += 2;
+            }
             other => {
                 push_identity_escape(&mut self.out, other);
                 self.index += 2;
@@ -248,6 +273,10 @@ impl Translator {
     fn atom_unicode_escape(&mut self) {
         if let Some(unit) = self.code_unit_escape_at(0) {
             self.index += 6;
+            if !self.unicode {
+                push_char(&mut self.out, u32::from(encode_code_unit(unit as u16)));
+                return;
+            }
             if !is_surrogate(unit) {
                 push_char(&mut self.out, unit);
                 return;
@@ -257,36 +286,10 @@ impl Translator {
                 && is_in(low, LOW_SURROGATES)
             {
                 self.index += 6;
-                if !self.unicode && !self.take_low_half_quantifier() {
-                    self.out.push_str(NEVER);
-                    return;
-                }
                 push_char(&mut self.out, combine(unit, low));
                 return;
             }
-            if self.unicode {
-                self.out.push_str(NEVER);
-                return;
-            }
-            // A high surrogate and a class of low ones are one character.
-            if is_in(unit, HIGH_SURROGATES)
-                && let Some((ranges, length)) = self.low_surrogate_class()
-            {
-                self.index += length;
-                if !self.take_low_half_quantifier() {
-                    self.out.push_str(NEVER);
-                    return;
-                }
-                self.out.push('[');
-                for (first, last) in ranges {
-                    push_range(&mut self.out, combine(unit, first), combine(unit, last));
-                }
-                self.out.push(']');
-                return;
-            }
-            self.out.push('[');
-            push_non_unicode_range(&mut self.out, unit, unit);
-            self.out.push(']');
+            self.out.push_str(NEVER);
             return;
         }
         if self.unicode
@@ -302,104 +305,8 @@ impl Translator {
         self.index += 2;
     }
 
-    /// A class of low surrogates at the cursor: `[`, one or more `\uDCxx`
-    /// or `\uDCxx-\uDCyy` items, `]`. regexpu-core writes an astral set
-    /// without `u` this way (`\uD835[\uDC00-\uDC19\uDC34-\uDC4D]`), and
-    /// translating each half alone multiplied it into tens of thousands of
-    /// ranges that took about half a second to compile per use. Returns the
-    /// ranges and the class length.
-    fn low_surrogate_class(&self) -> Option<(Vec<(u32, u32)>, usize)> {
-        if self.peek(0) != Some('[') {
-            return None;
-        }
-        let low = |unit: &u32| is_in(*unit, LOW_SURROGATES);
-        let mut ranges = Vec::new();
-        let mut offset = 1;
-        while self.peek(offset) != Some(']') {
-            let first = self.code_unit_escape_at(offset).filter(low)?;
-            offset += 6;
-            let last = if self.peek(offset) == Some('-') {
-                let last = self
-                    .code_unit_escape_at(offset + 1)
-                    .filter(|unit| low(unit) && *unit >= first)?;
-                offset += 7;
-                last
-            } else {
-                first
-            };
-            ranges.push((first, last));
-        }
-        (!ranges.is_empty()).then_some((ranges, offset + 1))
-    }
-
-    /// The idiom `[\uD800-\uDBFF][\uDC00-\uDFFF]` at the cursor.
-    fn is_surrogate_pair_idiom(&self) -> bool {
-        let range_class = |offset: usize, (first, last): (u32, u32)| {
-            self.peek(offset) == Some('[')
-                && self.code_unit_escape_at(offset + 1) == Some(first)
-                && self.peek(offset + 7) == Some('-')
-                && self.code_unit_escape_at(offset + 8) == Some(last)
-                && self.peek(offset + 14) == Some(']')
-        };
-        range_class(0, HIGH_SURROGATES) && range_class(15, LOW_SURROGATES)
-    }
-
-    /// After a surrogate pair written as two halves and emitted as the one
-    /// character it encodes (without `u`), at a quantifier written on the low
-    /// half. JavaScript repeats that code unit only; here the character is
-    /// one unit, and no low surrogate follows a pair's low half in a
-    /// well-formed string, so the pair matches the character once unless the
-    /// quantifier demands two or more low halves, when it matches nothing
-    /// (bd-9vouw.156). Applying `?` to the whole character instead made
-    /// `[\uD800-\uDBFF][\uDC00-\uDFFF]?` match the empty string everywhere.
-    /// Where JavaScript would match the high half alone (`??`, `{0}`) the
-    /// character is matched, as for any surrogate half (see the module docs).
-    /// Consumes the quantifier and a lazy `?`; returns whether the pair can
-    /// match.
-    fn take_low_half_quantifier(&mut self) -> bool {
-        let min_low_halves = match self.peek(0) {
-            Some('?' | '*') => {
-                self.index += 1;
-                0
-            }
-            Some('+') => {
-                self.index += 1;
-                1
-            }
-            Some('{') if self.is_braced_quantifier() => {
-                let mut min = 0u32;
-                self.index += 1;
-                while let Some(digit) = self.peek(0).and_then(|c| c.to_digit(10)) {
-                    min = min.saturating_mul(10).saturating_add(digit);
-                    self.index += 1;
-                }
-                while self.peek(0).is_some_and(|c| c != '}') {
-                    self.index += 1;
-                }
-                self.index += 1;
-                min
-            }
-            _ => return true,
-        };
-        if self.peek(0) == Some('?') {
-            self.index += 1;
-        }
-        min_low_halves <= 1
-    }
-
     /// A character class; the cursor is on the `[`.
     fn class(&mut self) {
-        if !self.unicode && self.is_surrogate_pair_idiom() {
-            self.index += 30;
-            if !self.take_low_half_quantifier() {
-                self.out.push_str(NEVER);
-                return;
-            }
-            self.out.push('[');
-            self.out.push_str(SUPPLEMENTARY_RANGE);
-            self.out.push(']');
-            return;
-        }
         match (self.peek(1), self.peek(2)) {
             (Some(']'), _) => {
                 self.out.push_str(NEVER);
@@ -438,7 +345,14 @@ impl Translator {
                     atoms.push(ClassAtom::Dash);
                     self.index += 1;
                 }
-                '\\' if self.peek(1).is_some() => atoms.push(self.class_escape()),
+                '\\' if self.peek(1).is_some() => match self.class_escape() {
+                    ClassAtom::Char(value) if !self.unicode && value > 0xFFFF => {
+                        let (high, low) = split(value);
+                        atoms.push(ClassAtom::Char(high));
+                        atoms.push(ClassAtom::Char(low));
+                    }
+                    atom => atoms.push(atom),
+                },
                 _ => {
                     self.index += 1;
                     let code_point = u32::from(c);
@@ -1010,27 +924,18 @@ fn push_scalar_range(out: &mut String, first: u32, last: u32) {
     }
 }
 
-/// A code unit range without the `u` flag. A surrogate half stands for the
-/// supplementary characters whose UTF-16 form contains it.
+/// A code unit range without `u`, split only around the encoded surrogate
+/// interval. Each class member still consumes one input code unit.
 fn push_non_unicode_range(out: &mut String, first: u32, last: u32) {
     push_scalar_range(out, first, last);
-    let high = (first.max(HIGH_SURROGATES.0), last.min(HIGH_SURROGATES.1));
-    let low = (first.max(LOW_SURROGATES.0), last.min(LOW_SURROGATES.1));
-    if high == HIGH_SURROGATES || low == LOW_SURROGATES {
-        out.push_str(SUPPLEMENTARY_RANGE);
-        return;
-    }
-    if high.0 <= high.1 {
+    let start = first.max(0xD800);
+    let end = last.min(0xDFFF);
+    if start <= end {
         push_range(
             out,
-            combine(high.0, LOW_SURROGATES.0),
-            combine(high.1, LOW_SURROGATES.1),
+            u32::from(encode_code_unit(start as u16)),
+            u32::from(encode_code_unit(end as u16)),
         );
-    }
-    if low.0 <= low.1 {
-        for lead in HIGH_SURROGATES.0..=HIGH_SURROGATES.1 {
-            push_range(out, combine(lead, low.0), combine(lead, low.1));
-        }
     }
 }
 
@@ -2211,11 +2116,13 @@ fn valid_property_escape(body: &str, negated: bool, unicode_sets: bool) -> bool 
 
 #[cfg(test)]
 mod tests {
+    use super::super::regexp_input::RegExpInput;
     use super::{
         GENERAL_CATEGORY_VALUES, LONE_PROPERTY_NAMES, SCRIPT_VALUES, STRING_PROPERTY_NAMES,
         group_modifier_error, has_nested_quantifier, js_pattern_to_rust, unicode_mode_syntax_error,
         unicode_property_escape_error, unicode_sets_class_error,
     };
+    use crate::js_string::JsString;
     use regex::{Regex, RegexBuilder};
 
     /// bd-9vouw.401: with `u`, a `{` that starts no quantifier, a lone `}` or
@@ -2772,15 +2679,27 @@ mod tests {
             .unwrap_or_else(|error| panic!("`{pattern}` did not translate: {error}"))
     }
 
-    fn rust(pattern: &str) -> Regex {
-        rust_with(pattern, "")
+    struct CodeUnitRegex(Regex);
+
+    impl CodeUnitRegex {
+        fn is_match(&self, text: &str) -> bool {
+            self.is_match_string(&JsString::from(text))
+        }
+
+        fn is_match_string(&self, text: &JsString) -> bool {
+            self.0.is_match(RegExpInput::new(text, false).text())
+        }
+    }
+
+    fn rust(pattern: &str) -> CodeUnitRegex {
+        CodeUnitRegex(rust_with(pattern, ""))
     }
 
     /// A high surrogate before a class of several low ranges (regexpu-core's
-    /// astral set without `u`) is one compact class of the characters it
-    /// encodes (bd-9vouw.183).
+    /// astral set without `u`) stays a compact sequence of unit atoms
+    /// (bd-9vouw.183, bd-9vouw.458).
     #[test]
-    fn high_surrogate_with_a_multi_range_low_class_is_one_astral_class() {
+    fn high_surrogate_with_a_multi_range_low_class_is_compact() {
         let pattern = r"^\uD835[\uDC00-\uDC19\uDC34-\uDC4D\uDC56]$";
         let translated = js_pattern_to_rust(pattern, "");
         assert!(translated.len() < 80, "{translated}");
@@ -2926,9 +2845,9 @@ mod tests {
     /// string everywhere: the `?` on the low half applied to the whole
     /// character the pair was rewritten as (bd-9vouw.156).
     #[test]
-    fn quantified_low_half_of_a_pair_matches_the_character_once() {
+    fn quantified_low_half_of_a_pair_repeats_only_that_unit() {
         let idiom = r"[\uD800-\uDBFF][\uDC00-\uDFFF]";
-        for quantifier in ["", "?", "*", "+", "{1}", "{0,3}", "{1,}?", "??", "{0}"] {
+        for quantifier in ["", "?", "*", "+", "{1}", "{0,3}", "{1,}?", "??"] {
             let whole = rust(&format!("^{idiom}{quantifier}$"));
             assert!(whole.is_match("😀"), "{quantifier}");
             assert!(!whole.is_match(""), "{quantifier} matched the empty string");
@@ -2938,7 +2857,15 @@ mod tests {
                 "{quantifier}"
             );
         }
+        assert!(!rust(&format!("^{idiom}{{0}}$")).is_match("😀"));
+        assert!(
+            rust(&format!("^{idiom}{{0}}$")).is_match_string(&JsString::from_code_units(&[0xD83D]))
+        );
         assert!(!rust(&format!("{idiom}{{2}}")).is_match("😀😀"));
+        assert!(
+            rust(&format!("^{idiom}{{2}}$"))
+                .is_match_string(&JsString::from_code_units(&[0xD83D, 0xDE00, 0xDE00]))
+        );
         assert!(rust(r"^😀?$").is_match("😀"));
         assert!(!rust(r"^😀?$").is_match(""));
         assert!(rust(r"^\ud83c[\udffb-\udfff]*$").is_match("\u{1F3FC}"));
@@ -2948,6 +2875,54 @@ mod tests {
         // pair is one code point the quantifier applies to.
         assert!(rust(r"^(?:😀)?$").is_match(""));
         assert!(rust_with(r"^😀?$", "u").is_match(""));
+    }
+
+    #[test]
+    fn non_unicode_atoms_and_ranges_match_exact_code_units() {
+        let pair = JsString::from("😀");
+        let high = JsString::from_code_units(&[0xD83D]);
+        let low = JsString::from_code_units(&[0xDE00]);
+        assert!(!rust("^.$").is_match_string(&pair));
+        assert!(rust("^..$").is_match_string(&pair));
+        assert!(rust("^.$").is_match_string(&high));
+        assert!(rust("^.$").is_match_string(&low));
+        for pattern in [r"^\uD83D$", r"^[\uD800-\uDBFF]$", "^[😀]$", r"^[\😀]$"] {
+            assert!(rust(pattern).is_match_string(&high), "{pattern}");
+            assert!(!rust(pattern).is_match_string(&pair), "{pattern}");
+        }
+        for unit in [0xD7FF, 0xD800, 0xDBFF, 0xDC00, 0xDFFF, 0xE000] {
+            assert!(
+                rust(r"^[\uD7FF-\uE000]$").is_match_string(&JsString::from_code_units(&[unit])),
+                "{unit:X}"
+            );
+        }
+        assert!(!rust(r"^[^\u0000-\uFFFF]$").is_match_string(&high));
+        assert!(rust("^\u{F0000}$").is_match("\u{F0000}"));
+        assert!(!rust("^\u{F0000}$").is_match_string(&JsString::from_code_units(&[0xD800])));
+    }
+
+    #[test]
+    fn non_unicode_literal_quantifiers_and_capture_names_keep_their_domains() {
+        let high = JsString::from_code_units(&[0xD83D]);
+        for pattern in ["^😀{0}$", r"^\😀{0}$", r"^\uD83D\uDE00{0}$"] {
+            assert!(rust(pattern).is_match_string(&high), "{pattern}");
+            assert!(!rust(pattern).is_match("😀"), "{pattern}");
+        }
+        let pattern = "(?<𝒜>.)(?<tail>.)";
+        let translated = js_pattern_to_rust(pattern, "");
+        assert!(translated.contains("(?<𝒜>"));
+        let text = JsString::from("😀");
+        let input = RegExpInput::new(&text, false);
+        let regex = rust_with(pattern, "");
+        let captures = regex.captures(input.text()).expect("two UTF-16 units");
+        assert_eq!(
+            input.decode(captures.name("𝒜").expect("Unicode name").as_str()),
+            high
+        );
+        assert_eq!(
+            input.decode(captures.name("tail").expect("low unit").as_str()),
+            JsString::from_code_units(&[0xDE00])
+        );
     }
 
     /// ohm-js compiles `\p{Cs}` for every General_Category value when it

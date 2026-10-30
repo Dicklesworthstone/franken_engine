@@ -7,8 +7,9 @@
 //! and named backreferences, captures cleared at each repetition, and the
 //! rule that an optional iteration may not match the empty string.
 //!
-//! Matching is over characters (Unicode scalar values), like the `regex`
-//! path, so the surrogate rules of `regexp_syntax` apply here too. Every
+//! Matching is over Unicode scalar values in `u`/`v` mode and the lossless
+//! UTF-16 unit encoding from `regexp_input` otherwise, just like the `regex`
+//! path. Every
 //! match attempt runs under a step budget that depends only on the pattern
 //! and the input length, so a catastrophic pattern ends with
 //! [`BacktrackError::StepBudget`] instead of running without bound.
@@ -41,6 +42,7 @@ use std::sync::OnceLock;
 use regex::Regex;
 
 use super::InterpreterError;
+use super::regexp_input::encode_code_unit;
 
 mod execution;
 use execution::Run;
@@ -56,7 +58,6 @@ const MAX_PROGRAM_LEN: usize = 1 << 16;
 const MAX_UNROLLED_REPEAT: u32 = 16;
 const HIGH_SURROGATES: (u32, u32) = (0xD800, 0xDBFF);
 const LOW_SURROGATES: (u32, u32) = (0xDC00, 0xDFFF);
-const SUPPLEMENTARY: (u32, u32) = (0x1_0000, 0x10_FFFF);
 /// Deepest group nesting the parser accepts (franken_engine#2). Real
 /// patterns nest a handful of levels; the `regex` crate's own default nest
 /// limit is 250, so every pattern the automaton route accepts below that
@@ -268,8 +269,7 @@ impl PreparedInput {
                     .saturating_sub(1);
                 let mut character = block * OFFSET_BLOCK_SCALARS;
                 let limit = (character + OFFSET_BLOCK_SCALARS).min(self.chars.len());
-                let mut current =
-                    usize::try_from(checkpoints[block]).unwrap_or(usize::MAX);
+                let mut current = usize::try_from(checkpoints[block]).unwrap_or(usize::MAX);
                 let word = widths[block];
                 while character < limit {
                     if current >= usize::try_from(byte).unwrap_or(usize::MAX) {
@@ -302,8 +302,7 @@ impl PreparedInput {
                 }
                 let block = index / OFFSET_BLOCK_SCALARS;
                 let within = index % OFFSET_BLOCK_SCALARS;
-                let mut offset =
-                    usize::try_from(checkpoints[block]).unwrap_or(usize::MAX);
+                let mut offset = usize::try_from(checkpoints[block]).unwrap_or(usize::MAX);
                 let word = widths[block];
                 for lane in 0..within {
                     offset += 1 + ((word >> (2 * lane)) & 3) as usize;
@@ -584,26 +583,17 @@ impl RangeSet {
         self.push(first.max(0xE000), last);
     }
 
-    /// A code unit range without `u`: a surrogate half stands for the
-    /// supplementary characters whose UTF-16 form contains it.
+    /// A code unit range without `u`, with the surrogate interval mapped
+    /// injectively into the same scalar interval as the input.
     fn push_code_units(&mut self, first: u32, last: u32) {
         self.push_scalar(first, last);
-        let high = (first.max(HIGH_SURROGATES.0), last.min(HIGH_SURROGATES.1));
-        let low = (first.max(LOW_SURROGATES.0), last.min(LOW_SURROGATES.1));
-        if high == HIGH_SURROGATES || low == LOW_SURROGATES {
-            self.push(SUPPLEMENTARY.0, SUPPLEMENTARY.1);
-            return;
-        }
-        if high.0 <= high.1 {
+        let start = first.max(0xD800);
+        let end = last.min(0xDFFF);
+        if start <= end {
             self.push(
-                combine(high.0, LOW_SURROGATES.0),
-                combine(high.1, LOW_SURROGATES.1),
+                u32::from(encode_code_unit(start as u16)),
+                u32::from(encode_code_unit(end as u16)),
             );
-        }
-        if low.0 <= low.1 {
-            for lead in HIGH_SURROGATES.0..=HIGH_SURROGATES.1 {
-                self.push(combine(lead, low.0), combine(lead, low.1));
-            }
         }
     }
 
@@ -896,9 +886,36 @@ impl Parser {
 
     fn term(&mut self) -> Result<Node, String> {
         let groups_before = self.group_count;
-        let (atom, quantifiable) = self.atom()?;
+        // A raw supplementary literal (also an Annex B identity escape)
+        // denotes two atoms without `u`. Parse a following quantifier only
+        // on the low unit. Keep names Unicode by doing this here, outside
+        // group_name, instead of expanding every source character up front.
+        let literal = match (self.peek(0), self.peek(1)) {
+            (Some('\\'), Some(escaped)) if u32::from(escaped) > 0xFFFF => Some((escaped, 2)),
+            (Some(character), _) if u32::from(character) > 0xFFFF => Some((character, 1)),
+            _ => None,
+        };
+        let (leading, atom, quantifiable) = match literal.filter(|_| !self.unicode) {
+            Some((character, consumed)) => {
+                let (high, low) = split(u32::from(character));
+                self.index += consumed;
+                (
+                    Some(encode_code_unit(high as u16)),
+                    Node::Char(encode_code_unit(low as u16)),
+                    true,
+                )
+            }
+            None => {
+                let (atom, quantifiable) = self.atom()?;
+                (None, atom, quantifiable)
+            }
+        };
+        let with_leading = |atom| match leading {
+            Some(high) => Node::Concat(vec![Node::Char(high), atom]),
+            None => atom,
+        };
         let Some((min, max)) = self.quantifier()? else {
-            return Ok(atom);
+            return Ok(with_leading(atom));
         };
         if !quantifiable {
             return Err("Nothing to repeat".to_string());
@@ -912,30 +929,13 @@ impl Parser {
         if max.is_some_and(|max| max < min) {
             return Err("numbers out of order in {} quantifier".to_string());
         }
-        Ok(Node::Repeat {
+        Ok(with_leading(Node::Repeat {
             body: Box::new(atom),
             min,
             max,
             greedy,
             groups: (groups_before + 1, self.group_count + 1),
-        })
-    }
-
-    /// After a surrogate pair matched as one character (without `u`), at a
-    /// quantifier written on the low half: see
-    /// `regexp_syntax`'s `take_low_half_quantifier` (bd-9vouw.156). Consumes
-    /// the quantifier and a lazy `?`; whether the pair can match.
-    fn take_low_half_quantifier(&mut self) -> Result<bool, String> {
-        let Some((min, max)) = self.quantifier()? else {
-            return Ok(true);
-        };
-        if self.peek(0) == Some('?') {
-            self.index += 1;
-        }
-        if max.is_some_and(|max| max < min) {
-            return Err("numbers out of order in {} quantifier".to_string());
-        }
-        Ok(min <= 1)
+        }))
     }
 
     /// A quantifier at the cursor; `{` that starts no quantifier is left for
@@ -1017,15 +1017,6 @@ impl Parser {
                 }
                 None => Err("\\ at end of pattern".to_string()),
             },
-            // Without `u` a literal astral character is a surrogate pair; a
-            // quantifier after it applies to the low half (bd-9vouw.156).
-            _ if !self.unicode && u32::from(c) > 0xFFFF => {
-                self.index += 1;
-                if !self.take_low_half_quantifier()? {
-                    return Ok((self.add_class(RangeSet::default(), false), true));
-                }
-                Ok((Node::Char(c), true))
-            }
             _ => {
                 self.index += 1;
                 Ok((Node::Char(c), true))
@@ -1241,6 +1232,9 @@ impl Parser {
             return Ok(Node::Char('u'));
         };
         self.index += 6;
+        if !self.unicode {
+            return Ok(Node::Char(encode_code_unit(unit as u16)));
+        }
         if !is_in(unit, (0xD800, 0xDFFF)) {
             return Ok(Node::Char(char_from(unit)));
         }
@@ -1249,27 +1243,9 @@ impl Parser {
             && is_in(low, LOW_SURROGATES)
         {
             self.index += 6;
-            if !self.unicode && !self.take_low_half_quantifier()? {
-                return Ok(self.add_class(RangeSet::default(), false));
-            }
             return Ok(Node::Char(char_from(combine(unit, low))));
         }
-        let mut set = RangeSet::default();
-        if !self.unicode {
-            // A high surrogate and a class of low ones are one character.
-            if is_in(unit, HIGH_SURROGATES)
-                && let Some((first, last, length)) = self.low_surrogate_class()
-            {
-                self.index += length;
-                if !self.take_low_half_quantifier()? {
-                    return Ok(self.add_class(set, false));
-                }
-                set.push(combine(unit, first), combine(unit, last));
-            } else {
-                set.push_code_units(unit, unit);
-            }
-        }
-        Ok(self.add_class(set, false))
+        Ok(self.add_class(RangeSet::default(), false))
     }
 
     /// `\uHHHH` with the backslash at `self.index + offset`.
@@ -1286,25 +1262,6 @@ impl Parser {
         let close = self.chars.get(start..)?.iter().position(|&c| c == '}')?;
         let value = hex_value(&self.chars, start, close)?;
         Some((value, close + 2))
-    }
-
-    /// A class of low surrogates at the cursor, `[\uDCxx]` or
-    /// `[\uDCxx-\uDCyy]`: the range and the class length.
-    fn low_surrogate_class(&self) -> Option<(u32, u32, usize)> {
-        if self.peek(0) != Some('[') {
-            return None;
-        }
-        let first = self.code_unit_escape_at(1)?;
-        if !is_in(first, LOW_SURROGATES) {
-            return None;
-        }
-        if self.peek(7) == Some(']') {
-            return Some((first, first, 8));
-        }
-        let last = self
-            .code_unit_escape_at(8)
-            .filter(|_| self.peek(7) == Some('-'))?;
-        (is_in(last, LOW_SURROGATES) && self.peek(14) == Some(']')).then_some((first, last, 15))
     }
 
     /// `\p{..}` or `\P{..}` with the cursor on the backslash.
@@ -1391,28 +1348,8 @@ impl Parser {
         Node::Class(self.classes.len() - 1)
     }
 
-    /// The idiom `[\uD800-\uDBFF][\uDC00-\uDFFF]` at the cursor.
-    fn is_surrogate_pair_idiom(&self) -> bool {
-        let range_class = |offset: usize, (first, last): (u32, u32)| {
-            self.peek(offset) == Some('[')
-                && self.code_unit_escape_at(offset + 1) == Some(first)
-                && self.peek(offset + 7) == Some('-')
-                && self.code_unit_escape_at(offset + 8) == Some(last)
-                && self.peek(offset + 14) == Some(']')
-        };
-        range_class(0, HIGH_SURROGATES) && range_class(15, LOW_SURROGATES)
-    }
-
     /// A character class; the cursor is on the `[`.
     fn class(&mut self) -> Result<Node, String> {
-        if !self.unicode && self.is_surrogate_pair_idiom() {
-            self.index += 30;
-            let mut set = RangeSet::default();
-            if self.take_low_half_quantifier()? {
-                set.push(SUPPLEMENTARY.0, SUPPLEMENTARY.1);
-            }
-            return Ok(self.add_class(set, false));
-        }
         self.index += 1;
         let negated = self.peek(0) == Some('^');
         if negated {
@@ -1430,7 +1367,14 @@ impl Parser {
                     self.index += 1;
                     atoms.push(ClassAtom::Dash);
                 }
-                '\\' if self.peek(1).is_some() => atoms.push(self.class_escape()?),
+                '\\' if self.peek(1).is_some() => match self.class_escape()? {
+                    ClassAtom::Char(value) if !self.unicode && value > 0xFFFF => {
+                        let (high, low) = split(value);
+                        atoms.push(ClassAtom::Char(high));
+                        atoms.push(ClassAtom::Char(low));
+                    }
+                    atom => atoms.push(atom),
+                },
                 _ => {
                     self.index += 1;
                     let value = u32::from(c);
@@ -2063,27 +2007,48 @@ fn budget_error(error: BacktrackError) -> InterpreterError {
 
 #[cfg(test)]
 mod tests {
+    use super::super::regexp_input::RegExpInput;
     use super::{
         BacktrackError, BacktrackRegExp, CaptureRetention, CompiledRegExp, GlobalMatchError,
         MAX_GLOBAL_MATCH_RETAINED_BYTES, MAX_GROUP_NESTING, PreparedInput, RetentionBudget,
     };
+    use crate::js_string::JsString;
 
     fn unbounded() -> RetentionBudget {
         RetentionBudget::new(u64::MAX)
     }
 
-    /// exec at 0 as (match index in bytes, captured strings).
+    /// exec at 0 as (match index in UTF-16 units, captured strings).
     fn exec(pattern: &str, flags: &str, text: &str) -> Option<(usize, Vec<Option<String>>)> {
+        let (index, captures) = exec_string(pattern, flags, &JsString::from(text))?;
+        Some((
+            index,
+            captures
+                .into_iter()
+                .map(|capture| capture.map(|text| text.as_utf8_projection().to_string()))
+                .collect(),
+        ))
+    }
+
+    fn exec_string(
+        pattern: &str,
+        flags: &str,
+        text: &JsString,
+    ) -> Option<(usize, Vec<Option<JsString>>)> {
         let regexp = BacktrackRegExp::new(pattern, flags)
             .unwrap_or_else(|error| panic!("/{pattern}/{flags}: {error}"));
+        let input = RegExpInput::new(text, flags.contains('u') || flags.contains('v'));
         let spans = regexp
-            .exec_at(&PreparedInput::new(text), 0, flags.contains('y'))
+            .exec_at(&PreparedInput::new(input.text()), 0, flags.contains('y'))
             .expect("within budget")?;
         let groups = spans
             .iter()
-            .map(|span| span.map(|(from, to)| text[from..to].to_string()))
+            .map(|span| span.map(|(from, to)| input.slice(from, to)))
             .collect();
-        Some((spans[0].map_or(0, |(from, _)| from), groups))
+        Some((
+            spans[0].map_or(0, |(from, _)| input.unit_index(from)),
+            groups,
+        ))
     }
 
     fn groups(values: &[Option<&str>]) -> Vec<Option<String>> {
@@ -2255,6 +2220,70 @@ mod tests {
     }
 
     #[test]
+    fn non_unicode_lookaround_and_backreferences_preserve_surrogate_units() {
+        let high = JsString::from_code_units(&[0xD83D]);
+        let low = JsString::from_code_units(&[0xDE00]);
+        let text = JsString::from("a😀b");
+        assert_eq!(
+            exec_string(r"(?<=a)(.)(.)(?=b)", "", &text),
+            Some((
+                1,
+                vec![
+                    Some(JsString::from("😀")),
+                    Some(high.clone()),
+                    Some(low.clone())
+                ]
+            ))
+        );
+        let text = JsString::from_code_units(&[0xD83D, 0xDE00, 0xD83D]);
+        assert_eq!(
+            exec_string(r"(?<𝒜>.)(?<tail>.)\k<𝒜>", "", &text),
+            Some((0, vec![Some(text.clone()), Some(high.clone()), Some(low)]))
+        );
+        assert_eq!(
+            exec_string(r"(?<=\uD83D)\uDE00", "", &JsString::from("😀")),
+            Some((1, vec![Some(JsString::from_code_units(&[0xDE00]))]))
+        );
+        assert_eq!(
+            exec_string(r"^(?=)[\uD800-\uDBFF]$", "", &high),
+            Some((0, vec![Some(high.clone())]))
+        );
+    }
+
+    #[test]
+    fn non_unicode_raw_and_escaped_quantifiers_repeat_the_low_unit() {
+        let high = JsString::from_code_units(&[0xD83D]);
+        let pair = JsString::from("😀");
+        for pattern in [
+            "(?=)😀{0}",
+            "(?=)😀??",
+            r"(?=)\😀{0}",
+            r"(?=)\uD83D\uDE00{0}",
+            r"(?=)[\uD800-\uDBFF][\uDC00-\uDFFF]{0}",
+        ] {
+            assert_eq!(
+                exec_string(pattern, "", &pair),
+                Some((0, vec![Some(high.clone())])),
+                "{pattern}"
+            );
+        }
+        let repeated_low = JsString::from_code_units(&[0xD83D, 0xDE00, 0xDE00]);
+        assert_eq!(
+            exec_string("^😀{2}$", "", &repeated_low),
+            Some((0, vec![Some(repeated_low.clone())]))
+        );
+        assert_eq!(
+            exec("^(?:😀){2}$", "", "😀😀"),
+            Some((0, groups(&[Some("😀😀")])))
+        );
+        assert_eq!(
+            exec("^😀{2}$", "u", "😀😀"),
+            Some((0, groups(&[Some("😀😀")])))
+        );
+        assert_eq!(exec_string("^😀{2}$", "u", &repeated_low), None);
+    }
+
+    #[test]
     fn look_ahead_keeps_captures_and_is_atomic() {
         assert_eq!(
             exec(r"(?=(a+))a*b\1", "", "baaabac"),
@@ -2398,13 +2427,21 @@ mod tests {
                 spans,
                 [Some((0, 0)), Some((1, 2)), Some((2, 2)), Some((3, 3))]
             );
+            let text = JsString::from("😀");
+            let input = RegExpInput::new(&text, false);
             let emoji: Vec<_> = engine
-                .all_captures("😀", CaptureRetention::AllGroups, &mut unbounded())
+                .all_captures(input.text(), CaptureRetention::AllGroups, &mut unbounded())
                 .unwrap()
                 .into_iter()
-                .map(|captures| captures[0])
+                .map(|captures| {
+                    captures[0].map(|(from, to)| (input.unit_index(from), input.unit_index(to)))
+                })
                 .collect();
-            assert_eq!(emoji, [Some((0, 0)), Some((4, 4))], "whole characters");
+            assert_eq!(
+                emoji,
+                [Some((0, 0)), Some((1, 1)), Some((2, 2))],
+                "UTF-16 units"
+            );
         }
     }
 

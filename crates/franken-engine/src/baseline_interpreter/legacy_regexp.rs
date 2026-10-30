@@ -18,9 +18,10 @@ pub(super) struct LegacyRegExpMatch {
     /// Shared with the matched string when it is one already, so an exec
     /// loop does not copy its whole input per match (bd-9vouw.475).
     input: JsString,
-    /// Byte spans in `input`'s UTF-8 projection: the whole match, then each
-    /// capture group.
+    /// The whole match, then each capture group. Ordinary UTF-8 matches
+    /// retain byte spans; code-unit matching records exact UTF-16 spans.
     spans: Vec<Option<(usize, usize)>>,
+    utf16_spans: bool,
     label: Option<Label>,
 }
 
@@ -50,15 +51,6 @@ pub(super) fn is_legacy_regexp_static(key: &str) -> bool {
 }
 
 impl InterpreterCore {
-    /// Record a successful match of `input` (UpdateLegacyRegExpStaticProperties).
-    pub(super) fn record_legacy_regexp_match(
-        &mut self,
-        input: &str,
-        spans: &[Option<(usize, usize)>],
-    ) {
-        self.record_legacy_regexp_match_shared(&JsString::from(input), spans);
-    }
-
     /// Record a match of `input`, sharing the string instead of copying it;
     /// spans are byte offsets in its UTF-8 projection.
     pub(super) fn record_legacy_regexp_match_shared(
@@ -72,9 +64,29 @@ impl InterpreterCore {
         self.legacy_regexp_match = Some(LegacyRegExpMatch {
             input: input.clone(),
             spans: spans.to_vec(),
+            utf16_spans: false,
             label: None,
         });
         self.legacy_regexp_generation = self.legacy_regexp_generation.wrapping_add(1);
+    }
+
+    pub(super) fn record_legacy_regexp_input_match(
+        &mut self,
+        subject: &JsString,
+        input: &RegExpInput<'_>,
+        spans: &Captures,
+    ) {
+        if input.retained_bytes() == 0 && subject.is_well_formed() {
+            self.record_legacy_regexp_match_shared(subject, spans);
+        } else if spans.first().is_some_and(Option::is_some) {
+            self.legacy_regexp_match = Some(LegacyRegExpMatch {
+                input: subject.clone(),
+                spans: input.unit_spans(spans),
+                utf16_spans: true,
+                label: None,
+            });
+            self.legacy_regexp_generation = self.legacy_regexp_generation.wrapping_add(1);
+        }
     }
 
     /// After a builtin call that began at `generation`: a match it recorded
@@ -100,19 +112,37 @@ impl InterpreterCore {
         let Some(record) = self.legacy_regexp_match.as_ref() else {
             return Ok(Value::str(""));
         };
+        let slice = |from: usize, to: usize| {
+            if record.utf16_spans {
+                let units: Vec<u16> = record
+                    .input
+                    .encode_utf16()
+                    .skip(from)
+                    .take(to - from)
+                    .collect();
+                JsString::from_code_units(&units)
+            } else {
+                JsString::from(&record.input[from..to])
+            }
+        };
         let text = |span: Option<&Option<(usize, usize)>>| {
             span.copied()
                 .flatten()
-                .map_or("", |(from, to)| &record.input[from..to])
+                .map_or_else(|| JsString::from(""), |(from, to)| slice(from, to))
         };
         let (start, end) = record.spans[0].unwrap_or((0, 0));
+        let length = if record.utf16_spans {
+            record.input.utf16_len()
+        } else {
+            record.input.len()
+        };
         let value = match key {
-            "input" | "$_" => record.input.as_utf8_projection(),
+            "input" | "$_" => record.input.clone(),
             "lastMatch" | "$&" => text(record.spans.first()),
             "lastParen" | "$+" if record.spans.len() > 1 => text(record.spans.last()),
-            "lastParen" | "$+" => "",
-            "leftContext" | "$`" => &record.input[..start],
-            "rightContext" | "$'" => &record.input[end..],
+            "lastParen" | "$+" => JsString::from(""),
+            "leftContext" | "$`" => slice(0, start),
+            "rightContext" | "$'" => slice(end, length),
             group => {
                 let index = group
                     .strip_prefix('$')
@@ -121,7 +151,7 @@ impl InterpreterCore {
                 text(record.spans.get(index))
             }
         };
-        let value = Value::str(value);
+        let value = Value::Str(value);
         let label = record.label.clone().unwrap_or(Label::TopSecret);
         let pending = self
             .pending_hostcall_result_label

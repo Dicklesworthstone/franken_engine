@@ -1719,6 +1719,8 @@ impl InterpreterCore {
             call_argument_value_scratch: _,
             call_argument_label_scratch: _,
             json_parse_temporary_bytes: _,
+            // Native text buffers contain no heap object references.
+            regexp_temporary_bytes: _,
             module_snapshot_in_flight_bytes: _,
             temporarily_suspended_execution_bytes: _,
             // Traced from the values and delegations that name them.

@@ -693,6 +693,10 @@ pub struct OrchestratorConfig {
     pub commonjs_entry: bool,
     /// Parser mode + deterministic budget configuration.
     pub parser_options: ParserOptions,
+    /// Embedder-selected package imports/exports conditions. These augment
+    /// the native `node` and per-request `import`/`require` defaults. The
+    /// constructor validates, sorts and deduplicates the bounded set.
+    pub module_conditions: Vec<String>,
     /// The trusted host lets each lane's register window grow to the entry
     /// module's widest verified frame, the extra register carriers charged
     /// to the memory budget (bd-9vouw.262: `frankenctl run` sets it, as
@@ -720,6 +724,7 @@ impl Default for OrchestratorConfig {
             parse_goal: ParseGoal::Script,
             commonjs_entry: false,
             parser_options: ParserOptions::default(),
+            module_conditions: Vec::new(),
             auto_size_register_window: false,
             trace_id_prefix: "orch".to_string(),
             policy_id: "default-policy".to_string(),
@@ -1675,6 +1680,9 @@ pub enum OrchestratorError {
     InvalidModuleRoot {
         detail: String,
     },
+    InvalidModuleConditions {
+        detail: String,
+    },
     PreparedExecutionContextMismatch {
         reserved_extension_id: String,
         requested_extension_id: String,
@@ -1734,6 +1742,9 @@ impl fmt::Display for OrchestratorError {
             }
             Self::InvalidModuleRoot { detail } => {
                 write!(f, "invalid module root: {detail}")
+            }
+            Self::InvalidModuleConditions { detail } => {
+                write!(f, "invalid package conditions: {detail}")
             }
             Self::PreparedExecutionContextMismatch {
                 reserved_extension_id,
@@ -2146,13 +2157,20 @@ impl ExecutionOrchestrator {
     }
 
     fn try_new_with_resolved_evidence_authority(
-        config: OrchestratorConfig,
+        mut config: OrchestratorConfig,
         runtime_config: RuntimeConfig,
         ambient_authority_grant: AmbientAuthorityGrant,
         evidence_signing_authority: EvidenceSigningAuthority,
         evidence_chain_instance_id: String,
     ) -> Result<Self, OrchestratorError> {
         Self::validate_concurrency_envelope(config.max_concurrent_sagas)?;
+        InterpreterConfig::validate_module_conditions(&config.module_conditions).map_err(
+            |detail| OrchestratorError::InvalidModuleConditions {
+                detail: detail.to_string(),
+            },
+        )?;
+        config.module_conditions.sort_unstable();
+        config.module_conditions.dedup();
         let verification_identity = evidence_signing_authority.verification_identity();
         let evidence_ledger_id = Self::derive_evidence_ledger_id(
             &config,
@@ -3814,6 +3832,7 @@ impl ExecutionOrchestrator {
         // A required or imported module is parsed under the same options (and
         // budgets) as the entry, not the parser's built-in defaults.
         quickjs_config.module_parser_options = self.config.parser_options.clone();
+        quickjs_config.module_conditions = self.config.module_conditions.clone();
         quickjs_config.process_argv = self.process_argv.clone();
         quickjs_config.process_shape_read_allowed =
             self.ambient_authority_grant == AmbientAuthorityGrant::TrustedProcessShape;
@@ -3832,6 +3851,7 @@ impl ExecutionOrchestrator {
         v8_config.cancellation_token = cancellation_token.cloned();
         v8_config.commonjs_entry = self.commonjs_entry();
         v8_config.module_parser_options = self.config.parser_options.clone();
+        v8_config.module_conditions = self.config.module_conditions.clone();
         v8_config.process_argv = self.process_argv.clone();
         v8_config.process_shape_read_allowed =
             self.ambient_authority_grant == AmbientAuthorityGrant::TrustedProcessShape;

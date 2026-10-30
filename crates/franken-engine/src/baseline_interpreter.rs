@@ -12554,6 +12554,9 @@ pub enum ModuleResolutionFailureReason {
     PackagePathNotExported,
     /// The captured package scope has no matching private imports mapping.
     PackageImportNotDefined,
+    /// The selected file is a native addon, for which this runtime has no
+    /// admitted loader. Its bytes must never be parsed as JavaScript.
+    NativeAddonUnsupported,
     /// Other resolution failure with descriptive reason.
     Other(String),
 }
@@ -12566,6 +12569,7 @@ impl ModuleResolutionFailureReason {
             Self::ModuleNotFound => "module not found",
             Self::PackagePathNotExported => "package subpath is not exported",
             Self::PackageImportNotDefined => "package import is not defined",
+            Self::NativeAddonUnsupported => "native addons are not supported",
             Self::Other(_) => "resolution failed",
         }
     }
@@ -12585,6 +12589,7 @@ impl ModuleResolutionFailureReason {
         match self {
             Self::PackagePathNotExported => "ERR_PACKAGE_PATH_NOT_EXPORTED",
             Self::PackageImportNotDefined => "ERR_PACKAGE_IMPORT_NOT_DEFINED",
+            Self::NativeAddonUnsupported => "ERR_DLOPEN_DISABLED",
             _ if style == ImportStyle::Import => "ERR_MODULE_NOT_FOUND",
             _ => "MODULE_NOT_FOUND",
         }
@@ -12599,6 +12604,7 @@ impl fmt::Display for ModuleResolutionFailureReason {
             Self::ModuleNotFound => write!(f, "module not found"),
             Self::PackagePathNotExported => write!(f, "package subpath is not exported"),
             Self::PackageImportNotDefined => write!(f, "package import is not defined"),
+            Self::NativeAddonUnsupported => write!(f, "native addons are not supported"),
             Self::Other(reason) => write!(f, "{}", reason),
         }
     }
@@ -12922,6 +12928,11 @@ pub struct InterpreterConfig {
     /// same budget as the program that requires it.
     #[serde(default)]
     pub module_parser_options: ParserOptions,
+    /// Additional package imports/exports conditions chosen by the embedder.
+    /// These augment `node` and the current `import`/`require` condition;
+    /// they never select another loader or grant filesystem authority.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub module_conditions: Vec<String>,
     /// `process.argv` as the embedder launched the program (bd-my9hk):
     /// runtime path, script path, then the program's own arguments. Empty
     /// unless the embedder supplies it.
@@ -12950,6 +12961,7 @@ impl PartialEq for InterpreterConfig {
             && self.extension_id == other.extension_id
             && self.checkpoint_density == other.checkpoint_density
             && self.module_parser_options == other.module_parser_options
+            && self.module_conditions == other.module_conditions
             && self.process_argv == other.process_argv
             && self.process_shape_read_allowed == other.process_shape_read_allowed
         // Note: cancellation_token is intentionally excluded from comparison
@@ -12975,6 +12987,7 @@ impl InterpreterConfig {
             canonical_module_root: None,
             commonjs_entry: false,
             module_parser_options: ParserOptions::default(),
+            module_conditions: Vec::new(),
             process_argv: Vec::new(),
             process_shape_read_allowed: false,
             granted_capabilities: BTreeSet::new(),
@@ -13000,6 +13013,7 @@ impl InterpreterConfig {
             canonical_module_root: None,
             commonjs_entry: false,
             module_parser_options: ParserOptions::default(),
+            module_conditions: Vec::new(),
             process_argv: Vec::new(),
             process_shape_read_allowed: false,
             granted_capabilities: BTreeSet::new(),
@@ -13031,6 +13045,7 @@ impl InterpreterConfig {
             canonical_module_root: None,
             commonjs_entry: false,
             module_parser_options: ParserOptions::default(),
+            module_conditions: Vec::new(),
             process_argv: Vec::new(),
             process_shape_read_allowed: false,
             granted_capabilities: BTreeSet::new(),
@@ -13062,6 +13077,7 @@ impl InterpreterConfig {
             canonical_module_root: None,
             commonjs_entry: false,
             module_parser_options: ParserOptions::default(),
+            module_conditions: Vec::new(),
             process_argv: Vec::new(),
             process_shape_read_allowed: false,
             granted_capabilities: BTreeSet::new(),
@@ -13069,6 +13085,22 @@ impl InterpreterConfig {
             cancellation_token: None,
             checkpoint_density: 1000,
         }
+    }
+
+    /// Keep package-map condition work bounded independently of parser and
+    /// instruction budgets. Two slots are reserved for `node` and load style.
+    pub(crate) fn validate_module_conditions(conditions: &[String]) -> Result<(), &'static str> {
+        if conditions.len() > 62 {
+            return Err("module_conditions accepts at most 62 additional conditions");
+        }
+        if conditions.iter().any(|condition| {
+            condition.is_empty() || condition.len() > 128 || condition.chars().any(char::is_control)
+        }) {
+            return Err(
+                "module_conditions entries must contain 1 to 128 bytes with no control characters",
+            );
+        }
+        Ok(())
     }
 
     /// Set the module root, canonicalizing it once for reuse during module resolution.
@@ -40050,7 +40082,7 @@ impl InterpreterCore {
             if candidate.is_file() {
                 return Some(candidate.to_path_buf());
             }
-            let with_extension = ["cjs", "js", "json", "mjs"]
+            let with_extension = ["js", "json", "node"]
                 .into_iter()
                 .map(|extension| package_resolution::with_appended_extension(candidate, extension))
                 .find(|path| path.is_file());
@@ -40062,7 +40094,7 @@ impl InterpreterCore {
             if let Some(main) = Self::resolve_package_main(candidate) {
                 return Some(main);
             }
-            return ["index.cjs", "index.js", "index.json", "index.mjs"]
+            return ["index.js", "index.json", "index.node"]
                 .into_iter()
                 .map(|index| candidate.join(index))
                 .find(|path| path.is_file());
@@ -40388,6 +40420,20 @@ impl InterpreterCore {
             return Err(InterpreterError::ModuleLoweringFailed {
                 specifier: resolved.to_string(),
                 error: "installed resolver cannot fall back to filesystem source".to_string(),
+            });
+        }
+        // LOAD_AS_FILE/LOAD_INDEX must select a .node candidate before any
+        // directory fallback, just as Node does. Selection is not permission
+        // to execute it: refuse before reading source or populating the module
+        // cache, including repeated attempts caught by optional-dependency code.
+        if delivered.is_none()
+            && Path::new(resolved)
+                .extension()
+                .is_some_and(|extension| extension == "node")
+        {
+            return Err(InterpreterError::ModuleResolutionFailed {
+                specifier: resolved.to_string(),
+                reason: ModuleResolutionFailureReason::NativeAddonUnsupported,
             });
         }
         let source_hash = delivered.as_ref().map(|source| source.content_hash);
@@ -73403,6 +73449,10 @@ impl InterpreterCore {
             ModuleResolutionFailureReason::PackageImportNotDefined => (
                 "TypeError",
                 format!("Package import specifier '{specifier}' is not defined"),
+            ),
+            ModuleResolutionFailureReason::NativeAddonUnsupported => (
+                "Error",
+                format!("Native addon '{specifier}' cannot be loaded: {reason}"),
             ),
             _ => (
                 "Error",
@@ -108033,7 +108083,8 @@ impl InterpreterCore {
                     | ModuleResolutionFailureReason::MalformedSpecifier
                     | ModuleResolutionFailureReason::ModuleNotFound
                     | ModuleResolutionFailureReason::PackagePathNotExported
-                    | ModuleResolutionFailureReason::PackageImportNotDefined => 0,
+                    | ModuleResolutionFailureReason::PackageImportNotDefined
+                    | ModuleResolutionFailureReason::NativeAddonUnsupported => 0,
                 }),
             InterpreterError::ModuleReadFailed { specifier, error }
             | InterpreterError::ModuleParseFailed { specifier, error }
@@ -167695,11 +167746,23 @@ mod tests {
 
     #[test]
     fn config_serde_roundtrip() {
-        let config = InterpreterConfig::quickjs_defaults();
+        let mut config = InterpreterConfig::quickjs_defaults();
         let json = serde_json::to_string(&config).expect("serialize derived Serialize");
+        assert!(
+            !json.contains("module_conditions"),
+            "default snapshots stay compatible"
+        );
         let deser: InterpreterConfig =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, deser);
+        assert!(deser.module_conditions.is_empty());
+
+        config.module_conditions = vec!["development".to_string()];
+        let json = serde_json::to_string(&config).expect("serialize custom package conditions");
+        let deser: InterpreterConfig =
+            serde_json::from_str(&json).expect("deserialize custom package conditions");
+        assert_eq!(config, deser);
+        assert_eq!(deser.module_conditions, ["development"]);
     }
 
     // -----------------------------------------------------------------------

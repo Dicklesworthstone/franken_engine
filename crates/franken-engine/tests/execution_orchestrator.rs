@@ -3376,6 +3376,297 @@ fn commonjs_entry_resolves_installed_packages_like_node_bd_4dme3() {
     }
 }
 
+#[test]
+fn commonjs_executes_node_extension_precedence_without_implicit_cjs_or_mjs() {
+    let root = tempfile::tempdir().expect("module root");
+    write_tree(
+        root.path(),
+        &[
+            ("value.js", "module.exports = 'js';"),
+            ("value.cjs", "module.exports = 'explicit-cjs';"),
+            ("value.mjs", "export const value = 'explicit-mjs';"),
+            ("dir/index.js", "module.exports = 'index-js';"),
+            ("dir/index.cjs", "module.exports = 'wrong-index-cjs';"),
+            ("data.json", "42"),
+            ("data.cjs", "module.exports = 'wrong-data-cjs';"),
+            ("only.cjs", "module.exports = 'must name the extension';"),
+            (
+                "entry.cjs",
+                "console.log(require('./value'));\n\
+            console.log(require('./dir'));\n\
+            console.log(require('./data'));\n\
+            console.log(require('./value.cjs'));\n\
+            console.log(require('./value.mjs').value);\n\
+            try { require('./only'); } catch (error) { console.log(error.code); }",
+            ),
+        ],
+    );
+    let entry = root.path().join("entry.cjs");
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let result = ExecutionOrchestrator::new(OrchestratorConfig {
+            force_lane: Some(lane),
+            commonjs_entry: true,
+            ..OrchestratorConfig::default()
+        })
+        .execute(&commonjs_entry_package(
+            root.path(),
+            &entry,
+            "node-file-precedence",
+        ))
+        .unwrap_or_else(|error| panic!("{lane:?}: Node file precedence failed: {error}"));
+        assert_eq!(
+            console_lines(&result),
+            [
+                "js",
+                "index-js",
+                "42",
+                "explicit-cjs",
+                "explicit-mjs",
+                "MODULE_NOT_FOUND",
+            ],
+            "{lane:?}"
+        );
+    }
+}
+
+#[test]
+fn commonjs_native_addons_are_refused_before_source_reads_and_cache_insertion() {
+    let root = tempfile::tempdir().expect("module root");
+    write_tree(
+        root.path(),
+        &[
+            // Valid JavaScript deliberately masquerades as a native addon. No
+            // loader may parse it, execute its marker or select the sibling dir.
+            (
+                "addon.node",
+                "console.log('addon-executed'); module.exports = 7;",
+            ),
+            (
+                "addon/index.js",
+                "console.log('directory-executed'); module.exports = 8;",
+            ),
+            (
+                "node_modules/native-main/package.json",
+                r#"{"main":"entry"}"#,
+            ),
+            (
+                "node_modules/native-main/entry.node",
+                "console.log('main-addon-executed');",
+            ),
+            (
+                "node_modules/native-main/index.js",
+                "console.log('main-fallback-executed');",
+            ),
+            (
+                "node_modules/native-index/index.node",
+                "console.log('index-addon-executed');",
+            ),
+            (
+                "node_modules/native-url/package.json",
+                r#"{"exports":"./entry.node?variant#fragment"}"#,
+            ),
+            (
+                "node_modules/native-url/entry.node",
+                "console.log('url-addon-executed');",
+            ),
+            (
+                "entry.mjs",
+                "import 'native-url'; console.log('must not execute');",
+            ),
+            (
+                "entry.cjs",
+                "try { require('./addon'); } catch (error) { console.log(error.code); }\n\
+            try { require('./addon.node'); } catch (error) { console.log(error.code); }\n\
+            try { require('native-main'); } catch (error) { console.log(error.code); }\n\
+            try { require('native-index'); } catch (error) { console.log(error.code); }\n\
+            try { require('native-url'); } catch (error) { console.log(error.code); }\n\
+            console.log('continued');",
+            ),
+        ],
+    );
+    let entry = root.path().join("entry.cjs");
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let result = ExecutionOrchestrator::new(OrchestratorConfig {
+            force_lane: Some(lane),
+            commonjs_entry: true,
+            ..OrchestratorConfig::default()
+        })
+        .execute(&commonjs_entry_package(
+            root.path(),
+            &entry,
+            "native-addon-refusal",
+        ))
+        .unwrap_or_else(|error| panic!("{lane:?}: native addon refusal failed: {error}"));
+        assert_eq!(
+            console_lines(&result),
+            [
+                "ERR_DLOPEN_DISABLED",
+                "ERR_DLOPEN_DISABLED",
+                "ERR_DLOPEN_DISABLED",
+                "ERR_DLOPEN_DISABLED",
+                "ERR_DLOPEN_DISABLED",
+                "continued",
+            ],
+            "{lane:?}"
+        );
+
+        let error = ExecutionOrchestrator::new(OrchestratorConfig {
+            force_lane: Some(lane),
+            parse_goal: ParseGoal::Module,
+            ..OrchestratorConfig::default()
+        })
+        .execute(&commonjs_entry_package(
+            root.path(),
+            &root.path().join("entry.mjs"),
+            "native-addon-url-refusal",
+        ))
+        .expect_err("URL query/fragment cannot disguise an ESM native addon target");
+        assert!(
+            matches!(
+                error.primary_error(),
+                OrchestratorError::Interpreter(InterpreterError::ModuleResolutionFailed {
+                    reason: ModuleResolutionFailureReason::NativeAddonUnsupported,
+                    ..
+                })
+            ),
+            "{lane:?}: unexpected addon error {error}"
+        );
+    }
+}
+
+#[test]
+fn package_conditions_reach_both_lanes_and_every_module_load_form() {
+    let root = tempfile::tempdir().expect("module root");
+    write_tree(
+        root.path(),
+        &[
+            (
+                "package.json",
+                r##"{"name":"self","exports":{"development":"./self-dev.cjs","default":"./self-prod.cjs"},"imports":{"#local":{"development":"./local-dev.cjs","default":"./local-prod.cjs"},"#external":"conditional"}}"##,
+            ),
+            ("self-dev.cjs", "module.exports = 'dev-self';"),
+            ("self-prod.cjs", "module.exports = 'prod-self';"),
+            ("local-dev.cjs", "module.exports = 'dev-local';"),
+            ("local-prod.cjs", "module.exports = 'prod-local';"),
+            (
+                "node_modules/conditional/package.json",
+                r#"{"exports":{"node":{"development":{"require":"./dev.cjs","import":"./dev.mjs"},"require":"./prod.cjs","import":"./prod.mjs"},"default":"./wrong.cjs"}}"#,
+            ),
+            (
+                "node_modules/conditional/dev.cjs",
+                "module.exports = 'dev-require';",
+            ),
+            (
+                "node_modules/conditional/dev.mjs",
+                "export default 'dev-import';",
+            ),
+            (
+                "node_modules/conditional/prod.cjs",
+                "module.exports = 'prod-require';",
+            ),
+            (
+                "node_modules/conditional/prod.mjs",
+                "export default 'prod-import';",
+            ),
+            (
+                "node_modules/conditional/wrong.cjs",
+                "module.exports = 'lost-node-condition';",
+            ),
+            (
+                "entry.cjs",
+                "console.log(require('conditional'));\n\
+                 console.log(require('self'));\n\
+                 console.log(require('#local'));\n\
+                 console.log(require('#external'));\n\
+                 import('conditional').then(module => console.log(module.default));",
+            ),
+            (
+                "entry.mjs",
+                "import value from 'conditional';\n\
+                 import self from 'self';\n\
+                 import local from '#local';\n\
+                 import external from '#external';\n\
+                 console.log(value); console.log(self); console.log(local); console.log(external);\n\
+                 import('conditional').then(module => console.log(module.default));",
+            ),
+        ],
+    );
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for commonjs_entry in [true, false] {
+            for development in [false, true] {
+                let config = OrchestratorConfig {
+                    force_lane: Some(lane),
+                    commonjs_entry,
+                    parse_goal: if commonjs_entry {
+                        ParseGoal::Script
+                    } else {
+                        ParseGoal::Module
+                    },
+                    module_conditions: if development {
+                        vec!["development".to_string(), "development".to_string()]
+                    } else {
+                        Vec::new()
+                    },
+                    ..OrchestratorConfig::default()
+                };
+                let entry = root.path().join(if commonjs_entry {
+                    "entry.cjs"
+                } else {
+                    "entry.mjs"
+                });
+                let result = ExecutionOrchestrator::new(config)
+                    .execute(&commonjs_entry_package(root.path(), &entry, "package-conditions"))
+                    .unwrap_or_else(|error| {
+                        panic!("{lane:?}, commonjs={commonjs_entry}, development={development}: {error}")
+                    });
+                let mode = if development { "dev" } else { "prod" };
+                let style = if commonjs_entry { "require" } else { "import" };
+                assert_eq!(
+                    console_lines(&result),
+                    [
+                        format!("{mode}-{style}"),
+                        format!("{mode}-self"),
+                        format!("{mode}-local"),
+                        format!("{mode}-{style}"),
+                        format!("{mode}-import"),
+                    ],
+                    "{lane:?}, commonjs={commonjs_entry}, development={development}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn package_conditions_reject_invalid_configuration_before_execution() {
+    for module_conditions in [
+        vec![String::new()],
+        vec!["x".repeat(129)],
+        vec!["development\nproduction".to_string()],
+        vec!["dev".to_string(); 63],
+    ] {
+        let error = match ExecutionOrchestrator::try_new(OrchestratorConfig {
+            module_conditions,
+            ..OrchestratorConfig::default()
+        }) {
+            Ok(_) => panic!("invalid package conditions must not construct an orchestrator"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            OrchestratorError::InvalidModuleConditions { .. }
+        ));
+    }
+    assert!(
+        ExecutionOrchestrator::try_new(OrchestratorConfig {
+            module_conditions: (0..62).map(|index| format!("{index:0>128}")).collect(),
+            ..OrchestratorConfig::default()
+        })
+        .is_ok(),
+        "the documented 62-condition, 128-byte boundary must be admitted"
+    );
+}
+
 /// What a package does not export stays unreachable even when the file
 /// exists, and a missing package is reported by name.
 #[test]

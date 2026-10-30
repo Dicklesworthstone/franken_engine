@@ -1039,6 +1039,7 @@ fn config_clone_preserves_all_fields() {
         trace_id_prefix: "clone-test".to_string(),
         policy_id: "policy-clone".to_string(),
         parser_options: Default::default(),
+        module_conditions: vec!["development".to_string()],
         auto_size_register_window: false,
     };
     let cloned = cfg.clone();
@@ -1051,6 +1052,7 @@ fn config_clone_preserves_all_fields() {
     assert_eq!(cloned.parse_goal, ParseGoal::Module);
     assert_eq!(cloned.trace_id_prefix, "clone-test");
     assert_eq!(cloned.policy_id, "policy-clone");
+    assert_eq!(cloned.module_conditions, ["development"]);
 }
 
 // =========================================================================

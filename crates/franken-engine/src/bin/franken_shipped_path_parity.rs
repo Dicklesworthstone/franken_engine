@@ -1432,6 +1432,7 @@ fn classify_orchestrator_error(error: &OrchestratorError) -> FailureClass {
         | OrchestratorError::InvalidConcurrencyEnvelope { .. }
         | OrchestratorError::WitnessSealing { .. }
         | OrchestratorError::InvalidModuleRoot { .. }
+        | OrchestratorError::InvalidModuleConditions { .. }
         | OrchestratorError::EmptyExtensionId
         | OrchestratorError::ProcessSpawnAttempt(_)
         | OrchestratorError::ResolvedEntryRejected { .. }

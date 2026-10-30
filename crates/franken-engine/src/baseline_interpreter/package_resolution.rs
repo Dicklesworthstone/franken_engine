@@ -1,6 +1,6 @@
 //! Node's CommonJS package resolution for bare `require` specifiers
 //! (bd-4dme3): the `node_modules` walk-up inside the module root, package.json
-//! `exports` (subpaths, `*` patterns, and the `node`/`require`/`default`
+//! `exports` (subpaths, `*` patterns, and built-in plus embedder-selected
 //! conditions) and `main`, JSON modules, and core-module precedence.
 //!
 //! Every path this resolves is still canonicalized and bounded by the module
@@ -641,10 +641,10 @@ fn resolve_manifest_main(directory: &Path, manifest: &PackageManifest) -> Option
     if main.is_file() {
         return Some(main);
     }
-    ["js", "json"]
+    ["js", "json", "node"]
         .into_iter()
         .map(|extension| with_appended_extension(&main, extension))
-        .chain(["index.js", "index.json"].map(|index| main.join(index)))
+        .chain(["index.js", "index.json", "index.node"].map(|index| main.join(index)))
         .find(|candidate| candidate.is_file())
 }
 
@@ -722,7 +722,8 @@ impl InterpreterCore {
         &self,
         specifier: &str,
     ) -> Result<PathBuf, InterpreterError> {
-        self.resolve_bare_package_specifier(specifier, REQUIRE_EXPORT_CONDITIONS)
+        let conditions = self.effective_module_conditions(specifier, REQUIRE_EXPORT_CONDITIONS)?;
+        self.resolve_bare_package_specifier(specifier, &conditions, PackageLookupMode::CommonJs)
     }
 
     /// An ES module's bare specifier (bd-mgfhs): match `import` conditions,
@@ -731,13 +732,43 @@ impl InterpreterCore {
         &self,
         specifier: &str,
     ) -> Result<PathBuf, InterpreterError> {
-        self.resolve_bare_package_specifier(specifier, IMPORT_EXPORT_CONDITIONS)
+        let conditions = self.effective_module_conditions(specifier, IMPORT_EXPORT_CONDITIONS)?;
+        self.resolve_bare_package_specifier(specifier, &conditions, PackageLookupMode::PackageUrl)
+    }
+
+    fn effective_module_conditions<'a>(
+        &'a self,
+        specifier: &str,
+        defaults: &'a [&'a str],
+    ) -> Result<std::borrow::Cow<'a, [&'a str]>, InterpreterError> {
+        // The ordinary no-custom-condition path borrows the static defaults:
+        // no allocation, sorting or string copies on a package lookup.
+        if self.config.module_conditions.is_empty() {
+            return Ok(std::borrow::Cow::Borrowed(defaults));
+        }
+        // Direct interpreter embedders receive the same bounded contract as
+        // orchestrator callers. Validate before consulting any package file.
+        InterpreterConfig::validate_module_conditions(&self.config.module_conditions).map_err(
+            |detail| InterpreterError::ModuleResolutionFailed {
+                specifier: specifier.to_string(),
+                reason: ModuleResolutionFailureReason::Other(detail.to_string()),
+            },
+        )?;
+        let mut conditions: Vec<_> = defaults
+            .iter()
+            .copied()
+            .chain(self.config.module_conditions.iter().map(String::as_str))
+            .collect();
+        conditions.sort_unstable();
+        conditions.dedup();
+        Ok(std::borrow::Cow::Owned(conditions))
     }
 
     fn resolve_bare_package_specifier(
         &self,
         specifier: &str,
         conditions: &[&str],
+        mode: PackageLookupMode,
     ) -> Result<PathBuf, InterpreterError> {
         let failed = |reason| InterpreterError::ModuleResolutionFailed {
             specifier: specifier.to_string(),
@@ -788,18 +819,13 @@ impl InterpreterCore {
                 _ => Err(failed(ModuleResolutionFailureReason::ModuleNotFound)),
             };
         }
-        let mode = if conditions.contains(&"import") {
-            // ESM private imports never fall through to node_modules/#name.
-            // CommonJS retains that historical fallback without an imports map.
-            if specifier.starts_with('#') {
-                return Err(failed(ModuleResolutionFailureReason::Other(format!(
-                    "package import `{specifier}` is not defined"
-                ))));
-            }
-            PackageLookupMode::PackageUrl
-        } else {
-            PackageLookupMode::CommonJs
-        };
+        // ESM private imports never fall through to node_modules/#name.
+        // CommonJS retains that historical fallback without an imports map.
+        if mode == PackageLookupMode::PackageUrl && specifier.starts_with('#') {
+            return Err(failed(ModuleResolutionFailureReason::Other(format!(
+                "package import `{specifier}` is not defined"
+            ))));
+        }
         self.resolve_named_require_from(specifier, &start, &root, conditions, mode)
     }
 
@@ -889,7 +915,7 @@ impl InterpreterCore {
                         .as_ref()
                         .and_then(|manifest| resolve_manifest_main(&package_dir, manifest))
                         .or_else(|| {
-                            ["index.js", "index.json"]
+                            ["index.js", "index.json", "index.node"]
                                 .map(|index| package_dir.join(index))
                                 .into_iter()
                                 .find(|candidate| candidate.is_file())
@@ -944,9 +970,10 @@ impl InterpreterCore {
     }
 
     /// Node's LOAD_AS_DIRECTORY step for a package.json `main`: the file it
-    /// names (as given, or with `.js`/`.json` appended), else that path's
-    /// `index.js`/`index.json`. `None` when the directory declares no usable
-    /// `main`, so the caller falls back to the directory's own index.
+    /// names (as given, or with `.js`/`.json`/`.node` appended), else that path's
+    /// `index.js`/`index.json`/`index.node`. A selected native addon is refused
+    /// by the loader, not skipped in favor of another candidate. `None` when
+    /// the directory declares no usable `main`, so its own index is tried.
     pub(super) fn resolve_package_main(directory: &Path) -> Option<PathBuf> {
         let manifest = read_package_manifest(directory).ok().flatten()?;
         resolve_manifest_main(directory, &manifest)
@@ -1013,6 +1040,249 @@ mod tests {
                 .expect("resolved path"),
             expected.canonicalize().expect("expected path")
         );
+    }
+
+    #[test]
+    fn commonjs_extension_and_index_probes_follow_node_order() {
+        let root = tempfile::tempdir().expect("module root");
+        for path in [
+            "exact",
+            "exact.js",
+            "value.cjs",
+            "value.js",
+            "value.mjs",
+            "data.cjs",
+            "data.json",
+            "data.mjs",
+            "dir/index.cjs",
+            "dir/index.js",
+            "dir/index.json",
+            "dir/index.mjs",
+            "json-dir/index.cjs",
+            "json-dir/index.json",
+            "only-cjs.cjs",
+            "only-mjs.mjs",
+            "only-cjs-dir/index.cjs",
+            "only-mjs-dir/index.mjs",
+        ] {
+            write_package_fixture(root.path(), path, "0");
+        }
+        let core = package_test_core(root.path());
+        for (request, selected) in [
+            ("./exact", "exact"),
+            ("./value", "value.js"),
+            ("./data", "data.json"),
+            ("./dir", "dir/index.js"),
+            ("./dir/", "dir/index.js"),
+            ("./json-dir", "json-dir/index.json"),
+            ("./only-cjs.cjs", "only-cjs.cjs"),
+            ("./only-mjs.mjs", "only-mjs.mjs"),
+        ] {
+            assert_package_path(
+                core.resolve_require_specifier(request).map(PathBuf::from),
+                &root.path().join(selected),
+            );
+        }
+        for request in [
+            "./only-cjs",
+            "./only-mjs",
+            "./only-cjs-dir",
+            "./only-mjs-dir",
+        ] {
+            assert!(
+                matches!(
+                    core.resolve_require_specifier(request),
+                    Err(InterpreterError::ModuleResolutionFailed {
+                        reason: ModuleResolutionFailureReason::ModuleNotFound,
+                        ..
+                    })
+                ),
+                "{request} must not infer .cjs or .mjs"
+            );
+        }
+    }
+
+    #[test]
+    fn commonjs_native_addon_candidates_precede_directory_and_main_fallbacks() {
+        let root = tempfile::tempdir().expect("module root");
+        for (path, text) in [
+            ("addon.node", "not JavaScript"),
+            (
+                "addon/index.js",
+                "module.exports = 'wrong directory fallback';",
+            ),
+            (
+                "node_modules/native-main/package.json",
+                r#"{"main":"entry"}"#,
+            ),
+            ("node_modules/native-main/entry.node", "not JavaScript"),
+            (
+                "node_modules/native-main/index.js",
+                "module.exports = 'wrong main fallback';",
+            ),
+            ("node_modules/native-index/index.node", "not JavaScript"),
+        ] {
+            write_package_fixture(root.path(), path, text);
+        }
+        let core = package_test_core(root.path());
+        for (request, selected) in [
+            ("./addon", "addon.node"),
+            ("./addon.node", "addon.node"),
+            ("native-main", "node_modules/native-main/entry.node"),
+            ("native-index", "node_modules/native-index/index.node"),
+        ] {
+            assert_package_path(
+                core.resolve_require_specifier(request).map(PathBuf::from),
+                &root.path().join(selected),
+            );
+        }
+        // Package-only ESM legacy main resolution chooses the same addon;
+        // it will be refused by the loader rather than parsed as source.
+        assert_package_path(
+            core.resolve_bare_import_specifier("native-main"),
+            &root.path().join("node_modules/native-main/entry.node"),
+        );
+    }
+
+    #[test]
+    fn package_conditions_augment_defaults_without_changing_the_lookup_mode() {
+        let root = tempfile::tempdir().expect("module root");
+        for (path, text) in [
+            (
+                "package.json",
+                r##"{"name":"self","exports":{".":{"development":"./dev.cjs","default":"./prod.cjs"}},"imports":{"#local":{"development":"./dev.cjs","default":"./prod.cjs"},"#external":"conditional"}}"##,
+            ),
+            ("dev.cjs", "module.exports = 'dev';"),
+            ("prod.cjs", "module.exports = 'prod';"),
+            (
+                "node_modules/conditional/package.json",
+                r#"{"exports":{"development":{"import":"./dev.mjs","require":"./dev.cjs"},"import":"./prod.mjs","require":"./prod.cjs"}}"#,
+            ),
+            (
+                "node_modules/conditional/dev.cjs",
+                "module.exports = 'dev-require';",
+            ),
+            (
+                "node_modules/conditional/dev.mjs",
+                "export default 'dev-import';",
+            ),
+            (
+                "node_modules/conditional/prod.cjs",
+                "module.exports = 'prod-require';",
+            ),
+            (
+                "node_modules/conditional/prod.mjs",
+                "export default 'prod-import';",
+            ),
+            ("node_modules/legacy/value.js", "module.exports = 42;"),
+            ("node_modules/legacy/dir/index.js", "module.exports = 43;"),
+        ] {
+            write_package_fixture(root.path(), path, text);
+        }
+        let mut core = package_test_core(root.path());
+        assert!(
+            matches!(
+                core.effective_module_conditions("conditional", REQUIRE_EXPORT_CONDITIONS)
+                    .unwrap(),
+                std::borrow::Cow::Borrowed(_)
+            ),
+            "default package conditions must not allocate"
+        );
+        assert_package_path(
+            core.resolve_bare_require_specifier("conditional"),
+            &root.path().join("node_modules/conditional/prod.cjs"),
+        );
+        assert_package_path(
+            core.resolve_bare_import_specifier("conditional"),
+            &root.path().join("node_modules/conditional/prod.mjs"),
+        );
+        core.config.module_conditions = vec!["development".into(), "development".into()];
+        for request in ["conditional", "#external"] {
+            assert_package_path(
+                core.resolve_bare_require_specifier(request),
+                &root.path().join("node_modules/conditional/dev.cjs"),
+            );
+            assert_package_path(
+                core.resolve_bare_import_specifier(request),
+                &root.path().join("node_modules/conditional/dev.mjs"),
+            );
+        }
+        for request in ["self", "#local"] {
+            assert_package_path(
+                core.resolve_bare_require_specifier(request),
+                &root.path().join("dev.cjs"),
+            );
+            assert_package_path(
+                core.resolve_bare_import_specifier(request),
+                &root.path().join("dev.cjs"),
+            );
+        }
+        // Conditions may deliberately include the other style. That changes
+        // conditional-map selection, never CommonJS's file/directory probing.
+        core.config.module_conditions = vec!["import".into()];
+        assert_package_path(
+            core.resolve_bare_require_specifier("conditional"),
+            &root.path().join("node_modules/conditional/prod.mjs"),
+        );
+        assert_package_path(
+            core.resolve_bare_require_specifier("legacy/value"),
+            &root.path().join("node_modules/legacy/value.js"),
+        );
+        assert_package_path(
+            core.resolve_bare_require_specifier("legacy/dir"),
+            &root.path().join("node_modules/legacy/dir/index.js"),
+        );
+        core.config.module_conditions = vec!["require".into()];
+        assert!(core.resolve_bare_import_specifier("legacy/value").is_err());
+        assert!(core.resolve_bare_import_specifier("legacy/dir").is_err());
+    }
+
+    #[test]
+    fn additional_conditions_preserve_document_order_and_package_encapsulation() {
+        let root = tempfile::tempdir().expect("module root");
+        for (path, text) in [
+            (
+                "node_modules/ordered/package.json",
+                r#"{"exports":{"default":"./default.cjs","development":"./dev.cjs"}}"#,
+            ),
+            ("node_modules/ordered/default.cjs", "module.exports = 1;"),
+            ("node_modules/ordered/dev.cjs", "module.exports = 2;"),
+            (
+                "node_modules/denied/package.json",
+                r#"{"exports":{"development":null,"default":"./public.cjs"}}"#,
+            ),
+            ("node_modules/denied/public.cjs", "module.exports = 3;"),
+            (
+                "node_modules/escape/package.json",
+                r#"{"exports":{"development":"../outside.cjs","default":"./public.cjs"}}"#,
+            ),
+            ("node_modules/escape/public.cjs", "module.exports = 4;"),
+            ("node_modules/outside.cjs", "module.exports = 'escaped';"),
+        ] {
+            write_package_fixture(root.path(), path, text);
+        }
+        let mut core = package_test_core(root.path());
+        core.config.module_conditions = vec!["development".into()];
+        assert_package_path(
+            core.resolve_bare_require_specifier("ordered"),
+            &root.path().join("node_modules/ordered/default.cjs"),
+        );
+        for request in ["denied", "escape"] {
+            assert!(core.resolve_bare_require_specifier(request).is_err());
+            assert!(core.resolve_bare_import_specifier(request).is_err());
+        }
+        for conditions in [
+            vec![String::new()],
+            vec!["x".repeat(129)],
+            vec!["dev\nprod".into()],
+            vec!["dev".into(); 63],
+        ] {
+            core.config.module_conditions = conditions;
+            let error = core
+                .resolve_bare_require_specifier("ordered")
+                .expect_err("invalid embedder conditions cannot be ignored");
+            assert!(error.to_string().contains("module_conditions"), "{error}");
+        }
     }
 
     #[test]
@@ -1216,16 +1486,19 @@ mod tests {
             "module.exports = 3;",
         );
         let core = package_test_core(root.path());
-        for conditions in [REQUIRE_EXPORT_CONDITIONS, IMPORT_EXPORT_CONDITIONS] {
+        for (conditions, mode) in [
+            (REQUIRE_EXPORT_CONDITIONS, PackageLookupMode::CommonJs),
+            (IMPORT_EXPORT_CONDITIONS, PackageLookupMode::PackageUrl),
+        ] {
             for request in ["#exact", "#root"] {
                 assert_package_path(
-                    core.resolve_bare_package_specifier(request, conditions),
+                    core.resolve_bare_package_specifier(request, conditions, mode),
                     &root.path().join("node_modules/legacy/entry.js"),
                 );
             }
             for request in ["#extension", "#directory"] {
                 let error = core
-                    .resolve_bare_package_specifier(request, conditions)
+                    .resolve_bare_package_specifier(request, conditions, mode)
                     .expect_err("no file probing for imports targets");
                 assert!(
                     error.to_string().contains(request),
@@ -1325,9 +1598,12 @@ mod tests {
             .canonicalize_module_candidate("escape", &outside_manifest)
             .expect_err("outside manifest must fail containment")
             .to_string();
-        for conditions in [REQUIRE_EXPORT_CONDITIONS, IMPORT_EXPORT_CONDITIONS] {
+        for (conditions, mode) in [
+            (REQUIRE_EXPORT_CONDITIONS, PackageLookupMode::CommonJs),
+            (IMPORT_EXPORT_CONDITIONS, PackageLookupMode::PackageUrl),
+        ] {
             let actual = core
-                .resolve_bare_package_specifier("escape", conditions)
+                .resolve_bare_package_specifier("escape", conditions, mode)
                 .expect_err("must reject the manifest before parsing it");
             assert_eq!(actual.to_string(), expected);
         }
@@ -1374,9 +1650,12 @@ mod tests {
         )
         .expect("contained manifest symlink");
         let core = package_test_core(root.path());
-        for conditions in [REQUIRE_EXPORT_CONDITIONS, IMPORT_EXPORT_CONDITIONS] {
+        for (conditions, mode) in [
+            (REQUIRE_EXPORT_CONDITIONS, PackageLookupMode::CommonJs),
+            (IMPORT_EXPORT_CONDITIONS, PackageLookupMode::PackageUrl),
+        ] {
             assert_eq!(
-                core.resolve_bare_package_specifier("linked", conditions)
+                core.resolve_bare_package_specifier("linked", conditions, mode)
                     .expect("contained manifest must remain usable")
                     .canonicalize()
                     .expect("resolved module"),
@@ -1584,12 +1863,12 @@ mod tests {
             }
             let mut core = package_test_core(root.path());
             core.current_module_specifier = Some(directory.join("probe.cjs").display().to_string());
-            for (conditions, expected) in [
-                (REQUIRE_EXPORT_CONDITIONS, &case.require),
-                (IMPORT_EXPORT_CONDITIONS, &case.import),
+            for (conditions, mode, expected) in [
+                (REQUIRE_EXPORT_CONDITIONS, PackageLookupMode::CommonJs, &case.require),
+                (IMPORT_EXPORT_CONDITIONS, PackageLookupMode::PackageUrl, &case.import),
             ] {
                 let actual = core
-                    .resolve_bare_package_specifier(&case.specifier, conditions)
+                    .resolve_bare_package_specifier(&case.specifier, conditions, mode)
                     .unwrap_or_else(|error| panic!("{} {conditions:?}: {error}", case.id));
                 assert_eq!(
                     actual.canonicalize().expect("resolved file"),

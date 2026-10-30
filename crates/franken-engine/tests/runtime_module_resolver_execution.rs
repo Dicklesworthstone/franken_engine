@@ -1660,61 +1660,72 @@ fn delivered_http_request_values_send_public_post_to_real_socket() {
     use std::time::{Duration, Instant};
 
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        for invocation in [
-            "request(url, options, onResponse)",
-            "http.request(url, options, onResponse)",
-            "request.call(null, url, options, onResponse)",
-            "request.apply(null, [url, options, onResponse])",
-            "request.bind(null)(url, options, onResponse)",
-            "new request(url, options, onResponse)",
-            "Reflect.construct(request, [url, options, onResponse])",
+        for (syntax, filename, imports) in [
+            (
+                ModuleSyntax::CommonJs,
+                "entry.cjs",
+                "const http = require('http'); const request = http.request;",
+            ),
+            (
+                ModuleSyntax::EsModule,
+                "entry.mjs",
+                "import http, { request } from 'node:http';",
+            ),
         ] {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("public sink");
-            listener.set_nonblocking(true).expect("bounded accept");
-            let address = listener.local_addr().expect("sink address");
-            let server = std::thread::spawn(move || {
-                let deadline = Instant::now() + Duration::from_secs(5);
-                let mut stream = loop {
-                    match listener.accept() {
-                        Ok((stream, _)) => break stream,
-                        Err(error)
-                            if error.kind() == std::io::ErrorKind::WouldBlock
-                                && Instant::now() < deadline =>
-                        {
-                            std::thread::sleep(Duration::from_millis(5));
+            for invocation in [
+                "request(url, options, onResponse)",
+                "http.request(url, options, onResponse)",
+                "request.call(null, url, options, onResponse)",
+                "request.apply(null, [url, options, onResponse])",
+                "request.bind(null)(url, options, onResponse)",
+                "new request(url, options, onResponse)",
+                "Reflect.construct(request, [url, options, onResponse])",
+            ] {
+                let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("public sink");
+                listener.set_nonblocking(true).expect("bounded accept");
+                let address = listener.local_addr().expect("sink address");
+                let server = std::thread::spawn(move || {
+                    let deadline = Instant::now() + Duration::from_secs(5);
+                    let mut stream = loop {
+                        match listener.accept() {
+                            Ok((stream, _)) => break stream,
+                            Err(error)
+                                if error.kind() == std::io::ErrorKind::WouldBlock
+                                    && Instant::now() < deadline =>
+                            {
+                                std::thread::sleep(Duration::from_millis(5));
+                            }
+                            Err(error) => {
+                                panic!("native module request did not reach the socket: {error}")
+                            }
                         }
-                        Err(error) => {
-                            panic!("native module request did not reach the socket: {error}")
-                        }
-                    }
-                };
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(5)))
-                    .expect("read bound");
-                stream
-                    .set_write_timeout(Some(Duration::from_secs(5)))
-                    .expect("write bound");
-                let mut bytes = Vec::new();
-                (&mut stream)
-                    .take(65536)
-                    .read_to_end(&mut bytes)
-                    .expect("request bytes");
-                stream
-                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
-                    .expect("response bytes");
-                bytes
-            });
-            let root = tempfile::tempdir().expect("provider root");
-            let transcript = Arc::new(InMemoryHostIoTranscript::recording());
-            let resolver = Arc::new(
-                OpaqueResolver::new(vec![(
-                    "entry.cjs",
-                    definition(
-                        ModuleSyntax::CommonJs,
-                        &format!(
-                            r#"
-const http = require('http');
-const request = http.request;
+                    };
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .expect("read bound");
+                    stream
+                        .set_write_timeout(Some(Duration::from_secs(5)))
+                        .expect("write bound");
+                    let mut bytes = Vec::new();
+                    (&mut stream)
+                        .take(65536)
+                        .read_to_end(&mut bytes)
+                        .expect("request bytes");
+                    stream
+                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                        .expect("response bytes");
+                    bytes
+                });
+                let root = tempfile::tempdir().expect("provider root");
+                let transcript = Arc::new(InMemoryHostIoTranscript::recording());
+                let resolver = Arc::new(
+                    OpaqueResolver::new(vec![(
+                        filename,
+                        definition(
+                            syntax,
+                            &format!(
+                                r#"
+{imports}
 const url = 'http://{address}/native-module';
 const options = {{ method: 'POST' }};
 const onResponse = response => {{
@@ -1729,35 +1740,36 @@ outgoing.on('error', error => console.log(error.code));
 outgoing.write('Hello, ');
 outgoing.end('world!');
 "#
+                            ),
                         ),
-                    ),
-                )])
-                .with_native_builtins(),
-            );
-            let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
-            let installed = ExecutionModuleResolver::new(
-                &source.module.record.id,
-                resolver,
-                Arc::new(AllowAllPolicy),
-            );
-            let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
-            engine.set_host_io(
-                Arc::new(SandboxedHostIo::with_root(root.path()).expect("real provider")),
-                Some(transcript.clone()),
-            );
-            let mut execution = package();
-            execution.capabilities.push("network_egress".into());
-            let result = engine
-                .execute_resolved_entry_with_resolver(&execution, &source, installed)
-                .expect("public bytes traverse the native module and the real host I/O seam");
-            let bytes = server.join().expect("bounded public sink");
-            assert!(bytes.starts_with(b"POST /native-module HTTP/1.1\r\n"));
-            assert!(bytes.ends_with(b"\r\n\r\nHello, world!"));
-            assert_eq!(lines(&result), ["200", "ok"]);
-            let entries = transcript.recorded_entries();
-            assert_eq!(entries.len(), 1);
-            assert!(entries[0].1.is_ok());
-            assert_eq!(result.host_effect_transcript.len(), 1);
+                    )])
+                    .with_native_builtins(),
+                );
+                let source = entry(&resolver, filename, syntax);
+                let installed = ExecutionModuleResolver::new(
+                    &source.module.record.id,
+                    resolver,
+                    Arc::new(AllowAllPolicy),
+                );
+                let mut engine = orchestrator(lane, syntax);
+                engine.set_host_io(
+                    Arc::new(SandboxedHostIo::with_root(root.path()).expect("real provider")),
+                    Some(transcript.clone()),
+                );
+                let mut execution = package();
+                execution.capabilities.push("network_egress".into());
+                let result = engine
+                    .execute_resolved_entry_with_resolver(&execution, &source, installed)
+                    .expect("public bytes traverse the native module and the real host I/O seam");
+                let bytes = server.join().expect("bounded public sink");
+                assert!(bytes.starts_with(b"POST /native-module HTTP/1.1\r\n"));
+                assert!(bytes.ends_with(b"\r\n\r\nHello, world!"));
+                assert_eq!(lines(&result), ["200", "ok"]);
+                let entries = transcript.recorded_entries();
+                assert_eq!(entries.len(), 1);
+                assert!(entries[0].1.is_ok());
+                assert_eq!(result.host_effect_transcript.len(), 1);
+            }
         }
     }
 }
@@ -1766,7 +1778,7 @@ outgoing.end('world!');
 fn delivered_http_request_values_preserve_ifc_denial_and_exact_evidence() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         for (name, expected_tls) in [("http", false), ("https", true)] {
-            for (setup, body, expected_body, invocation) in [
+            let commonjs_cases = [
                 (
                     "const request = http.request;",
                     "privateBytes",
@@ -1827,7 +1839,59 @@ fn delivered_http_request_values_preserve_ifc_denial_and_exact_evidence() {
                     "public",
                     "request.bind(null)(options)",
                 ),
-            ] {
+            ];
+            let esm_cases = [
+                (
+                    format!(
+                        "import {{ request as firstRequest }} from '{name}'; import './mutate.cjs'; import {{ request }} from 'node:{name}';"
+                    ),
+                    "'public'",
+                    "public",
+                    "request(options)",
+                ),
+                (
+                    "import './read.cjs'; import { request } from './reexport.mjs';".to_string(),
+                    "'public'",
+                    "public",
+                    "request(options)",
+                ),
+            ];
+            let cases =
+                commonjs_cases
+                    .into_iter()
+                    .map(|(setup, body, expected_body, invocation)| {
+                        (
+                            ModuleSyntax::CommonJs,
+                            setup.to_string(),
+                            body,
+                            expected_body,
+                            invocation,
+                        )
+                    })
+                    .chain(esm_cases.into_iter().map(
+                        |(setup, body, expected_body, invocation)| {
+                            (
+                                ModuleSyntax::EsModule,
+                                setup,
+                                body,
+                                expected_body,
+                                invocation,
+                            )
+                        },
+                    ));
+            for (syntax, setup, body, expected_body, invocation) in cases {
+                let filename = if syntax == ModuleSyntax::CommonJs {
+                    "entry.cjs"
+                } else {
+                    "entry.mjs"
+                };
+                let prelude = if syntax == ModuleSyntax::CommonJs {
+                    format!(
+                        "const load = require; const moduleName = '{name}'; const http = load(moduleName); const fs = load('fs'); const privateBytes = fs.readFileSync('private.txt', 'utf8');"
+                    )
+                } else {
+                    String::new()
+                };
                 let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("egress sentinel");
                 listener
                     .set_nonblocking(true)
@@ -1840,16 +1904,12 @@ fn delivered_http_request_values_preserve_ifc_denial_and_exact_evidence() {
                 let resolver = Arc::new(
                     OpaqueResolver::new(vec![
                         (
-                            "entry.cjs",
+                            filename,
                             definition(
-                                ModuleSyntax::CommonJs,
+                                syntax,
                                 &format!(
                                     r#"
-const load = require;
-const moduleName = '{name}';
-const http = load(moduleName);
-const fs = load('fs');
-const privateBytes = fs.readFileSync('private.txt', 'utf8');
+{prelude}
 {setup}
 const options = {{ host: '127.0.0.1', port: {}, path: '/refused', method: 'POST' }};
 const outgoing = {invocation};
@@ -1863,6 +1923,18 @@ outgoing.end();
                             .with_dependency(ModuleDependency::new(
                                 "./reexport.cjs",
                                 ImportStyle::Require,
+                            ))
+                            .with_dependency(ModuleDependency::new(
+                                "./mutate.cjs",
+                                ImportStyle::Import,
+                            ))
+                            .with_dependency(ModuleDependency::new(
+                                "./read.cjs",
+                                ImportStyle::Import,
+                            ))
+                            .with_dependency(ModuleDependency::new(
+                                "./reexport.mjs",
+                                ImportStyle::Import,
                             )),
                         ),
                         (
@@ -1872,16 +1944,39 @@ outgoing.end();
                                 &format!("module.exports = require('{name}');"),
                             ),
                         ),
+                        (
+                            "mutate.cjs",
+                            definition(
+                                ModuleSyntax::CommonJs,
+                                &format!(
+                                    "const http = require('{name}'); const fs = require('fs'); http.privateState = fs.readFileSync('private.txt', 'utf8');"
+                                ),
+                            ),
+                        ),
+                        (
+                            "read.cjs",
+                            definition(
+                                ModuleSyntax::CommonJs,
+                                "require('fs').readFileSync('private.txt', 'utf8');",
+                            ),
+                        ),
+                        (
+                            "reexport.mjs",
+                            definition(
+                                ModuleSyntax::EsModule,
+                                &format!("export {{ request }} from '{name}';"),
+                            ),
+                        ),
                     ])
                     .with_native_builtins(),
                 );
-                let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+                let source = entry(&resolver, filename, syntax);
                 let installed = ExecutionModuleResolver::new(
                     &source.module.record.id,
                     resolver,
                     Arc::new(AllowAllPolicy),
                 );
-                let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
+                let mut engine = orchestrator(lane, syntax);
                 engine.set_host_io(
                     Arc::new(SandboxedHostIo::with_root(root.path()).expect("real provider")),
                     Some(transcript.clone()),

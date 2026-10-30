@@ -40927,11 +40927,22 @@ impl InterpreterCore {
         }
     }
 
+    #[cfg(test)]
     fn import_module(
         &mut self,
         module: &Ir3Module,
         specifier: &JsString,
     ) -> Result<Value, InterpreterError> {
+        self.import_module_with_http_provenance(module, specifier, &mut false)
+    }
+
+    fn import_module_with_http_provenance(
+        &mut self,
+        module: &Ir3Module,
+        specifier: &JsString,
+        native_http: &mut bool,
+    ) -> Result<Value, InterpreterError> {
+        *native_http = false;
         let specifier = Self::utf8_module_specifier(specifier)?;
         self.run_pre_import_hook(module, specifier)?;
         let delivered = self
@@ -40947,17 +40958,28 @@ impl InterpreterCore {
         if let Some(source) = delivered.as_ref()
             && let Some(native) = NativeBuiltinModule::from_record(&source.module.record)
         {
-            return self.load_native_builtin_namespace(module, source, native, import_bound.as_ref());
+            let namespace =
+                self.load_native_builtin_namespace(module, source, native, import_bound.as_ref())?;
+            *native_http = matches!(
+                native,
+                NativeBuiltinModule::Http | NativeBuiltinModule::Https
+            );
+            return Ok(namespace);
         }
         if delivered.is_none()
             && let Some(native) = NativeBuiltinModule::from_specifier(specifier)
         {
-            return self.load_ordinary_native_builtin_namespace(
+            let namespace = self.load_ordinary_native_builtin_namespace(
                 module,
                 specifier,
                 native,
                 import_bound.as_ref(),
+            )?;
+            *native_http = matches!(
+                native,
+                NativeBuiltinModule::Http | NativeBuiltinModule::Https
             );
+            return Ok(namespace);
         }
         let resolved = match &delivered {
             Some(source) => source.module.record.id.clone(),
@@ -57581,16 +57603,35 @@ impl InterpreterCore {
                         WitnessEventKind::HostcallDispatched,
                         Some("cap:module_load"),
                     );
-                    let namespace = self.dispatch_import_hostcall(
+                    let mut native_http = false;
+                    let namespace = self.dispatch_import_hostcall_with_http_provenance(
                         "module_load",
                         RegRange {
                             start: specifier,
                             count: 1,
                         },
                         Some(module),
+                        &mut native_http,
                     )?;
-                    let result_label = hostcall_result_contract("module_load")
-                        .result_label(&specifier_label, None);
+                    let result_label = if native_http && let Value::Object(object) = &namespace {
+                        // Authentication and the import-bound checks already
+                        // completed. A pure engine-owned HTTP namespace is
+                        // not a source read, but its cached export graph and
+                        // every getter observation still contribute provenance.
+                        let state = self.native_builtin_state_label_with_floor(
+                            module,
+                            *object,
+                            Label::Public,
+                        )?;
+                        let result =
+                            self.join_owned_label_with_temporary_budget(state, &specifier_label)?;
+                        let observed = self
+                            .take_pending_hostcall_result_label()
+                            .unwrap_or(Label::Public);
+                        self.join_owned_label_with_temporary_budget(result, &observed)?
+                    } else {
+                        hostcall_result_contract("module_load").result_label(&specifier_label, None)
+                    };
                     self.write_reg_with_label(dst, namespace, result_label)?;
                     self.ip += 1;
                     if let Some((dependency, evaluation_promise)) =
@@ -73959,11 +74000,22 @@ impl InterpreterCore {
         args: RegRange,
         module: Option<&Ir3Module>,
     ) -> Result<Value, InterpreterError> {
+        self.dispatch_import_hostcall_with_http_provenance(capability, args, module, &mut false)
+    }
+
+    fn dispatch_import_hostcall_with_http_provenance(
+        &mut self,
+        capability: &str,
+        args: RegRange,
+        module: Option<&Ir3Module>,
+        native_http: &mut bool,
+    ) -> Result<Value, InterpreterError> {
+        *native_http = false;
         let args_hash = self.hostcall_arguments_hash(args);
         let outcome = if capability == crate::capability::DYNAMIC_IMPORT_CAPABILITY {
             self.dynamic_import(args, module)
         } else {
-            self.dispatch_import_hostcall_inner(args, module)
+            self.dispatch_import_hostcall_inner(args, module, native_http)
         };
         // See `dispatch_require_hostcall`: nested module evaluation records
         // inner completions first, so the outer record takes its timestamp at
@@ -73977,6 +74029,7 @@ impl InterpreterCore {
         &mut self,
         args: RegRange,
         module: Option<&Ir3Module>,
+        native_http: &mut bool,
     ) -> Result<Value, InterpreterError> {
         let specifier_value = if args.count > 0 {
             self.read_reg(args.start)?
@@ -73994,7 +74047,7 @@ impl InterpreterCore {
         let module = module.ok_or_else(|| InterpreterError::InternalError {
             details: "module import hostcall missing module context".to_string(),
         })?;
-        self.import_module(module, &specifier)
+        self.import_module_with_http_provenance(module, &specifier, native_http)
     }
 
     /// `import(specifier)` (ES2020 12.3.10.1 with HostImportModuleDynamically

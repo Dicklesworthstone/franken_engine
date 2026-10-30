@@ -461,7 +461,15 @@ fn resolve_package_target(
             Ok(ExportsTargetResolution::NoMatch)
         }
         PackageExports::Alternatives(alternatives) => {
-            let mut last_error = None;
+            if alternatives.is_empty() {
+                return Ok(ExportsTargetResolution::Excluded);
+            }
+            // PACKAGE_TARGET_RESOLVE distinguishes undefined (no active
+            // condition) from null (an explicit exclusion). Only undefined
+            // lets an enclosing condition object try its next branch. Keep
+            // the last null/invalid-target result while skipping unmatched
+            // alternatives, including nested arrays.
+            let mut last_outcome = Ok(ExportsTargetResolution::NoMatch);
             for alternative in alternatives {
                 match resolve_package_target(
                     package_dir,
@@ -471,13 +479,15 @@ fn resolve_package_target(
                     conditions,
                 ) {
                     Ok(ExportsTargetResolution::NoMatch) => {}
-                    Ok(ExportsTargetResolution::Excluded) => last_error = None,
+                    Ok(ExportsTargetResolution::Excluded) => {
+                        last_outcome = Ok(ExportsTargetResolution::Excluded);
+                    }
                     Ok(resolved) => return Ok(resolved),
-                    Err(error @ PackageTargetError::Target(_)) => last_error = Some(error),
+                    Err(error @ PackageTargetError::Target(_)) => last_outcome = Err(error),
                     Err(error) => return Err(error),
                 }
             }
-            last_error.map_or(Ok(ExportsTargetResolution::Excluded), Err)
+            last_outcome
         }
     }
 }
@@ -1040,6 +1050,79 @@ mod tests {
                 .expect("resolved path"),
             expected.canonicalize().expect("expected path")
         );
+    }
+
+    #[test]
+    fn conditional_arrays_preserve_unmatched_excluded_and_invalid_states() {
+        let directory = Path::new("/conditional-array-package");
+        for conditions in [REQUIRE_EXPORT_CONDITIONS, IMPORT_EXPORT_CONDITIONS] {
+            for target in [
+                r#"[{"browser":"./browser.cjs"}]"#,
+                r#"[[{"browser":"./browser.cjs"}],{}]"#,
+                r#"[{"browser":null},{"development":[]}]"#,
+            ] {
+                let target: PackageExports = serde_json::from_str(target).unwrap();
+                assert!(matches!(
+                    resolve_package_target(directory, &target, None, false, conditions),
+                    Ok(ExportsTargetResolution::NoMatch)
+                ));
+            }
+            for target in [
+                "[]",
+                "[null]",
+                r#"[null,{"browser":"./browser.cjs"}]"#,
+                r#"[[],{}]"#,
+                r#"["../invalid.cjs",null,{"browser":"./browser.cjs"}]"#,
+                r#"[["../invalid.cjs"],null,{}]"#,
+            ] {
+                let target: PackageExports = serde_json::from_str(target).unwrap();
+                assert!(matches!(
+                    resolve_package_target(directory, &target, None, false, conditions),
+                    Ok(ExportsTargetResolution::Excluded)
+                ));
+            }
+            for target in [
+                r#"["../invalid.cjs",{"browser":"./browser.cjs"}]"#,
+                r#"[null,"../invalid.cjs",{}]"#,
+            ] {
+                let target: PackageExports = serde_json::from_str(target).unwrap();
+                assert!(matches!(
+                    resolve_package_target(directory, &target, None, false, conditions),
+                    Err(PackageTargetError::Target(_))
+                ));
+            }
+            for target in [
+                r#"{"node":[{"browser":"./browser.cjs"}],"default":"./fallback.cjs"}"#,
+                r#"{"node":[[{"browser":"./browser.cjs"}],{}],"default":"./fallback.cjs"}"#,
+                r#"[null,{"browser":"./browser.cjs"},"./fallback.cjs"]"#,
+                r#"["../invalid.cjs",{},"./fallback.cjs"]"#,
+            ] {
+                let target: PackageExports = serde_json::from_str(target).unwrap();
+                for imports in [false, true] {
+                    assert!(matches!(
+                        resolve_package_target(directory, &target, None, imports, conditions),
+                        Ok(ExportsTargetResolution::Found(path))
+                            if path == directory.join("fallback.cjs")
+                    ));
+                }
+            }
+            // Configuration and selected URL errors are not array fallback
+            // signals. They still fail even with a valid later alternative.
+            let numeric: PackageExports = serde_json::from_str(
+                r#"[{"node":{"0":"./invalid.cjs","default":"./fallback.cjs"}},"./fallback.cjs"]"#,
+            )
+            .unwrap();
+            assert!(matches!(
+                resolve_package_target(directory, &numeric, None, false, conditions),
+                Err(PackageTargetError::Configuration(_))
+            ));
+            let separator: PackageExports =
+                serde_json::from_str(r#"["./%2fhidden.cjs","./fallback.cjs"]"#).unwrap();
+            assert!(matches!(
+                resolve_package_target(directory, &separator, None, false, conditions),
+                Err(PackageTargetError::Specifier(_))
+            ));
+        }
     }
 
     #[test]

@@ -657,6 +657,20 @@ fn native_runtime_wrapper(native: NativeBuiltinModule) -> Option<(&'static str, 
                 + native_module_loader::stream_bridge_source_bytes()
                 + loader_bytes * 4,
         )),
+        NativeBuiltinModule::Readline | NativeBuiltinModule::ReadlinePromises => Some((
+            "module.exports = require('readline');",
+            // Charge the complete temporary composition before replacing its
+            // private dependencies with the realm's Events and decoder objects.
+            READLINE_SOURCE.len()
+                + include_str!("readline_cursor.js").len()
+                + EVENTS_SOURCE.len()
+                + STRING_DECODER_SOURCE.len()
+                + loader_bytes * 3,
+        )),
+        NativeBuiltinModule::DiagnosticsChannel => Some((
+            "module.exports = require('diagnostics_channel');",
+            DIAGNOSTICS_CHANNEL_SOURCE.len() + loader_bytes,
+        )),
         _ => None,
     }
 }
@@ -689,6 +703,7 @@ pub(crate) fn native_runtime_module_tree(
         native,
         NativeBuiltinModule::Stream | NativeBuiltinModule::StreamPromises
             | NativeBuiltinModule::Fs | NativeBuiltinModule::FsPromises
+            | NativeBuiltinModule::Readline | NativeBuiltinModule::ReadlinePromises
     ) {
         // The runtime provider shares its dependencies with public native
         // imports. Re-running the legacy Events initializer would reset
@@ -2017,7 +2032,7 @@ mod tests {
     }
 
     #[test]
-    fn commonjs_source_only_modules_keep_canonical_dependencies() {
+    fn native_readline_factories_keep_canonical_dependencies() {
         struct Dependencies {
             events: usize,
             decoder: usize,
@@ -2037,12 +2052,20 @@ mod tests {
             }
         }
         for name in ["readline", "readline/promises"] {
-            assert!(NativeBuiltinModule::from_specifier(name).is_none());
+            let native = NativeBuiltinModule::from_specifier(name).unwrap();
             let tree = crate::parser_api_stability::parse_script(&format!(
                 "const api = require('{name}'); globalThis.api = api;"
-            )).unwrap();
-            let mut rewritten = rewrite_commonjs_util_requires(&tree).unwrap()
-                .expect("source-only modules retain their supported CommonJS rewrite");
+            ))
+            .unwrap();
+            assert!(
+                rewrite_commonjs_util_requires(&tree).unwrap().is_none(),
+                "authenticated CommonJS must share the real native provider"
+            );
+            assert!(
+                rewrite_util_requires(&tree).unwrap().is_some(),
+                "script-only callers retain their existing supported rewrite"
+            );
+            let mut rewritten = native_runtime_module_tree(native).unwrap();
             let mut dependencies = Dependencies {
                 events: 0,
                 decoder: 0,
@@ -2052,6 +2075,10 @@ mod tests {
             assert_eq!(dependencies.events, 1, "{name}");
             assert_eq!(dependencies.decoder, 1, "{name}");
             assert_eq!(dependencies.private_constructor, 0, "{name}");
+            assert!(
+                native_runtime_module_source_bytes(native).unwrap()
+                    > READLINE_SOURCE.len() + include_str!("readline_cursor.js").len()
+            );
         }
     }
 

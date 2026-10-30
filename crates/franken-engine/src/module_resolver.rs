@@ -376,6 +376,9 @@ pub enum NativeBuiltinModule {    Buffer,
     StreamConsumers,
     StreamWeb,
     Module,
+    Readline,
+    ReadlinePromises,
+    DiagnosticsChannel,
 }
 
 impl NativeBuiltinModule {
@@ -406,6 +409,9 @@ impl NativeBuiltinModule {
             "stream/promises" | "node:stream/promises" => Some(Self::StreamPromises),
             "stream/consumers" | "node:stream/consumers" => Some(Self::StreamConsumers),
             "stream/web" | "node:stream/web" => Some(Self::StreamWeb),
+            "readline" | "node:readline" => Some(Self::Readline),
+            "readline/promises" | "node:readline/promises" => Some(Self::ReadlinePromises),
+            "diagnostics_channel" | "node:diagnostics_channel" => Some(Self::DiagnosticsChannel),
             _ => None,
         }
     }
@@ -437,6 +443,9 @@ impl NativeBuiltinModule {
             Self::StreamPromises => "node:stream/promises",
             Self::StreamConsumers => "node:stream/consumers",
             Self::StreamWeb => "node:stream/web",
+            Self::Readline => "node:readline",
+            Self::ReadlinePromises => "node:readline/promises",
+            Self::DiagnosticsChannel => "node:diagnostics_channel",
         }
     }
 
@@ -445,11 +454,18 @@ impl NativeBuiltinModule {
     pub fn record(self, id: impl Into<String>) -> ModuleRecord {
         let mut required_capabilities =
             BTreeSet::from([RuntimeCapability::ModuleLoad, RuntimeCapability::Builtin]);
-        // Stream completion, backpressure and cancellation use the native
-        // nextTick queue, whose scheduling authority is Timer.
+        // Stream completion, readline cursor callbacks and diagnostics
+        // subscriber errors use the native nextTick/microtask queues, whose
+        // scheduling authority is Timer.
         if matches!(
             self,
-            Self::Timers | Self::TimersPromises | Self::Stream | Self::StreamPromises
+            Self::Timers
+                | Self::TimersPromises
+                | Self::Stream
+                | Self::StreamPromises
+                | Self::Readline
+                | Self::ReadlinePromises
+                | Self::DiagnosticsChannel
         ) {
             required_capabilities.insert(RuntimeCapability::Timer);
         }
@@ -2895,6 +2911,9 @@ mod tests {
             "stream/promises",
             "stream/consumers",
             "stream/web",
+            "readline",
+            "readline/promises",
+            "diagnostics_channel",
         ] {
             let builtin = NativeBuiltinModule::from_specifier(name).unwrap();
             assert_eq!(builtin.canonical_specifier(), format!("node:{name}"));
@@ -2933,7 +2952,16 @@ mod tests {
                 record
                     .required_capabilities
                     .contains(&RuntimeCapability::Timer),
-                matches!(name, "timers" | "timers/promises" | "stream" | "stream/promises")
+                matches!(
+                    name,
+                    "timers"
+                        | "timers/promises"
+                        | "stream"
+                        | "stream/promises"
+                        | "readline"
+                        | "readline/promises"
+                        | "diagnostics_channel"
+                )
             );
             let request = ModuleRequest::new(name, ImportStyle::Require);
             let denied = CapabilityPolicyHook::new(BTreeSet::from([RuntimeCapability::ModuleLoad]));
@@ -2945,6 +2973,8 @@ mod tests {
             "fs/unknown",
             "path/unknown",
             "stream/unknown",
+            "readline/unknown",
+            "diagnostics_channel/unknown",
             "node:unknown",
             "node:node:buffer",
             "./buffer",
@@ -2967,6 +2997,9 @@ mod tests {
             NativeBuiltinModule::FsPromises,
             NativeBuiltinModule::StreamConsumers,
             NativeBuiltinModule::StreamWeb,
+            NativeBuiltinModule::Readline,
+            NativeBuiltinModule::ReadlinePromises,
+            NativeBuiltinModule::DiagnosticsChannel,
         ] {
             let original = builtin.record("captured:graph:native");
             let mut forged = original.clone();

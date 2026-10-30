@@ -116,6 +116,9 @@ impl OpaqueResolver {
             NativeBuiltinModule::StreamPromises,
             NativeBuiltinModule::StreamConsumers,
             NativeBuiltinModule::StreamWeb,
+            NativeBuiltinModule::Readline,
+            NativeBuiltinModule::ReadlinePromises,
+            NativeBuiltinModule::DiagnosticsChannel,
         ] {
             let canonical = native.canonical_specifier();
             let names = [
@@ -2508,6 +2511,220 @@ module.exports = {
                 "true true",
             ]
         );
+    }
+}
+
+#[test]
+fn delivered_readline_diagnostics_share_native_factories_across_packages() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![
+                (
+                    "entry.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        r#"
+const readline = require('readline');
+const diagnostics = require('diagnostics_channel');
+const events = require('events');
+const child = require('./child.cjs');
+const promises = require('readline/promises');
+console.log(readline === child.readline, diagnostics === child.diagnostics,
+    promises === readline.promises, promises === child.promises);
+const input = new events.EventEmitter();
+input.resume = function () {};
+input.pause = function () {};
+const reader = child.readline.createInterface({input: input, terminal: false});
+const seen = [];
+diagnostics.subscribe('captured-lines', function (line) { seen.push(line); });
+reader.on('line', function (line) { child.diagnostics.channel('captured-lines').publish(line); });
+input.emit('data', Buffer.from([226, 130]));
+input.emit('data', Buffer.from([172, 10]));
+input.emit('data', 'tail');
+input.emit('end');
+console.log(reader instanceof events.EventEmitter, seen.join('|'), reader.closed);
+readline.promises = {};
+console.log(require('node:readline/promises') === promises);
+diagnostics.marker = 42;
+console.log(child.diagnostics.marker, diagnostics.channel('captured-lines').hasSubscribers);
+"#,
+                    )
+                    .with_dependency(ModuleDependency::new("./child.cjs", ImportStyle::Require)),
+                ),
+                (
+                    "child.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        r#"
+module.exports = {
+    readline: require('node:readline'),
+    promises: require('node:readline/promises'),
+    diagnostics: require('node:diagnostics_channel')
+};
+"#,
+                    ),
+                ),
+            ])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let policy = Arc::new(RecordingPolicy {
+            allow_native_builtins: true,
+            ..RecordingPolicy::default()
+        });
+        let installed =
+            ExecutionModuleResolver::new(&source.module.record.id, resolver, policy.clone());
+        let result = orchestrator(lane, ModuleSyntax::CommonJs)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("captured packages share readline, promises and diagnostics state");
+        assert_eq!(
+            lines(&result),
+            ["true true true true", "true €|tail true", "true", "42 true"]
+        );
+        assert!(
+            policy
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|(request, _)| !request.specifier.starts_with('\0')),
+            "private factory dependencies must not request uncaptured routes"
+        );
+    }
+}
+
+#[test]
+fn delivered_readline_diagnostics_esm_namespaces_match_commonjs() {
+    let resolver = Arc::new(OpaqueResolver::new(vec![
+        ("entry.mjs", definition(ModuleSyntax::EsModule, r#"
+import readline, {createInterface, cursorTo} from 'node:readline';
+import promises, {Readline} from 'readline/promises';
+import diagnostics, {channel, Channel} from 'node:diagnostics_channel';
+import child from './child.cjs';
+console.log(readline === child.readline, promises === child.promises,
+    diagnostics === child.diagnostics, createInterface === readline.createInterface);
+console.log(typeof cursorTo, typeof Readline, channel('esm') instanceof Channel);
+const seen = [];
+child.diagnostics.subscribe('esm', function (value) { seen.push(value); });
+channel('esm').publish(42);
+console.log(seen.join(','), channel('esm').hasSubscribers);
+import('diagnostics_channel').then(function (ns) {
+    console.log(ns.default === diagnostics, ns.channel === channel);
+});
+"#).with_dependency(ModuleDependency::new("./child.cjs", ImportStyle::Import))),
+        ("child.cjs", definition(ModuleSyntax::CommonJs,
+            "module.exports = {readline: require('readline'), promises: require('node:readline/promises'), diagnostics: require('diagnostics_channel')};")),
+    ]).with_native_builtins());
+    let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+    let installed =
+        ExecutionModuleResolver::new(&source.module.record.id, resolver, Arc::new(AllowAllPolicy));
+    let result = orchestrator(LaneChoice::QuickJs, ModuleSyntax::EsModule)
+        .execute_resolved_entry_with_resolver(&package(), &source, installed)
+        .expect("native readline and diagnostics expose bounded ESM namespaces");
+    assert_eq!(
+        lines(&result),
+        [
+            "true true true true",
+            "function function true",
+            "42 true",
+            "true true",
+        ]
+    );
+}
+
+#[test]
+fn delivered_readline_diagnostics_preserve_capability_and_alias_authority() {
+    for name in ["readline", "readline/promises", "diagnostics_channel"] {
+        for capability in ["builtin", "timer", "module_load"] {
+            let resolver = Arc::new(
+                OpaqueResolver::new(vec![(
+                    "entry.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        &format!("require('{name}'); console.log('must not run');"),
+                    ),
+                )])
+                .with_native_builtins(),
+            );
+            let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+            let installed = ExecutionModuleResolver::new(
+                &source.module.record.id,
+                resolver,
+                Arc::new(AllowAllPolicy),
+            );
+            let mut package = package();
+            package.capabilities.retain(|grant| grant != capability);
+            let mut engine = orchestrator(LaneChoice::QuickJs, ModuleSyntax::CommonJs);
+            let error = engine
+                .execute_resolved_entry_with_resolver(&package, &source, installed)
+                .expect_err("a native module descriptor never supplies missing authority");
+            assert!(
+                error.to_string().contains(capability),
+                "{name} / {capability}: {error}"
+            );
+            assert!(engine.last_failed_console_output().is_empty());
+        }
+        let alias = format!("node:{name}");
+        let resolver = Arc::new(OpaqueResolver::new(vec![(
+            "entry.cjs", definition(ModuleSyntax::CommonJs,
+                &format!("require('{name}'); console.log('allowed'); try {{ require('{alias}'); }} catch (_) {{ console.log('caught'); }}")),
+        )]).with_native_builtins());
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let policy = Arc::new(RecordingPolicy {
+            denied: Some((alias, 1)),
+            allow_native_builtins: true,
+            ..RecordingPolicy::default()
+        });
+        let installed = ExecutionModuleResolver::new(&source.module.record.id, resolver, policy);
+        let mut engine = orchestrator(LaneChoice::QuickJs, ModuleSyntax::CommonJs);
+        let error = engine
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect_err("cached factories must still authorize every alias route");
+        assert!(
+            error
+                .to_string()
+                .contains("closed-world module resolution refused"),
+            "{error}"
+        );
+        assert_eq!(
+            engine
+                .last_failed_console_output()
+                .iter()
+                .map(|entry| entry.message.as_str())
+                .collect::<Vec<_>>(),
+            ["allowed"]
+        );
+    }
+}
+
+#[test]
+fn delivered_diagnostics_esm_rejects_guest_and_snapshot_getters() {
+    for mutation in [
+        "Object.defineProperty(dc.Channel.prototype, 'hasSubscribers', {get: function hasSubscribers() { console.log('guest getter ran'); return true; }});",
+        "const get = Object.getOwnPropertyDescriptor(dc.Channel.prototype, 'hasSubscribers').get; Object.defineProperty(dc, 'channel', {get: get});",
+    ] {
+        let resolver = Arc::new(OpaqueResolver::new(vec![
+            ("entry.mjs", definition(ModuleSyntax::EsModule,
+                "import './mutator.cjs'; import {channel} from 'node:diagnostics_channel'; console.log('must not run');")
+                .with_dependency(ModuleDependency::new("./mutator.cjs", ImportStyle::Import))),
+            ("mutator.cjs", definition(ModuleSyntax::CommonJs,
+                &format!("const dc = require('diagnostics_channel'); {mutation}"))),
+        ]).with_native_builtins());
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let mut engine = orchestrator(LaneChoice::QuickJs, ModuleSyntax::EsModule);
+        let error = engine
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect_err("only authenticated deferred factory getters may be imported");
+        assert!(
+            error.to_string().contains("bounded-import contract"),
+            "{mutation}: {error}"
+        );
+        assert!(engine.last_failed_console_output().is_empty(), "{mutation}");
     }
 }
 

@@ -41313,7 +41313,10 @@ impl InterpreterCore {
             | NativeBuiltinModule::Stream
             | NativeBuiltinModule::StreamPromises
             | NativeBuiltinModule::StreamConsumers
-            | NativeBuiltinModule::StreamWeb => {
+            | NativeBuiltinModule::StreamWeb
+            | NativeBuiltinModule::Readline
+            | NativeBuiltinModule::ReadlinePromises
+            | NativeBuiltinModule::DiagnosticsChannel => {
                 self.source_builtin_module(module, native, import_bound)
             }
         }
@@ -41427,6 +41430,26 @@ impl InterpreterCore {
                 "doesNotThrow", "rejects", "doesNotReject", "strict",
             ],
             NativeBuiltinModule::StringDecoder => vec!["StringDecoder"],
+            NativeBuiltinModule::Readline => vec![
+                "Interface",
+                "createInterface",
+                "promises",
+                "cursorTo",
+                "moveCursor",
+                "clearLine",
+                "clearScreenDown",
+            ],
+            NativeBuiltinModule::ReadlinePromises => {
+                vec!["Interface", "createInterface", "Readline"]
+            }
+            NativeBuiltinModule::DiagnosticsChannel => vec![
+                "channel",
+                "hasSubscribers",
+                "subscribe",
+                "unsubscribe",
+                "tracingChannel",
+                "Channel",
+            ],
             NativeBuiltinModule::TimersPromises => {
                 vec!["setTimeout", "setImmediate", "setInterval", "scheduler"]
             }
@@ -41723,9 +41746,10 @@ impl InterpreterCore {
             "\0franken-engine/native-stream" => 3,
             "\0franken-engine/native-buffer" => 4,
             "\0franken-engine/native-stream/web" => 5,
+            "\0franken-engine/native-diagnostics_channel" => 6,
             _ => return false,
         };
-        static FACTORY_HASHES: OnceLock<[ContentHash; 6]> = OnceLock::new();
+        static FACTORY_HASHES: OnceLock<[ContentHash; 7]> = OnceLock::new();
         let hashes = FACTORY_HASHES.get_or_init(|| {
             [
                 NativeBuiltinModule::Util
@@ -41745,6 +41769,9 @@ impl InterpreterCore {
                     .canonical_hash(),
                 NativeBuiltinModule::StreamWeb
                     .record("\0franken-engine/native-stream/web")
+                    .canonical_hash(),
+                NativeBuiltinModule::DiagnosticsChannel
+                    .record("\0franken-engine/native-diagnostics_channel")
                     .canonical_hash(),
             ]
         });
@@ -41770,6 +41797,23 @@ impl InterpreterCore {
         };
         if code.is_generator || code.rest_param_index.is_some() {
             return false;
+        }
+        if provider == 6 {
+            // These two immutable prototype getters inspect private channel
+            // state only when called on a receiver. Namespace publication
+            // never invokes them. A guest getter, even with the same name,
+            // must retain the ordinary fail-high path.
+            let Some(source) = program.function_sources.get(&closure.function_index) else {
+                return false;
+            };
+            return !setter
+                && code.arity == 0
+                && code.name.as_deref() == Some("hasSubscribers")
+                && matches!(
+                    source.as_str().trim(),
+                    "get hasSubscribers() {\n      const s = state(this);\n      return s.subscribers.length !== 0 || s.storeCount !== 0;\n    }"
+                        | "get hasSubscribers() {\n      for (let i = 0; i < eventNames.length; i++) if (this[eventNames[i]].hasSubscribers) return true;\n      return false;\n    }"
+                );
         }
         if provider == 5 {
             // Web Stream accessors are deferred receiver operations over the
@@ -42008,6 +42052,11 @@ impl InterpreterCore {
             NativeBuiltinModule::StreamPromises => "\0franken-engine/native-stream/promises/esm",
             NativeBuiltinModule::StreamConsumers => "\0franken-engine/native-stream/consumers/esm",
             NativeBuiltinModule::StreamWeb => "\0franken-engine/native-stream/web/esm",
+            NativeBuiltinModule::Readline => "\0franken-engine/native-readline/esm",
+            NativeBuiltinModule::ReadlinePromises => "\0franken-engine/native-readline/promises/esm",
+            NativeBuiltinModule::DiagnosticsChannel => {
+                "\0franken-engine/native-diagnostics_channel/esm"
+            }
         };
         let object = match &value {
             Value::Object(object) => *object,
@@ -42405,6 +42454,21 @@ impl InterpreterCore {
                 "\0franken-engine/native-stream/web",
                 None,
             ),
+            NativeBuiltinModule::Readline => (
+                NativeBuiltinModule::Readline,
+                "\0franken-engine/native-readline",
+                None,
+            ),
+            NativeBuiltinModule::ReadlinePromises => (
+                NativeBuiltinModule::Readline,
+                "\0franken-engine/native-readline",
+                Some("promises"),
+            ),
+            NativeBuiltinModule::DiagnosticsChannel => (
+                NativeBuiltinModule::DiagnosticsChannel,
+                "\0franken-engine/native-diagnostics_channel",
+                None,
+            ),
             _ => {
                 return Err(InterpreterError::InternalError {
                     details: "native provider has no engine-owned source factory".to_string(),
@@ -42454,7 +42518,9 @@ impl InterpreterCore {
                 // a later require must neither select nor invoke guest code.
                 let stable_member = match factory {
                     NativeBuiltinModule::Util => Some("types"),
-                    NativeBuiltinModule::Stream | NativeBuiltinModule::Fs => Some("promises"),
+                    NativeBuiltinModule::Stream
+                    | NativeBuiltinModule::Fs
+                    | NativeBuiltinModule::Readline => Some("promises"),
                     _ => None,
                 };
                 if let Some(name) = stable_member {

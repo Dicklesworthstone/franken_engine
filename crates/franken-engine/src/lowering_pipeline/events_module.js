@@ -254,6 +254,7 @@
     var finished = false;
     var paused = false;
     var flowDepth = 0;
+    var resumeRequested = false;
     var hasError = false;
     var terminalError;
     function result(value, done) { return { value: value, done: done }; }
@@ -292,7 +293,14 @@
       // synchronous producers stop only when the high watermark is observed
       // inside emit(). Publishing `paused = false` afterwards lost that pause.
       if (flowDepth !== 0) { return; }
-      while (!finished && paused && values.size < low) {
+      while (!finished && resumeRequested) {
+        // Only consumption creates demand for a restart. A producer can cross
+        // high while already below low (low > high is valid), so observing a
+        // small queue after emit() alone must not immediately undo its pause.
+        // Clear this request before guest code; only reentrant next() calls
+        // can request another reconciliation after the callback completes.
+        resumeRequested = false;
+        if (!paused || values.size >= low) { return; }
         paused = false;
         flowDepth++;
         try { emitter.resume(); } catch (error) { fail(error); }
@@ -311,6 +319,7 @@
           // becomes the iterator's terminal error, after already queued events,
           // instead of throwing from next() and silently losing this value.
           var ready = resolvePromise(result(value, false));
+          resumeRequested = true;
           resumeProducer();
           return ready;
         }
@@ -322,6 +331,7 @@
         }
         if (finished) { return resolvePromise(result(undefined, true)); }
         var pending = new EventPromise(function (resolve, reject) { put(waiters, { resolve: resolve, reject: reject }); });
+        resumeRequested = true;
         resumeProducer();
         return pending;
       },

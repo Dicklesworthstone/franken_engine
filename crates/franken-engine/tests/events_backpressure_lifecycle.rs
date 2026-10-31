@@ -174,3 +174,28 @@ e.resume();
 fn reentrant_consumers_cannot_strand_demand_or_recurse_through_resume() {
     assert_events(REENTRANT_DEMAND, "reentry 96 4560 2 0");
 }
+
+const INVERTED_WATERMARKS: &str = r#"
+const E = require('events'); const e = new E(); const calls = [];
+e.pause = function () { calls.push('pause'); };
+e.resume = function () { calls.push('resume'); };
+const it = E.on(e, 'data', { highWaterMark: 2, lowWaterMark: 4 });
+for (let i = 0; i < 5; i++) e.emit('data', i);
+console.log('buffered', calls.join(':'));
+(async () => {
+  console.log('first', (await it.next()).value[0], calls.join(':'));
+  console.log('second', (await it.next()).value[0], calls.join(':'));
+  await it.return();
+  let sum = 0;
+  for await (const values of it) sum += values[0];
+  console.log('closed', sum, calls.join(':'), e.listenerCount('data'));
+})().catch(error => console.log('FAIL', error.message));
+"#;
+
+#[test]
+fn low_watermark_above_high_resumes_only_after_consumption() {
+    assert_events(
+        INVERTED_WATERMARKS,
+        "buffered pause\nfirst 0 pause\nsecond 1 pause:resume\nclosed 9 pause:resume 0",
+    );
+}

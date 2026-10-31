@@ -43,7 +43,7 @@ function noSubscriptions(emitter) {
   assert.equal(emitter.listenerCount('end'), 0);
 }
 
-async function synchronousProducer(api, limit) {
+async function synchronousProducer(api, limit, lowWaterMark = 1) {
   const emitter = new native.EventEmitter();
   let produced = 0, consumed = 0, paused = false, peak = 0, pauses = 0, resumes = 0;
   emitter.pause = function () { paused = true; pauses++; };
@@ -56,7 +56,7 @@ async function synchronousProducer(api, limit) {
     }
     if (produced === limit) emitter.emit('end');
   };
-  const iterator = api.on(emitter, 'data', { highWaterMark: 2, lowWaterMark: 1, close: ['end'] });
+  const iterator = api.on(emitter, 'data', { highWaterMark: 2, lowWaterMark, close: ['end'] });
   emitter.resume();
   const values = [];
   while (true) {
@@ -99,6 +99,26 @@ test('ordinary hysteresis and FIFO results remain equal to live Node', async () 
     return { calls, values };
   }
   assert.deepEqual(await exercise(facade()), await exercise(native));
+});
+
+test('low above high resumes on demand and retains bounded synchronous refills', async () => {
+  async function exercise(api) {
+    const { emitter, iterator, calls } = consumer(api, { highWaterMark: 2, lowWaterMark: 4 });
+    for (let i = 0; i < 5; i++) emitter.emit('data', i);
+    assert.deepEqual(calls, ['pause'], 'emission must not undo a pause');
+    await nextValue(iterator, 0);
+    assert.deepEqual(calls, ['pause'], 'low watermark comparison is strict');
+    await nextValue(iterator, 1);
+    assert.deepEqual(calls, ['pause', 'resume']);
+    await iterator.return();
+    return calls;
+  }
+  assert.deepEqual(await exercise(facade()), await exercise(native));
+  const actual = await synchronousProducer(facade(), 256, 4);
+  const reference = await synchronousProducer(native, 256, 4);
+  assert.deepEqual(actual.values, reference.values);
+  assert.deepEqual(actual.values, Array.from({ length: 256 }, (_, i) => i));
+  assert.equal(actual.peak, 3, 'a refill alone must not request another restart');
 });
 
 for (const terminal of ['return', 'end', 'error', 'abort']) {
@@ -267,9 +287,10 @@ for (const [name, expected] of [
   ['TERMINAL_AND_FAILURE', 'terminal return 12 0 true\nterminal end 12 0 true\nterminal abort 12 0 true\n' +
     'failure false 12 true true\nfailure null 12 true true\nfailure undefined 12 true true'],
   ['REENTRANT_DEMAND', 'reentry 96 4560 2 0'],
+  ['INVERTED_WATERMARKS', 'buffered pause\nfirst 0 pause\nsecond 1 pause:resume\nclosed 9 pause:resume 0'],
 ]) {
   test(`exact native-test JavaScript under the full host facade: ${name}`, async () => {
-    assert.equal(programs.size, 3);
+    assert.equal(programs.size, 4);
     assert(programs.has(name));
     const api = facade(), lines = [];
     const log = (...args) => lines.push(require('node:util').format(...args));

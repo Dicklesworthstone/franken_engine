@@ -1692,7 +1692,10 @@ pub fn create_effect_from_hostcall_tag(
             Ok(Box::new(effect))
         }
         tag if tag.starts_with("fs:") => {
-            let operation = if tag == "fs:read" {
+            let operation = if matches!(
+                tag,
+                "fs:read" | crate::capability::FS_READ_PROMISE_CAPABILITY
+            ) {
                 FsOperation::Read
             } else if tag == "fs:write" {
                 FsOperation::Write
@@ -3780,6 +3783,31 @@ mod tests {
             !remote.capabilities().runtime_caps.is_empty(),
             "Remote must not be stripped to ComputeOnly"
         );
+    }
+
+    #[test]
+    fn promise_read_tag_preserves_the_read_effect_and_exact_authority() {
+        let effect = create_effect_from_hostcall_tag(
+            crate::capability::FS_READ_PROMISE_CAPABILITY,
+            &["input.txt".to_string(), "utf8".to_string()],
+        )
+        .expect("registered promise read");
+        assert_eq!(effect.effect_name(), "hostcall:fs:read");
+        let required = effect.required_capabilities();
+        assert_eq!(required.runtime_caps.len(), 1);
+        assert!(required.runtime_caps.contains(&RuntimeCapability::FsRead));
+        let parameters = effect
+            .parameters()
+            .downcast::<(FsOperation, String, Vec<String>, Option<Vec<u8>>)>()
+            .expect("same typed filesystem request as synchronous reads");
+        assert_eq!(parameters.0, FsOperation::Read);
+        assert_eq!(parameters.1, "input.txt");
+        assert!(parameters.2.is_empty());
+        assert_eq!(parameters.3, None, "encoding cannot become a write payload");
+        assert!(matches!(
+            create_effect_from_hostcall_tag("fs:read:promise:write", &["output".to_string()]),
+            Err(EffectError::InvalidParameters { .. })
+        ));
     }
 
     #[test]

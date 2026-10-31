@@ -376,11 +376,14 @@ pub fn capability_for_effect(effect: EffectKind) -> RuntimeCapability {
     }
 }
 
-/// Best-effort map a raw capability tag to a typed capability: try the whole
-/// tag, then the `prefix` of a `prefix:detail` tag (`builtin:MathPI` →
-/// `builtin`). Returns `None` when neither resolves — the raw tag is still the
-/// authority of record.
+/// Use the same exact authority contract as runtime dispatch. Builtin-named
+/// operations can require Timer, RandomRead or other specific grants; their
+/// textual prefix is not an authority proof. Retain the legacy best-effort
+/// mapping only for tags outside the registry, with the raw tag still recorded.
 fn capability_for_tag(tag: &str) -> Option<RuntimeCapability> {
+    if let Some(row) = crate::capability::hostcall_registry_row(tag) {
+        return row.authority;
+    }
     RuntimeCapability::from_tag_str(tag).or_else(|| {
         tag.split(':')
             .next()
@@ -782,6 +785,147 @@ mod tests {
                 .any(|requirement| requirement.capability == Some(RuntimeCapability::FsWrite)),
             "the operation-specific write capability must survive"
         );
+    }
+
+    #[test]
+    fn builtin_named_operations_report_their_runtime_authority() {
+        for (tag, expected) in [
+            ("builtin:QueueMicrotask", RuntimeCapability::Timer),
+            ("builtin:CryptoRandomBytes", RuntimeCapability::RandomRead),
+            (
+                "builtin:EventEmitterConstructorRef",
+                RuntimeCapability::Builtin,
+            ),
+            (
+                crate::capability::FS_READ_PROMISE_CAPABILITY,
+                RuntimeCapability::FsRead,
+            ),
+        ] {
+            assert_eq!(capability_for_tag(tag), Some(expected), "{tag}");
+        }
+        let report = analyze_authority_footprint(
+            "const events = require('events'); const controller = new AbortController(); events.addAbortListener(controller.signal, function () {});",
+            "abort-listener.js",
+            ParseGoal::Script,
+        );
+        assert_eq!(report.outcome(), CheckOutcome::Clean, "{report:?}");
+        assert!(
+            report
+                .required_capabilities
+                .iter()
+                .any(|requirement| requirement.capability == Some(RuntimeCapability::Timer)),
+            "{report:?}"
+        );
+    }
+
+    #[test]
+    fn literal_promise_reads_report_read_authority_without_ambient_require() {
+        for source in [
+            "require('fs/promises').readFile('input.txt', 'utf8');",
+            "const fs = require('node:fs/promises'); fs.readFile('input.txt', 'utf8');",
+            "const { readFile: read } = require('fs/promises'); read('input.txt');",
+            "const fs = require('fs'); fs.promises.readFile('input.txt', null);",
+            "const { promises } = require('node:fs'); promises.readFile('input.txt');",
+        ] {
+            let report = analyze_authority_footprint(source, "promise-read.js", ParseGoal::Script);
+            assert_eq!(
+                report.outcome(),
+                CheckOutcome::Clean,
+                "{source}: {report:?}"
+            );
+            assert_eq!(
+                report.required_capabilities.len(),
+                1,
+                "{source}: {report:?}"
+            );
+            assert_eq!(
+                report.required_capabilities[0].capability,
+                Some(RuntimeCapability::FsRead)
+            );
+            assert_eq!(
+                report.required_capabilities[0].capability_tag,
+                crate::capability::FS_READ_PROMISE_CAPABILITY
+            );
+            assert!(!report.required_capabilities[0].call_sites.is_empty());
+            assert_eq!(
+                report,
+                analyze_authority_footprint(source, "promise-read.js", ParseGoal::Script)
+            );
+        }
+    }
+
+    #[test]
+    fn promise_reads_do_not_hide_ambient_secret_inputs_or_observable_modules() {
+        for source in [
+            "require('fs/promises').readFile(process.env.TOKEN, 'utf8');",
+            "const fs = require('fs/promises'); consume(fs); fs.readFile('input.txt');",
+            "const fs = require('fs/promises'); fs.readFile = customRead; fs.readFile('input.txt');",
+            "async function load() { return await require('fs/promises').readFile('input.txt', 'utf8'); } load();",
+        ] {
+            let report =
+                analyze_authority_footprint(source, "promise-boundary.js", ParseGoal::Script);
+            assert_ne!(
+                report.outcome(),
+                CheckOutcome::Clean,
+                "{source}: {report:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn first_class_events_initialization_requires_builtin_without_unused_timers() {
+        for source in [
+            "const events = require('events'); const emitter = new events.EventEmitter();",
+            "const events = require('node:events'); const wait = events.once; wait({}, 'tick');",
+            "const { EventEmitter, once } = require('events'); const emitter = new EventEmitter(); once(emitter, 'tick');",
+        ] {
+            let report = analyze_authority_footprint(source, "events.js", ParseGoal::Script);
+            assert_eq!(
+                report.outcome(),
+                CheckOutcome::Clean,
+                "{source}: {report:?}"
+            );
+            assert!(
+                report
+                    .required_capabilities
+                    .iter()
+                    .any(|requirement| requirement.capability == Some(RuntimeCapability::Builtin)),
+                "initializing the native Events constructor needs Builtin: {report:?}"
+            );
+            assert!(
+                report
+                    .required_capabilities
+                    .iter()
+                    .all(|requirement| requirement.capability != Some(RuntimeCapability::Timer)),
+                "unused addAbortListener must not introduce Timer: {report:?}"
+            );
+            assert_eq!(
+                report,
+                analyze_authority_footprint(source, "events.js", ParseGoal::Script),
+                "the factory summary must be deterministic"
+            );
+        }
+    }
+
+    #[test]
+    fn uninvoked_factories_and_shadowed_events_loaders_do_not_add_authority() {
+        for source in [
+            "const unused = function () { return Object.keys({ value: 1 }); };",
+            "const require = function () { return { value: 1 }; }; const events = require('events'); events.value;",
+            "const Object = { value: 1 }; Object.value;",
+            "function unused() { return require('events'); }",
+        ] {
+            let report = analyze_authority_footprint(source, "pure.js", ParseGoal::Script);
+            assert_eq!(
+                report.outcome(),
+                CheckOutcome::Clean,
+                "{source}: {report:?}"
+            );
+            assert!(
+                report.required_capabilities.is_empty(),
+                "{source}: {report:?}"
+            );
+        }
     }
 
     #[test]

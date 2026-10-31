@@ -195,3 +195,36 @@ test('bad options and pre-aborted signals reject without registering', options, 
     error => error.code === 'ABORT_ERR' && error.cause === 'before');
   assert.deepEqual(emitter.eventNames(), []);
 });
+
+test('native once regression fixtures agree across constructor, destructured and namespace imports',
+  options, async () => {
+    const fixtures = fs.readFileSync(path.join(__dirname,
+      '../crates/franken-engine/tests/events_once_registration.rs'), 'utf8');
+    for (const name of ['REGISTRATION', 'OVERRIDE', 'REJECTION', 'ORDERING',
+      'EVENT_TARGET', 'INVALID_EMITTER']) {
+      const match = fixtures.match(new RegExp('const ' + name + ': &str = r#"([\\s\\S]*?)"#;'));
+      assert.ok(match, 'missing native fixture ' + name);
+      const original = match[1];
+      for (const source of [
+        original,
+        original.replace('const E = require(', 'const { EventEmitter: E, once: wait } = require(')
+          .replaceAll('E.once(', 'wait('),
+        original.replace('const E = require(',
+          "const events = require('events'); const { EventEmitter: E } = require(")
+          .replaceAll('E.once(', 'events.once('),
+      ]) {
+        const run = async E => {
+          const output = [];
+          new Function('require', 'console', source)(name => {
+            assert.ok(name === 'events' || name === 'node:events');
+            return E;
+          }, { log: (...args) => output.push(args.map(String).join(' ')) });
+          // All fixtures settle in microtasks. This checkpoint observes async
+          // adoption without asserting anything about the native interpreter.
+          await new Promise(resolve => setImmediate(resolve));
+          return output;
+        };
+        assert.deepEqual(await run(candidate()), await run(native), name);
+      }
+    }
+  });

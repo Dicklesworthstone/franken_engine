@@ -28,7 +28,8 @@
 //! A `require` the program declares in an enclosing scope (a parameter, a
 //! local function) is its own and is called as written. The same pure-module
 //! lowering hook also materializes `events` over the native EventEmitter
-//! constructor and EventsOnce hostcall (bd-305gi), and `vm` (bd-9vouw.303):
+//! constructor and ordinary async listener registration (bd-305gi), and `vm`
+//! (bd-9vouw.303):
 //! Node's shape, whose every code-running entry point refuses with an
 //! EvalError when called, so a package that loads `vm` for an optional
 //! feature loads (jsonpath-plus). `stream` (bd-305gi.1) is engine-owned
@@ -280,10 +281,8 @@ const VM_SOURCE: &str = r#"(function () {
 // A private dependency, not an ambient HostCall or a public util property.
 const ASSERT_PLACEHOLDERS: [(&str, &str); 1] = [("__franken_assert_util", MODULE_BINDING)];
 
-const EVENTS_PLACEHOLDERS: [(&str, &str); 2] = [
-    ("__franken_events_constructor", "%EventsConstructorRef"),
-    ("__franken_events_once", "%EventsOnce"),
-];
+const EVENTS_PLACEHOLDERS: [(&str, &str); 1] =
+    [("__franken_events_constructor", "%EventsConstructorRef")];
 
 // The events and string_decoder modules the stream module builds on (each
 // declared before it), and the process.nextTick queue.
@@ -520,6 +519,28 @@ const STREAM_GLOBALS: [&str; 22] = [
     "WeakMap",
 ];
 
+/// Exact reserved names introduced by the engine-owned module rewriters.
+pub(super) fn is_module_binding(name: &str) -> bool {
+    matches!(
+        name,
+        MODULE_BINDING
+            | EVENTS_MODULE_BINDING
+            | ASSERT_MODULE_BINDING
+            | TIMERS_MODULE_BINDING
+            | STRING_DECODER_MODULE_BINDING
+            | VM_MODULE_BINDING
+            | READLINE_MODULE_BINDING
+            | DIAGNOSTICS_CHANNEL_BINDING
+            | STREAM_MODULE_BINDING
+            | STREAM_CONSUMERS_BINDING
+            | WEB_STREAMS_BINDING
+            | BUFFER_MODULE_BINDING
+            | QUERYSTRING_MODULE_BINDING
+            | fs_module::MODULE_BINDING
+            | zlib_module::BINDING
+    )
+}
+
 /// `const %util_module = <module>;`, which the rewrite puts first in the
 /// program. Its initializer runs only engine-owned code.
 pub(super) fn is_module_declaration(statement: &Statement) -> bool {
@@ -534,17 +555,7 @@ pub(super) fn is_module_declaration(statement: &Statement) -> bool {
                 [VariableDeclarator {
                     pattern: BindingPattern::Identifier(name),
                     ..
-                }] if name == MODULE_BINDING || name == EVENTS_MODULE_BINDING
-                    || name == ASSERT_MODULE_BINDING || name == TIMERS_MODULE_BINDING
-                    || name == STRING_DECODER_MODULE_BINDING || name == VM_MODULE_BINDING
-                    || name == READLINE_MODULE_BINDING
-                    || name == DIAGNOSTICS_CHANNEL_BINDING
-                    || name == STREAM_MODULE_BINDING
-                    || name == STREAM_CONSUMERS_BINDING
-                    || name == WEB_STREAMS_BINDING
-                    || name == BUFFER_MODULE_BINDING
-                    || name == QUERYSTRING_MODULE_BINDING
-                    || name == zlib_module::BINDING
+                }] if is_module_binding(name)
             )
     )
 }
@@ -1003,9 +1014,11 @@ fn rewrite_module_objects_with_runtime_sources(
 
 /// Top-level CommonJS `events` declarators that the existing finite
 /// lowering facade has proved safe to consume. Keep their initializers intact
-/// during pure-module rewriting so the authenticated EventEmitter/once lowering
-/// can see the original require shape. Some legacy recognizers confirm an
-/// alias after just one matching use; an elided module/once binding would then
+/// during pure-module rewriting so the authenticated EventEmitter lowering
+/// can see the original require shape. The `once` helper always uses the cached
+/// module: even two-argument calls must perform public listener registration
+/// and async Promise adoption. Some legacy recognizers confirm an alias after
+/// just one matching use; an elided module binding would then
 /// be undefined at every ordinary use. Require a const binding and prove all
 /// its uses, including initialization order, before withholding its initializer.
 fn facade_claimed_events_declarators(body: &[Statement]) -> BTreeSet<(usize, usize)> {
@@ -1025,7 +1038,6 @@ fn facade_claimed_events_declarators(body: &[Statement]) -> BTreeSet<(usize, usi
     }
     let lookup = BTreeMap::new();
     let emitters = super::confirmed_event_emitter_bindings(body, &lookup);
-    let once = super::confirmed_events_once_destructured_requires(body, &lookup);
     let modules = super::confirmed_events_module_aliases(body, &lookup);
     let mut claimed = BTreeSet::new();
 
@@ -1050,7 +1062,7 @@ fn facade_claimed_events_declarators(body: &[Statement]) -> BTreeSet<(usize, usi
                     &lookup,
                 ) && !body.iter().any(|statement| {
                     super::module_alias_statement_has_rejected_use(statement, local, surface)
-                }) && events_once_arguments_are_finite(body, local, surface)
+                }) && !events_alias_calls_once(body, local)
             };
             match &declarator.pattern {
                 BindingPattern::Identifier(local)
@@ -1078,13 +1090,6 @@ fn facade_claimed_events_declarators(body: &[Statement]) -> BTreeSet<(usize, usi
                             };
                             match super::well_formed_static_name(&property.key) {
                                 Some("EventEmitter") => emitters.contains(local),
-                                Some("once") => {
-                                    once.contains(local)
-                                        && finite(
-                                            local,
-                                            super::LoweringOnlyModuleAliasSurface::EventsOnce,
-                                        )
-                                }
                                 _ => false,
                             }
                         });
@@ -1150,52 +1155,32 @@ fn events_facade_has_dynamic_observer(body: &[Statement]) -> bool {
         .any(|statement| observer.statement(&mut statement.clone()).is_err() || observer.0)
 }
 
-/// The native wait accepts exactly two arguments. Options, spreading and
-/// invalid arity need the module's observable async validation. Walk default
-/// parameters and computed keys too, not just function/method bodies. A
-/// shadowed call can conservatively select the full module, but the actual
-/// rewrite still resolves every require and alias in its lexical scope.
-fn events_once_arguments_are_finite(
-    body: &[Statement],
-    local: &str,
-    surface: super::LoweringOnlyModuleAliasSurface,
-) -> bool {
-    struct Arguments<'a> {
+/// A native wait cannot replace an observable call to `events.once`, even
+/// without options: it skips overridden registration APIs, newListener and
+/// async adoption. Walk default parameters and computed keys too. A shadowed
+/// call can conservatively select the full module, but the actual rewrite
+/// still resolves every require and alias in its lexical scope.
+fn events_alias_calls_once(body: &[Statement], local: &str) -> bool {
+    struct OnceCall<'a> {
         local: &'a str,
-        surface: super::LoweringOnlyModuleAliasSurface,
-        finite: bool,
+        found: bool,
     }
-    impl Walk for Arguments<'_> {
+    impl Walk for OnceCall<'_> {
         fn expression(&mut self, expression: &mut Expression) -> Outcome {
-            let once_call = match self.surface {
-                super::LoweringOnlyModuleAliasSurface::EventsOnce => {
-                    super::is_events_once_direct_call(expression, self.local)
-                }
-                super::LoweringOnlyModuleAliasSurface::EventsModule => {
-                    super::is_events_alias_once_call(expression, self.local)
-                }
-                _ => false,
-            };
-            if once_call && let Expression::Call { arguments, .. } = expression {
-                self.finite &= arguments.len() == 2
-                    && !arguments
-                        .iter()
-                        .any(|argument| matches!(argument, Expression::SpreadElement(_)));
-            }
-            if self.finite {
-                walk_expression(self, expression)
-            } else {
+            self.found |= super::is_events_alias_once_call(expression, self.local);
+            if self.found {
                 Ok(())
+            } else {
+                walk_expression(self, expression)
             }
         }
     }
-    let mut arguments = Arguments {
+    let mut calls = OnceCall {
         local,
-        surface,
-        finite: true,
+        found: false,
     };
     body.iter()
-        .all(|statement| arguments.statement(&mut statement.clone()).is_ok() && arguments.finite)
+        .any(|statement| calls.statement(&mut statement.clone()).is_err() || calls.found)
 }
 
 /// The top-level `const { ... } = require('stream')` declarators, as
@@ -2521,7 +2506,7 @@ mod events_tests {
     }
 
     #[test]
-    fn mixed_stream_reroute_preserves_other_facade_initializers_bd_305gi_2() {
+    fn mixed_stream_reroute_shares_its_events_dependency_bd_305gi_2() {
         let tree = parse(
             "const { EventEmitter } = require('events'); new EventEmitter(); \
              const { Readable } = require('stream'); Readable.from(['a']); \
@@ -2531,21 +2516,59 @@ mod events_tests {
         let rewritten = rewrite_util_requires(&tree)
             .expect("rewrite")
             .expect("stream module");
-        let events = rewritten
+        let module_bindings: Vec<_> = rewritten
             .body
             .iter()
-            .find_map(|statement| {
+            .filter(|statement| is_module_declaration(statement))
+            .map(|statement| {
                 let Statement::VariableDeclaration(declaration) = statement else {
-                    return None;
+                    panic!("module declaration");
                 };
-                declaration
-                    .declarations
-                    .iter()
-                    .find(|declarator| declarator.pattern.binding_names().contains(&"EventEmitter"))
+                let BindingPattern::Identifier(name) = &declaration.declarations[0].pattern else {
+                    panic!("private module binding");
+                };
+                name.as_str()
             })
-            .expect("user EventEmitter declaration");
-        assert!(matches!(events.initializer.as_ref(),
-            Some(expression) if builtin_require_member(expression) == Some((PureModule::Events, None))));
+            .collect();
+        assert_eq!(
+            module_bindings,
+            [
+                EVENTS_MODULE_BINDING,
+                STRING_DECODER_MODULE_BINDING,
+                STREAM_MODULE_BINDING
+            ]
+        );
+        // Stream depends on the same mutable Events constructor exported to
+        // the user. Leaving the original Events require on the finite facade
+        // would split constructor settings and bypass the shared loader.
+        for (local, loader) in [
+            ("EventEmitter", EVENTS_MODULE_BINDING),
+            ("Readable", STREAM_MODULE_BINDING),
+            ("stream", STREAM_MODULE_BINDING),
+        ] {
+            let initializer = rewritten
+                .body
+                .iter()
+                .find_map(|statement| {
+                    let Statement::VariableDeclaration(declaration) = statement else {
+                        return None;
+                    };
+                    declaration
+                        .declarations
+                        .iter()
+                        .find(|declarator| declarator.pattern.binding_names().contains(&local))
+                        .and_then(|declarator| declarator.initializer.as_ref())
+                })
+                .expect("user import initializer");
+            assert!(
+                matches!(initializer,
+                Expression::Call { callee, arguments, .. }
+                    if arguments.is_empty()
+                        && matches!(callee.as_ref(), Expression::Identifier(name) if name == loader)),
+                "{local} must use the shared {loader}"
+            );
+        }
+        assert!(rewrite_util_requires(&rewritten).unwrap().is_none());
     }
 
     /// Every other `require('stream')` gets the module, declared after the
@@ -2634,9 +2657,7 @@ mod events_tests {
             "const EventEmitter = require('events'); new EventEmitter();",
             "const EventEmitter = require('events').EventEmitter; new EventEmitter();",
             "const { EventEmitter } = require('node:events'); new EventEmitter();",
-            "const { once } = require('events'); once(emitter, 'ready');",
-            "const { EventEmitter: E, once: wait } = require('node:events'); new E(); wait(emitter, 'ready');",
-            "const events = require('events'); events.once(emitter, 'ready');",
+            "const events = require('events'); events.captureRejections;",
         ] {
             let tree = parse(source, ParseGoal::Script);
             assert!(
@@ -2713,8 +2734,13 @@ mod events_tests {
     }
 
     #[test]
-    fn once_options_spread_and_invalid_arity_use_the_first_class_helper() {
+    fn every_once_call_uses_the_observable_first_class_helper() {
         for source in [
+            "const { once } = require('events'); once(emitter, 'ready');",
+            "const { EventEmitter: E, once: wait } = require('node:events'); new E(); wait(emitter, 'ready');",
+            "const events = require('events'); events.once(emitter, 'ready');",
+            "const { once } = require('events'); function wait(value = once(emitter, 'ready')) { return value; }",
+            "const events = require('events'); const wait = (value = events.once(emitter, 'ready')) => value;",
             "const { once } = require('events'); once(emitter, 'ready', options);",
             "const events = require('node:events'); events.once(emitter, 'ready', null);",
             "const { once } = require('events'); once(...[emitter, 'ready']);",
@@ -2727,7 +2753,18 @@ mod events_tests {
             let tree = parse(source, ParseGoal::Script);
             let rewritten = rewrite_util_requires(&tree)
                 .expect("once argument rewrite")
-                .expect("the finite two-argument hostcall cannot serve this form");
+                .expect(
+                    "every once call needs observable listener registration and async adoption",
+                );
+            assert_eq!(
+                rewritten
+                    .body
+                    .iter()
+                    .filter(|statement| is_module_declaration(statement))
+                    .count(),
+                1,
+                "one shared Events loader must serve the helper: {source}"
+            );
             assert!(
                 !rewritten
                     .body
@@ -2770,10 +2807,10 @@ mod events_tests {
     #[test]
     fn finite_events_handoff_ignores_lexically_shadowed_uses() {
         for source in [
-            "const events = require('events'); events.once(emitter, 'ready'); \
+            "const events = require('events'); events.captureRejections; \
              function local(events) { return events.arbitrary; }",
-            "const { once } = require('events'); once(emitter, 'ready'); \
-             { const once = local; consume(once); }",
+            "const E = require('events'); new E(); \
+             { const E = local; consume(E); }",
             "const E = require('events'); new E(); \
              function local(require) { return require('events'); }",
         ] {
@@ -2781,6 +2818,28 @@ mod events_tests {
             assert!(
                 rewrite_util_requires(&tree).unwrap().is_none(),
                 "local bindings must not be mistaken for builtin aliases: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn observable_once_rewrite_preserves_shadowed_require_and_helper_values() {
+        for source in [
+            "const { once } = require('events'); once(emitter, 'ready'); \
+             { const once = local; consume(once); }",
+            "const events = require('events'); events.once(emitter, 'ready'); \
+             function local(events) { return events.once(emitter, 'local'); }",
+            "const { once } = require('events'); once(emitter, 'ready'); \
+             function local(require) { return require('events').once; }",
+        ] {
+            let tree = parse(source, ParseGoal::Script);
+            let rewritten = rewrite_util_requires(&tree)
+                .unwrap()
+                .expect("observable once");
+            assert_eq!(rewritten.body.last(), tree.body.last(), "{source}");
+            assert!(
+                rewrite_util_requires(&rewritten).unwrap().is_none(),
+                "{source}"
             );
         }
     }

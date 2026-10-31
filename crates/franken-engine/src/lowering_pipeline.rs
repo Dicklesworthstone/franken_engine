@@ -81,6 +81,7 @@ use crate::parser_gap_inventory::{
 use crate::unified_authority_algebra::{AuthorityLattice, BudgetEnvelope, CapabilitySet};
 
 mod esm_core_imports;
+mod native_module_authority;
 mod native_module_source;
 pub(crate) mod path_module;
 mod util_module;
@@ -8522,6 +8523,12 @@ fn lower_ir1_to_ir2_with_input_hash(
             }
         }
     }
+    // Initialization runs inside native factories and their first-use caches.
+    // Keep its authority in IR2 without importing capabilities from methods
+    // that initialization merely creates. IFC still checks every nested body.
+    collect_immediately_invoked_capabilities(&ir1.ops, &mut required_capabilities);
+    collect_native_module_initializer_capabilities(ir1, &mut required_capabilities);
+    native_module_authority::collect(ir1, &mut required_capabilities);
     ir2.required_capabilities = required_capabilities
         .into_iter()
         .map(CapabilityTag)
@@ -31777,6 +31784,91 @@ fn lower_member_property_key_to_ir1(
     Ok(Ir1PropertyKey::Static(key))
 }
 
+/// Include authority exercised by a directly invoked, zero-argument function
+/// expression. The adjacent stack operations prove the callee's identity;
+/// aliases, property lookups and other indirect calls need separate summaries.
+/// Calling a generator only creates an iterator and does not execute its body.
+/// Use an explicit work list so deeply nested factories do not recurse here.
+fn collect_immediately_invoked_capabilities(ops: &[Ir1Op], required: &mut BTreeSet<String>) {
+    let mut pending = vec![ops];
+    while let Some(ops) = pending.pop() {
+        for pair in ops.windows(2) {
+            let [
+                Ir1Op::CreateFunction {
+                    body_ops,
+                    is_generator: false,
+                    ..
+                },
+                Ir1Op::Call { arg_count: 0 },
+            ] = pair
+            else {
+                continue;
+            };
+            for op in body_ops {
+                if let (_, Some(capability), _) = classify_ir1_op(op) {
+                    required.insert(capability.0);
+                }
+            }
+            pending.push(body_ops);
+        }
+    }
+}
+
+/// The native module rewriter binds only reserved, engine-owned names to
+/// `(function (initialize) { ... return cachedLoader; })(initializerThunk)`.
+/// Read the actual thunk rather than hard-coding a module's capability list.
+/// Creating the cache does not initialize a module; only a call to its private
+/// binding exercises these capabilities. Ordinary guest functions/aliases are
+/// not claimed by this bounded summary.
+fn collect_native_module_initializer_capabilities(
+    ir1: &Ir1Module,
+    required: &mut BTreeSet<String>,
+) {
+    let native_bindings: BTreeSet<BindingId> = ir1
+        .scopes
+        .iter()
+        .flat_map(|scope| &scope.bindings)
+        .filter(|binding| util_module::is_module_binding(&binding.name))
+        .map(|binding| binding.binding_id)
+        .collect();
+    let mut initializers = BTreeMap::new();
+    for window in ir1.ops.windows(4) {
+        let [
+            Ir1Op::CreateFunction { .. },
+            Ir1Op::CreateFunction {
+                body_ops,
+                is_generator: false,
+                ..
+            },
+            Ir1Op::Call { arg_count: 1 },
+            Ir1Op::StoreBinding { binding_id } | Ir1Op::InitializeBinding { binding_id },
+        ] = window
+        else {
+            continue;
+        };
+        if native_bindings.contains(binding_id) {
+            initializers.insert(*binding_id, body_ops.as_slice());
+        }
+    }
+    for window in ir1.ops.windows(2) {
+        let [
+            Ir1Op::LoadBinding { binding_id },
+            Ir1Op::Call { arg_count: 0 },
+        ] = window
+        else {
+            continue;
+        };
+        if let Some(body) = initializers.remove(binding_id) {
+            for op in body {
+                if let (_, Some(capability), _) = classify_ir1_op(op) {
+                    required.insert(capability.0);
+                }
+            }
+            collect_immediately_invoked_capabilities(body, required);
+        }
+    }
+}
+
 fn classify_ir1_op(
     op: &Ir1Op,
 ) -> (
@@ -31785,9 +31877,18 @@ fn classify_ir1_op(
     Option<FlowAnnotation>,
 ) {
     match op {
-        Ir1Op::LoadName { .. } | Ir1Op::ResolveNameStatus { .. } => {
-            (EffectBoundary::ReadEffect, None, None)
+        Ir1Op::LoadName { name, .. } => {
+            // Match the IR3/runtime authority for first-class realm values.
+            // Lexically shadowed names use LoadBinding and cannot acquire this
+            // authority merely by being spelled Object or a timer.
+            let capability = timer_global_capability(name)
+                .map(|_| CapabilityTag("timer".to_string()))
+                .or_else(|| {
+                    has_mutable_static_builtins(name).then(|| CapabilityTag("builtin".to_string()))
+                });
+            (EffectBoundary::ReadEffect, capability, None)
         }
+        Ir1Op::ResolveNameStatus { .. } => (EffectBoundary::ReadEffect, None, None),
         Ir1Op::PutName { .. } | Ir1Op::PutNameWithStatus { .. } => {
             (EffectBoundary::WriteEffect, None, None)
         }
@@ -38122,6 +38223,66 @@ mod tests {
             source_text: None,
             sloppy: false,
         }
+    }
+
+    #[test]
+    fn immediate_factory_authority_excludes_uninvoked_methods_and_generators() {
+        let hostcall = |capability: &str| Ir1Op::HostCall {
+            capability: capability.to_string(),
+            arg_count: 0,
+        };
+        let mut generator = nested_function_with_body(vec![hostcall("timer")]);
+        if let Ir1Op::CreateFunction { is_generator, .. } = &mut generator {
+            *is_generator = true;
+        }
+        let nested_factory =
+            nested_function_with_body(vec![hostcall("builtin:ObjectCreate"), Ir1Op::Return]);
+        let ops = vec![
+            nested_function_with_body(vec![
+                hostcall("builtin:EventEmitterConstructorRef"),
+                nested_function_with_body(vec![hostcall("timer")]),
+                Ir1Op::Pop,
+                generator,
+                Ir1Op::Call { arg_count: 0 },
+                Ir1Op::Pop,
+                nested_factory,
+                Ir1Op::Call { arg_count: 0 },
+                Ir1Op::Return,
+            ]),
+            Ir1Op::Call { arg_count: 0 },
+        ];
+        let mut required = BTreeSet::new();
+        collect_immediately_invoked_capabilities(&ops, &mut required);
+        assert_eq!(
+            required,
+            BTreeSet::from([
+                "builtin:EventEmitterConstructorRef".to_string(),
+                "builtin:ObjectCreate".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn realm_value_authority_matches_runtime_without_claiming_lexical_shadows() {
+        for (name, expected) in [("Object", "builtin"), ("setTimeout", "timer")] {
+            let (_, capability, _) = classify_ir1_op(&Ir1Op::LoadName {
+                name: name.to_string(),
+                allow_missing: false,
+            });
+            assert_eq!(capability, Some(CapabilityTag(expected.to_string())));
+        }
+        assert_eq!(
+            classify_ir1_op(&Ir1Op::LoadBinding { binding_id: 0 }).1,
+            None
+        );
+        assert_eq!(
+            classify_ir1_op(&Ir1Op::LoadName {
+                name: "ordinaryGuestValue".to_string(),
+                allow_missing: false,
+            })
+            .1,
+            None
+        );
     }
 
     #[test]

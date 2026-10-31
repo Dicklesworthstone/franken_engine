@@ -8,6 +8,35 @@ use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3}
 use frankenengine_engine::parser_api_stability::parse_script;
 
 fn assert_events(source: &str, expected: &str) {
+    // A constructor alias that also reads E.once already selected the full
+    // module. Separate or destructured once imports used to take a different
+    // native wait shortcut, bypassing all observable registration and adoption.
+    for (shape, source) in [
+        ("constructor", source.to_string()),
+        (
+            "destructured",
+            source
+                .replace(
+                    "const E = require(",
+                    "const { EventEmitter: E, once: wait } = require(",
+                )
+                .replace("E.once(", "wait("),
+        ),
+        (
+            "namespace",
+            source
+                .replace(
+                    "const E = require(",
+                    "const events = require('events'); const { EventEmitter: E } = require(",
+                )
+                .replace("E.once(", "events.once("),
+        ),
+    ] {
+        assert_events_shape(&source, expected, shape);
+    }
+}
+
+fn assert_events_shape(source: &str, expected: &str, shape: &str) {
     let tree = parse_script(source).expect("events source parses");
     let lowered = lower_ir0_to_ir3(
         &Ir0Module::from_syntax_tree(tree, "events-once-registration.js"),
@@ -35,7 +64,7 @@ fn assert_events(source: &str, expected: &str) {
             assert_eq!(
                 core.estimated_memory_bytes(),
                 core.recompute_estimated_memory_bytes(),
-                "v8={v8_profile}, GC={stress:?}"
+                "{shape}, v8={v8_profile}, GC={stress:?}"
             );
             let output = result
                 .console_output
@@ -43,7 +72,7 @@ fn assert_events(source: &str, expected: &str) {
                 .map(|entry| entry.message.as_str())
                 .collect::<Vec<_>>()
                 .join("\n");
-            assert_eq!(output, expected, "v8={v8_profile}, GC={stress:?}");
+            assert_eq!(output, expected, "{shape}, v8={v8_profile}, GC={stress:?}");
         }
     }
 }
@@ -69,7 +98,10 @@ console.log(emitter.listenerCount(name), emitter.listenerCount('error'));
 
 #[test]
 fn once_notifies_new_listener_and_installs_native_one_shot_wrappers() {
-    assert_events(REGISTRATION, "ready:function,error:function\ntrue true\n0 0\n2 true 42");
+    assert_events(
+        REGISTRATION,
+        "ready:function,error:function\ntrue true\n0 0\n2 true 42",
+    );
 }
 
 const OVERRIDE: &str = r#"
@@ -117,6 +149,42 @@ console.log('sync');
 #[test]
 fn once_adopts_its_event_promise_with_node_reaction_ordering() {
     assert_events(ORDERING, "sync\nbefore\nafter\nafter2\nonce");
+}
+
+const EVENT_TARGET: &str = r#"
+const E = require('events');
+const target = new EventTarget();
+const original = target.addEventListener;
+target.addEventListener = function (name, listener, options) {
+  console.log('register', name, options.once);
+  return original.call(this, name, listener, options);
+};
+const event = new Event('ready');
+E.once(target, 'ready').then(values => console.log(values.length, values[0] === event));
+console.log(target.dispatchEvent(event));
+target.dispatchEvent(new Event('ready'));
+"#;
+
+#[test]
+fn once_supports_event_targets_through_public_one_shot_registration() {
+    assert_events(EVENT_TARGET, "register ready true\ntrue\n1 true");
+}
+
+const INVALID_EMITTER: &str = r#"
+const E = require('events');
+let synchronous = false;
+try {
+  E.once(42, 'ready').catch(error => console.log(error.name, error.code));
+} catch (error) { synchronous = true; }
+console.log('sync', synchronous);
+"#;
+
+#[test]
+fn invalid_emitter_rejects_the_async_helper_without_throwing_synchronously() {
+    assert_events(
+        INVALID_EMITTER,
+        "sync false\nTypeError ERR_INVALID_ARG_TYPE",
+    );
 }
 
 // These cleanup contracts deliberately exceed Node's behavior when registration

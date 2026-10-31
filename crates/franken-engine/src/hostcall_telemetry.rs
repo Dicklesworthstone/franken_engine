@@ -131,7 +131,10 @@ impl HostcallType {
             Self::ModuleLoad
         } else if tag.starts_with("number:") || tag.starts_with("builtin:") {
             Self::Builtin
-        } else if tag == "fs:read" || tag == "fs.read" || tag == "fs_read" {
+        } else if matches!(
+            tag,
+            "fs:read" | "fs.read" | "fs_read" | crate::capability::FS_READ_PROMISE_CAPABILITY
+        ) {
             Self::FsRead
         } else if tag == "fs:write" || tag == "fs.write" || tag == "fs_write" {
             Self::FsWrite
@@ -1061,6 +1064,15 @@ mod tests {
         assert_eq!(
             HostcallType::from_capability_tag("fs:read"),
             HostcallType::FsRead
+        );
+        assert_eq!(
+            HostcallType::from_capability_tag(crate::capability::FS_READ_PROMISE_CAPABILITY),
+            HostcallType::FsRead
+        );
+        assert_eq!(
+            HostcallType::from_capability_tag("fs:read:promise:write"),
+            HostcallType::Builtin,
+            "an unregistered suffix must not impersonate a filesystem read"
         );
         assert_eq!(
             HostcallType::from_capability_tag("net:fetch"),

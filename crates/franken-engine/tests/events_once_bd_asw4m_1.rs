@@ -1,9 +1,10 @@
 //! bd-asw4m.1: Promise-backed static `events.once` through the shared
 //! EventEmitter and Promise/event-loop machinery.
 //!
-//! The first-class module routes uncancelled waits to `builtin:EventsOnce`.
-//! Destructured, aliased, computed, and ESM exports retain native Promise
-//! behavior without gaining filesystem or `ModuleLoad` authority.
+//! The first-class module registers listeners through the public one-shot
+//! API and adopts the event Promise through its async helper. Destructured,
+//! aliased, computed, and ESM exports share those observable semantics without
+//! gaining filesystem or `ModuleLoad` authority.
 
 use std::collections::BTreeSet;
 
@@ -142,11 +143,13 @@ fn once_settlement_queues_promise_reactions_as_microtasks() {
         queueMicrotask(() => order.push('queued'));
         setImmediate(() => console.log(order.join(',')));
     "#;
-    assert_eq!(eval_console(source), "sync,once,queued");
+    // Node's async once adopts the event Promise; the queued microtask runs
+    // before the externally observed reaction even for synchronous emission.
+    assert_eq!(eval_console(source), "sync,queued,once");
 }
 
 #[test]
-fn commonjs_module_alias_routes_to_the_same_builtin() {
+fn commonjs_module_alias_routes_to_the_same_observable_helper() {
     let source = r#"
         const events = require('node:events');
         const { EventEmitter } = require('events');
@@ -269,7 +272,7 @@ fn waiter_memory_accounting_matches_eager_reference_before_and_after_cleanup() {
 }
 
 #[test]
-fn node_events_named_import_is_elided_to_a_builtin_capability() {
+fn node_events_named_import_preserves_observable_helper_and_builtin_boundary() {
     let tree = frankenengine_engine::parser_api_stability::parse_module(
         "import { once as wait } from 'node:events';\nconst emitter = {};\nwait(emitter, 'ready');\n",
     )
@@ -281,10 +284,9 @@ fn node_events_named_import_is_elided_to_a_builtin_capability() {
         Ir1Op::ImportModule { specifier } if specifier == "node:events"
     )));
 
-    // The hostcall now lives inside the first-class once function, not the
-    // outer module's op list. Check the actual flattened executable and
-    // enforce the capability boundary at execution, rather than pinning the
-    // old direct-call optimization shape.
+    // The shared factory obtains the native constructor, but once itself must
+    // remain the observable async implementation. The old EventsOnce shortcut
+    // skipped overridden registration methods and settled one turn too early.
     let output = lower_ir0_to_ir3(
         &ir0,
         &LoweringContext::new("events-once-gate", "bd-305gi", "builtin-only"),
@@ -296,9 +298,20 @@ fn node_events_named_import_is_elided_to_a_builtin_capability() {
             .instructions
             .iter()
             .any(|instruction| matches!(instruction,
-                Ir3Instruction::HostCall { capability, args, .. }
-                    if capability.0 == "builtin:EventsOnce" && args.count == 2
+                Ir3Instruction::HostCall { capability, .. }
+                    if capability.0 == "builtin:EventEmitterConstructorRef"
             ))
+    );
+    assert!(
+        !output
+            .ir3
+            .instructions
+            .iter()
+            .any(|instruction| matches!(instruction,
+                Ir3Instruction::HostCall { capability, .. }
+                    if capability.0 == "builtin:EventsOnce"
+            )),
+        "ESM once must retain public registration and async adoption"
     );
     let mut config = InterpreterConfig::quickjs_defaults();
     config.granted_capabilities = BTreeSet::from([

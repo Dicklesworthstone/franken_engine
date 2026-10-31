@@ -1,0 +1,2306 @@
+{
+  "schema_version": "franken-engine.issue6-scoped-qualification.v1",
+  "recorded_utc_date": "2026-10-31",
+  "consumer": {
+    "issue": "https://github.com/Dicklesworthstone/franken_engine/issues/6",
+    "bead": "bd-15w28",
+    "decision": "Evidence for the v0.3.0 filesystem/Events release gate. Native runtime and complete same-baseline regression qualification remain required."
+  },
+  "feature_gate": {
+    "release": "v0.3.0",
+    "status": "held",
+    "publish_authorized_by_this_record": false,
+    "latest_published_release_observed": "v0.2.0"
+  },
+  "defect": "First-class filesystem/Events facades changed supported CommonJS lowering, authority footprints and observable once behavior. This record qualifies bounded source-based fixes without relaxing Unknown host exception provenance or IFC sinks.",
+  "supersession_condition": "Supersede with successful canonical native runtime/GC/admission tests and a complete named-test comparison against v0.2.0 on the same pinned nightly, followed by all established release gates.",
+  "deletion_condition": "This scoped record and generator may be removed after a durable canonical qualification artifact references these inputs/results and issue6/bd-15w28 releasekeeping no longer depends on the temporary subset.",
+  "starting_main_revision": "f658c30622bd21e19d2137676a724360f604851f",
+  "source_sha256": {
+    "crates/franken-engine/src/lowering_pipeline.rs": "074f2d62209944cd51b2cdf72e475580fc1d125ad6bbe6e1d53df5a6acb3dc30",
+    "crates/franken-engine/src/lowering_pipeline/fs_module.rs": "7e633c709b132e4b31471a4a96b21f680365ef1cc39a3a77772590872c07b40a",
+    "crates/franken-engine/src/lowering_pipeline/util_module.rs": "0bd6cbdd6bc40dbfd45779cb7ce88c528da02a69fc17b787ad7e94764099aad6",
+    "crates/franken-engine/src/lowering_pipeline/events_module.js": "d4d8a7457bf7b9397bd3e7145962b3afe813a142e240b157997ad86fe26ad1ac",
+    "crates/franken-engine/src/authority_footprint.rs": "9769d13c5bdc08c58bb9c8266ae833184f06f48e76705cb3e09603454b44d6d4",
+    "crates/franken-engine/src/capability.rs": "d03993ed5d7d8d0a11944d247fbd25a668442c23abaf064e9502353f389ecd72",
+    "crates/franken-engine/src/lowering_pipeline/native_module_authority.rs": "414884704bc4d97c9e7284dce118b38dc0f480032d42192a1c8b164a48c8b1ab"
+  },
+  "scope": {
+    "kind": "Native diagnostic crate built from exact production parser, lowerer and authority source; extracted production test bodies called through temporary entrypoints. Not the canonical cargo test library target.",
+    "production_engine_modules": [
+      "ast",
+      "authority_footprint",
+      "capability",
+      "deterministic_serde",
+      "effect_set",
+      "engine_object_id",
+      "epoch_barrier",
+      "feature_parity_tracker",
+      "flow_lattice",
+      "hash_tiers",
+      "ifc_artifacts",
+      "ir_contract",
+      "js_string",
+      "lowering_arena",
+      "lowering_pipeline",
+      "module_compatibility_matrix",
+      "module_resolver",
+      "object_model",
+      "parser",
+      "parser_api_stability",
+      "parser_gap_inventory",
+      "security_epoch",
+      "signature_preimage",
+      "ts_normalization",
+      "unified_authority_algebra"
+    ],
+    "additional_module": "lowering_pipeline/native_module_authority.rs",
+    "core_source_modules": [
+      "js_string",
+      "deterministic_serde",
+      "hash_tiers"
+    ],
+    "exact_interpreter_metadata": [
+      "HostcallCapabilityClass",
+      "InterpreterError",
+      "ModuleResolutionFailureReason",
+      "classify_hostcall_capability",
+      "live_hostcall_decision",
+      "builtin_instanceof_capability_name",
+      "canonical_builtin_prototype_name",
+      "regexp_literal_early_error",
+      "regexp_builder static method",
+      "NODE_CORE_MODULE_NAMES / is_node_core_module_specifier",
+      "regexp_syntax, regexp_backtrack modules; exact regexp_input code-unit helper and constants"
+    ],
+    "exclusions": [
+      "capability::trust_zone is unused by this diagnostic and excluded at its module declaration",
+      "InterpreterCore execution implementation is excluded; its name is only a namespace for the verbatim static regexp_builder method",
+      "Native fs Promise dispatcher, host hooks, queued settlement, GC collector and runtime integration tests were not compiled or executed by this subset",
+      "Full engine/core runtime and the complete library suite are excluded",
+      "This run is not a v0.2.0 native binary comparison, release build, clippy/format gate, installer gate or performance gate"
+    ],
+    "host_exception_context": "Original authority inputs use analyze_authority_footprint with Unknown provider provenance. No authenticated-provider substitution or IFC source/sink weakening was applied."
+  },
+  "build": {
+    "command": [
+      "cargo",
+      "rustc",
+      "--offline",
+      "--bin",
+      "fe-issue6-native-probe",
+      "--",
+      "-C",
+      "linker=/dev/shm/fe-issue6-probe-9c955a09af10/memory_linker.py"
+    ],
+    "exit_code": 0,
+    "aborted_reason": null,
+    "elapsed_seconds": 22.570695397000236,
+    "peak_owned_rss_bytes": 1500446720,
+    "log": "/dev/shm/fe-issue6-probe-9c955a09af10/build-publication-retry.log"
+  },
+  "native_executable": {
+    "storage": "lossless gzip of genuine native ELF; execution uses decompressed bytes via Linux memfd",
+    "uncompressed_sha256": "102f9a5529b6924e659e3d2ffda88d6754795d995febd0eff97bcc0aa2862a34",
+    "uncompressed_bytes": 23249912,
+    "compressed_bytes": 4963300,
+    "destination": "/dev/shm/fe-issue6-probe-9c955a09af10/target/debug/build/fe-issue6-native-probe/860015b5f59249fa/out/fe_issue6_native_probe",
+    "linker_exit": 0
+  },
+  "storage_workaround": "The actual pinned native linker emitted ELF bytes to stdout; the identical bytes were losslessly gzip-stored and executed through Linux memfd. This avoids tmpfs link-output exhaustion and does not substitute interpreter execution or test results.",
+  "selected_tests": {
+    "result": {
+      "exit_code": 0,
+      "elapsed_seconds": 3.7380494880053448,
+      "executable_sha256": "102f9a5529b6924e659e3d2ffda88d6754795d995febd0eff97bcc0aa2862a34",
+      "source_manifest": "publication-sources.json",
+      "passed": 43,
+      "failed": 0
+    },
+    "provenance": {
+      "test_bodies_sha256": {
+        "parse": "eb9eb7f50812e99e6266173ecbc94aa077aa656e64ba5409a2d81f0b18484bfd",
+        "parse_goal": "62b403decf637b64c69a6d75fc56aa5e4453bf5e6b8c2a55aebd2b28587fe305",
+        "require_count": "15c563e15a60a99441500f2415f4d3f608b4d872d0dacf8648e61d6e6646f70c",
+        "authority_probe_distinguishes_module_values_from_mediated_calls": "1f93463887ecfc427a181bee3406aa61fc7e9128b409e6afedec7fe29de8677d",
+        "direct_sync_calls_use_protected_operations_without_a_module_prelude": "4cf13e3923025029723c447d6c3fb752a5de0daf3e3c56103c4adb34d861f152",
+        "direct_calls_preserve_arguments_and_discriminator_like_guest_paths": "eb8fd9320ead78a3d1194cc556f7bc48a294fd16e0ce55749b373a1e27a2133c",
+        "literal_network_facades_preserve_direct_fs_calls_without_claiming_their_loads": "92158dd32719629668cf1ae6f71122453ec7d118b08858ac6ddbc3055ed5f30e",
+        "one_observable_or_unsupported_use_keeps_the_complete_module_path": "fe27a48df38b877257b7ea8862dc42486f2980df11b4aeeec198a0d0858d46eb",
+        "direct_calls_never_claim_a_shadowed_or_dynamic_loader": "3727cff478105f14d152bf8e95351c030c388bdfa2123d4fb01c78796d581583",
+        "inline_calls_keep_module_values_when_dynamic_code_can_observe_them": "74b0cf520980fba49a62116ecb8f7a02bfe10957426c202dc16aa54b2971ab13",
+        "dynamic_loader_guards_preserve_direct_named_environment_inputs": "fc82c4c4688c8d6039a16d2952bc87cc155eac73ac23a4f4710d8be9c7967f3d",
+        "numeric_result_indexing_keeps_inline_and_bound_reads_direct": "f29336c6bf4229c7b529a27f0d09e2989d1948393998db20a41eefbc6972ff8b",
+        "access_constants_use_the_native_values_without_constructing_a_module": "2237da89cec485c2ead976acd66b8fb58f5660104fcea19d7fb95f28987facf3",
+        "access_constant_mutation_escape_and_lexical_reads_keep_the_module_path": "0123470bb456d46f50fead0175c642a744aa6ca21060043b6c1a1693e4535796",
+        "const_namespaces_and_named_destructures_reuse_the_inline_operation_emitter": "a02066eac9f908aa007a4b7745437ef5da35c165d3622d7eac3edee8c483cf28",
+        "alias_expansion_keeps_declarator_order_and_non_alias_effects": "f8bbca7cd7b5089c2a4f9c83fdd61e41e84ac6bf5c79a561dde4aebc970f1129",
+        "aliases_in_loops_and_branches_are_claimed_only_after_initialization": "f033f7c4e2272dc8e8561e5739623cc546426fdb9b52b2abb3e891ad92619682",
+        "one_escaped_mutated_or_unsupported_alias_preserves_the_whole_original_module": "5d60c3dfb40bfcc1400122d2782ed865b8d42e23875256a0ecb38224a46e33d8",
+        "alias_shadowing_never_rewrites_a_different_binding": "12643b42af7196c17f59760f8ec3f1720148d9086f0c9791490507cae6bdcdb3",
+        "process_named_aliases_keep_property_observations_on_the_object_path": "d4e2479e58d9f7c09af920c1fd82dc2cc7508adad3cef3a7cc24ad98d649ebea",
+        "partial_destructures_and_unused_aliases_are_not_elided": "eb2fc018d583492267e7e6f02c23c6042e96184362baaf940996c685f91ee491",
+        "direct_promise_reads_use_the_protected_native_completion_intrinsic": "541af5c8b8246da6a268f3df4613a7a89a7ddda1439f11938fa792f88081d180",
+        "deferred_promise_reads_keep_the_full_facade_authority_boundary": "69440ea082d09cb243ed2c370c4b88c95a2aa0e66b1c979a2f73b8d34dd37c41",
+        "promise_reads_keep_handles_options_writes_and_observable_modules_on_the_facade": "affbdf5cf4fddadd5a3954adc2cf8e0cb1fa85df719faa34f55b68d7fc1ccc66",
+        "promise_aliases_preserve_temporal_and_loader_scope_boundaries": "dff803c5fdf2b96adf5d9dacdd2abc834066c173ce5383cf716791ab2a5e0459",
+        "direct_promise_reads_share_the_sync_boundary_without_unused_write_authority": "85a8ca60546dda49b240000b23e2bece8362687378c4ceff20ef410bf91188c3",
+        "finite_events_facade_keeps_original_require_initializers_for_legacy_lowering": "9c26d24742217b52713b86092edec1a8a7f302ab4f8d5fff8f275cd9af8b50ba",
+        "observable_or_unsupported_events_uses_still_materialize_the_module": "e1c0a4fc83044efd4bf1018b347c56fe78ec6f62877d390e9ce6f25cef2f8eeb",
+        "one_direct_events_use_cannot_elide_other_uses_or_mutable_bindings": "b3379f8a16feaa762db4c6ed15d576e33a445df679f345f7ab4029e0554d3b99",
+        "every_once_call_uses_the_observable_first_class_helper": "45b038e7b6b2c3b570cc9b27e2001fbede5ba08df404b62efb9872da36a0394b",
+        "materialized_events_rewrites_every_other_finite_events_alias": "19404bea06b2590352c9aa6872a0868a90435fe80a86bb8412c3ba4f951c0fd7",
+        "finite_events_handoff_ignores_lexically_shadowed_uses": "2dd654be97838d6944f6684088fa584826fc0d039ff9e1e6763a0c79fff2707f",
+        "dynamic_observers_cannot_keep_events_settings_on_the_finite_path": "721a8585efb9e5a1b828880a5e71ced205cd90185081d5801b83c24d1a52cc48",
+        "event_intrinsics_are_builtin_capabilities_not_filesystem_authority": "cf4980c77f14ef4c8e947015c3b654a94969d1765b6b216b6af01b8e3464839a",
+        "observable_once_rewrite_preserves_shadowed_require_and_helper_values": "b37f1ac44f842d8c2007740f645fc97a71d2c54d4c8ebe38d8ba8d41bf99b8f6",
+        "events_source_parses_with_every_used_global_shadowed": "ac9979ab563b5befd3552e5af53afa13af124b2e794990b44b79f70f575cece9",
+        "mixed_stream_reroute_shares_its_events_dependency_bd_305gi_2": "a2de0803caac5b1a50cafef2c1753a9e5e86145c93065892b55b547991277043",
+        "capabilities": "68a4fe7cc2de00525f764ab9d3cac4bd45b5d157137507705d2f5fb021c8e939",
+        "selected_add_abort_listener_carries_its_real_timer_authority": "66a108c3752cbff6e74794c2dd1d8244a0c10ccd12cfff3691025b61b4088df8",
+        "unused_shadowed_reassigned_and_once_helpers_do_not_claim_timer": "cea99e0fd3ecee8917b761388eda4d3e617614cff647cd6cb579c50cb651a829",
+        "nested_function_with_body": "f1636130c6c61cb5696bacc424fd79167cb4a3c09cb1d0dd17900a6883f77165",
+        "immediate_factory_authority_excludes_uninvoked_methods_and_generators": "92c78c951f913cbfbe0c622324684739afdd493729fa9a0b31b7dc37a01beb09",
+        "realm_value_authority_matches_runtime_without_claiming_lexical_shadows": "50913423d253afd0b7a30207e9ec1f37630939320d0a23129e99aa27d300c411",
+        "first_class_events_initialization_requires_builtin_without_unused_timers": "f6183a5e9b78e972b4f628486666aad054bf79cd0bd1e996cd3f534d03f06095",
+        "uninvoked_factories_and_shadowed_events_loaders_do_not_add_authority": "62d2d32c717c4bdf09cb35c4529f531e8062c0382370401b877e4af71ec5e321",
+        "literal_promise_reads_report_read_authority_without_ambient_require": "dbf9093cfabb632f84c259f571c0115155d511ba9cc1e44d7adfe8b408c23ce8",
+        "promise_reads_do_not_hide_ambient_secret_inputs_or_observable_modules": "bbc8b45285b6339a4bfb0c5e1130b4143311b4e5725a9a3d4da057527aa99aa4",
+        "builtin_named_operations_report_their_runtime_authority": "058ac6327c4e3fec90eb4c9bcaa2850b198b4f52135e84c8111f2cf93fe362ff"
+      },
+      "executed_names": [
+        "authority_probe_distinguishes_module_values_from_mediated_calls",
+        "direct_sync_calls_use_protected_operations_without_a_module_prelude",
+        "direct_calls_preserve_arguments_and_discriminator_like_guest_paths",
+        "literal_network_facades_preserve_direct_fs_calls_without_claiming_their_loads",
+        "one_observable_or_unsupported_use_keeps_the_complete_module_path",
+        "direct_calls_never_claim_a_shadowed_or_dynamic_loader",
+        "inline_calls_keep_module_values_when_dynamic_code_can_observe_them",
+        "dynamic_loader_guards_preserve_direct_named_environment_inputs",
+        "numeric_result_indexing_keeps_inline_and_bound_reads_direct",
+        "access_constants_use_the_native_values_without_constructing_a_module",
+        "access_constant_mutation_escape_and_lexical_reads_keep_the_module_path",
+        "const_namespaces_and_named_destructures_reuse_the_inline_operation_emitter",
+        "alias_expansion_keeps_declarator_order_and_non_alias_effects",
+        "aliases_in_loops_and_branches_are_claimed_only_after_initialization",
+        "one_escaped_mutated_or_unsupported_alias_preserves_the_whole_original_module",
+        "alias_shadowing_never_rewrites_a_different_binding",
+        "process_named_aliases_keep_property_observations_on_the_object_path",
+        "partial_destructures_and_unused_aliases_are_not_elided",
+        "direct_promise_reads_use_the_protected_native_completion_intrinsic",
+        "deferred_promise_reads_keep_the_full_facade_authority_boundary",
+        "promise_reads_keep_handles_options_writes_and_observable_modules_on_the_facade",
+        "promise_aliases_preserve_temporal_and_loader_scope_boundaries",
+        "direct_promise_reads_share_the_sync_boundary_without_unused_write_authority",
+        "finite_events_facade_keeps_original_require_initializers_for_legacy_lowering",
+        "observable_or_unsupported_events_uses_still_materialize_the_module",
+        "one_direct_events_use_cannot_elide_other_uses_or_mutable_bindings",
+        "every_once_call_uses_the_observable_first_class_helper",
+        "materialized_events_rewrites_every_other_finite_events_alias",
+        "finite_events_handoff_ignores_lexically_shadowed_uses",
+        "dynamic_observers_cannot_keep_events_settings_on_the_finite_path",
+        "event_intrinsics_are_builtin_capabilities_not_filesystem_authority",
+        "observable_once_rewrite_preserves_shadowed_require_and_helper_values",
+        "events_source_parses_with_every_used_global_shadowed",
+        "mixed_stream_reroute_shares_its_events_dependency_bd_305gi_2",
+        "immediate_factory_authority_excludes_uninvoked_methods_and_generators",
+        "realm_value_authority_matches_runtime_without_claiming_lexical_shadows",
+        "first_class_events_initialization_requires_builtin_without_unused_timers",
+        "uninvoked_factories_and_shadowed_events_loaders_do_not_add_authority",
+        "literal_promise_reads_report_read_authority_without_ambient_require",
+        "promise_reads_do_not_hide_ambient_secret_inputs_or_observable_modules",
+        "builtin_named_operations_report_their_runtime_authority",
+        "selected_add_abort_listener_carries_its_real_timer_authority",
+        "unused_shadowed_reassigned_and_once_helpers_do_not_claim_timer"
+      ],
+      "count": 43,
+      "scope": "Exact production test bodies plus exact supporting test helpers through temporary entrypoints, not canonical cargo test or interpreter execution"
+    },
+    "events_source_controls": 44,
+    "events_positive_controls": 28,
+    "events_negative_controls": 16
+  },
+  "authority_comparison": {
+    "input_count": 33,
+    "classification_counts_are_not_test_pass_counts": true,
+    "starting_main_counts": {
+      "Clean": 21,
+      "FindingsPresent": 10,
+      "Unanalyzable": 2
+    },
+    "candidate_counts": {
+      "Clean": 23,
+      "FindingsPresent": 8,
+      "Unanalyzable": 2
+    },
+    "each_input_evaluated_twice_with_identical_reports": true,
+    "cases": [
+      {
+        "name": "inline-fs-read",
+        "source": "require('fs').readFileSync('input.txt', 'utf8');",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "d5b1836e0c444660768198ee57f7d38483d4188b4b6925053a185bc9f0125862",
+        "requirements": [
+          {
+            "call_sites": [
+              {
+                "end_column": 48,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "finding_codes": [],
+        "fail_closed_reason": null,
+        "starting_main": {
+          "outcome": "Clean",
+          "report_sha256": "d5b1836e0c444660768198ee57f7d38483d4188b4b6925053a185bc9f0125862",
+          "requirements": [
+            {
+              "call_sites": [
+                {
+                  "end_column": 48,
+                  "end_line": 1,
+                  "start_column": 1,
+                  "start_line": 1
+                }
+              ],
+              "capability": "FsRead",
+              "capability_tag": "fs:read"
+            }
+          ]
+        }
+      },
+      {
+        "name": "inline-node-fs-read",
+        "source": "require('node:fs').readFileSync('input.txt', 'utf8');",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "68968e4ec4db9c562f8a37c3af0eca74ef90f2b34571d70d192c1202925b3ad9",
+        "requirements": [
+          {
+            "call_sites": [
+              {
+                "end_column": 53,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "finding_codes": [],
+        "fail_closed_reason": null,
+        "starting_main": {
+          "outcome": "Clean",
+          "report_sha256": "68968e4ec4db9c562f8a37c3af0eca74ef90f2b34571d70d192c1202925b3ad9",
+          "requirements": [
+            {
+              "call_sites": [
+                {
+                  "end_column": 53,
+                  "end_line": 1,
+                  "start_column": 1,
+                  "start_line": 1
+                }
+              ],
+              "capability": "FsRead",
+              "capability_tag": "fs:read"
+            }
+          ]
+        }
+      },
+      {
+        "name": "namespace-fs-read",
+        "source": "const fs = require('fs'); fs.readFileSync('input.txt', 'utf8');",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "5f95666df49d6311a850cafcea840d45bbd3a45f1daaff792117fbca80b6f144",
+        "requirements": [
+          {
+            "call_sites": [
+              {
+                "end_column": 63,
+                "end_line": 1,
+                "start_column": 27,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "finding_codes": [],
+        "fail_closed_reason": null,
+        "starting_main": {
+          "outcome": "Clean",
+          "report_sha256": "5f95666df49d6311a850cafcea840d45bbd3a45f1daaff792117fbca80b6f144",
+          "requirements": [
+            {
+              "call_sites": [
+                {
+                  "end_column": 63,
+                  "end_line": 1,
+                  "start_column": 27,
+                  "start_line": 1
+                }
+              ],
+              "capability": "FsRead",
+              "capability_tag": "fs:read"
+            }
+          ]
+        }
+      },
+      {
+        "name": "destructured-fs-read",
+        "source": "const {readFileSync: read} = require('fs'); read('input.txt', 'utf8');",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "c3b32318abdb4fa08abc6338bbabd40d9d03e1de9288886adf4d2412fff9b4e0",
+        "requirements": [
+          {
+            "call_sites": [
+              {
+                "end_column": 70,
+                "end_line": 1,
+                "start_column": 45,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "finding_codes": [],
+        "fail_closed_reason": null,
+        "starting_main": {
+          "outcome": "Clean",
+          "report_sha256": "c3b32318abdb4fa08abc6338bbabd40d9d03e1de9288886adf4d2412fff9b4e0",
+          "requirements": [
+            {
+              "call_sites": [
+                {
+                  "end_column": 70,
+                  "end_line": 1,
+                  "start_column": 45,
+                  "start_line": 1
+                }
+              ],
+              "capability": "FsRead",
+              "capability_tag": "fs:read"
+            }
+          ]
+        }
+      },
+      {
+        "name": "inline-promises-read",
+        "source": "require('fs/promises').readFile('input.txt', 'utf8');",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "8488534c638091208458e6d065522c425cfe9e43b00d78ee1ce57aa775016d70",
+        "requirements": [
+          {
+            "call_sites": [
+              {
+                "end_column": 53,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read:promise"
+          }
+        ],
+        "finding_codes": [],
+        "fail_closed_reason": null,
+        "starting_main": {
+          "outcome": "FindingsPresent",
+          "report_sha256": "b03f62e230df8756519a4a5b01f99a444685c4300c6818b7fe718f907e1e2e17",
+          "requirements": [
+            {
+              "call_sites": [],
+              "capability": "FsRead",
+              "capability_tag": "fs_read"
+            }
+          ]
+        }
+      },
+      {
+        "name": "namespace-promises-read",
+        "source": "const fs = require('node:fs/promises'); fs.readFile('input.txt', 'utf8');",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "9fe76fb1cfe834f91a59bd44b935cfa61454af53091cded1dc8cdfd3388f76f5",
+        "requirements": [
+          {
+            "call_sites": [
+              {
+                "end_column": 73,
+                "end_line": 1,
+                "start_column": 41,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read:promise"
+          }
+        ],
+        "finding_codes": [],
+        "fail_closed_reason": null,
+        "starting_main": {
+          "outcome": "FindingsPresent",
+          "report_sha256": "e7c9c9d484f5703478023928ebcac6064d68b683d62197bc786d6bdc24ef3a2d",
+          "requirements": [
+            {
+              "call_sites": [],
+              "capability": "FsRead",
+              "capability_tag": "fs_read"
+            }
+          ]
+        }
+      },
+      {
+        "name": "inline-fs-write",
+        "source": "require('fs').writeFileSync('out.txt', 'data');",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "9c0f0551b3a0ec49b0f17b2873f6d60d64c6b1a54d78f6b3aa4223c099b09cde",
+        "requirements": [
+          {
+            "call_sites": [
+              {
+                "end_column": 47,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsWrite",
+            "capability_tag": "fs:write"
+          }
+        ],
+        "finding_codes": [],
+        "fail_closed_reason": null,
+        "starting_main": {
+          "outcome": "Clean",
+          "report_sha256": "9c0f0551b3a0ec49b0f17b2873f6d60d64c6b1a54d78f6b3aa4223c099b09cde",
+          "requirements": [
+            {
+              "call_sites": [
+                {
+                  "end_column": 47,
+                  "end_line": 1,
+                  "start_column": 1,
+                  "start_line": 1
+                }
+              ],
+              "capability": "FsWrite",
+              "capability_tag": "fs:write"
+            }
+          ]
+        }
+      },
+      {
+        "name": "namespace-fs-write",
+        "source": "const fs = require('fs'); fs.writeFileSync('out.txt', 'data');",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "581b5e631b6c4131f78398c3756e958d6731662dc4edbfe4bf3a923c4593e9bf",
+        "requirements": [
+          {
+            "call_sites": [
+              {
+                "end_column": 62,
+                "end_line": 1,
+                "start_column": 27,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsWrite",
+            "capability_tag": "fs:write"
+          }
+        ],
+        "finding_codes": [],
+        "fail_closed_reason": null,
+        "starting_main": {
+          "outcome": "Clean",
+          "report_sha256": "581b5e631b6c4131f78398c3756e958d6731662dc4edbfe4bf3a923c4593e9bf",
+          "requirements": [
+            {
+              "call_sites": [
+                {
+                  "end_column": 62,
+                  "end_line": 1,
+                  "start_column": 27,
+                  "start_line": 1
+                }
+              ],
+              "capability": "FsWrite",
+              "capability_tag": "fs:write"
+            }
+          ]
+        }
+      },
+      {
+        "name": "inline-fs-constant",
+        "source": "require('fs').constants.R_OK;",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "3b9c6fcf2cf29df7ab7d6261b3719ee7beb2a85b895ebf5d3324334c60f2c28e",
+        "requirements": [],
+        "finding_codes": [],
+        "fail_closed_reason": null,
+        "starting_main": {
+          "outcome": "Clean",
+          "report_sha256": "3b9c6fcf2cf29df7ab7d6261b3719ee7beb2a85b895ebf5d3324334c60f2c28e",
+          "requirements": []
+        }
+      },
+      {
+        "name": "node-fs-constant",
+        "source": "require('node:fs').constants.W_OK;",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "437d95d39f09cb0c15b3b9d4b25071c968141033b3d2349d0542dbb56e5ec5e0",
+        "requirements": [],
+        "finding_codes": [],
+        "fail_closed_reason": null,
+        "starting_main": {
+          "outcome": "Clean",
+          "report_sha256": "437d95d39f09cb0c15b3b9d4b25071c968141033b3d2349d0542dbb56e5ec5e0",
+          "requirements": []
+        }
+      },
+      {
+        "name": "namespace-fs-constant",
+        "source": "const fs = require('fs'); fs.constants.F_OK;",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "f876fd7c797542cfe39172be78932841446dff90df3f5ff088fc6a23131d616a",
+        "requirements": [],
+        "finding_codes": [],
+        "fail_closed_reason": null,
+        "starting_main": {
+          "outcome": "Clean",
+          "report_sha256": "f876fd7c797542cfe39172be78932841446dff90df3f5ff088fc6a23131d616a",
+          "requirements": []
+        }
+      },
+      {
+        "name": "inline-access-constant",
+        "source": "require('fs').accessSync('input.txt', require('fs').constants.R_OK);",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "9076eb49f8daeb717ab04c037d66e1ebda877410187b10e140c54739c4a15cae",
+        "requirements": [
+          {
+            "call_sites": [
+              {
+                "end_column": 68,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "finding_codes": [],
+        "fail_closed_reason": null,
+        "starting_main": {
+          "outcome": "Clean",
+          "report_sha256": "9076eb49f8daeb717ab04c037d66e1ebda877410187b10e140c54739c4a15cae",
+          "requirements": [
+            {
+              "call_sites": [
+                {
+                  "end_column": 68,
+                  "end_line": 1,
+                  "start_column": 1,
+                  "start_line": 1
+                }
+              ],
+              "capability": "FsRead",
+              "capability_tag": "fs:read"
+            }
+          ]
+        }
+      },
+      {
+        "name": "namespace-access-constant",
+        "source": "const fs = require('fs'); fs.accessSync('input.txt', fs.constants.R_OK);",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "dbfd0093eb74abb4f1f73e19ef6e25f49b25d970a055d695f477d9c59f51730a",
+        "requirements": [
+          {
+            "call_sites": [
+              {
+                "end_column": 72,
+                "end_line": 1,
+                "start_column": 27,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "finding_codes": [],
+        "fail_closed_reason": null,
+        "starting_main": {
+          "outcome": "Clean",
+          "report_sha256": "dbfd0093eb74abb4f1f73e19ef6e25f49b25d970a055d695f477d9c59f51730a",
+          "requirements": [
+            {
+              "call_sites": [
+                {
+                  "end_column": 72,
+                  "end_line": 1,
+                  "start_column": 27,
+                  "start_line": 1
+                }
+              ],
+              "capability": "FsRead",
+              "capability_tag": "fs:read"
+            }
+          ]
+        }
+      },
+      {
+        "name": "invalid-write-undefined",
+        "source": "require('fs').writeFileSync('out.txt', undefined);",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "4181b949a571677dbd3a336c18f04d7704e843b88bf52f9ef077db1bbedd3e22",
+        "requirements": [
+          {
+            "call_sites": [
+              {
+                "end_column": 50,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsWrite",
+            "capability_tag": "fs:write"
+          }
+        ],
+        "finding_codes": [],
+        "fail_closed_reason": null,
+        "starting_main": {
+          "outcome": "Clean",
+          "report_sha256": "4181b949a571677dbd3a336c18f04d7704e843b88bf52f9ef077db1bbedd3e22",
+          "requirements": [
+            {
+              "call_sites": [
+                {
+                  "end_column": 50,
+                  "end_line": 1,
+                  "start_column": 1,
+                  "start_line": 1
+                }
+              ],
+              "capability": "FsWrite",
+              "capability_tag": "fs:write"
+            }
+          ]
+        }
+      },
+      {
+        "name": "missing-write-payload",
+        "source": "require('fs').writeFileSync('out.txt');",
+        "outcome": "FindingsPresent",
+        "deterministic_replay": true,
+        "report_sha256": "2de654a96a5a0cb19dde62bd342662b0d4e1c72c3af0a425fd4faec42f633f74",
+        "requirements": [
+          {
+            "call_sites": [],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "finding_codes": [
+          "FE-CAP-0001"
+        ],
+        "fail_closed_reason": null,
+        "starting_main": {
+          "outcome": "FindingsPresent",
+          "report_sha256": "2de654a96a5a0cb19dde62bd342662b0d4e1c72c3af0a425fd4faec42f633f74",
+          "requirements": [
+            {
+              "call_sites": [],
+              "capability": "FsRead",
+              "capability_tag": "fs_read"
+            }
+          ]
+        }
+      },
+      {
+        "name": "invalid-read-path",
+        "source": "require('fs').readFileSync(null, 'utf8');",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "2b79d99194c321aba56a9bbb96e2f97076a17587aa72aea33458a57757c571c6",
+        "requirements": [
+          {
+            "call_sites": [
+              {
+                "end_column": 41,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "finding_codes": [],
+        "fail_closed_reason": null,
+        "starting_main": {
+          "outcome": "Clean",
+          "report_sha256": "2b79d99194c321aba56a9bbb96e2f97076a17587aa72aea33458a57757c571c6",
+          "requirements": [
+            {
+              "call_sites": [
+                {
+                  "end_column": 41,
+                  "end_line": 1,
+                  "start_column": 1,
+                  "start_line": 1
+                }
+              ],
+              "capability": "FsRead",
+              "capability_tag": "fs:read"
+            }
+          ]
+        }
+      },
+      {
+        "name": "escaped-fs-object",
+        "source": "const fs = require('fs'); console.log(fs);",
+        "outcome": "FindingsPresent",
+        "deterministic_replay": true,
+        "report_sha256": "f21fce78501417fca2124147f29672c900feab29383627ececc5a9fd32b16cb8",
+        "requirements": [
+          {
+            "call_sites": [],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "finding_codes": [
+          "FE-CAP-0001"
+        ],
+        "fail_closed_reason": null,
+        "starting_main": {
+          "outcome": "FindingsPresent",
+          "report_sha256": "f21fce78501417fca2124147f29672c900feab29383627ececc5a9fd32b16cb8",
+          "requirements": [
+            {
+              "call_sites": [],
+              "capability": "FsRead",
+              "capability_tag": "fs_read"
+            }
+          ]
+        }
+      },
+      {
+        "name": "mutated-fs-method",
+        "source": "const fs = require('fs'); fs.readFileSync = function () { return 'replacement'; }; fs.readFileSync('missing');",
+        "outcome": "FindingsPresent",
+        "deterministic_replay": true,
+        "report_sha256": "027e361c77982f2aa52d1c509204fd581af7c2650ab8eb38ab0815319a7581b8",
+        "requirements": [
+          {
+            "call_sites": [],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "finding_codes": [
+          "FE-CAP-0001"
+        ],
+        "fail_closed_reason": null,
+        "starting_main": {
+          "outcome": "FindingsPresent",
+          "report_sha256": "027e361c77982f2aa52d1c509204fd581af7c2650ab8eb38ab0815319a7581b8",
+          "requirements": [
+            {
+              "call_sites": [],
+              "capability": "FsRead",
+              "capability_tag": "fs_read"
+            }
+          ]
+        }
+      },
+      {
+        "name": "inline-secret-flow",
+        "source": "const secret = process.env.TOKEN; require('fs').writeFileSync('out', secret);",
+        "outcome": "Unanalyzable",
+        "deterministic_replay": true,
+        "report_sha256": "6b4542da4170a991aed2f4c751f6021a8a518efab346e0bed8baa938a0781353",
+        "requirements": [],
+        "finding_codes": [],
+        "fail_closed_reason": "unsupported or unanalyzable construct: unauthorized flow detected at op 8: Secret -> Internal (artifact_id=sha256:bbfb3e39927fdc43b8b80dfe736dacba17b37e2ff3a3a86a4c4ce7de2cafbd04 denied_flow_count=1 reason=no_lattice_or_declassification_path)",
+        "starting_main": {
+          "outcome": "Unanalyzable",
+          "report_sha256": "6b4542da4170a991aed2f4c751f6021a8a518efab346e0bed8baa938a0781353",
+          "requirements": []
+        }
+      },
+      {
+        "name": "bound-secret-flow",
+        "source": "const fs = require('fs'); const secret = process.env.TOKEN; fs.writeFileSync('out', secret);",
+        "outcome": "Unanalyzable",
+        "deterministic_replay": true,
+        "report_sha256": "bd2e521183eac6cf67714936b40e07ff4f0942010f0a4002c1c1b19d878368b4",
+        "requirements": [],
+        "finding_codes": [],
+        "fail_closed_reason": "unsupported or unanalyzable construct: unauthorized flow detected at op 11: Secret -> Internal (artifact_id=sha256:4bf3d0b07b5ac2e8b7557b96d279808435820be73e3897a31d3110c38304e7ba denied_flow_count=1 reason=no_lattice_or_declassification_path)",
+        "starting_main": {
+          "outcome": "Unanalyzable",
+          "report_sha256": "bd2e521183eac6cf67714936b40e07ff4f0942010f0a4002c1c1b19d878368b4",
+          "requirements": []
+        }
+      },
+      {
+        "name": "fs-and-http-read",
+        "source": "const fs = require('fs'); const http = require('http'); fs.readFileSync('input.txt', 'utf8'); http.get('https://example.com');",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "785650123a3852a58e7e6caa9b5f9c7a139d960cfb6d446cff96a3780fef8d94",
+        "requirements": [
+          {
+            "call_sites": [
+              {
+                "end_column": 126,
+                "end_line": 1,
+                "start_column": 95,
+                "start_line": 1
+              }
+            ],
+            "capability": "NetworkEgress",
+            "capability_tag": "builtin:HttpGet"
+          },
+          {
+            "call_sites": [
+              {
+                "end_column": 93,
+                "end_line": 1,
+                "start_column": 57,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "finding_codes": [],
+        "fail_closed_reason": null,
+        "starting_main": {
+          "outcome": "Clean",
+          "report_sha256": "785650123a3852a58e7e6caa9b5f9c7a139d960cfb6d446cff96a3780fef8d94",
+          "requirements": [
+            {
+              "call_sites": [
+                {
+                  "end_column": 126,
+                  "end_line": 1,
+                  "start_column": 95,
+                  "start_line": 1
+                }
+              ],
+              "capability": "NetworkEgress",
+              "capability_tag": "builtin:HttpGet"
+            },
+            {
+              "call_sites": [
+                {
+                  "end_column": 93,
+                  "end_line": 1,
+                  "start_column": 57,
+                  "start_line": 1
+                }
+              ],
+              "capability": "FsRead",
+              "capability_tag": "fs:read"
+            }
+          ]
+        }
+      },
+      {
+        "name": "events-default-constructor",
+        "source": "const EventEmitter = require('events'); const emitter = new EventEmitter(); emitter.emit('tick');",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "c7f25eb2035cc688ad6bfcac9a5a3d82aad91e5c36ac13171ea255baf43c92c4",
+        "requirements": [
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:EventEmitterConstructorRef"
+          }
+        ],
+        "finding_codes": [],
+        "fail_closed_reason": null,
+        "starting_main": {
+          "outcome": "Clean",
+          "report_sha256": "c7f25eb2035cc688ad6bfcac9a5a3d82aad91e5c36ac13171ea255baf43c92c4",
+          "requirements": [
+            {
+              "call_sites": [],
+              "capability": "Builtin",
+              "capability_tag": "builtin:EventEmitterConstructorRef"
+            }
+          ]
+        }
+      },
+      {
+        "name": "events-named-constructor",
+        "source": "const {EventEmitter} = require('node:events'); const emitter = new EventEmitter(); emitter.emit('tick');",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "b15fe8d6132ee5bfb658007f95d94d975beb1fc5b636f4c35afbebaaa4125863",
+        "requirements": [
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:EventEmitterConstructorRef"
+          }
+        ],
+        "finding_codes": [],
+        "fail_closed_reason": null,
+        "starting_main": {
+          "outcome": "Clean",
+          "report_sha256": "b15fe8d6132ee5bfb658007f95d94d975beb1fc5b636f4c35afbebaaa4125863",
+          "requirements": [
+            {
+              "call_sites": [],
+              "capability": "Builtin",
+              "capability_tag": "builtin:EventEmitterConstructorRef"
+            }
+          ]
+        }
+      },
+      {
+        "name": "events-namespace-constructor",
+        "source": "const events = require('events'); const emitter = new events.EventEmitter(); emitter.emit('tick');",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "98bc9063a0999ccae7f57cc950f1766bdddfb20ec46cd175c229313875963af4",
+        "requirements": [
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin"
+          },
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:EventEmitterConstructorRef"
+          },
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:Symbol"
+          },
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:WeakMap"
+          }
+        ],
+        "finding_codes": [],
+        "fail_closed_reason": null,
+        "starting_main": {
+          "outcome": "Clean",
+          "report_sha256": "af9d2df335b42fde7d809faaa7817acabe9ccd8019f7987f36a17d0d091e1333",
+          "requirements": []
+        }
+      },
+      {
+        "name": "events-mixed-constructor-once",
+        "source": "const events = require('events'); const emitter = new events.EventEmitter(); events.once(emitter, 'tick'); emitter.emit('tick');",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "db7a19bc49cd1ea0e0238aa807517700d12418e1dc33549701c01fbc26945799",
+        "requirements": [
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin"
+          },
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:EventEmitterConstructorRef"
+          },
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:Symbol"
+          },
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:WeakMap"
+          }
+        ],
+        "finding_codes": [],
+        "fail_closed_reason": null,
+        "starting_main": {
+          "outcome": "Clean",
+          "report_sha256": "607a1ed42b949d167e2de1eab25283e8e216e6049e1e45fffb7a90965637707a",
+          "requirements": []
+        }
+      },
+      {
+        "name": "events-once-options",
+        "source": "const events = require('events'); const emitter = new events.EventEmitter(); events.once(emitter, 'tick', {}); emitter.emit('tick');",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "1f89fc0b5824419aba70e551b321529d296f77daf21132c6ce0b429d95ef762a",
+        "requirements": [
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin"
+          },
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:EventEmitterConstructorRef"
+          },
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:Symbol"
+          },
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:WeakMap"
+          }
+        ],
+        "finding_codes": [],
+        "fail_closed_reason": null,
+        "starting_main": {
+          "outcome": "Clean",
+          "report_sha256": "bf33a4d2814700a1af20c9f47b3bedf0a092c9284281bb9a8bb2fdb6c301c435",
+          "requirements": []
+        }
+      },
+      {
+        "name": "events-detached-helper",
+        "source": "const events = require('events'); const helper = events.once; helper({}, 'tick');",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "66549b2837bfdbc38776130b950fad24bc11a86311c965a72469c0da89a75fa5",
+        "requirements": [
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin"
+          },
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:EventEmitterConstructorRef"
+          },
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:Symbol"
+          },
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:WeakMap"
+          }
+        ],
+        "finding_codes": [],
+        "fail_closed_reason": null,
+        "starting_main": {
+          "outcome": "Clean",
+          "report_sha256": "0259069069239ffadc8bfb3acedba1c86e0a3170768101168656ba8c63365072",
+          "requirements": []
+        }
+      },
+      {
+        "name": "dynamic-fs-observer",
+        "source": "eval(\"require('fs').readFileSync = function() { return 'changed'; }\"); require('fs').readFileSync('input.txt');",
+        "outcome": "FindingsPresent",
+        "deterministic_replay": true,
+        "report_sha256": "ee1353defb8d97fa204a1c90105707ec30ff4308a3e5688f89523e43b334d2a2",
+        "requirements": [
+          {
+            "call_sites": [],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "finding_codes": [
+          "FE-CAP-0001"
+        ],
+        "fail_closed_reason": null,
+        "starting_main": {
+          "outcome": "FindingsPresent",
+          "report_sha256": "ee1353defb8d97fa204a1c90105707ec30ff4308a3e5688f89523e43b334d2a2",
+          "requirements": [
+            {
+              "call_sites": [],
+              "capability": "FsRead",
+              "capability_tag": "fs_read"
+            }
+          ]
+        }
+      },
+      {
+        "name": "unknown-core-module",
+        "source": "require('node:unknown-native-module');",
+        "outcome": "FindingsPresent",
+        "deterministic_replay": true,
+        "report_sha256": "773fe183d7608458093e063d0908925bb3109849d116f2df11db21f0d2ed2824",
+        "requirements": [
+          {
+            "call_sites": [
+              {
+                "end_column": 38,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "finding_codes": [
+          "FE-CAP-0001"
+        ],
+        "fail_closed_reason": null,
+        "starting_main": {
+          "outcome": "FindingsPresent",
+          "report_sha256": "773fe183d7608458093e063d0908925bb3109849d116f2df11db21f0d2ed2824",
+          "requirements": [
+            {
+              "call_sites": [
+                {
+                  "end_column": 38,
+                  "end_line": 1,
+                  "start_column": 1,
+                  "start_line": 1
+                }
+              ],
+              "capability": "FsRead",
+              "capability_tag": "fs_read"
+            }
+          ]
+        }
+      },
+      {
+        "name": "dynamic-module-import",
+        "source": "const name = 'fs'; require(name);",
+        "outcome": "FindingsPresent",
+        "deterministic_replay": true,
+        "report_sha256": "3f21a39e3dcb7ea38dbe919dd1f29cd51e30edb03c1b8f9345595531fcfdfc4d",
+        "requirements": [
+          {
+            "call_sites": [
+              {
+                "end_column": 33,
+                "end_line": 1,
+                "start_column": 20,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "finding_codes": [
+          "FE-CAP-0001"
+        ],
+        "fail_closed_reason": null,
+        "starting_main": {
+          "outcome": "FindingsPresent",
+          "report_sha256": "3f21a39e3dcb7ea38dbe919dd1f29cd51e30edb03c1b8f9345595531fcfdfc4d",
+          "requirements": [
+            {
+              "call_sites": [
+                {
+                  "end_column": 33,
+                  "end_line": 1,
+                  "start_column": 20,
+                  "start_line": 1
+                }
+              ],
+              "capability": "FsRead",
+              "capability_tag": "fs_read"
+            }
+          ]
+        }
+      },
+      {
+        "name": "read-result-indexing",
+        "source": "require('fs').readFileSync('input.txt', 'utf8').split('\\n')[0];",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "0767b64ddb77f48dd9f09d186c4392ca4bc918a03ef2aa85dc4c0fea9833cf77",
+        "requirements": [
+          {
+            "call_sites": [
+              {
+                "end_column": 63,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read"
+          }
+        ],
+        "finding_codes": [],
+        "fail_closed_reason": null,
+        "starting_main": {
+          "outcome": "Clean",
+          "report_sha256": "0767b64ddb77f48dd9f09d186c4392ca4bc918a03ef2aa85dc4c0fea9833cf77",
+          "requirements": [
+            {
+              "call_sites": [
+                {
+                  "end_column": 63,
+                  "end_line": 1,
+                  "start_column": 1,
+                  "start_line": 1
+                }
+              ],
+              "capability": "FsRead",
+              "capability_tag": "fs:read"
+            }
+          ]
+        }
+      },
+      {
+        "name": "bare-fs-import",
+        "source": "require('fs');",
+        "outcome": "FindingsPresent",
+        "deterministic_replay": true,
+        "report_sha256": "3b631c8d625365886a6b9a075a489392fa4ccfbdad3c68c88ea675fc27d6a2fe",
+        "requirements": [
+          {
+            "call_sites": [],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "finding_codes": [
+          "FE-CAP-0001"
+        ],
+        "fail_closed_reason": null,
+        "starting_main": {
+          "outcome": "FindingsPresent",
+          "report_sha256": "3b631c8d625365886a6b9a075a489392fa4ccfbdad3c68c88ea675fc27d6a2fe",
+          "requirements": [
+            {
+              "call_sites": [],
+              "capability": "FsRead",
+              "capability_tag": "fs_read"
+            }
+          ]
+        }
+      },
+      {
+        "name": "bare-promises-import",
+        "source": "require('fs/promises');",
+        "outcome": "FindingsPresent",
+        "deterministic_replay": true,
+        "report_sha256": "f4c0ff9d4248c6dffa598abe5cefef72e11c9231352dcb3d529c6799e8af50a4",
+        "requirements": [
+          {
+            "call_sites": [],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "finding_codes": [
+          "FE-CAP-0001"
+        ],
+        "fail_closed_reason": null,
+        "starting_main": {
+          "outcome": "FindingsPresent",
+          "report_sha256": "f4c0ff9d4248c6dffa598abe5cefef72e11c9231352dcb3d529c6799e8af50a4",
+          "requirements": [
+            {
+              "call_sites": [],
+              "capability": "FsRead",
+              "capability_tag": "fs_read"
+            }
+          ]
+        }
+      }
+    ],
+    "execution_result": {
+      "exit_code": 0,
+      "elapsed_seconds": 1.5259328820029623,
+      "executable_sha256": "102f9a5529b6924e659e3d2ffda88d6754795d995febd0eff97bcc0aa2862a34",
+      "source_manifest": "publication-sources.json",
+      "outcomes": {
+        "Clean": 23,
+        "FindingsPresent": 8,
+        "Unanalyzable": 2
+      },
+      "deterministic_replay": true
+    },
+    "all_recorded_reports_match_previous_functional_snapshot": true
+  },
+  "extra_authority_inputs": {
+    "input_count": 14,
+    "counts": {
+      "Clean": 9,
+      "FindingsPresent": 3,
+      "Unanalyzable": 2
+    },
+    "cases": [
+      {
+        "name": "promises-destructured",
+        "source": "const {readFile:read}=require('fs/promises'); read('input.txt','utf8');",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "6916777f5567bc1f6038e99652482baec5c35bd5e256c332b602fea4c33dfb2d",
+        "requirements": [
+          {
+            "call_sites": [
+              {
+                "end_column": 71,
+                "end_line": 1,
+                "start_column": 47,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read:promise"
+          }
+        ],
+        "finding_codes": [],
+        "fail_closed_reason": null
+      },
+      {
+        "name": "promises-subobject",
+        "source": "require('fs').promises.readFile('input.txt','utf8');",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "313502d4469d499f00359f76cd58d5e627f5c6fd1d5426a9aaef8151505e604b",
+        "requirements": [
+          {
+            "call_sites": [
+              {
+                "end_column": 52,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read:promise"
+          }
+        ],
+        "finding_codes": [],
+        "fail_closed_reason": null
+      },
+      {
+        "name": "promises-destructured-namespace",
+        "source": "const {promises:io}=require('fs'); io.readFile('input.txt','utf8');",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "fccec541ced0c20c39b84b049063e83e20d3089a91e8b87636f42ada58d353af",
+        "requirements": [
+          {
+            "call_sites": [
+              {
+                "end_column": 67,
+                "end_line": 1,
+                "start_column": 36,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read:promise"
+          }
+        ],
+        "finding_codes": [],
+        "fail_closed_reason": null
+      },
+      {
+        "name": "promises-await",
+        "source": "async function load(){ return await require('fs/promises').readFile('input.txt','utf8'); } load();",
+        "outcome": "FindingsPresent",
+        "deterministic_replay": true,
+        "report_sha256": "2eb478b9360abef7697761e1b3f23717ee756f5c27beb03138358407f45cdda7",
+        "requirements": [
+          {
+            "call_sites": [],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "finding_codes": [
+          "FE-CAP-0001"
+        ],
+        "fail_closed_reason": null
+      },
+      {
+        "name": "promises-then",
+        "source": "require('fs/promises').readFile('input.txt','utf8').then(function(value){ console.log(value); });",
+        "outcome": "Unanalyzable",
+        "deterministic_replay": true,
+        "report_sha256": "f0576a715ad7345400b52fb0d0028a071ae532db0bdc8887497e0e41a3a2ce27",
+        "requirements": [],
+        "finding_codes": [],
+        "fail_closed_reason": "unsupported or unanalyzable construct: unauthorized flow detected at op 12: TopSecret -> Internal (artifact_id=sha256:b18096daf91447b3959ff617c94dc10e7e73a2dbec0bf6a0a5ab100c7fff57cb denied_flow_count=1 reason=no_lattice_or_declassification_path)"
+      },
+      {
+        "name": "promises-plus-write",
+        "source": "require('fs/promises').readFile('input.txt','utf8');require('fs').writeFileSync('out','public');",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "bc35e53ab459ce7dc4c19b276a06640e4c9b17d2f00132d76f3f8bd0013c5403",
+        "requirements": [
+          {
+            "call_sites": [
+              {
+                "end_column": 52,
+                "end_line": 1,
+                "start_column": 1,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsRead",
+            "capability_tag": "fs:read:promise"
+          },
+          {
+            "call_sites": [
+              {
+                "end_column": 96,
+                "end_line": 1,
+                "start_column": 53,
+                "start_line": 1
+              }
+            ],
+            "capability": "FsWrite",
+            "capability_tag": "fs:write"
+          }
+        ],
+        "finding_codes": [],
+        "fail_closed_reason": null
+      },
+      {
+        "name": "promises-secret-write",
+        "source": "const secret=process.env.TOKEN; require('fs/promises').readFile('input.txt','utf8');require('fs').writeFileSync('out',secret);",
+        "outcome": "Unanalyzable",
+        "deterministic_replay": true,
+        "report_sha256": "98a0bdfca3017e21b491c8e80a678bf39897b136fea042d2c19dc1464cf85c06",
+        "requirements": [],
+        "finding_codes": [],
+        "fail_closed_reason": "unsupported or unanalyzable construct: unauthorized flow detected at op 13: Secret -> Internal (artifact_id=sha256:975e6e9ce3949b39267bfd2e18d99aa02355a3d84e2e3427c3e2405b689bad29 denied_flow_count=1 reason=no_lattice_or_declassification_path)"
+      },
+      {
+        "name": "promises-mutation",
+        "source": "const fs=require('fs/promises');fs.readFile=function(){return 'other'};fs.readFile('x');",
+        "outcome": "FindingsPresent",
+        "deterministic_replay": true,
+        "report_sha256": "3c1014e7f0897a85ec54a2ee98ff11d3258ba96ad976de054ebbb74e1bda3e2d",
+        "requirements": [
+          {
+            "call_sites": [],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "finding_codes": [
+          "FE-CAP-0001"
+        ],
+        "fail_closed_reason": null
+      },
+      {
+        "name": "promises-escape",
+        "source": "const fs=require('fs/promises');console.log(fs);fs.readFile('x');",
+        "outcome": "FindingsPresent",
+        "deterministic_replay": true,
+        "report_sha256": "101a93d2185b888f03b32db7c27461cc2cf0d4a8207e5ea6ebbcd06a5745baf9",
+        "requirements": [
+          {
+            "call_sites": [],
+            "capability": "FsRead",
+            "capability_tag": "fs_read"
+          }
+        ],
+        "finding_codes": [
+          "FE-CAP-0001"
+        ],
+        "fail_closed_reason": null
+      },
+      {
+        "name": "events-exact-once",
+        "source": "const {EventEmitter,once}=require('events');const e=new EventEmitter();once(e,'x');e.emit('x');",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "068e878a920f1bf9fac60f7494d803f3c6922658bc9880cc198bf0dfdfffebd4",
+        "requirements": [
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin"
+          },
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:EventEmitterConstructorRef"
+          },
+          {
+            "call_sites": [],
+            "capability": null,
+            "capability_tag": "builtin:RequireObjectCoercible"
+          },
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:Symbol"
+          },
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:WeakMap"
+          }
+        ],
+        "finding_codes": [],
+        "fail_closed_reason": null
+      },
+      {
+        "name": "events-bare",
+        "source": "require('events');",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "65d9cd6bf1fb2fb8a3324de8491be4cc84048331308284836862c90729d59597",
+        "requirements": [
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin"
+          },
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:EventEmitterConstructorRef"
+          },
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:Symbol"
+          },
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:WeakMap"
+          }
+        ],
+        "finding_codes": [],
+        "fail_closed_reason": null
+      },
+      {
+        "name": "events-uninvoked-import",
+        "source": "function f(){return require('events');}",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "1e2576a6049905eb0c7811bdc5557cbda219ae72288857ca01905fe286d96382",
+        "requirements": [],
+        "finding_codes": [],
+        "fail_closed_reason": null
+      },
+      {
+        "name": "events-add-abort-listener",
+        "source": "const events=require('events');const c=new AbortController();events.addAbortListener(c.signal,()=>{});",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "9a1aeb291385df4d5c44480e2de8d2df129147d3429c0955fd875efbf5db615e",
+        "requirements": [
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin"
+          },
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:EventEmitterConstructorRef"
+          },
+          {
+            "call_sites": [],
+            "capability": "Timer",
+            "capability_tag": "builtin:QueueMicrotask"
+          },
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:Symbol"
+          },
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:WeakMap"
+          },
+          {
+            "call_sites": [],
+            "capability": "Timer",
+            "capability_tag": "timer"
+          }
+        ],
+        "finding_codes": [],
+        "fail_closed_reason": null
+      },
+      {
+        "name": "events-builtin-denied",
+        "source": "const E=require('events');new E.EventEmitter();",
+        "outcome": "Clean",
+        "deterministic_replay": true,
+        "report_sha256": "1e3b14d5b64865b4a0289a979bc736f6ff0a4dd3d981e8d7caa21ff794cf571c",
+        "requirements": [
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin"
+          },
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:EventEmitterConstructorRef"
+          },
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:Symbol"
+          },
+          {
+            "call_sites": [],
+            "capability": "Builtin",
+            "capability_tag": "builtin:WeakMap"
+          }
+        ],
+        "finding_codes": [],
+        "fail_closed_reason": null
+      }
+    ],
+    "note": "events-builtin-denied is only an analyzer construction input name; it does not execute a denial gate. The named async read now retains its fail-closed full-facade boundary instead of reporting an empty footprint.",
+    "execution_result": {
+      "exit_code": 0,
+      "elapsed_seconds": 1.6040338479942875,
+      "executable_sha256": "102f9a5529b6924e659e3d2ffda88d6754795d995febd0eff97bcc0aa2862a34",
+      "source_manifest": "publication-sources.json",
+      "outcomes": {
+        "Clean": 9,
+        "FindingsPresent": 3,
+        "Unanalyzable": 2
+      },
+      "deterministic_replay": true
+    },
+    "all_recorded_reports_match_previous_functional_snapshot": true
+  },
+  "historical_lowering_assertions": {
+    "selection_source": "35 names from bd-15w28:28 filesystem and7 Events; Events suffixes resolved uniquely against current production names.",
+    "body_source": "Unmodified CURRENT production test bodies, not bodies extracted from the v0.2.0 tag.",
+    "execution_source_manifest": {
+      "crates/franken-engine/src/lowering_pipeline.rs": "c9fe214803f51f493895fd3b9ee9dc779dd55a8821ef1c573ff7c7ae11e6bb45",
+      "crates/franken-engine/src/lowering_pipeline/fs_module.rs": "8da5cf58f77f3e7d31995486420745019a6fcffe873da723095afe412e51cfbb",
+      "crates/franken-engine/src/lowering_pipeline/util_module.rs": "54c51c515f9eab43ad7e49e00d9537476044cb088b26fb8caea7e04f07279fef",
+      "crates/franken-engine/src/lowering_pipeline/events_module.js": "d4d8a7457bf7b9397bd3e7145962b3afe813a142e240b157997ad86fe26ad1ac",
+      "crates/franken-engine/src/authority_footprint.rs": "9769d13c5bdc08c58bb9c8266ae833184f06f48e76705cb3e09603454b44d6d4",
+      "crates/franken-engine/src/capability.rs": "d03993ed5d7d8d0a11944d247fbd25a668442c23abaf064e9502353f389ecd72",
+      "crates/franken-engine/src/lowering_pipeline/native_module_authority.rs": "f4b7192dc48f3b6eb0794eadfe41f0c0862a7ec6ffcfee250b6a01305625896f"
+    },
+    "result": {
+      "exit_code": 1,
+      "elapsed_seconds": 11.435543334002432,
+      "executable_sha256": "94cf15fac481639ff35cdb01db86bdf1e6936439019d18979f76b294842ecb3c",
+      "source_manifest": "final-sources.json",
+      "passed": 8,
+      "failed": 27
+    },
+    "baseline_binary_executed_for_this_subset": false,
+    "not_a_v0_2_regression_delta": true,
+    "note": "Executed before the final IR2 Events-summary coercion additions. These assertions call IR0-to-IR1 only; their source, helpers and IR0/IR1 implementation are unchanged. Many assert superseded direct-hostcall shapes or ambient refusal; runtime equivalence remains unqualified.",
+    "results": [
+      {
+        "name": "binding_callback_read_lowers_to_fs_read_bd_201vt",
+        "status": "fail",
+        "test_body_sha256": "946bd3aab6cad0f0d90268b05f23b016611c9d10887b320b43f6d6e28fbc9ce3",
+        "unchanged_from_starting_main": true,
+        "first_assertion_lines": "const fs = require('fs'); fs.readFile(path, cb) must lower to an fs:read hostcall",
+        "text_truncated": false,
+        "complete_panic_block_sha256": "33ffc40e7d7b79e983226688071b6251e152a2f89bb55ec56bab9f8e009ae92e"
+      },
+      {
+        "name": "binding_callback_write_lowers_to_fs_write_bd_201vt",
+        "status": "fail",
+        "test_body_sha256": "485837967bcd39cdf604723342ccecb70d8e5c5023478f4e7fc9ded00e5e181d",
+        "unchanged_from_starting_main": true,
+        "first_assertion_lines": "const fs = require('fs'); fs.writeFile(path, data, cb) must lower to an fs:write hostcall",
+        "text_truncated": false,
+        "complete_panic_block_sha256": "25c35760ac5ae93972a6d79cd81ea2d6e09cc6f5265f74d5438e8c481a360fdf"
+      },
+      {
+        "name": "cjs_destructured_promises_off_fs_lowers_bd_1xl17_c",
+        "status": "fail",
+        "test_body_sha256": "9a2896d7438b5c5f41e3e2d0de276047b3db8a6255079626a0360606b032347e",
+        "unchanged_from_starting_main": true,
+        "first_assertion_lines": "promises destructured off require('fs'): promises.readFile must lower to fs:read",
+        "text_truncated": false,
+        "complete_panic_block_sha256": "abccf6aaaa424a6d71488802ab127ea966a997966f275c4c05268ae4eba9cfa4"
+      },
+      {
+        "name": "cjs_fs_destructured_readfile_callback_lowers_bd_rmaze",
+        "status": "fail",
+        "test_body_sha256": "9c894265ee12c9a6ceb3ff7683450cfe8c345b50d9dff61515d1e880b16c446e",
+        "unchanged_from_starting_main": true,
+        "first_assertion_lines": "destructured async readFile(path, cb) must lower to an fs:read host effect",
+        "text_truncated": false,
+        "complete_panic_block_sha256": "6d6dc4f78b4d826bfc803afa37f53159c3bcc140fdafb9056f220712a43196ca"
+      },
+      {
+        "name": "cjs_fs_destructured_readsync_lowers_bd_rmaze",
+        "status": "pass",
+        "test_body_sha256": "62f214f8d74bd0b92b09f03b48e7e6f2e9aeed1fe1d7f0a4fbe444e2c9987765",
+        "unchanged_from_starting_main": true
+      },
+      {
+        "name": "cjs_fs_destructured_rename_lowers_bd_rmaze",
+        "status": "pass",
+        "test_body_sha256": "435db07f0e1fa2df61808c3ce0effb9b7fb683bfe02332aa9a368b0394e75bbc",
+        "unchanged_from_starting_main": true
+      },
+      {
+        "name": "cjs_fs_destructured_writesync_lowers_bd_rmaze",
+        "status": "pass",
+        "test_body_sha256": "9721ce1b10182a1ba4c0884df77f203479c04a8e11f32f3c07df969a16ec8624",
+        "unchanged_from_starting_main": true
+      },
+      {
+        "name": "cjs_fs_promises_binding_lowers_to_promise_wrapped_hostcall_bd_1xl17_c",
+        "status": "fail",
+        "test_body_sha256": "c6e5b40e6f4c035160f7bc67bbe002d0f834a1b5e2d30113e1c22e5ff79f5bbd",
+        "unchanged_from_starting_main": true,
+        "first_assertion_lines": "fs/promises binding readFile must lower to an fs:read host effect",
+        "text_truncated": false,
+        "complete_panic_block_sha256": "5446183596df269fdb54911ff3bddff42abda7ee12e9471dc72c9e89bc129079"
+      },
+      {
+        "name": "cjs_fs_promises_destructured_read_lowers_to_promise_wrapped_hostcall_bd_1xl17_c",
+        "status": "fail",
+        "test_body_sha256": "bfdddeca543bd49c078ead0be3821eb5c032b26e84430a7810a7457b5553ee47",
+        "unchanged_from_starting_main": true,
+        "first_assertion_lines": "destructured fs/promises readFile must lower to an fs:read host effect",
+        "text_truncated": false,
+        "complete_panic_block_sha256": "3ef893bad8ff8c738d2853fef7b20662eb32c56526f5990c01a6169af7b884b4"
+      },
+      {
+        "name": "cjs_fs_promises_destructured_read_with_encoding_arity_two_bd_1xl17_c",
+        "status": "fail",
+        "test_body_sha256": "d1828bdff5cbd2bf54f8ee09b30c9a7ec39b02394f2f309f3d71fe7b65fb756a",
+        "unchanged_from_starting_main": true,
+        "first_assertion_lines": "assertion `left == right` failed\n  left: None\n right: Some(2)",
+        "text_truncated": false,
+        "complete_panic_block_sha256": "36a0b6038b6b46be7485c33ee89b4d5dac577d3f2f2e7aad88361d174aff5982"
+      },
+      {
+        "name": "cjs_fs_promises_destructured_rename_lowers_bd_1xl17_c",
+        "status": "fail",
+        "test_body_sha256": "92ac7b82920d53a27a081a6042d038bd583ffb65bb16761474719280b15e345a",
+        "unchanged_from_starting_main": true,
+        "first_assertion_lines": "assertion failed: ops_have_hostcall(&ops, \"fs:read\")",
+        "text_truncated": false,
+        "complete_panic_block_sha256": "3ffe11ca3cacf972a6023bd2d0f40a6f226040f848d9f71773d7b447065723d3"
+      },
+      {
+        "name": "cjs_fs_promises_destructured_write_lowers_to_promise_wrapped_hostcall_bd_1xl17_c",
+        "status": "fail",
+        "test_body_sha256": "6ef3cb9d7b7d9da2b3fad7603199661011782acef6949ce2d0dbca2c74ebe057",
+        "unchanged_from_starting_main": true,
+        "first_assertion_lines": "assertion failed: ops_have_hostcall(&ops, \"fs:write\")",
+        "text_truncated": false,
+        "complete_panic_block_sha256": "04d022ecaf648024a3d4dbd2033a5a697d6ff417b3c663aa92af0ad6b85bb87b"
+      },
+      {
+        "name": "cjs_fs_promises_inline_lowers_to_promise_wrapped_hostcall_bd_1xl17_c",
+        "status": "fail",
+        "test_body_sha256": "41f5fbc968d231755b4addeb455423eaee30055c8b8cf561d6adac7253914af6",
+        "unchanged_from_starting_main": true,
+        "first_assertion_lines": "assertion failed: ops_have_hostcall(&ops, \"fs:write\")",
+        "text_truncated": false,
+        "complete_panic_block_sha256": "28c50cc9437478ce179b3309b302ef3466f651261a46a54d077369bc365d17b3"
+      },
+      {
+        "name": "cjs_require_fs_dot_promises_binding_lowers_bd_1xl17_c",
+        "status": "fail",
+        "test_body_sha256": "9a221e41b7d23eabdeb3389510a9908cb90f84f4e5ece03a258d7186585ce5a5",
+        "unchanged_from_starting_main": true,
+        "first_assertion_lines": "fsp.readFile (fsp = require('fs').promises) must lower to an fs:read host effect",
+        "text_truncated": false,
+        "complete_panic_block_sha256": "38a967293639307b6c00dbcf0d93984351d42b791edc0b0cc9895cdb3a23a622"
+      },
+      {
+        "name": "fs_access_constants_fold_to_posix_values_bd_8u1t5",
+        "status": "pass",
+        "test_body_sha256": "9505176b50982b0f072e947b3a96a7083f454af89395867a808717506a671119",
+        "unchanged_from_starting_main": true
+      },
+      {
+        "name": "fs_promises_subobject_is_deep_scanned_and_discriminated_bd_8u1t5",
+        "status": "fail",
+        "test_body_sha256": "54bb42e98b922434ddde490ec5764f6ff43dfce474f0bb597e1fdbf7d57f16fd",
+        "unchanged_from_starting_main": true,
+        "first_assertion_lines": "assertion failed: ops_deep_match(&ops,\n    &|op|\n            matches!(op, Ir1Op::HostCall { capability, .. } if capability ==\n                \"promise:resolve\"))",
+        "text_truncated": false,
+        "complete_panic_block_sha256": "d0203f4e9d0760d9fc508a3cb62d1515fdedb94fda0bb766170d32844330b9dd"
+      },
+      {
+        "name": "fs_sync_breadth_emits_operation_discriminators_bd_8u1t5",
+        "status": "fail",
+        "test_body_sha256": "ed77beb9a4948d78f7afacbeb3512dde23d0d99de7b30af192c0668c6713f380",
+        "unchanged_from_starting_main": true,
+        "first_assertion_lines": "missing hidden operation discriminator \"\\0fsop:mkdir\"",
+        "text_truncated": false,
+        "complete_panic_block_sha256": "32f621f4dc7c9f725a6c03bf52b2394e6dc6cbfa8df886529dba35db00b68988"
+      },
+      {
+        "name": "inline_callback_read_lowers_to_fs_read_with_closure_bd_201vt",
+        "status": "fail",
+        "test_body_sha256": "7d946bc24dcdaeb9bfc7bda97108204052dafc383ede63ed87febebe2a5490f5",
+        "unchanged_from_starting_main": true,
+        "first_assertion_lines": "assertion `left == right` failed: require('fs').readFile(path, cb) must lower to fs:read with path + callback\n  left: None\n right: Some(2)",
+        "text_truncated": false,
+        "complete_panic_block_sha256": "7c699356666f52b57e5584732a4b9f96c46ff4461ae310da8dec9de27fee8360"
+      },
+      {
+        "name": "inline_callback_read_with_encoding_lowers_arity_three_bd_201vt",
+        "status": "fail",
+        "test_body_sha256": "a8f522e6b6ab5a9ccdf8a49e83048c8b8df83b06ebdfae2823a403b0a1fdaa43",
+        "unchanged_from_starting_main": true,
+        "first_assertion_lines": "assertion `left == right` failed: require('fs').readFile(path, 'utf8', cb) must lower to fs:read with all three args\n  left: None\n right: Some(3)",
+        "text_truncated": false,
+        "complete_panic_block_sha256": "f362aa378501f7cea743698ad9758e6f1b946bdba32b4c31f2e2b5670de4c96d"
+      },
+      {
+        "name": "inline_callback_write_lowers_to_fs_write_with_closure_bd_201vt",
+        "status": "fail",
+        "test_body_sha256": "f5cd5bc94fde5e213322a40ac0df944cd99a482772f3b5982256a190700d970f",
+        "unchanged_from_starting_main": true,
+        "first_assertion_lines": "assertion `left == right` failed: require('fs').writeFile(path, data, cb) must lower to fs:write with path + data + callback\n  left: None\n right: Some(3)",
+        "text_truncated": false,
+        "complete_panic_block_sha256": "93d0aea93108cb9031f28ea0b4d4295a49bf20bac5c60abc46f227bd3ae2dfb9"
+      },
+      {
+        "name": "inline_read_with_encoding_lowers_to_arity_two_hostcall_bd_1xl17_d",
+        "status": "fail",
+        "test_body_sha256": "72496b5b0a6c3bf68b9a08870cfdf4cb8a3b33f6f0d88c5df5592af516cfe02d",
+        "unchanged_from_starting_main": true,
+        "first_assertion_lines": "assertion `left == right` failed: require('fs').readFileSync(path, 'utf8') must lower to fs:read with both args\n  left: Some(3)\n right: Some(2)",
+        "text_truncated": false,
+        "complete_panic_block_sha256": "f6ea66f164c9cc0d4e41b1c9b65b68b6304063f13f660069fc4eb37783aaede8"
+      },
+      {
+        "name": "inline_read_without_encoding_stays_arity_one_bd_1xl17_d",
+        "status": "fail",
+        "test_body_sha256": "fa67eaef5d254a3b21a500509a231848c1b3dd8e500f953c1dc7108a0bdb1e17",
+        "unchanged_from_starting_main": true,
+        "first_assertion_lines": "assertion `left == right` failed: require('fs').readFileSync(path) must still lower to fs:read with one arg\n  left: Some(3)\n right: Some(1)",
+        "text_truncated": false,
+        "complete_panic_block_sha256": "3d2e9c2e7919f887e05135c798990f256befadb40e78148b62b31397a09343ad"
+      },
+      {
+        "name": "inline_require_fs_dot_promises_read_lowers_bd_1xl17_c",
+        "status": "fail",
+        "test_body_sha256": "94508a1036af6fc13f2f91cbd34fbba6b5cb0d83449c40058f9f46a79d3002a3",
+        "unchanged_from_starting_main": true,
+        "first_assertion_lines": "require('fs').promises.readFile must lower to an fs:read host effect",
+        "text_truncated": false,
+        "complete_panic_block_sha256": "f89601100c86689116544676b1fb67f8bcf432b60fba7780d3b8dc7d0216faf2"
+      },
+      {
+        "name": "inline_require_fs_dot_promises_write_lowers_bd_1xl17_c",
+        "status": "fail",
+        "test_body_sha256": "4328dff13ae760fa3395bc943b233cf8f4797f1de3e124d47dff6908c35396fa",
+        "unchanged_from_starting_main": true,
+        "first_assertion_lines": "assertion failed: ops_have_hostcall(&ops, \"fs:write\")",
+        "text_truncated": false,
+        "complete_panic_block_sha256": "127c34bdd46341b5f6a38d247255ecf0263a19d9bbccd9657fe2a84cf753355c"
+      },
+      {
+        "name": "unused_fs_destructured_require_is_not_recognized_bd_rmaze",
+        "status": "fail",
+        "test_body_sha256": "6697517876626765c9c5ac547541d0244b065f8d45250d6165122d27641cfd66",
+        "unchanged_from_starting_main": true,
+        "first_assertion_lines": "an unconfirmed destructured sync-fs require must keep the ambient-authority denial",
+        "text_truncated": false,
+        "complete_panic_block_sha256": "1403f6a6f52a7073ce4673541b1b7d9ae9e611ef78a2bf802fe749ad1a79dc94"
+      },
+      {
+        "name": "unused_fs_promises_destructured_require_is_not_recognized_bd_1xl17_c",
+        "status": "fail",
+        "test_body_sha256": "7cdc30c58af718b7f7b1ebf91cf15ab08ce782dd51940e46d36aff1d70f45365",
+        "unchanged_from_starting_main": true,
+        "first_assertion_lines": "an unconfirmed destructured fs/promises require must keep the ambient-authority denial",
+        "text_truncated": false,
+        "complete_panic_block_sha256": "9eb5150dc2910f6f511569cba6c2b1ecd2e42048aaf8e94c3122c079b19587ce"
+      },
+      {
+        "name": "unused_fs_promises_require_binding_is_not_recognized_bd_1xl17_c",
+        "status": "fail",
+        "test_body_sha256": "3de5b1434d4bf3fad2478bc4862ad57b7bcb47c70b2e251b8cb5e80b4db74967",
+        "unchanged_from_starting_main": true,
+        "first_assertion_lines": "an unconfirmed fs/promises require alias must keep the ambient-authority denial",
+        "text_truncated": false,
+        "complete_panic_block_sha256": "9122018bcc2517023988dbb96eac48e33fc3e7941def5023edd38007fe679675"
+      },
+      {
+        "name": "unused_require_fs_dot_promises_binding_is_not_recognized_bd_1xl17_c",
+        "status": "fail",
+        "test_body_sha256": "f6c7dcbaf8a27e9b4041c35672921f384374e1aebdd509048113b067d7f59e0c",
+        "unchanged_from_starting_main": true,
+        "first_assertion_lines": "an unconfirmed require('fs').promises binding must keep the ambient-authority denial",
+        "text_truncated": false,
+        "complete_panic_block_sha256": "b0c3a0ce0b3e92eb41d548752a7da836f4e95b918f09763bcad2a70106b5a64c"
+      },
+      {
+        "name": "direct_event_emitter_member_and_cluster_instanceof_use_ordinary_values_bd_dspwz",
+        "status": "pass",
+        "test_body_sha256": "9a7667206ea4a61bd5e1819e282d59f2a4a543f159d2020a7db80ee42c28f6c2",
+        "unchanged_from_starting_main": true
+      },
+      {
+        "name": "event_emitter_member_provenance_rejects_computed_mutable_and_detached_forms_bd_dspwz",
+        "status": "fail",
+        "test_body_sha256": "8f2160eab9669f24db2b6f64c469105449e8c49ceebeb1cf26c31a453adea2bd",
+        "unchanged_from_starting_main": true,
+        "first_assertion_lines": "unsupported EventEmitter possession must remain ambient-refused: LoweringPassResult { module: Ir1Module { header: IrHeader { schema_version: IrSchemaVersion { major: 0, minor: 17, patch: 0 }, level: Ir1, source_hash: Some(ContentHash([195, 224, 137, 15, 169, 15, 216, 176, 44, 77, 148, 48, 135, 229, 189, 21, 202, 98, 112, 60, 236, 54, 27, 243, 174, 18, 124, 230, 201, 48, 255, 201])), source_label: \"events_computed_bd_dspwz.js\" }, scopes: [ScopeNode { scope_id: ScopeId { depth: 0, index: 0 }, parent: None, kind: Global, bindings: [ResolvedBinding { name: \"%events_module\", binding_id: 0, scope: ScopeId { depth: 0, index: 0 }, kind: Const }, ResolvedBinding { name: \"EventEmitter\", binding_id: 1, scope: ScopeId { depth: 0, index: 0 }, kind: Const }] }], ops: [CreateFunction { name: None, param_names: [\"initialize\"], body_ops: [LoadLiteral { value: String(JsString { utf8: \"use strict\", units: None }) }, Pop, LoadLiteral { value: Integer(0) }, StoreBinding { binding_id: 1 }, Discard, LoadLiteral { value: Undefined }, StoreBinding { binding_id: 2 }, Discard, CreateFunction { name: None, param_names: [], body_ops: [LoadBinding { binding_id: 0 }, LoadLiteral { value: Integer(2) }, BinaryOp {",
+        "text_truncated": true,
+        "complete_panic_block_sha256": "3279b25c804150aa7fe521206cbbcb9c5e356a3d368ce866eb2e1b1c1fdc19cb"
+      },
+      {
+        "name": "events_confirmed_outer_sentinels_stop_at_child_shadows_bd_2dmnn_1",
+        "status": "pass",
+        "test_body_sha256": "1162fc253fb8d3f5b86343b0e1f85ed9c6875ac7e43a238daf79ee57ff17853b",
+        "unchanged_from_starting_main": true
+      },
+      {
+        "name": "events_destructured_constructor_materializes_first_class_builtin_bd_dspwz",
+        "status": "pass",
+        "test_body_sha256": "9eae384ca159df26691fc88f0eda1e99831c53e398912dc45f28d4b9a6a79186",
+        "unchanged_from_starting_main": true
+      },
+      {
+        "name": "events_shadowed_only_uses_do_not_confirm_outer_requires_bd_2dmnn_1",
+        "status": "fail",
+        "test_body_sha256": "6cb4b706d9a67e8ed43d0f7f06013240b72a3a311be4c88f7bdee6bd146a9735",
+        "unchanged_from_starting_main": true,
+        "first_assertion_lines": "a shadow-only events use must not confirm the outer require: LoweringPassResult { module: Ir1Module { header: IrHeader { schema_version: IrSchemaVersion { major: 0, minor: 17, patch: 0 }, level: Ir1, source_hash: Some(ContentHash([242, 135, 251, 250, 89, 77, 212, 224, 156, 147, 107, 177, 206, 241, 210, 112, 136, 245, 244, 250, 124, 167, 99, 103, 23, 121, 82, 126, 90, 50, 149, 118])), source_label: \"events_shadowed_only_module-parameter_bd_2dmnn_1.js\" }, scopes: [ScopeNode { scope_id: ScopeId { depth: 0, index: 0 }, parent: None, kind: Global, bindings: [ResolvedBinding { name: \"read\", binding_id: 2, scope: ScopeId { depth: 0, index: 0 }, kind: Var }, ResolvedBinding { name: \"%events_module\", binding_id: 0, scope: ScopeId { depth: 0, index: 0 }, kind: Const }, ResolvedBinding { name: \"events\", binding_id: 1, scope: ScopeId { depth: 0, index: 0 }, kind: Const }] }], ops: [DeclareFunction { name: \"read\", binding_id: 2, param_names: [\"events\"], body_ops: [LoadBinding { binding_id: 0 }, GetProperty { key: Static(JsString { utf8: \"captureRejections\", units: None }) }, Return], free_vars: [], free_var_ids: [], runtime_global_loads: [], child_captured_locals: [], local_lexical_bindings: []",
+        "text_truncated": true,
+        "complete_panic_block_sha256": "d0c7c8942d1ab311e6fe37d1a4d69c32654c7d5006b2f62d80751cc20e645302"
+      },
+      {
+        "name": "events_static_constants_fold_to_literals_bd_2dmnn",
+        "status": "pass",
+        "test_body_sha256": "c085d6852db9cc7b81bce35c39944cbfffe864974037e6a5f0115e2b5d4b9ac9",
+        "unchanged_from_starting_main": true
+      },
+      {
+        "name": "unused_and_deferred_events_requires_remain_ambient_refused_bd_2dmnn",
+        "status": "fail",
+        "test_body_sha256": "9c615fbf5a4769ede5ca50a33ae1fb59c7dc42346e7e972c73243343508ba327",
+        "unchanged_from_starting_main": true,
+        "first_assertion_lines": "unsupported or unused events require must remain ambient-refused: events_unused_destructure_bd_2dmnn.js",
+        "text_truncated": false,
+        "complete_panic_block_sha256": "a6d16fa39d6806d13ec5067420cafc24200555e1d35fad62e69aab76750cb98c"
+      }
+    ],
+    "helper_sha256": {
+      "count_hostcall_deep": "0af691526f376906b9edd7c2ce7b2d36818b15bb535588a61fb6ec8232bb6029",
+      "count_ops_deep": "93e034dde01ddf83d864ce2d97adb432a83d8288d3bbddd47df7da6893a5f5d6",
+      "fs_read_hostcall_arg_count": "9791d6bfef7469313fbea00fb23860b06e47fa1e195f5429ed9cc8f24207eb9b",
+      "fs_write_hostcall_arg_count": "6569ae037589d01d6d1c7521b2403cf609e3b29b6b819e42a975e574e05b2b83",
+      "lower_script_source_ops": "6bc370b181a9ddc75c908510c4e07e6ab52e7da8eff212a1c3406e70c0145bd8",
+      "ops_deep_match": "d05243e4530e8f72e62f3f3f95189d359762007054906e2653fe7e6d5b93b18d",
+      "ops_have_hostcall": "b37be6f442390c7cebaf03773c61e519099a0661aa45080046e6d9bd1a671e12"
+    }
+  },
+  "existing_fs_global_name_assertions": {
+    "result": {
+      "exit_code": 1,
+      "elapsed_seconds": 0.3008804809942376,
+      "executable_sha256": "94cf15fac481639ff35cdb01db86bdf1e6936439019d18979f76b294842ecb3c",
+      "source_manifest": "final-sources.json",
+      "passed": 0,
+      "failed": 2
+    },
+    "baseline_binary_executed": false,
+    "attribution": "Bodies, FreeNames helper and all five composite filesystem JavaScript templates are byte-identical to starting main. This is source-identity attribution, not a baseline test execution claim. Expected sets have not been edited to force success.",
+    "results": [
+      {
+        "name": "directory_iteration_uses_the_shared_module_without_erasing_loader_bindings",
+        "test_body_sha256": "8082490c190743c52f2bb8a1c6a18ccaee23b85351072d275710d4e6aff637c4",
+        "unchanged_from_starting_main": true,
+        "status": "fail",
+        "assertion": "actual free-name set includes arguments; expected set omits arguments"
+      },
+      {
+        "name": "recursive_copy_uses_one_filesystem_module_not_a_direct_or_ambient_call",
+        "test_body_sha256": "eaec378e28c3be7ace72ad57469f26bd6f02915a13e433ada1ff561092a6a5d6",
+        "unchanged_from_starting_main": true,
+        "status": "fail",
+        "assertion": "actual free-name set includes arguments; expected set omits arguments"
+      }
+    ]
+  },
+  "historical_baseline_provenance": {
+    "record": "artifacts/issue6_scoped_qualification_20261027.json",
+    "v0_2_0_revision": "2b3bfb6366ba1bd267ce92bad5466b1c105a91ee",
+    "recorded_v0_2_0_authority_counts": {
+      "Clean": 22,
+      "FindingsPresent": 11,
+      "Unanalyzable": 0
+    },
+    "v0_2_0_reexecuted_in_this_session": false,
+    "historical_44_regressions_is_not_a_current_main_measurement": true
+  },
+  "node_semantics": {
+    "executor": "root agent; independently executed final sources",
+    "node_version": "v24.22.1",
+    "commands": [
+      "node --test --test-concurrency=1 scripts/test_events_once_registration.cjs scripts/test_events_backpressure.cjs scripts/test_events_error_monitor.cjs scripts/test_events_promise_intrinsics.cjs",
+      "node scripts/test_events_module.cjs"
+    ],
+    "results": {
+      "test_runner": {
+        "passed": 62,
+        "failed": 0,
+        "skipped": 0
+      },
+      "differential_suite": {
+        "differential_checks": 267,
+        "rust_source_host_adapters": 14,
+        "inline_isolated": 7,
+        "esm_reference_only": 1,
+        "protected_helpers": 4,
+        "private_intrinsics": 9,
+        "failed": 0
+      }
+    },
+    "disclosed_difference": {
+      "listenersDuringSourceAbort": {
+        "node": 0,
+        "candidate": 1
+      }
+    },
+    "rust_interpreter_executed": false,
+    "source_sha256": {
+      "scripts/test_events_once_registration.cjs": "83f49d020d6cd44939b3c2038853fcb7d1a19de5e1234acfc9618839d385369f",
+      "scripts/test_events_backpressure.cjs": "25430ff2acdf4e3fae0a06424f80142d88ca38d1fbf72dccd7b02122fee817ec",
+      "scripts/test_events_error_monitor.cjs": "14e5695b49e21fab76b3895948d2f278c6effa05142c81fb3dbe485a7c3fef57",
+      "scripts/test_events_promise_intrinsics.cjs": "bf34bc17d0126b2fcc4658ed8f0fd8bb502047cd1ca9b5573effb8217f8b8d50",
+      "scripts/test_events_module.cjs": "6cf70e311fbfbfaabd9e54841391e7d9c8a489c5f7144bb40f97e39cba117b8b"
+    }
+  },
+  "unexecuted_runtime_source_sha256": {
+    "crates/franken-engine/src/baseline_interpreter.rs": "0f76dfe2c9082f8982edb705ab6bd74e17aae1aca1f2f745266a8a4631dbbdef",
+    "crates/franken-engine/src/baseline_interpreter/collector.rs": "23df13755fc4695e9f6cf02681e9b5c3d9d1dff7e9c9e7f2ee53a6b17a895c41",
+    "crates/franken-engine/src/hostcall_telemetry.rs": "e427670a1badd9d3a4f28f9bd276397c663b7d690e220a77d7ffdf505dff76eb",
+    "crates/franken-engine/src/hostcall_effects_migration.rs": "852e10f85dc77b47857c8479df78356fcb53e1a20d86113bbb50ed4c7751d386",
+    "crates/franken-engine/tests/fs_module_objects.rs": "bf07e1a42ea2690a51e7c71e704e0a32012ada37fe0344ecbf1aab5c7128c1db",
+    "crates/franken-engine/tests/events_once_registration.rs": "5a0e528afaf69ad5eb6c6625d5a68c4939cf09918480f8e0cae4ce54b0810227",
+    "crates/franken-engine/tests/events_once_bd_asw4m_1.rs": "972486c34fa1b3ccf9bbfd57bea1e4fa68fd18771e0ba5165d0241d8b7e52ed3"
+  },
+  "remaining_native_gates": [
+    "cargo test --locked --offline -p frankenengine-engine --no-default-features --lib fs_promise_native_",
+    "cargo test --locked --offline -p frankenengine-engine --no-default-features --test fs_direct_calls --test fs_module_objects --test events_default_import_bd_9vouw_165 --test events_once_registration --test events_once_bd_asw4m_1",
+    "cargo test --locked --offline -p frankenengine-engine --no-default-features --lib",
+    "Repeat the complete library run on v0.2.0 using nightly-2026-09-21 and compare failing test names, then complete established check/clippy/format, native installer and same-baseline performance gates."
+  ],
+  "reproduction": {
+    "generator": "scripts/reproduce_issue6_scoped_qualification.py",
+    "generator_sha256": "40071231b1f5845fff59dd87f58bed19181a50fb47387512b89387d6270eff8a",
+    "command": "python3 scripts/reproduce_issue6_scoped_qualification.py --repository /path/to/qualified/checkout --work /tmp/issue6-reproduction --toolchain-bin /path/to/nightly-2026-09-21/bin --cargo-home /path/to/provisioned/cargo-cache",
+    "requirements": "Adequately provisioned host, recorded source hashes, starting-main Git object and the pinned toolchain/dependency cache. Generator is read-only for repository source and creates a new workspace. Its default link is normal native Cargo; no process infrastructure or compiled binary is committed.",
+    "cargo_lock_sha256": "cc4151169799f2b8215785dd7b6fa538d7b302bcd8a7b0ef4e593b9c9628f2b8",
+    "cargo_lock": "# This file is automatically @generated by Cargo.\n# It is not intended for manual editing.\nversion = 4\n\n[[package]]\nname = \"aho-corasick\"\nversion = \"1.1.5\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"c982642fa9e8606056828ee9a8505737230110bb1099153c79efe865c59d12ba\"\ndependencies = [\n \"memchr\",\n]\n\n[[package]]\nname = \"autocfg\"\nversion = \"1.5.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53\"\n\n[[package]]\nname = \"base64ct\"\nversion = \"1.8.3\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06\"\n\n[[package]]\nname = \"bitflags\"\nversion = \"2.13.2\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06\"\n\n[[package]]\nname = \"block-buffer\"\nversion = \"0.10.4\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71\"\ndependencies = [\n \"generic-array\",\n]\n\n[[package]]\nname = \"bumpalo\"\nversion = \"3.20.3\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649\"\n\n[[package]]\nname = \"cc\"\nversion = \"1.6.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"f74872d07caf508b30a21f6836e7d7016a2eaf7d9ff4f48deaa58cd8a0407630\"\ndependencies = [\n \"find-msvc-tools\",\n \"shlex\",\n]\n\n[[package]]\nname = \"cfg-if\"\nversion = \"1.0.5\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600\"\n\n[[package]]\nname = \"const-oid\"\nversion = \"0.9.6\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"c2459377285ad874054d797f3ccebf984978aa39129f6eafde5cdc8315b612f8\"\n\n[[package]]\nname = \"cpufeatures\"\nversion = \"0.2.17\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"59ed5838eebb26a2bb2e58f6d5b5316989ae9d08bab10e0e6d103e656d1b0280\"\ndependencies = [\n \"libc\",\n]\n\n[[package]]\nname = \"crypto-common\"\nversion = \"0.1.7\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a\"\ndependencies = [\n \"generic-array\",\n \"typenum\",\n]\n\n[[package]]\nname = \"curve25519-dalek\"\nversion = \"4.1.3\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"97fb8b7c4503de7d6ae7b42ab72a5a59857b4c937ec27a3d4539dba95b5ab2be\"\ndependencies = [\n \"cfg-if\",\n \"cpufeatures\",\n \"curve25519-dalek-derive\",\n \"digest\",\n \"fiat-crypto\",\n \"rustc_version\",\n \"subtle\",\n \"zeroize\",\n]\n\n[[package]]\nname = \"curve25519-dalek-derive\"\nversion = \"0.1.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"f46882e17999c6cc590af592290432be3bce0428cb0d5f8b6715e4dc7b383eb3\"\ndependencies = [\n \"proc-macro2\",\n \"quote\",\n \"syn 2.0.119\",\n]\n\n[[package]]\nname = \"der\"\nversion = \"0.7.10\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"e7c1832837b905bbfb5101e07cc24c8deddf52f93225eee6ead5f4d63d53ddcb\"\ndependencies = [\n \"const-oid\",\n \"zeroize\",\n]\n\n[[package]]\nname = \"digest\"\nversion = \"0.10.7\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292\"\ndependencies = [\n \"block-buffer\",\n \"crypto-common\",\n \"subtle\",\n]\n\n[[package]]\nname = \"displaydoc\"\nversion = \"0.2.7\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"c6232dd377dcc64799954cbd3a9bb882e9cdc1308ccd87b1c098f1fb2eaf82a8\"\ndependencies = [\n \"proc-macro2\",\n \"quote\",\n \"syn 3.0.6\",\n]\n\n[[package]]\nname = \"ed25519\"\nversion = \"2.2.3\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"115531babc129696a58c64a4fef0a8bf9e9698629fb97e9e40767d235cfbcd53\"\ndependencies = [\n \"pkcs8\",\n \"signature\",\n]\n\n[[package]]\nname = \"ed25519-dalek\"\nversion = \"2.2.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"70e796c081cee67dc755e1a36a0a172b897fab85fc3f6bc48307991f64e4eca9\"\ndependencies = [\n \"curve25519-dalek\",\n \"ed25519\",\n \"serde\",\n \"sha2\",\n \"subtle\",\n \"zeroize\",\n]\n\n[[package]]\nname = \"errno\"\nversion = \"0.3.14\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb\"\ndependencies = [\n \"libc\",\n \"windows-sys 0.61.2\",\n]\n\n[[package]]\nname = \"fe-issue6-native-probe\"\nversion = \"0.1.0\"\ndependencies = [\n \"bumpalo\",\n \"ed25519-dalek\",\n \"franken-engine-deterministic-derive\",\n \"franken-engine-deterministic-trait\",\n \"frankenengine-core\",\n \"frankenengine-extension-host\",\n \"hex\",\n \"hmac\",\n \"num-bigint\",\n \"rand\",\n \"regex\",\n \"ryu-js\",\n \"serde\",\n \"serde_json\",\n \"sha2\",\n \"subtle\",\n \"thiserror\",\n \"url\",\n \"zeroize\",\n]\n\n[[package]]\nname = \"fiat-crypto\"\nversion = \"0.2.9\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d\"\n\n[[package]]\nname = \"find-msvc-tools\"\nversion = \"0.1.14\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484\"\n\n[[package]]\nname = \"form_urlencoded\"\nversion = \"1.2.2\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf\"\ndependencies = [\n \"percent-encoding\",\n]\n\n[[package]]\nname = \"franken-engine-deterministic-derive\"\nversion = \"0.1.0\"\ndependencies = [\n \"franken-engine-deterministic-trait\",\n \"proc-macro2\",\n \"quote\",\n \"syn 2.0.119\",\n]\n\n[[package]]\nname = \"franken-engine-deterministic-trait\"\nversion = \"0.1.0\"\n\n[[package]]\nname = \"frankenengine-core\"\nversion = \"0.3.0\"\ndependencies = [\n \"franken-engine-deterministic-derive\",\n \"franken-engine-deterministic-trait\",\n \"hmac\",\n \"serde\",\n \"serde_json\",\n \"sha2\",\n \"subtle\",\n]\n\n[[package]]\nname = \"frankenengine-extension-host\"\nversion = \"0.1.0\"\ndependencies = [\n \"ed25519-dalek\",\n \"rand\",\n \"rustix\",\n \"rustls\",\n \"rustls-pki-types\",\n \"serde\",\n \"serde_bytes\",\n \"serde_json\",\n \"sha2\",\n \"webpki-roots\",\n]\n\n[[package]]\nname = \"generic-array\"\nversion = \"0.14.7\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a\"\ndependencies = [\n \"typenum\",\n \"version_check\",\n]\n\n[[package]]\nname = \"getrandom\"\nversion = \"0.2.17\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"ff2abc00be7fca6ebc474524697ae276ad847ad0a6b3faa4bcb027e9a4614ad0\"\ndependencies = [\n \"cfg-if\",\n \"libc\",\n \"wasi\",\n]\n\n[[package]]\nname = \"hex\"\nversion = \"0.4.3\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70\"\n\n[[package]]\nname = \"hmac\"\nversion = \"0.12.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e\"\ndependencies = [\n \"digest\",\n]\n\n[[package]]\nname = \"icu_collections\"\nversion = \"2.3.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"fa68d21081c4a05d5a901a1c62add574c77048b6a1c67be3b50ce0b60d4ca513\"\ndependencies = [\n \"displaydoc\",\n \"potential_utf\",\n \"utf8_iter\",\n \"yoke\",\n \"zerofrom\",\n \"zerovec\",\n]\n\n[[package]]\nname = \"icu_locale_core\"\nversion = \"2.3.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"d56e28588da92eee5c3201a6eff33fabdd49b62269c8938d4ff050ce4d900deb\"\ndependencies = [\n \"displaydoc\",\n \"litemap\",\n \"tinystr\",\n \"writeable\",\n \"zerovec\",\n]\n\n[[package]]\nname = \"icu_normalizer\"\nversion = \"2.3.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"12f9cf5f235641ed274641dd81c3f28d870e276763d0797aeeab72317b1c646f\"\ndependencies = [\n \"icu_collections\",\n \"icu_normalizer_data\",\n \"icu_properties\",\n \"icu_provider\",\n \"smallvec\",\n \"zerovec\",\n]\n\n[[package]]\nname = \"icu_normalizer_data\"\nversion = \"2.3.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"1563da1ed3e0b3bf3d74c9b85917ac9c56464d2f57242270c09c9e752f8021a0\"\n\n[[package]]\nname = \"icu_properties\"\nversion = \"2.3.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"7e7ca276ad3145661a65914e6daf131ca5120cd3dcee8f8f3214b8875184a148\"\ndependencies = [\n \"displaydoc\",\n \"icu_collections\",\n \"icu_locale_core\",\n \"icu_properties_data\",\n \"icu_provider\",\n \"zerotrie\",\n \"zerovec\",\n]\n\n[[package]]\nname = \"icu_properties_data\"\nversion = \"2.3.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"e590f038c1464a96894fd6d10127e90a8be4509f56ff7ecef851b15cee0b7caa\"\n\n[[package]]\nname = \"icu_provider\"\nversion = \"2.3.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"d27bbb9d3abbefac45d55f647c9de1d44aafcd1186eb91879afef17c396c3e73\"\ndependencies = [\n \"displaydoc\",\n \"icu_locale_core\",\n \"writeable\",\n \"yoke\",\n \"zerofrom\",\n \"zerotrie\",\n \"zerovec\",\n]\n\n[[package]]\nname = \"idna\"\nversion = \"1.1.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"3b0875f23caa03898994f6ddc501886a45c7d3d62d04d2d90788d47be1b1e4de\"\ndependencies = [\n \"idna_adapter\",\n \"smallvec\",\n \"utf8_iter\",\n]\n\n[[package]]\nname = \"idna_adapter\"\nversion = \"1.2.2\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"cb68373c0d6620ef8105e855e7745e18b0d00d3bdb07fb532e434244cdb9a714\"\ndependencies = [\n \"icu_normalizer\",\n \"icu_properties\",\n]\n\n[[package]]\nname = \"itoa\"\nversion = \"1.0.18\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682\"\n\n[[package]]\nname = \"libc\"\nversion = \"0.2.189\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2\"\n\n[[package]]\nname = \"linux-raw-sys\"\nversion = \"0.12.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53\"\n\n[[package]]\nname = \"litemap\"\nversion = \"0.8.3\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae\"\n\n[[package]]\nname = \"memchr\"\nversion = \"2.8.3\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98\"\n\n[[package]]\nname = \"num-bigint\"\nversion = \"0.5.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"93e7820bc0a80a0238e650327316f929ba18d5be054b647490a3a6a339f3e7c0\"\ndependencies = [\n \"num-integer\",\n \"num-traits\",\n]\n\n[[package]]\nname = \"num-integer\"\nversion = \"0.1.47\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"7ce2d95d4b3734dc35aa2f45e1aa22cd416814592a4f9d9205e11affd5b8e10b\"\ndependencies = [\n \"num-traits\",\n]\n\n[[package]]\nname = \"num-traits\"\nversion = \"0.2.19\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841\"\ndependencies = [\n \"autocfg\",\n]\n\n[[package]]\nname = \"once_cell\"\nversion = \"1.21.4\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50\"\n\n[[package]]\nname = \"percent-encoding\"\nversion = \"2.3.2\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220\"\n\n[[package]]\nname = \"pkcs8\"\nversion = \"0.10.2\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"f950b2377845cebe5cf8b5165cb3cc1a5e0fa5cfa3e1f7f55707d8fd82e0a7b7\"\ndependencies = [\n \"der\",\n \"spki\",\n]\n\n[[package]]\nname = \"potential_utf\"\nversion = \"0.1.6\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"d83eb9bc6d8e5cf568e7a1101d60ee05e81ed50ea106026f3d18deeb046d7661\"\ndependencies = [\n \"zerovec\",\n]\n\n[[package]]\nname = \"ppv-lite86\"\nversion = \"0.2.21\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9\"\ndependencies = [\n \"zerocopy\",\n]\n\n[[package]]\nname = \"proc-macro2\"\nversion = \"1.0.107\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9\"\ndependencies = [\n \"unicode-ident\",\n]\n\n[[package]]\nname = \"quote\"\nversion = \"1.0.47\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001\"\ndependencies = [\n \"proc-macro2\",\n]\n\n[[package]]\nname = \"rand\"\nversion = \"0.8.8\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"e058c7de0b26af77780c769414d6257830bb240f3c38477dbc2c16e5f54d6d4c\"\ndependencies = [\n \"libc\",\n \"rand_chacha\",\n \"rand_core\",\n]\n\n[[package]]\nname = \"rand_chacha\"\nversion = \"0.3.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"e6c10a63a0fa32252be49d21e7709d4d4baf8d231c2dbce1eaa8141b9b127d88\"\ndependencies = [\n \"ppv-lite86\",\n \"rand_core\",\n]\n\n[[package]]\nname = \"rand_core\"\nversion = \"0.6.4\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c\"\ndependencies = [\n \"getrandom\",\n]\n\n[[package]]\nname = \"regex\"\nversion = \"1.13.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"f020237b6c8eed93db2e2cb53c00c60a8e1bc73da7d073199a1180401450218d\"\ndependencies = [\n \"aho-corasick\",\n \"memchr\",\n \"regex-automata\",\n \"regex-syntax\",\n]\n\n[[package]]\nname = \"regex-automata\"\nversion = \"0.4.18\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"ad8553b9b26413251cbf30e620595c7a41b3887f03da04579c0e6b0d6a06b4b2\"\ndependencies = [\n \"aho-corasick\",\n \"memchr\",\n \"regex-syntax\",\n]\n\n[[package]]\nname = \"regex-syntax\"\nversion = \"0.8.11\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4\"\n\n[[package]]\nname = \"ring\"\nversion = \"0.17.14\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"a4689e6c2294d81e88dc6261c768b63bc4fcdb852be6d1352498b114f61383b7\"\ndependencies = [\n \"cc\",\n \"cfg-if\",\n \"getrandom\",\n \"libc\",\n \"untrusted\",\n \"windows-sys 0.52.0\",\n]\n\n[[package]]\nname = \"rustc_version\"\nversion = \"0.4.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"cfcb3a22ef46e85b45de6ee7e79d063319ebb6594faafcf1c225ea92ab6e9b92\"\ndependencies = [\n \"semver\",\n]\n\n[[package]]\nname = \"rustix\"\nversion = \"1.1.5\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d\"\ndependencies = [\n \"bitflags\",\n \"errno\",\n \"libc\",\n \"linux-raw-sys\",\n \"windows-sys 0.61.2\",\n]\n\n[[package]]\nname = \"rustls\"\nversion = \"0.23.45\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634\"\ndependencies = [\n \"once_cell\",\n \"ring\",\n \"rustls-pki-types\",\n \"rustls-webpki\",\n \"subtle\",\n \"zeroize\",\n]\n\n[[package]]\nname = \"rustls-pki-types\"\nversion = \"1.15.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"2f4925028c7eb5d1fcdaf196971378ed9d2c1c4efc7dc5d011256f76c99c0a96\"\ndependencies = [\n \"zeroize\",\n]\n\n[[package]]\nname = \"rustls-webpki\"\nversion = \"0.103.15\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2\"\ndependencies = [\n \"ring\",\n \"rustls-pki-types\",\n \"untrusted\",\n]\n\n[[package]]\nname = \"ryu-js\"\nversion = \"1.0.3\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"04d056b875a9d2e6cb9a61d127afee9ac5999b9f87bcb32079d1318e505be714\"\n\n[[package]]\nname = \"semver\"\nversion = \"1.0.28\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd\"\n\n[[package]]\nname = \"serde\"\nversion = \"1.0.229\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba\"\ndependencies = [\n \"serde_core\",\n \"serde_derive\",\n]\n\n[[package]]\nname = \"serde_bytes\"\nversion = \"0.11.19\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"a5d440709e79d88e51ac01c4b72fc6cb7314017bb7da9eeff678aa94c10e3ea8\"\ndependencies = [\n \"serde\",\n \"serde_core\",\n]\n\n[[package]]\nname = \"serde_core\"\nversion = \"1.0.229\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"67dca2c9c51e58a4791a4b1ed58308b39c64224d349a935ab5039aa360942a48\"\ndependencies = [\n \"serde_derive\",\n]\n\n[[package]]\nname = \"serde_derive\"\nversion = \"1.0.229\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348\"\ndependencies = [\n \"proc-macro2\",\n \"quote\",\n \"syn 3.0.6\",\n]\n\n[[package]]\nname = \"serde_json\"\nversion = \"1.0.151\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14\"\ndependencies = [\n \"itoa\",\n \"memchr\",\n \"serde\",\n \"serde_core\",\n \"zmij\",\n]\n\n[[package]]\nname = \"sha2\"\nversion = \"0.10.9\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283\"\ndependencies = [\n \"cfg-if\",\n \"cpufeatures\",\n \"digest\",\n]\n\n[[package]]\nname = \"shlex\"\nversion = \"2.0.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba\"\n\n[[package]]\nname = \"signature\"\nversion = \"2.2.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de\"\ndependencies = [\n \"rand_core\",\n]\n\n[[package]]\nname = \"smallvec\"\nversion = \"1.16.2\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"f9395f0f0eee849a9b707b2f06bb92a6a422090e2123bb2ef8e87a0e61892a8e\"\n\n[[package]]\nname = \"spki\"\nversion = \"0.7.3\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"d91ed6c858b01f942cd56b37a94b3e0a1798290327d1236e4d9cf4eaca44d29d\"\ndependencies = [\n \"base64ct\",\n \"der\",\n]\n\n[[package]]\nname = \"stable_deref_trait\"\nversion = \"1.2.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596\"\n\n[[package]]\nname = \"subtle\"\nversion = \"2.6.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292\"\n\n[[package]]\nname = \"syn\"\nversion = \"2.0.119\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"872831b642d1a07999a962a351ed35b955ea2cfc8f3862091e2a240a84f17297\"\ndependencies = [\n \"proc-macro2\",\n \"quote\",\n \"unicode-ident\",\n]\n\n[[package]]\nname = \"syn\"\nversion = \"3.0.6\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"8593e8e72159ed2257d083c7a454a85cbf854f37a0966d8d483aff8c8a3ebcee\"\ndependencies = [\n \"proc-macro2\",\n \"quote\",\n \"unicode-ident\",\n]\n\n[[package]]\nname = \"synstructure\"\nversion = \"0.14.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"901704edd0dfe137f1987838ee4f259e4e063c31371bdb423f7ae38ec6f77f02\"\ndependencies = [\n \"proc-macro2\",\n \"quote\",\n \"syn 3.0.6\",\n]\n\n[[package]]\nname = \"thiserror\"\nversion = \"2.0.20\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"ec86235f5fcc2a73650310756d2ac5b138a5780bbbdfae3eeccec992c435ba4f\"\ndependencies = [\n \"thiserror-impl\",\n]\n\n[[package]]\nname = \"thiserror-impl\"\nversion = \"2.0.20\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af\"\ndependencies = [\n \"proc-macro2\",\n \"quote\",\n \"syn 3.0.6\",\n]\n\n[[package]]\nname = \"tinystr\"\nversion = \"0.8.4\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"b1e27c91459209c2986af3dcf603a5a74a4368754ce37414f59acc971167f643\"\ndependencies = [\n \"displaydoc\",\n \"zerovec\",\n]\n\n[[package]]\nname = \"typenum\"\nversion = \"1.20.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20\"\n\n[[package]]\nname = \"unicode-ident\"\nversion = \"1.0.26\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"d245f478577f809a851594d02313b640fb437e0bb33866753cff937863096954\"\n\n[[package]]\nname = \"untrusted\"\nversion = \"0.9.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1\"\n\n[[package]]\nname = \"url\"\nversion = \"2.5.8\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed\"\ndependencies = [\n \"form_urlencoded\",\n \"idna\",\n \"percent-encoding\",\n \"serde\",\n]\n\n[[package]]\nname = \"utf8_iter\"\nversion = \"1.0.4\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be\"\n\n[[package]]\nname = \"version_check\"\nversion = \"0.9.5\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a\"\n\n[[package]]\nname = \"wasi\"\nversion = \"0.11.1+wasi-snapshot-preview1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"ccf3ec651a847eb01de73ccad15eb7d99f80485de043efb2f370cd654f4ea44b\"\n\n[[package]]\nname = \"webpki-roots\"\nversion = \"1.0.9\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a\"\ndependencies = [\n \"rustls-pki-types\",\n]\n\n[[package]]\nname = \"windows-link\"\nversion = \"0.2.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5\"\n\n[[package]]\nname = \"windows-sys\"\nversion = \"0.52.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d\"\ndependencies = [\n \"windows-targets\",\n]\n\n[[package]]\nname = \"windows-sys\"\nversion = \"0.61.2\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc\"\ndependencies = [\n \"windows-link\",\n]\n\n[[package]]\nname = \"windows-targets\"\nversion = \"0.52.6\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"9b724f72796e036ab90c1021d4780d4d3d648aca59e491e6b98e725b84e99973\"\ndependencies = [\n \"windows_aarch64_gnullvm\",\n \"windows_aarch64_msvc\",\n \"windows_i686_gnu\",\n \"windows_i686_gnullvm\",\n \"windows_i686_msvc\",\n \"windows_x86_64_gnu\",\n \"windows_x86_64_gnullvm\",\n \"windows_x86_64_msvc\",\n]\n\n[[package]]\nname = \"windows_aarch64_gnullvm\"\nversion = \"0.52.6\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"32a4622180e7a0ec044bb555404c800bc9fd9ec262ec147edd5989ccd0c02cd3\"\n\n[[package]]\nname = \"windows_aarch64_msvc\"\nversion = \"0.52.6\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"09ec2a7bb152e2252b53fa7803150007879548bc709c039df7627cabbd05d469\"\n\n[[package]]\nname = \"windows_i686_gnu\"\nversion = \"0.52.6\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"8e9b5ad5ab802e97eb8e295ac6720e509ee4c243f69d781394014ebfe8bbfa0b\"\n\n[[package]]\nname = \"windows_i686_gnullvm\"\nversion = \"0.52.6\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"0eee52d38c090b3caa76c563b86c3a4bd71ef1a819287c19d586d7334ae8ed66\"\n\n[[package]]\nname = \"windows_i686_msvc\"\nversion = \"0.52.6\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"240948bc05c5e7c6dabba28bf89d89ffce3e303022809e73deaefe4f6ec56c66\"\n\n[[package]]\nname = \"windows_x86_64_gnu\"\nversion = \"0.52.6\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"147a5c80aabfbf0c7d901cb5895d1de30ef2907eb21fbbab29ca94c5b08b1a78\"\n\n[[package]]\nname = \"windows_x86_64_gnullvm\"\nversion = \"0.52.6\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"24d5b23dc417412679681396f2b49f3de8c1473deb516bd34410872eff51ed0d\"\n\n[[package]]\nname = \"windows_x86_64_msvc\"\nversion = \"0.52.6\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec\"\n\n[[package]]\nname = \"writeable\"\nversion = \"0.6.4\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc\"\n\n[[package]]\nname = \"yoke\"\nversion = \"0.8.3\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"709fe23a0424b6a435d82152b1bd3fdfb0833487d5fa90d05d42762a9891fef5\"\ndependencies = [\n \"stable_deref_trait\",\n \"yoke-derive\",\n \"zerofrom\",\n]\n\n[[package]]\nname = \"yoke-derive\"\nversion = \"0.8.4\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"ec8ebde2db3681e8c9980cc27822030e68752690ddfa9473e739aeb4dbde6d71\"\ndependencies = [\n \"proc-macro2\",\n \"quote\",\n \"syn 3.0.6\",\n \"synstructure\",\n]\n\n[[package]]\nname = \"zerocopy\"\nversion = \"0.8.61\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"879fb705ce98c32e41ebdb970fbe1204f8492423b314c6ab0354c3e7b5542866\"\ndependencies = [\n \"zerocopy-derive\",\n]\n\n[[package]]\nname = \"zerocopy-derive\"\nversion = \"0.8.61\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"708882a28301d604fa039cc7727607a98d04c4b86dc76ec9cc683f805d709759\"\ndependencies = [\n \"proc-macro2\",\n \"quote\",\n \"syn 2.0.119\",\n]\n\n[[package]]\nname = \"zerofrom\"\nversion = \"0.1.8\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"0ec05a11813ea801ff6d75110ad09cd0824ddba17dfe17128ea0d5f68e6c5272\"\ndependencies = [\n \"zerofrom-derive\",\n]\n\n[[package]]\nname = \"zerofrom-derive\"\nversion = \"0.1.8\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"f75b4683f6c7f45248d4d64056a24298c6281e0993356d7d1b4a1a962ef10d4a\"\ndependencies = [\n \"proc-macro2\",\n \"quote\",\n \"syn 3.0.6\",\n \"synstructure\",\n]\n\n[[package]]\nname = \"zeroize\"\nversion = \"1.9.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879\"\n\n[[package]]\nname = \"zerotrie\"\nversion = \"0.2.5\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"4ea269c3bd32f0a32c321907a2ae912ba6f4649bb0fc764a15627e99a7095a3f\"\ndependencies = [\n \"displaydoc\",\n \"yoke\",\n \"zerofrom\",\n]\n\n[[package]]\nname = \"zerovec\"\nversion = \"0.11.8\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"bb0464e17806c1d976d5cba29399c7f08e516e279e2ba493f63123b5fca67dd8\"\ndependencies = [\n \"yoke\",\n \"zerofrom\",\n \"zerovec-derive\",\n]\n\n[[package]]\nname = \"zerovec-derive\"\nversion = \"0.11.6\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"34df6fc39dbd26ddc9c10e6a2984476e13acce22e64e4487636ef494369225da\"\ndependencies = [\n \"proc-macro2\",\n \"quote\",\n \"syn 3.0.6\",\n]\n\n[[package]]\nname = \"zmij\"\nversion = \"1.0.23\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b\"\n",
+    "qualification_commands": [
+      "PROBE_RUN_NAME=build-publication-retry PROBE_MEMORY_LINK=1 python3 run_bounded.py cargo rustc --offline --bin fe-issue6-native-probe -- -C linker=/dev/shm/fe-issue6-probe-9c955a09af10/memory_linker.py",
+      "PROBE_MANIFEST=publication-sources.json python3 execute_memory_probe.py selected-publication --selected-tests",
+      "PROBE_MANIFEST=publication-sources.json python3 execute_memory_probe.py authority-publication cases33.json",
+      "PROBE_MANIFEST=publication-sources.json python3 execute_memory_probe.py authority-extra-publication cases-extra.json"
+    ],
+    "temporary_validation_workspace": "/dev/shm/fe-issue6-probe-9c955a09af10",
+    "assembly_check": {
+      "exit_code": 0,
+      "source_manifest": "publication-sources.json",
+      "production_snapshot_files": 125,
+      "selected_body_and_helper_hashes_match": true,
+      "metadata_and_lockfile_byte_identical_to_executed_harness": true,
+      "authority33_and_extra14_inputs_identical_to_executed_harness": true,
+      "recompiled_during_generator_check": false,
+      "note": "The generator was assembled with --prepare-only against the final publication hashes. The selected bodies and exact metadata were verified against the independently compiled/run native harness; no second compile or interpreter execution is implied."
+    },
+    "default_generator_execution": "Builds the genuine native source subset, runs the exact 43 selected production bodies, then runs the original 33 and the additional 14 authority inputs; checks outcome and exact required-capability arrays against this artifact. It does not run the canonical runtime or full suite."
+  },
+  "log_sha256": {
+    "build-qualified.log": "4ca6b1ad996d9d984b256aee396329409eb1933df532d8663af8133102729b29",
+    "build-qualified-result.json": "1afd846bd931282fc6c83d6a956f8af55338844ff9eab85685563453a020a59d",
+    "selected-qualified.stdout": "cd6162f0584d4be22ca5bce0f9a509c502f5c977ac0a73e2681c78265ce7ff46",
+    "selected-qualified.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "authority-qualified.jsonl": "a0265208135fcc89447cf015f9e95bd1dae2694b52e1708e4e9277286964bc23",
+    "authority-extra-qualified.jsonl": "30c389616ededabe3608b668f1bdb50290a34b76030211c33f034075895c38a8",
+    "historical-final.stdout": "8c592d17c1c2074cbe11169b368ec53f78d7b7d59ca243862daf90b1cc4395c4",
+    "historical-final.stderr": "ba19a51644beb6018c4fcb8fa577a6ba4feb9e2fe0a95f6d4563336a3fbe7ee8",
+    "existing-facade-final.stdout": "e74e10bace2804467d58f61fe458ed5c4f01881ca2d21c243de783a8b83fa2d1",
+    "existing-facade-final.stderr": "148366d052d27c282672184e6e4477980731fc45a1e07b13a9394f718ab1ddf0",
+    "native-link-storage.json": "8b60a8bfe21c67400a684611fbd6f3f20a26c3f9fc49dec72ade092ac5280a08",
+    "build-publication.log": "16665a71f17dbb721d9cdd3dddf3dae9d89316e313febdb1bd8959f68f9f8bbe",
+    "build-publication-retry.log": "c73f611c2ab74955cbba39556a37ec048da3e7c57f47cdb6dd038de3aae4be3d",
+    "build-publication-retry-result.json": "64df0f51754293b7aab6fd123ca366f9ebf4504586261ca182494ecd23f53817",
+    "selected-publication.stdout": "cd6162f0584d4be22ca5bce0f9a509c502f5c977ac0a73e2681c78265ce7ff46",
+    "selected-publication.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "selected-publication-result.json": "d0c51e75666468e50e7580944ba0ba8d28ac18b7efb46aa29d937a7378f982ec",
+    "authority-publication.jsonl": "a0265208135fcc89447cf015f9e95bd1dae2694b52e1708e4e9277286964bc23",
+    "authority-publication-result.json": "73ba06add803c4ea9d2968649cae2c9e7135492b7d7ea7f41b5cf4dfb6425f66",
+    "authority-extra-publication.jsonl": "30c389616ededabe3608b668f1bdb50290a34b76030211c33f034075895c38a8",
+    "authority-extra-publication-result.json": "3e50c8871cc6703b46052191de05c91ff0f57b6e11a6cba16067a46b64ebc103",
+    "publication-sources.json": "7588f3f686d395903f19f66647d66b858eae02972d465e3a55b765b90cc3ea06",
+    "publication-test-provenance.json": "6c11eda2817023f2ea4fbf3c9c3fc1a072ebd26c820ebb18708785c11020f143"
+  },
+  "limitations": [
+    "The final43 successful selected bodies are not evidence that all library or runtime tests pass.",
+    "Two original authority inputs remain Unanalyzable; observable/mutated filesystem module values and deferred Promise reads remain bounded or fail closed.",
+    "Original current-body lowering assertions still fail as separately reported;27 is a subset assertion count, not a current-v0.2.0 regression count.",
+    "Native Promise success/rejection ordering, Buffer thenable adoption, GC retention, memory admission, hook denial and full end-to-end backend behavior require the added canonical runtime tests on sufficient resources."
+  ],
+  "canonical_workspace_format_gate": {
+    "command": "cargo fmt --check (pinned nightly)",
+    "process_exit_code": 0,
+    "verdict": "failed_or_incomplete",
+    "reason": "rustfmt aborted with memory allocation of 124109595664 bytes failed; stack in rustfmt diff::lines. A zero outer Cargo exit is not a passing format result.",
+    "reported_output_lines": 21422,
+    "reported_format_sections": 1306,
+    "compressed_log_bytes": 156004,
+    "compressed_log_sha256": "cd7c11fbc1f1cabfcd0190cd4d974e200dd7061cbfc32a80cb7afa0df8778523",
+    "executor": "root agent; actual attempted gate"
+  },
+  "earlier_qualification_snapshots": [
+    {
+      "kind": "pre-formatting functional qualification",
+      "source_sha256": {
+        "crates/franken-engine/src/lowering_pipeline.rs": "c9fe214803f51f493895fd3b9ee9dc779dd55a8821ef1c573ff7c7ae11e6bb45",
+        "crates/franken-engine/src/lowering_pipeline/fs_module.rs": "8da5cf58f77f3e7d31995486420745019a6fcffe873da723095afe412e51cfbb",
+        "crates/franken-engine/src/lowering_pipeline/util_module.rs": "54c51c515f9eab43ad7e49e00d9537476044cb088b26fb8caea7e04f07279fef",
+        "crates/franken-engine/src/lowering_pipeline/events_module.js": "d4d8a7457bf7b9397bd3e7145962b3afe813a142e240b157997ad86fe26ad1ac",
+        "crates/franken-engine/src/authority_footprint.rs": "9769d13c5bdc08c58bb9c8266ae833184f06f48e76705cb3e09603454b44d6d4",
+        "crates/franken-engine/src/capability.rs": "d03993ed5d7d8d0a11944d247fbd25a668442c23abaf064e9502353f389ecd72",
+        "crates/franken-engine/src/lowering_pipeline/native_module_authority.rs": "414884704bc4d97c9e7284dce118b38dc0f480032d42192a1c8b164a48c8b1ab"
+      },
+      "build": {
+        "command": [
+          "cargo",
+          "rustc",
+          "--offline",
+          "--bin",
+          "fe-issue6-native-probe",
+          "--",
+          "-C",
+          "linker=/dev/shm/fe-issue6-probe-9c955a09af10/memory_linker.py"
+        ],
+        "exit_code": 0,
+        "aborted_reason": null,
+        "elapsed_seconds": 22.582556339999428,
+        "peak_owned_rss_bytes": 1518415872,
+        "log": "/dev/shm/fe-issue6-probe-9c955a09af10/build-qualified.log"
+      },
+      "native_executable": {
+        "storage": "lossless gzip of genuine native ELF; execution uses decompressed bytes via Linux memfd",
+        "uncompressed_sha256": "d69e711f7110e70c419997c5dd00567b5ef3c06dcc74c15121a1641cd7247803",
+        "uncompressed_bytes": 23249912,
+        "compressed_bytes": 4963317,
+        "destination": "/dev/shm/fe-issue6-probe-9c955a09af10/target/debug/build/fe-issue6-native-probe/860015b5f59249fa/out/fe_issue6_native_probe",
+        "linker_exit": 0
+      },
+      "selected_result": {
+        "exit_code": 0,
+        "elapsed_seconds": 3.78989208600251,
+        "executable_sha256": "d69e711f7110e70c419997c5dd00567b5ef3c06dcc74c15121a1641cd7247803",
+        "source_manifest": "qualified-sources.json",
+        "passed": 43,
+        "failed": 0
+      },
+      "authority_counts": {
+        "Clean": 23,
+        "FindingsPresent": 8,
+        "Unanalyzable": 2
+      },
+      "extra_authority_counts": {
+        "Clean": 9,
+        "FindingsPresent": 3,
+        "Unanalyzable": 2
+      }
+    }
+  ],
+  "publication_build_storage_failure": {
+    "command": [
+      "cargo",
+      "rustc",
+      "--offline",
+      "--bin",
+      "fe-issue6-native-probe",
+      "--",
+      "-C",
+      "linker=/dev/shm/fe-issue6-probe-9c955a09af10/memory_linker.py"
+    ],
+    "exit_code": 101,
+    "reason": "ENOSPC during link output storage on the first final-formatting build attempt; no test success was attributed to this failed attempt. A single retry succeeded after unused diagnostic sources and archived output were preserved with lossless compression.",
+    "elapsed_seconds": 20.5648,
+    "peak_owned_rss_bytes": 1519403008,
+    "log": "build-publication.log",
+    "result_json_save_failed": true
+  },
+  "bounded_changed_line_format_audit": {
+    "executor": "root and owning implementation agents",
+    "pinned_formatter": "nightly-2026-09-21",
+    "git_diff_check": "passed",
+    "all_changed_rust_files_parse": true,
+    "introduced_format_differences_remaining": 0,
+    "remaining_inherited_format_groups": {
+      "lowering_pipeline.rs": 33,
+      "baseline_interpreter.rs": 92,
+      "baseline_interpreter/collector.rs": 1,
+      "lowering_pipeline/fs_module.rs": 59,
+      "lowering_pipeline/util_module.rs": 27
+    },
+    "fully_format_clean": [
+      "authority_footprint.rs",
+      "hostcall_effects_migration.rs",
+      "hostcall_telemetry.rs",
+      "capability.rs",
+      "lowering_pipeline/native_module_authority.rs",
+      "tests/fs_module_objects.rs",
+      "three changed Events native test files"
+    ],
+    "canonical_workspace_format_gate_unchanged": "FAILED/INCOMPLETE; this bounded changed-line audit does not upgrade the global gate."
+  }
+}

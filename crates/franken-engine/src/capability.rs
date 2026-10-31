@@ -294,6 +294,10 @@ pub const GENERATOR_PROLOGUE_CAPABILITY: &str = "generator:prologue";
 /// and returns a promise for its namespace instead of the namespace itself.
 pub const DYNAMIC_IMPORT_CAPABILITY: &str = "module:dynamic_import";
 
+/// A literal-path fs/promises read. This has exactly the ordinary FsRead
+/// authority and provider result contract; only Promise completion is deferred.
+pub const FS_READ_PROMISE_CAPABILITY: &str = "fs:read:promise";
+
 /// Private native-util reads of the current realm's host-supplied arguments.
 /// The runtime additionally requires its explicit process-shape grant; a
 /// generic Builtin grant alone never permits these input reads.
@@ -389,8 +393,8 @@ pub fn hostcall_registry_row(tag: &str) -> Option<HostcallRegistryRow<'_>> {
             result_contract_for_authority(RuntimeCapability::NetworkEgress),
             HostcallDispatchBinding::Builtin,
         ),
-        "fs:read" | "fs:write" | "net:connect" | "net:fetch" | "net:outbound" | "net:request" => {
-            let authority = if tag == "fs:read" {
+        "fs:read" | FS_READ_PROMISE_CAPABILITY | "fs:write" | "net:connect" | "net:fetch" | "net:outbound" | "net:request" => {
+            let authority = if matches!(tag, "fs:read" | FS_READ_PROMISE_CAPABILITY) {
                 RuntimeCapability::FsRead
             } else if tag == "fs:write" {
                 RuntimeCapability::FsWrite
@@ -2445,6 +2449,12 @@ mod tests {
                 HostcallDispatchBinding::HostIo,
             ),
             (
+                FS_READ_PROMISE_CAPABILITY,
+                Some(RuntimeCapability::FsRead),
+                HostcallResultContract::SourceFloor(Label::Internal),
+                HostcallDispatchBinding::HostIo,
+            ),
+            (
                 "builtin:CryptoRandomBytes",
                 Some(RuntimeCapability::RandomRead),
                 HostcallResultContract::SourceFloor(Label::Secret),
@@ -2503,6 +2513,9 @@ mod tests {
     fn exact_tag_registry_unknowns_fail_high_bd_z1peg_1() {
         for tag in [
             "promise:thenLater",
+            "fs:read:promise:suffix",
+            "fs:read:promise ",
+            "fs:read:Promise",
             "builtin:proto:DefinitelyNotAConstructor",
             "unknown:hostcall",
             "",

@@ -293,6 +293,158 @@ fn filesystem_promise_errors_reject_and_metadata_methods_return_promises() {
 }
 
 #[test]
+fn call_only_promise_reads_preserve_native_io_completion_order() {
+    let root = tempfile::tempdir().expect("sandbox");
+    std::fs::write(root.path().join("input.txt"), "promise bytes").expect("input");
+    for (declaration, read) in [
+        ("", "require('fs/promises').readFile"),
+        ("", "require('node:fs/promises').readFile"),
+        ("", "require('fs').promises.readFile"),
+        ("const io = require('node:fs/promises');", "io.readFile"),
+        ("const {readFile: read} = require('fs/promises');", "read"),
+        ("const io = require('fs').promises;", "io.readFile"),
+        ("const {promises: io} = require('node:fs');", "io.readFile"),
+        ("const io = require('fs');", "io.promises.readFile"),
+    ] {
+        let source = format!(
+            "{declaration} let inline = true; \
+             const pending = {read}('input.txt', 'utf8'); \
+             pending.then(value => console.log('resolved', inline, value)); \
+             Promise.resolve().then(() => console.log('microtask')); \
+             console.log(pending instanceof Promise); inline = false;"
+        );
+        let (output, effects) = run_granting_with_effect_count(
+            &source,
+            root.path(),
+            &[
+                "vm_dispatch",
+                "heap_allocate",
+                "builtin",
+                "console",
+                "fs_read",
+            ],
+        )
+        .unwrap_or_else(|error| panic!("native call-only Promise read: {source}: {error}"));
+        // Promise.resolve(readFileSync(...)) would settle the read before the
+        // already-queued microtask. The native I/O completion must remain later.
+        assert_eq!(
+            output,
+            ["true", "microtask", "resolved false promise bytes"],
+            "{source}"
+        );
+        assert_eq!(effects, 1, "exactly one mediated read: {source}");
+    }
+}
+
+#[test]
+fn call_only_promise_read_adopts_buffer_then_at_io_completion() {
+    let root = tempfile::tempdir().expect("sandbox");
+    std::fs::write(root.path().join("input.txt"), "promise bytes").expect("input");
+    let (output, effects) = run_granting_with_effect_count(
+        "let calls = 0; let finished = false; \
+         Buffer.prototype.then = function(resolve) { calls += 1; resolve('adopted'); }; \
+         require('fs/promises').readFile('input.txt') \
+           .then(value => console.log('fulfilled', finished, value, calls)); \
+         Promise.resolve().then(() => console.log('microtask', calls)); \
+         finished = true;",
+        root.path(),
+        &[
+            "vm_dispatch",
+            "heap_allocate",
+            "builtin",
+            "console",
+            "fs_read",
+        ],
+    )
+    .expect("filesystem completion uses PromiseResolve including observable then adoption");
+    assert_eq!(output, ["microtask 0", "fulfilled true adopted 1"]);
+    assert_eq!(effects, 1);
+}
+
+#[test]
+fn call_only_promise_read_errors_reject_without_synchronous_escape() {
+    let root = tempfile::tempdir().expect("sandbox");
+    std::fs::write(root.path().join("input.txt"), "promise bytes").expect("input");
+    let (missing, effects) = run_granting_with_effect_count(
+        "try { \
+           const pending = require('fs/promises').readFile('absent.txt', 'utf8'); \
+           console.log('returned', pending instanceof Promise); \
+           pending.then(() => console.log('unexpected success'), \
+             error => console.log('rejected', error.code)); \
+           Promise.resolve().then(() => console.log('microtask')); \
+         } catch (error) { console.log('unexpected synchronous failure', error.code); }",
+        root.path(),
+        &[
+            "vm_dispatch",
+            "heap_allocate",
+            "builtin",
+            "console",
+            "fs_read",
+        ],
+    )
+    .expect("a filesystem error settles the returned Promise");
+    assert_eq!(missing, ["returned true", "microtask", "rejected ENOENT"]);
+    assert_eq!(effects, 1, "the failed provider read remains recorded");
+
+    let (invalid, effects) = run_granting_with_effect_count(
+        "try { \
+           const pending = require('node:fs/promises').readFile('input.txt', 'not-an-encoding'); \
+           console.log('returned', pending instanceof Promise); \
+           pending.then(() => console.log('unexpected success'), \
+             error => console.log('rejected', error instanceof TypeError)); \
+         } catch (error) { console.log('unexpected synchronous failure'); }",
+        root.path(),
+        &[
+            "vm_dispatch",
+            "heap_allocate",
+            "builtin",
+            "console",
+            "fs_read",
+        ],
+    )
+    .expect("argument validation rejects within the Promise executor");
+    assert_eq!(invalid, ["returned true", "rejected true"]);
+    assert_eq!(
+        effects, 0,
+        "invalid encoding is rejected before provider dispatch"
+    );
+}
+
+#[test]
+fn call_only_promise_reads_require_filesystem_authority_before_host_effects() {
+    let root = tempfile::tempdir().expect("sandbox");
+    std::fs::write(root.path().join("input.txt"), "private bytes").expect("input");
+    let provider = Arc::new(SandboxedHostIo::with_root(root.path()).expect("sandbox provider"));
+    let recording = Arc::new(InMemoryHostIoTranscript::recording());
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_host_io(provider, Some(recording.clone()));
+    let package = ExtensionPackage {
+        extension_id: "call-only-promise-read-authority".into(),
+        source: "require('fs/promises').readFile('input.txt', 'utf8').catch(() => {});".into(),
+        source_file: None,
+        module_root: None,
+        capabilities: ["vm_dispatch", "heap_allocate", "builtin"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        version: "1.0.0".into(),
+        metadata: BTreeMap::new(),
+    };
+    let error = orchestrator
+        .execute(&package)
+        .expect_err("FsRead is not granted");
+    let message = format!("{error:?}");
+    assert!(
+        message.contains("CapabilityDenied") && message.contains("fs:read"),
+        "{message}"
+    );
+    assert!(
+        recording.entries().is_empty(),
+        "denied Promise reads must not reach the provider"
+    );
+}
+
+#[test]
 fn lexical_require_is_not_replaced_and_guest_globals_do_not_capture_the_facade() {
     let root = tempfile::tempdir().expect("sandbox");
     let output = run(

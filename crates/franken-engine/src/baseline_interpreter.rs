@@ -1240,6 +1240,7 @@ pub(crate) fn capability_gate_key(tag: &str) -> &str {
         | "builtin:CryptoRandomInt"
         | "builtin:CryptoRandomFillSync" => "random_read",
         "env:read" | "env:has" => "env_read",
+        crate::capability::FS_READ_PROMISE_CAPABILITY => "fs:read",
         _ => tag,
     }
 }
@@ -2074,8 +2075,13 @@ fn check_hostcall_capability_gate(
 ) -> Result<bool, InterpreterError> {
     // Keep the operation spelling for the live hook: an exact witness denial
     // of env:read must still match even though its authority/evidence key is
-    // env_read. Canonical authority decisions remain independent of that tag.
-    let operation_tag = capability_tag;
+    // env_read. The native Promise read changes only completion of the SAME
+    // fs:read effect, so existing exact read policies must still observe it.
+    // Its distinct IR tag remains available for dispatch and result contracts.
+    let operation_tag = match capability_tag {
+        crate::capability::FS_READ_PROMISE_CAPABILITY => "fs:read",
+        other => other,
+    };
     let capability_tag = capability_gate_key(operation_tag);
     // bd-9vouw.76: a language operation encoded as a HostCall needs no
     // authority. Recording its constant `allowed` decision per call grew the
@@ -2243,6 +2249,15 @@ struct PendingTimerTask {
     /// `active_timers` under this id is the cancellation authority.
     timer_id: u32,
     kind: PendingTimerTaskKind,
+}
+
+/// A filesystem Promise settles in the same I/O lane as the facade's callback.
+/// The map retains both values until adoption/rejection finishes, including
+/// observable thenable lookup on a returned Buffer.
+#[derive(Debug, Clone)]
+struct PendingFsPromiseRead {
+    promise: crate::promise_model::PromiseHandle,
+    outcome: Result<Value, Value>,
 }
 
 /// A host module job owns the caller's resolution and IFC context until its
@@ -16121,6 +16136,9 @@ pub struct InterpreterCore {
     /// drains the entry by seq when it fires, so the map never retains completed
     /// callbacks.
     pending_io_callbacks: BTreeMap<u64, Vec<Value>>,
+    /// Native fs/promises read completions, keyed by the I/O registration.
+    /// Entries stay rooted and charged while their Promise adopts a value.
+    pending_fs_promise_reads: BTreeMap<u64, Arc<PendingFsPromiseRead>>,
     /// Deferred import() host jobs, keyed by the scheduler registration.
     /// Entries remain present during evaluation to root their owned handles.
     pending_dynamic_imports: BTreeMap<u64, Arc<PendingDynamicImportTask>>,
@@ -17393,6 +17411,7 @@ impl InterpreterCore {
             builtin_dispatch_hit_unknown_member: false,
             next_tick_queue: std::collections::VecDeque::new(),
             pending_io_callbacks: BTreeMap::new(),
+            pending_fs_promise_reads: BTreeMap::new(),
             pending_dynamic_imports: BTreeMap::new(),
             deferred_callback_in_flight_bytes: 0,
             pending_child_process_tasks: BTreeMap::new(),
@@ -20011,6 +20030,190 @@ impl InterpreterCore {
         )?;
         self.join_object_mutation_label(request_id, &lifecycle_label)?;
         Ok(Value::Object(request_id))
+    }
+
+    /// The compiler emits this exact route only for proven call-only literal
+    /// paths and primitive encodings. The ordinary fs:read dispatcher still
+    /// validates paths, records the effect, checks cancellation and labels its
+    /// result/error. Native completion replaces only the facade's Promise
+    /// executor and callback; it neither grants authority nor changes I/O.
+    fn dispatch_fs_promise_read(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        // Like Node's fs/promises, this protected operation uses the realm's
+        // intrinsic Promise, independent of a replaceable global constructor.
+        // Never let this read-only entrypoint smuggle another FsOperation or
+        // a trailing guest callback into the shared dispatcher, even in IR
+        // supplied directly by an embedder.
+        if args.count != 3
+            || !matches!(self.read_reg(args.start)?, Value::Str(ref value)
+                if value.as_ref() == "\0fsop:read")
+        {
+            return Err(InterpreterError::CapabilityDenied {
+                capability: "fs:read:promise:operation".to_string(),
+            });
+        }
+        self.check_host_io_confidentiality("fs:read", args)?;
+        let inputs_label = self.join_arg_range_label(args)?;
+        let result_label = hostcall_result_contract("fs:read").result_label(&inputs_label, None);
+        let promise = self.create_promise()?;
+        // Provider result/error allocation can collect. The returned Promise
+        // does not yet have a guest register or pending-task owner.
+        let pins = self.gc_pin_network_values([Value::Promise(promise.0)]);
+        let result = (|| {
+            let path = self.read_reg(args.start + 1)?;
+            let options = self.read_reg(args.start + 2)?;
+            let outcome = if !matches!(path, Value::Str(_))
+                || !matches!(options, Value::Str(_) | Value::Undefined | Value::Null)
+            {
+                Err(InterpreterError::TypeError {
+                    expected: "a filesystem Promise read with a string path and primitive encoding"
+                        .to_string(),
+                    got: format!(
+                        "{} path and {} options",
+                        path.type_name(),
+                        options.type_name()
+                    ),
+                })
+            } else {
+                self.dispatch_host_io_hostcall("fs:read", args)
+            };
+            let provider_label = self.take_pending_hostcall_result_label();
+            match outcome {
+                Ok(value) => {
+                    // The existing facade's callback is never called when no
+                    // provider is installed. Preserve its pending Promise.
+                    let settlement_label = provider_label
+                        .as_ref()
+                        .map_or_else(|| result_label.clone(), |label| result_label.join(label));
+                    // Publish the return label before committing a queued task:
+                    // a failed label admission must leave no job referring to
+                    // the fresh Promise that the error path rolls back.
+                    let value_pins = self.gc_pin_network_values([value.clone()]);
+                    let scheduled: Result<(), InterpreterError> = (|| {
+                        self.replace_pending_hostcall_result_label(Some(settlement_label.clone()))?;
+                        if self.host_io.is_some() {
+                            self.schedule_fs_promise_read(
+                                PendingFsPromiseRead {
+                                    promise,
+                                    outcome: Ok(value),
+                                },
+                                settlement_label,
+                            )?;
+                        }
+                        Ok(())
+                    })();
+                    self.gc_unpin_network_values(value_pins);
+                    scheduled?;
+                }
+                Err(error) if matches!(error, InterpreterError::HostFilesystem { .. }) => {
+                    let exception_floor = match self.filesystem_exception_provenance() {
+                        HostIoExceptionProvenance::ProviderInternal => Label::Internal,
+                        HostIoExceptionProvenance::Unknown => Label::TopSecret,
+                    };
+                    let label = provider_label
+                        .unwrap_or(exception_floor)
+                        .join(&inputs_label);
+                    let thrown = self.native_error_to_thrown_value(&error)?;
+                    let error_pins = self.gc_pin_network_values([thrown.clone()]);
+                    let scheduled = (|| {
+                        self.replace_pending_hostcall_result_label(Some(label.clone()))?;
+                        self.schedule_fs_promise_read(
+                            PendingFsPromiseRead {
+                                promise,
+                                outcome: Err(thrown),
+                            },
+                            label,
+                        )
+                    })();
+                    self.gc_unpin_network_values(error_pins);
+                    scheduled?;
+                }
+                Err(error) if Self::js_catchable_error_name(&error).is_some() => {
+                    // Validation throws happen inside the Promise executor;
+                    // they reject immediately, before any I/O-completion job.
+                    let mut label = Label::Internal.join(&inputs_label);
+                    if let Some(provider_label) = provider_label {
+                        label = label.join(&provider_label);
+                    }
+                    let thrown = self.native_error_to_thrown_value(&error)?;
+                    let error_pins = self.gc_pin_network_values([thrown.clone()]);
+                    let rejected = (|| {
+                        self.replace_pending_hostcall_result_label(Some(label.clone()))?;
+                        let reason = self.promise_value(&thrown)?;
+                        self.reject_promise(promise, reason, label)
+                    })();
+                    self.gc_unpin_network_values(error_pins);
+                    rejected?;
+                }
+                Err(error) => return Err(error),
+            }
+            Ok(Value::Promise(promise.0))
+        })();
+        self.gc_unpin_network_values(pins);
+        if result.is_err() {
+            self.rollback_fresh_promise(promise);
+        }
+        result
+    }
+
+    fn schedule_fs_promise_read(
+        &mut self,
+        task: PendingFsPromiseRead,
+        label: Label,
+    ) -> Result<(), InterpreterError> {
+        let value = match &task.outcome {
+            Ok(value) | Err(value) => value.clone(),
+        };
+        // Both the Promise and payload are unowned by the task map until
+        // admission succeeds; protect them across any allocation safe point.
+        let pins = self.gc_pin_network_values([Value::Promise(task.promise.0), value]);
+        let admitted = (|| {
+            let retained_bytes = Self::pending_fs_promise_read_bytes(&task);
+            self.apply_memory_component_delta(0, retained_bytes)?;
+            let previous_promise_bytes = self.promise_runtime_memory_bytes();
+            let registration = self
+                .event_loop
+                .schedule_io_completion(crate::closure_model::ClosureHandle(u32::MAX), label);
+            if let Err(error) = self.apply_promise_runtime_memory_delta(previous_promise_bytes) {
+                self.event_loop.rollback_last_scheduled(registration);
+                self.estimated_memory_bytes =
+                    self.estimated_memory_bytes.saturating_sub(retained_bytes);
+                return Err(error);
+            }
+            self.pending_fs_promise_reads
+                .insert(registration, Arc::new(task));
+            Ok(())
+        })();
+        self.gc_unpin_network_values(pins);
+        admitted
+    }
+
+    fn execute_pending_fs_promise_read(
+        &mut self,
+        macrotask: &crate::promise_model::Macrotask,
+        module: Option<&Ir3Module>,
+    ) -> Option<Result<(), InterpreterError>> {
+        // Keep the task in its GC root map until adoption finishes. A Buffer's
+        // then getter can run guest code, allocate or request collection.
+        let task = Arc::clone(
+            self.pending_fs_promise_reads
+                .get(&macrotask.registration_seq)?,
+        );
+        let retained_bytes = Self::pending_fs_promise_read_bytes(&task);
+        let result = match &task.outcome {
+            Ok(value) => self.resolve_promise_with_value(
+                module,
+                task.promise,
+                value.clone(),
+                macrotask.label.clone(),
+            ),
+            Err(value) => self.promise_value(value).and_then(|reason| {
+                self.reject_promise(task.promise, reason, macrotask.label.clone())
+            }),
+        };
+        self.pending_fs_promise_reads
+            .remove(&macrotask.registration_seq);
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(retained_bytes);
+        Some(result)
     }
 
     /// bd-201vt / bd-3894s slice (2c): schedule an async host-I/O callback to run on
@@ -26401,6 +26604,7 @@ impl InterpreterCore {
             .event_listeners_memory_bytes()
             .saturating_add(self.event_promise_waiters_memory_bytes())
             .saturating_add(self.pending_io_callbacks_memory_bytes())
+            .saturating_add(self.pending_fs_promise_reads_memory_bytes())
             .saturating_add(self.pending_dynamic_imports_memory_bytes())
             .saturating_add(self.deferred_callback_in_flight_bytes)
             .saturating_add(self.completed_child_processes_memory_bytes())
@@ -26420,6 +26624,10 @@ impl InterpreterCore {
             self.event_loop.cancel_registration(registration);
         }
         self.pending_io_callbacks.clear();
+        for registration in self.pending_fs_promise_reads.keys().copied() {
+            self.event_loop.cancel_registration(registration);
+        }
+        self.pending_fs_promise_reads.clear();
         for registration in self.pending_dynamic_imports.keys().copied() {
             self.event_loop.cancel_registration(registration);
         }
@@ -55624,7 +55832,11 @@ impl InterpreterCore {
                         // above (`check_hostcall_capability_gate`) has already
                         // authorized it against the granted NetworkEgress capability.
                         self.check_host_io_confidentiality(&capability.0, args)?;
-                        self.dispatch_host_io_hostcall(&capability.0, args)?
+                        if capability.0 == crate::capability::FS_READ_PROMISE_CAPABILITY {
+                            self.dispatch_fs_promise_read(args)?
+                        } else {
+                            self.dispatch_host_io_hostcall(&capability.0, args)?
+                        }
                     }
                     HostcallDispatchBinding::Internal
                     | HostcallDispatchBinding::DeterministicNoop => Value::Undefined,
@@ -75868,6 +76080,9 @@ impl InterpreterCore {
                 result.map(|_| ())
             }
             crate::promise_model::MacrotaskSource::IoCompletion => {
+                if let Some(result) = self.execute_pending_fs_promise_read(macrotask, module) {
+                    return result;
+                }
                 if let Some(result) =
                     self.execute_pending_dynamic_import(macrotask.registration_seq)
                 {
@@ -96264,7 +96479,13 @@ impl InterpreterCore {
             }
             Some(HostcallDispatchBinding::HostIo) => self
                 .check_host_io_confidentiality(cap, delegated_args)
-                .and_then(|()| self.dispatch_host_io_hostcall(cap, delegated_args)),
+                .and_then(|()| {
+                    if cap == crate::capability::FS_READ_PROMISE_CAPABILITY {
+                        self.dispatch_fs_promise_read(delegated_args)
+                    } else {
+                        self.dispatch_host_io_hostcall(cap, delegated_args)
+                    }
+                }),
             Some(
                 HostcallDispatchBinding::Internal | HostcallDispatchBinding::DeterministicNoop,
             ) => Ok(Value::Undefined),
@@ -108196,6 +108417,24 @@ impl InterpreterCore {
         }))
     }
 
+    fn pending_fs_promise_read_bytes(task: &PendingFsPromiseRead) -> u64 {
+        let value = match &task.outcome {
+            Ok(value) | Err(value) => value,
+        };
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(std::mem::size_of::<PendingFsPromiseRead>() as u64)
+            .saturating_add(std::mem::size_of::<[usize; 2]>() as u64)
+            .saturating_add(Self::estimate_value_bytes(value))
+    }
+
+    fn pending_fs_promise_reads_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(
+            self.pending_fs_promise_reads
+                .values()
+                .map(|task| Self::pending_fs_promise_read_bytes(task)),
+        )
+    }
+
     fn pending_dynamic_import_task_bytes(task: &PendingDynamicImportTask) -> u64 {
         MEMORY_ESTIMATE_MAP_ENTRY_BYTES
             .saturating_add(std::mem::size_of::<PendingDynamicImportTask>() as u64)
@@ -110192,6 +110431,7 @@ impl InterpreterCore {
             .saturating_add(async_generator_bytes)
             .saturating_add(self.top_level_await_outcome_memory_bytes())
             .saturating_add(self.pending_io_callbacks_memory_bytes())
+            .saturating_add(self.pending_fs_promise_reads_memory_bytes())
             .saturating_add(self.pending_dynamic_imports_memory_bytes())
             .saturating_add(self.deferred_callback_in_flight_bytes)
             .saturating_add(self.pending_child_process_tasks_memory_bytes())
@@ -125242,6 +125482,20 @@ mod recordable_capability_tag_tests {
         }
     }
 
+    #[test]
+    fn native_fs_promise_route_shares_only_the_exact_read_gate_identity() {
+        let tag = crate::capability::FS_READ_PROMISE_CAPABILITY;
+        assert_eq!(capability_gate_key(tag), "fs:read");
+        assert_eq!(recordable_capability_tag(tag).as_ref(), tag);
+        for forged in [
+            "fs:read:promise:suffix",
+            "fs:read:promise ",
+            "fs:read:Promise",
+        ] {
+            assert_eq!(capability_gate_key(forged), forged);
+        }
+    }
+
     /// Overlong tags remain bounded while committing their complete original
     /// bytes into the recorded representation.
     #[test]
@@ -128010,6 +128264,547 @@ mod async_runtime_tests_current {
             event_core.estimated_memory_bytes(),
             event_core.recompute_estimated_memory_bytes()
         );
+    }
+
+    fn fs_promise_read_test_core(
+        outcome: HostIoOutcome,
+    ) -> (InterpreterCore, Arc<std::sync::atomic::AtomicUsize>) {
+        #[derive(Debug)]
+        struct ReadProvider {
+            outcome: HostIoOutcome,
+            calls: Arc<std::sync::atomic::AtomicUsize>,
+        }
+        impl HostIoProvider for ReadProvider {
+            fn name(&self) -> &str {
+                "fs-promise-native-read-test"
+            }
+            fn perform(
+                &self,
+                request: &HostIoRequest,
+                _granted: &[frankenengine_extension_host::host_io::HostIoCapability],
+            ) -> HostIoOutcome {
+                assert!(matches!(request, HostIoRequest::FsRead { .. }));
+                self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                self.outcome.clone()
+            }
+        }
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut core = test_interpreter();
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::FsRead);
+        core.set_host_io(
+            Arc::new(ReadProvider {
+                outcome,
+                calls: calls.clone(),
+            }),
+            None,
+        );
+        for (register, value) in [
+            (0, Value::str("\0fsop:read")),
+            (1, Value::str("input.txt")),
+            (2, Value::str("utf8")),
+        ] {
+            core.write_reg_with_label(register, value, Label::Public)
+                .unwrap();
+        }
+        (core, calls)
+    }
+
+    #[test]
+    fn fs_promise_native_completion_preserves_labels_and_collection_roots() {
+        use crate::promise_model::{PromiseHandle, PromiseState};
+        use frankenengine_extension_host::host_io::HostIoResponse;
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        for (encoding, outcome, label, rejected) in [
+            (
+                Value::str("utf8"),
+                Ok(HostIoResponse::FsRead {
+                    bytes: b"native bytes".to_vec(),
+                }),
+                Label::Internal,
+                false,
+            ),
+            (
+                Value::Undefined,
+                Ok(HostIoResponse::FsRead {
+                    bytes: b"native bytes".to_vec(),
+                }),
+                Label::Internal,
+                false,
+            ),
+            (
+                Value::str("utf8"),
+                Err(HostIoError::Fs {
+                    code: "ENOENT".into(),
+                    detail: "unknown provider path".into(),
+                }),
+                Label::TopSecret,
+                true,
+            ),
+        ] {
+            let (mut core, calls) = fs_promise_read_test_core(outcome);
+            core.write_reg_with_label(2, encoding, Label::Public)
+                .unwrap();
+            let Value::Promise(handle) = core
+                .dispatch_fs_promise_read(RegRange { start: 0, count: 3 })
+                .unwrap()
+            else {
+                panic!("read must return its native Promise");
+            };
+            let handle = PromiseHandle(handle);
+            assert_eq!(
+                core.promise_store.get(handle).unwrap().state,
+                PromiseState::Pending
+            );
+            assert_eq!(core.pending_fs_promise_reads.len(), 1);
+            assert_eq!(
+                core.take_pending_hostcall_result_label(),
+                Some(label.clone())
+            );
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+            // Neither the returned Promise nor the decoded Buffer/Error is in
+            // a guest register. The pending completion is their sole root.
+            core.set_gc_stress_interval(Some(1));
+            core.gc_arm_event_loop(None);
+            core.gc_event_loop_safe_point();
+            core.gc_disarm_event_loop();
+            assert!(core.gc_stats().collections > 0);
+            assert_eq!(
+                core.promise_store.get(handle).unwrap().state,
+                PromiseState::Pending
+            );
+            let retained = core.pending_fs_promise_reads.values().next().unwrap();
+            if let Ok(Value::Object(buffer)) = &retained.outcome {
+                assert_eq!(core.binary_storage_label(*buffer), Label::Internal);
+            }
+            let previous = core.promise_runtime_memory_bytes();
+            let task = core.event_loop.turn().macrotask.expect("I/O completion");
+            core.apply_promise_runtime_memory_delta(previous).unwrap();
+            assert_eq!(
+                task.source,
+                crate::promise_model::MacrotaskSource::IoCompletion
+            );
+            assert_eq!(task.label, label);
+            core.execute_macrotask_callback(&task, Some(&module))
+                .unwrap();
+            assert!(core.pending_fs_promise_reads.is_empty());
+            let record = core.promise_store.get(handle).unwrap();
+            assert_eq!(record.label, label);
+            assert_eq!(matches!(record.state, PromiseState::Rejected(_)), rejected);
+            assert_eq!(
+                matches!(record.state, PromiseState::Fulfilled(_)),
+                !rejected
+            );
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn fs_promise_native_validation_rejects_before_io_and_missing_provider_stays_pending() {
+        use crate::promise_model::{PromiseHandle, PromiseState};
+        use frankenengine_extension_host::host_io::HostIoResponse;
+        for (register, value) in [(1, Value::Null), (2, Value::str("invalid-encoding"))] {
+            let (mut core, calls) =
+                fs_promise_read_test_core(Ok(HostIoResponse::FsRead { bytes: vec![] }));
+            core.write_reg_with_label(register, value, Label::Public)
+                .unwrap();
+            let Value::Promise(handle) = core
+                .dispatch_fs_promise_read(RegRange { start: 0, count: 3 })
+                .unwrap()
+            else {
+                panic!("invalid arguments reject a Promise");
+            };
+            let record = core.promise_store.get(PromiseHandle(handle)).unwrap();
+            assert!(matches!(record.state, PromiseState::Rejected(_)));
+            assert_eq!(record.label, Label::Internal);
+            assert!(core.pending_fs_promise_reads.is_empty());
+            assert!(!core.event_loop.has_pending_work());
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+        let (mut core, calls) =
+            fs_promise_read_test_core(Ok(HostIoResponse::FsRead { bytes: vec![] }));
+        core.host_io = None;
+        let Value::Promise(handle) = core
+            .dispatch_fs_promise_read(RegRange { start: 0, count: 3 })
+            .unwrap()
+        else {
+            panic!("missing provider still returns a Promise");
+        };
+        assert_eq!(
+            core.promise_store.get(PromiseHandle(handle)).unwrap().state,
+            PromiseState::Pending
+        );
+        assert!(core.pending_fs_promise_reads.is_empty());
+        assert!(!core.event_loop.has_pending_work());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn fs_promise_native_route_cannot_smuggle_operations_or_classified_paths() {
+        use frankenengine_extension_host::host_io::HostIoResponse;
+        for operation in ["\0fsop:write", "\0fsop:open", "\0fsop:stat", "input.txt"] {
+            let (mut core, calls) =
+                fs_promise_read_test_core(Ok(HostIoResponse::FsRead { bytes: vec![] }));
+            core.write_reg_with_label(0, Value::str(operation), Label::Public)
+                .unwrap();
+            let before = core.promise_store.len();
+            assert!(matches!(
+                core.dispatch_fs_promise_read(RegRange { start: 0, count: 3 }),
+                Err(InterpreterError::CapabilityDenied { .. })
+            ));
+            assert_eq!(core.promise_store.len(), before);
+            assert!(core.pending_fs_promise_reads.is_empty());
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        }
+        let (mut core, calls) =
+            fs_promise_read_test_core(Ok(HostIoResponse::FsRead { bytes: vec![] }));
+        core.write_reg_with_label(1, Value::str("classified-path"), Label::Secret)
+            .unwrap();
+        let before = core.promise_store.len();
+        assert!(
+            core.dispatch_fs_promise_read(RegRange { start: 0, count: 3 })
+                .is_err()
+        );
+        assert_eq!(core.promise_store.len(), before);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(core.pending_fs_promise_reads.is_empty());
+        assert!(!core.event_loop.has_pending_work());
+    }
+
+    #[test]
+    fn fs_promise_native_fatal_errors_do_not_become_rejections() {
+        let (mut core, calls) = fs_promise_read_test_core(Err(HostIoError::Denied {
+            reason: "provider policy".into(),
+        }));
+        let before = core.promise_store.len();
+        assert!(matches!(
+            core.dispatch_fs_promise_read(RegRange { start: 0, count: 3 }),
+            Err(InterpreterError::InternalError { .. })
+        ));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(core.promise_store.len(), before);
+        assert!(core.pending_fs_promise_reads.is_empty());
+        assert!(!core.event_loop.has_pending_work());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn fs_promise_native_task_admission_preserves_unrelated_work() {
+        for (refuse_payload, unrelated) in
+            [(true, false), (false, false), (true, true), (false, true)]
+        {
+            let mut core = test_interpreter();
+            let promise = core.create_promise().unwrap();
+            let existing = if unrelated {
+                let before = core.promise_runtime_memory_bytes();
+                let seq = core.event_loop.schedule_io_completion(
+                    crate::closure_model::ClosureHandle(47),
+                    Label::Internal,
+                );
+                core.apply_promise_runtime_memory_delta(before).unwrap();
+                Some(seq)
+            } else {
+                None
+            };
+            let task = PendingFsPromiseRead {
+                promise,
+                outcome: Ok(Value::str("unpublished result")),
+            };
+            let before = core.estimated_memory_bytes();
+            let retained = InterpreterCore::pending_fs_promise_read_bytes(&task);
+            core.config.max_total_memory_bytes = before + retained - u64::from(refuse_payload);
+            assert!(matches!(
+                core.schedule_fs_promise_read(task, Label::Internal),
+                Err(InterpreterError::MemoryBudgetExceeded { .. })
+            ));
+            assert!(core.pending_fs_promise_reads.is_empty());
+            assert_eq!(core.event_loop.has_pending_work(), unrelated);
+            assert_eq!(core.estimated_memory_bytes(), before);
+            assert_eq!(core.recompute_estimated_memory_bytes(), before);
+            assert!(!core.gc_network_task_active());
+            if let Some(existing) = existing {
+                let task = core.event_loop.turn().macrotask.unwrap();
+                assert_eq!(task.registration_seq, existing);
+                assert_eq!(task.handler, crate::closure_model::ClosureHandle(47));
+            }
+        }
+    }
+
+    #[test]
+    fn fs_promise_native_direct_and_delegated_dispatch_require_live_read_authority() {
+        use crate::promise_model::{PromiseHandle, PromiseState};
+        use frankenengine_extension_host::host_io::HostIoResponse;
+        for (delegated, granted) in [(false, false), (false, true), (true, false), (true, true)] {
+            let (mut core, calls) = fs_promise_read_test_core(Ok(HostIoResponse::FsRead {
+                bytes: b"mediated".to_vec(),
+            }));
+            if !granted {
+                core.config
+                    .granted_capabilities
+                    .remove(&RuntimeCapability::FsRead);
+            }
+            let tag = crate::capability::FS_READ_PROMISE_CAPABILITY;
+            let (capability, args) = if delegated {
+                core.config
+                    .granted_capabilities
+                    .insert(RuntimeCapability::Builtin);
+                let arguments = core
+                    .alloc_array_from_values(&[
+                        Value::str("\0fsop:read"),
+                        Value::str("input.txt"),
+                        Value::str("utf8"),
+                    ])
+                    .unwrap();
+                core.write_reg_with_label(10, Value::str(tag), Label::Public)
+                    .unwrap();
+                core.write_reg_with_label(11, Value::Object(arguments), Label::Public)
+                    .unwrap();
+                (
+                    format!("builtin:ApplyHostCall:{tag}"),
+                    RegRange {
+                        start: 10,
+                        count: 2,
+                    },
+                )
+            } else {
+                (tag.to_string(), RegRange { start: 0, count: 3 })
+            };
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::HostCall {
+                        capability: CapabilityTag(capability),
+                        args,
+                        dst: 3,
+                    },
+                    Ir3Instruction::Halt,
+                ],
+                Vec::new(),
+            );
+            let result = core.execute(&module);
+            if granted {
+                result.unwrap_or_else(|error| panic!("delegated={delegated}: {error:?}"));
+                let Value::Promise(handle) = core.read_reg(3).unwrap() else {
+                    panic!("returned Promise")
+                };
+                let record = core.promise_store.get(PromiseHandle(handle)).unwrap();
+                assert_eq!(record.label, Label::Internal);
+                assert!(
+                    matches!(&record.state, PromiseState::Fulfilled(crate::object_model::JsValue::Str(value)) if value == "mediated")
+                );
+            } else {
+                assert!(
+                    matches!(result, Err(InterpreterError::CapabilityDenied { ref capability }) if capability == "fs:read"),
+                    "delegated={delegated}: {result:?}"
+                );
+            }
+            assert_eq!(
+                calls.load(std::sync::atomic::Ordering::SeqCst),
+                usize::from(granted)
+            );
+            assert!(core.pending_fs_promise_reads.is_empty());
+            assert!(!core.event_loop.has_pending_work());
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn fs_promise_native_direct_and_delegated_reads_preserve_exact_policy_hook_denials() {
+        use frankenengine_extension_host::host_io::HostIoResponse;
+        struct DenyFsReadHook(Arc<std::sync::atomic::AtomicUsize>);
+        impl InterpreterHook for DenyFsReadHook {
+            fn instruction_hooks_enabled(&self) -> bool {
+                false
+            }
+            fn pre_property_access(
+                &self,
+                _ctx: &HookContext,
+                _target: &ObjectRef,
+                _key: &PropertyKey,
+            ) -> HookAction {
+                HookAction::Allow
+            }
+            fn pre_call(
+                &self,
+                _ctx: &HookContext,
+                _callee: &FunctionRef,
+                _args: &[Value],
+            ) -> HookAction {
+                HookAction::Allow
+            }
+            fn pre_allocation(
+                &self,
+                _ctx: &HookContext,
+                _kind: AllocKind,
+                _size_hint: usize,
+            ) -> HookAction {
+                HookAction::Allow
+            }
+            fn pre_import(&self, _ctx: &HookContext, _specifier: &str) -> HookAction {
+                HookAction::Allow
+            }
+            fn pre_hostcall(
+                &self,
+                _ctx: &HookContext,
+                capability: &str,
+                allowed: bool,
+            ) -> HookAction {
+                assert_ne!(
+                    capability,
+                    crate::capability::FS_READ_PROMISE_CAPABILITY,
+                    "the completion adapter must not rename a policy-controlled read"
+                );
+                if capability == "fs:read" {
+                    assert!(
+                        allowed,
+                        "the live FsRead grant precedes the independent hook denial"
+                    );
+                    self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    HookAction::Terminate("filesystem read policy".into())
+                } else {
+                    HookAction::Allow
+                }
+            }
+        }
+        for delegated in [false, true] {
+            let (mut core, calls) = fs_promise_read_test_core(Ok(HostIoResponse::FsRead {
+                bytes: b"must not be read".to_vec(),
+            }));
+            let seen = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            core.set_hook(Arc::new(DenyFsReadHook(seen.clone())));
+            let tag = crate::capability::FS_READ_PROMISE_CAPABILITY;
+            let (capability, args) = if delegated {
+                core.config
+                    .granted_capabilities
+                    .insert(RuntimeCapability::Builtin);
+                let arguments = core
+                    .alloc_array_from_values(&[
+                        Value::str("\0fsop:read"),
+                        Value::str("input.txt"),
+                        Value::str("utf8"),
+                    ])
+                    .unwrap();
+                core.write_reg_with_label(10, Value::str(tag), Label::Public)
+                    .unwrap();
+                core.write_reg_with_label(11, Value::Object(arguments), Label::Public)
+                    .unwrap();
+                (
+                    format!("builtin:ApplyHostCall:{tag}"),
+                    RegRange {
+                        start: 10,
+                        count: 2,
+                    },
+                )
+            } else {
+                (tag.to_string(), RegRange { start: 0, count: 3 })
+            };
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::HostCall {
+                        capability: CapabilityTag(capability),
+                        args,
+                        dst: 3,
+                    },
+                    Ir3Instruction::Halt,
+                ],
+                Vec::new(),
+            );
+            let before = core.promise_store.len();
+            let result = core.execute(&module);
+            assert!(
+                matches!(result, Err(InterpreterError::ContainmentActionRequested { ref action, ref reason })
+                if action == "terminate" && reason.as_deref() == Some("filesystem read policy")),
+                "delegated={delegated}: {result:?}"
+            );
+            assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 1);
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+            assert_eq!(core.promise_store.len(), before);
+            assert!(core.pending_fs_promise_reads.is_empty());
+            assert!(!core.event_loop.has_pending_work());
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn fs_promise_native_budget_refusals_leave_no_dangling_promise_or_job() {
+        use frankenengine_extension_host::host_io::HostIoResponse;
+        let fixture = || {
+            fs_promise_read_test_core(Ok(HostIoResponse::FsRead {
+                bytes: b"read bytes".to_vec(),
+            }))
+        };
+        let mut ceiling = fixture().0.estimated_memory_bytes();
+        let mut refused_after_effect = false;
+        let mut admitted = false;
+        for _ in 0..32 {
+            let (mut core, calls) = fixture();
+            core.config.max_total_memory_bytes = ceiling;
+            let before = core.promise_store.len();
+            match core.dispatch_fs_promise_read(RegRange { start: 0, count: 3 }) {
+                Err(InterpreterError::MemoryBudgetExceeded {
+                    requested_bytes, ..
+                }) => {
+                    assert!(requested_bytes > ceiling);
+                    refused_after_effect |= calls.load(std::sync::atomic::Ordering::SeqCst) != 0;
+                    assert_eq!(
+                        core.promise_store.len(),
+                        before,
+                        "fresh Promise must roll back"
+                    );
+                    assert!(
+                        core.pending_fs_promise_reads.is_empty(),
+                        "failed dispatch leaves no pending owner"
+                    );
+                    assert!(
+                        !core.event_loop.has_pending_work(),
+                        "failed dispatch leaves no queued job"
+                    );
+                    assert_eq!(
+                        core.estimated_memory_bytes(),
+                        core.recompute_estimated_memory_bytes()
+                    );
+                    ceiling = requested_bytes;
+                }
+                Ok(Value::Promise(_)) => {
+                    assert_eq!(core.pending_fs_promise_reads.len(), 1);
+                    core.clear_residual_event_state().unwrap();
+                    assert!(core.pending_fs_promise_reads.is_empty());
+                    assert!(!core.event_loop.has_pending_work());
+                    assert_eq!(
+                        core.estimated_memory_bytes(),
+                        core.recompute_estimated_memory_bytes()
+                    );
+                    admitted = true;
+                    break;
+                }
+                other => panic!("unexpected read admission result: {other:?}"),
+            }
+        }
+        assert!(
+            refused_after_effect,
+            "exercise task/return-label admission after the recorded read"
+        );
+        assert!(admitted, "the exact read/task budget must converge");
     }
 
     fn lower_module_graph_entry_bd_yn3lv(path: &Path, source: &str) -> Ir3Module {

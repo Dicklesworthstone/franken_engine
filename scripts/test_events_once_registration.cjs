@@ -201,7 +201,7 @@ test('native once regression fixtures agree across constructor, destructured and
     const fixtures = fs.readFileSync(path.join(__dirname,
       '../crates/franken-engine/tests/events_once_registration.rs'), 'utf8');
     for (const name of ['REGISTRATION', 'OVERRIDE', 'REJECTION', 'ORDERING',
-      'EVENT_TARGET', 'INVALID_EMITTER']) {
+      'EVENT_TARGET', 'INVALID_EMITTER', 'PROTECTED_REGISTRATION']) {
       const match = fixtures.match(new RegExp('const ' + name + ': &str = r#"([\\s\\S]*?)"#;'));
       assert.ok(match, 'missing native fixture ' + name);
       const original = match[1];
@@ -228,3 +228,25 @@ test('native once regression fixtures agree across constructor, destructured and
       }
     }
   });
+
+test('replacement during newListener cannot corrupt the remaining subscription transaction', options, async () => {
+  for (const E of [native, candidate()]) {
+    const emitter = new E();
+    const push = Array.prototype.push;
+    let calls = 0;
+    emitter.on('newListener', name => {
+      if (name === 'go') {
+        Array.prototype.push = function () { calls++; throw new Error('guest push'); };
+      }
+    });
+    let pending;
+    try {
+      pending = E.once(emitter, 'go');
+      emitter.emit('go', 42);
+    } finally { Array.prototype.push = push; }
+    assert.deepEqual(await pending, [42]);
+    assert.equal(calls, 0);
+    assert.equal(emitter.listenerCount('go'), 0);
+    assert.equal(emitter.listenerCount('error'), 0);
+  }
+});

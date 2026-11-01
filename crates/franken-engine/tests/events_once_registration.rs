@@ -225,3 +225,35 @@ console.log(emitter.listenerCount('ready'), emitter.listenerCount('error'));
 fn observable_once_retains_authenticated_abort_cleanup() {
     assert_events(CANCELLED, "0 0\nAbortError ABORT_ERR true");
 }
+
+const PROTECTED_REGISTRATION: &str = r#"
+const E = require('events');
+const emitter = new E();
+const controller = new AbortController();
+const push = Array.prototype.push;
+const isArray = Array.isArray;
+let calls = 0, once, iterator, pending, returned;
+function poison() { calls++; throw new Error('guest Array helper'); }
+try {
+  Array.prototype.push = poison;
+  Array.isArray = poison;
+  once = E.once(emitter, 'ready', { signal: controller.signal });
+  iterator = E.on(emitter, 'data', { signal: controller.signal, close: ['end'] });
+  pending = iterator.next();
+  emitter.emit('ready', 42);
+  emitter.emit('data', 7);
+  returned = iterator.return();
+} finally {
+  Array.prototype.push = push;
+  Array.isArray = isArray;
+}
+console.log('untouched', calls, emitter.eventNames().length);
+Promise.all([once, pending, returned]).then(values => {
+  console.log('values', values[0][0], values[1].value[0], values[2].done);
+});
+"#;
+
+#[test]
+fn guest_array_helpers_cannot_intercept_listener_registration_and_cleanup() {
+    assert_events(PROTECTED_REGISTRATION, "untouched 0 0\nvalues 42 7 true");
+}

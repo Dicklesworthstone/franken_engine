@@ -18,6 +18,7 @@
   var apply = Reflect.apply;
   var defineProperty = Object.defineProperty;
   var createObject = Object.create;
+  var isArray = Array.isArray;
   // Internal event delivery must not call guest-replaced Promise helpers after
   // removing an event or installing a waiter. Capture them alongside the other
   // realm intrinsics; binding once avoids an argument-array allocation per read.
@@ -87,7 +88,7 @@
     return error;
   }
   function optionsObject(options) {
-    if (options === null || typeof options !== 'object' || Array.isArray(options)) {
+    if (options === null || typeof options !== 'object' || isArray(options)) {
       throw invalidType('options');
     }
     return options;
@@ -125,17 +126,23 @@
     if (!nativeEmitter && !eventTarget) {
       throw invalidType('emitter');
     }
-    var removers = [];
+    // These records belong to the registration transaction, not the guest's
+    // Array prototype. A newListener hook can replace Array.prototype.push
+    // halfway through registration; bookkeeping must still admit every remover
+    // and roll the whole transaction back if a later registration throws.
+    var removers = queue();
     var closed = false;
     function close() {
       if (closed) { return; }
       closed = true;
       var pending = removers;
-      removers = [];
+      // Closing blocks further registration, so detach without allocating a
+      // replacement container on cancellation or an exceptional cleanup path.
+      removers = null;
       var firstError;
       var failed = false;
-      for (var i = 0; i < pending.length; i++) {
-        try { pending[i](); } catch (error) {
+      while (pending.size > 0) {
+        try { take(pending)(); } catch (error) {
           if (!failed) { failed = true; firstError = error; }
         }
       }
@@ -143,7 +150,7 @@
     }
     function register(add, remove) {
       if (closed) { return; }
-      removers.push(remove);
+      put(removers, remove);
       try { add(); } catch (error) {
         try { close(); } finally { throw error; }
       }

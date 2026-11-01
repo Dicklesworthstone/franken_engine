@@ -428,14 +428,14 @@ test('one nonempty vector borrows its Buffer window without staging or scatter',
       assert.deepEqual(counts, { allocations: 0, allocatedBytes: 0, concats: 0, copies: 0 });
       const effects = calls.filter(call => /^(read|write)_fd$/.test(call.operation));
       assert.equal(effects.length, 2);
-      if (!typed) {
-        assert.equal(effects[0].args[1], data);
-        assert.equal(effects[1].args[1], target);
-      } else {
-        assert.equal(effects[0].args[1].buffer, data.buffer);
-        assert.equal(effects[0].args[1].byteOffset, data.byteOffset);
-        assert.equal(effects[1].args[1].buffer, target.buffer);
-        assert.equal(effects[1].args[1].byteOffset, target.byteOffset);
+      // The private bridge authenticates a fresh byte view even for Buffers,
+      // so guest-owned metadata cannot redirect I/O. Borrowing promises the
+      // same storage window, not the same wrapper identity. Public result
+      // identities and the zero-staging/copy counters remain checked above.
+      for (const [effect, original] of [[effects[0], data], [effects[1], target]]) {
+        assert.equal(effect.args[1].buffer, original.buffer);
+        assert.equal(effect.args[1].byteOffset, original.byteOffset);
+        assert.equal(effect.args[1].byteLength, original.byteLength);
       }
     } finally { await handle.close(); }
   }

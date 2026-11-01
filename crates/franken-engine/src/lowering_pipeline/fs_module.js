@@ -1199,7 +1199,23 @@
       return new NativePromise(function (resolve, reject) {
         var operation = handleOperation(path, 'readFile');
         if (operation !== undefined) { resolve(operation(options)); return; }
-        __franken_fs_read('\0fsop:read', path, options, function (error, value) {
+        // The native bridge consumes data properties, not guest accessors or
+        // prototypes. Resolve options here while ordinary JavaScript property
+        // semantics still apply, retaining the selected flag and signal. This
+        // keeps pathname reads on the FsRead boundary instead of opening a
+        // writable descriptor just to implement option handling.
+        // Node's pathname readFile ignores a function in the options slot.
+        if (typeof options === 'function') { options = undefined; }
+        var settings = fileOptions(options, null);
+        if (options !== null && typeof options === 'object') { settings.flag = options.flag; }
+        checkAbort(settings.signal);
+        __franken_fs_read('\0fsop:read', path, settings, function (error, value) {
+          // The native host read may already have completed and been recorded
+          // before its callback is delivered. Cancellation changes completion,
+          // not that completed effect prefix, and must not escape the callback
+          // leaving the caller's Promise permanently pending.
+          try { checkAbort(settings.signal); }
+          catch (abortError) { reject(abortError); return; }
           if (error) { reject(error); } else { resolve(value); }
         });
       });

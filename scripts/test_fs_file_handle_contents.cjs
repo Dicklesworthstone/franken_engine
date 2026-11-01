@@ -495,7 +495,7 @@ test('fs.promises handle overloads agree with Node and never auto-close caller h
   assert.equal(calls.filter(call => /^(read|write|append)$/.test(call.operation)).length, 0);
 });
 
-test('pathname promises keep their native callback path before and after handle registration', async () => {
+test('pathname promises retain read callbacks and owned descriptor writes after handle registration', async () => {
   const { facade, file, calls } = fixture();
   await facade.promises.writeFile(file, 'ab');
   await facade.promises.appendFile(file, 'cd');
@@ -505,7 +505,12 @@ test('pathname promises keep their native callback path before and after handle 
   assert.equal(await facade.promises.readFile(handle, 'utf8'), 'abcd');
   await handle.close();
   assert.deepEqual(calls.filter(call => /^(read|write|append)$/.test(call.operation))
-    .map(call => call.operation), ['write', 'append', 'read', 'read']);
+    .map(call => call.operation), ['read', 'read']);
+  assert.deepEqual(calls.slice(0, 6).map(call => call.operation),
+    ['open', 'write_fd', 'close_fd', 'open', 'write_fd', 'close_fd']);
+  assert.deepEqual(calls.filter(call => call.operation === 'open').map(call => call.args[1]),
+    ['w', 'a', 'r']);
+  assert.equal(calls.filter(call => call.operation === 'close_fd').length, 3);
 });
 
 test('handle overloads ignore forged public fd values and overwritten public methods', async () => {
@@ -607,15 +612,107 @@ test('namespace handle overloads preserve abort failures without I/O', async () 
   await handle.close();
 });
 
+test('pathname Promise reads refuse pre-abort before entering the native host boundary', async () => {
+  for (const reason of [undefined, null, false, 'stop']) {
+    const { facade, file, calls } = fixture();
+    fs.writeFileSync(file, 'private');
+    const controller = new AbortController();
+    controller.abort(reason);
+    let pending;
+    assert.doesNotThrow(() => {
+      pending = facade.promises.readFile(file, { signal: controller.signal });
+    });
+    await assert.rejects(pending, error => error.name === 'AbortError' &&
+      error.code === 'ABORT_ERR' && error.cause === controller.signal.reason);
+    assert.deepEqual(calls, [], 'pre-abort must not need filesystem authority');
+  }
+});
+
+test('pathname Promise reads snapshot accessor and inherited options for native dispatch', async () => {
+  // Mirror the native host bridge's own-data option lookup while performing
+  // a real file read. This isolates facade normalization; native execution is
+  // covered separately in fs_module_objects.rs.
+  const { facade, file, calls } = fixture((authority, operation, args) => {
+    if (operation !== 'read') return;
+    const [, options, callback] = args;
+    const encoding = Object.getOwnPropertyDescriptor(options, 'encoding')?.value;
+    const flag = Object.getOwnPropertyDescriptor(options, 'flag')?.value;
+    fs.readFile(args[0], { encoding, flag }, callback);
+    return null;
+  });
+  fs.writeFileSync(file, 'native bytes');
+  let reads = 0, flags = 0;
+  const inherited = Object.create({ encoding: 'utf8', flag: 'r+' });
+  const accessor = {
+    get encoding() { reads++; return 'utf8'; },
+    get flag() { flags++; return 'r'; }
+  };
+  assert.equal(await facade.promises.readFile(file, inherited), 'native bytes');
+  assert.equal(await facade.promises.readFile(file, accessor), 'native bytes');
+  assert.equal(reads, 1); assert.equal(flags, 1);
+  assert.equal(calls[0].args[1].flag, 'r+', 'preserve the selected open mode');
+  assert(calls.every(call => call.authority === 'fs_read' && call.operation === 'read'));
+  assert.equal(fs.readFileSync(file, 'utf8'), 'native bytes');
+});
+
+test('pathname Promise reads reject cancellation after host read but before delivery', async () => {
+  let complete;
+  const { facade, file, calls } = fixture((authority, operation, args) => {
+    if (operation !== 'read') return;
+    const bytes = fs.readFileSync(args[0]);
+    complete = () => args[2](null, bytes);
+    return null;
+  });
+  fs.writeFileSync(file, 'completed host read');
+  const controller = new AbortController();
+  const pending = facade.promises.readFile(file, { signal: controller.signal });
+  const rejected = assert.rejects(pending, error => error.code === 'ABORT_ERR' &&
+    error.cause === false);
+  assert.equal(typeof complete, 'function');
+  controller.abort(false);
+  complete();
+  await rejected;
+  assert.deepEqual(calls.map(call => call.operation), ['read'],
+    'the completed read remains recorded; cancellation performs no second I/O');
+});
+
+test('pathname Promise option failures reject before native dispatch and keep Buffer defaults', async () => {
+  const { facade, file, calls } = fixture();
+  fs.writeFileSync(file, 'bytes');
+  const failure = new Error('option getter');
+  const badOptions = [
+    { get encoding() { throw failure; } },
+    { get flag() { throw failure; } },
+    { get signal() { throw failure; } }
+  ];
+  for (const options of badOptions) {
+    await assert.rejects(facade.promises.readFile(file, options), error => error === failure);
+  }
+  for (const signal of [null, {}, false]) {
+    await assert.rejects(facade.promises.readFile(file, { signal }),
+      { code: 'ERR_INVALID_ARG_TYPE' });
+  }
+  assert.deepEqual(calls, []);
+  const ignoredFunction = () => {};
+  Object.defineProperty(ignoredFunction, 'encoding', { get() { throw failure; } });
+  for (const options of [undefined, null, { encoding: null }, ignoredFunction]) {
+    const bytes = await facade.promises.readFile(file, options);
+    assert(Buffer.isBuffer(bytes)); assert.equal(bytes.toString(), 'bytes');
+  }
+});
+
 test('the handle registry is lazy and initialization failure occurs before opening an fd', async () => {
   const failure = new Error('registry allocation failed');
   const FailingWeakMap = new Proxy(WeakMap, { construct() { throw failure; } });
   const { facade, file, calls } = fixture(undefined, { WeakMap: FailingWeakMap });
   assert.deepEqual(calls, []);
   await facade.promises.writeFile(file, 'path-only');
+  assert.equal(fs.readFileSync(file, 'utf8'), 'path-only');
+  const completedPathEffects = calls.length;
   await assert.rejects(facade.promises.open(file + '-handle', 'w'), error => error === failure);
   assert.equal(fs.existsSync(file + '-handle'), false);
-  assert.equal(calls.filter(call => call.operation === 'open').length, 0);
+  assert.equal(calls.length, completedPathEffects,
+    'registry initialization must fail before any additional descriptor effect');
 });
 
 test('the private handle registry uses captured constructor and get/set helpers', async () => {

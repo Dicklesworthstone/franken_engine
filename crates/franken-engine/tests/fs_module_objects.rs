@@ -445,6 +445,89 @@ fn call_only_promise_reads_require_filesystem_authority_before_host_effects() {
 }
 
 #[test]
+fn facade_promise_reads_resolve_accessors_and_inherited_encoding_options() {
+    let root = tempfile::tempdir().expect("sandbox");
+    std::fs::write(root.path().join("input.txt"), "native bytes").expect("input");
+    let (output, effects) = run_granting_with_effect_count(
+        "const fs = require('fs'); let gets = 0; \
+         const options = { get encoding() { gets++; return 'utf8'; } }; \
+         fs.promises.readFile('input.txt', options).then(text => { \
+           console.log(typeof text, text, gets > 0); \
+           return fs.promises.readFile('input.txt', Object.create({encoding: 'utf8'})); \
+         }).then(text => { console.log(typeof text, text); \
+           return fs.promises.readFile('input.txt'); \
+         }).then(bytes => console.log(Buffer.isBuffer(bytes), bytes.length));",
+        root.path(),
+        &[
+            "vm_dispatch",
+            "heap_allocate",
+            "builtin",
+            "console",
+            "fs_read",
+        ],
+    )
+    .expect("full-facade reads preserve JavaScript options with only FsRead authority");
+    assert_eq!(
+        output,
+        ["string native bytes true", "string native bytes", "true 12"]
+    );
+    assert_eq!(
+        effects, 3,
+        "each Promise reads through the existing host boundary exactly once"
+    );
+}
+
+#[test]
+fn facade_promise_read_pre_abort_needs_no_filesystem_authority_or_effect() {
+    let root = tempfile::tempdir().expect("sandbox");
+    std::fs::write(root.path().join("input.txt"), "private bytes").expect("input");
+    let (output, effects) = run_granting_with_effect_count(
+        "const fs = require('fs'); const controller = new AbortController(); \
+         controller.abort(false); \
+         const pending = fs.promises.readFile('input.txt', {signal: controller.signal}); \
+         console.log('returned', pending instanceof Promise); \
+         pending.then(() => console.log('unexpected success'), \
+           error => console.log(error.name, error.code, error.cause));",
+        root.path(),
+        &["vm_dispatch", "heap_allocate", "builtin", "console"],
+    )
+    .expect("pre-aborted reads reject without needing an FsRead grant");
+    assert_eq!(output, ["returned true", "AbortError ABORT_ERR false"]);
+    assert_eq!(
+        effects, 0,
+        "pre-abort must never reach the provider or recorder"
+    );
+}
+
+#[test]
+fn facade_promise_read_checks_abort_at_native_completion_without_erasing_effects() {
+    let root = tempfile::tempdir().expect("sandbox");
+    std::fs::write(root.path().join("input.txt"), "completed read").expect("input");
+    let (output, effects) = run_granting_with_effect_count(
+        "const fs = require('fs'); const controller = new AbortController(); \
+         const pending = fs.promises.readFile('input.txt', \
+           {encoding: 'utf8', signal: controller.signal}); \
+         controller.abort('after read'); \
+         pending.then(() => console.log('unexpected success'), \
+           error => console.log(error.name, error.code, error.cause));",
+        root.path(),
+        &[
+            "vm_dispatch",
+            "heap_allocate",
+            "builtin",
+            "console",
+            "fs_read",
+        ],
+    )
+    .expect("cancellation before completion rejects the caller's Promise");
+    assert_eq!(output, ["AbortError ABORT_ERR after read"]);
+    assert_eq!(
+        effects, 1,
+        "the already-completed read remains in the effect transcript"
+    );
+}
+
+#[test]
 fn lexical_require_is_not_replaced_and_guest_globals_do_not_capture_the_facade() {
     let root = tempfile::tempdir().expect("sandbox");
     let output = run(

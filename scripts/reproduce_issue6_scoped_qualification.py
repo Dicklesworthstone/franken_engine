@@ -69,8 +69,6 @@ def prepare_source_snapshot(P,R):
     [lib]
     path="../snapshot/crates/franken-core/src/probe_lib.rs"
     [dependencies]
-    zeroize="1.8"
-    thiserror="2"
     serde={version="1",features=["derive","rc"]}
     serde_json={version="1",features=["float_roundtrip","unbounded_depth"]}
     sha2="0.10"
@@ -208,7 +206,7 @@ def main():
     main_source=(P/'src/main.rs').read_text().replace('fe_issue6_native_probe::','crate::')
     (src/'probe_main.rs').write_text((src/'probe_lib.rs').read_text()+main_source)
     cargo=(P/'Cargo.toml').read_text().replace('edition="2024"','edition="2024"\nautolib=false\nautobins=false',1)
-    cargo=cargo.replace('[lib]\npath="snapshot/crates/franken-engine/src/probe_lib.rs"\n','')
+    cargo=cargo.replace('    [lib]\n    path="snapshot/crates/franken-engine/src/probe_lib.rs"\n','')
     cargo=cargo.replace('[workspace]','[[bin]]\nname="fe-issue6-native-probe"\npath="snapshot/crates/franken-engine/src/probe_main.rs"\n[workspace]')
     (P/'Cargo.toml').write_text(cargo)
     print('Prepared exact native source subset and 43 critical test bodies at',P,flush=True)
@@ -216,8 +214,10 @@ def main():
     env=os.environ.copy();env['RUSTUP_TOOLCHAIN']='nightly-2026-09-21'
     if args.toolchain_bin:env['PATH']=str(args.toolchain_bin.resolve())+os.pathsep+env.get('PATH','')
     if args.cargo_home:env['CARGO_HOME']=str(args.cargo_home.resolve())
-    subprocess.run(['cargo','build','--offline','--jobs','1','--bin','fe-issue6-native-probe'],cwd=P,env=env,check=True)
-    binary=P/'target/debug/fe-issue6-native-probe'
+    subprocess.run(['cargo','build','--locked','--offline','--jobs','1','--bin','fe-issue6-native-probe'],cwd=P,env=env,check=True)
+    target=Path(env.get('CARGO_TARGET_DIR',P/'target'))
+    if not target.is_absolute():target=P/target
+    binary=target/'debug/fe-issue6-native-probe'
     for label,argument in [('selected','--selected-tests'),('authority33',str(P/'cases33.json')),('authority14',str(P/'cases-extra.json'))]:
         result=subprocess.run([str(binary),argument],capture_output=True,text=True)
         (P/(label+'.stdout')).write_text(result.stdout);(P/(label+'.stderr')).write_text(result.stderr)

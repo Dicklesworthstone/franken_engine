@@ -1,0 +1,316 @@
+{
+  "schema": "franken-engine.issue6.regression-comparison.v1",
+  "measurement_date": "2026-11-01",
+  "repository": "Dicklesworthstone/franken_engine",
+  "issue": "https://github.com/Dicklesworthstone/franken_engine/issues/6",
+  "bead": "bd-15w28",
+  "source_commit": "9bdb551a296b5915fd7e81b76918069626dd3fd2",
+  "release_qualified": false,
+  "artifact_contract": {
+    "consumer": "Maintainers qualifying bd-15w28 / issue #6 for the held v0.3.0 candidate.",
+    "gate": "Scoped prequalification before the complete named v0.2.0 regression comparison and canonical native quality gates.",
+    "observed_defect": "First-class filesystem/events regressions, obsolete IR/refusal assertions, and an interrupted execution environment that made the raw qualification logs unavailable.",
+    "superseded_when": "An archived canonical comparison at an exact revision covers the complete historical inventory, actual filesystem/events interpreter execution, and all required quality gates."
+  },
+  "reconstruction": {
+    "status": "Compact reconstruction after the execution environment became unavailable.",
+    "basis": "Completed native frontend measurements, retained tool outputs and binary identities, and immutable GitHub source identities.",
+    "raw_logs_available": false,
+    "full_scratch_draft_recovered": false,
+    "historical44_complete_name_manifest_available": false,
+    "historical44_note": "The issue and bead do not publish a complete exact 44-name manifest. These explicitly named cohorts are not a new count for the historical 44.",
+    "accepted_by_reproducer_evidence_argument": false,
+    "compatibility_note": "This report is not an executable --evidence input for reproduce_issue6_scoped_qualification.py. Historical evidence files retain their original strict hash and report checks."
+  },
+  "scope": {
+    "native_frontend": "Executed production Rust parser, lowering, authority and flow-proof source subsets with extracted original test bodies/helpers through a temporary diagnostic entrypoint.",
+    "exclusions": [
+      "InterpreterCore runtime execution",
+      "Canonical cargo test --lib suite",
+      "Full v0.2.0 library comparison",
+      "Complete frankenctl binary execution"
+    ],
+    "diagnostic_boundary": "Interpreter metadata and regexp helpers were extracted for frontend compilation; the interpreter runtime was excluded. The scoped crate is not the canonical engine library target.",
+    "source_git_blobs": {
+      "crates/franken-engine/src/baseline_interpreter.rs": "d305b291d63da9d422f87b3d85af59434bce9635",
+      "crates/franken-engine/src/baseline_interpreter/event_target.rs": "569bfc4b61e791f1dec0ac5f15cfeefe57201644",
+      "crates/franken-engine/src/lowering_pipeline.rs": "97216cb99b0f55fc332c74936ce9b8b070e69187",
+      "crates/franken-engine/src/lowering_pipeline/events_module.js": "229e344d8bf9ad4a76630fc0d5bd980ca4741fdc",
+      "crates/franken-engine/src/lowering_pipeline/util_module.rs": "94affdd340c7df61e696d0eb6f9070cfe253cc38",
+      "crates/franken-engine/tests/events_once_registration.rs": "f606e7ef908c105057817309c046d0566f7dc34a",
+      "scripts/test_events_backpressure.cjs": "280c66c5fc2e49e8571c73a53fef9a3de55db10c",
+      "scripts/test_events_error_monitor.cjs": "c0238f6fc5574885c0727ced45d93b6b541fdbbe",
+      "scripts/test_events_module.cjs": "4187b24ecf36434474ba9aebd7e1d682d82e5f45",
+      "scripts/test_events_once_registration.cjs": "eb2bd219566496383d45c0bb71a6cf68b4739feb",
+      "scripts/test_events_promise_intrinsics.cjs": "c5600cbcc83d2bc6502be2a6e85efb9943bbf912",
+      "scripts/tests/events_queue.cjs": "2098618b8db6297240229d4ce8ed983ddbdbe585",
+      "scripts/tests/readline_module.cjs": "3fbb8e5015519689336a67711cb09f9dab2b261b",
+      "crates/franken-engine/src/authority_footprint.rs": "9e96b5ebc3be0443b962c0270c272e6a90e86e5d",
+      "crates/franken-engine/src/lowering_pipeline/fs_module.js": "49118c002950c87f33d84e081497b70dcc901ba0",
+      "crates/franken-engine/src/lowering_pipeline/fs_module.rs": "e397a5355a4de58511e0f97914ecfbeb30ce77c7",
+      "crates/franken-engine/tests/fs_module_objects.rs": "7a9d6ea59b07bd1787ad533f05181f23df6d3134",
+      "scripts/test_fs_file_handle_contents.cjs": "b922de22be06520000300d5bfaa73d5475496f54",
+      "crates/franken-engine/src/capability.rs": "11c3613e3a3a6fced21820641b2a76679c7d368e",
+      "crates/franken-engine/src/lowering_pipeline/native_module_authority.rs": "86e1332417ec69f83c63baef58dee3551b6cc2d9"
+    },
+    "diagnostic_source_basis": "The starting/current frontend probes used the recorded f658c30622bd21e19d2137676a724360f604851f source-subset foundation plus verified frontend overlays. The v0.2.0 probe used that revision's actual source with an explicitly adapted metadata boundary."
+  },
+  "revisions": {
+    "baseline_v0_2_0": "2b3bfb6366ba1bd267ce92bad5466b1c105a91ee",
+    "starting_main": "36688c671bf97f9ce4267c3280da52082741accf",
+    "corrected_main": "9bdb551a296b5915fd7e81b76918069626dd3fd2"
+  },
+  "binaries_sha256": {
+    "baseline_v0_2_0": "53c8807537723dd25906a92f035026d80d062715add3c2407e6c8c1a1bddffcb",
+    "starting_main": "fe8505b0f472172108a78a84072ce282dc247b321874c7313c5c4193d350859e",
+    "corrected_frontend": "fba59a36bb4cb4c497186e3a526284fa297d807a39c785bda0dec2f537b4544b"
+  },
+  "toolchain": {
+    "pin": "nightly-2026-09-21",
+    "rustc": "rustc 1.100.0-nightly (bba531001 2026-09-20)",
+    "host_reference_node": "v24.22.1"
+  },
+  "same_body_comparison": {
+    "legacy_lowering_35": {
+      "baseline": {
+        "pass": 35,
+        "fail": 0
+      },
+      "starting_main": {
+        "pass": 8,
+        "fail": 27
+      },
+      "corrected_main": {
+        "pass": 8,
+        "fail": 27
+      }
+    },
+    "focused_security_7": {
+      "baseline": {
+        "pass": 6,
+        "fail": 1
+      },
+      "starting_main": {
+        "pass": 2,
+        "fail": 5
+      },
+      "corrected_main": {
+        "pass": 4,
+        "fail": 3
+      }
+    },
+    "identity_note": "All 35 original lowering bodies and all 7 security bodies were verified byte-identical across the compared revisions before environment loss. Their original failing assertions were retained."
+  },
+  "authority_case_comparison": {
+    "tuple_order": [
+      "Clean",
+      "FindingsPresent",
+      "Unanalyzable"
+    ],
+    "original_33": {
+      "baseline": [
+        22,
+        11,
+        0
+      ],
+      "starting_main": [
+        23,
+        8,
+        2
+      ],
+      "corrected_main": [
+        23,
+        8,
+        2
+      ]
+    },
+    "additional_14": {
+      "baseline": [
+        8,
+        5,
+        1
+      ],
+      "starting_main": [
+        9,
+        3,
+        2
+      ],
+      "corrected_main": [
+        9,
+        3,
+        2
+      ]
+    },
+    "mixed_crypto_4": {
+      "baseline": [
+        2,
+        0,
+        2
+      ],
+      "starting_main": [
+        0,
+        4,
+        0
+      ],
+      "corrected_main": [
+        2,
+        0,
+        2
+      ]
+    },
+    "replay": "The analyzer deterministically replayed the input reports.",
+    "interpretation": "The two original-33 Unanalyzable outcomes are intended secret-to-filesystem flow refusals. Mixed-crypto corrections restore precise read/entropy authority and the intended refusals for secret path/content writes."
+  },
+  "current_scoped_checks": {
+    "selected_43": {
+      "pass": 43,
+      "fail": 0
+    },
+    "added_or_updated_7": {
+      "pass": 7,
+      "fail": 0
+    },
+    "authority_16": {
+      "pass": 16,
+      "fail": 0
+    },
+    "overlap_note": "These groups overlap and must not be summed as unique tests. The 7 include 6 added checks and 1 updated check.",
+    "selected_body_changes": [
+      "direct_calls_preserve_arguments_and_discriminator_like_guest_paths: the dynamic encoding case moved to a separately tested facade fallback; a primitive encoding remains the direct-case control.",
+      "event_intrinsics_are_builtin_capabilities_not_filesystem_authority: added a negative check that the guest placeholder spelling does not grant intrinsic authority."
+    ],
+    "parent_reexecution": "The parent independently re-executed all 43 selected checks on the final fba59a36 binary and verified both descriptor-flow diagnostics plus the four real-loader denial controls."
+  },
+  "host_reference_checks": {
+    "filesystem": {
+      "contents": 54,
+      "handles": 23,
+      "promise_writes": 26,
+      "total_pass": 103,
+      "total_fail": 0
+    },
+    "events": {
+      "registration_pass": 16,
+      "promise_intrinsics_pass": 15,
+      "backpressure_pass": 25,
+      "error_monitor_pass": 11,
+      "comparisons_pass": 267
+    },
+    "limitations": "These execute shipped JavaScript with Node reference adapters. The protected abort-registration adapter supplies Node's primitive; it does not execute the new Rust listener primitive.",
+    "unchanged_broader_failures": "The Events queue check and three Readline checks retain the same failures observed with the frozen starting source; those broader lanes are not reported green."
+  },
+  "restored_security_tests": [
+    "parsed_source_preserves_nonfinal_secret_hostcall_operand_bd_bscab",
+    "filesystem_catch_flow_uses_authenticated_provider_and_operand_provenance_bd_padqo"
+  ],
+  "remaining_security_assertions": {
+    "fd_lifecycle_fixtures_lower_without_unauthorized_flow_bd_zco6t": {
+      "failure": "Requires a direct BufferObjectToString opcode count that is now replaced by ordinary property/method lowering.",
+      "supplemental_result": "Both original ProviderInternal flow proofs and all original <= Internal console-label checks pass.",
+      "read_fixture_console_labels": [
+        "Internal",
+        "Public"
+      ],
+      "stale_fd_fixture_console_labels": [
+        "Public",
+        "Internal"
+      ],
+      "sinks_per_fixture": 2
+    },
+    "typeof_placeholders_never_shadow_later_ambient_authority_bd_d0n7u": {
+      "failure": "Expects known native fs module construction to be rejected as an ambient loader.",
+      "supplemental_result": "Native fs construction lowers with or without typeof. Original fetch/crypto denials remain. All four relative/dynamic loader controls remain denied with FsRead."
+    },
+    "mixed_event_emitter_this_fixture_lowers_without_unauthorized_flow_bd_asw4m_3": {
+      "failure": "Searches for obsolete builtin:ConsoleLog instead of console:log; also fails on v0.2.0.",
+      "supplemental_result": "The final console operation retains Internal-to-Internal flow without declassification. ProviderInternal proof and public Unknown IR0-to-IR3 proof both pass with zero denied flows."
+    }
+  },
+  "legacy_failures": {
+    "count": 27,
+    "categories": {
+      "sync_read_arity": 2,
+      "protected_promise_read_contract": 7,
+      "callback_facade": 6,
+      "promise_write_facade": 3,
+      "breadth_or_deferred_facade": 2,
+      "retired_fs_rejection": 4,
+      "retired_events_rejection": 3
+    },
+    "status": "Original representation/refusal assertions remain unchanged and failing. Their complete runtime contracts still require native qualification; no broad test migration was made to force a green count."
+  },
+  "read_options_tradeoff": {
+    "controls": [
+      "object encoding option",
+      "bound options value",
+      "accessor encoding option",
+      "source undefined identifier"
+    ],
+    "starting_main": "Clean",
+    "corrected_main": "FindingsPresent at the conservative first-class filesystem module boundary",
+    "positive_controls": "Omitted options and primitive string encoding remain Clean.",
+    "reason": "Observable JavaScript property semantics must execute before the native data-property lookup; bypassing them was unsound."
+  },
+  "native_execution_and_gates": {
+    "full_engine_unit_test_build": "rustc SIGKILL before tests",
+    "full_engine_production_check": "rustc SIGKILL before completion",
+    "existing_ci_runtime_closure": {
+      "source": ".github/workflows/native-runtime.yml async-generators selector",
+      "selected_modules": 122,
+      "first_attempt": "Found E0308 at string_replace_js(value.as_ref()) and was ultimately SIGKILLed.",
+      "correction": "Pass &value, the original JsString, to the helper's existing signature.",
+      "retry": "SIGKILL before any integration test ran.",
+      "retry_max_child_rss_KiB": 5007136,
+      "cgroup_memory_limit_bytes": 8589934592,
+      "oom_counter_increased": true,
+      "implementation_and_tests": "Exact candidate implementation and test bytes; the selector changes only the isolated manifest and root-module entrypoint."
+    },
+    "runtime_metadata_only_check": "Started for events_once_registration, fs_module_objects and events_default_import_bd_9vouw_165; result unavailable after executor loss.",
+    "cargo_fmt_check": {
+      "passed": false,
+      "cargo_exit": 0,
+      "formatter_address_space_limit_GiB": 2,
+      "observed": "Formatting diffs and a formatter allocation failure; zero cargo exit was not treated as a pass.",
+      "attempted_allocation_bytes": 124113825108
+    },
+    "canonical_all_target_check": "Not completed; exact all-target gate was not run before executor loss.",
+    "canonical_clippy": "Not run before executor loss.",
+    "full_library_baseline_comparison": "Not executed.",
+    "github_actions": "Direct Actions API queries for the functional commits returned zero runs; no remote green run is claimed.",
+    "build_attempt_note": "The full-engine attempts did not produce a pristine baseline run or any test counts. Only the frozen diagnostic source-subset runs supply the baseline comparison."
+  },
+  "reproduction_repairs": {
+    "changes": [
+      "Remove unused zeroize and thiserror only from the synthetic core manifest to match the recorded lock.",
+      "Match the generated explicit library stanza's indentation so only the intended diagnostic binary is built.",
+      "Require cargo build --locked --offline.",
+      "Resolve the diagnostic binary from the same absolute or relative CARGO_TARGET_DIR used by Cargo."
+    ],
+    "completed_validation": "Before executor loss, the dependency/stanza repairs passed prepare-only and cargo metadata --locked --offline --no-deps validation with the recorded lock unchanged. Python syntax compilation passed after all four repairs.",
+    "pending_validation": "The complete repaired script run and the final full scratch evidence's prepare-only check were not completed."
+  },
+  "release_state": "Held. This report supplies bounded evidence and does not satisfy or waive the full release gate.",
+  "harness_corrections": [
+    "Initial frozen diagnostic preparation required a temporary lock repair adding two unused synthetic-core dependency edges; package versions and checksums were unchanged. The checked-in script repair instead removes the unused dependencies and preserves the recorded lock.",
+    "The explicit generated [lib] stanza was removed in temporary preparation after its original unindented replacement failed to match.",
+    "A temporary comparison-helper extractor initially copied a nested Counter::expression method as a free helper. Its inventory was restricted to the test module; original production and test bodies were unchanged.",
+    "The v0.2.0 diagnostic metadata boundary was adapted to modules/constants absent from that old revision, using the old source rather than substituting current runtime implementation."
+  ],
+  "functional_commits": [
+    "ce7716732e8a94eee68c3af4aba18e5dbfa5c5b6",
+    "c6d36a384d783d362eb80e95678b441a464a2ac7",
+    "74b6ce14b46248f96244456b74f5ec9c649d9d1d",
+    "9bdb551a296b5915fd7e81b76918069626dd3fd2"
+  ],
+  "named_native_probes_without_execution": [
+    "execution_orchestrator::tests::real_js_fs_program_produces_host_effects_bd_1xl17",
+    "execution_orchestrator::tests::binding_form_const_fs_require_produces_host_effects_bd_1xl17_a",
+    "execution_orchestrator::tests::cjs_fs_promises_binding_produces_host_effects_bd_1xl17_c",
+    "execution_orchestrator::tests::read_with_encoding_executes_end_to_end_bd_1xl17_d",
+    "execution_orchestrator::tests::read_unknown_encoding_throws_catchable_type_error_bd_rul7k",
+    "execution_orchestrator::tests::async_callback_fs_program_produces_host_effects_bd_201vt",
+    "execution_orchestrator::tests::phase_error_still_poisons_unused_replay_suffix_bd_eou2o",
+    "execution_orchestrator::tests::unsupported_recorder_fails_before_live_host_effect_bd_eou2o",
+    "baseline_interpreter::function_prototype_call_apply_tests_current::generated_function_compilation_scratch_preflights_and_releases_bd_fw7zd_8_2"
+  ]
+}

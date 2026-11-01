@@ -19,7 +19,8 @@ function load(text) {
     Object.defineProperty(AdapterEmitter, name, { value, writable: true, configurable: true });
   }
   return new Function('__franken_events_constructor', '__franken_events_once',
-    'return ' + text)(() => AdapterEmitter, nativeOnce);
+    '__franken_events_add_abort_listener', 'return ' + text)(
+    () => AdapterEmitter, nativeOnce, native.addAbortListener);
 }
 const candidate = load(source);
 let checks = 0;

@@ -10,8 +10,9 @@ const source = fs.readFileSync(process.env.FRANKEN_EVENTS_SOURCE || path.join(__
   '../crates/franken-engine/src/lowering_pipeline/events_module.js'), 'utf8');
 function candidate() {
   class Emitter extends native.EventEmitter {}
-  return Function('__franken_events_constructor', '__franken_events_once', 'return ' + source)(
-    () => Emitter, () => { throw new Error('unexpected native once delegation'); });
+  return Function('__franken_events_constructor', '__franken_events_once',
+    '__franken_events_add_abort_listener', 'return ' + source)(
+    () => Emitter, () => { throw new Error('unexpected native once delegation'); }, native.addAbortListener);
 }
 function compare(exercise) { assert.deepEqual(exercise(candidate()), exercise(native)); }
 

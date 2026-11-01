@@ -106,6 +106,9 @@ const SIGNAL_DEPENDENTS_SLOT: &str = "__signalDependents";
 // Store source IDs as integers so a live composite does not root an abandoned
 // source and, transitively, all the other composites registered on that source.
 const SIGNAL_SOURCES_SLOT: &str = "__signalSources";
+// An engine-private HeapObject brand, never an option or a guest property.
+// The ordinary object memory meter and collector own its storage and lifetime.
+const PROTECTED_ABORT_LISTENER_BRAND: &str = "ProtectedAbortListener";
 
 /// The internal slots above: never own keys guest code lists.
 pub(super) const EVENT_FAMILY_SLOT_KEYS: [&str; 21] = [
@@ -894,6 +897,54 @@ impl InterpreterCore {
         Ok(())
     }
 
+    /// The first-class events.addAbortListener facade's private registration
+    /// primitive. It does not invoke guest code or coerce operands. Publish the
+    /// complete once-listener record only after its allocation and private
+    /// brand have been admitted by the existing native memory budget.
+    pub(super) fn register_protected_abort_listener(
+        &mut self,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        if args.count != 2 {
+            return Err(InterpreterError::TypeError {
+                expected: "signal and listener for protected abort registration".to_string(),
+                got: format!("{} argument(s)", args.count),
+            });
+        }
+        let signal = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let signal = self.abort_signal_receiver(&signal, "addAbortListener")?;
+        let callback = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+        if !callback.is_callable() {
+            return Err(InterpreterError::TypeError {
+                expected: "callable abort listener".to_string(),
+                got: callback.type_name().to_string(),
+            });
+        }
+        // addEventListener deduplicates by callback and capture. A duplicate
+        // protected registration must not upgrade an existing ordinary record
+        // or change whether that original registration was one-shot.
+        if self
+            .event_target_find_record(signal, "abort", &callback, false)?
+            .is_some()
+        {
+            return Ok(Value::Undefined);
+        }
+        let record = self.alloc_branded_object(
+            PROTECTED_ABORT_LISTENER_BRAND,
+            &[
+                ("type", Value::str("abort")),
+                ("callback", callback),
+                ("capture", Value::Bool(false)),
+                ("once", Value::Bool(true)),
+                ("passive", Value::Bool(false)),
+                ("removed", Value::Bool(false)),
+                ("target", Value::Object(signal)),
+            ],
+        )?;
+        self.event_array_push(signal, LISTENERS_SLOT, Value::Object(record))?;
+        Ok(Value::Undefined)
+    }
+
     /// The `capture` of a listener's options: a boolean, or the option.
     fn event_listener_capture(
         &mut self,
@@ -1022,11 +1073,20 @@ impl InterpreterCore {
             if self.event_slot(record, "removed").is_truthy() {
                 continue;
             }
+            let protected_abort_listener = event_type == "abort"
+                && self
+                    .heap
+                    .get(record.0 as usize)
+                    .is_some_and(|object| object.brand() == Some(PROTECTED_ABORT_LISTENER_BRAND));
             if self
                 .event_slot(event, EVENT_STOP_IMMEDIATE_SLOT)
                 .is_truthy()
+                && !protected_abort_listener
             {
-                break;
+                // Ordinary listeners stay suppressed. Protected abort
+                // registrations later in the same snapshot still run at their
+                // original positions with this exact signal and Event.
+                continue;
             }
             if self.event_slot(record, "once").is_truthy() {
                 self.event_target_remove_record(target, record)?;
@@ -1762,6 +1822,156 @@ mod abort_graph_tests {
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn protected_abort_records_resist_stop_without_exposing_a_forgeable_option() {
+        let (mut core, module) = runtime();
+        let signal = core.alloc_abort_signal().unwrap();
+        let ordinary = listener_object(&mut core);
+        let options = core
+            .alloc_object_with_properties(&[
+                ("once", Value::Bool(true)),
+                ("resistStopPropagation", Value::Bool(true)),
+                ("__type", Value::str(PROTECTED_ABORT_LISTENER_BRAND)),
+            ])
+            .unwrap();
+        core.event_target_add_listener(
+            &module,
+            signal,
+            Value::str("abort"),
+            ordinary,
+            Value::Object(options),
+        )
+        .unwrap();
+        let ordinary = core.event_array_objects(signal, LISTENERS_SLOT).unwrap()[0];
+        // Even a property on the internal record does not confer the brand.
+        core.set_event_slot(
+            ordinary,
+            "__type",
+            Value::str(PROTECTED_ABORT_LISTENER_BRAND),
+        )
+        .unwrap();
+        core.seed_register(0, Value::Object(signal)).unwrap();
+        core.seed_register(
+            1,
+            Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayIsArray)),
+        )
+        .unwrap();
+        core.register_protected_abort_listener(RegRange { start: 0, count: 2 })
+            .unwrap();
+        let protected = core.event_array_objects(signal, LISTENERS_SLOT).unwrap()[1];
+        assert_eq!(
+            core.heap[protected.0 as usize].brand(),
+            Some(PROTECTED_ABORT_LISTENER_BRAND)
+        );
+        let event = core
+            .alloc_event("Event", "abort", [false; 3], Value::Null)
+            .unwrap();
+        core.set_event_slot(event, EVENT_STOP_IMMEDIATE_SLOT, Value::Bool(true))
+            .unwrap();
+        core.event_target_dispatch(&module, &Value::Object(signal), &Value::Object(event))
+            .unwrap();
+        assert!(!core.event_slot(ordinary, "removed").is_truthy());
+        assert!(core.event_slot(protected, "removed").is_truthy());
+        assert_eq!(
+            core.event_array_objects(signal, LISTENERS_SLOT).unwrap(),
+            vec![ordinary]
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn protected_abort_registration_preserves_existing_callback_options() {
+        let (mut core, module) = runtime();
+        let signal = core.alloc_abort_signal().unwrap();
+        let callback =
+            Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayIsArray));
+        core.event_target_add_listener(
+            &module,
+            signal,
+            Value::str("abort"),
+            callback.clone(),
+            Value::Undefined,
+        )
+        .unwrap();
+        let original = core.event_array_objects(signal, LISTENERS_SLOT).unwrap();
+        core.seed_register(0, Value::Object(signal)).unwrap();
+        core.seed_register(1, callback).unwrap();
+        let before = core.estimated_memory_bytes();
+        core.register_protected_abort_listener(RegRange { start: 0, count: 2 })
+            .unwrap();
+        assert_eq!(
+            core.event_array_objects(signal, LISTENERS_SLOT).unwrap(),
+            original
+        );
+        assert_eq!(core.estimated_memory_bytes(), before);
+        assert_eq!(core.heap[original[0].0 as usize].brand(), None);
+        assert!(!core.event_slot(original[0], "once").is_truthy());
+    }
+
+    #[test]
+    fn protected_abort_registration_refusal_never_attaches_a_partial_record() {
+        let (mut core, _) = runtime();
+        let signal = core.alloc_abort_signal().unwrap();
+        core.seed_register(0, Value::Object(signal)).unwrap();
+        core.seed_register(
+            1,
+            Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayIsArray)),
+        )
+        .unwrap();
+        let original = core.event_slot(signal, LISTENERS_SLOT);
+        let before = core.heap.live_len();
+        // Admit the fully branded record, refuse the replacement listener list.
+        core.config.max_heap_objects = u32::try_from(before + 1).unwrap();
+        core.register_protected_abort_listener(RegRange { start: 0, count: 2 })
+            .expect_err("listener-list allocation is refused");
+        assert_eq!(core.heap.live_len(), before + 1);
+        assert_eq!(core.event_slot(signal, LISTENERS_SLOT), original);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn protected_abort_intrinsic_requires_builtin_authority_before_registration() {
+        let (mut core, module) = runtime();
+        let signal = core.alloc_abort_signal().unwrap();
+        core.seed_register(0, Value::Object(signal)).unwrap();
+        core.seed_register(
+            1,
+            Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayIsArray)),
+        )
+        .unwrap();
+        core.config
+            .granted_capabilities
+            .remove(&RuntimeCapability::Builtin);
+        let tag = "builtin:EventsAddAbortListener";
+        assert!(matches!(
+            check_hostcall_capability_gate(&mut core, tag, 0),
+            Err(InterpreterError::CapabilityDenied { .. })
+        ));
+        assert!(
+            core.event_array_objects(signal, LISTENERS_SLOT)
+                .unwrap()
+                .is_empty()
+        );
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::Builtin);
+        assert!(check_hostcall_capability_gate(&mut core, tag, 1).unwrap());
+        core.dispatch_builtin_hostcall(tag, RegRange { start: 0, count: 2 }, Some(&module))
+            .unwrap();
+        assert_eq!(
+            core.event_array_objects(signal, LISTENERS_SLOT)
+                .unwrap()
+                .len(),
+            1
         );
     }
 }

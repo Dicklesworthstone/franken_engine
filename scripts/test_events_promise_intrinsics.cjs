@@ -15,7 +15,8 @@ function facade() {
   for (const [key, value] of [['defaultMaxListeners', 10], ['captureRejections', false]]) {
     Object.defineProperty(E, key, {value, writable:true, configurable:true});
   }
-  return Function('__franken_events_constructor', 'return ' + source)(() => E);
+  return Function('__franken_events_constructor', '__franken_events_add_abort_listener',
+    'return ' + source)(() => E, native.addAbortListener);
 }
 function poison(member, run) {
   const target = member === 'constructor' ? globalThis : RealPromise;

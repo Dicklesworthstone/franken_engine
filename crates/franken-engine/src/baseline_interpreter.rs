@@ -98280,6 +98280,7 @@ impl InterpreterCore {
                 // materialized by this dispatch.
                 self.register_event_promise_once(args)
             }
+            "builtin:EventsAddAbortListener" => self.register_protected_abort_listener(args),
             "builtin:StreamReadableFrom" => {
                 // bd-fw7zd: statically proven `Readable.from(...)` is an
                 // engine-contained finite stream. No module object or host

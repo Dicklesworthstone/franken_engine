@@ -173,6 +173,7 @@ pub(super) fn intrinsic_capability(name: &str) -> Option<&'static str> {
         PROCESS_EXEC_ARGV_INTRINSIC => Some(crate::capability::UTIL_PROCESS_EXEC_ARGV_CAPABILITY),
         "%EventsConstructorRef" => Some("builtin:EventEmitterConstructorRef"),
         "%EventsOnce" => Some("builtin:EventsOnce"),
+        "%EventsAddAbortListener" => Some("builtin:EventsAddAbortListener"),
         "%TimersPromisesSetTimeout" => Some("builtin:TimersPromisesSetTimeout"),
         "%TimersPromisesSetImmediate" => Some("builtin:TimersPromisesSetImmediate"),
         "%TimersPromisesSetInterval" => Some("builtin:TimersPromisesSetInterval"),
@@ -281,8 +282,13 @@ const VM_SOURCE: &str = r#"(function () {
 // A private dependency, not an ambient HostCall or a public util property.
 const ASSERT_PLACEHOLDERS: [(&str, &str); 1] = [("__franken_assert_util", MODULE_BINDING)];
 
-const EVENTS_PLACEHOLDERS: [(&str, &str); 1] =
-    [("__franken_events_constructor", "%EventsConstructorRef")];
+const EVENTS_PLACEHOLDERS: [(&str, &str); 2] = [
+    ("__franken_events_constructor", "%EventsConstructorRef"),
+    (
+        "__franken_events_add_abort_listener",
+        "%EventsAddAbortListener",
+    ),
+];
 
 // The events and string_decoder modules the stream module builds on (each
 // declared before it), and the process.nextTick queue.
@@ -2886,6 +2892,10 @@ mod events_tests {
             );
         }
         assert_eq!(intrinsic_capability("__franken_events_once"), None);
+        assert_eq!(
+            intrinsic_capability("__franken_events_add_abort_listener"),
+            None
+        );
         assert_eq!(intrinsic_capability("require"), None);
     }
 

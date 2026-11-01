@@ -341,7 +341,7 @@ test('replaced public decoder methods cannot intercept an initialized readline f
 });
 
 // Compose the actual engine-owned dependencies as well as readline. Only
-// the emitter's primitive constructor and the Buffer/language primitives
+// the emitter's constructor/protected abort registration and Buffer/language primitives
 // remain Node-hosted. Do not mutate Node's exported EventEmitter statics or
 // let an inherited Node events.on accidentally supply a missing algorithm.
 function sharedCandidate() {
@@ -349,8 +349,9 @@ function sharedCandidate() {
   Object.setPrototypeOf(HostEmitter.prototype, events.EventEmitter.prototype);
   const base = path.join(__dirname, '../../crates/franken-engine/src/lowering_pipeline');
   const sharedEvents = Function('__franken_events_constructor', '__franken_events_once',
+    '__franken_events_add_abort_listener',
     'return ' + fs.readFileSync(path.join(base, 'events_module.js'), 'utf8'))(
-      () => HostEmitter, events.once);
+      () => HostEmitter, events.once, events.addAbortListener);
   const sharedDecoder = Function('return ' + fs.readFileSync(
     path.join(base, 'string_decoder_module.js'), 'utf8'))();
   assert.notEqual(sharedEvents.on, events.on);

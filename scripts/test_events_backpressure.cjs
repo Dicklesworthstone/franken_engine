@@ -13,7 +13,8 @@ const source = fs.readFileSync(sourcePath, 'utf8');
 function facade() {
   class Emitter extends native.EventEmitter {}
   return new Function('__franken_events_constructor', '__franken_events_once',
-    'return ' + source)(() => Emitter, native.once);
+    '__franken_events_add_abort_listener', 'return ' + source)(
+    () => Emitter, native.once, native.addAbortListener);
 }
 function consumer(api = facade(), options = {}) {
   const emitter = new native.EventEmitter();

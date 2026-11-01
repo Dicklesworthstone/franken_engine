@@ -11,8 +11,12 @@ const source = fs.readFileSync(process.env.FRANKEN_EVENTS_SOURCE || path.join(__
   '../crates/franken-engine/src/lowering_pipeline/events_module.js'), 'utf8');
 function candidate() {
   class Emitter extends native.EventEmitter {}
-  return new Function('__franken_events_constructor', '__franken_events_once', 'return ' + source)(
-    () => Emitter, () => { throw new Error('candidate delegated observable once registration'); });
+  // The protected-registration adapter models the private native primitive;
+  // these host checks do not exercise the Rust listener record or dispatcher.
+  return new Function('__franken_events_constructor', '__franken_events_once',
+    '__franken_events_add_abort_listener', 'return ' + source)(
+    () => Emitter, () => { throw new Error('candidate delegated observable once registration'); },
+    (signal, listener) => { native.addAbortListener(signal, listener); });
 }
 const options = { timeout: 2500 };
 async function compare(exercise) {
@@ -201,7 +205,7 @@ test('native once regression fixtures agree across constructor, destructured and
     const fixtures = fs.readFileSync(path.join(__dirname,
       '../crates/franken-engine/tests/events_once_registration.rs'), 'utf8');
     for (const name of ['REGISTRATION', 'OVERRIDE', 'REJECTION', 'ORDERING',
-      'EVENT_TARGET', 'INVALID_EMITTER', 'PROTECTED_REGISTRATION']) {
+      'EVENT_TARGET', 'INVALID_EMITTER', 'PROTECTED_REGISTRATION', 'PROTECTED_ABORT', 'PREABORT']) {
       const match = fixtures.match(new RegExp('const ' + name + ': &str = r#"([\\s\\S]*?)"#;'));
       assert.ok(match, 'missing native fixture ' + name);
       const original = match[1];
@@ -249,4 +253,79 @@ test('replacement during newListener cannot corrupt the remaining subscription t
     assert.equal(emitter.listenerCount('go'), 0);
     assert.equal(emitter.listenerCount('error'), 0);
   }
+});
+
+test('addAbortListener survives stopped propagation with the original signal and event', options, async () => {
+  await compare(async E => {
+    const controller = new AbortController(), signal = controller.signal, trace = [];
+    let original;
+    signal.addEventListener('abort', event => {
+      original = event; trace.push('stop'); event.stopImmediatePropagation();
+    });
+    signal.addEventListener('abort', () => trace.push('ordinary'));
+    E.addAbortListener(signal, function (event) {
+      trace.push(['protected', this === signal, event === original, event.target === signal,
+        signal.aborted, signal.reason]);
+    });
+    signal.addEventListener('abort', () => trace.push('after'));
+    E.addAbortListener(signal, () => trace.push('protected2'));
+    controller.abort('reason');
+    controller.abort('ignored');
+    return trace;
+  });
+});
+
+test('protected abort registration keeps ordinary ordering, duplicate identity, and disposal', options, async () => {
+  for (const dispose of [false, true]) {
+    await compare(async E => {
+      const controller = new AbortController(), signal = controller.signal, trace = [];
+      signal.addEventListener('abort', () => trace.push('first'));
+      const registration = E.addAbortListener(signal, () => trace.push('protected'));
+      signal.addEventListener('abort', () => trace.push('last'));
+      if (dispose) { registration[Symbol.dispose](); registration[Symbol.dispose](); }
+      controller.abort();
+      return [trace, Object.getPrototypeOf(registration) === null];
+    });
+  }
+  await compare(async E => {
+    const controller = new AbortController(), trace = [];
+    function duplicate() { trace.push('duplicate'); }
+    controller.signal.addEventListener('abort', event => event.stopImmediatePropagation());
+    controller.signal.addEventListener('abort', duplicate);
+    const first = E.addAbortListener(controller.signal, duplicate);
+    const second = E.addAbortListener(controller.signal, duplicate);
+    controller.abort();
+    first[Symbol.dispose](); second[Symbol.dispose]();
+    return trace;
+  });
+});
+
+test('synthetic abort is a one-shot event and reentrant dispatch cannot repeat a protected callback', options, async () => {
+  for (const synthetic of [false, true]) {
+    await compare(async E => {
+      const controller = new AbortController(), signal = controller.signal, trace = [];
+      signal.addEventListener('abort', event => { trace.push('stop'); event.stopImmediatePropagation(); });
+      E.addAbortListener(signal, function (event) {
+        trace.push([this === signal, event.target === signal, signal.aborted]);
+        signal.dispatchEvent(new Event('abort'));
+      });
+      if (synthetic) { signal.dispatchEvent(new Event('abort')); }
+      controller.abort();
+      return trace;
+    });
+  }
+});
+
+test('pre-aborted callbacks retain microtask order and cannot be cancelled by disposing', options, async () => {
+  await compare(async E => {
+    const controller = new AbortController(), trace = [];
+    controller.abort();
+    const registration = E.addAbortListener(controller.signal, function (event) {
+      trace.push(['callback', this === undefined, event === undefined]);
+    });
+    registration[Symbol.dispose]();
+    trace.push('sync');
+    await Promise.resolve();
+    return trace;
+  });
 });

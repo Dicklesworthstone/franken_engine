@@ -26,6 +26,7 @@
   var resolvePromise = Promise.resolve.bind(Promise);
   var rejectPromise = Promise.reject.bind(Promise);
   var iteratorKey = Symbol.iterator;
+  var disposeKey = Symbol.dispose;
   var controllerSignal = Object.getOwnPropertyDescriptor(AbortController.prototype, 'signal').get;
   var signalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'aborted').get;
   var signalReason = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'reason').get;
@@ -467,15 +468,22 @@
     abortSignal(signal);
     if (typeof listener !== 'function') { throw argumentType('listener', 'of type function', listener); }
     var remove;
+    // Admit the returned handle and its closure before publishing a native
+    // listener or a queued callback. An allocation refusal must not strand a
+    // registration whose caller never received the way to dispose it.
+    var disposable = createObject(null);
+    if (typeof disposeKey === 'symbol') {
+      disposable[disposeKey] = function () { if (remove !== undefined) { remove(); } };
+    }
     if (isAborted(signal)) {
       queueMicrotask(function () { listener(); });
     } else {
-      apply(addListener, signal, ['abort', listener, { once: true }]);
       remove = function () { apply(removeListener, signal, ['abort', listener]); };
-    }
-    var disposable = createObject(null);
-    if (typeof Symbol.dispose === 'symbol') {
-      disposable[Symbol.dispose] = function () { if (remove !== undefined) { remove(); } };
+      // The native record resists stopImmediatePropagation without moving the
+      // callback to a dependent signal: its position, receiver, and Event must
+      // still belong to this signal's ordinary dispatch. The private intrinsic
+      // is unavailable to guest addEventListener options or property names.
+      __franken_events_add_abort_listener(signal, listener);
     }
     return disposable;
   };

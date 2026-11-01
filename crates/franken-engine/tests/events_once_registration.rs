@@ -32,11 +32,11 @@ fn assert_events(source: &str, expected: &str) {
                 .replace("E.once(", "events.once("),
         ),
     ] {
-        assert_events_shape(&source, expected, shape);
+        assert_events_shape(&source, expected, shape, false);
     }
 }
 
-fn assert_events_shape(source: &str, expected: &str, shape: &str) {
+fn assert_events_shape(source: &str, expected: &str, shape: &str, timer: bool) {
     let tree = parse_script(source).expect("events source parses");
     let lowered = lower_ir0_to_ir3(
         &Ir0Module::from_syntax_tree(tree, "events-once-registration.js"),
@@ -58,6 +58,9 @@ fn assert_events_shape(source: &str, expected: &str, shape: &str) {
             ]
             .into_iter()
             .collect();
+            if timer {
+                config.granted_capabilities.insert(RuntimeCapability::Timer);
+            }
             let mut core = InterpreterCore::new(config, "events-once");
             core.set_gc_stress_interval(stress);
             let result = core.execute(&lowered.ir3).expect("events source executes");
@@ -256,4 +259,67 @@ Promise.all([once, pending, returned]).then(values => {
 #[test]
 fn guest_array_helpers_cannot_intercept_listener_registration_and_cleanup() {
     assert_events(PROTECTED_REGISTRATION, "untouched 0 0\nvalues 42 7 true");
+}
+
+const PROTECTED_ABORT: &str = r#"
+'use strict';
+const E = require('events');
+const { addAbortListener: listen } = require('node:events');
+const controller = new AbortController(), signal = controller.signal;
+let original;
+signal.addEventListener('abort', event => {
+  original = event;
+  console.log('stop');
+  event.stopImmediatePropagation();
+});
+signal.addEventListener('abort', () => console.log('ordinary must stay stopped'),
+  { resistStopPropagation: true, __type: 'ProtectedAbortListener' });
+const removed = listen(signal, () => console.log('disposed must stay absent'));
+removed[Symbol.dispose](); removed[Symbol.dispose]();
+E.addAbortListener(signal, function (event) {
+  console.log('protected', this === signal, event === original,
+    event.target === signal, signal.aborted, signal.reason);
+});
+listen(signal, () => console.log('protected2'));
+controller.abort('reason'); controller.abort('ignored');
+const synthetic = new AbortController(), event = new Event('abort');
+synthetic.signal.addEventListener('abort', e => e.stopImmediatePropagation());
+listen(synthetic.signal, function (value) {
+  console.log('synthetic', value === event, this === synthetic.signal, this.aborted);
+  this.dispatchEvent(new Event('abort'));
+});
+synthetic.signal.dispatchEvent(event);
+synthetic.abort('later');
+const duplicate = new AbortController();
+function ordinary() { console.log('duplicate must stay ordinary'); }
+duplicate.signal.addEventListener('abort', e => e.stopImmediatePropagation());
+duplicate.signal.addEventListener('abort', ordinary);
+listen(duplicate.signal, ordinary);
+duplicate.abort();
+console.log('done');
+"#;
+
+#[test]
+fn add_abort_listener_retains_original_dispatch_identity_and_protected_delivery() {
+    assert_events(
+        PROTECTED_ABORT,
+        "stop\nprotected true true true true reason\nprotected2\nsynthetic true true false\ndone",
+    );
+}
+
+const PREABORT: &str = r#"
+'use strict';
+const E = require('events');
+const controller = new AbortController();
+controller.abort('earlier');
+const disposable = E.addAbortListener(controller.signal, function (event) {
+  console.log('later', this === undefined, event === undefined);
+});
+disposable[Symbol.dispose]();
+console.log('sync');
+"#;
+
+#[test]
+fn preaborted_listener_keeps_queued_delivery_even_after_disposal() {
+    assert_events_shape(PREABORT, "sync\nlater true true", "pre-aborted", true);
 }

@@ -1,6 +1,7 @@
 'use strict';
 // Host-side differential validation of the exact engine-owned events prelude.
-// The adapter supplies Node's native emitter. once() remains the shipped source.
+// The adapter supplies Node's emitter and protected abort-registration primitive.
+// once() and the public addAbortListener facade remain the shipped source.
 // This does NOT execute FrankenEngine's parser, lowering, interpreter, or IFC.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -10,13 +11,13 @@ const { spawnSync } = require('node:child_process');
 const source = fs.readFileSync(path.join(__dirname,
   '../crates/franken-engine/src/lowering_pipeline/events_module.js'), 'utf8');
 const factory = new Function('__franken_events_constructor', '__franken_events_once',
-  'AbortController', 'AbortSignal', 'return ' + source);
+  'AbortController', 'AbortSignal', '__franken_events_add_abort_listener', 'return ' + source);
 function candidate(Controller = AbortController, Signal = AbortSignal) {
   class AdapterEmitter extends nodeEvents.EventEmitter {}
   Object.defineProperty(AdapterEmitter, 'name', { value: 'EventEmitter' });
   return factory(() => AdapterEmitter, () => {
     throw new Error('observable once must not delegate to a native wait');
-  }, Controller, Signal);
+  }, Controller, Signal, nodeEvents.addAbortListener);
 }
 function reason(error) {
   return { name: error && error.name, code: error && error.code, cause: error && error.cause };
@@ -68,7 +69,8 @@ async function run() {
         const input = candidateRun
           ? `const nodeEvents = require('node:events');
              class AdapterEmitter extends nodeEvents.EventEmitter {}
-             const E = new Function('__franken_events_constructor', ${JSON.stringify('return ' + source)})(() => AdapterEmitter);
+             const E = new Function('__franken_events_constructor', '__franken_events_add_abort_listener',
+               ${JSON.stringify('return ' + source)})(() => AdapterEmitter, nodeEvents.addAbortListener);
              new Function('require', ${JSON.stringify(program)})(specifier => {
                if (specifier !== 'events' && specifier !== 'node:events') throw new Error('unexpected dependency');
                return E;
@@ -91,8 +93,9 @@ async function run() {
       const child = spawnSync(process.execPath, ['-'], {
         input: `const nodeEvents = require('node:events');
           class AdapterEmitter extends nodeEvents.EventEmitter {}
-          const make = new Function('__franken_events_constructor', '__franken_events_once', ${JSON.stringify('return ' + source)});
-          const E = make(() => AdapterEmitter, nodeEvents.once);
+          const make = new Function('__franken_events_constructor', '__franken_events_once',
+            '__franken_events_add_abort_listener', ${JSON.stringify('return ' + source)});
+          const E = make(() => AdapterEmitter, nodeEvents.once, nodeEvents.addAbortListener);
           new Function('require', ${JSON.stringify(program)})(name => {
             if (name !== 'events' && name !== 'node:events') throw new Error('unexpected dependency');
             return E;

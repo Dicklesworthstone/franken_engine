@@ -33517,6 +33517,11 @@ fn hostcall_exception_is_operand_derived(
         // The authenticated EventEmitter constructor reference is a finite
         // engine-owned value with no guest operands or callbacks.
         "builtin:EventEmitterConstructorRef" => inputs.is_empty(),
+        // Private abort registration checks native slots and callable identity,
+        // then allocates a listener record. It never invokes the listener or
+        // guest getters/coercions; argument labels still join the result and
+        // the Internal exception floor, while fatal budget refusals stay fatal.
+        "builtin:EventsAddAbortListener" => inputs.len() == 2,
         // These constructors are intercepted only for the unshadowed native
         // globals. Closed direct inputs cover primitive lengths/offsets,
         // engine-owned ArrayBuffers/views, and fresh array literals without
@@ -38107,6 +38112,46 @@ mod tests {
                 HostIoExceptionProvenance::Unknown,
             ));
         }
+    }
+
+    #[test]
+    fn protected_abort_registration_keeps_operand_labels_and_builtin_authority() {
+        let mut next_identity = 0;
+        let signal = fresh_shaped_flow_value(
+            Label::Secret,
+            FlowValueShape::Unknown,
+            &mut next_identity,
+        );
+        let callback = fresh_shaped_flow_value(
+            Label::Internal,
+            FlowValueShape::Callable,
+            &mut next_identity,
+        );
+        let tag = "builtin:EventsAddAbortListener";
+        assert!(hostcall_exception_is_operand_derived(
+            tag,
+            &[signal.clone(), callback],
+            HostIoExceptionProvenance::Unknown,
+        ));
+        assert!(!hostcall_exception_is_operand_derived(
+            tag,
+            std::slice::from_ref(&signal),
+            HostIoExceptionProvenance::Unknown,
+        ));
+        let row = crate::capability::hostcall_registry_row(tag).expect("private builtin registry");
+        assert_eq!(
+            row.authority,
+            Some(crate::capability::RuntimeCapability::Builtin)
+        );
+        assert_eq!(
+            row.result_contract.result_label(&Label::Secret, None),
+            Label::Secret
+        );
+        assert!(!hostcall_exception_is_operand_derived(
+            "fs:read",
+            std::slice::from_ref(&signal),
+            HostIoExceptionProvenance::Unknown,
+        ));
     }
 
     #[test]

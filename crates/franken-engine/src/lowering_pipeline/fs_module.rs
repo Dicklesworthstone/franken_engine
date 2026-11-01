@@ -752,9 +752,11 @@ impl Walk for DirectFsCalls {
             && require_member(object) == Some(None)
             && let Some(method) = super::super::well_formed_static_name(property)
             && let Some(spec) = super::super::fs_sync_builtin_spec(method)
-            // Recursive options need the shared directory collector, not the
-            // native single-directory effect. Dynamic options fail this proof.
-            && (method != "readdirSync"
+            // Reads with object/dynamic options need JavaScript property
+            // semantics before the native bridge's data-only lookup. Even an
+            // object literal can inherit signal/flag/encoding accessors.
+            // Recursive directory options likewise need the shared collector.
+            && (!matches!(method, "readFileSync" | "readdirSync")
                 || arguments.get(1).is_none_or(|options| matches!(options,
                     Expression::UndefinedLiteral | Expression::NullLiteral
                     | Expression::StringLiteral(_))))
@@ -797,11 +799,13 @@ impl Walk for DirectFsCalls {
             && matches!(arguments.as_slice(), [Expression::StringLiteral(specifier)]
                 if specifier.as_str().is_some_and(|specifier|
                     super::super::is_http_module_specifier(specifier)
-                        || super::super::is_https_module_specifier(specifier)))
+                        || super::super::is_https_module_specifier(specifier)
+                        || super::super::is_crypto_module_specifier(specifier)))
         {
-            // These fixed networking facades do not load guest modules or
+            // These fixed native facades do not load guest modules or
             // expose the filesystem namespace. Leave their require intact for
-            // the ordinary HTTP/HTTPS recognizers and authority checks. A
+            // their ordinary recognizers and invocation authority checks,
+            // including RandomRead and Secret source labels for crypto. A
             // source binding named require still invalidates the whole proof.
             return Ok(());
         }
@@ -1596,7 +1600,7 @@ mod tests {
 
     #[test]
     fn direct_calls_preserve_arguments_and_discriminator_like_guest_paths() {
-        let tree = parse("require('fs').readFileSync(path(), encoding());");
+        let tree = parse("require('fs').readFileSync(path(), 'utf8');");
         let rewritten = direct_fs_calls(&tree).unwrap().unwrap();
         let Statement::Expression(original) = &tree.body[0] else { panic!("call"); };
         let Statement::Expression(lowered) = &rewritten.body[0] else { panic!("call"); };
@@ -1609,6 +1613,44 @@ mod tests {
         let Expression::Call { arguments, .. } = &statement.expression else { panic!("args"); };
         assert_eq!(arguments[0], Expression::StringLiteral("\0fsop:read".into()));
         assert_eq!(arguments[1], Expression::StringLiteral("\0fsop:unlink".into()));
+    }
+
+    #[test]
+    fn sync_read_options_with_observable_property_semantics_keep_the_facade() {
+        for source in [
+            "require('fs').readFileSync(path(), encoding());",
+            "require('fs').readFileSync('input', {encoding: 'utf8'});",
+            "require('node:fs').readFileSync('input', {get encoding() { return 'utf8'; }});",
+            "const fs = require('fs'); fs.readFileSync('input', options);",
+            "const {readFileSync: read} = require('fs'); read('input', options);",
+            "require('fs').readFileSync(path(), undefined);",
+            "const undefined = options; require('fs').readFileSync('input', undefined);",
+        ] {
+            let tree = parse(source);
+            let original = tree.clone();
+            assert!(direct_fs_calls(&tree).unwrap().is_none(), "{source}");
+            assert_eq!(tree, original, "a failed direct proof must not mutate source");
+            let rewritten = rewrite_fs_requires(&tree).unwrap().expect("native facade");
+            let Statement::Expression(before) = tree.body.last().unwrap() else {
+                panic!("original call");
+            };
+            let Statement::Expression(after) = rewritten.body.last().unwrap() else {
+                panic!("facade call");
+            };
+            let Expression::Call { arguments: before, .. } = &before.expression else {
+                panic!("original operands");
+            };
+            let Expression::Call { arguments: after, .. } = &after.expression else {
+                panic!("facade operands");
+            };
+            assert_eq!(after, before, "preserve every operand exactly once and in order: {source}");
+        }
+        // Source `undefined` is a shadowable identifier. Only omitted options
+        // create an UndefinedLiteral without resolving a guest binding.
+        for options in ["", ", 'utf8'", ", null"] {
+            let source = format!("require('fs').readFileSync(path(){options});");
+            assert!(direct_fs_calls(&parse(&source)).unwrap().is_some(), "{source}");
+        }
     }
 
     #[test]
@@ -1653,6 +1695,60 @@ mod tests {
                 direct_fs_calls(&parse(source)).unwrap().is_none(),
                 "{source}"
             );
+        }
+    }
+
+    #[test]
+    fn literal_crypto_facades_preserve_direct_fs_operands_and_native_loads() {
+        for specifier in ["crypto", "node:crypto"] {
+            let tree = parse(&format!(
+                "const crypto = require('{specifier}'); const path = crypto.randomUUID(); \
+                 const fs = require('fs'); fs.writeFileSync(path, 'public-data');"
+            ));
+            let original = tree.clone();
+            let rewritten = direct_fs_calls(&tree).unwrap().expect("native crypto facade");
+            assert_eq!(rewritten.body.len(), tree.body.len());
+            assert_eq!(rewritten.body[0], tree.body[0], "preserve the crypto loader");
+            assert_eq!(rewritten.body[1], tree.body[1], "preserve the entropy call");
+            assert_eq!(require_count(&rewritten), 0, "filesystem loads are mediated");
+            assert!(!rewritten.body.iter().any(is_module_declaration));
+            let Statement::Expression(before) = &tree.body[3] else {
+                panic!("original write");
+            };
+            let Statement::Expression(after) = &rewritten.body[3] else {
+                panic!("protected write");
+            };
+            let Expression::Call { arguments: before, .. } = &before.expression else {
+                panic!("original operands");
+            };
+            let Expression::Call { callee, arguments, .. } = &after.expression else {
+                panic!("protected operands");
+            };
+            assert_eq!(callee.as_ref(), &Expression::Identifier("%FsWrite".into()));
+            assert_eq!(arguments[0], Expression::StringLiteral("\0fsop:write".into()));
+            assert_eq!(&arguments[1..3], before.as_slice(), "retain the nonfinal secret path operand");
+            assert_eq!(tree, original, "the proof must not mutate its input");
+            assert!(rewrite_fs_requires(&rewritten).unwrap().is_none());
+        }
+    }
+
+    #[test]
+    fn crypto_facades_do_not_relax_filesystem_observation_or_loader_guards() {
+        for source in [
+            "const crypto = require('crypto'); require('./crypto.cjs'); require('fs').readFileSync('x');",
+            "const crypto = require('crypto'); require(cryptoModule); require('fs').readFileSync('x');",
+            "function load(require) { const crypto = require('crypto'); require('fs').readFileSync('x'); }",
+            "const require = loader; const crypto = require('crypto'); require('fs').readFileSync('x');",
+            "const crypto = require('crypto'); crypto.randomUUID.constructor('return require')(); require('fs').readFileSync('x');",
+            "const crypto = require('crypto'); crypto[key]; require('fs').readFileSync('x');",
+            "const crypto = require('crypto'); const fs = require('fs'); consume(fs); fs.readFileSync('x');",
+            "const crypto = require('crypto'); const fs = require('fs'); fs.readFileSync = replacement; fs.readFileSync('x');",
+            "const crypto = require('crypto'); const load = require; require('fs').readFileSync('x');",
+        ] {
+            let tree = parse(source);
+            let original = tree.clone();
+            assert!(direct_fs_calls(&tree).unwrap().is_none(), "{source}");
+            assert_eq!(tree, original, "a failed proof must preserve its input");
         }
     }
 

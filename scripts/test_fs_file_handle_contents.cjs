@@ -38,7 +38,7 @@ function fixture(hook = () => {}, globals = {}) {
       case 'read_fd': return fs.readSync(...args);
       case 'write_fd': return fs.writeSync(...args);
       case 'fsync': return fs.fsyncSync(...args);
-      case 'read': return fs.readFile(...args);
+      case 'read': return typeof args[2] === 'function' ? fs.readFile(...args) : fs.readFileSync(...args);
       case 'write': return fs.writeFile(...args);
       case 'append': return fs.appendFile(...args);
       default: throw new Error(`unexpected host operation: ${operation}`);
@@ -699,6 +699,230 @@ test('pathname Promise option failures reject before native dispatch and keep Bu
     const bytes = await facade.promises.readFile(file, options);
     assert(Buffer.isBuffer(bytes)); assert.equal(bytes.toString(), 'bytes');
   }
+});
+
+test('sync pathname reads resolve accessor and inherited options at the native boundary', () => {
+  const { facade, file, calls } = fixture((authority, operation, args) => {
+    if (operation !== 'read') return;
+    const encoding = Object.getOwnPropertyDescriptor(args[1], 'encoding')?.value;
+    const flag = Object.getOwnPropertyDescriptor(args[1], 'flag')?.value;
+    return fs.readFileSync(args[0], { encoding, flag });
+  });
+  fs.writeFileSync(file, 'sync bytes');
+  for (const options of [Object.create({ encoding: 'utf8', flag: 'r+' }),
+    { get encoding() { return 'utf8'; }, get flag() { return 'r'; } }]) {
+    assert.equal(facade.readFileSync(file, options), fs.readFileSync(file, options));
+  }
+  assert.equal(calls[0].args[1].flag, 'r+');
+  assert(calls.every(call => call.authority === 'fs_read' && call.operation === 'read'));
+});
+
+test('sync pathname reads validate options before dispatch but ignore cancellation', () => {
+  const { facade, file, calls } = fixture();
+  fs.writeFileSync(file, 'sync bytes');
+  const failure = new Error('options getter');
+  for (const key of ['encoding', 'signal', 'flag']) {
+    const options = { get [key]() { throw failure; } };
+    assert.throws(() => facade.readFileSync(file, options), error => error === failure);
+  }
+  assert.deepEqual(calls, []);
+  const signal = AbortSignal.abort(false);
+  assert.equal(facade.readFileSync(file, { encoding: 'utf8', signal }),
+    fs.readFileSync(file, { encoding: 'utf8', signal }));
+  const ignored = () => { throw new Error('not a callback'); };
+  Object.defineProperty(ignored, 'encoding', { get() { throw failure; } });
+  for (const options of [undefined, null, ignored]) {
+    const bytes = facade.readFileSync(file, options);
+    assert(Buffer.isBuffer(bytes)); assert.equal(bytes.toString(), 'sync bytes');
+  }
+});
+
+test('callback pathname reads normalize inherited options and preserve asynchronous delivery', async () => {
+  const { facade, file, calls } = fixture((authority, operation, args) => {
+    if (operation !== 'read') return;
+    const encoding = Object.getOwnPropertyDescriptor(args[1], 'encoding')?.value;
+    const flag = Object.getOwnPropertyDescriptor(args[1], 'flag')?.value;
+    fs.readFile(args[0], { encoding, flag }, args[2]);
+    return null;
+  });
+  fs.writeFileSync(file, 'callback bytes');
+  for (const options of [Object.create({ encoding: 'utf8', flag: 'r+' }),
+    { get encoding() { return 'utf8'; }, get flag() { return 'r'; } }]) {
+    let returned = false;
+    const value = await new Promise((resolve, reject) => {
+      facade.readFile(file, options, (error, data) => {
+        try { assert.equal(returned, true); if (error) reject(error); else resolve(data); }
+        catch (failure) { reject(failure); }
+      });
+      returned = true;
+    });
+    assert.equal(value, 'callback bytes');
+  }
+  assert.equal(calls[0].args[1].flag, 'r+');
+  assert(calls.every(call => call.authority === 'fs_read' && call.operation === 'read'));
+});
+
+test('callback pathname pre-abort matches Node synchronous completion and skips flag and host access', () => {
+  const { facade, file, calls } = fixture();
+  fs.writeFileSync(file, 'callback bytes');
+  function exercise(api) {
+    const signal = AbortSignal.abort(false);
+    let synchronous = true, completed = 0, observed;
+    const options = { signal, get flag() { throw new Error('aborted read consulted flag'); } };
+    api.readFile(file, options, function (error) {
+      completed++;
+      observed = [synchronous, error.name, error.code, error.cause, arguments.length];
+    });
+    synchronous = false;
+    assert.equal(completed, 1);
+    return observed;
+  }
+  assert.deepEqual(exercise(facade), exercise(fs));
+  assert.deepEqual(calls, []);
+  const failure = new Error('callback failure');
+  assert.throws(() => facade.readFile(file, { signal: AbortSignal.abort() }, () => {
+    throw failure;
+  }), error => error === failure, 'a pre-abort callback throw remains a synchronous throw');
+  assert.deepEqual(calls, []);
+});
+
+test('callback pathname option errors throw before scheduling and callback validation runs first', () => {
+  const { facade, file, calls } = fixture();
+  fs.writeFileSync(file, 'callback bytes');
+  const failure = new Error('options getter');
+  let callbacks = 0;
+  for (const key of ['encoding', 'signal', 'flag']) {
+    const options = { get [key]() { throw failure; } };
+    assert.throws(() => facade.readFile(file, options, () => { callbacks++; }),
+      error => error === failure);
+  }
+  const options = { get encoding() { throw failure; } };
+  assert.throws(() => facade.readFile(file, options, null), { code: 'ERR_INVALID_ARG_TYPE' });
+  assert.equal(callbacks, 0);
+  assert.deepEqual(calls, []);
+});
+
+test('callback pathname reads recheck cancellation at delivery without swallowing callback throws', () => {
+  let complete;
+  const { facade, file, calls } = fixture((authority, operation, args) => {
+    if (operation !== 'read') return;
+    const bytes = fs.readFileSync(args[0]);
+    complete = () => args[2](null, bytes);
+    return null;
+  });
+  fs.writeFileSync(file, 'completed read');
+  const controller = new AbortController();
+  const failure = new Error('callback failure');
+  let callbacks = 0;
+  facade.readFile(file, { signal: controller.signal }, function (error) {
+    callbacks++;
+    assert.equal(error.code, 'ABORT_ERR'); assert.equal(error.cause, 'after read');
+    assert.equal(arguments.length, 1);
+    throw failure;
+  });
+  controller.abort('after read');
+  assert.throws(complete, error => error === failure);
+  assert.equal(callbacks, 1);
+  assert.deepEqual(calls.map(call => call.operation), ['read']);
+});
+
+test('callback pathname abort getters throw synchronously before dispatch like Node', () => {
+  const { facade, file, calls } = fixture();
+  fs.writeFileSync(file, 'callback bytes');
+  for (const key of ['aborted', 'reason']) {
+    const failure = new Error('signal ' + key);
+    const signal = { aborted: true };
+    Object.defineProperty(signal, key, { get() { throw failure; } });
+    for (const api of [fs, facade]) {
+      let callbacks = 0;
+      assert.throws(() => api.readFile(file, { signal }, () => { callbacks++; }),
+        error => error === failure);
+      assert.equal(callbacks, 0, 'signal accessor failure is not an err-first completion');
+    }
+  }
+  assert.deepEqual(calls, []);
+});
+
+test('callback pathname signal validation does not consume the completion getter early', () => {
+  let complete;
+  const { facade, file, calls } = fixture((authority, operation, args) => {
+    if (operation !== 'read') return;
+    const bytes = fs.readFileSync(args[0]);
+    complete = () => args[2](null, bytes);
+    return null;
+  });
+  fs.writeFileSync(file, 'completed read');
+  const failure = new Error('signal completion getter');
+  let reads = 0, callbacks = 0;
+  const signal = { get aborted() { if (++reads === 2) throw failure; return false; } };
+  assert.doesNotThrow(() => facade.readFile(file, { signal }, () => { callbacks++; }));
+  assert.equal(reads, 1); assert.equal(callbacks, 0);
+  assert.equal(typeof complete, 'function');
+  assert.throws(complete, error => error === failure);
+  assert.equal(reads, 2); assert.equal(callbacks, 0);
+  assert.deepEqual(calls.map(call => call.operation), ['read']);
+});
+
+test('sync pathname reads do not evaluate an aborted getter while validating signal presence', () => {
+  const { facade, file } = fixture();
+  fs.writeFileSync(file, 'sync bytes');
+  const signal = { get aborted() { throw new Error('sync read observed abort status'); } };
+  assert.equal(facade.readFileSync(file, { encoding: 'utf8', signal }),
+    fs.readFileSync(file, { encoding: 'utf8', signal }));
+});
+
+test('sync pathname defaults skip inherited signal but preserve inherited encoding', async () => {
+  const { facade, file, context, calls } = fixture();
+  fs.writeFileSync(file, 'native bytes');
+  const prototype = vm.runInContext('Object.prototype', context);
+  const explicitOptions = vm.runInContext('({})', context);
+  const failure = new Error('inherited signal');
+  let signalReads = 0, encodingReads = 0;
+  Object.defineProperty(prototype, 'signal', { configurable: true, get() {
+    signalReads++; throw failure;
+  } });
+  try {
+    for (const options of [undefined, null, () => {}]) {
+      const bytes = facade.readFileSync(file, options);
+      assert(Buffer.isBuffer(bytes)); assert.equal(bytes.toString(), 'native bytes');
+    }
+    assert(Buffer.isBuffer(facade.readFileSync(file)));
+    assert.equal(signalReads, 0, 'Node sync defaults do not validate an inherited signal');
+    for (const options of ['utf8', explicitOptions]) {
+      assert.throws(() => facade.readFileSync(file, options), error => error === failure);
+    }
+    assert.equal(signalReads, 2, 'explicit string and object options still validate signal');
+    assert.throws(() => facade.readFile(file, () => assert.fail('unexpected callback')),
+      error => error === failure, 'callback defaults still observe their signal');
+    await assert.rejects(facade.promises.readFile(file), error => error === failure);
+    assert.equal(signalReads, 4, 'Promise defaults still observe their signal');
+    Object.defineProperty(prototype, 'encoding', { configurable: true, get() {
+      encodingReads++; return 'utf8';
+    } });
+    assert.equal(facade.readFileSync(file, null), 'native bytes');
+    assert.equal(encodingReads, 1, 'default encoding retains ordinary prototype lookup');
+    assert.equal(signalReads, 4);
+    assert.equal(calls.length, 5, 'only the successful synchronous reads cross the host seam');
+    assert(calls.every(call => call.authority === 'fs_read' && call.operation === 'read'));
+  } finally {
+    delete prototype.signal;
+    delete prototype.encoding;
+  }
+});
+
+test('pathname read option snapshots cannot invoke a prototype flag setter', async () => {
+  const { facade, file, context } = fixture();
+  fs.writeFileSync(file, 'owned fields');
+  vm.runInContext("Object.defineProperty(Object.prototype, 'flag', { \
+    set() { throw new Error('prototype setter intercepted native options'); }, configurable: true });", context);
+  assert.equal(facade.readFileSync(file, { encoding: 'utf8', flag: 'r' }), 'owned fields');
+  assert.equal(await facade.promises.readFile(file, { encoding: 'utf8', flag: 'r' }), 'owned fields');
+  const value = await new Promise((resolve, reject) => {
+    facade.readFile(file, { encoding: 'utf8', flag: 'r' }, (error, value) => {
+      if (error) reject(error); else resolve(value);
+    });
+  });
+  assert.equal(value, 'owned fields');
 });
 
 test('the handle registry is lazy and initialization failure occurs before opening an fd', async () => {

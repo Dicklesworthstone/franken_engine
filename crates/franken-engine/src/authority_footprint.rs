@@ -788,6 +788,54 @@ mod tests {
     }
 
     #[test]
+    fn direct_fs_with_native_crypto_keeps_both_invocation_capabilities() {
+        for specifier in ["crypto", "node:crypto"] {
+            let source = format!(
+                "const crypto = require('{specifier}'); crypto.randomUUID(); \
+                 require('fs').readFileSync('input', 'utf8');"
+            );
+            let report = analyze_authority_footprint(&source, "crypto-fs.js", ParseGoal::Script);
+            assert_eq!(report.outcome(), CheckOutcome::Clean, "{report:?}");
+            let capabilities: std::collections::BTreeSet<_> = report
+                .required_capabilities
+                .iter()
+                .filter_map(|requirement| requirement.capability)
+                .collect();
+            assert_eq!(
+                capabilities,
+                std::collections::BTreeSet::from([
+                    RuntimeCapability::FsRead,
+                    RuntimeCapability::RandomRead,
+                ]),
+                "native crypto must retain entropy authority without adding unused filesystem writes: {report:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn crypto_secrets_in_filesystem_paths_and_contents_still_fail_closed() {
+        for operation in [
+            "fs.writeFileSync(secret, 'public-data');",
+            "fs.writeFileSync('output', secret);",
+        ] {
+            let source = format!(
+                "const crypto = require('crypto'); const secret = crypto.randomUUID(); \
+                 const fs = require('fs'); {operation}"
+            );
+            let report =
+                analyze_authority_footprint(&source, "crypto-secret-fs.js", ParseGoal::Script);
+            assert_eq!(report.outcome(), CheckOutcome::Unanalyzable, "{report:?}");
+            assert!(
+                report
+                    .fail_closed_reason
+                    .as_deref()
+                    .is_some_and(|reason| reason.contains("Secret -> Internal")),
+                "the entropy source must retain its Secret label at either filesystem operand: {report:?}"
+            );
+        }
+    }
+
+    #[test]
     fn builtin_named_operations_report_their_runtime_authority() {
         for (tag, expected) in [
             ("builtin:QueueMicrotask", RuntimeCapability::Timer),

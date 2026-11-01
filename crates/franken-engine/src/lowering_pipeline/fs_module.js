@@ -37,7 +37,9 @@
   // call lowering emits. In particular, fd lifecycle operations require write
   // authority. No wrapper performs host I/O outside these two intrinsics.
   function readFileSync(path, options) {
-    return __franken_fs_read('\0fsop:read', path, options);
+    // Like Node, the synchronous API validates the options bag but does not
+    // cancel a read because an otherwise valid signal has already aborted.
+    return __franken_fs_read('\0fsop:read', path, readOptions(options, false, true));
   }
   function writeFileSync(path, data, options) {
     return __franken_fs_write('\0fsop:write', path, data, options);
@@ -195,9 +197,18 @@
       options = undefined;
     }
     validateCallback(callback);
+    var settings = readOptions(options, true);
+    // Node reports pre-abort synchronously to the callback, without reading
+    // the open flag or entering the filesystem boundary. Getter failures
+    // while observing the signal remain synchronous throws, not callbacks.
+    var aborted = abortError(settings.signal);
+    if (aborted !== undefined) { callback(aborted); return; }
+    if (options !== null && typeof options === 'object') { settings.flag = options.flag; }
     // The closure adapter also accepts bound/builtin callbacks; the native
     // host-I/O scheduler owns completion timing and filesystem result labels.
-    return __franken_fs_read('\0fsop:read', path, options, function (error, value) {
+    return __franken_fs_read('\0fsop:read', path, settings, function (error, value) {
+      var aborted = abortError(settings.signal);
+      if (aborted !== undefined) { callback(aborted); return; }
       callback(error, value);
     });
   }
@@ -282,7 +293,7 @@
     }
     return { buffer: buffer, offset: offset, length: length };
   }
-  function fileOptions(options, defaultEncoding) {
+  function fileOptions(options, defaultEncoding, signalPresenceOnly, skipSignal) {
     if (options === undefined || options === null) { options = {}; }
     if (typeof options === 'string') { options = { encoding: options }; }
     if (typeof options !== 'object') { throw argumentError('options'); }
@@ -293,21 +304,49 @@
       error.code = 'ERR_INVALID_ARG_VALUE';
       throw error;
     }
-    var signal = options.signal;
+    var signal = skipSignal ? undefined : options.signal;
     if (signal !== undefined && (signal === null || typeof signal !== 'object' ||
-        typeof signal.aborted !== 'boolean')) {
+        (signalPresenceOnly ? !('aborted' in signal) : typeof signal.aborted !== 'boolean'))) {
       throw argumentError('options.signal');
     }
     return { encoding: encoding, signal: signal };
   }
-  function checkAbort(signal) {
+  function readOptions(options, deferFlag, synchronous) {
+    // The native bridge consumes data properties, not guest accessors or
+    // prototypes. Resolve them here using ordinary JavaScript semantics,
+    // keeping pathname reads on FsRead without a writable descriptor.
+    // Node ignores a function in the sync/Promise options slot; callback
+    // overload resolution removes it before this helper is entered.
+    // Node's synchronous default bag skips signal validation entirely. Keep
+    // its inherited encoding observable, while explicit string/object options
+    // and both asynchronous APIs continue to validate their signal.
+    var skipSignal = synchronous && (options === undefined || options === null ||
+      typeof options === 'function');
+    if (typeof options === 'function') { options = undefined; }
+    // Pathname APIs validate the presence of aborted on a signal without
+    // reading an aborted getter. Sync reads never consult its status, and
+    // async reads must not consume a changing getter before their checkpoint.
+    var validated = fileOptions(options, null, true, skipSignal);
+    // Own fields keep guest prototype setters out of the bridge snapshot,
+    // including the callback path's deferred flag assignment below.
+    var settings = { encoding: validated.encoding, signal: validated.signal, flag: undefined };
+    if (!deferFlag && options !== null && typeof options === 'object') {
+      settings.flag = options.flag;
+    }
+    return settings;
+  }
+  function abortError(signal) {
     if (signal !== undefined && signal.aborted) {
       var error = new Error('The operation was aborted');
       error.name = 'AbortError';
       error.code = 'ABORT_ERR';
       error.cause = signal.reason;
-      throw error;
+      return error;
     }
+  }
+  function checkAbort(signal) {
+    var error = abortError(signal);
+    if (error !== undefined) { throw error; }
   }
   function checkedCount(count, length, syscall, requireProgress) {
     if (typeof count !== 'number' || count % 1 !== 0 || count < 0 ||
@@ -1199,15 +1238,7 @@
       return new NativePromise(function (resolve, reject) {
         var operation = handleOperation(path, 'readFile');
         if (operation !== undefined) { resolve(operation(options)); return; }
-        // The native bridge consumes data properties, not guest accessors or
-        // prototypes. Resolve options here while ordinary JavaScript property
-        // semantics still apply, retaining the selected flag and signal. This
-        // keeps pathname reads on the FsRead boundary instead of opening a
-        // writable descriptor just to implement option handling.
-        // Node's pathname readFile ignores a function in the options slot.
-        if (typeof options === 'function') { options = undefined; }
-        var settings = fileOptions(options, null);
-        if (options !== null && typeof options === 'object') { settings.flag = options.flag; }
+        var settings = readOptions(options, false);
         checkAbort(settings.signal);
         __franken_fs_read('\0fsop:read', path, settings, function (error, value) {
           // The native host read may already have completed and been recorded

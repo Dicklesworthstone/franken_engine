@@ -528,6 +528,229 @@ fn facade_promise_read_checks_abort_at_native_completion_without_erasing_effects
 }
 
 #[test]
+fn facade_sync_reads_resolve_options_and_ignore_only_the_aborted_state() {
+    let root = tempfile::tempdir().expect("sandbox");
+    std::fs::write(root.path().join("input.txt"), "native bytes").expect("input");
+    let (output, effects) = run_granting_with_effect_count(
+        "const fs = require('fs'); console.log(typeof fs); \
+         const controller = new AbortController(); controller.abort(false); \
+         console.log(fs.readFileSync('input.txt', \
+           {get encoding() { return 'utf8'; }, signal: controller.signal})); \
+         console.log(fs.readFileSync('input.txt', Object.create({encoding: 'utf8'}))); \
+         const ignored = () => { throw new Error('not a callback'); }; \
+         const bytes = fs.readFileSync('input.txt', ignored); \
+         console.log(Buffer.isBuffer(bytes), bytes.length); \
+         try { fs.readFileSync('input.txt', {get encoding() { throw 'option failure'; }}); } \
+         catch (error) { console.log(error); }",
+        root.path(),
+        &[
+            "vm_dispatch",
+            "heap_allocate",
+            "builtin",
+            "console",
+            "fs_read",
+        ],
+    )
+    .expect("sync facade reads resolve options without adding writable descriptors");
+    assert_eq!(
+        output,
+        [
+            "object",
+            "native bytes",
+            "native bytes",
+            "true 12",
+            "option failure"
+        ]
+    );
+    assert_eq!(
+        effects, 3,
+        "throwing options must not produce a fourth read"
+    );
+}
+
+#[test]
+fn facade_callback_reads_normalize_options_before_scheduled_delivery() {
+    let root = tempfile::tempdir().expect("sandbox");
+    std::fs::write(root.path().join("input.txt"), "native bytes").expect("input");
+    let (output, effects) = run_granting_with_effect_count(
+        "const fs = require('fs'); \
+         fs.readFile('input.txt', Object.create({encoding: 'utf8'}), \
+           (error, text) => console.log(error === null, typeof text, text)); \
+         fs.readFile('input.txt', {get encoding() { return 'utf8'; }}, \
+           (error, text) => console.log(error === null, typeof text, text)); \
+         console.log('queued'); \
+         try { fs.readFile('input.txt', {get encoding() { throw 'option failure'; }}, \
+           () => console.log('unexpected callback')); } catch (error) { console.log(error); }",
+        root.path(),
+        &[
+            "vm_dispatch",
+            "heap_allocate",
+            "builtin",
+            "console",
+            "fs_read",
+        ],
+    )
+    .expect("callback reads retain the native I/O lane without Timer or FsWrite grants");
+    assert_eq!(
+        output,
+        [
+            "queued",
+            "option failure",
+            "true string native bytes",
+            "true string native bytes"
+        ]
+    );
+    assert_eq!(
+        effects, 2,
+        "option rejection does not dispatch or schedule host work"
+    );
+}
+
+#[test]
+fn facade_callback_pre_abort_completes_synchronously_without_host_authority() {
+    let root = tempfile::tempdir().expect("sandbox");
+    let (output, effects) = run_granting_with_effect_count(
+        "const fs = require('fs'); const controller = new AbortController(); \
+         controller.abort(false); let synchronous = true; \
+         const options = {signal: controller.signal, get flag() { throw 'unexpected flag'; }}; \
+         fs.readFile('not-read.txt', options, function(error) { \
+           console.log(synchronous, error.name, error.code, error.cause, arguments.length); }); \
+         synchronous = false; console.log('returned'); \
+         try { fs.readFile('not-read.txt', options, () => { throw 'callback failure'; }); } \
+         catch (error) { console.log(error); }",
+        root.path(),
+        &["vm_dispatch", "heap_allocate", "builtin", "console"],
+    )
+    .expect("pre-abort callback needs neither an I/O grant nor a Timer grant");
+    assert_eq!(
+        output,
+        [
+            "true AbortError ABORT_ERR false 1",
+            "returned",
+            "callback failure"
+        ]
+    );
+    assert_eq!(effects, 0);
+}
+
+#[test]
+fn facade_callback_abort_at_delivery_preserves_the_completed_effect() {
+    let root = tempfile::tempdir().expect("sandbox");
+    std::fs::write(root.path().join("input.txt"), "native bytes").expect("input");
+    let (output, effects) = run_granting_with_effect_count(
+        "const fs = require('fs'); const controller = new AbortController(); \
+         fs.readFile('input.txt', {signal: controller.signal}, function(error) { \
+           console.log(error.name, error.code, error.cause, arguments.length); }); \
+         controller.abort('after read');",
+        root.path(),
+        &[
+            "vm_dispatch",
+            "heap_allocate",
+            "builtin",
+            "console",
+            "fs_read",
+        ],
+    )
+    .expect("late cancellation changes callback completion, not the recorded prefix");
+    assert_eq!(output, ["AbortError ABORT_ERR after read 1"]);
+    assert_eq!(effects, 1);
+}
+
+#[test]
+fn facade_callback_signal_getter_errors_are_throws_without_host_authority() {
+    let root = tempfile::tempdir().expect("sandbox");
+    let (output, effects) = run_granting_with_effect_count(
+        "const fs = require('fs'); \
+         try { fs.readFile('not-read.txt', \
+           {signal: {get aborted() { throw 'aborted getter'; }}}, \
+           () => console.log('unexpected callback')); } catch (error) { console.log(error); } \
+         try { fs.readFile('not-read.txt', \
+           {signal: {aborted: true, get reason() { throw 'reason getter'; }}}, \
+           () => console.log('unexpected callback')); } catch (error) { console.log(error); }",
+        root.path(),
+        &["vm_dispatch", "heap_allocate", "builtin", "console"],
+    )
+    .expect("signal accessors retain their synchronous exception boundary");
+    assert_eq!(output, ["aborted getter", "reason getter"]);
+    assert_eq!(effects, 0);
+}
+
+#[test]
+fn facade_sync_read_validates_signal_presence_without_observing_abort_status() {
+    let root = tempfile::tempdir().expect("sandbox");
+    std::fs::write(root.path().join("input.txt"), "native bytes").expect("input");
+    let (output, effects) = run_granting_with_effect_count(
+        "const fs = require('fs'); \
+         const signal = {get aborted() { throw 'unexpected status getter'; }}; \
+         console.log(fs.readFileSync('input.txt', {encoding: 'utf8', signal}));",
+        root.path(),
+        &[
+            "vm_dispatch",
+            "heap_allocate",
+            "builtin",
+            "console",
+            "fs_read",
+        ],
+    )
+    .expect("synchronous reads ignore cancellation status getters like Node");
+    assert_eq!(output, ["native bytes"]);
+    assert_eq!(effects, 1);
+}
+
+#[test]
+fn facade_sync_default_options_do_not_observe_inherited_signal() {
+    let root = tempfile::tempdir().expect("sandbox");
+    std::fs::write(root.path().join("input.txt"), "native bytes").expect("input");
+    let (output, effects) = run_granting_with_effect_count(
+        "const fs = require('fs'); console.log(typeof fs); \
+         let signalReads = 0; let encodingReads = 0; \
+         Object.defineProperty(Object.prototype, 'signal', {configurable: true, \
+           get() { signalReads++; throw 'prototype signal'; }}); \
+         try { \
+           console.log(Buffer.isBuffer(fs.readFileSync('input.txt'))); \
+           console.log(Buffer.isBuffer(fs.readFileSync('input.txt', undefined))); \
+           console.log(Buffer.isBuffer(fs.readFileSync('input.txt', null))); \
+           console.log(Buffer.isBuffer(fs.readFileSync('input.txt', () => {}))); \
+           console.log(signalReads); \
+           try { fs.readFileSync('input.txt', 'utf8'); } catch (error) { console.log(error); } \
+           try { fs.readFileSync('input.txt', {}); } catch (error) { console.log(error); } \
+           Object.defineProperty(Object.prototype, 'encoding', {configurable: true, \
+             get() { encodingReads++; return 'utf8'; }}); \
+           console.log(fs.readFileSync('input.txt', null)); \
+           console.log(signalReads, encodingReads); \
+         } finally { delete Object.prototype.signal; delete Object.prototype.encoding; }",
+        root.path(),
+        &[
+            "vm_dispatch",
+            "heap_allocate",
+            "builtin",
+            "console",
+            "fs_read",
+        ],
+    )
+    .expect("sync default options preserve encoding without consulting signal");
+    assert_eq!(
+        output,
+        [
+            "object",
+            "true",
+            "true",
+            "true",
+            "true",
+            "0",
+            "prototype signal",
+            "prototype signal",
+            "native bytes",
+            "2 1"
+        ]
+    );
+    assert_eq!(
+        effects, 5,
+        "only the successful sync reads reach the provider"
+    );
+}
+
+#[test]
 fn lexical_require_is_not_replaced_and_guest_globals_do_not_capture_the_facade() {
     let root = tempfile::tempdir().expect("sandbox");
     let output = run(

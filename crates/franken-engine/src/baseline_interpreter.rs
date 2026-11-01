@@ -45824,7 +45824,7 @@ impl InterpreterCore {
                     let label = self.join_arg_range_label(args)?;
                     return self.string_replace_js(
                         Some(module),
-                        value.as_ref(),
+                        &value,
                         &Value::Str(search),
                         &replacement,
                         true,

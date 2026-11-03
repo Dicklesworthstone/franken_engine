@@ -683,8 +683,7 @@ impl MutationRaceCase {
                     .expect("seed copy destination");
             }
             Self::Unlink | Self::RemoveFile => {
-                std::fs::write(parent.join("remove.txt"), b"remove me")
-                    .expect("seed removed file");
+                std::fs::write(parent.join("remove.txt"), b"remove me").expect("seed removed file");
             }
             Self::RemoveRecursive => {
                 std::fs::create_dir_all(parent.join("remove-dir").join("nested"))
@@ -970,8 +969,7 @@ fn bd_wyff0_all_mutations_refuse_or_unlink_final_symlink_without_following_it() 
         if std::fs::symlink_metadata(&raced_final).is_ok() {
             let mut saved = raced_final.as_os_str().to_owned();
             saved.push(".before-race");
-            std::fs::rename(&raced_final, PathBuf::from(saved))
-                .expect("save original final entry");
+            std::fs::rename(&raced_final, PathBuf::from(saved)).expect("save original final entry");
         }
         std::os::unix::fs::symlink(&outside_target, &raced_final)
             .expect("install final outside symlink");
@@ -1286,8 +1284,7 @@ fn bd_8ju8m_in_root_symlink_chains_resolve_and_cycles_fail_closed() {
     let scratch = ScratchDir::new();
     let provider = SandboxedHostIo::with_root(&scratch.path).expect("provider");
     std::fs::create_dir_all(provider.root().join("real")).expect("create real dir");
-    std::fs::write(provider.root().join("real").join("data.txt"), b"chained")
-        .expect("seed target");
+    std::fs::write(provider.root().join("real").join("data.txt"), b"chained").expect("seed target");
     // hop -> real (directory symlink), alias -> hop/data.txt (via symlinked dir),
     // abs -> <root>/real/data.txt (absolute target back inside the root).
     std::os::unix::fs::symlink("real", provider.root().join("hop")).expect("dir link");
@@ -1338,8 +1335,7 @@ fn bd_8ju8m_in_root_symlink_chains_resolve_and_cycles_fail_closed() {
 
     // An in-root symlink whose target climbs above the root must still be
     // rejected even though every component exists.
-    std::os::unix::fs::symlink("../outside", provider.root().join("climb"))
-        .expect("climbing link");
+    std::os::unix::fs::symlink("../outside", provider.root().join("climb")).expect("climbing link");
     assert!(matches!(
         provider.perform(
             &HostIoRequest::FsRead {
@@ -1406,8 +1402,7 @@ fn bd_p5bsj_realpath_is_virtual_absolute_reusable_and_root_private() {
     )
     .expect("seed guest file");
 
-    let guest_path =
-        sandboxed_realpath(&provider, "nested/data.txt").expect("resolve guest path");
+    let guest_path = sandboxed_realpath(&provider, "nested/data.txt").expect("resolve guest path");
     assert_eq!(guest_path, "/nested/data.txt");
     assert!(
         !guest_path.contains(provider.root().to_str().expect("scratch root is UTF-8")),
@@ -1929,8 +1924,7 @@ fn spawn_tls_http_server(
         .expect("generate self-signed certificate");
     let cert_pem = certified.cert.pem();
     let cert_der = certified.cert.der().clone();
-    let key_der =
-        rustls_pki_types::PrivateKeyDer::Pkcs8(certified.key_pair.serialize_der().into());
+    let key_der = rustls_pki_types::PrivateKeyDer::Pkcs8(certified.key_pair.serialize_der().into());
     let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
     let config = rustls::ServerConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
@@ -2252,4 +2246,237 @@ fn sandboxed_write_through_symlink_is_rejected() {
         !outside.path.join("target.txt").exists(),
         "the write must not have escaped the sandbox"
     );
+}
+
+#[cfg(unix)]
+mod bounded_file_mutations {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn copy(provider: &SandboxedHostIo, source: &str, destination: &str) -> HostIoOutcome {
+        provider.perform(
+            &HostIoRequest::FsMeta {
+                operation: FsOperation::CopyFile,
+                path: source.to_string(),
+                arguments: vec![destination.to_string()],
+                data: Vec::new(),
+            },
+            &[HostIoCapability::FsWrite],
+        )
+    }
+
+    #[test]
+    fn oversized_copy_preserves_existing_destination_and_creates_nothing() {
+        let scratch = ScratchDir::new();
+        let provider = SandboxedHostIo::with_root_and_limit(&scratch.path, 8).unwrap();
+        std::fs::write(scratch.path.join("source"), b"123456789").unwrap();
+        std::fs::write(scratch.path.join("destination"), b"keep me").unwrap();
+
+        for destination in ["destination", "new-file"] {
+            let result = copy(&provider, "source", destination);
+            assert!(
+                matches!(result, Err(HostIoError::Io { .. })),
+                "copy must enforce the provider byte limit: {result:?}"
+            );
+            assert_eq!(
+                std::fs::read(scratch.path.join("destination")).unwrap(),
+                b"keep me"
+            );
+            assert!(!scratch.path.join("new-file").exists());
+            assert_eq!(
+                std::fs::read(scratch.path.join("source")).unwrap(),
+                b"123456789"
+            );
+        }
+    }
+
+    #[test]
+    fn copy_to_same_inode_preserves_source_through_path_and_hardlink_aliases() {
+        let scratch = ScratchDir::new();
+        let provider = SandboxedHostIo::with_root(&scratch.path).unwrap();
+        std::fs::write(scratch.path.join("source"), b"original bytes").unwrap();
+        std::fs::hard_link(scratch.path.join("source"), scratch.path.join("alias")).unwrap();
+
+        for destination in ["source", "./source", "alias"] {
+            let result = copy(&provider, "source", destination);
+            assert!(
+                matches!(result, Err(HostIoError::Fs { ref code, .. }) if code == "EINVAL"),
+                "copy must refuse a destination referring to the source inode: {result:?}"
+            );
+            assert_eq!(
+                std::fs::read(scratch.path.join("source")).unwrap(),
+                b"original bytes"
+            );
+            assert_eq!(
+                std::fs::read(scratch.path.join("alias")).unwrap(),
+                b"original bytes"
+            );
+        }
+    }
+
+    #[test]
+    fn copy_at_byte_limit_preserves_content_permissions_and_truncation_semantics() {
+        let scratch = ScratchDir::new();
+        let provider = SandboxedHostIo::with_root_and_limit(&scratch.path, 8).unwrap();
+        let source = scratch.path.join("source");
+        std::fs::write(&source, b"12345678").unwrap();
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o640)).unwrap();
+        std::fs::write(scratch.path.join("destination"), b"old longer contents").unwrap();
+        assert!(copy(&provider, "source", "destination").is_ok());
+        assert_eq!(
+            std::fs::read(scratch.path.join("destination")).unwrap(),
+            b"12345678"
+        );
+        assert_eq!(
+            std::fs::metadata(scratch.path.join("destination"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o640
+        );
+
+        let zero_limit = SandboxedHostIo::with_root_and_limit(&scratch.path, 0).unwrap();
+        std::fs::write(scratch.path.join("empty"), b"").unwrap();
+        assert!(copy(&zero_limit, "empty", "destination").is_ok());
+        assert!(
+            std::fs::read(scratch.path.join("destination"))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn writable_fifo_is_rejected_before_any_bytes_are_delivered() {
+        let scratch = ScratchDir::new();
+        let provider = SandboxedHostIo::with_root(&scratch.path).unwrap();
+        let fifo = scratch.path.join("fifo");
+        rustix::fs::mkfifoat(
+            rustix::fs::CWD,
+            &fifo,
+            rustix::fs::Mode::from_raw_mode(0o600),
+        )
+        .unwrap();
+        let descriptor = rustix::fs::open(
+            &fifo,
+            rustix::fs::OFlags::RDWR | rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .unwrap();
+        let mut peer = std::fs::File::from(descriptor);
+        std::fs::write(scratch.path.join("source"), b"source bytes").unwrap();
+
+        let write = HostIoRequest::FsWrite {
+            path: "fifo".to_string(),
+            data: b"write bytes".to_vec(),
+        };
+        let append = HostIoRequest::FsMeta {
+            operation: FsOperation::Append,
+            path: "fifo".to_string(),
+            arguments: Vec::new(),
+            data: b"append bytes".to_vec(),
+        };
+        for request in [write, append] {
+            assert!(matches!(
+                provider.perform(&request, &[HostIoCapability::FsWrite]),
+                Err(HostIoError::Fs { ref code, .. }) if code == "EINVAL"
+            ));
+        }
+        assert!(matches!(
+            copy(&provider, "source", "fifo"),
+            Err(HostIoError::Fs { ref code, .. }) if code == "EINVAL"
+        ));
+        let mut bytes = [0u8; 64];
+        assert_eq!(
+            peer.read(&mut bytes).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock,
+            "rejected file operations must not send bytes to a FIFO peer"
+        );
+    }
+
+    #[test]
+    fn file_mutations_reject_fifos_without_waiting_for_a_peer() {
+        use std::sync::mpsc;
+
+        for operation in [
+            "write",
+            "append",
+            "truncate",
+            "copy-source",
+            "copy-destination",
+        ] {
+            let scratch = ScratchDir::new();
+            let provider = SandboxedHostIo::with_root(&scratch.path).unwrap();
+            let fifo = scratch.path.join("fifo");
+            rustix::fs::mkfifoat(
+                rustix::fs::CWD,
+                &fifo,
+                rustix::fs::Mode::from_raw_mode(0o600),
+            )
+            .unwrap();
+            std::fs::write(scratch.path.join("regular"), b"preserved").unwrap();
+            let request = match operation {
+                "write" => HostIoRequest::FsWrite {
+                    path: "fifo".to_string(),
+                    data: b"x".to_vec(),
+                },
+                _ => HostIoRequest::FsMeta {
+                    operation: match operation {
+                        "append" => FsOperation::Append,
+                        "truncate" => FsOperation::Truncate,
+                        _ => FsOperation::CopyFile,
+                    },
+                    path: if operation == "copy-destination" {
+                        "regular"
+                    } else {
+                        "fifo"
+                    }
+                    .to_string(),
+                    arguments: match operation {
+                        "copy-source" => vec!["regular".to_string()],
+                        "copy-destination" => vec!["fifo".to_string()],
+                        "truncate" => vec!["0".to_string()],
+                        _ => Vec::new(),
+                    },
+                    data: b"x".to_vec(),
+                },
+            };
+            let (send, recv) = mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                send.send(provider.perform(&request, &[HostIoCapability::FsWrite]))
+                    .unwrap();
+            });
+            // Rescue the old blocking open so a regression fails instead of
+            // leaving the suite hung. The real FIFO has no peer before this wait.
+            let (before_rescue, result) = match recv.recv_timeout(Duration::from_secs(1)) {
+                Ok(result) => (true, result),
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    let _rescue = rustix::fs::open(
+                        &fifo,
+                        rustix::fs::OFlags::RDWR
+                            | rustix::fs::OFlags::NONBLOCK
+                            | rustix::fs::OFlags::CLOEXEC,
+                        rustix::fs::Mode::empty(),
+                    )
+                    .unwrap();
+                    (
+                        false,
+                        recv.recv_timeout(Duration::from_secs(2))
+                            .expect("rescue unblocks FIFO open"),
+                    )
+                }
+                Err(error) => panic!("FIFO worker disconnected: {error}"),
+            };
+            worker.join().unwrap();
+            assert!(before_rescue, "{operation} blocked waiting for a FIFO peer");
+            assert!(
+                result.is_err(),
+                "{operation} unexpectedly admitted a FIFO: {result:?}"
+            );
+            assert_eq!(
+                std::fs::read(scratch.path.join("regular")).unwrap(),
+                b"preserved"
+            );
+        }
+    }
 }

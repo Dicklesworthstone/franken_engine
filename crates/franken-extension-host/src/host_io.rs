@@ -18,9 +18,9 @@ use std::time::Duration;
 #[path = "host_io_budget.rs"]
 pub mod budget;
 mod control;
-mod fd_write;
 #[cfg(all(test, unix))]
 mod fd_admission_tests;
+mod fd_write;
 mod http_response;
 mod network_deadline;
 pub use control::{HostIoControl, UnrestrictedHostIoControl};
@@ -1464,11 +1464,49 @@ impl SandboxedHostIo {
         let descriptor = rustix::fs::openat(
             &target.parent,
             &target.name,
-            flags | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC,
+            flags
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC
+                | rustix::fs::OFlags::NONBLOCK
+                | rustix::fs::OFlags::NOCTTY,
             rustix::fs::Mode::from_raw_mode(0o666),
         )
         .map_err(|err| Self::rustix_fs_error(action, raw, err))?;
         Ok(std::fs::File::from(descriptor))
+    }
+
+    /// Data operations accept regular files only. Open without truncation,
+    /// validate the held descriptor, then truncate that same file if requested.
+    /// NONBLOCK prevents a FIFO substituted after resolution from hanging the
+    /// host before this check; metadata-only operations can still open directories.
+    #[cfg(unix)]
+    fn open_regular_mutation_file(
+        target: &MutationTarget,
+        flags: rustix::fs::OFlags,
+        raw: &str,
+        action: &str,
+    ) -> Result<std::fs::File, HostIoError> {
+        let file =
+            Self::open_mutation_file(target, flags & !rustix::fs::OFlags::TRUNC, raw, action)?;
+        let metadata = file
+            .metadata()
+            .map_err(|err| Self::fs_error("stat", raw, err))?;
+        if !metadata.is_file() {
+            return Err(HostIoError::Fs {
+                code: if metadata.is_dir() {
+                    "EISDIR"
+                } else {
+                    "EINVAL"
+                }
+                .to_string(),
+                detail: format!("not a regular file: {raw}"),
+            });
+        }
+        if flags.contains(rustix::fs::OFlags::TRUNC) {
+            file.set_len(0)
+                .map_err(|err| Self::fs_error("truncate", raw, err))?;
+        }
+        Ok(file)
     }
 
     #[cfg(unix)]
@@ -1654,7 +1692,7 @@ impl SandboxedHostIo {
         #[cfg(unix)]
         {
             let target = self.mutation_target(raw, false)?;
-            let mut file = Self::open_mutation_file(
+            let mut file = Self::open_regular_mutation_file(
                 &target,
                 rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::CREATE | rustix::fs::OFlags::TRUNC,
                 raw,
@@ -1766,7 +1804,7 @@ impl SandboxedHostIo {
             let base_flags = base_flags | rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::NOCTTY;
             let file = if writable {
                 let target = self.mutation_target(raw, false)?;
-                Self::open_mutation_file(&target, base_flags, raw, "open")?
+                Self::open_regular_mutation_file(&target, base_flags, raw, "open")?
             } else {
                 let ReadTarget::Entry { parent, name, .. } = self.read_target(raw, true)? else {
                     return Err(HostIoError::Fs {
@@ -1995,7 +2033,7 @@ impl SandboxedHostIo {
                 #[cfg(unix)]
                 {
                     let target = self.mutation_target(raw, false)?;
-                    let mut file = Self::open_mutation_file(
+                    let mut file = Self::open_regular_mutation_file(
                         &target,
                         rustix::fs::OFlags::WRONLY
                             | rustix::fs::OFlags::CREATE
@@ -2201,7 +2239,9 @@ impl SandboxedHostIo {
                         )
                         .map_err(|err| Self::rustix_fs_error("rename", raw, err))?;
                     } else {
-                        let mut source_file = Self::open_mutation_file(
+                        use std::os::unix::fs::MetadataExt;
+
+                        let mut source_file = Self::open_regular_mutation_file(
                             &source,
                             rustix::fs::OFlags::RDONLY,
                             raw,
@@ -2210,21 +2250,55 @@ impl SandboxedHostIo {
                         let source_metadata = source_file
                             .metadata()
                             .map_err(|err| Self::fs_error("stat copy source", raw, err))?;
-                        if !source_metadata.is_file() {
-                            return Err(HostIoError::Fs {
-                                code: "EISDIR".to_string(),
-                                detail: format!("copy source is not a regular file: {raw}"),
+                        if source_metadata.len() > self.max_bytes {
+                            return Err(HostIoError::Io {
+                                detail: format!(
+                                    "copy source {raw} exceeds the {}-byte cap",
+                                    self.max_bytes
+                                ),
                             });
                         }
-                        let mut destination_file = Self::open_mutation_file(
+                        // Capture at most cap+1 bytes before touching the
+                        // destination. A source growing after stat must neither
+                        // bypass the cap nor cause a rejected copy to erase an
+                        // existing destination. This is a bounded byte capture,
+                        // not an atomic snapshot of concurrent source writes.
+                        let mut bytes = Vec::new();
+                        (&mut source_file)
+                            .take(self.max_bytes.saturating_add(1))
+                            .read_to_end(&mut bytes)
+                            .map_err(|err| Self::fs_error("read copy source", raw, err))?;
+                        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > self.max_bytes {
+                            return Err(HostIoError::Io {
+                                detail: format!(
+                                    "copy source {raw} exceeds the {}-byte cap",
+                                    self.max_bytes
+                                ),
+                            });
+                        }
+                        let mut destination_file = Self::open_regular_mutation_file(
                             &destination,
-                            rustix::fs::OFlags::WRONLY
-                                | rustix::fs::OFlags::CREATE
-                                | rustix::fs::OFlags::TRUNC,
+                            rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::CREATE,
                             destination_raw,
                             "open copy destination",
                         )?;
-                        std::io::copy(&mut source_file, &mut destination_file)
+                        let destination_metadata = destination_file.metadata().map_err(|err| {
+                            Self::fs_error("stat copy destination", destination_raw, err)
+                        })?;
+                        if source_metadata.dev() == destination_metadata.dev()
+                            && source_metadata.ino() == destination_metadata.ino()
+                        {
+                            return Err(HostIoError::Fs {
+                                code: "EINVAL".to_string(),
+                                detail: "copy source and destination refer to the same file"
+                                    .to_string(),
+                            });
+                        }
+                        destination_file.set_len(0).map_err(|err| {
+                            Self::fs_error("truncate copy destination", destination_raw, err)
+                        })?;
+                        destination_file
+                            .write_all(&bytes)
                             .map_err(|err| Self::fs_error("copy", raw, err))?;
                         destination_file
                             .set_permissions(source_metadata.permissions())
@@ -2303,7 +2377,7 @@ impl SandboxedHostIo {
                 #[cfg(unix)]
                 {
                     let target = self.mutation_target(raw, false)?;
-                    let file = Self::open_mutation_file(
+                    let file = Self::open_regular_mutation_file(
                         &target,
                         rustix::fs::OFlags::WRONLY,
                         raw,

@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use frankenengine_engine::ast::ParseGoal;
 use frankenengine_engine::baseline_interpreter::{InterpreterError, LaneChoice};
@@ -12,7 +13,7 @@ use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::execution_cell::CellError;
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorError,
-    OrchestratorResult,
+    OrchestratorResult, ProcessSpawnAttemptAuthority,
 };
 use frankenengine_engine::lowering_pipeline::AmbientAuthorityGrant;
 use frankenengine_engine::module_compatibility_matrix::CompatibilityMode;
@@ -23,10 +24,64 @@ use frankenengine_engine::module_resolver::{
     ResolutionErrorCode, ResolutionOutcome, ResolutionResult,
 };
 use frankenengine_engine::runtime_config::RuntimeConfig;
+use frankenengine_extension_host::host_effect_journal::{
+    HostEffectJournalEntry, InMemoryHostEffectJournal,
+};
 use frankenengine_extension_host::host_io::{
     HostIoCapability, HostIoControl, HostIoError, HostIoExceptionProvenance, HostIoOutcome,
     HostIoProvider, HostIoRecorder, HostIoRequest, InMemoryHostIoTranscript, SandboxedHostIo,
 };
+use frankenengine_extension_host::process_spawn::{
+    ProcessExit, ProcessSpawnCapability, ProcessSpawnError, ProcessSpawnOutcome,
+    ProcessSpawnProvider, ProcessSpawnRequest, ProcessSpawnResponse,
+};
+
+#[derive(Debug, Default)]
+struct RecordingModuleProcess {
+    requests: Mutex<Vec<ProcessSpawnRequest>>,
+}
+
+impl ProcessSpawnProvider for RecordingModuleProcess {
+    fn name(&self) -> &str {
+        "recording-module-process"
+    }
+
+    fn perform(
+        &self,
+        request: &ProcessSpawnRequest,
+        granted: &[ProcessSpawnCapability],
+    ) -> ProcessSpawnOutcome {
+        assert_eq!(granted, &[ProcessSpawnCapability::Spawn]);
+        self.requests
+            .lock()
+            .expect("process request log")
+            .push(request.clone());
+        Ok(ProcessSpawnResponse::Run {
+            exit: ProcessExit {
+                success: true,
+                code: Some(0),
+                signal: None,
+            },
+            stdout: b"module-process".to_vec(),
+            stderr: Vec::new(),
+        })
+    }
+
+    fn cleanup_handle(&self, _handle: &str) -> ProcessSpawnOutcome {
+        Ok(ProcessSpawnResponse::Cleaned { was_present: false })
+    }
+}
+
+fn module_process_authority() -> ProcessSpawnAttemptAuthority {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock");
+    ProcessSpawnAttemptAuthority::expiring_at_unix_ms(
+        u64::try_from(now.as_millis())
+            .expect("milliseconds fit u64")
+            .saturating_add(300_000),
+    )
+}
 
 const ROOT: &str = "/captured-module-test";
 const ID_PREFIX: &str = "captured:";
@@ -96,6 +151,7 @@ impl OpaqueResolver {
             NativeBuiltinModule::Zlib,
             NativeBuiltinModule::Http,
             NativeBuiltinModule::Https,
+            NativeBuiltinModule::ChildProcess,
             NativeBuiltinModule::Module,
             NativeBuiltinModule::Events,
             NativeBuiltinModule::Fs,
@@ -1464,6 +1520,293 @@ console.log(require.resolve('querystring'), require.resolve('node:querystring'))
             11,
             "aliases, cached objects and require.resolve must all authorize their route"
         );
+    }
+}
+
+#[test]
+fn delivered_child_process_modules_share_mutable_exports_without_spawn_authority() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![
+                ("entry.cjs", definition(ModuleSyntax::CommonJs, r#"
+const cp = require('child_process');
+const other = require('./child.cjs');
+console.log(cp === other, cp === require('node:child_process'));
+for (const name of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync']) {
+    const method = cp[name];
+    const property = Object.getOwnPropertyDescriptor(cp, name);
+    const prototype = Object.getOwnPropertyDescriptor(method, 'prototype');
+    console.log(method.name, method.length, property.writable, property.enumerable,
+        property.configurable, prototype.writable, prototype.enumerable,
+        prototype.configurable, method.prototype.constructor === method);
+}
+cp.execFileSync = function () { return 'changed'; };
+console.log(other.execFileSync(), require('child_process').execFileSync());
+"#).with_dependency(ModuleDependency::new("./child.cjs", ImportStyle::Require))),
+                ("child.cjs", definition(ModuleSyntax::CommonJs,
+                    "const load = require; const name = 'node:child_process'; module.exports = load(name);")),
+            ]).with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let policy = Arc::new(RecordingPolicy {
+            allow_native_builtins: true,
+            ..RecordingPolicy::default()
+        });
+        let installed =
+            ExecutionModuleResolver::new(&source.module.record.id, resolver, policy.clone());
+        let result = orchestrator(lane, ModuleSyntax::CommonJs)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("child_process values need no process authority to load or inspect");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true",
+                "spawn 3 true true true true false false true",
+                "spawnSync 3 true true true true false false true",
+                "exec 3 true true true true false false true",
+                "execSync 2 true true true true false false true",
+                "execFile 4 true true true true false false true",
+                "execFileSync 3 true true true true false false true",
+                "changed changed",
+            ]
+        );
+        assert_eq!(
+            policy.requests.lock().expect("policy log").len(),
+            5,
+            "cached aliases must still authorize every module edge"
+        );
+        assert!(result.host_effect_transcript.is_empty());
+        assert!(result.host_effect_journal.is_empty());
+    }
+}
+
+#[test]
+fn delivered_child_process_esm_namespaces_share_commonjs_functions() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(OpaqueResolver::new(vec![
+            ("entry.mjs", definition(ModuleSyntax::EsModule, r#"
+import cp, { spawn, spawnSync, exec, execSync, execFile, execFileSync } from 'node:child_process';
+import other from './child.cjs';
+console.log(cp === other, spawn === cp.spawn, spawnSync === cp.spawnSync);
+console.log(exec === cp.exec, execSync === cp.execSync, execFile === cp.execFile,
+    execFileSync === cp.execFileSync);
+import('child_process').then(ns => console.log(ns.default === cp, ns.execFileSync === execFileSync));
+"#).with_dependency(ModuleDependency::new("./child.cjs", ImportStyle::Import))),
+            ("child.cjs", definition(ModuleSyntax::CommonJs,
+                "module.exports = require('child_process');")),
+        ]).with_native_builtins());
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let result = orchestrator(lane, ModuleSyntax::EsModule)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("all supported process functions have authenticated named and default exports");
+        assert_eq!(
+            lines(&result),
+            ["true true true", "true true true true", "true true"]
+        );
+        assert!(result.host_effect_journal.is_empty());
+    }
+}
+
+#[test]
+fn delivered_child_process_function_values_never_grant_spawn_authority() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for invocation in [
+            "cp.spawn('tool')",
+            "cp.spawnSync('tool')",
+            "cp.exec('tool')",
+            "cp.execSync('tool')",
+            "cp.execFile('tool')",
+            "cp.execFileSync('tool')",
+            "const { execFileSync: run } = cp; run('tool')",
+            "const key = 'execFileSync'; cp[key]('tool')",
+            "cp.execFileSync(...['tool', []])",
+            "cp.execFileSync.call(null, 'tool', [])",
+            "cp.execFileSync.apply(null, ['tool', []])",
+            "cp.execFileSync.bind(null, 'tool')([])",
+            "new cp.execFileSync('tool', [])",
+            "Reflect.construct(cp.execFileSync, ['tool', []])",
+        ] {
+            let resolver = Arc::new(OpaqueResolver::new(vec![("entry.cjs",
+                definition(ModuleSyntax::CommonJs, &format!(
+                    "const load = require; const cp = load('node:child_process'); console.log('loaded'); {invocation};")))])
+                .with_native_builtins());
+            let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+            let installed = ExecutionModuleResolver::new(
+                &source.module.record.id,
+                resolver,
+                Arc::new(AllowAllPolicy),
+            );
+            let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
+            let error = engine
+                .execute_resolved_entry_with_resolver(&package(), &source, installed)
+                .expect_err("a first-class process function must check the caller's capability");
+            assert!(
+                matches!(error.primary_error(), OrchestratorError::Interpreter(
+                InterpreterError::CapabilityDenied { capability, .. }) if capability == "process_spawn"),
+                "{lane:?}: {invocation}: {error:?}"
+            );
+            assert_eq!(
+                engine
+                    .last_failed_console_output()
+                    .iter()
+                    .map(|entry| entry.message.as_str())
+                    .collect::<Vec<_>>(),
+                ["loaded"]
+            );
+            assert!(engine.last_failed_host_effect_journal().is_empty());
+        }
+    }
+}
+
+#[test]
+fn delivered_child_process_static_and_dynamic_imports_execute_admitted_requests() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for (syntax, name, program) in [
+            (
+                ModuleSyntax::EsModule,
+                "entry.mjs",
+                r#"
+import { execFileSync as run } from 'node:child_process';
+console.log(run('tool', ['alpha'], { encoding: 'utf8' }));
+"#,
+            ),
+            (
+                ModuleSyntax::CommonJs,
+                "entry.cjs",
+                r#"
+import('child_process').then(ns => {
+    const { execFileSync: run } = ns;
+    console.log(run.apply(null, ['tool', ['alpha'], { encoding: 'utf8' }]));
+});
+"#,
+            ),
+            (
+                ModuleSyntax::EsModule,
+                "entry.mjs",
+                r#"
+import('node:child_process').then(ns => {
+    const run = ns.default.execFileSync;
+    console.log(run.call(null, 'tool', ['alpha'], { encoding: 'utf8' }));
+});
+"#,
+            ),
+        ] {
+            let resolver = Arc::new(
+                OpaqueResolver::new(vec![(name, definition(syntax, program))])
+                    .with_native_builtins(),
+            );
+            let source = entry(&resolver, name, syntax);
+            let installed = ExecutionModuleResolver::new(
+                &source.module.record.id,
+                resolver,
+                Arc::new(AllowAllPolicy),
+            );
+            let provider = Arc::new(RecordingModuleProcess::default());
+            let mut engine = orchestrator(lane, syntax);
+            engine.set_process_spawn(
+                provider.clone(),
+                Arc::new(InMemoryHostEffectJournal::recording()),
+                module_process_authority(),
+            );
+            let mut execution = package();
+            execution.capabilities.push("process_spawn".into());
+            let result = engine
+                .execute_resolved_entry_with_resolver(&execution, &source, installed)
+                .unwrap_or_else(|error| panic!("{lane:?}: {program}: {error}"));
+            assert_eq!(lines(&result), ["module-process"]);
+            let requests = provider.requests.lock().expect("process request log");
+            assert!(
+                matches!(requests.as_slice(), [ProcessSpawnRequest::Run { launch, stdin, timeout_millis: None }]
+                if launch.executable == "tool" && launch.argv == ["alpha"] && !launch.shell && stdin.is_empty())
+            );
+            assert!(
+                matches!(result.host_effect_journal.as_slice(), [HostEffectJournalEntry::ProcessSpawn {
+                request, outcome: Ok(ProcessSpawnResponse::Run { stdout, .. }),
+            }] if request == &requests[0] && stdout == b"module-process")
+            );
+        }
+    }
+}
+
+#[test]
+fn delivered_child_process_dynamic_imports_preserve_classified_state_and_source_floors() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for program in [
+            // An ordinary source re-export retains its Internal source floor.
+            "import('./relay.mjs').then(ns => ns.execFileSync('tool', []));",
+            // Engine-local namespaces retain their live object mutations.
+            "const cp = require('child_process'); cp.privateState = require('crypto').randomUUID(); import('node:child_process').then(ns => ns.execFileSync('tool', []));",
+            // Export getters and selected function properties cannot launder a label.
+            "const cp = require('child_process'); const run = cp.execFileSync; const secret = require('crypto').randomUUID(); Object.defineProperty(cp, 'execFileSync', { get() { if (secret) return run; return run; } }); import('child_process').then(ns => ns.execFileSync('tool', []));",
+            // The spelling's provenance survives successful native resolution.
+            "const secret = require('crypto').randomUUID(); const name = secret ? 'child_process' : 'child_process'; import(name).then(ns => ns.execFileSync('tool', []));",
+        ] {
+            let resolver = Arc::new(
+                OpaqueResolver::new(vec![
+                    (
+                        "entry.cjs",
+                        definition(ModuleSyntax::CommonJs, program).with_dependency(
+                            ModuleDependency::new("./relay.mjs", ImportStyle::Import),
+                        ),
+                    ),
+                    (
+                        "relay.mjs",
+                        definition(
+                            ModuleSyntax::EsModule,
+                            "export { execFileSync } from 'node:child_process';",
+                        ),
+                    ),
+                ])
+                .with_native_builtins(),
+            );
+            let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+            let installed = ExecutionModuleResolver::new(
+                &source.module.record.id,
+                resolver,
+                Arc::new(AllowAllPolicy),
+            );
+            let provider = Arc::new(RecordingModuleProcess::default());
+            let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
+            engine.set_process_spawn(
+                provider.clone(),
+                Arc::new(InMemoryHostEffectJournal::recording()),
+                module_process_authority(),
+            );
+            let mut execution = package();
+            execution
+                .capabilities
+                .extend(["process_spawn".into(), "random_read".into()]);
+            let error = engine
+                .execute_resolved_entry_with_resolver(&execution, &source, installed)
+                .expect_err(
+                    "native dynamic imports must preserve selection and source confidentiality",
+                );
+            assert!(
+                provider
+                    .requests
+                    .lock()
+                    .expect("process request log")
+                    .is_empty(),
+                "{lane:?}: {program}: {error}"
+            );
+            match engine.last_failed_host_effect_journal() {
+                [
+                    HostEffectJournalEntry::ProcessSpawn {
+                        outcome: Err(ProcessSpawnError::FlowPolicyBlocked),
+                        ..
+                    },
+                ] => {}
+                [] if error.to_string().contains("bounded-import contract") => {}
+                entries => {
+                    panic!("{lane:?}: {program}: expected an IFC refusal, got {error}; {entries:?}")
+                }
+            }
+        }
     }
 }
 

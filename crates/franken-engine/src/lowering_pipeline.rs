@@ -25670,6 +25670,12 @@ fn is_require_child_process_module_initializer(
     expression: &Expression,
     binding_lookup: &BTreeMap<String, BindingId>,
 ) -> bool {
+    // The authenticated CommonJS loader returns a real, mutable module.
+    // Preserve its identity, property reads and call sites; only an actual
+    // native function invocation may cross the process_spawn authority gate.
+    if require_is_commonjs_wrapper(binding_lookup) {
+        return false;
+    }
     let Expression::Call {
         callee, arguments, ..
     } = expression
@@ -50765,6 +50771,39 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_child_process_calls_preserve_runtime_module_objects() {
+        for name in ["child_process", "node:child_process"] {
+            let source = format!(
+                "const cp = require('{name}');\n\
+                 cp.spawnSync('program');\n\
+                 function later() {{ return cp.execFileSync('program'); }}\n\
+                 require('{name}').execSync('program');"
+            );
+            let tree = crate::parser_api_stability::parse_script(&source)
+                .expect("parse CommonJS child-process exports");
+            let ir0 = Ir0Module::from_syntax_tree(tree, "native-child-process.cjs");
+            for preserve_loads in [false, true] {
+                let mut context = LoweringContext::new("native-child-process", "cjs", "policy")
+                    .with_authenticated_commonjs_runtime_bindings();
+                if preserve_loads {
+                    context = context.with_preserved_runtime_module_loads();
+                }
+                let output = lower_ir0_to_ir3(&ir0, &context)
+                    .expect("child-process methods retain runtime receiver semantics");
+                assert_eq!(count_hostcall_deep(&output.ir1.ops, "process_spawn"), 0);
+                assert_eq!(
+                    count_ops_deep(&output.ir1.ops, &|op| matches!(
+                        op,
+                        Ir1Op::Call { arg_count: 1 }
+                    )),
+                    2,
+                    "both {name} loads must invoke the authenticated require"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn authenticated_http_calls_preserve_mutable_runtime_module_objects() {
         for name in ["http", "node:http", "https", "node:https"] {
             let source = format!(
@@ -50804,6 +50843,7 @@ mod tests {
     fn preserved_commonjs_builtin_loads_reach_the_runtime_callee() {
         for name in [
             "buffer",
+            "child_process",
             "crypto",
             "zlib",
             "http",

@@ -12,8 +12,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use frankenengine_engine::HybridRouter;
 use frankenengine_engine::ast::ParseGoal;
+use frankenengine_engine::baseline_interpreter::LaneChoice;
 #[cfg(unix)]
-use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore, LaneChoice};
+use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore};
 #[cfg(unix)]
 use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::checkpoint::CancellationToken;
@@ -325,6 +326,275 @@ fn process_package_with_entropy(source: &str) -> ExtensionPackage {
         .capabilities
         .extend(["builtin".to_string(), "random_read".to_string()]);
     package
+}
+
+fn first_class_process_package(source: &str) -> ExtensionPackage {
+    let mut package = process_package(source);
+    package
+        .capabilities
+        .extend(["builtin".into(), "module_load".into()]);
+    package
+}
+
+fn first_class_process_engine(lane: LaneChoice) -> ExecutionOrchestrator {
+    ExecutionOrchestrator::new(OrchestratorConfig {
+        commonjs_entry: true,
+        force_lane: Some(lane),
+        ..OrchestratorConfig::default()
+    })
+}
+
+#[test]
+fn first_class_process_calls_share_the_authenticated_request_and_replay_path() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for invocation in [
+            "cp.execFileSync('tool', ['alpha'], { encoding: 'utf8' })",
+            "(() => { const run = cp.execFileSync; return run('tool', ['alpha'], { encoding: 'utf8' }); })()",
+            "(() => { const { execFileSync: run } = cp; return run('tool', ['alpha'], { encoding: 'utf8' }); })()",
+            "(() => { const key = 'execFileSync'; return cp[key]('tool', ['alpha'], { encoding: 'utf8' }); })()",
+            "cp.execFileSync(...['tool', ['alpha'], { encoding: 'utf8' }])",
+            "cp.execFileSync.call(null, 'tool', ['alpha'], { encoding: 'utf8' })",
+            "cp.execFileSync.apply(null, ['tool', ['alpha'], { encoding: 'utf8' }])",
+            "cp.execFileSync.bind(null, 'tool')(['alpha'], { encoding: 'utf8' })",
+            "Reflect.apply(cp.execFileSync, null, ['tool', ['alpha'], { encoding: 'utf8' }])",
+        ] {
+            let package = first_class_process_package(&format!(
+                "const load = require; const cp = load('node:child_process'); console.log({invocation});"
+            ));
+            let provider = Arc::new(RecordingProcessSpawn::successful(b"first-class"));
+            let mut engine = first_class_process_engine(lane);
+            engine.set_process_spawn(
+                provider.clone(),
+                Arc::new(InMemoryHostEffectJournal::recording()),
+                test_process_authority(),
+            );
+            let result = engine
+                .execute(&package)
+                .unwrap_or_else(|error| panic!("{lane:?}: {invocation}: {error}"));
+            assert_eq!(result.console_output[0].message, "first-class");
+            assert_eq!(
+                *provider.seen.lock().expect("provider log"),
+                [expected_run_request()]
+            );
+            assert!(
+                matches!(result.host_effect_journal.as_slice(), [HostEffectJournalEntry::ProcessSpawn {
+                request, outcome: Ok(ProcessSpawnResponse::Run { stdout, .. }),
+            }] if request == &expected_run_request() && stdout == b"first-class")
+            );
+
+            let replay_provider = Arc::new(RecordingProcessSpawn::successful(b"must-not-run"));
+            let mut replay = first_class_process_engine(lane);
+            replay.set_process_spawn(
+                replay_provider.clone(),
+                Arc::new(InMemoryHostEffectJournal::replaying(
+                    result.host_effect_journal,
+                )),
+                ProcessSpawnAttemptAuthority::expiring_at_unix_ms(0),
+            );
+            let replayed = replay
+                .execute(&package)
+                .expect("module call replays without live spawn authority");
+            assert_eq!(replayed.console_output[0].message, "first-class");
+            assert!(
+                replay_provider
+                    .seen
+                    .lock()
+                    .expect("replay provider log")
+                    .is_empty()
+            );
+        }
+    }
+}
+
+#[test]
+fn first_class_process_selection_and_arguments_retain_runtime_ifc_denials() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for (setup, invocation) in [
+            ("const run = cp.execFileSync;", "run(secret, [])"),
+            (
+                "const opts = {}; const alias = opts; alias.cwd = secret; const run = cp.execFileSync;",
+                "run('tool', [], opts)",
+            ),
+            (
+                "cp.privateState = secret; const run = require('node:child_process').execFileSync;",
+                "run('tool', [])",
+            ),
+            (
+                "cp.privateState = secret; const run = require('node:child_process').execFileSync;",
+                "run.call(null, 'tool', [])",
+            ),
+            (
+                "cp.privateState = secret; const run = require('node:child_process').execFileSync;",
+                "run.apply(null, ['tool', []])",
+            ),
+            (
+                "cp.privateState = secret; const run = require('node:child_process').execFileSync;",
+                "run.bind(null)('tool', [])",
+            ),
+            (
+                "cp.privateState = secret; const run = require('node:child_process').execFileSync;",
+                "new run('tool', [])",
+            ),
+            (
+                "cp.privateState = secret; const run = require('node:child_process').execFileSync;",
+                "Reflect.construct(run, ['tool', []])",
+            ),
+        ] {
+            let provider = Arc::new(RecordingProcessSpawn::successful(b"must-not-run"));
+            let mut engine = first_class_process_engine(lane);
+            engine.set_process_spawn(
+                provider.clone(),
+                Arc::new(InMemoryHostEffectJournal::recording()),
+                test_process_authority(),
+            );
+            let mut package = first_class_process_package(&format!(
+                "const cp = require('child_process'); const crypto = require('crypto'); const secret = crypto.randomUUID(); {setup} {invocation};"
+            ));
+            package.capabilities.push("random_read".into());
+            let error = engine
+                .execute(&package)
+                .expect_err("classified selections and request data must not launch a process");
+            assert!(
+                error.to_string().contains("FLOW_POLICY_BLOCKED"),
+                "{lane:?}: {setup} {invocation}: {error}"
+            );
+            assert!(provider.seen.lock().expect("provider log").is_empty());
+            assert!(
+                matches!(
+                    engine.last_failed_host_effect_journal(),
+                    [HostEffectJournalEntry::ProcessSpawn {
+                        request: ProcessSpawnRequest::Run { .. },
+                        outcome: Err(ProcessSpawnError::FlowPolicyBlocked),
+                    }]
+                ),
+                "runtime refusal must retain the exact denied request"
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn first_class_process_values_execute_real_native_processes_and_async_callbacks() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let (provider, _) =
+            native_process_provider("native-printf", &["/usr/bin/printf", "/bin/printf"], 30_000);
+        let mut engine = first_class_process_engine(lane);
+        engine.set_process_spawn(
+            provider,
+            Arc::new(InMemoryHostEffectJournal::recording()),
+            test_process_authority(),
+        );
+        let result = engine
+            .execute(&first_class_process_package(
+                r#"
+const cp = require('child_process');
+const { execFileSync: run } = cp;
+console.log(run.apply(null, ['native-printf', ['sync:%s', 'ok'], { encoding: 'utf8' }]));
+const sync = new cp.spawnSync('native-printf', ['constructor'], { encoding: 'utf8' });
+console.log(sync.status, sync.stdout, Object.getPrototypeOf(sync) === Object.prototype);
+const encoded = new cp.execFileSync('native-printf', ['ignored'], { encoding: 'utf8' });
+console.log(encoded instanceof cp.execFileSync);
+cp.execFileSync.prototype = 17;
+const plain = new cp.execFileSync('native-printf', ['ignored'], { encoding: 'utf8' });
+console.log(Object.getPrototypeOf(plain) === Object.prototype);
+function Target() {}
+Target.prototype = 17;
+const reflected = Reflect.construct(cp.execFileSync,
+    ['native-printf', ['ignored'], { encoding: 'utf8' }], Target);
+console.log(Object.getPrototypeOf(reflected) === Object.prototype);
+const invoke = cp.execFile;
+const child = invoke.call(null, 'native-printf', ['async:%s', 'ok'], { encoding: 'utf8' },
+    (error, stdout, stderr) => console.log(error === null, stdout, stderr.length));
+child.on('close', code => console.log('closed', code));
+"#,
+            ))
+            .expect("first-class calls execute the same signed native process lifecycle");
+        assert_eq!(
+            result
+                .console_output
+                .iter()
+                .map(|entry| entry.message.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "sync:ok",
+                "0 constructor true",
+                "true",
+                "true",
+                "true",
+                "true async:ok 0",
+                "closed 0"
+            ]
+        );
+        assert!(result.host_effect_journal.iter().all(|entry| matches!(
+            entry,
+            HostEffectJournalEntry::ProcessSpawn { outcome: Ok(_), .. }
+        )));
+        assert_eq!(result.host_effect_journal.len(), 7);
+        result
+            .cell_execution_transcript
+            .as_ref()
+            .expect("native process transcript")
+            .verify()
+            .expect("first-class process transcript verifies");
+    }
+}
+
+#[test]
+fn first_class_process_callbacks_keep_selection_labels_out_of_request_data() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let provider = Arc::new(RecordingProcessSpawn::successful(b"callback-output"));
+        let mut engine = first_class_process_engine(lane);
+        engine.set_process_spawn(
+            provider.clone(),
+            Arc::new(InMemoryHostEffectJournal::recording()),
+            test_process_authority(),
+        );
+        let mut package = first_class_process_package(
+            r#"
+const cp = require('node:child_process');
+const crypto = require('crypto');
+const callbacks = { done: () => cp.execFileSync('tool', ['callback']) };
+callbacks.privateState = crypto.randomUUID();
+const callback = callbacks.done;
+const execFile = cp.execFile;
+execFile('tool', ['alpha'], callback);
+"#,
+        );
+        package.capabilities.push("random_read".into());
+        let error = engine
+            .execute(&package)
+            .expect_err("classified callback selection must reach its callback context");
+        assert!(
+            error.to_string().contains("FLOW_POLICY_BLOCKED"),
+            "{lane:?}: {error}"
+        );
+        assert_eq!(
+            *provider.seen.lock().expect("provider log"),
+            expected_async_requests(),
+            "a callback label is not part of the public launch request"
+        );
+        assert!(
+            matches!(
+                engine.last_failed_host_effect_journal(),
+                [
+                    HostEffectJournalEntry::ProcessSpawn {
+                        request: ProcessSpawnRequest::Spawn { .. },
+                        outcome: Ok(_)
+                    },
+                    HostEffectJournalEntry::ProcessSpawn {
+                        request: ProcessSpawnRequest::Wait { .. },
+                        outcome: Ok(_)
+                    },
+                    HostEffectJournalEntry::ProcessSpawn {
+                        request: ProcessSpawnRequest::Run { .. },
+                        outcome: Err(ProcessSpawnError::FlowPolicyBlocked)
+                    },
+                ]
+            ),
+            "the callback's attempted request must retain the classified context"
+        );
+    }
 }
 
 fn unix_now_ms() -> u64 {

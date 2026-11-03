@@ -381,6 +381,7 @@ pub enum NativeBuiltinModule {    Buffer,
     DiagnosticsChannel,
     Http,
     Https,
+    ChildProcess,
 }
 
 impl NativeBuiltinModule {
@@ -394,6 +395,7 @@ impl NativeBuiltinModule {
             "module" | "node:module" => Some(Self::Module),
             "http" | "node:http" => Some(Self::Http),
             "https" | "node:https" => Some(Self::Https),
+            "child_process" | "node:child_process" => Some(Self::ChildProcess),
             "events" | "node:events" => Some(Self::Events),
             "os" | "node:os" => Some(Self::Os),
             "querystring" | "node:querystring" => Some(Self::Querystring),
@@ -430,6 +432,7 @@ impl NativeBuiltinModule {
             Self::Module => "node:module",
             Self::Http => "node:http",
             Self::Https => "node:https",
+            Self::ChildProcess => "node:child_process",
             Self::Events => "node:events",
             Self::Os => "node:os",
             Self::Querystring => "node:querystring",
@@ -2897,6 +2900,7 @@ mod tests {
             "zlib",
             "http",
             "https",
+            "child_process",
             "fs",
             "fs/promises",
             "module",
@@ -2954,6 +2958,7 @@ mod tests {
                 RuntimeCapability::FsRead,
                 RuntimeCapability::FsWrite,
                 RuntimeCapability::NetworkEgress,
+                RuntimeCapability::ProcessSpawn,
             ] {
                 assert!(
                     !record.required_capabilities.contains(&effect),
@@ -3007,6 +3012,7 @@ mod tests {
             NativeBuiltinModule::Zlib,
             NativeBuiltinModule::Http,
             NativeBuiltinModule::Https,
+            NativeBuiltinModule::ChildProcess,
             NativeBuiltinModule::Fs,
             NativeBuiltinModule::FsPromises,
             NativeBuiltinModule::StreamConsumers,

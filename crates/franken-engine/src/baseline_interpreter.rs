@@ -3918,6 +3918,10 @@ pub enum BuiltinFunctionKind {
     /// Node exposes ordinary constructible functions here. Append only:
     /// builtin ordinals participate in deterministic register hashing.
     NativeHttpFunction,
+    /// First-class child_process exports retain the authenticated operation;
+    /// invocation still crosses the process_spawn policy and journal seam.
+    /// Append only: builtin ordinals are part of register hashing.
+    NativeChildProcessFunction,
 }
 
 /// Annex B B.2.2.2-14: each String HTML method's tag and attribute name.
@@ -3956,9 +3960,19 @@ impl BuiltinFunctionKind {
                 | Self::StandardConstructor
                 | Self::IntlConstructor
                 | Self::NativeHttpFunction
+                | Self::NativeChildProcessFunction
                 // Whether a callable proxy constructs depends on its target;
                 // `construct_callable_proxy` checks that.
                 | Self::CallableProxy
+        )
+    }
+
+    /// Native factories whose callee selection contributes to an immediate
+    /// host effect, including indirect calls and constructor invocations.
+    const fn observes_host_effect_selection(self) -> bool {
+        matches!(
+            self,
+            Self::NativeHttpFunction | Self::NativeChildProcessFunction
         )
     }
 }
@@ -4097,6 +4111,15 @@ impl BuiltinFunction {
         Self {
             kind: BuiltinFunctionKind::NativeHttpFunction,
             module_specifier: BuiltinModuleSpecifier::from_nonempty(tag),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn native_child_process_function(operation: &'static str) -> Self {
+        Self {
+            kind: BuiltinFunctionKind::NativeChildProcessFunction,
+            module_specifier: BuiltinModuleSpecifier::from_nonempty(operation),
             iterator_handle: None,
             bound_object: None,
         }
@@ -5871,6 +5894,10 @@ impl BuiltinFunction {
                 native_http_function_metadata(&self.module_specifier)
                     .map_or("anonymous", |(_, name, _)| name)
             }
+            BuiltinFunctionKind::NativeChildProcessFunction => {
+                native_child_process_function_metadata(&self.module_specifier)
+                    .map_or("anonymous", |(_, name, _)| name)
+            }
             BuiltinFunctionKind::PrototypeGetter => self
                 .module_specifier
                 .0
@@ -6177,6 +6204,10 @@ impl BuiltinFunction {
         use BuiltinFunctionKind as K;
         if self.kind == K::NativeHttpFunction {
             return native_http_function_metadata(&self.module_specifier)
+                .map(|(_, _, length)| length);
+        }
+        if self.kind == K::NativeChildProcessFunction {
+            return native_child_process_function_metadata(&self.module_specifier)
                 .map(|(_, _, length)| length);
         }
         let fixed = match self.kind {
@@ -6539,6 +6570,27 @@ const CRYPTO_MODULE_KEY: &str = "<module crypto>";
 const ZLIB_MODULE_KEY: &str = "<module zlib>";
 const HTTP_MODULE_KEY: &str = "<module http>";
 const HTTPS_MODULE_KEY: &str = "<module https>";
+const CHILD_PROCESS_MODULE_KEY: &str = "<module child_process>";
+
+/// The private discriminators are the existing process_spawn wire format.
+/// Keeping them on engine-created values never grants process authority.
+const CHILD_PROCESS_FUNCTIONS: [(&str, &str, i64); 6] = [
+    ("\0processop:spawn", "spawn", 3),
+    ("\0processop:spawn_sync", "spawnSync", 3),
+    ("\0processop:exec", "exec", 3),
+    ("\0processop:exec_sync", "execSync", 2),
+    ("\0processop:exec_file", "execFile", 4),
+    ("\0processop:exec_file_sync", "execFileSync", 3),
+];
+
+fn native_child_process_function_metadata(
+    operation: &str,
+) -> Option<(&'static str, &'static str, i64)> {
+    CHILD_PROCESS_FUNCTIONS
+        .iter()
+        .copied()
+        .find(|(candidate, _, _)| *candidate == operation)
+}
 
 /// Exact finite provider surface. These are the same operations as direct
 /// HTTP lowering, including the separate TLS request path.
@@ -18737,6 +18789,30 @@ impl InterpreterCore {
         &mut self,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
+        let operation = self.builtin_arg(args, 0)?;
+        let discriminator = self.process_string_argument(operation.as_ref(), "operation")?;
+        let logical_args = RegRange {
+            start: args
+                .start
+                .checked_add(1)
+                .ok_or(InterpreterError::RegisterOutOfBounds {
+                    register: args.start,
+                    max: self.config.max_registers,
+                })?,
+            count: args.count.saturating_sub(1),
+        };
+        self.dispatch_process_spawn_operation(&discriminator, logical_args)
+    }
+
+    /// The raw authenticated hostcall and first-class module exports share
+    /// exactly one request parser, IFC check, provider and journal path.
+    /// Arguments keep their original registers and labels; no synthetic
+    /// prefix can clobber a caller register or relabel a callback.
+    fn dispatch_process_spawn_operation(
+        &mut self,
+        discriminator: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
         let mut values = Vec::with_capacity(args.count as usize);
         let mut labels = Vec::with_capacity(args.count as usize);
         for offset in 0..args.count {
@@ -18750,11 +18826,10 @@ impl InterpreterCore {
             labels.push(self.get_register_label(register)?.clone());
             values.push(self.read_reg(register)?);
         }
-        let discriminator = self.process_string_argument(values.first(), "operation")?;
-        let logical = values.get(1..).unwrap_or_default();
+        let logical = values.as_slice();
         let command = self.process_string_argument(logical.first(), "command")?;
         let (argv, options_value, callback, callback_argument_index, request_argument_count) =
-            match discriminator.as_str() {
+            match discriminator {
                 "\0processop:spawn_sync" | "\0processop:spawn" | "\0processop:exec_file_sync" => {
                     if self.process_is_array(logical.get(1)) {
                         (
@@ -18836,8 +18911,6 @@ impl InterpreterCore {
             };
         let request_label_seed = self.clone_active_execution_context_label()?;
         let request_label = labels
-            .get(1..)
-            .unwrap_or_default()
             .iter()
             .zip(logical.iter())
             .take(request_argument_count)
@@ -18848,12 +18921,12 @@ impl InterpreterCore {
             });
         let options = self.process_call_options(options_value)?;
         let force_shell = matches!(
-            discriminator.as_str(),
+            discriminator,
             "\0processop:exec_sync" | "\0processop:exec"
         );
         let launch = Self::process_launch(command, argv, &options, force_shell);
         let async_operation = matches!(
-            discriminator.as_str(),
+            discriminator,
             "\0processop:spawn" | "\0processop:exec" | "\0processop:exec_file"
         );
         let callback_id = match callback {
@@ -18868,7 +18941,6 @@ impl InterpreterCore {
         };
         let callback_label = callback_id
             .and(callback_argument_index)
-            .and_then(|index: usize| index.checked_add(1))
             .and_then(|index| labels.get(index))
             .cloned()
             .unwrap_or(Label::Public);
@@ -19026,7 +19098,7 @@ impl InterpreterCore {
             }
             return Err(error);
         }
-        match discriminator.as_str() {
+        match discriminator {
             "\0processop:spawn_sync" => self.process_sync_result(
                 ProcessSpawnResponse::Run {
                     exit,
@@ -41161,16 +41233,16 @@ impl InterpreterCore {
         module: &Ir3Module,
         specifier: &JsString,
     ) -> Result<Value, InterpreterError> {
-        self.import_module_with_http_provenance(module, specifier, &mut false)
+        self.import_module_with_native_effect_provenance(module, specifier, &mut false)
     }
 
-    fn import_module_with_http_provenance(
+    fn import_module_with_native_effect_provenance(
         &mut self,
         module: &Ir3Module,
         specifier: &JsString,
-        native_http: &mut bool,
+        native_effect: &mut bool,
     ) -> Result<Value, InterpreterError> {
-        *native_http = false;
+        *native_effect = false;
         let specifier = Self::utf8_module_specifier(specifier)?;
         self.run_pre_import_hook(module, specifier)?;
         let delivered = self
@@ -41188,9 +41260,11 @@ impl InterpreterCore {
         {
             let namespace =
                 self.load_native_builtin_namespace(module, source, native, import_bound.as_ref())?;
-            *native_http = matches!(
+            *native_effect = matches!(
                 native,
-                NativeBuiltinModule::Http | NativeBuiltinModule::Https
+                NativeBuiltinModule::Http
+                    | NativeBuiltinModule::Https
+                    | NativeBuiltinModule::ChildProcess
             );
             return Ok(namespace);
         }
@@ -41203,9 +41277,11 @@ impl InterpreterCore {
                 native,
                 import_bound.as_ref(),
             )?;
-            *native_http = matches!(
+            *native_effect = matches!(
                 native,
-                NativeBuiltinModule::Http | NativeBuiltinModule::Https
+                NativeBuiltinModule::Http
+                    | NativeBuiltinModule::Https
+                    | NativeBuiltinModule::ChildProcess
             );
             return Ok(namespace);
         }
@@ -41318,6 +41394,69 @@ impl InterpreterCore {
             prototypes.insert(CRYPTO_MODULE_KEY.to_string(), object);
         });
         Ok(Value::Object(object))
+    }
+
+    /// Loading child_process only creates realm-owned callable values. The
+    /// existing signed process provider, live capability hooks and IFC policy
+    /// are checked when a function is invoked, even through an alias.
+    fn child_process_core_module(&mut self, module: &Ir3Module) -> Result<Value, InterpreterError> {
+        if let Some(object) = self.builtin_prototypes.get(CHILD_PROCESS_MODULE_KEY) {
+            return Ok(Value::Object(*object));
+        }
+        let mut members = Vec::with_capacity(CHILD_PROCESS_FUNCTIONS.len());
+        for (operation, name, _) in CHILD_PROCESS_FUNCTIONS {
+            let function =
+                Value::BuiltinFunction(BuiltinFunction::native_child_process_function(operation));
+            let prototype = self.native_child_process_function_prototype(operation)?;
+            let backing = self
+                .ensure_function_own_property_object(module, &function)?
+                .ok_or_else(|| InterpreterError::InternalError {
+                    details: "native child_process function has no property storage".to_string(),
+                })?;
+            self.set_object_property(backing, "prototype".to_string(), Value::Object(prototype))?;
+            self.set_own_property_attributes(
+                backing,
+                &RuntimePropertyKey::String(JsString::from("prototype")),
+                PropertyAttributes {
+                    writable: true,
+                    enumerable: false,
+                    configurable: false,
+                },
+            )?;
+            members.push((name, function));
+        }
+        let object = self.alloc_object_with_properties(&members)?;
+        self.mutate_builtin_prototypes(|prototypes| {
+            prototypes.insert(CHILD_PROCESS_MODULE_KEY.to_string(), object);
+        });
+        Ok(Value::Object(object))
+    }
+
+    fn native_child_process_function_prototype(
+        &mut self,
+        operation: &str,
+    ) -> Result<ObjectId, InterpreterError> {
+        let (operation, _, _) =
+            native_child_process_function_metadata(operation).ok_or_else(|| {
+                InterpreterError::TypeError {
+                    expected: "known native child_process function".to_string(),
+                    got: operation.to_string(),
+                }
+            })?;
+        let key = format!("\0franken-engine/native-child_process/prototype/{operation}");
+        if let Some(object) = self.builtin_prototypes.get(&key) {
+            return Ok(*object);
+        }
+        let parent = self.ensure_builtin_prototype("Object")?;
+        let prototype = self.alloc_object_with_prototype(Some(parent))?;
+        self.install_prototype_constructor(
+            prototype,
+            Value::BuiltinFunction(BuiltinFunction::native_child_process_function(operation)),
+        )?;
+        self.mutate_builtin_prototypes(|prototypes| {
+            prototypes.insert(key, prototype);
+        });
+        Ok(prototype)
     }
 
     /// First-class HTTP modules share the already implemented request,
@@ -41637,25 +41776,27 @@ impl InterpreterCore {
         module: &Ir3Module,
         specifier: &JsString,
     ) -> Result<Value, InterpreterError> {
-        self.require_module_with_http_provenance(module, specifier, &mut false)
+        self.require_module_with_native_effect_provenance(module, specifier, &mut false)
     }
 
-    fn require_module_with_http_provenance(
+    fn require_module_with_native_effect_provenance(
         &mut self,
         module: &Ir3Module,
         specifier: &JsString,
-        native_http: &mut bool,
+        native_effect: &mut bool,
     ) -> Result<Value, InterpreterError> {
-        *native_http = false;
+        *native_effect = false;
         let specifier = Self::utf8_module_specifier(specifier)?;
         self.run_pre_import_hook(module, specifier)?;
         if self.module_resolver.is_none()
             && let Some(native) = NativeBuiltinModule::from_specifier(specifier)
         {
             let value = self.native_builtin_module(module, native, None)?;
-            *native_http = matches!(
+            *native_effect = matches!(
                 native,
-                NativeBuiltinModule::Http | NativeBuiltinModule::Https
+                NativeBuiltinModule::Http
+                    | NativeBuiltinModule::Https
+                    | NativeBuiltinModule::ChildProcess
             );
             return Ok(value);
         }
@@ -41672,9 +41813,11 @@ impl InterpreterCore {
             && let Some(native) = NativeBuiltinModule::from_record(&source.module.record)
         {
             let value = self.load_native_builtin_resolved(module, source, native, None)?;
-            *native_http = matches!(
+            *native_effect = matches!(
                 native,
-                NativeBuiltinModule::Http | NativeBuiltinModule::Https
+                NativeBuiltinModule::Http
+                    | NativeBuiltinModule::Https
+                    | NativeBuiltinModule::ChildProcess
             );
             return Ok(value);
         }
@@ -41773,6 +41916,7 @@ impl InterpreterCore {
             NativeBuiltinModule::Zlib => self.zlib_core_module(),
             NativeBuiltinModule::Http => self.http_core_module(module, false),
             NativeBuiltinModule::Https => self.http_core_module(module, true),
+            NativeBuiltinModule::ChildProcess => self.child_process_core_module(module),
             NativeBuiltinModule::Module => self.module_core_module(),
             NativeBuiltinModule::Os => self.os_core_module(),
             NativeBuiltinModule::Querystring => self.querystring_core_module(),
@@ -41810,6 +41954,10 @@ impl InterpreterCore {
     /// facade inventories where the provider itself is table-driven.
     fn native_builtin_export_names(native: NativeBuiltinModule) -> Vec<&'static str> {
         match native {
+            NativeBuiltinModule::ChildProcess => CHILD_PROCESS_FUNCTIONS
+                .iter()
+                .map(|(_, name, _)| *name)
+                .collect(),
             NativeBuiltinModule::Http => {
                 vec![
                     "Agent",
@@ -42533,6 +42681,7 @@ impl InterpreterCore {
             NativeBuiltinModule::Zlib => "\0franken-engine/native-zlib/esm",
             NativeBuiltinModule::Http => "\0franken-engine/native-http/esm",
             NativeBuiltinModule::Https => "\0franken-engine/native-https/esm",
+            NativeBuiltinModule::ChildProcess => "\0franken-engine/native-child_process/esm",
             NativeBuiltinModule::Fs => "\0franken-engine/native-fs/esm",
             NativeBuiltinModule::FsPromises => "\0franken-engine/native-fs/promises/esm",
             NativeBuiltinModule::Module => "\0franken-engine/native-module/esm",
@@ -44913,6 +45062,7 @@ impl InterpreterCore {
             BuiltinFunctionKind::NativeHttpFunction => {
                 native_http_function_metadata(&builtin.module_specifier)?.0
             }
+            BuiltinFunctionKind::NativeChildProcessFunction => "process_spawn",
             BuiltinFunctionKind::ConsoleLog => "console:log",
             BuiltinFunctionKind::ConsoleError => "console:error",
             BuiltinFunctionKind::ConsoleWarn => "console:warn",
@@ -44934,7 +45084,7 @@ impl InterpreterCore {
         Some(Cow::Borrowed(tag))
     }
 
-    /// A native HTTP function selected from a classified module or property
+    /// A native effect function selected from a classified module or property
     /// must carry that selection into its request state and immediate effects,
     /// not only the eventual destination register. Other builtins retain their
     /// existing invocation contract. The observation scope accounts its label
@@ -44948,7 +45098,7 @@ impl InterpreterCore {
         receiver_register: Option<u32>,
         callee: u32,
     ) -> Result<Value, InterpreterError> {
-        if builtin.kind != BuiltinFunctionKind::NativeHttpFunction {
+        if !builtin.kind.observes_host_effect_selection() {
             return self.dispatch_builtin_function(
                 module,
                 builtin,
@@ -45603,23 +45753,23 @@ impl InterpreterCore {
                     WitnessEventKind::HostcallDispatched,
                     Some("cap:module_load"),
                 );
-                let mut native_http = false;
-                let result = self.dispatch_require_hostcall_with_http_provenance(
+                let mut native_effect = false;
+                let result = self.dispatch_require_hostcall_with_native_effect_provenance(
                     args,
                     Some(module),
-                    &mut native_http,
+                    &mut native_effect,
                 );
                 self.current_module_specifier = previous_module_specifier;
                 if let Ok(value) = &result {
-                    // An authenticated engine-local HTTP namespace reads no
+                    // An authenticated engine-local effect namespace reads no
                     // host module bytes. Its initial contents are Public, but
                     // a cached load must retain all guest-written state and
                     // opaque accessors. Ordinary source loads keep their
                     // existing Internal floor, including source re-exports.
-                    let result_label = if native_http {
+                    let result_label = if native_effect {
                         let Value::Object(object) = value else {
                             return Err(InterpreterError::InternalError {
-                                details: "native HTTP provider returned a non-object".to_string(),
+                                details: "native effect provider returned a non-object".to_string(),
                             });
                         };
                         args_label.join(&self.native_builtin_state_label_with_floor(
@@ -48002,6 +48152,26 @@ impl InterpreterCore {
                 self.gc_enter_builtin();
                 let result = result.and_then(|value| {
                     self.publish_delegated_hostcall_result_label(tag, &inputs)?;
+                    Ok(value)
+                });
+                drop(inputs);
+                self.estimated_memory_bytes =
+                    self.estimated_memory_bytes.saturating_sub(input_bytes);
+                result
+            }
+            BuiltinFunctionKind::NativeChildProcessFunction => {
+                let (operation, _, _) =
+                    native_child_process_function_metadata(&builtin.module_specifier)
+                        .ok_or_else(|| InterpreterError::TypeError {
+                            expected: "known native child_process function".to_string(),
+                            got: builtin.module_specifier.to_string(),
+                        })?;
+                let inputs = self.join_arg_range_with_object_mutation_label(args)?;
+                let input_bytes = Self::estimate_label_bytes(&inputs);
+                self.apply_memory_component_delta(0, input_bytes)?;
+                let result = self.dispatch_process_spawn_operation(operation, args);
+                let result = result.and_then(|value| {
+                    self.publish_delegated_hostcall_result_label("process_spawn", &inputs)?;
                     Ok(value)
                 });
                 drop(inputs);
@@ -53341,7 +53511,7 @@ impl InterpreterCore {
                 None => result_label,
             };
             let result_label = if matches!(&active_callee, Value::BuiltinFunction(builtin)
-                if builtin.kind == BuiltinFunctionKind::NativeHttpFunction)
+                if builtin.kind.observes_host_effect_selection())
             {
                 let observed = self
                     .take_pending_hostcall_result_label()
@@ -57835,19 +58005,19 @@ impl InterpreterCore {
                         WitnessEventKind::HostcallDispatched,
                         Some("cap:module_load"),
                     );
-                    let mut native_http = false;
-                    let namespace = self.dispatch_import_hostcall_with_http_provenance(
+                    let mut native_effect = false;
+                    let namespace = self.dispatch_import_hostcall_with_native_effect_provenance(
                         "module_load",
                         RegRange {
                             start: specifier,
                             count: 1,
                         },
                         Some(module),
-                        &mut native_http,
+                        &mut native_effect,
                     )?;
-                    let result_label = if native_http && let Value::Object(object) = &namespace {
+                    let result_label = if native_effect && let Value::Object(object) = &namespace {
                         // Authentication and the import-bound checks already
-                        // completed. A pure engine-owned HTTP namespace is
+                        // completed. A pure engine-owned effect namespace is
                         // not a source read, but its cached export graph and
                         // every getter observation still contribute provenance.
                         let state = self.native_builtin_state_label_with_floor(
@@ -59982,9 +60152,7 @@ impl InterpreterCore {
                             result_label,
                             &new_target_label,
                         )?;
-                        let result_label = if builtin.kind
-                            == BuiltinFunctionKind::NativeHttpFunction
-                        {
+                        let result_label = if builtin.kind.observes_host_effect_selection() {
                             let observed = self
                                 .take_pending_hostcall_result_label()
                                 .unwrap_or(Label::Public);
@@ -60119,10 +60287,20 @@ impl InterpreterCore {
                         if standard_name == Some("Iterator") {
                             return Err(self.abstract_iterator_construction_error());
                         }
-                        if builtin.kind == BuiltinFunctionKind::NativeHttpFunction {
+                        if builtin.kind.observes_host_effect_selection() {
                             self.clear_pending_hostcall_result_label();
                         }
                         let mut result = match standard_name {
+                            _ if builtin.kind == BuiltinFunctionKind::NativeChildProcessFunction => {
+                                self.construct_builtin_with_new_target_and_labels(
+                                    module,
+                                    builtin,
+                                    args,
+                                    &callee_val,
+                                    &callee_label,
+                                    &callee_label,
+                                )?
+                            }
                             _ if builtin.kind == BuiltinFunctionKind::DateConstructor => {
                                 self.dispatch_builtin_hostcall("builtin:Date", args, Some(module))?
                             }
@@ -60181,7 +60359,7 @@ impl InterpreterCore {
                         // bd-n2mjy / bd-0zybl / bd-ooaka.1).
                         let args_label = self.join_arg_range_label(args)?;
                         let result_label =
-                            if builtin.kind == BuiltinFunctionKind::NativeHttpFunction {
+                            if builtin.kind.observes_host_effect_selection() {
                                 let observed = self
                                     .take_pending_hostcall_result_label()
                                     .unwrap_or(Label::Public);
@@ -74035,17 +74213,17 @@ impl InterpreterCore {
         args: RegRange,
         module: Option<&Ir3Module>,
     ) -> Result<Value, InterpreterError> {
-        self.dispatch_require_hostcall_with_http_provenance(args, module, &mut false)
+        self.dispatch_require_hostcall_with_native_effect_provenance(args, module, &mut false)
     }
 
-    fn dispatch_require_hostcall_with_http_provenance(
+    fn dispatch_require_hostcall_with_native_effect_provenance(
         &mut self,
         args: RegRange,
         module: Option<&Ir3Module>,
-        native_http: &mut bool,
+        native_effect: &mut bool,
     ) -> Result<Value, InterpreterError> {
         let args_hash = self.hostcall_arguments_hash(args);
-        let outcome = self.dispatch_require_hostcall_inner(args, module, native_http);
+        let outcome = self.dispatch_require_hostcall_inner(args, module, native_effect);
         // Module evaluation can recursively complete another module hostcall.
         // Record in completion order so nested records remain timestamp-
         // monotonic while retaining deterministic instruction-clock time.
@@ -74158,7 +74336,7 @@ impl InterpreterCore {
         &mut self,
         args: RegRange,
         module: Option<&Ir3Module>,
-        native_http: &mut bool,
+        native_effect: &mut bool,
     ) -> Result<Value, InterpreterError> {
         let spec_val = if args.count > 0 {
             self.read_reg(args.start)?
@@ -74176,7 +74354,7 @@ impl InterpreterCore {
         let module = module.ok_or_else(|| InterpreterError::InternalError {
             details: "module:require apply hostcall missing module context".to_string(),
         })?;
-        match self.require_module_with_http_provenance(module, &specifier, native_http) {
+        match self.require_module_with_native_effect_provenance(module, &specifier, native_effect) {
             // Node names the request as written, not the resolved path.
             Err(InterpreterError::ModuleResolutionFailed { reason, .. }) => Err(self
                 .throw_module_resolution_failure(
@@ -74240,22 +74418,24 @@ impl InterpreterCore {
         args: RegRange,
         module: Option<&Ir3Module>,
     ) -> Result<Value, InterpreterError> {
-        self.dispatch_import_hostcall_with_http_provenance(capability, args, module, &mut false)
+        self.dispatch_import_hostcall_with_native_effect_provenance(
+            capability, args, module, &mut false,
+        )
     }
 
-    fn dispatch_import_hostcall_with_http_provenance(
+    fn dispatch_import_hostcall_with_native_effect_provenance(
         &mut self,
         capability: &str,
         args: RegRange,
         module: Option<&Ir3Module>,
-        native_http: &mut bool,
+        native_effect: &mut bool,
     ) -> Result<Value, InterpreterError> {
-        *native_http = false;
+        *native_effect = false;
         let args_hash = self.hostcall_arguments_hash(args);
         let outcome = if capability == crate::capability::DYNAMIC_IMPORT_CAPABILITY {
             self.dynamic_import(args, module)
         } else {
-            self.dispatch_import_hostcall_inner(args, module, native_http)
+            self.dispatch_import_hostcall_inner(args, module, native_effect)
         };
         // See `dispatch_require_hostcall`: nested module evaluation records
         // inner completions first, so the outer record takes its timestamp at
@@ -74269,7 +74449,7 @@ impl InterpreterCore {
         &mut self,
         args: RegRange,
         module: Option<&Ir3Module>,
-        native_http: &mut bool,
+        native_effect: &mut bool,
     ) -> Result<Value, InterpreterError> {
         let specifier_value = if args.count > 0 {
             self.read_reg(args.start)?
@@ -74287,7 +74467,7 @@ impl InterpreterCore {
         let module = module.ok_or_else(|| InterpreterError::InternalError {
             details: "module import hostcall missing module context".to_string(),
         })?;
-        self.import_module_with_http_provenance(module, &specifier, native_http)
+        self.import_module_with_native_effect_provenance(module, &specifier, native_effect)
     }
 
     /// `import(specifier)` (ES2020 12.3.10.1 with HostImportModuleDynamically
@@ -74480,12 +74660,35 @@ impl InterpreterCore {
         )?;
         self.pending_async_module_import = None;
         let module = task.owner_module.as_ref();
-        let outcome = self.dynamic_import_namespace(module, &task.specifier);
+        // This host job starts a fresh observation. The initiating specifier
+        // and execution context are retained by the task, independently of a
+        // preceding job's temporary hostcall-result publication.
+        self.clear_pending_hostcall_result_label();
+        let mut native_effect = false;
+        let outcome = self
+            .dynamic_import_namespace(module, &task.specifier, &mut native_effect)
+            .and_then(|namespace| {
+                let label = if native_effect && let Value::Object(object) = &namespace {
+                    // As for static imports and require, authenticated native
+                    // factories read no host source bytes. Keep selection,
+                    // cached mutations and accessor observations; source
+                    // re-exports still take the ordinary Internal floor.
+                    let state =
+                        self.native_builtin_state_label_with_floor(module, *object, Label::Public)?;
+                    let label = self.join_owned_label_with_temporary_budget(state, &task.label)?;
+                    let observed = self
+                        .take_pending_hostcall_result_label()
+                        .unwrap_or(Label::Public);
+                    self.join_owned_label_with_temporary_budget(label, &observed)?
+                } else {
+                    hostcall_result_contract(crate::capability::DYNAMIC_IMPORT_CAPABILITY)
+                        .result_label(&task.label, None)
+                };
+                Ok((namespace, label))
+            });
         let async_evaluation = self.pending_async_module_import.take();
         match outcome {
-            Ok(namespace) => {
-                let label = hostcall_result_contract(crate::capability::DYNAMIC_IMPORT_CAPABILITY)
-                    .result_label(&task.label, None);
+            Ok((namespace, label)) => {
                 // A module still suspended at a top-level await fulfills its
                 // evaluation promise with its namespace (or rejects it), so
                 // following that promise settles this one when it finishes.
@@ -74512,7 +74715,9 @@ impl InterpreterCore {
         &mut self,
         module: &Ir3Module,
         specifier: &str,
+        native_effect: &mut bool,
     ) -> Result<Value, InterpreterError> {
+        *native_effect = false;
         self.run_pre_import_hook(module, specifier)?;
         // bd-j8f7q: a unit lowered under the bounded-imports contract assumed
         // every ImportCall yields at most IFC_BOUNDED_IMPORT_LABEL, whatever
@@ -74523,14 +74728,20 @@ impl InterpreterCore {
         if self.module_resolver.is_some() {
             let delivered = self.resolve_installed_module(specifier, ImportStyle::Import)?;
             let resolved = delivered.module.record.id.clone();
-            if let Some(native) = NativeBuiltinModule::from_record(&delivered.module.record)
-            {
-                return self.load_native_builtin_namespace(
+            if let Some(native) = NativeBuiltinModule::from_record(&delivered.module.record) {
+                let namespace = self.load_native_builtin_namespace(
                     module,
                     &delivered,
                     native,
                     import_bound.as_ref(),
+                )?;
+                *native_effect = matches!(
+                    native,
+                    NativeBuiltinModule::Http
+                        | NativeBuiltinModule::Https
+                        | NativeBuiltinModule::ChildProcess
                 );
+                return Ok(namespace);
             }
             return self.load_module_resolved(
                 module,
@@ -74541,12 +74752,19 @@ impl InterpreterCore {
             );
         }
         if let Some(native) = NativeBuiltinModule::from_specifier(specifier) {
-            return self.load_ordinary_native_builtin_namespace(
+            let namespace = self.load_ordinary_native_builtin_namespace(
                 module,
                 specifier,
                 native,
                 import_bound.as_ref(),
+            )?;
+            *native_effect = matches!(
+                native,
+                NativeBuiltinModule::Http
+                    | NativeBuiltinModule::Https
+                    | NativeBuiltinModule::ChildProcess
             );
+            return Ok(namespace);
         }
         if import_bound.is_some()
             && !crate::lowering_pipeline::is_bounded_import_specifier(specifier)
@@ -112779,8 +112997,8 @@ impl InterpreterCore {
         Ok(prototype)
     }
 
-    /// Native HTTP factories also retain the selected constructor and
-    /// new.target provenance while allocating their request/server state.
+    /// Native effect factories also retain the selected constructor and
+    /// new.target provenance while allocating their host-backed state.
     /// This includes Reflect.construct and a derived class's super() path.
     fn construct_builtin_with_new_target_and_labels(
         &mut self,
@@ -112791,7 +113009,7 @@ impl InterpreterCore {
         callee_label: &Label,
         new_target_label: &Label,
     ) -> Result<Value, InterpreterError> {
-        if builtin.kind != BuiltinFunctionKind::NativeHttpFunction {
+        if !builtin.kind.observes_host_effect_selection() {
             return self.construct_builtin_with_new_target(module, builtin, args, new_target);
         }
         self.clear_pending_hostcall_result_label();
@@ -112867,8 +113085,8 @@ impl InterpreterCore {
         // GetPrototypeFromConstructor(newTarget, default) (ES2024 10.1.14):
         // Get(newTarget, "prototype") observably (a getter or proxy trap runs
         // and may throw), before the construction reads its arguments; a
-        // value that is not an object falls back to the builtin's own
-        // intrinsic prototype, not %Object.prototype% (bd-9vouw.273).
+        // Standard constructors fall back to their own intrinsic prototype
+        // (bd-9vouw.273); ordinary process functions use %Object.prototype%.
         self.gc_nested_request = None;
         let prototype = match self.get_v(
             module,
@@ -112876,6 +113094,9 @@ impl InterpreterCore {
             &RuntimePropertyKey::String(JsString::from("prototype")),
         )? {
             Value::Object(prototype) => prototype,
+            _ if builtin.kind == BuiltinFunctionKind::NativeChildProcessFunction => {
+                self.ensure_builtin_prototype("Object")?
+            }
             _ => self.default_constructor_prototype_for_value(
                 module,
                 &Value::BuiltinFunction(builtin.clone()),
@@ -112926,6 +113147,17 @@ impl InterpreterCore {
             && !result.is_object_like()
         {
             result = Value::Object(self.alloc_primitive_wrapper(result)?);
+        }
+        // Node's process functions are ordinary constructors: an explicitly
+        // returned object wins, while an encoded stdout string leaves the
+        // newly constructed receiver as the result.
+        if builtin.kind == BuiltinFunctionKind::NativeChildProcessFunction {
+            return if result.is_object_like() {
+                Ok(result)
+            } else {
+                self.alloc_object_with_prototype(Some(prototype))
+                    .map(Value::Object)
+            };
         }
         // Node's HTTP factories are ordinary functions that explicitly
         // return a request or server. [[Construct]] must keep that result's
@@ -113495,6 +113727,11 @@ impl InterpreterCore {
                 if builtin.kind == BuiltinFunctionKind::NativeHttpFunction =>
             {
                 self.native_http_function_prototype(&builtin.module_specifier)
+            }
+            Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::NativeChildProcessFunction =>
+            {
+                self.native_child_process_function_prototype(&builtin.module_specifier)
             }
             Value::BuiltinFunction(builtin) if builtin.kind.is_constructible() => {
                 self.ensure_builtin_prototype(builtin.display_name())

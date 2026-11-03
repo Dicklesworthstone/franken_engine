@@ -1992,81 +1992,28 @@ impl NativeProcessSpawn {
                 });
             }
         }
-        let state = lock_unpoison(&self.children)
-            .remove(handle)
-            .ok_or_else(|| unknown_handle(handle))?;
-        let mut running = match state {
-            LifecycleChild::Running(running) => running,
-            LifecycleChild::Terminal(outcome) => return terminal_operation_error(handle, &outcome),
-        };
-        let exited = match running.child.try_wait() {
-            Ok(status) => status.is_some(),
-            Err(error) => {
-                let _ = terminate_remaining_process_group(&running);
-                kill_and_reap(&mut running.child);
-                let _ = collect_outputs(running);
-                return Err(ProcessSpawnError::Io {
-                    operation: "poll before kill".to_string(),
-                    detail: error.to_string(),
-                });
+        let running = {
+            let mut children = lock_unpoison(&self.children);
+            if let Some(LifecycleChild::Terminal(outcome)) = children.get(handle) {
+                // A late signal must not consume the pending Wait's terminal
+                // outcome, including an earlier timeout or cancellation.
+                return terminal_operation_error(handle, outcome);
+            }
+            match children.remove(handle) {
+                Some(LifecycleChild::Running(running)) => running,
+                _ => return Err(unknown_handle(handle)),
             }
         };
-        if !exited {
-            match signal {
-                ProcessSignal::Kill => {
-                    let group_result = terminate_remaining_process_group(&running);
-                    let child_result = running.child.kill();
-                    if let (Err(group_error), Err(child_error)) = (group_result, child_result) {
-                        // A process may exit between `try_wait` and signalling.
-                        // Always reap before reporting the failed containment
-                        // attempt.
-                        let _ = running.child.wait();
-                        let _ = collect_outputs(running);
-                        return Err(ProcessSpawnError::Io {
-                            operation: "kill process group and child".to_string(),
-                            detail: format!("{group_error}; direct child fallback: {child_error}"),
-                        });
-                    }
-                }
-                ProcessSignal::Terminate | ProcessSignal::Interrupt => {
-                    // bd-m42c2: TERM/INT go to the child's private process
-                    // group via the same rustix surface as containment
-                    // teardown; std's `Child::kill` is SIGKILL-only.
-                    #[cfg(unix)]
-                    if let Err(error) =
-                        signal_process_group_id(running.process_group, rustix_signal(signal))
-                    {
-                        let _ = running.child.wait();
-                        let _ = collect_outputs(running);
-                        return Err(error);
-                    }
-                    #[cfg(not(unix))]
-                    unreachable!("non-unix TERM/INT was refused above");
-                }
-            }
-        }
-        let status = match running.child.wait() {
-            Ok(status) => status,
-            Err(error) => {
-                let _ = terminate_remaining_process_group(&running);
-                kill_and_reap(&mut running.child);
-                let _ = collect_outputs(running);
-                return Err(ProcessSpawnError::Io {
-                    operation: "reap after kill".to_string(),
-                    detail: error.to_string(),
-                });
-            }
-        };
-        let (stdout, stderr) = collect_outputs_controlled(running, control)?;
-        let outcome = Ok(ProcessSpawnResponse::Killed {
+        let outcome = signal_and_collect_controlled(
+            running,
             signal,
-            exit: exit_from_status(status),
-            stdout,
-            stderr,
-        });
+            self.policy.limits.max_runtime_millis,
+            control,
+        );
         // bd-m42c2: the pending lifecycle `Wait` turn must observe the kill
-        // outcome instead of an unknown handle, so the terminal record stays
-        // addressable under the same handle (mirroring watchdog completion).
+        // outcome, even when a refused signal or interrupted reap required
+        // forced containment. Retain failures and captured output as well as
+        // successful kills, mirroring watchdog completion.
         {
             let mut children = lock_unpoison(&self.children);
             children.insert(
@@ -3027,11 +2974,18 @@ fn wait_and_collect(
 }
 
 fn wait_and_collect_controlled(
-    mut running: RunningChild,
+    running: RunningChild,
     timeout: Duration,
     control: &dyn ProcessSpawnControl,
 ) -> Result<(ProcessExit, Vec<u8>, Vec<u8>), ProcessSpawnError> {
-    let deadline = Instant::now().checked_add(timeout);
+    wait_and_collect_until_controlled(running, Instant::now().checked_add(timeout), control)
+}
+
+fn wait_and_collect_until_controlled(
+    mut running: RunningChild,
+    deadline: Option<Instant>,
+    control: &dyn ProcessSpawnControl,
+) -> Result<(ProcessExit, Vec<u8>, Vec<u8>), ProcessSpawnError> {
     let status = loop {
         match running.child.try_wait() {
             Err(error) => {
@@ -3076,6 +3030,73 @@ fn wait_and_collect_controlled(
     let exit = exit_from_status(status);
     let (stdout, stderr) = collect_outputs_controlled(running, control)?;
     Ok((exit, stdout, stderr))
+}
+
+fn signal_and_collect_controlled(
+    mut running: RunningChild,
+    signal: ProcessSignal,
+    policy_runtime_millis: u64,
+    control: &dyn ProcessSpawnControl,
+) -> ProcessSpawnOutcome {
+    let signalling = control.checkpoint().and_then(|()| {
+        let exited = running
+            .child
+            .try_wait()
+            .map_err(|error| ProcessSpawnError::Io {
+                operation: "poll before kill".to_string(),
+                detail: error.to_string(),
+            })?
+            .is_some();
+        if exited {
+            return Ok(());
+        }
+        match signal {
+            ProcessSignal::Kill => {
+                let group_result = terminate_remaining_process_group(&running);
+                let child_result = running.child.kill();
+                match (group_result, child_result) {
+                    (Err(group_error), Err(child_error)) => Err(ProcessSpawnError::Io {
+                        operation: "kill process group and child".to_string(),
+                        detail: format!("{group_error}; direct child fallback: {child_error}"),
+                    }),
+                    _ => Ok(()),
+                }
+            }
+            ProcessSignal::Terminate | ProcessSignal::Interrupt => {
+                // TERM/INT preserve guest-selected signal semantics. A child
+                // may ignore either, so delivery alone is not containment.
+                #[cfg(unix)]
+                {
+                    signal_process_group_id(running.process_group, rustix_signal(signal))
+                }
+                #[cfg(not(unix))]
+                unreachable!("non-unix TERM/INT was refused before taking ownership")
+            }
+        }
+    });
+    if let Err(error) = signalling {
+        // Ownership has left the map, so the detached watchdog can no longer
+        // rescue this child. Force containment before any blocking reap even
+        // when signalling or the authority checkpoint itself failed.
+        let _ = terminate_remaining_process_group(&running);
+        kill_and_reap(&mut running.child);
+        let _ = collect_outputs(running);
+        return Err(error);
+    }
+    // Keep the original absolute lifecycle deadline across scheduler stalls;
+    // rebasing a remaining duration at the wait call could extend the budget.
+    // An ignored TERM/INT must not block past cancellation, expiry, or
+    // revocation while the detached watchdog lacks ownership.
+    let deadline = running
+        .started
+        .checked_add(Duration::from_millis(policy_runtime_millis));
+    let (exit, stdout, stderr) = wait_and_collect_until_controlled(running, deadline, control)?;
+    Ok(ProcessSpawnResponse::Killed {
+        signal,
+        exit,
+        stdout,
+        stderr,
+    })
 }
 
 fn cleanup_lifecycle_child(state: Option<LifecycleChild>) -> ProcessSpawnOutcome {
@@ -3484,6 +3505,103 @@ mod tests {
                 })
             }
         }
+    }
+
+    #[cfg(unix)]
+    fn spawn_signal_resistant_child(
+        runtime_millis: u64,
+        acknowledge_signal: bool,
+    ) -> (
+        NativeProcessSpawn,
+        String,
+        tempfile::TempDir,
+        rustix::process::Pid,
+    ) {
+        let shell = executable(&["/bin/sh", "/usr/bin/sh"]);
+        let markers = tempfile::tempdir().expect("create signal readiness directory");
+        let ready = markers.path().join("ready");
+        let signalled = markers.path().join("signalled");
+        let mut policy = ProcessSpawnPolicy::jailed("/").expect("rooted policy");
+        let canonical = policy.authorize_executable(&shell).expect("authorize sh");
+        policy.allowed_signals.insert(ProcessSignal::Interrupt);
+        policy.limits.max_runtime_millis = runtime_millis;
+        let provider = NativeProcessSpawn::new(policy).expect("native provider");
+        let disposition = if acknowledge_signal {
+            "trap 'printf caught > \"$2\"' TERM INT"
+        } else {
+            "trap '' TERM INT"
+        };
+        // Keep the shell blocked on its real stdin pipe. Readiness is published
+        // only after installing the signal disposition and writing both streams.
+        let script = format!(
+            "{disposition}; printf before-signal-stdout; printf before-signal-stderr >&2; \
+             printf ready > \"$1\"; while :; do read -r line || :; done"
+        );
+        let response = provider
+            .perform(
+                &ProcessSpawnRequest::Spawn {
+                    launch: ProcessLaunch {
+                        executable: canonical,
+                        argv: vec![
+                            "-c".to_string(),
+                            script,
+                            "franken-signal-test".to_string(),
+                            ready.display().to_string(),
+                            signalled.display().to_string(),
+                        ],
+                        env: BTreeMap::new(),
+                        cwd: None,
+                        shell: false,
+                        stdio: ProcessStdio::default(),
+                    },
+                },
+                &[ProcessSpawnCapability::Spawn],
+            )
+            .expect("spawn signal-resistant child");
+        let ProcessSpawnResponse::Spawned { handle } = response else {
+            panic!("lifecycle spawn response");
+        };
+        let readiness_deadline = Instant::now() + Duration::from_secs(2);
+        while std::fs::read(&ready).ok().as_deref() != Some(b"ready") {
+            assert!(
+                Instant::now() < readiness_deadline,
+                "child must install its real signal disposition before Kill"
+            );
+            thread::sleep(Duration::from_millis(2));
+        }
+        let group = match lock_unpoison(&provider.children).get(&handle) {
+            Some(LifecycleChild::Running(running)) => running.process_group,
+            _ => panic!("signal-resistant child must still be running before Kill"),
+        };
+        (provider, handle, markers, group)
+    }
+
+    #[cfg(unix)]
+    fn rescue_signal_test_after_deadline(
+        group: rustix::process::Pid,
+    ) -> (SyncSender<()>, JoinHandle<bool>) {
+        let (finished, completion) = sync_channel(1);
+        let rescue = thread::spawn(move || {
+            if completion.recv_timeout(Duration::from_secs(2)).is_ok() {
+                return false;
+            }
+            // The unfixed implementation blocks after removing the child from
+            // the provider map. An independent real group kill bounds this test
+            // even there, and is explicitly a failure rather than a passing path.
+            terminate_process_group_id(group).expect("rescue blocked signal test");
+            true
+        });
+        (finished, rescue)
+    }
+
+    #[cfg(unix)]
+    fn assert_process_workers_released(provider: &NativeProcessSpawn) {
+        assert_eq!(provider.active_children.load(Ordering::Acquire), 0);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while provider.active_watchdogs.load(Ordering::Acquire) != 0 && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(provider.active_watchdogs.load(Ordering::Acquire), 0);
     }
 
     #[test]
@@ -4516,51 +4634,220 @@ mod tests {
     #[test]
     fn kill_with_terminate_signals_the_group_and_reports_sigterm_bd_m42c2() {
         let sleep = executable(&["/bin/sleep", "/usr/bin/sleep"]);
-        let mut policy = ProcessSpawnPolicy::jailed("/").expect("rooted policy");
-        let canonical = policy
-            .authorize_executable(&sleep)
-            .expect("authorize sleep");
-        policy.allowed_signals.insert(ProcessSignal::Terminate);
-        let provider = NativeProcessSpawn::new(policy).expect("native provider");
-        let response = provider
-            .perform(
-                &ProcessSpawnRequest::Spawn {
-                    launch: ProcessLaunch {
-                        executable: canonical,
-                        argv: vec!["30".to_string()],
-                        env: BTreeMap::new(),
-                        cwd: None,
-                        shell: false,
-                        stdio: ProcessStdio::default(),
+        for (signal, native_signal) in [
+            (ProcessSignal::Terminate, 15),
+            (ProcessSignal::Interrupt, 2),
+            (ProcessSignal::Kill, 9),
+        ] {
+            let mut policy = ProcessSpawnPolicy::jailed("/").expect("rooted policy");
+            let canonical = policy
+                .authorize_executable(&sleep)
+                .expect("authorize sleep");
+            policy.allowed_signals.insert(signal);
+            let provider = NativeProcessSpawn::new(policy).expect("native provider");
+            let response = provider
+                .perform(
+                    &ProcessSpawnRequest::Spawn {
+                        launch: ProcessLaunch {
+                            executable: canonical,
+                            argv: vec!["30".to_string()],
+                            env: BTreeMap::new(),
+                            cwd: None,
+                            shell: false,
+                            stdio: ProcessStdio::default(),
+                        },
                     },
-                },
-                &[ProcessSpawnCapability::Spawn],
-            )
-            .expect("spawn sleep for terminate");
-        let ProcessSpawnResponse::Spawned { handle } = response else {
-            panic!("lifecycle spawn response");
-        };
-        assert!(matches!(
-            provider.perform(
+                    &[ProcessSpawnCapability::Spawn],
+                )
+                .expect("spawn sleep for signal");
+            let ProcessSpawnResponse::Spawned { handle } = response else {
+                panic!("lifecycle spawn response");
+            };
+            let outcome = provider.perform(
                 &ProcessSpawnRequest::Kill {
                     handle: handle.clone(),
-                    signal: ProcessSignal::Terminate,
+                    signal,
                 },
                 &[ProcessSpawnCapability::Spawn],
-            ),
-            Ok(ProcessSpawnResponse::Killed {
-                signal: ProcessSignal::Terminate,
-                exit: ProcessExit {
-                    success: false,
-                    code: None,
-                    signal: Some(15),
+            );
+            assert!(matches!(
+                &outcome,
+                Ok(ProcessSpawnResponse::Killed {
+                    signal: requested,
+                    exit: ProcessExit {
+                        success: false,
+                        code: None,
+                        signal: Some(observed),
+                    },
+                    ..
+                }) if *requested == signal && *observed == native_signal
+            ));
+            // bd-m42c2: the terminal kill outcome stays addressable so the
+            // pending lifecycle Wait observes it instead of an unknown handle.
+            assert_eq!(
+                provider.perform(
+                    &ProcessSpawnRequest::Wait {
+                        handle,
+                        timeout_millis: Some(1_000),
+                    },
+                    &[ProcessSpawnCapability::Spawn],
+                ),
+                outcome
+            );
+            assert_process_workers_released(&provider);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ignored_terminate_and_interrupt_obey_the_lifecycle_deadline() {
+        for signal in [ProcessSignal::Terminate, ProcessSignal::Interrupt] {
+            let (provider, handle, _markers, group) = spawn_signal_resistant_child(500, false);
+            let (finished, rescue) = rescue_signal_test_after_deadline(group);
+            let outcome = provider.perform(
+                &ProcessSpawnRequest::Kill {
+                    handle: handle.clone(),
+                    signal,
                 },
-                ..
-            })
-        ));
-        // bd-m42c2: the terminal kill outcome stays addressable so the
-        // pending lifecycle Wait observes it instead of an unknown handle.
+                &[ProcessSpawnCapability::Spawn],
+            );
+            let _ = finished.send(());
+            assert!(
+                !rescue.join().expect("signal-test rescue must not panic"),
+                "Kill({signal:?}) must enforce the original lifecycle deadline without external rescue"
+            );
+            assert!(
+                matches!(
+                    &outcome,
+                    Err(ProcessSpawnError::PartialOutputFailed {
+                        failure,
+                        signal: Some(9),
+                        partial_stdout,
+                        partial_stderr,
+                    }) if matches!(failure.as_ref(), ProcessSpawnError::TimedOut { .. })
+                        && partial_stdout == b"before-signal-stdout"
+                        && partial_stderr == b"before-signal-stderr"
+                ),
+                "ignored {signal:?} must time out with the captured streams: {outcome:?}"
+            );
+            assert_process_workers_released(&provider);
+            assert_eq!(
+                provider.perform(
+                    &ProcessSpawnRequest::Kill {
+                        handle: handle.clone(),
+                        signal,
+                    },
+                    &[ProcessSpawnCapability::Spawn],
+                ),
+                outcome,
+                "a late signal must not consume the pending Wait's terminal failure"
+            );
+            assert_eq!(
+                provider.perform(
+                    &ProcessSpawnRequest::Wait {
+                        handle,
+                        timeout_millis: Some(1_000),
+                    },
+                    &[ProcessSpawnCapability::Spawn],
+                ),
+                outcome,
+                "Wait must retain the terminal signal failure and partial output"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn expired_absolute_deadline_cannot_gain_a_new_reaping_budget() {
+        let (provider, handle, _markers, group) = spawn_signal_resistant_child(10_000, false);
+        signal_process_group_id(group, rustix::process::Signal::TERM)
+            .expect("deliver the ignored native signal before reaping");
+        let state = lock_unpoison(&provider.children)
+            .remove(&handle)
+            .expect("take exclusive lifecycle ownership for reaping");
+        let LifecycleChild::Running(running) = state else {
+            panic!("signal-resistant child must still be running");
+        };
+        // A deadline captured before readiness and signal delivery is already
+        // spent when the wait begins, as with a scheduler stall at that seam.
+        let expired_deadline = running.started;
+        let (finished, rescue) = rescue_signal_test_after_deadline(group);
+        let outcome = wait_and_collect_until_controlled(
+            running,
+            Some(expired_deadline),
+            &UnrestrictedProcessSpawnControl,
+        );
+        let _ = finished.send(());
+        assert!(
+            !rescue.join().expect("signal-test rescue must not panic"),
+            "an already-expired absolute deadline must force containment immediately"
+        );
         assert!(matches!(
+            outcome,
+            Err(ProcessSpawnError::PartialOutputFailed {
+                failure,
+                signal: Some(9),
+                partial_stdout,
+                partial_stderr,
+            }) if matches!(failure.as_ref(), ProcessSpawnError::TimedOut { .. })
+                && partial_stdout == b"before-signal-stdout"
+                && partial_stderr == b"before-signal-stderr"
+        ));
+        assert_process_workers_released(&provider);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_after_native_signal_delivery_interrupts_reaping() {
+        let (provider, handle, markers, group) = spawn_signal_resistant_child(10_000, true);
+        let stopped = Arc::new(AtomicUsize::new(0));
+        let stop_after_signal = {
+            let signalled = markers.path().join("signalled");
+            let stopped = Arc::clone(&stopped);
+            thread::spawn(move || {
+                let deadline = Instant::now() + Duration::from_secs(1);
+                while Instant::now() < deadline {
+                    if std::fs::read(&signalled).ok().as_deref() == Some(b"caught") {
+                        stopped.store(1, Ordering::Release);
+                        return true;
+                    }
+                    thread::sleep(Duration::from_millis(2));
+                }
+                false
+            })
+        };
+        let (finished, rescue) = rescue_signal_test_after_deadline(group);
+        let outcome = provider.perform_controlled(
+            &ProcessSpawnRequest::Kill {
+                handle: handle.clone(),
+                signal: ProcessSignal::Terminate,
+            },
+            &[ProcessSpawnCapability::Spawn],
+            Arc::new(TestStopControl {
+                stopped: Arc::clone(&stopped),
+            }),
+        );
+        let _ = finished.send(());
+        let rescued = rescue.join().expect("signal-test rescue must not panic");
+        assert!(
+            stop_after_signal
+                .join()
+                .expect("signal observer must not panic"),
+            "the real child must acknowledge TERM before authority is revoked"
+        );
+        assert!(
+            !rescued,
+            "Kill must observe cancellation while the signalled child remains alive"
+        );
+        assert_eq!(
+            outcome,
+            Err(ProcessSpawnError::Denied {
+                reason: "TEST_PROCESS_CONTROL_STOPPED".to_string(),
+            }),
+            "cancellation remains the primary outcome after forced containment"
+        );
+        assert_process_workers_released(&provider);
+        assert_eq!(
             provider.perform(
                 &ProcessSpawnRequest::Wait {
                     handle,
@@ -4568,12 +4855,9 @@ mod tests {
                 },
                 &[ProcessSpawnCapability::Spawn],
             ),
-            Ok(ProcessSpawnResponse::Killed {
-                signal: ProcessSignal::Terminate,
-                ..
-            })
-        ));
-        assert_eq!(provider.active_children.load(Ordering::Acquire), 0);
+            outcome,
+            "the pending Wait must receive the same terminal cancellation"
+        );
     }
 
     #[cfg(target_os = "linux")]

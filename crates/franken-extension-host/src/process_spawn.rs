@@ -2339,19 +2339,42 @@ fn path_string(path: &Path) -> Result<String, ProcessSpawnError> {
         .ok_or_else(|| policy_error("non_utf8_path", path.display().to_string()))
 }
 
+fn open_executable_file(path: &Path, operation: &str) -> Result<File, ProcessSpawnError> {
+    // The canonical pathname can be replaced after admission. Open without
+    // waiting for a FIFO peer or acquiring a terminal, then let the caller
+    // inspect and hash this same held descriptor before any native launch.
+    #[cfg(unix)]
+    let opened = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::NONBLOCK
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::NOCTTY
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .map(File::from);
+    #[cfg(not(unix))]
+    let opened = File::open(path);
+    opened.map_err(|error| ProcessSpawnError::Io {
+        operation: operation.to_string(),
+        detail: error.to_string(),
+    })
+}
+
 fn digest_file(path: &Path, maximum_bytes: u64) -> Result<[u8; 32], ProcessSpawnError> {
-    let mut file = File::open(path).map_err(|error| ProcessSpawnError::Io {
-        operation: "open executable for digest".to_string(),
+    let mut file = open_executable_file(path, "open executable for digest")?;
+    let metadata = file.metadata().map_err(|error| ProcessSpawnError::Io {
+        operation: "inspect executable for digest".to_string(),
         detail: error.to_string(),
     })?;
-    let executable_bytes = file
-        .metadata()
-        .map_err(|error| ProcessSpawnError::Io {
-            operation: "inspect executable for digest".to_string(),
-            detail: error.to_string(),
-        })?
-        .len();
-    enforce_limit("executable_bytes", executable_bytes, maximum_bytes)?;
+    if !metadata.is_file() {
+        return Err(policy_error(
+            "executable_not_file",
+            path.display().to_string(),
+        ));
+    }
+    enforce_limit("executable_bytes", metadata.len(), maximum_bytes)?;
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 16 * 1024];
     let mut total_bytes = 0_u64;
@@ -2381,10 +2404,7 @@ fn open_verified_executable(
     control: &dyn ProcessSpawnControl,
 ) -> Result<File, ProcessSpawnError> {
     control.checkpoint()?;
-    let mut executable_file = File::open(executable).map_err(|error| ProcessSpawnError::Io {
-        operation: "open executable identity".to_string(),
-        detail: error.to_string(),
-    })?;
+    let mut executable_file = open_executable_file(executable, "open executable identity")?;
     let metadata = executable_file
         .metadata()
         .map_err(|error| ProcessSpawnError::Io {
@@ -4180,6 +4200,136 @@ mod tests {
         assert!(exit.success);
         assert_eq!(stdout, b"verified");
         assert!(stderr.is_empty());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[test]
+    fn authorized_executable_replaced_by_fifo_is_rejected_without_a_peer() {
+        let echo = executable(&["/bin/echo", "/usr/bin/echo"]);
+        let temporary = tempfile::tempdir().expect("temporary executable directory");
+        let authorized = temporary.path().join("authorized");
+        let original = temporary.path().join("original");
+        std::fs::copy(&echo, &authorized).expect("copy executable before authorization");
+        let mut policy =
+            ProcessSpawnPolicy::jailed(temporary.path()).expect("temporary jailed policy");
+        let canonical = policy
+            .authorize_executable(&authorized)
+            .expect("authorize regular executable");
+        let provider = Arc::new(NativeProcessSpawn::new(policy).expect("native provider"));
+        // Replace only after both policy admission and provider installation.
+        // The exact authorized pathname still exists, but now names a FIFO.
+        std::fs::rename(&authorized, &original).expect("retain original executable");
+        rustix::fs::mkfifoat(
+            rustix::fs::CWD,
+            &authorized,
+            rustix::fs::Mode::from_raw_mode(0o600),
+        )
+        .expect("replace authorized executable with a real FIFO");
+        let (send, receive) = channel();
+        let worker = {
+            let provider = Arc::clone(&provider);
+            thread::spawn(move || {
+                send.send(provider.perform(
+                    &run_request(canonical, vec!["must-not-launch"]),
+                    &[ProcessSpawnCapability::Spawn],
+                ))
+                .expect("return native FIFO refusal");
+            })
+        };
+        let (before_rescue, outcome) = match receive.recv_timeout(Duration::from_secs(1)) {
+            Ok(outcome) => (true, outcome),
+            Err(RecvTimeoutError::Timeout) => {
+                // Bound the old blocking open without weakening the assertion:
+                // reaching this real peer is always a regression failure.
+                let _rescue = rustix::fs::open(
+                    &authorized,
+                    rustix::fs::OFlags::RDWR
+                        | rustix::fs::OFlags::NONBLOCK
+                        | rustix::fs::OFlags::CLOEXEC,
+                    rustix::fs::Mode::empty(),
+                )
+                .expect("rescue old FIFO executable open");
+                (
+                    false,
+                    receive
+                        .recv_timeout(Duration::from_secs(2))
+                        .expect("FIFO peer must release blocked executable open"),
+                )
+            }
+            Err(error) => panic!("native executable worker disconnected: {error}"),
+        };
+        worker
+            .join()
+            .expect("native executable worker must not panic");
+        assert!(
+            before_rescue,
+            "executable admission must reject a FIFO without waiting for a peer"
+        );
+        assert!(matches!(
+            outcome,
+            Err(ProcessSpawnError::PolicyViolation { code, .. })
+                if code == "executable_not_file"
+        ));
+        assert_process_workers_released(&provider);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn executable_digest_rejects_a_fifo_before_reading_or_waiting_for_a_peer() {
+        let temporary = tempfile::tempdir().expect("temporary digest directory");
+        let fifo = temporary.path().join("candidate");
+        rustix::fs::mkfifoat(
+            rustix::fs::CWD,
+            &fifo,
+            rustix::fs::Mode::from_raw_mode(0o600),
+        )
+        .expect("create real executable digest FIFO");
+        let (send, receive) = channel();
+        let worker = {
+            let fifo = fifo.clone();
+            thread::spawn(move || {
+                send.send(digest_file(&fifo, 1_024))
+                    .expect("return executable digest result");
+            })
+        };
+        let (before_rescue, outcome) = match receive.recv_timeout(Duration::from_secs(1)) {
+            Ok(outcome) => (true, outcome),
+            Err(RecvTimeoutError::Timeout) => {
+                let mut rescue = File::from(
+                    rustix::fs::open(
+                        &fifo,
+                        rustix::fs::OFlags::RDWR
+                            | rustix::fs::OFlags::NONBLOCK
+                            | rustix::fs::OFlags::CLOEXEC,
+                        rustix::fs::Mode::empty(),
+                    )
+                    .expect("rescue old FIFO digest open"),
+                );
+                rescue
+                    .write_all(b"untrusted stream")
+                    .expect("release old digest reader");
+                drop(rescue);
+                (
+                    false,
+                    receive
+                        .recv_timeout(Duration::from_secs(2))
+                        .expect("finite FIFO stream must release old digest reader"),
+                )
+            }
+            Err(error) => panic!("executable digest worker disconnected: {error}"),
+        };
+        worker
+            .join()
+            .expect("executable digest worker must not panic");
+        assert!(
+            before_rescue,
+            "setup-time executable hashing must not wait for a FIFO peer"
+        );
+        assert!(matches!(
+            outcome,
+            Err(ProcessSpawnError::PolicyViolation { code, .. })
+                if code == "executable_not_file"
+        ));
     }
 
     #[cfg(unix)]

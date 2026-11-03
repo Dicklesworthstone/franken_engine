@@ -9357,8 +9357,10 @@ fn lower_ir2_to_ir3_with_input_hash(
     // a default expression's binding) is a runtime scope cell too: the
     // interpreter tracks the cell its ExportBinding reads, and every later
     // write republishes the export; a register copy is invisible to it.
-    // Function declarations keep their registers (they are published before
-    // the imports run and rarely reassigned).
+    // Function declarations need the same cell: although their initial value
+    // is published before imports run, a later assignment must immediately
+    // reach importers, including a dependency that calls back during a cycle.
+    // End-of-body republication is too late for those reads.
     let exported_binding_ids = ir2
         .ops
         .iter()
@@ -9369,7 +9371,12 @@ fn lower_ir2_to_ir3_with_input_hash(
         .filter(|binding_id| {
             matches!(
                 binding_kind_by_id.get(binding_id),
-                Some(BindingKind::Let | BindingKind::Const | BindingKind::Var)
+                Some(
+                    BindingKind::Let
+                        | BindingKind::Const
+                        | BindingKind::Var
+                        | BindingKind::FunctionDecl
+                )
             )
         })
         .collect::<Vec<_>>();

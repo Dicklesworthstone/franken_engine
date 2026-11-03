@@ -31,6 +31,7 @@ on:
       - 'crates/franken-engine-control-plane-integration-tests/Cargo.toml'
       - 'crates/franken-engine/src/promise_model*.rs'
       - 'crates/franken-engine/tests/async_generator_execution.rs'
+      - 'crates/franken-engine/tests/esm_function_exports.rs'
       - 'crates/franken-engine/tests/generator_next_bd_v6cv1_regression.rs'
       - 'crates/franken-engine/tests/array_species_bd_9vouw_94.rs'
       - 'crates/franken-engine/tests/proxy_descriptor_traps_bd_9vouw_147.rs'
@@ -292,6 +293,7 @@ jobs:
             --test promise_subclass_bd_9vouw_137 --test promise_reaction_label_conformance \
             --test gc_reclaim_bd_9vouw_57 \
             --test process_spawn_foundation_bd_x85a7 \
+            --test esm_function_exports \
             --test nested_callback_semantics \
             -- --nocapture > async-generator-validation/tests.log 2>&1 || status=$?
           tail -n 220 async-generator-validation/tests.log
@@ -305,6 +307,7 @@ jobs:
             crates/franken-engine/src/baseline_interpreter/promise_capability.rs \
             crates/franken-engine/src/promise_model.rs \
             crates/franken-engine/tests/async_generator_execution.rs \
+            crates/franken-engine/tests/esm_function_exports.rs \
             crates/franken-engine/tests/array_species_bd_9vouw_94.rs \
             crates/franken-engine/tests/proxy_descriptor_traps_bd_9vouw_147.rs \
             crates/franken-engine/tests/promise_subclass_bd_9vouw_137.rs \

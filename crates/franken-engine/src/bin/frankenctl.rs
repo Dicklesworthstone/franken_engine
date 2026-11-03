@@ -125,6 +125,7 @@ use frankenengine_engine::runtime_explain_views::{
     EXPLAIN_META_LANE_REASON, build_explain_bundle,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
+use frankenengine_engine::signature_preimage::{SIGNING_KEY_LEN, SigningKey};
 use frankenengine_engine::third_party_verifier::{
     BenchmarkClaimBundle, ClaimedBenchmarkOutcome, THIRD_PARTY_VERIFIER_COMPONENT,
     ThirdPartyVerificationReport, VerificationCheckResult, VerificationVerdict, VerifierEvent,
@@ -199,6 +200,7 @@ enum CommandSpec {
     Onboard(OnboardArgs),
     DiffBehavior(DiffBehaviorArgs),
     Run(RunArgs),
+    EvidenceInit(EvidenceInitArgs),
     AgentSandbox(AgentSandboxArgs),
     Explain(ExplainArgs),
     Claims(ClaimsArgs),
@@ -225,6 +227,7 @@ enum HelpTopic {
     Onboard,
     DiffBehavior,
     Run,
+    Evidence,
     AgentSandbox,
     Explain,
     Claims,
@@ -268,6 +271,7 @@ impl HelpTopic {
             Self::Onboard => onboard_usage(),
             Self::DiffBehavior => diff_behavior_usage(),
             Self::Run => run_usage(),
+            Self::Evidence => evidence_usage(),
             Self::AgentSandbox => agent_sandbox_usage(),
             Self::Explain => explain_usage(),
             Self::Claims => claims_usage(),
@@ -380,6 +384,9 @@ struct RunArgs {
     /// Export public verification material for an operator to retain and pin
     /// separately from the untrusted run report. This does not enroll a key.
     emit_evidence_trust: Option<PathBuf>,
+    /// Explicit persistent private key plus an independently pinned public
+    /// registry. Arguments retain paths and public coordinates, never seeds.
+    evidence_authority: Option<RunEvidenceAuthorityArgs>,
     data_contract: Option<PathBuf>,
     data_contract_purpose: String,
     /// Directory for the E8 certificate bundle (bd-fqlfw.8.3); requires
@@ -640,6 +647,39 @@ struct ReplayArgs {
 struct ReplayEvidenceTrustArgs {
     snapshot: PathBuf,
     expected_digest: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RunEvidenceAuthorityArgs {
+    key_file: PathBuf,
+    producer_id: String,
+    trust: ReplayEvidenceTrustArgs,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EvidenceInitArgs {
+    producer_id: String,
+    key_out: PathBuf,
+    trust_out: PathBuf,
+    epoch: u64,
+}
+
+// This value is private runtime state, not a serializable run configuration.
+struct LoadedRunEvidenceAuthority {
+    authority: RuntimeEvidenceAuthority,
+    snapshot: EvidenceTrustSnapshot,
+    digest: String,
+}
+
+#[derive(Debug, Serialize)]
+struct EvidenceInitOutput {
+    schema_version: String,
+    producer_id: String,
+    key_id: String,
+    epoch: u64,
+    private_key_path: String,
+    trust_snapshot_path: String,
+    evidence_trust_snapshot_digest: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1943,6 +1983,7 @@ fn run(raw_args: Vec<String>) -> Result<i32, String> {
         CommandSpec::Onboard(args) => execute_onboard(args),
         CommandSpec::DiffBehavior(args) => execute_diff_behavior(args),
         CommandSpec::Run(args) => execute_run(args),
+        CommandSpec::EvidenceInit(args) => execute_evidence_init(args),
         CommandSpec::AgentSandbox(args) => execute_agent_sandbox(args),
         CommandSpec::Explain(args) => execute_explain(args),
         CommandSpec::Claims(args) => execute_claims(args),
@@ -1985,6 +2026,7 @@ fn parse_command(args: &[String]) -> Result<CommandSpec, String> {
         "onboard" => parse_onboard_command(&args[1..]),
         "diff-behavior" => parse_diff_behavior_command(&args[1..]),
         "run" => parse_run_command(&args[1..]),
+        "evidence" => parse_evidence_command(&args[1..]),
         "agent-sandbox" => parse_agent_sandbox_command(&args[1..]),
         "explain" => parse_explain_command(&args[1..]),
         "claims" => parse_claims_command(&args[1..]),
@@ -2018,6 +2060,14 @@ fn parse_help_command(args: &[String]) -> Result<CommandSpec, String> {
             parse_leaf_help_topic("diff-behavior", HelpTopic::DiffBehavior, &args[1..])
         }
         "run" => parse_leaf_help_topic("run", HelpTopic::Run, &args[1..]),
+        "evidence" => {
+            let rest = if args.get(1).is_some_and(|value| value == "init") {
+                &args[2..]
+            } else {
+                &args[1..]
+            };
+            parse_leaf_help_topic("evidence init", HelpTopic::Evidence, rest)
+        }
         "agent-sandbox" => {
             parse_leaf_help_topic("agent-sandbox", HelpTopic::AgentSandbox, &args[1..])
         }
@@ -2434,6 +2484,92 @@ fn diff_behavior_usage() -> String {
     .join("\n")
 }
 
+fn parse_evidence_command(args: &[String]) -> Result<CommandSpec, String> {
+    if args.is_empty() || has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::Evidence));
+    }
+    if args[0] != "init" {
+        return Err(format!(
+            "unknown evidence subcommand `{}` (expected init)",
+            args[0]
+        ));
+    }
+    let mut producer_id = None;
+    let mut key_out = None;
+    let mut trust_out = None;
+    let mut epoch = 1;
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--producer-id" => producer_id = Some(next_arg(args, &mut index, "--producer-id")?),
+            "--key-out" => key_out = Some(PathBuf::from(next_arg(args, &mut index, "--key-out")?)),
+            "--trust-out" => {
+                trust_out = Some(PathBuf::from(next_arg(args, &mut index, "--trust-out")?))
+            }
+            "--epoch" => epoch = parse_u64(&next_arg(args, &mut index, "--epoch")?, "--epoch")?,
+            flag => return Err(format!("unknown evidence init flag `{flag}`")),
+        }
+        index += 1;
+    }
+    let args = EvidenceInitArgs {
+        producer_id: producer_id
+            .ok_or_else(|| "evidence init requires --producer-id <id>".to_string())?,
+        key_out: key_out
+            .ok_or_else(|| "evidence init requires --key-out <private.seed>".to_string())?,
+        trust_out: trust_out
+            .ok_or_else(|| "evidence init requires --trust-out <public.json>".to_string())?,
+        epoch,
+    };
+    validate_evidence_init_args(&args)?;
+    Ok(CommandSpec::EvidenceInit(args))
+}
+
+fn validate_evidence_init_args(args: &EvidenceInitArgs) -> Result<(), String> {
+    if args.producer_id.trim().is_empty() {
+        return Err("evidence init requires a nonempty producer id".to_string());
+    }
+    if args.key_out == args.trust_out {
+        return Err("private key and public trust snapshot destinations must differ".to_string());
+    }
+    if args.key_out.file_name().is_none() || args.trust_out.file_name().is_none() {
+        return Err("evidence init destinations must name files".to_string());
+    }
+    // Catch ordinary aliases and missing parents before reserving either file.
+    // Exclusive descriptor creation remains authoritative if paths change.
+    let parent = |path: &Path| -> Result<PathBuf, String> {
+        let path = path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let canonical = path.canonicalize().map_err(|error| {
+            format!(
+                "evidence destination parent `{}` is unavailable: {error}",
+                path.display()
+            )
+        })?;
+        if !canonical.is_dir() {
+            return Err(format!(
+                "evidence destination parent `{}` is not a directory",
+                path.display()
+            ));
+        }
+        Ok(canonical)
+    };
+    if parent(&args.key_out)? == parent(&args.trust_out)?
+        && args.key_out.file_name() == args.trust_out.file_name()
+    {
+        return Err("private key and public trust snapshot destinations must differ".to_string());
+    }
+    Ok(())
+}
+
+fn parse_expected_trust_digest(value: &str) -> Result<String, String> {
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("--expected-trust-digest requires exactly 64 hexadecimal digits".to_string());
+    }
+    Ok(value.to_ascii_lowercase())
+}
+
 fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
     if has_help_flag(args) {
         return Ok(CommandSpec::HelpTopic(HelpTopic::Run));
@@ -2450,6 +2586,10 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut explain_out: Option<PathBuf> = None;
     let mut emit_trace: Option<PathBuf> = None;
     let mut emit_evidence_trust: Option<PathBuf> = None;
+    let mut evidence_key_file = None;
+    let mut evidence_producer_id = None;
+    let mut trust_snapshot = None;
+    let mut expected_trust_digest = None;
     let mut data_contract: Option<PathBuf> = None;
     let mut data_contract_purpose = DEFAULT_DATA_CONTRACT_PURPOSE.to_string();
     let mut certificate_out: Option<PathBuf> = None;
@@ -2538,6 +2678,34 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
                     "--emit-evidence-trust",
                 )?));
             }
+            "--evidence-key-file" => {
+                evidence_key_file = Some(PathBuf::from(next_arg(
+                    args,
+                    &mut index,
+                    "--evidence-key-file",
+                )?));
+            }
+            "--evidence-producer-id" => {
+                let producer = next_arg(args, &mut index, "--evidence-producer-id")?;
+                if producer.trim().is_empty() {
+                    return Err("--evidence-producer-id must not be empty".to_string());
+                }
+                evidence_producer_id = Some(producer);
+            }
+            "--trust-snapshot" => {
+                trust_snapshot = Some(PathBuf::from(next_arg(
+                    args,
+                    &mut index,
+                    "--trust-snapshot",
+                )?));
+            }
+            "--expected-trust-digest" => {
+                expected_trust_digest = Some(parse_expected_trust_digest(&next_arg(
+                    args,
+                    &mut index,
+                    "--expected-trust-digest",
+                )?)?);
+            }
             flag => {
                 if !limits.parse_flag(args, &mut index)? {
                     return Err(format!("unknown run flag `{flag}`"));
@@ -2550,6 +2718,17 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
     let input = input.ok_or_else(|| "run requires --input <path>".to_string())?;
     let extension_id =
         extension_id.ok_or_else(|| "run requires --extension-id <id>".to_string())?;
+    let evidence_authority = match (evidence_key_file, evidence_producer_id, trust_snapshot, expected_trust_digest) {
+        (None, None, None, None) => None,
+        (Some(key_file), Some(producer_id), Some(snapshot), Some(expected_digest)) => {
+            Some(RunEvidenceAuthorityArgs {
+                key_file,
+                producer_id,
+                trust: ReplayEvidenceTrustArgs { snapshot, expected_digest },
+            })
+        }
+        _ => return Err("configured evidence signing requires --evidence-key-file, --evidence-producer-id, --trust-snapshot, and --expected-trust-digest together".to_string()),
+    };
     // Without --goal, the extension decides as Node's does: `.mjs` / `.mts`
     // is an ES module and `.cjs` / `.cts` a CommonJS module (bd-9vouw.415);
     // a `.js` / `.ts` file is an ES module in a `"type": "module"` package
@@ -2579,6 +2758,7 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
         explain_out,
         emit_trace,
         emit_evidence_trust,
+        evidence_authority,
         data_contract,
         data_contract_purpose,
         certificate_out,
@@ -3197,13 +3377,7 @@ fn parse_replay_run_command(args: &[String]) -> Result<CommandSpec, String> {
             }
             "--expected-trust-digest" => {
                 let digest = next_arg(args, &mut index, "--expected-trust-digest")?;
-                if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-                    return Err(
-                        "--expected-trust-digest requires exactly 64 hexadecimal digits"
-                            .to_string(),
-                    );
-                }
-                expected_trust_digest = Some(digest.to_ascii_lowercase());
+                expected_trust_digest = Some(parse_expected_trust_digest(&digest)?);
             }
             flag => return Err(format!("unknown replay run flag `{flag}`")),
         }
@@ -4675,7 +4849,463 @@ fn relative_within_root(root: &Path, entry: &Path) -> Result<String, String> {
     Ok(parts.join("/"))
 }
 
+#[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+fn read_private_evidence_signing_key(path: &Path) -> Result<SigningKey, String> {
+    use rustix::fs::{Mode, OFlags, open};
+    use std::os::unix::fs::PermissionsExt;
+    use zeroize::Zeroizing;
+
+    // NONBLOCK prevents a FIFO substituted at the pathname from blocking open.
+    // Inspect and read the same held descriptor; never check then reopen.
+    let descriptor = open(
+        path,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK | OFlags::NOCTTY,
+        Mode::empty(),
+    )
+    .map_err(|error| {
+        format!(
+            "failed to securely open private evidence key `{}`: {error}",
+            path.display()
+        )
+    })?;
+    let file = fs::File::from(descriptor);
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("failed to inspect private evidence key: {error}"))?;
+    if !metadata.is_file() {
+        return Err("private evidence key must be a regular file".to_string());
+    }
+    if metadata.permissions().mode() & 0o077 != 0 {
+        return Err("private evidence key must not grant group or other permissions".to_string());
+    }
+    let mut bytes = Zeroizing::new(Vec::with_capacity(SIGNING_KEY_LEN + 1));
+    file.take((SIGNING_KEY_LEN + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("failed to read private evidence key: {error}"))?;
+    if bytes.len() != SIGNING_KEY_LEN {
+        return Err("private evidence key must contain exactly 32 raw seed bytes".to_string());
+    }
+    let mut seed = Zeroizing::new([0u8; SIGNING_KEY_LEN]);
+    seed.copy_from_slice(&bytes);
+    SigningKey::from_bytes(*seed).map_err(|_| "private evidence signing key is invalid".to_string())
+}
+
+#[cfg(not(all(unix, not(any(target_os = "redox", target_os = "espidf")))))]
+fn read_private_evidence_signing_key(_path: &Path) -> Result<SigningKey, String> {
+    Err("secure regular-file evidence key loading is unavailable on this platform".to_string())
+}
+
+#[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+fn create_new_evidence_file(path: &Path, private: bool) -> Result<fs::File, String> {
+    use rustix::fs::{Mode, OFlags, open};
+    let mode = if private {
+        Mode::RUSR | Mode::WUSR
+    } else {
+        Mode::RUSR | Mode::WUSR | Mode::RGRP | Mode::ROTH
+    };
+    open(
+        path,
+        OFlags::WRONLY
+            | OFlags::CREATE
+            | OFlags::EXCL
+            | OFlags::NOFOLLOW
+            | OFlags::CLOEXEC
+            | OFlags::NONBLOCK,
+        mode,
+    )
+    .map(fs::File::from)
+    .map_err(|error| {
+        format!(
+            "cannot exclusively create evidence file `{}`: {error}",
+            path.display()
+        )
+    })
+}
+
+#[cfg(not(all(unix, not(any(target_os = "redox", target_os = "espidf")))))]
+fn create_new_evidence_file(_path: &Path, _private: bool) -> Result<fs::File, String> {
+    Err("secure evidence identity initialization is unavailable on this platform".to_string())
+}
+
+fn initialize_runtime_evidence(args: &EvidenceInitArgs) -> Result<EvidenceInitOutput, String> {
+    use std::io::Write;
+    use zeroize::Zeroizing;
+
+    validate_evidence_init_args(args)?;
+    let mut seed = Zeroizing::new([0u8; SIGNING_KEY_LEN]);
+    rand::rngs::OsRng
+        .try_fill_bytes(&mut *seed)
+        .map_err(|_| "operating-system randomness unavailable for evidence identity".to_string())?;
+    let key = SigningKey::from_bytes(*seed)
+        .map_err(|_| "generated evidence signing key was invalid".to_string())?;
+    let epoch = SecurityEpoch::from_raw(args.epoch);
+    let authority =
+        RuntimeEvidenceAuthority::from_signing_key(&args.producer_id, key, epoch, 1, None)
+            .map_err(|error| format!("invalid evidence identity configuration: {error}"))?;
+    let identity = authority.verification_identity();
+    let key_id = identity.key_provenance.key_id.clone();
+    let snapshot = EvidenceTrustSnapshot::from_runtime_identities(epoch, [identity])
+        .map_err(|error| format!("failed to construct public evidence trust: {error}"))?;
+    let digest = snapshot
+        .canonical_digest()
+        .map_err(|error| format!("failed to hash public evidence trust: {error}"))?
+        .to_hex();
+    let public_bytes = serde_json::to_vec_pretty(&snapshot)
+        .map_err(|error| format!("failed to encode public evidence trust: {error}"))?;
+
+    // Exclusive creation protects existing files. Both descriptors are held
+    // before writing secret bytes. This is not an atomic two-file transaction;
+    // failures retain any newly created files and describe the partial state.
+    let mut key_file = create_new_evidence_file(&args.key_out, true)?;
+    let mut trust_file = create_new_evidence_file(&args.trust_out, false).map_err(|error| {
+        format!(
+            "{error}; an empty private-key destination remains at `{}`; no key was written",
+            args.key_out.display()
+        )
+    })?;
+    key_file.write_all(&*seed).and_then(|()| key_file.sync_all()).map_err(|error| {
+        format!("private evidence key write/sync failed: {error}; partial new files remain at `{}` and `{}`", args.key_out.display(), args.trust_out.display())
+    })?;
+    trust_file.write_all(&public_bytes).and_then(|()| trust_file.sync_all()).map_err(|error| {
+        format!("public evidence snapshot write/sync failed: {error}; private key was retained at `{}` and public snapshot may be incomplete at `{}`", args.key_out.display(), args.trust_out.display())
+    })?;
+    Ok(EvidenceInitOutput {
+        schema_version: "franken-engine.frankenctl.evidence-init.v1".to_string(),
+        producer_id: args.producer_id.clone(),
+        key_id,
+        epoch: args.epoch,
+        private_key_path: args.key_out.display().to_string(),
+        trust_snapshot_path: args.trust_out.display().to_string(),
+        evidence_trust_snapshot_digest: digest,
+    })
+}
+
+fn execute_evidence_init(args: EvidenceInitArgs) -> Result<i32, String> {
+    print_json(&initialize_runtime_evidence(&args)?)?;
+    Ok(0)
+}
+
+fn load_pinned_runtime_snapshot(
+    trust: &ReplayEvidenceTrustArgs,
+) -> Result<(EvidenceTrustSnapshot, String), String> {
+    let snapshot = load_json_file::<EvidenceTrustSnapshot>(&trust.snapshot)?;
+    let digest = snapshot
+        .canonical_digest()
+        .map_err(|error| format!("invalid runtime trust snapshot: {error}"))?
+        .to_hex();
+    if digest != trust.expected_digest {
+        return Err(
+            "trust snapshot digest does not match the operator's independent pin".to_string(),
+        );
+    }
+    Ok((snapshot, digest))
+}
+
+fn load_configured_run_evidence_authority(
+    args: &RunEvidenceAuthorityArgs,
+) -> Result<LoadedRunEvidenceAuthority, String> {
+    let load = || -> Result<LoadedRunEvidenceAuthority, String> {
+        let (snapshot, digest) = load_pinned_runtime_snapshot(&args.trust)?;
+        let key = read_private_evidence_signing_key(&args.key_file)?;
+        let authority = RuntimeEvidenceAuthority::from_trusted_snapshot(
+            &args.producer_id,
+            key,
+            &snapshot,
+        )
+        .map_err(|error| {
+            format!(
+                "configured runtime signing identity is not active in the pinned registry: {error}"
+            )
+        })?;
+        Ok(LoadedRunEvidenceAuthority {
+            authority,
+            snapshot,
+            digest,
+        })
+    };
+    load().map_err(|error| {
+        format!("configured runtime evidence authority rejected before execution: {error}")
+    })
+}
+
+#[cfg(all(test, unix, not(any(target_os = "redox", target_os = "espidf"))))]
+mod configured_evidence_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+
+    fn directory() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "frankenctl-configured-evidence-{}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time")
+                .as_nanos(),
+            NEXT.fetch_add(1, Ordering::Relaxed),
+        ));
+        fs::create_dir_all(&dir).expect("test directory");
+        dir
+    }
+
+    fn initialize(dir: &Path) -> (EvidenceInitArgs, RunEvidenceAuthorityArgs) {
+        let init = EvidenceInitArgs {
+            producer_id: "operator-runtime".to_string(),
+            key_out: dir.join("private.seed"),
+            trust_out: dir.join("public.json"),
+            epoch: 7,
+        };
+        let output = initialize_runtime_evidence(&init).expect("initialize real files");
+        let configured = RunEvidenceAuthorityArgs {
+            key_file: init.key_out.clone(),
+            producer_id: init.producer_id.clone(),
+            trust: ReplayEvidenceTrustArgs {
+                snapshot: init.trust_out.clone(),
+                expected_digest: output.evidence_trust_snapshot_digest,
+            },
+        };
+        (init, configured)
+    }
+
+    fn write_private(path: &Path, bytes: &[u8]) {
+        fs::write(path, bytes).expect("private test fixture");
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).expect("private permissions");
+    }
+
+    #[test]
+    fn initialized_private_identity_reopens_and_signs_against_one_public_pin() {
+        let dir = directory();
+        let (init, args) = initialize(&dir);
+        assert_eq!(
+            fs::metadata(&init.key_out)
+                .expect("private metadata")
+                .permissions()
+                .mode()
+                & 0o077,
+            0
+        );
+        assert_eq!(
+            fs::metadata(&init.key_out).expect("private metadata").len(),
+            32
+        );
+        let first = load_configured_run_evidence_authority(&args).expect("first reopen");
+        let second = load_configured_run_evidence_authority(&args).expect("independent reopen");
+        assert_eq!(
+            first.authority.verification_identity(),
+            second.authority.verification_identity()
+        );
+        assert_eq!(first.digest, args.trust.expected_digest);
+        assert_eq!(first.snapshot.current_epoch.as_u64(), 7);
+        let registry = first
+            .snapshot
+            .to_runtime_registry()
+            .expect("external public registry");
+        for (authority, payload) in [
+            (&first.authority, b"run-one".as_slice()),
+            (&second.authority, b"run-two".as_slice()),
+        ] {
+            let envelope = authority
+                .sign_detached(payload, first.snapshot.current_epoch)
+                .expect("sign genuine payload");
+            registry
+                .verify_detached(&envelope, payload, first.snapshot.current_epoch)
+                .expect("verify genuine signature");
+        }
+        let seed = fs::read(&init.key_out).expect("private fixture bytes");
+        let public = fs::read_to_string(&init.trust_out).expect("public snapshot");
+        assert!(!public.contains(&serde_json::to_string(&seed).expect("test seed representation")));
+        assert!(!format!("{:?}", first.authority).contains(&hex::encode(&seed)));
+    }
+
+    #[test]
+    fn evidence_initialization_never_overwrites_and_reports_partial_reservations() {
+        let dir = directory();
+        let (init, _) = initialize(&dir);
+        let private = fs::read(&init.key_out).expect("private original");
+        let public = fs::read(&init.trust_out).expect("public original");
+        assert!(initialize_runtime_evidence(&init).is_err());
+        assert_eq!(fs::read(&init.key_out).expect("private retained"), private);
+        assert_eq!(fs::read(&init.trust_out).expect("public retained"), public);
+
+        let mut partial = init.clone();
+        partial.key_out = dir.join("unused-private.seed");
+        let error = initialize_runtime_evidence(&partial).expect_err("public destination exists");
+        assert!(error.contains("no key was written"), "{error}");
+        assert_eq!(
+            fs::metadata(&partial.key_out)
+                .expect("reserved private file")
+                .len(),
+            0
+        );
+        assert_eq!(
+            fs::read(&init.trust_out).expect("public still retained"),
+            public
+        );
+
+        let conflicting = EvidenceInitArgs {
+            key_out: dir.join("conflict"),
+            trust_out: dir.join("conflict"),
+            ..init.clone()
+        };
+        assert!(initialize_runtime_evidence(&conflicting).is_err());
+        assert!(!conflicting.key_out.exists());
+        let alias = EvidenceInitArgs {
+            key_out: dir.join("alias"),
+            trust_out: dir.join(".").join("alias"),
+            ..init.clone()
+        };
+        assert!(initialize_runtime_evidence(&alias).is_err());
+        assert!(!alias.key_out.exists());
+        let invalid = EvidenceInitArgs {
+            producer_id: "  ".to_string(),
+            key_out: dir.join("blank-key"),
+            trust_out: dir.join("blank-public"),
+            ..init
+        };
+        assert!(initialize_runtime_evidence(&invalid).is_err());
+        assert!(!invalid.key_out.exists());
+        assert!(!invalid.trust_out.exists());
+    }
+
+    #[test]
+    fn private_seed_reader_rejects_wrong_sizes_zero_keys_and_nonregular_paths() {
+        let dir = directory();
+        for size in [0, 1, 31, 33, 4096] {
+            let path = dir.join(format!("size-{size}"));
+            write_private(&path, &vec![0x41; size]);
+            let error = read_private_evidence_signing_key(&path).expect_err("strict size");
+            assert!(
+                error.contains("exactly 32 raw seed bytes"),
+                "{size}: {error}"
+            );
+        }
+        let zeros = dir.join("zeros");
+        write_private(&zeros, &[0u8; 32]);
+        assert!(read_private_evidence_signing_key(&zeros).is_err());
+        assert!(read_private_evidence_signing_key(&dir).is_err());
+        let regular = dir.join("valid");
+        write_private(&regular, &[0x42u8; 32]);
+        assert!(read_private_evidence_signing_key(&regular).is_ok());
+        fs::set_permissions(&regular, fs::Permissions::from_mode(0o644))
+            .expect("public permissions");
+        let error =
+            read_private_evidence_signing_key(&regular).expect_err("public private-key file");
+        assert!(error.contains("group or other permissions"));
+        fs::set_permissions(&regular, fs::Permissions::from_mode(0o400))
+            .expect("owner-read permissions");
+        assert!(read_private_evidence_signing_key(&regular).is_ok());
+        let symlink = dir.join("symlink");
+        std::os::unix::fs::symlink(&regular, &symlink).expect("symlink fixture");
+        assert!(read_private_evidence_signing_key(&symlink).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn private_seed_reader_refuses_fifo_without_waiting_for_a_writer() {
+        use rustix::fs::{CWD, Mode, OFlags, mkfifoat, open};
+        use std::sync::mpsc;
+        use std::time::Duration;
+        let path = directory().join("fifo");
+        mkfifoat(CWD, &path, Mode::RUSR | Mode::WUSR).expect("FIFO fixture");
+        let rescue_path = path.clone();
+        let (finished, completion) = mpsc::channel();
+        let watchdog = std::thread::spawn(move || {
+            if completion.recv_timeout(Duration::from_secs(2)).is_ok() {
+                return false;
+            }
+            // A missing NONBLOCK regression must fail instead of hanging the
+            // test process. Linux permits this bounded rescue peer without a
+            // partner; it is never opened on the successful no-peer path.
+            let peer = open(
+                &rescue_path,
+                OFlags::RDWR
+                    | OFlags::NONBLOCK
+                    | OFlags::CLOEXEC
+                    | OFlags::NOFOLLOW
+                    | OFlags::NOCTTY,
+                Mode::empty(),
+            )
+            .expect("bounded FIFO rescue peer");
+            let _ = completion.recv_timeout(Duration::from_secs(2));
+            drop(peer);
+            true
+        });
+        let result = read_private_evidence_signing_key(&path);
+        let _ = finished.send(());
+        let rescued = watchdog.join().expect("join FIFO watchdog");
+        assert!(
+            !rescued,
+            "private key loader blocked until a rescue FIFO peer appeared"
+        );
+        let error = result.expect_err("FIFO is not a key file");
+        assert!(error.contains("regular file"), "{error}");
+    }
+
+    #[test]
+    fn configured_seed_and_public_pin_fail_closed_independently() {
+        let dir = directory();
+        let (_, args) = initialize(&dir);
+        let mut wrong_pin = args.clone();
+        wrong_pin.trust.expected_digest = "00".repeat(32);
+        wrong_pin.key_file = dir.join("not-opened-before-pin-check");
+        let error = load_configured_run_evidence_authority(&wrong_pin)
+            .err()
+            .expect("wrong pin");
+        assert!(error.contains("independent pin"), "{error}");
+        let mut wrong_producer = args.clone();
+        wrong_producer.producer_id = "other-producer".to_string();
+        let error = load_configured_run_evidence_authority(&wrong_producer)
+            .err()
+            .expect("wrong producer");
+        assert!(error.contains("not registered"), "{error}");
+        let mut wrong_key = args.clone();
+        wrong_key.key_file = dir.join("wrong.seed");
+        write_private(&wrong_key.key_file, &[0x62; 32]);
+        let error = load_configured_run_evidence_authority(&wrong_key)
+            .err()
+            .expect("wrong key");
+        assert!(error.contains("not registered"), "{error}");
+        assert!(!error.contains(&hex::encode([0x62; 32])));
+
+        let mut snapshot: EvidenceTrustSnapshot =
+            load_json_file(&args.trust.snapshot).expect("public snapshot");
+        snapshot.current_epoch = SecurityEpoch::from_raw(6);
+        let mut future = args.clone();
+        future.trust.snapshot = dir.join("future.json");
+        future.trust.expected_digest = snapshot
+            .canonical_digest()
+            .expect("well-formed snapshot")
+            .to_hex();
+        fs::write(
+            &future.trust.snapshot,
+            serde_json::to_vec(&snapshot).expect("json"),
+        )
+        .expect("future snapshot");
+        let error = load_configured_run_evidence_authority(&future)
+            .err()
+            .expect("inactive key");
+        assert!(error.contains("after signed epoch"), "{error}");
+        snapshot.producer_lineage_tips.clear();
+        fs::write(
+            &future.trust.snapshot,
+            serde_json::to_vec(&snapshot).expect("json"),
+        )
+        .expect("invalid snapshot");
+        let error = load_configured_run_evidence_authority(&future)
+            .err()
+            .expect("invalid snapshot");
+        assert!(error.contains("invalid runtime trust snapshot"), "{error}");
+    }
+}
+
 fn execute_run(args: RunArgs) -> Result<i32, String> {
+    let configured_evidence = args
+        .evidence_authority
+        .as_ref()
+        .map(load_configured_run_evidence_authority)
+        .transpose()?;
     let source = fs::read_to_string(&args.input)
         .map_err(|error| format!("failed to read source `{}`: {error}", args.input.display()))?;
     let source_hash = ContentHash::compute(source.as_bytes());
@@ -4719,14 +5349,21 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
     if let Some(tokens) = args.parser_max_token_count {
         orchestrator_config.parser_options.budget.max_token_count = tokens;
     }
+    if let Some(configured) = configured_evidence.as_ref() {
+        orchestrator_config.epoch = configured.snapshot.current_epoch;
+    }
     let replay_cell_close_budget_ms = orchestrator_config.cell_close_budget_ms;
-    let evidence_authority = RuntimeEvidenceAuthority::generate_runtime_owned(
-        fresh_runtime_evidence_producer_id("frankenctl.run", &source_hash.to_hex())?,
-        orchestrator_config.epoch,
-        1,
-        None,
-    )
-    .map_err(|error| format!("failed to initialize runtime evidence authority: {error}"))?;
+    let evidence_authority = if let Some(configured) = configured_evidence.as_ref() {
+        configured.authority.clone()
+    } else {
+        RuntimeEvidenceAuthority::generate_runtime_owned(
+            fresh_runtime_evidence_producer_id("frankenctl.run", &source_hash.to_hex())?,
+            orchestrator_config.epoch,
+            1,
+            None,
+        )
+        .map_err(|error| format!("failed to initialize runtime evidence authority: {error}"))?
+    };
     let mut orchestrator = ExecutionOrchestrator::try_new_with_runtime_config_and_authority(
         orchestrator_config,
         run_runtime_config(args.instruction_budget, &args.limits),
@@ -4784,7 +5421,14 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         .map_err(|error| {
             format!("generated run evidence chain failed exact verification: {error}")
         })?;
-    let evidence_trust_snapshot_digest = if let Some(path) = args.emit_evidence_trust.as_ref() {
+    let evidence_trust_snapshot_digest = if let Some(configured) = configured_evidence.as_ref() {
+        if let Some(path) = args.emit_evidence_trust.as_ref() {
+            // A rotated key alone is not a complete registry. Preserve every
+            // externally pinned predecessor, successor, and declared tip.
+            write_json_file(path, &configured.snapshot)?;
+        }
+        Some(configured.digest.clone())
+    } else if let Some(path) = args.emit_evidence_trust.as_ref() {
         let snapshot = EvidenceTrustSnapshot::from_runtime_identities(
             result.epoch,
             [trusted_runtime_identity],
@@ -9613,16 +10257,7 @@ fn authenticate_run_report_evidence(
     trust: &ReplayEvidenceTrustArgs,
 ) -> Result<String, String> {
     let verify = || -> Result<String, String> {
-        let snapshot = load_json_file::<EvidenceTrustSnapshot>(&trust.snapshot)?;
-        let digest = snapshot
-            .canonical_digest()
-            .map_err(|error| format!("invalid runtime trust snapshot: {error}"))?
-            .to_hex();
-        if digest != trust.expected_digest {
-            return Err(
-                "trust snapshot digest does not match the operator's independent pin".to_string(),
-            );
-        }
+        let (snapshot, digest) = load_pinned_runtime_snapshot(trust)?;
         let registry = snapshot
             .to_runtime_registry()
             .map_err(|error| format!("invalid runtime trust registry: {error}"))?;
@@ -12794,6 +13429,7 @@ fn usage() -> String {
         "  frankenctl run --input <source.js> --extension-id <id> [--goal script|module] [--out <report.json>]",
         "      [--data-contract <contract.json>] [--purpose <purpose>] [--certificate-out <bundle-dir>]",
         "      [--explain [bundle.json]] [--explain-out <bundle.json>]",
+        "  frankenctl evidence init --producer-id <id> --key-out <private.seed> --trust-out <public.json> [--epoch <u64>]",
         "  frankenctl agent-sandbox --manifest <manifest.json> --input <generated.js> [--goal script|module]",
         "      [--data-contract <contract.json>] [--purpose <purpose>] [--certificate-out <bundle-dir>] [--out <report.json>]",
         "      # run agent-generated code under manifest-declared tool authority; certificate bundle on exit",
@@ -12864,6 +13500,7 @@ fn command_label(command: &CommandSpec) -> &'static str {
         CommandSpec::Onboard(_) => "onboard",
         CommandSpec::DiffBehavior(_) => "diff-behavior",
         CommandSpec::Run(_) => "run",
+        CommandSpec::EvidenceInit(_) => "evidence-init",
         CommandSpec::Explain(_) => "explain",
         CommandSpec::Claims(ClaimsArgs {
             mode: ClaimsMode::Explain(_),
@@ -12919,6 +13556,9 @@ fn command_remediation(command: &str) -> &'static str {
             "Verify the source path and parse goal (try --goal module for files with imports), then rerun `frankenctl check`."
         }
         "run" => "Verify extension source path and `--extension-id`, then rerun `frankenctl run`.",
+        "evidence-init" => {
+            "Choose unused key/snapshot paths in existing directories; retain the private seed and independently pin the public snapshot digest."
+        }
         "explain" => "Verify the explain bundle path, then rerun `frankenctl explain`.",
         "claims-explain" => {
             "Verify the claim id, matrix path, artifact paths, and optional Beads JSONL snapshot, then rerun `frankenctl claims explain`."
@@ -13002,6 +13642,25 @@ const EXECUTION_LIMITS_HELP: &str =
   1000000; past it the run fails closed). --max-source-bytes caps the
   source size (default 1 MiB).";
 
+fn evidence_usage() -> String {
+    [
+        "evidence usage:",
+        "  frankenctl evidence init --producer-id <id> --key-out <private.seed>",
+        "      --trust-out <public.json> [--epoch <u64>]",
+        "",
+        "  Provision an initial runtime signing identity (rotation 1; epoch defaults to 1).",
+        "  The OS generates the 32-byte private seed. It is written only to --key-out",
+        "  with private Unix permissions; stdout contains public coordinates and paths.",
+        "  Both destinations are created exclusively and must not already exist.",
+        "  Parent directories must exist. Completed writes are synced. This is not an",
+        "  atomic two-file transaction: errors identify retained partial files.",
+        "  Retain the private seed outside run reports. Independently retain/enroll the",
+        "  public snapshot digest before using it as an authenticated replay anchor.",
+        "  Initialization and private seed-file loading require supported Unix systems.",
+    ]
+    .join("\n")
+}
+
 fn run_usage() -> String {
     [
         "run usage:",
@@ -13011,6 +13670,8 @@ fn run_usage() -> String {
         "      [--explain [bundle.json]] [--explain-out <bundle.json>]",
         "      [--emit-trace <trace.json>] [--cell-close-budget-ms <n>]",
         "      [--emit-evidence-trust <public-trust.json>]",
+        "      [--evidence-key-file <private.seed> --evidence-producer-id <id>",
+        "       --trust-snapshot <public.json> --expected-trust-digest <64-hex-digest>]",
         "      [--instruction-budget <n>] [--parser-max-tokens <n>] [--max-heap-objects <n>]",
         "      [--max-heap-bytes <n>] [--max-console-entries <n>] [--max-source-bytes <n>]",
         "",
@@ -13042,6 +13703,17 @@ fn run_usage() -> String {
         "  This is the canonical semantic snapshot digest, not the file's SHA256.",
         "  Retain and pin that digest through a trusted channel at run time for",
         "  authenticated replay. Export alone does not enroll a trusted runtime.",
+        "",
+        "  All four configured-signing flags are required together. The private seed",
+        "  must be an exact 32-byte regular file; symlinks and special files are refused.",
+        "  Its Unix permissions must exclude all group/other access (0600 or 0400).",
+        "  The independent pin authenticates the complete public snapshot; its epoch",
+        "  becomes the run epoch. The selected producer/key must be active there.",
+        "  Repeated invocations retain that identity and pin. --emit-evidence-trust",
+        "  preserves the complete pinned lineage, including keys for other producers.",
+        "  Use `frankenctl evidence init --help` to provision a new initial identity.",
+        "  Configured key-file loading requires supported Unix systems. Without these",
+        "  flags each run continues to create a fresh runtime identity.",
         "",
         "  --certificate-out <bundle-dir> (requires --data-contract) writes the",
         "  signed E8 certificate bundle assembled from the run's recorded",

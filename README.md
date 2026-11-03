@@ -703,6 +703,32 @@ Before executing source, replay verifies the pinned runtime identity and key lif
 
 Successful authentication reports `evidence_authenticated: true`; deterministic replay without these flags reports `false`. Reports created before signed replay inputs were added remain usable for unauthenticated re-execution and are rejected when authentication is requested. A digest read only from an untrusted report is not an independent trust anchor. The public snapshot contains no private signing key and does not enroll the runtime into an external trust system. Imported module file contents are still read from the filesystem during replay; retain those dependencies separately because this report format does not capture and authenticate their bytes.
 
+### Persistent runtime evidence identity
+
+An operator can initialize one identity and use its independently pinned public snapshot across separate runs and process restarts:
+
+```bash
+frankenctl evidence init --producer-id my-runtime \
+  --key-out /secure/existing/directory/runtime.seed \
+  --trust-out ./runtime.trust.json --epoch 1
+```
+
+Both destinations must be unused paths in existing directories. Initialization generates a 32-byte private seed from operating-system randomness, creates its file with owner-only permissions, and writes the public snapshot. Its JSON output contains public identifiers, file paths, and `evidence_trust_snapshot_digest`. Retain that digest independently as `TRUSTED_RUN_DIGEST` and distribute the public snapshot through the operator's trust-enrollment process. Initialization never overwrites existing files; a write failure reports any newly created partial files that remain.
+
+```bash
+frankenctl run --input ./demo.js --extension-id demo-ext --out ./demo.run.json \
+  --evidence-key-file /secure/existing/directory/runtime.seed \
+  --evidence-producer-id my-runtime \
+  --trust-snapshot ./runtime.trust.json \
+  --expected-trust-digest "$TRUSTED_RUN_DIGEST"
+
+frankenctl replay run --trace ./demo.run.json --mode strict \
+  --trust-snapshot ./runtime.trust.json \
+  --expected-trust-digest "$TRUSTED_RUN_DIGEST"
+```
+
+All four configured-signing flags are required together. Before reading or executing the program, the CLI checks the independent snapshot pin, securely loads the private seed, and verifies that its key is registered for the selected producer and active at the snapshot's epoch. A wrong key, producer, pin, or lifecycle window stops the run; configured signing never falls back to a fresh identity. The run uses the pinned snapshot's epoch, and `--emit-evidence-trust` preserves its complete rotation lineage when exporting it again. Private key initialization and loading currently require supported Unix platforms; private key files must be regular files with no group or other permission bits. Runs without configured-signing flags continue to use a fresh runtime-owned identity.
+
 ### Counterfactual replay
 
 `counterfactual_evaluator.rs` answers "what would the runtime have done under policy snapshot X instead of Y?" against a captured trace. The original event stream and randomness transcript are fixed; only the policy snapshot is substituted. The output is a signed counterfactual decision record that ships alongside the original, so operators can audit a containment without ever applying the alternative policy in production.

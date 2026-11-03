@@ -523,6 +523,49 @@ impl RuntimeEvidenceAuthority {
         Ok(Self(identity))
     }
 
+    /// Reattach a privately provisioned key to its externally trusted public
+    /// identity. The caller must authenticate the snapshot independently; a
+    /// claimant's embedded identity is not an enrollment source. The complete
+    /// registry enforces activation and retirement at the snapshot's epoch.
+    pub fn from_trusted_snapshot(
+        producer_id: &str,
+        signing_key: SigningKey,
+        snapshot: &EvidenceTrustSnapshot,
+    ) -> Result<Self, LedgerError> {
+        let registry = snapshot.to_runtime_registry()?;
+        let verification_key = signing_key.verification_key();
+        let identity = snapshot
+            .identities
+            .iter()
+            .find(|identity| {
+                identity.producer_id == producer_id && identity.verification_key == verification_key
+            })
+            .ok_or_else(|| LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "configured signing key is not registered for runtime producer `{producer_id}`"
+                ),
+            })?;
+        let provenance = &identity.key_provenance;
+        let authority = Self::from_signing_key(
+            producer_id,
+            signing_key,
+            provenance.activation_epoch,
+            provenance.rotation_sequence,
+            provenance.previous_key_id.clone(),
+        )?;
+        // This checks admission of a private signing capability, not a claimed
+        // artifact. Reuse the registry's exact public-provenance and lifecycle
+        // checks without inventing a second key-retirement policy.
+        let coordinates = EvidenceSignatureEnvelope::unsigned_for(
+            authority.signing_identity(),
+            snapshot.current_epoch,
+        );
+        registry
+            .registry
+            .authorized_producer_for_envelope(&coordinates)?;
+        Ok(authority)
+    }
+
     /// Generate a fresh runtime authority from the operating-system CSPRNG.
     pub fn generate_runtime_owned(
         producer_id: impl Into<String>,
@@ -6558,6 +6601,132 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn configured_runtime_authorities_reopen_one_independently_trusted_identity() {
+        let original = perf_runtime_authority();
+        let snapshot = EvidenceTrustSnapshot::from_runtime_identities(
+            SecurityEpoch::from_raw(1),
+            [original.verification_identity()],
+        )
+        .expect("public registry");
+        let first = RuntimeEvidenceAuthority::from_trusted_snapshot(
+            original.producer_id(),
+            original.0.signing_key.clone(),
+            &snapshot,
+        )
+        .expect("first process authority");
+        let second = RuntimeEvidenceAuthority::from_trusted_snapshot(
+            original.producer_id(),
+            original.0.signing_key.clone(),
+            &snapshot,
+        )
+        .expect("second process authority");
+        assert_eq!(
+            first.verification_identity(),
+            second.verification_identity()
+        );
+        let registry = snapshot.to_runtime_registry().expect("trusted registry");
+        for (authority, payload) in [
+            (&first, b"first execution".as_slice()),
+            (&second, b"second execution".as_slice()),
+        ] {
+            let envelope = authority
+                .sign_detached(payload, snapshot.current_epoch)
+                .expect("sign");
+            registry
+                .verify_detached(&envelope, payload, snapshot.current_epoch)
+                .expect("verify against stable trust");
+        }
+    }
+
+    #[test]
+    fn configured_runtime_identity_rejects_wrong_key_producer_and_invalid_snapshot() {
+        let original = perf_runtime_authority();
+        let snapshot = EvidenceTrustSnapshot::from_runtime_identities(
+            SecurityEpoch::from_raw(1),
+            [original.verification_identity()],
+        )
+        .expect("public registry");
+        assert!(
+            RuntimeEvidenceAuthority::from_trusted_snapshot(
+                "other-producer",
+                original.0.signing_key.clone(),
+                &snapshot,
+            )
+            .is_err()
+        );
+        assert!(
+            RuntimeEvidenceAuthority::from_trusted_snapshot(
+                original.producer_id(),
+                SigningKey::from_bytes([0x62; 32]).expect("different key"),
+                &snapshot,
+            )
+            .is_err()
+        );
+        let mut invalid = snapshot.clone();
+        invalid.producer_lineage_tips.clear();
+        assert!(
+            RuntimeEvidenceAuthority::from_trusted_snapshot(
+                original.producer_id(),
+                original.0.signing_key.clone(),
+                &invalid,
+            )
+            .is_err()
+        );
+        let mut future = snapshot;
+        future.current_epoch = SecurityEpoch::from_raw(0);
+        let error = RuntimeEvidenceAuthority::from_trusted_snapshot(
+            original.producer_id(),
+            original.0.signing_key.clone(),
+            &future,
+        )
+        .expect_err("key is not active at the supplied epoch");
+        assert!(error.to_string().contains("after signed epoch"));
+    }
+
+    #[test]
+    fn configured_runtime_identity_uses_the_current_complete_rotation_lineage() {
+        let original = perf_runtime_authority();
+        let successor = RuntimeEvidenceAuthority::from_signing_key(
+            original.producer_id(),
+            SigningKey::from_bytes([0x62; 32]).expect("successor key"),
+            SecurityEpoch::from_raw(2),
+            2,
+            Some(original.key_provenance().key_id.clone()),
+        )
+        .expect("successor");
+        let snapshot = EvidenceTrustSnapshot::from_runtime_identities(
+            SecurityEpoch::from_raw(2),
+            [
+                original.verification_identity(),
+                successor.verification_identity(),
+            ],
+        )
+        .expect("complete rotation");
+        let error = RuntimeEvidenceAuthority::from_trusted_snapshot(
+            original.producer_id(),
+            original.0.signing_key.clone(),
+            &snapshot,
+        )
+        .expect_err("retired predecessor cannot sign new runs");
+        assert!(
+            error
+                .to_string()
+                .contains("retired at successor activation")
+        );
+        let reopened = RuntimeEvidenceAuthority::from_trusted_snapshot(
+            successor.producer_id(),
+            successor.0.signing_key.clone(),
+            &snapshot,
+        )
+        .expect("active successor");
+        assert_eq!(
+            reopened.verification_identity(),
+            successor.verification_identity()
+        );
+        assert_eq!(reopened.key_provenance().rotation_sequence, 2);
     }
 
     #[test]

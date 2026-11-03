@@ -482,3 +482,207 @@ fn authenticated_replay_rejects_malformed_or_nonruntime_external_trust() {
         );
     }
 }
+
+#[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+mod configured_runtime_identity {
+    use super::*;
+    use frankenengine_engine::signature_preimage::SigningKey;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn provision(dir: &Path) -> (PathBuf, PathBuf, String) {
+        let key = dir.join("runtime.seed");
+        let trust = dir.join("runtime.public.json");
+        let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+            .args([
+                "evidence",
+                "init",
+                "--producer-id",
+                "stable-runtime",
+                "--key-out",
+            ])
+            .arg(&key)
+            .arg("--trust-out")
+            .arg(&trust)
+            .args(["--epoch", "7"])
+            .output()
+            .expect("identity initialization CLI");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let initialized: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("public initialization output");
+        assert_eq!(initialized["producer_id"], "stable-runtime");
+        assert_eq!(initialized["epoch"], 7);
+        assert_eq!(fs::metadata(&key).expect("private key").len(), 32);
+        assert_eq!(
+            fs::metadata(&key)
+                .expect("private permissions")
+                .permissions()
+                .mode()
+                & 0o077,
+            0
+        );
+        let digest = initialized["evidence_trust_snapshot_digest"]
+            .as_str()
+            .expect("digest")
+            .to_string();
+        (key, trust, digest)
+    }
+
+    fn configured_run(
+        input: &Path,
+        report: &Path,
+        key: &Path,
+        trust: &Path,
+        digest: &str,
+        export: &Path,
+    ) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+            .args(["run", "--input"])
+            .arg(input)
+            .args(["--extension-id", "configured-replay", "--out"])
+            .arg(report)
+            .arg("--evidence-key-file")
+            .arg(key)
+            .args([
+                "--evidence-producer-id",
+                "stable-runtime",
+                "--trust-snapshot",
+            ])
+            .arg(trust)
+            .args(["--expected-trust-digest", digest, "--emit-evidence-trust"])
+            .arg(export)
+            .output()
+            .expect("configured run CLI")
+    }
+
+    #[test]
+    fn initialized_identity_authenticates_independent_runs_under_one_preexisting_pin() {
+        let dir = scratch_dir();
+        let (key, trust, digest) = provision(&dir);
+        let initial: EvidenceTrustSnapshot =
+            serde_json::from_slice(&fs::read(&trust).expect("trust")).expect("snapshot");
+        let input = dir.join("program.js");
+        fs::write(&input, "console.log(40 + 2);\n").expect("program");
+        let mut previous_instance = None;
+        for invocation in 0..2 {
+            let report = dir.join(format!("run-{invocation}.json"));
+            let export = dir.join(format!("trust-{invocation}.json"));
+            let output = configured_run(&input, &report, &key, &trust, &digest, &export);
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let recorded: serde_json::Value =
+                serde_json::from_slice(&output.stdout).expect("run output");
+            assert_eq!(recorded["replay_input"]["policy_epoch"], 7);
+            assert_eq!(recorded["evidence_trust_snapshot_digest"], digest);
+            assert_eq!(
+                recorded["replay_input_signature"]["producer_id"],
+                "stable-runtime"
+            );
+            assert_eq!(
+                recorded["replay_input_signature"]["key_provenance"]["key_id"],
+                initial.identities[0].key_provenance.key_id
+            );
+            let instance = recorded["evidence_chain_instance_id"]
+                .as_str()
+                .expect("instance")
+                .to_string();
+            assert_ne!(previous_instance.as_ref(), Some(&instance));
+            previous_instance = Some(instance);
+            let exported: EvidenceTrustSnapshot =
+                serde_json::from_slice(&fs::read(export).expect("export")).expect("snapshot");
+            assert_eq!(exported, initial);
+            let replay = authenticated_replay(&report, &trust, &digest, "strict");
+            assert!(
+                replay.status.success(),
+                "{}",
+                String::from_utf8_lossy(&replay.stderr)
+            );
+            let result: serde_json::Value =
+                serde_json::from_slice(&replay.stdout).expect("replay output");
+            assert_eq!(result["evidence_authenticated"], true);
+            assert_eq!(result["complete"], true);
+        }
+    }
+
+    #[test]
+    fn configured_rotation_preserves_complete_trust_and_rejects_retired_private_keys() {
+        let dir = scratch_dir();
+        let (old_key, initial_path, _) = provision(&dir);
+        let initial: EvidenceTrustSnapshot =
+            serde_json::from_slice(&fs::read(&initial_path).expect("initial trust"))
+                .expect("snapshot");
+        let successor = RuntimeEvidenceAuthority::from_signing_key(
+            "stable-runtime",
+            SigningKey::from_bytes([0x64; 32]).expect("successor seed"),
+            SecurityEpoch::from_raw(8),
+            2,
+            Some(initial.identities[0].key_provenance.key_id.clone()),
+        )
+        .expect("successor");
+        let complete = EvidenceTrustSnapshot::from_runtime_identities(
+            SecurityEpoch::from_raw(8),
+            [
+                initial.identities[0].clone(),
+                successor.verification_identity(),
+            ],
+        )
+        .expect("complete rotated registry");
+        let trust = dir.join("rotated.public.json");
+        fs::write(&trust, serde_json::to_vec(&complete).expect("snapshot"))
+            .expect("public rotation");
+        let digest = complete
+            .canonical_digest()
+            .expect("independent new pin")
+            .to_hex();
+        let key = dir.join("successor.seed");
+        fs::write(&key, [0x64; 32]).expect("successor private file");
+        fs::set_permissions(&key, fs::Permissions::from_mode(0o600)).expect("private permissions");
+        let input = dir.join("program.js");
+        fs::write(&input, "console.log(42);\n").expect("program");
+        let report = dir.join("rotated-run.json");
+        let export = dir.join("retained-trust.json");
+        let output = configured_run(&input, &report, &key, &trust, &digest, &export);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let exported: EvidenceTrustSnapshot =
+            serde_json::from_slice(&fs::read(&export).expect("export")).expect("snapshot");
+        assert_eq!(exported, complete);
+        assert_eq!(exported.identities.len(), 2);
+        let replay = authenticated_replay(&report, &trust, &digest, "strict");
+        assert!(
+            replay.status.success(),
+            "{}",
+            String::from_utf8_lossy(&replay.stderr)
+        );
+
+        let denied = configured_run(
+            &dir.join("missing-source.js"),
+            &dir.join("denied.json"),
+            &old_key,
+            &trust,
+            &digest,
+            &dir.join("denied-trust.json"),
+        );
+        assert!(!denied.status.success());
+        let stderr = String::from_utf8_lossy(&denied.stderr);
+        assert!(
+            stderr.contains("configured runtime evidence authority rejected before execution"),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains("retired at successor activation"),
+            "{stderr}"
+        );
+        assert!(!dir.join("denied.json").exists());
+        assert!(!dir.join("denied-trust.json").exists());
+    }
+}

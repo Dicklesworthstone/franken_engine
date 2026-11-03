@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::{
     BindingPattern, ExportDeclaration, ExportKind, Expression, ExpressionStatement, ImportClause,
-    ImportDeclaration, NamedExportClause, ParseGoal, SourceSpan, Statement, SyntaxTree,
+    ImportDeclaration, ImportSpecifier, NamedExportClause, ParseGoal, SourceSpan, Statement, SyntaxTree,
     VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
 };
 use crate::import_attributes::ImportAttributes;
@@ -210,6 +210,7 @@ impl std::error::Error for ArenaError {}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArenaNode {
     Import {
+        clause: ImportClause,
         binding: Option<String>,
         source: JsString,
         import_attributes: ImportAttributes,
@@ -463,10 +464,15 @@ impl ParserArena {
                 self.charge_bytes(NODE_BASE_ESTIMATED_BYTES)?;
                 self.charge_bytes(js_string_bytes(&import.source))?;
                 self.charge_bytes(import_attribute_bytes(&import.import_attributes))?;
-                for binding in import.clause.binding_names() {
+                // The clause owns names independently of the legacy primary
+                // binding. Admit its strings and specifier backing storage
+                // before cloning either representation into the arena.
+                self.charge_bytes(import_clause_bytes(&import.clause))?;
+                if let Some(binding) = &import.binding {
                     self.charge_bytes(string_bytes(binding))?;
                 }
                 ArenaNode::Import {
+                    clause: import.clause.clone(),
                     binding: import.binding.clone(),
                     source: import.source.clone(),
                     import_attributes: import.import_attributes.clone(),
@@ -711,17 +717,13 @@ impl ParserArena {
         let node = self.node(handle)?.clone();
         match node {
             ArenaNode::Import {
+                clause,
                 binding,
                 source,
                 import_attributes,
                 span,
             } => Ok(Statement::Import(ImportDeclaration {
-                clause: match &binding {
-                    Some(name) => ImportClause::Default {
-                        local: name.clone(),
-                    },
-                    None => ImportClause::SideEffect,
-                },
+                clause,
                 binding,
                 source,
                 import_attributes,
@@ -864,6 +866,33 @@ fn import_attribute_bytes(attributes: &ImportAttributes) -> u64 {
     })
 }
 
+fn import_clause_bytes(clause: &ImportClause) -> u64 {
+    let payload = match clause {
+        ImportClause::SideEffect => 0,
+        ImportClause::Default { local } | ImportClause::Namespace { local } => string_bytes(local),
+        ImportClause::Named { specifiers } => import_specifier_bytes(specifiers),
+        ImportClause::DefaultAndNamed {
+            default,
+            specifiers,
+        } => string_bytes(default).saturating_add(import_specifier_bytes(specifiers)),
+        ImportClause::DefaultAndNamespace { default, namespace } => {
+            string_bytes(default).saturating_add(string_bytes(namespace))
+        }
+    };
+    u64::try_from(std::mem::size_of::<ImportClause>())
+        .unwrap_or(u64::MAX)
+        .saturating_add(payload)
+}
+
+fn import_specifier_bytes(specifiers: &[ImportSpecifier]) -> u64 {
+    let storage = u64::try_from(std::mem::size_of_val(specifiers)).unwrap_or(u64::MAX);
+    specifiers.iter().fold(storage, |bytes, specifier| {
+        bytes
+            .saturating_add(string_bytes(&specifier.import_name))
+            .saturating_add(string_bytes(&specifier.local_name))
+    })
+}
+
 fn js_string_bytes(value: &JsString) -> u64 {
     let utf8_projection_bytes = string_bytes(value.as_utf8_projection());
     if value.is_well_formed() {
@@ -946,17 +975,21 @@ fn module_source_audit_descriptor(source: &JsString) -> String {
 fn node_audit_descriptor(node: &ArenaNode) -> String {
     match node {
         ArenaNode::Import {
+            clause,
             binding,
             source,
             import_attributes,
             span,
         } => {
             let source = module_source_audit_descriptor(source);
+            let clause = serde_json::to_string(clause)
+                .expect("import-clause audit serialization should be infallible");
             let mut descriptor = format!(
-                "import binding={} source={} span={}",
+                "import binding={} source={} span={} clause={}",
                 binding.as_deref().unwrap_or("_"),
                 source,
-                span.index()
+                span.index(),
+                clause
             );
             if !import_attributes.is_empty() {
                 descriptor.push_str(" import_attributes=");
@@ -1721,6 +1754,9 @@ mod tests {
     #[test]
     fn node_audit_descriptor_import() {
         let node = ArenaNode::Import {
+            clause: ImportClause::Default {
+                local: "foo".to_string(),
+            },
             import_attributes: Default::default(),
             binding: Some("foo".to_string()),
             source: "./bar.js".into(),
@@ -1735,6 +1771,7 @@ mod tests {
     #[test]
     fn node_audit_descriptor_import_no_binding() {
         let node = ArenaNode::Import {
+            clause: ImportClause::SideEffect,
             import_attributes: Default::default(),
             binding: None,
             source: "./side.js".into(),
@@ -1769,12 +1806,14 @@ mod tests {
     #[test]
     fn node_audit_descriptors_distinguish_exact_module_sources_bd_lfq44() {
         let import_d800 = ArenaNode::Import {
+            clause: ImportClause::SideEffect,
             import_attributes: Default::default(),
             binding: None,
             source: JsString::from_code_units(&[0xD800]),
             span: SpanHandle::new(0),
         };
         let import_dc00 = ArenaNode::Import {
+            clause: ImportClause::SideEffect,
             import_attributes: Default::default(),
             binding: None,
             source: JsString::from_code_units(&[0xDC00]),
@@ -1787,6 +1826,7 @@ mod tests {
         assert_ne!(import_d800_desc, import_dc00_desc);
 
         let ordinary_import = ArenaNode::Import {
+            clause: ImportClause::SideEffect,
             import_attributes: Default::default(),
             binding: None,
             source: JsString::from("exact_utf16=d800"),

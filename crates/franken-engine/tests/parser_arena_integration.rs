@@ -584,6 +584,9 @@ fn arena_error_clone() {
 #[test]
 fn arena_node_import_with_binding() {
     let node = ArenaNode::Import {
+        clause: ImportClause::Default {
+            local: "mod".to_string(),
+        },
         import_attributes: Default::default(),
         binding: Some("mod".to_string()),
         source: "./mod.js".into(),
@@ -607,6 +610,7 @@ fn arena_node_import_with_binding() {
 #[test]
 fn arena_node_import_without_binding() {
     let node = ArenaNode::Import {
+        clause: ImportClause::SideEffect,
         import_attributes: Default::default(),
         binding: None,
         source: "./side.js".into(),
@@ -663,6 +667,9 @@ fn arena_node_expression_statement() {
 #[test]
 fn arena_node_clone_and_equality() {
     let node = ArenaNode::Import {
+        clause: ImportClause::Default {
+            local: "a".to_string(),
+        },
         import_attributes: Default::default(),
         binding: Some("a".to_string()),
         source: "b".into(),

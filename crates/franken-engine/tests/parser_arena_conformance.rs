@@ -300,7 +300,8 @@ fn arena_conformance_cases() -> Vec<ArenaConformanceCase> {
                 "./dep.mjs",
             )],
             vec![
-                "import binding=alpha source=./dep.mjs".to_string(),
+                r#"import binding=alpha source="./dep.mjs""#.to_string(),
+                r#"clause={"Default":{"local":"alpha"}}"#.to_string(),
                 "span=1".to_string(),
             ],
         ),
@@ -313,7 +314,10 @@ fn arena_conformance_cases() -> Vec<ArenaConformanceCase> {
                 "import './polyfill.mjs';",
                 "./polyfill.mjs",
             )],
-            vec!["import binding=_ source=./polyfill.mjs".to_string()],
+            vec![
+                r#"import binding=_ source="./polyfill.mjs""#.to_string(),
+                r#"clause="SideEffect""#.to_string(),
+            ],
         ),
         case(
             "es2020-module-export-default-expression-roundtrip",
@@ -332,7 +336,7 @@ fn arena_conformance_cases() -> Vec<ArenaConformanceCase> {
             "export { alpha };",
             ParseGoal::Module,
             vec![module_export_named("export { alpha };", "alpha")],
-            vec!["export_named clause=alpha".to_string()],
+            vec![r#"export_named clause="alpha""#.to_string()],
         ),
     ]
 }

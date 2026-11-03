@@ -995,22 +995,54 @@ enum StdinWriterCommand {
     Close,
 }
 
-/// Handle to the dedicated thread that owns a lifecycle child's stdin pipe.
-/// Guest `write` calls enqueue bounded chunks and return immediately; the
+/// Handle to the dedicated thread that owns a child's stdin pipe.
+/// Lifecycle guest `write` calls enqueue bounded chunks and return immediately; the
 /// writer thread absorbs pipe backpressure off the interpreter. Dropping or
-/// `Close` closes the pipe, delivering EOF to the child. Total accepted
-/// bytes stay bounded by the policy `max_stdin_bytes` limit enforced at the
-/// `write_stdin` boundary.
+/// `Close` closes the pipe, delivering EOF to the child. Teardown cancels and
+/// joins the writer even when a descendant retains the pipe's read end. Total
+/// accepted bytes stay bounded by the policy `max_stdin_bytes` limit enforced
+/// at the `write_stdin` boundary.
 #[derive(Debug)]
 struct StdinWriter {
     tx: Option<Sender<StdinWriterCommand>>,
+    cancel: Arc<AtomicBool>,
+    thread: Option<JoinHandle<std::io::Result<()>>>,
+}
+
+impl StdinWriter {
+    fn stop_and_join(&mut self) -> Result<(), ProcessSpawnError> {
+        self.cancel.store(true, Ordering::Release);
+        drop(self.tx.take());
+        let Some(thread) = self.thread.take() else {
+            return Ok(());
+        };
+        thread
+            .join()
+            .map_err(|_| ProcessSpawnError::Io {
+                operation: "join stdin writer".to_string(),
+                detail: "stdin writer thread panicked".to_string(),
+            })?
+            .map_err(|error| ProcessSpawnError::Io {
+                operation: "write stdin".to_string(),
+                detail: error.to_string(),
+            })
+    }
+}
+
+impl Drop for StdinWriter {
+    fn drop(&mut self) {
+        // All writes and queue waits are bounded cancellation points. Never
+        // detach a writer merely because the direct child has been reaped:
+        // escaped descendants can still hold an inherited stdin read end.
+        let _ = self.stop_and_join();
+    }
 }
 
 #[derive(Debug)]
 struct RunningChild {
     child: Child,
-    /// One-shot upfront writer owned by the Run lane (`join_stdin_writer`).
-    /// Lifecycle spawns move this into [`StdinWriter`] instead.
+    /// Piped stdin moves into an owned, cancellable [`StdinWriter`] for both
+    /// one-shot Run and lifecycle Spawn requests.
     stdin: Option<ChildStdin>,
     stdin_writer: Option<StdinWriter>,
     stdout: Option<OutputDrain>,
@@ -1641,15 +1673,18 @@ impl NativeProcessSpawn {
         };
         let timeout = effective_timeout(timeout_millis, self.policy.limits.max_runtime_millis);
         let process_result = wait_and_collect_controlled(running, timeout, control);
-        let stdin_result = join_stdin_writer(stdin_writer);
+        let stdin_result = match stdin_writer {
+            Some(mut writer) => writer.stop_and_join(),
+            None => Ok(()),
+        };
         let (exit, stdout, stderr) = match process_result {
             Ok(result) => {
                 stdin_result?;
                 result
             }
             Err(error) => {
-                // Timeout/cleanup is primary. Reaping closes the pipe and
-                // guarantees the writer has stopped before this returns.
+                // Timeout/cleanup is primary. Explicit cancellation and join
+                // stop the writer even if reaping does not close the pipe.
                 let _ = stdin_result;
                 return Err(error);
             }
@@ -1673,7 +1708,15 @@ impl NativeProcessSpawn {
         if launch.stdio.stdin == ProcessStdioMode::Pipe
             && let Some(child_stdin) = running.stdin.take()
         {
-            running.stdin_writer = Some(spawn_lifecycle_stdin_writer(child_stdin));
+            match spawn_lifecycle_stdin_writer(child_stdin) {
+                Ok(writer) => running.stdin_writer = Some(writer),
+                Err(error) => {
+                    let _ = terminate_remaining_process_group(&running);
+                    kill_and_reap(&mut running.child);
+                    let _ = collect_outputs(running);
+                    return Err(error);
+                }
+            }
         }
         let nonce = self.next_handle.fetch_add(1, Ordering::Relaxed);
         let handle = format!("ps-{}-{nonce:016x}", self.scope);
@@ -2574,65 +2617,115 @@ where
 fn spawn_stdin_writer(
     mut stdin: ChildStdin,
     data: Vec<u8>,
-) -> Result<JoinHandle<std::io::Result<()>>, ProcessSpawnError> {
-    thread::Builder::new()
+) -> Result<StdinWriter, ProcessSpawnError> {
+    set_stdin_nonblocking(&stdin)?;
+    let cancel = Arc::new(AtomicBool::new(false));
+    let writer_cancel = Arc::clone(&cancel);
+    let thread = thread::Builder::new()
         .name("franken-process-stdin".to_string())
-        .spawn(move || stdin.write_all(&data))
+        .spawn(move || write_stdin_cancellable(&mut stdin, &data, &writer_cancel))
         .map_err(|error| ProcessSpawnError::Io {
             operation: "start stdin writer".to_string(),
             detail: error.to_string(),
-        })
+        })?;
+    Ok(StdinWriter {
+        tx: None,
+        cancel,
+        thread: Some(thread),
+    })
 }
 
-fn join_stdin_writer(
-    writer: Option<JoinHandle<std::io::Result<()>>>,
-) -> Result<(), ProcessSpawnError> {
-    let Some(writer) = writer else {
-        return Ok(());
-    };
-    writer
-        .join()
-        .map_err(|_| ProcessSpawnError::Io {
-            operation: "join stdin writer".to_string(),
-            detail: "stdin writer thread panicked".to_string(),
-        })?
-        .map_err(|error| ProcessSpawnError::Io {
-            operation: "write stdin".to_string(),
+#[cfg(unix)]
+fn set_stdin_nonblocking(stdin: &ChildStdin) -> Result<(), ProcessSpawnError> {
+    let flags = rustix::fs::fcntl_getfl(stdin.as_fd()).map_err(|error| ProcessSpawnError::Io {
+        operation: "read stdin flags".to_string(),
+        detail: error.to_string(),
+    })?;
+    rustix::fs::fcntl_setfl(stdin.as_fd(), flags | rustix::fs::OFlags::NONBLOCK).map_err(|error| {
+        ProcessSpawnError::Io {
+            operation: "set stdin nonblocking".to_string(),
             detail: error.to_string(),
-        })
+        }
+    })
+}
+
+#[cfg(not(unix))]
+fn set_stdin_nonblocking(_stdin: &ChildStdin) -> Result<(), ProcessSpawnError> {
+    Err(ProcessSpawnError::NotImplemented {
+        what: "bounded native stdin requires a platform containment backend".to_string(),
+    })
+}
+
+fn write_stdin_cancellable(
+    stdin: &mut ChildStdin,
+    mut data: &[u8],
+    cancel: &AtomicBool,
+) -> std::io::Result<()> {
+    while !data.is_empty() {
+        if cancel.load(Ordering::Acquire) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "stdin writer cancelled during process teardown",
+            ));
+        }
+        match stdin.write(data) {
+            Ok(0) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WriteZero,
+                    "stdin pipe accepted no bytes",
+                ));
+            }
+            Ok(written) => data = &data[written..],
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(2));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 
 /// Start the dedicated stdin writer thread for a lifecycle spawn (bd-m42c2).
 /// The thread takes ownership of the pipe: queued writes drain off the
 /// interpreter, and `Close` (or sender drop) closes the pipe to deliver EOF.
-/// On thread-spawn failure the returned handle carries no sender, so the
-/// pipe closes immediately instead of leaving an unwritable fd open.
-fn spawn_lifecycle_stdin_writer(stdin: ChildStdin) -> StdinWriter {
+/// Thread-spawn and pipe-configuration failures are returned to the launch
+/// path, which tears down the child instead of publishing an unusable handle.
+fn spawn_lifecycle_stdin_writer(stdin: ChildStdin) -> Result<StdinWriter, ProcessSpawnError> {
+    set_stdin_nonblocking(&stdin)?;
     let (tx, rx) = channel::<StdinWriterCommand>();
-    let spawned = thread::Builder::new()
+    let cancel = Arc::new(AtomicBool::new(false));
+    let writer_cancel = Arc::clone(&cancel);
+    let thread = thread::Builder::new()
         .name("franken-process-stdin".to_string())
         .spawn(move || {
             let mut stdin = stdin;
-            // `rx` iteration ends on Close or sender drop; dropping `stdin`
-            // afterwards is what delivers EOF to the child.
-            for command in rx {
+            // Poll both the queue and the pipe. Neither an idle producer nor
+            // a full pipe may prevent owned teardown from joining this thread.
+            while !writer_cancel.load(Ordering::Acquire) {
+                let command = match rx.recv_timeout(Duration::from_millis(2)) {
+                    Ok(command) => command,
+                    Err(RecvTimeoutError::Timeout) => continue,
+                    Err(RecvTimeoutError::Disconnected) => break,
+                };
                 match command {
                     StdinWriterCommand::Write(data) => {
-                        if stdin.write_all(&data).is_err() {
-                            // Pipe closed (child exited or containment kill):
-                            // stop consuming. Later sends fail at the write()
-                            // boundary as typed Io errors.
-                            break;
-                        }
+                        write_stdin_cancellable(&mut stdin, &data, &writer_cancel)?;
                     }
                     StdinWriterCommand::Close => break,
                 }
             }
-        });
-    if spawned.is_err() {
-        return StdinWriter { tx: None };
-    }
-    StdinWriter { tx: Some(tx) }
+            Ok(())
+        })
+        .map_err(|error| ProcessSpawnError::Io {
+            operation: "start stdin writer".to_string(),
+            detail: error.to_string(),
+        })?;
+    Ok(StdinWriter {
+        tx: Some(tx),
+        cancel,
+        thread: Some(thread),
+    })
 }
 
 fn read_bounded(
@@ -4330,6 +4423,16 @@ mod tests {
         ));
         assert!(matches!(
             provider.perform(
+                &ProcessSpawnRequest::WriteStdin {
+                    handle: handle.clone(),
+                    data: b"-second-chunk".to_vec(),
+                },
+                &[ProcessSpawnCapability::Spawn],
+            ),
+            Ok(ProcessSpawnResponse::StdinWritten { bytes_written: 13 })
+        ));
+        assert!(matches!(
+            provider.perform(
                 &ProcessSpawnRequest::CloseStdin {
                     handle: handle.clone(),
                 },
@@ -4352,7 +4455,7 @@ mod tests {
                 },
                 stdout,
                 ..
-            }) if stdout == b"through-stdin"
+            }) if stdout == b"through-stdin-second-chunk"
         ));
     }
 
@@ -4660,6 +4763,174 @@ mod tests {
         ));
         assert!(started.elapsed() < Duration::from_secs(2));
         assert_eq!(provider.active_children.load(Ordering::Acquire), 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn run_cancellation_joins_stdin_while_another_process_retains_the_read_end() {
+        let shell = executable(&["/bin/sh", "/usr/bin/sh"]);
+        let setsid = executable(&["/usr/bin/setsid", "/bin/setsid"]);
+        let dd = executable(&["/bin/dd", "/usr/bin/dd"]);
+        let sleep = executable(&["/bin/sleep", "/usr/bin/sleep"]);
+        let (provider, canonical_shell) = provider_for(&shell);
+        let temp_dir = tempfile::tempdir().expect("create stdin-cancellation marker directory");
+        let ready = temp_dir.path().join("reader-ready");
+        let release = temp_dir.path().join("release-reader");
+        let finished = temp_dir.path().join("reader-finished");
+        let helper_log = temp_dir.path().join("helper.log");
+        let helper_diagnostics = || {
+            std::fs::read_to_string(&helper_log)
+                .unwrap_or_else(|error| format!("helper log unavailable: {error}"))
+        };
+        // The helper proves a real stdin write happened before publishing
+        // readiness, then retains that read end outside the child's group.
+        // Its finite lifetime is a fallback; normal and panic paths release it
+        // explicitly and wait for its terminal marker below.
+        let helper = format!(
+            "test \"$({} bs=1 count=1)\" = x || exit 97; \
+             echo ready > {}; i=0; \
+             while [ ! -f {} ] && [ $i -lt 500 ]; do {} 0.01; i=$((i+1)); done; \
+             echo finished > {}",
+            dd.display(),
+            ready.display(),
+            release.display(),
+            sleep.display(),
+            finished.display()
+        );
+        let command = format!(
+            "exec 3<&0; {} {} -c '{}' <&3 3<&- >{} 2>&1 & exec 3<&-; exec {} 5",
+            setsid.display(),
+            shell.display(),
+            helper,
+            helper_log.display(),
+            sleep.display()
+        );
+        let mut request = run_request(canonical_shell, vec!["-c", &command]);
+        let ProcessSpawnRequest::Run {
+            stdin,
+            timeout_millis,
+            ..
+        } = &mut request
+        else {
+            unreachable!()
+        };
+        *stdin = vec![b'x'; 128 * 1024];
+        *timeout_millis = Some(5_000);
+        let stopped = Arc::new(AtomicUsize::new(0));
+        struct ReleaseReader {
+            release: PathBuf,
+            finished: PathBuf,
+        }
+        impl Drop for ReleaseReader {
+            fn drop(&mut self) {
+                let _ = std::fs::write(&self.release, b"release");
+                let deadline = Instant::now() + Duration::from_secs(2);
+                while !self.finished.exists() && Instant::now() < deadline {
+                    thread::sleep(Duration::from_millis(2));
+                }
+            }
+        }
+        thread::scope(|scope| {
+            let release_reader = ReleaseReader {
+                release,
+                finished: finished.clone(),
+            };
+            let (completed, completion) = sync_channel(1);
+            let stopped_in_run = Arc::clone(&stopped);
+            let run_provider = &provider;
+            let run_request = &request;
+            scope.spawn(move || {
+                let outcome = run_provider.perform_controlled(
+                    run_request,
+                    &[ProcessSpawnCapability::Spawn],
+                    Arc::new(TestStopControl {
+                        stopped: stopped_in_run,
+                    }),
+                );
+                let _ = completed.send(outcome);
+            });
+            let ready_deadline = Instant::now() + Duration::from_secs(2);
+            while std::fs::read(&ready).ok().as_deref() != Some(b"ready\n") {
+                assert!(
+                    Instant::now() < ready_deadline,
+                    "helper must consume a real stdin byte before cancellation: {}",
+                    helper_diagnostics()
+                );
+                thread::sleep(Duration::from_millis(2));
+            }
+            stopped.store(1, Ordering::Release);
+            let outcome = completion.recv_timeout(Duration::from_secs(2));
+            // Release even on failure, so the historical blocking writer can
+            // finish and the scoped worker is always joined by the test.
+            drop(release_reader);
+            assert!(
+                finished.exists(),
+                "the retained reader must be released: {}",
+                helper_diagnostics()
+            );
+            assert!(matches!(
+                outcome.unwrap_or_else(|error| panic!(
+                    "Run must finish while the stdin read end is still retained: {error}; {}",
+                    helper_diagnostics()
+                )),
+                Err(ProcessSpawnError::Denied { reason })
+                    if reason == "TEST_PROCESS_CONTROL_STOPPED"
+            ));
+        });
+        assert_eq!(provider.active_children.load(Ordering::Acquire), 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn lifecycle_stdin_teardown_joins_a_writer_without_killing_its_reader() {
+        let sleep = executable(&["/bin/sleep", "/usr/bin/sleep"]);
+        let mut child = Command::new(sleep)
+            .arg("5")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("start a live non-reading pipe owner");
+        let stdin = child.stdin.take().expect("piped stdin");
+        let pipe = rustix::io::dup(&stdin).expect("observe the real pipe buffer");
+        let mut writer =
+            spawn_lifecycle_stdin_writer(stdin).expect("start owned lifecycle stdin writer");
+        let cancel = Arc::clone(&writer.cancel);
+        writer
+            .tx
+            .as_ref()
+            .expect("writer queue")
+            .send(StdinWriterCommand::Write(vec![b'x'; 128 * 1024]))
+            .expect("queue more than the pipe capacity");
+        let writing_deadline = Instant::now() + Duration::from_secs(2);
+        while rustix::io::ioctl_fionread(&pipe).expect("read pipe occupancy") == 0 {
+            assert!(
+                Instant::now() < writing_deadline,
+                "writer must reach the pipe"
+            );
+            thread::sleep(Duration::from_millis(2));
+        }
+        assert!(
+            rustix::io::ioctl_fionread(&pipe).expect("read pipe occupancy") < 128 * 1024,
+            "queued input must exceed the non-reading pipe's capacity"
+        );
+        drop(pipe);
+        let started = Instant::now();
+        let _ = writer.stop_and_join();
+        let reader_still_alive = child.try_wait().expect("poll pipe owner").is_none();
+        kill_and_reap(&mut child);
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(reader_still_alive, "joining must not depend on pipe EOF");
+        assert!(
+            writer.thread.is_none(),
+            "teardown must join the owned thread"
+        );
+        drop(writer);
+        assert_eq!(
+            Arc::strong_count(&cancel),
+            1,
+            "writer resources were released"
+        );
     }
 
     #[cfg(unix)]

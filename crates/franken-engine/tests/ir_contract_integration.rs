@@ -182,13 +182,13 @@ fn build_full_pipeline() -> (Ir0Module, Ir1Module, Ir2Module, Ir3Module, Ir4Modu
 fn schema_version_current_values() {
     let v = IrSchemaVersion::CURRENT;
     assert_eq!(v.major, 0);
-    assert_eq!(v.minor, 17);
+    assert_eq!(v.minor, 18);
     assert_eq!(v.patch, 0);
 }
 
 #[test]
 fn schema_version_display() {
-    assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.17.0");
+    assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.18.0");
     let custom = IrSchemaVersion {
         major: 2,
         minor: 3,
@@ -277,7 +277,7 @@ fn schema_version_0120_accepts_engine_history_but_rejects_core_owned_minors_bd_g
     verify_schema_version(&header(12)).expect("current minor must be accepted");
     let error = verify_schema_version(&header(13)).expect_err("future minor must be rejected");
     assert_eq!(error.code, IrErrorCode::SchemaVersionMismatch);
-    assert!(error.message.contains("0.17.0"));
+    assert!(error.message.contains("0.18.0"));
 }
 
 #[test]
@@ -658,6 +658,7 @@ fn ir1_op_all_variants_canonical() {
         Ir1Op::Call { arg_count: 5 },
         Ir1Op::Return,
         Ir1Op::ImportModule {
+            import_attributes: Default::default(),
             specifier: "./module.js".into(),
         },
         Ir1Op::ExportBinding {
@@ -685,6 +686,7 @@ fn ir1_op_serde_roundtrip_all_variants() {
         Ir1Op::Call { arg_count: 0 },
         Ir1Op::Return,
         Ir1Op::ImportModule {
+            import_attributes: Default::default(),
             specifier: "mod".into(),
         },
         Ir1Op::ExportBinding {
@@ -704,6 +706,7 @@ fn ir1_op_serde_roundtrip_all_variants() {
 #[test]
 fn ir1_import_module_wire_preserves_ordinary_and_exact_sources_bd_lfq44() {
     let ordinary = Ir1Op::ImportModule {
+        import_attributes: Default::default(),
         specifier: "pkg".into(),
     };
     assert_eq!(
@@ -712,6 +715,7 @@ fn ir1_import_module_wire_preserves_ordinary_and_exact_sources_bd_lfq44() {
     );
 
     let exact = |unit| Ir1Op::ImportModule {
+        import_attributes: Default::default(),
         specifier: JsString::from_code_units(&[unit]),
     };
     let d800 = exact(0xD800);

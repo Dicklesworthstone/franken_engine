@@ -57,6 +57,7 @@ use crate::authority_footprint::{
     analyze_authority_footprint,
 };
 use crate::capability::RuntimeCapability;
+use crate::import_attributes::ImportAttributes;
 use crate::module_compatibility_matrix::CompatibilityMode;
 use crate::module_resolver::{
     AllowAllPolicy, DeterministicModuleResolver, ImportStyle, ModuleDefinition, ModuleDependency,
@@ -519,6 +520,7 @@ impl PackageIntakeReport {
 struct ImportEdge {
     specifier: String,
     style: ImportStyle,
+    import_attributes: ImportAttributes,
     location: SourceLocation,
 }
 
@@ -560,6 +562,7 @@ fn collect_top_level_require(
                 imports.push(ImportEdge {
                     specifier: specifier.to_string(),
                     style: ImportStyle::Require,
+                    import_attributes: ImportAttributes::default(),
                     location,
                 });
             } else {
@@ -617,21 +620,23 @@ fn extract_es_module(source: &str, label: &str) -> ExtractedModule {
                 imports.push(ImportEdge {
                     specifier: specifier.to_string(),
                     style: ImportStyle::Import,
+                    import_attributes: decl.import_attributes.clone(),
                     location: SourceLocation::from(decl.span),
                 });
             }
             Statement::Export(decl) => {
-                // Re-export sources are folded into the export clause in v1 and
-                // are not split out as edges; their presence still marks ESM.
-                if matches!(
-                    &decl.kind,
-                    ExportKind::NamedClause(clause)
-                        if clause.source().is_some_and(|source| source.as_str().is_none())
-                ) {
-                    // Before the v4 AST carrier, this exact source made the
-                    // whole parse unusable. Keep that outcome until the intake
-                    // graph itself has an exact module-key representation.
-                    return empty();
+                if let ExportKind::NamedClause(clause) = &decl.kind
+                    && let Some(source) = clause.source()
+                {
+                    let Some(specifier) = source.as_str() else {
+                        return empty();
+                    };
+                    imports.push(ImportEdge {
+                        specifier: specifier.to_string(),
+                        style: ImportStyle::Import,
+                        import_attributes: clause.import_attributes().clone(),
+                        location: SourceLocation::from(decl.span),
+                    });
                 }
                 has_module_syntax = true;
             }
@@ -835,8 +840,10 @@ pub fn onboard_package(
         let mut definition = ModuleDefinition::new(module.syntax, source.clone())
             .with_provenance("frankenctl-onboard");
         for edge in &module.imports {
-            definition = definition
-                .with_dependency(ModuleDependency::new(edge.specifier.clone(), edge.style));
+            definition = definition.with_dependency(
+                ModuleDependency::new(edge.specifier.clone(), edge.style)
+                    .with_import_attributes(edge.import_attributes.clone()),
+            );
         }
         // Registration only fails for empty/outside-root keys; skip those files.
         if resolver
@@ -884,7 +891,8 @@ pub fn onboard_package(
             for &mode in &RESOLUTION_MODES {
                 let request = ModuleRequest::new(edge.specifier.clone(), edge.style)
                     .with_referrer(referrer.clone())
-                    .with_compatibility_mode(mode);
+                    .with_compatibility_mode(mode)
+                    .with_import_attributes(edge.import_attributes.clone());
                 match resolver.resolve(&request, &context, &AllowAllPolicy) {
                     Ok(outcome) => {
                         let resolved =
@@ -1220,6 +1228,25 @@ mod tests {
             assert_eq!(extracted.syntax, ModuleSyntax::CommonJs, "{source}");
             assert!(extracted.imports.is_empty(), "{source}");
         }
+    }
+
+    #[test]
+    fn static_import_and_reexport_edges_preserve_exact_attributes() {
+        let module = extract_es_module(
+            "import data from './data' with { type: 'json' };\nexport { default as forwarded } from './data' with { type: 'json' };\nexport * as ns from './data' with { type: 'json', integrity: 'opaque' };",
+            "typed-json-edges.mjs",
+        );
+        assert_eq!(module.syntax, ModuleSyntax::EsModule);
+        assert_eq!(module.imports.len(), 3);
+        for edge in &module.imports {
+            assert_eq!(edge.specifier, "./data");
+            assert_eq!(edge.style, ImportStyle::Import);
+            assert_eq!(edge.import_attributes.get("type"), Some("json"));
+        }
+        assert_eq!(
+            module.imports[2].import_attributes.get("integrity"),
+            Some("opaque")
+        );
     }
 
     /// Build a temporary package on disk and return (root, cleanup-on-drop).

@@ -28,6 +28,10 @@ use crate::ast::{
     WhileStatement, WithStatement,
 };
 use crate::deterministic_serde::{self, CanonicalValue};
+use crate::import_attributes::{
+    ImportAttributes, MAX_IMPORT_ATTRIBUTE_KEY_BYTES, MAX_IMPORT_ATTRIBUTE_TOTAL_BYTES,
+    MAX_IMPORT_ATTRIBUTE_VALUE_BYTES, MAX_IMPORT_ATTRIBUTES,
+};
 use crate::js_string::JsString;
 
 pub type ParseResult<T> = Result<T, ParseError>;
@@ -5381,21 +5385,43 @@ fn starts_export_declaration(statement: &str) -> bool {
 }
 
 /// Split `<binding-clause> from <quoted-source>` at the `from` that
-/// introduces the source: the last `from` that does not continue an
-/// identifier, has a non-empty clause before it, and is followed by a quote.
+/// introduces the source, outside quoted import names and binding braces.
 /// Minified code omits the spaces around it (`{a}from'x'`, `*as m from"x"`);
 /// `import from from 'x'` and `import{from}from'x'` keep their bindings.
 fn split_import_from(body: &str) -> Option<(&str, &str)> {
-    body.rmatch_indices("from").find_map(|(index, _)| {
-        let clause = &body[..index];
-        let source = body[index + "from".len()..].trim_start();
-        let keyword_starts = clause
-            .chars()
-            .next_back()
-            .is_none_or(|ch| !is_identifier_continue(ch));
-        (keyword_starts && !clause.trim().is_empty() && source.starts_with(['"', '\'']))
-            .then_some((clause, source))
-    })
+    let mut quote = None;
+    let mut escaped = false;
+    let mut braces = 0usize;
+    for (index, ch) in body.char_indices() {
+        if let Some(delimiter) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == delimiter {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' => quote = Some(ch),
+            '{' => braces = braces.saturating_add(1),
+            '}' => braces = braces.saturating_sub(1),
+            'f' if braces == 0 && body[index..].starts_with("from") => {
+                let clause = &body[..index];
+                let source = body[index + "from".len()..].trim_start();
+                let keyword_starts = clause
+                    .chars()
+                    .next_back()
+                    .is_none_or(|ch| !is_identifier_continue(ch));
+                if keyword_starts && !clause.trim().is_empty() && source.starts_with(['"', '\'']) {
+                    return Some((clause, source));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn parse_import(
@@ -5417,12 +5443,13 @@ fn parse_import(
     }
 
     if body.starts_with(['\'', '"']) {
-        let source_text = strip_import_attributes(body, source_label, &span)?;
+        let (source_text, import_attributes) = parse_import_attributes(body, source_label, &span)?;
         if let Some(source) = parse_quoted_string(source_text) {
             return Ok(ImportDeclaration {
                 clause: ImportClause::SideEffect,
                 binding: None,
                 source,
+                import_attributes,
                 span,
             });
         }
@@ -5455,7 +5482,8 @@ fn parse_import(
             Some(span),
         ));
     }
-    let source_text = strip_import_attributes(source_raw.trim(), source_label, &span)?;
+    let (source_text, import_attributes) =
+        parse_import_attributes(source_raw.trim(), source_label, &span)?;
     let source = parse_quoted_string(source_text).ok_or_else(|| {
         ParseError::new(
             ParseErrorCode::InvalidSyntax,
@@ -5469,82 +5497,103 @@ fn parse_import(
         binding: clause.primary_binding().map(str::to_string),
         clause,
         source,
+        import_attributes,
         span,
     })
 }
 
-/// Split an import attributes clause (ES2025 16.2.2 WithClause: `with {
-/// type: 'json' }`) off the module specifier text that starts `text`, and
-/// return the specifier text alone. The clause has string-valued entries
-/// keyed by identifier names or strings, with no key repeated (a
-/// SyntaxError). The engine supports `type: 'json'` on a `.json` specifier
-/// (the module loader loads `.json` files as JSON modules); any other
-/// attribute or a JSON type on another specifier is refused as
-/// unsupported rather than loaded as something else.
-fn strip_import_attributes<'a>(
+/// Find the end of one quoted token, without interpreting its escapes.
+/// Decoding and escape validity remain the responsibility of `parse_quoted_string`.
+fn module_quoted_token_end(text: &str) -> Option<usize> {
+    let quote = text.chars().next().filter(|ch| matches!(ch, '\'' | '"'))?;
+    let mut escaped = false;
+    for (index, ch) in text.char_indices().skip(1) {
+        if escaped {
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else if ch == quote {
+            return Some(index + ch.len_utf8());
+        }
+    }
+    None
+}
+
+/// Preserve the bounded WithClause until the loader knows the resolved format.
+/// The source spelling (including a package alias without a `.json` suffix)
+/// cannot decide its type. Unknown keys and types survive this grammar check.
+/// Commas, colons, braces and `from` inside quoted tokens are ordinary data.
+fn parse_import_attributes<'a>(
     text: &'a str,
     source_label: &str,
     span: &SourceSpan,
-) -> ParseResult<&'a str> {
+) -> ParseResult<(&'a str, ImportAttributes)> {
     let error = |code, message: &str| {
         ParseError::new(code, message, source_label.to_string(), Some(span.clone()))
     };
-    let Some(quote) = text.chars().next().filter(|ch| matches!(ch, '\'' | '"')) else {
-        return Ok(text);
-    };
-    let mut escaped = false;
-    let mut source_end = None;
-    for (index, ch) in text.char_indices().skip(1) {
-        match ch {
-            _ if escaped => escaped = false,
-            '\\' => escaped = true,
-            ch if ch == quote => {
-                source_end = Some(index + ch.len_utf8());
-                break;
-            }
-            _ => {}
-        }
-    }
-    let Some(source_end) = source_end else {
-        return Ok(text);
+    let Some(source_end) = module_quoted_token_end(text) else {
+        return Ok((text, ImportAttributes::default()));
     };
     let (source_text, rest) = text.split_at(source_end);
     let rest = rest.trim();
     let rest = rest.strip_suffix(';').map_or(rest, str::trim_end);
     if rest.is_empty() {
-        return Ok(source_text);
+        return Ok((source_text, ImportAttributes::default()));
     }
-    let Some(entries) = rest
+    let Some(mut rest) = rest
         .strip_prefix("with")
         .map(str::trim_start)
         .and_then(|after| after.strip_prefix('{'))
-        .and_then(|after| after.strip_suffix('}'))
     else {
-        return Ok(text);
+        return Err(error(
+            ParseErrorCode::InvalidSyntax,
+            "module source must be followed by a `with { ... }` clause or end of declaration",
+        ));
     };
-    let mut seen = BTreeSet::new();
-    let mut json = false;
-    for entry in without_trailing_specifier_comma(entries.trim()).split(',') {
-        let entry = entry.trim();
-        if entry.is_empty() {
-            if entries.trim().is_empty() {
-                break;
+    let mut attributes = BTreeMap::new();
+    let mut total_bytes = 0usize;
+    loop {
+        rest = rest.trim_start();
+        if let Some(tail) = rest.strip_prefix('}') {
+            if !tail.trim().is_empty() {
+                return Err(error(
+                    ParseErrorCode::InvalidSyntax,
+                    "unexpected text after import attributes",
+                ));
             }
+            let attributes = ImportAttributes::new(attributes)
+                .map_err(|err| error(ParseErrorCode::UnsupportedSyntax, &err.to_string()))?;
+            return Ok((source_text, attributes));
+        }
+        if attributes.len() == MAX_IMPORT_ATTRIBUTES {
             return Err(error(
-                ParseErrorCode::InvalidSyntax,
-                "import attributes contain an empty entry",
+                ParseErrorCode::UnsupportedSyntax,
+                "import attributes exceed the supported entry count",
             ));
         }
-        let Some((key, value)) = entry.split_once(':') else {
-            return Err(error(
-                ParseErrorCode::InvalidSyntax,
-                "an import attribute is `key: 'value'`",
-            ));
+        let key_end = if rest.starts_with(['\'', '"']) {
+            module_quoted_token_end(rest).ok_or_else(|| {
+                error(
+                    ParseErrorCode::InvalidSyntax,
+                    "unterminated import attribute key",
+                )
+            })?
+        } else {
+            rest.find(|ch: char| ch.is_whitespace() || matches!(ch, ':' | ',' | '}'))
+                .unwrap_or(rest.len())
         };
-        let key = key.trim();
-        let key = match parse_quoted_string(key) {
-            Some(key) => key.to_string(),
-            None if is_identifier(key) => canonicalize_identifier(key),
+        let key_text = &rest[..key_end];
+        let key = match parse_quoted_string(key_text) {
+            Some(key) => key
+                .as_str()
+                .ok_or_else(|| {
+                    error(
+                        ParseErrorCode::UnsupportedSyntax,
+                        "import attribute keys must be well-formed UTF-16",
+                    )
+                })?
+                .to_string(),
+            None if is_identifier(key_text) => canonicalize_identifier(key_text),
             None => {
                 return Err(error(
                     ParseErrorCode::InvalidSyntax,
@@ -5552,45 +5601,72 @@ fn strip_import_attributes<'a>(
                 ));
             }
         };
-        let Some(value) = parse_quoted_string(value.trim()) else {
+        if key.len() > MAX_IMPORT_ATTRIBUTE_KEY_BYTES {
             return Err(error(
-                ParseErrorCode::InvalidSyntax,
-                "an import attribute value is a string",
+                ParseErrorCode::UnsupportedSyntax,
+                "import attribute key exceeds its byte limit",
             ));
-        };
-        if !seen.insert(key.clone()) {
+        }
+        if attributes.contains_key(&key) {
             return Err(error(
                 ParseErrorCode::InvalidSyntax,
                 "duplicate import attribute key",
             ));
         }
-        if key == "type" && value == "json" {
-            json = true;
-        } else if key != "type" {
-            // A key the host does not support is a SyntaxError
-            // (AllImportAttributesSupported, ES2025 16.2.1.7.1; Node
-            // supports `type` only), not a refusal (bd-9vouw.429).
-            return Err(error(
+        rest = rest[key_end..]
+            .trim_start()
+            .strip_prefix(':')
+            .ok_or_else(|| {
+                error(
+                    ParseErrorCode::InvalidSyntax,
+                    "an import attribute is `key: 'value'`",
+                )
+            })?
+            .trim_start();
+        let value_end = module_quoted_token_end(rest).ok_or_else(|| {
+            error(
                 ParseErrorCode::InvalidSyntax,
-                "unsupported import attribute key (only `type` is supported)",
-            ));
-        } else {
+                "an import attribute value is a string",
+            )
+        })?;
+        let value = parse_quoted_string(&rest[..value_end]).ok_or_else(|| {
+            error(
+                ParseErrorCode::InvalidSyntax,
+                "invalid import attribute string",
+            )
+        })?;
+        let value = value.as_str().ok_or_else(|| {
+            error(
+                ParseErrorCode::UnsupportedSyntax,
+                "import attribute values must be well-formed UTF-16",
+            )
+        })?;
+        if value.len() > MAX_IMPORT_ATTRIBUTE_VALUE_BYTES {
             return Err(error(
                 ParseErrorCode::UnsupportedSyntax,
-                "unsupported import attribute (only `type: 'json'` is supported)",
+                "import attribute value exceeds its byte limit",
+            ));
+        }
+        total_bytes = total_bytes
+            .saturating_add(key.len())
+            .saturating_add(value.len());
+        if total_bytes > MAX_IMPORT_ATTRIBUTE_TOTAL_BYTES {
+            return Err(error(
+                ParseErrorCode::UnsupportedSyntax,
+                "import attributes exceed their total byte limit",
+            ));
+        }
+        attributes.insert(key, value.to_string());
+        rest = rest[value_end..].trim_start();
+        if let Some(tail) = rest.strip_prefix(',') {
+            rest = tail;
+        } else if !rest.starts_with('}') {
+            return Err(error(
+                ParseErrorCode::InvalidSyntax,
+                "import attributes require a comma or closing brace",
             ));
         }
     }
-    if json
-        && !parse_quoted_string(source_text)
-            .is_some_and(|source| source.to_string().to_ascii_lowercase().ends_with(".json"))
-    {
-        return Err(error(
-            ParseErrorCode::UnsupportedSyntax,
-            "`type: 'json'` is supported for `.json` module specifiers only",
-        ));
-    }
-    Ok(source_text)
 }
 
 fn parse_import_binding_clause(
@@ -6079,10 +6155,14 @@ fn parse_star_export_clause(
         })?;
     // `export * from 'm' with { ... }` carries import attributes as an
     // import does (ES2025 16.2.3).
-    let source_text = strip_import_attributes(source_raw, source_label, span)?;
+    let (source_text, import_attributes) = parse_import_attributes(source_raw, source_label, span)?;
     let source =
         parse_quoted_string(source_text).ok_or_else(|| error("export source must be quoted"))?;
-    Ok(NamedExportClause::new(head, Some(source)))
+    Ok(NamedExportClause::new_with_import_attributes(
+        head,
+        source,
+        import_attributes,
+    ))
 }
 
 fn parse_named_export_clause(
@@ -6112,7 +6192,7 @@ fn parse_named_export_clause(
 
     let specifiers = &inner_and_trailing[..close_index];
     let trailing = inner_and_trailing[close_index + 1..].trim();
-    let source = if !trailing.is_empty() {
+    let (source, import_attributes) = if !trailing.is_empty() {
         let Some(source_raw) = trailing.strip_prefix("from").map(str::trim_start) else {
             return Err(error(
                 "named export trailing clause must be `from <quoted-source>`",
@@ -6120,13 +6200,17 @@ fn parse_named_export_clause(
         };
         // `export { a } from 'm' with { ... }` carries import attributes as
         // an import does (ES2025 16.2.3).
-        let source_text = strip_import_attributes(source_raw, source_label, span)?;
-        Some(
-            parse_quoted_string(source_text)
-                .ok_or_else(|| error("export source must be quoted"))?,
+        let (source_text, import_attributes) =
+            parse_import_attributes(source_raw, source_label, span)?;
+        (
+            Some(
+                parse_quoted_string(source_text)
+                    .ok_or_else(|| error("export source must be quoted"))?,
+            ),
+            import_attributes,
         )
     } else {
-        None
+        (None, ImportAttributes::default())
     };
     let string_name_head =
         validate_named_export_specifiers(specifiers, source.is_some(), source_label, span)?;
@@ -6140,7 +6224,12 @@ fn parse_named_export_clause(
         canonicalize_whitespace(&format!("{{{without_comma}}}"))
     };
 
-    Ok(NamedExportClause::new(canonical_head, source))
+    Ok(match source {
+        Some(source) => {
+            NamedExportClause::new_with_import_attributes(canonical_head, source, import_attributes)
+        }
+        None => NamedExportClause::new(canonical_head, None),
+    })
 }
 
 /// Check a named export list (the text between its braces). Each entry is
@@ -23266,6 +23355,7 @@ mod tests {
         let span = SourceSpan::new(0, 1, 1, 1, 1, 1);
         assert_eq!(
             statement_kind_label(&Statement::Import(ImportDeclaration {
+                import_attributes: Default::default(),
                 clause: ImportClause::SideEffect,
                 binding: None,
                 source: "m".into(),
@@ -24710,6 +24800,9 @@ mod tests {
             "import './d.json' with { type: 'json' }",
             "import data from './d.json' with {}",
             "import x from './x.js'",
+            "import d from 'extensionless-package' with { type: 'json' }",
+            "import d from './d.css' with { type: 'css' }",
+            "import d from './d.js' with { type: 'json' }",
         ] {
             let tree = parser.parse(source, ParseGoal::Module).expect(source);
             assert!(
@@ -24725,14 +24818,6 @@ mod tests {
             (
                 "import d from './d.json' with { type: json }",
                 ParseErrorCode::InvalidSyntax,
-            ),
-            (
-                "import d from './d.css' with { type: 'css' }",
-                ParseErrorCode::UnsupportedSyntax,
-            ),
-            (
-                "import d from './d.js' with { type: 'json' }",
-                ParseErrorCode::UnsupportedSyntax,
             ),
         ] {
             let error = parser.parse(source, ParseGoal::Module).expect_err(source);

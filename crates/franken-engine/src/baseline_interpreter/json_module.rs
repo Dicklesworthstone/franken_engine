@@ -148,9 +148,13 @@ mod tests {
     }
 
     fn delivered(source: &str) -> SharedResolvedModule {
+        delivered_as(source, ModuleSyntax::Json, "captured:data")
+    }
+
+    fn delivered_as(source: &str, syntax: ModuleSyntax, id: &str) -> SharedResolvedModule {
         let record = ModuleRecord {
-            id: "captured:data".to_string(),
-            syntax: ModuleSyntax::Json,
+            id: id.to_string(),
+            syntax,
             source: source.to_string(),
             dependencies: Vec::new(),
             required_capabilities: BTreeSet::from([RuntimeCapability::ModuleLoad]),
@@ -167,6 +171,180 @@ mod tests {
             probe_sequence: Vec::new(),
         }
         .into()
+    }
+
+    fn json_attributes() -> ImportAttributes {
+        ImportAttributes::new(BTreeMap::from([("type".into(), "json".into())])).unwrap()
+    }
+
+    #[test]
+    fn typed_static_import_and_require_share_the_native_json_value_in_both_orders() {
+        for import_first in [false, true] {
+            let mut core = core();
+            let module = caller();
+            let source = delivered(r#"{"answer":42}"#);
+            let attributes = json_attributes();
+            let kinds = if import_first {
+                [ModuleLoadKind::Import(&attributes), ModuleLoadKind::Require]
+            } else {
+                [ModuleLoadKind::Require, ModuleLoadKind::Import(&attributes)]
+            };
+            let first = core
+                .load_module_resolved(
+                    &module,
+                    "captured:data",
+                    kinds[0],
+                    None,
+                    Some(source.clone()),
+                )
+                .unwrap();
+            let record = core.module_state.modules.get("captured:data").unwrap();
+            let value = record
+                .exports
+                .get(&JsString::from("default"))
+                .unwrap()
+                .clone();
+            let Value::Object(value_object) = value else {
+                panic!("JSON object");
+            };
+            let carrier = record.cjs_module_object.unwrap();
+            assert!(record.compiled_module.is_none());
+            assert_eq!(record.exports.len(), 1);
+            core.set_object_property(value_object, "answer".into(), Value::Int(43))
+                .unwrap();
+            let work = core.instructions_executed;
+            assert_eq!(
+                core.load_module_resolved(&module, "captured:data", kinds[1], None, Some(source),)
+                    .unwrap(),
+                first
+            );
+            assert_eq!(
+                core.instructions_executed, work,
+                "cached JSON is not parsed again"
+            );
+            assert_eq!(
+                core.iterator_protocol_property(
+                    Some(&module),
+                    carrier,
+                    &RuntimePropertyKey::String(JsString::from("exports")),
+                    Value::Object(carrier),
+                )
+                .unwrap(),
+                Value::Object(value_object)
+            );
+            assert_eq!(
+                core.heap[value_object.0 as usize].properties.get("answer"),
+                Some(&Value::Int(43))
+            );
+            assert_eq!(core.json_parse_temporary_bytes, 0);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn cached_json_never_authorizes_missing_unknown_or_dynamic_attributes() {
+        let mut core = core();
+        let module = caller();
+        let source = delivered("42");
+        core.load_module_resolved(
+            &module,
+            "captured:data",
+            ModuleLoadKind::Require,
+            None,
+            Some(source.clone()),
+        )
+        .unwrap();
+        let heap_objects = core.heap.len();
+        let work = core.instructions_executed;
+        for (attributes, expected) in [
+            (ImportAttributes::default(), "ERR_IMPORT_ATTRIBUTE_MISSING"),
+            (
+                ImportAttributes::new(BTreeMap::from([("type".into(), "javascript".into())]))
+                    .unwrap(),
+                "ERR_IMPORT_ATTRIBUTE_UNSUPPORTED",
+            ),
+            (
+                ImportAttributes::new(BTreeMap::from([
+                    ("type".into(), "json".into()),
+                    ("integrity".into(), "opaque".into()),
+                ]))
+                .unwrap(),
+                "ERR_IMPORT_ATTRIBUTE_UNSUPPORTED",
+            ),
+        ] {
+            assert!(matches!(core.load_module_resolved(
+                &module, "captured:data", ModuleLoadKind::Import(&attributes), None, Some(source.clone()),
+            ), Err(InterpreterError::ModuleLoweringFailed { error, .. }) if error.contains(expected)));
+        }
+        assert!(matches!(core.load_module_resolved(
+            &module, "captured:data", ModuleLoadKind::DynamicImport, None, Some(source),
+        ), Err(InterpreterError::ModuleLoweringFailed { error, .. }) if error.contains("import-options transport")));
+        assert_eq!(core.heap.len(), heap_objects);
+        assert_eq!(core.instructions_executed, work);
+        assert_eq!(
+            core.module_state
+                .modules
+                .get("captured:data")
+                .unwrap()
+                .status,
+            ModuleRuntimeStatus::Evaluated
+        );
+    }
+
+    #[test]
+    fn declared_format_beats_a_json_looking_source_identity() {
+        let mut core = core();
+        let module = caller();
+        let source = delivered_as(
+            "export default 42;",
+            ModuleSyntax::EsModule,
+            "captured:data.json",
+        );
+        assert!(matches!(core.load_module_resolved(
+            &module, "captured:data.json", ModuleLoadKind::Import(&json_attributes()), None, Some(source),
+        ), Err(InterpreterError::ModuleLoweringFailed { error, .. }) if error.contains("ERR_IMPORT_ATTRIBUTE_TYPE_INCOMPATIBLE")));
+        assert!(!core.module_state.modules.contains_key("captured:data.json"));
+    }
+
+    #[test]
+    fn retained_import_attribute_payload_is_part_of_program_memory_admission() {
+        let mut core = core();
+        let mut module = caller();
+        let id = "captured:attribute-budget";
+        core.ensure_module_record(&module, id).unwrap();
+        module.instructions = vec![Ir3Instruction::ImportModule {
+            specifier: 0,
+            dst: 1,
+            import_attributes: ImportAttributes::default(),
+        }];
+        let without_attributes = InterpreterCore::retained_module_program_bytes(&module, id);
+        core.config.max_total_memory_bytes = core
+            .estimated_memory_bytes()
+            .saturating_add(without_attributes);
+        module.instructions[0] = Ir3Instruction::ImportModule {
+            specifier: 0,
+            dst: 1,
+            import_attributes: json_attributes(),
+        };
+        assert!(matches!(
+            core.retain_module_program(id, &module),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(
+            core.module_state
+                .modules
+                .get(id)
+                .unwrap()
+                .compiled_module
+                .is_none()
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]
@@ -315,12 +493,12 @@ mod tests {
             core.load_module_resolved(
                 &module,
                 "captured:data",
-                ModuleLoadKind::Import,
+                ModuleLoadKind::Import(&ImportAttributes::default()),
                 None,
                 Some(source),
             ),
             Err(InterpreterError::ModuleLoweringFailed { error, .. })
-                if error.contains("import-attribute")
+                if error.contains("ERR_IMPORT_ATTRIBUTE_MISSING")
         ));
         assert!(core.pending_exception.is_none());
         assert_eq!(core.json_parse_temporary_bytes, 0);

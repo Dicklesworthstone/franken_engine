@@ -848,6 +848,7 @@ mod tests {
             Ir1Op::ForOfInit,
             Ir1Op::ForOfNext { done_label: 0 },
             Ir1Op::ImportModule {
+                import_attributes: Default::default(),
                 specifier: "m".into(),
             },
             Ir1Op::ExportBinding {

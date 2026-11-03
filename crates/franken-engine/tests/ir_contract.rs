@@ -1384,6 +1384,7 @@ fn enrichment_ir1_all_ops_serde_roundtrip() {
         Ir1Op::Call { arg_count: 3 },
         Ir1Op::Return,
         Ir1Op::ImportModule {
+            import_attributes: Default::default(),
             specifier: "mod".into(),
         },
         Ir1Op::ExportBinding {

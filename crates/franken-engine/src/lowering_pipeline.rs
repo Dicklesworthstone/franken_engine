@@ -57,16 +57,16 @@ use crate::flow_lattice::{
 use crate::hash_tiers::ContentHash;
 use crate::ifc_artifacts::{Label, ProofMethod};
 use crate::ir_contract::{
-    AccessorKind, BindingId, BindingKind, CapabilityTag, EffectBoundary, FlowAnnotation, Ir0Module,
-    GLOBAL_FUNCTION_BINDING_KIND, GLOBAL_VAR_BINDING_KIND,
-    Ir1Literal, Ir1Module, Ir1Op, Ir1OpSpanEntry, Ir1PropertyKey, Ir2Module, Ir2Op,
-    Ir3FunctionDesc, Ir3Instruction, Ir3Module, IrError, IrLevel, IteratorCloseReason, Reg,
-    RegRange, ResolvedBinding, ScopeId, ScopeKind, ScopeNode,
-    verify_ir0_script_global_schema, verify_ir1_derived_constructor_schema,
+    AccessorKind, BindingId, BindingKind, CapabilityTag, EffectBoundary, FlowAnnotation,
+    GLOBAL_FUNCTION_BINDING_KIND, GLOBAL_VAR_BINDING_KIND, Ir0Module, Ir1Literal, Ir1Module, Ir1Op,
+    Ir1OpSpanEntry, Ir1PropertyKey, Ir2Module, Ir2Op, Ir3FunctionDesc, Ir3Instruction, Ir3Module,
+    IrError, IrLevel, IteratorCloseReason, Reg, RegRange, ResolvedBinding, ScopeId, ScopeKind,
+    ScopeNode, verify_ir0_import_attributes_schema, verify_ir0_script_global_schema,
+    verify_ir1_derived_constructor_schema, verify_ir1_import_attributes_schema,
     verify_ir1_object_method_schema, verify_ir1_script_global_schema, verify_ir1_source,
-    verify_ir2_script_global_schema,
-    verify_ir2_derived_constructor_schema, verify_ir2_object_method_schema,
-    verify_ir3_specialization, verify_schema_version,
+    verify_ir2_derived_constructor_schema, verify_ir2_import_attributes_schema,
+    verify_ir2_object_method_schema, verify_ir2_script_global_schema, verify_ir3_specialization,
+    verify_schema_version,
 };
 use crate::js_string::JsString;
 use crate::parser::{
@@ -1241,7 +1241,9 @@ fn lower_ir0_to_ir1_on_current_stack(
     bounded_imports: bool,
     preserve_runtime_module_loads: bool,
 ) -> Result<LoweringPassResult<Ir1Module>, LoweringPipelineError> {
+    verify_schema_version(&ir0.header).map_err(lowering_error_from_ir_error)?;
     verify_ir0_script_global_schema(ir0).map_err(lowering_error_from_ir_error)?;
+    verify_ir0_import_attributes_schema(ir0).map_err(lowering_error_from_ir_error)?;
     if ir0.tree.body.is_empty() {
         return Err(LoweringPipelineError::EmptyIr0Body);
     }
@@ -1744,6 +1746,23 @@ fn lower_ir0_to_ir1_on_current_stack(
         match statement {
             Statement::Import(import) => {
                 let specifier = import.source.clone();
+                // JSON has one export. Until general ESM linking validates
+                // requested names, do not turn a nonexistent JSON export into
+                // an ordinary property read that silently yields undefined.
+                if import.import_attributes.get("type") == Some("json")
+                    && matches!(&import.clause,
+                        ImportClause::Named { specifiers }
+                        | ImportClause::DefaultAndNamed { specifiers, .. }
+                        if specifiers.iter().any(|specifier| specifier.import_name != "default"))
+                {
+                    return Err(unsupported_frontier_expression_error(
+                        "json_modules",
+                        "json_default_export_only",
+                        "lowering.json_named_import",
+                        "JSON modules expose only the default export; named imports must request default",
+                        Some(import.span),
+                    ));
+                }
                 let alloc_import_binding =
                     |name: &str,
                      bindings: &mut Vec<ResolvedBinding>,
@@ -1783,7 +1802,10 @@ fn lower_ir0_to_ir1_on_current_stack(
 
                 match &import.clause {
                     ImportClause::SideEffect => {
-                        ir1.ops.push(Ir1Op::ImportModule { specifier });
+                        ir1.ops.push(Ir1Op::ImportModule {
+                            specifier,
+                            import_attributes: import.import_attributes.clone(),
+                        });
                         ir1.ops.push(Ir1Op::Pop);
                     }
                     ImportClause::Namespace { local } => {
@@ -1818,7 +1840,10 @@ fn lower_ir0_to_ir1_on_current_stack(
                                 value: Ir1Literal::Undefined,
                             });
                         } else {
-                            ir1.ops.push(Ir1Op::ImportModule { specifier });
+                            ir1.ops.push(Ir1Op::ImportModule {
+                                specifier,
+                                import_attributes: import.import_attributes.clone(),
+                            });
                         }
                         let binding_id = alloc_import_binding(
                             local,
@@ -1861,7 +1886,10 @@ fn lower_ir0_to_ir1_on_current_stack(
                                 value: Ir1Literal::Undefined,
                             });
                         } else {
-                            ir1.ops.push(Ir1Op::ImportModule { specifier });
+                            ir1.ops.push(Ir1Op::ImportModule {
+                                specifier,
+                                import_attributes: import.import_attributes.clone(),
+                            });
                             ir1.ops.push(Ir1Op::GetProperty {
                                 key: Ir1PropertyKey::Static("default".into()),
                             });
@@ -2027,7 +2055,10 @@ fn lower_ir0_to_ir1_on_current_stack(
                                 &mut binding_lookup,
                                 &mut binding_index,
                             )?;
-                            ir1.ops.push(Ir1Op::ImportModule { specifier });
+                            ir1.ops.push(Ir1Op::ImportModule {
+                                specifier,
+                                import_attributes: import.import_attributes.clone(),
+                            });
                             ir1.ops.push(Ir1Op::StoreBinding {
                                 binding_id: temp_binding_id,
                             });
@@ -2060,7 +2091,10 @@ fn lower_ir0_to_ir1_on_current_stack(
                             &mut binding_lookup,
                             &mut binding_index,
                         )?;
-                        ir1.ops.push(Ir1Op::ImportModule { specifier });
+                        ir1.ops.push(Ir1Op::ImportModule {
+                            specifier,
+                            import_attributes: import.import_attributes.clone(),
+                        });
                         ir1.ops.push(Ir1Op::StoreBinding {
                             binding_id: temp_binding_id,
                         });
@@ -2107,7 +2141,10 @@ fn lower_ir0_to_ir1_on_current_stack(
                             &mut binding_lookup,
                             &mut binding_index,
                         )?;
-                        ir1.ops.push(Ir1Op::ImportModule { specifier });
+                        ir1.ops.push(Ir1Op::ImportModule {
+                            specifier,
+                            import_attributes: import.import_attributes.clone(),
+                        });
                         ir1.ops.push(Ir1Op::StoreBinding {
                             binding_id: temp_binding_id,
                         });
@@ -2189,6 +2226,7 @@ fn lower_ir0_to_ir1_on_current_stack(
                 {
                     ir1.ops.push(Ir1Op::ImportModule {
                         specifier: clause.source().cloned().expect("guarded above"),
+                        import_attributes: clause.import_attributes().clone(),
                     });
                     ir1.ops.push(Ir1Op::HostCall {
                         capability: MODULE_EXPORT_STAR_HOSTCALL.to_string(),
@@ -2222,6 +2260,7 @@ fn lower_ir0_to_ir1_on_current_stack(
                     };
                     ir1.ops.push(Ir1Op::ImportModule {
                         specifier: clause.source().cloned().expect("guarded above"),
+                        import_attributes: clause.import_attributes().clone(),
                     });
                     ir1.ops.push(Ir1Op::StoreBinding {
                         binding_id: namespace_binding_id,
@@ -2234,10 +2273,22 @@ fn lower_ir0_to_ir1_on_current_stack(
                 }
                 ExportKind::NamedClause(clause) => {
                     let specifiers = parse_named_export_clause_bindings(clause.canonical_head());
+                    if clause.import_attributes().get("type") == Some("json")
+                        && specifiers.iter().any(|(import_name, _)| import_name != "default")
+                    {
+                        return Err(unsupported_frontier_expression_error(
+                            "json_modules",
+                            "json_default_export_only",
+                            "lowering.json_named_reexport",
+                            "JSON modules expose only the default export; named reexports must request default",
+                            Some(export.span),
+                        ));
+                    }
                     if let Some(source_specifier) = clause.source().cloned() {
                         if specifiers.is_empty() {
                             ir1.ops.push(Ir1Op::ImportModule {
                                 specifier: source_specifier,
+                                import_attributes: clause.import_attributes().clone(),
                             });
                             ir1.ops.push(Ir1Op::Pop);
                         } else {
@@ -2259,6 +2310,7 @@ fn lower_ir0_to_ir1_on_current_stack(
                             };
                             ir1.ops.push(Ir1Op::ImportModule {
                                 specifier: source_specifier,
+                                import_attributes: clause.import_attributes().clone(),
                             });
                             ir1.ops.push(Ir1Op::StoreBinding {
                                 binding_id: temp_binding_id,
@@ -8476,6 +8528,7 @@ fn lower_ir1_to_ir2_with_input_hash(
     verify_ir1_derived_constructor_schema(ir1).map_err(lowering_error_from_ir_error)?;
     verify_ir1_object_method_schema(ir1).map_err(lowering_error_from_ir_error)?;
     verify_ir1_script_global_schema(ir1).map_err(lowering_error_from_ir_error)?;
+    verify_ir1_import_attributes_schema(ir1).map_err(lowering_error_from_ir_error)?;
     let ir1_hash = input_hash.unwrap_or_else(|| ir1.content_hash());
     debug_assert_eq!(
         ir1_hash,
@@ -8913,6 +8966,7 @@ fn lower_ir2_to_ir3_with_input_hash(
     verify_ir2_derived_constructor_schema(ir2).map_err(lowering_error_from_ir_error)?;
     verify_ir2_object_method_schema(ir2).map_err(lowering_error_from_ir_error)?;
     verify_ir2_script_global_schema(ir2).map_err(lowering_error_from_ir_error)?;
+    verify_ir2_import_attributes_schema(ir2).map_err(lowering_error_from_ir_error)?;
     enum PendingJump {
         Unconditional {
             instruction_index: usize,
@@ -10127,7 +10181,7 @@ fn lower_ir2_to_ir3_with_input_hash(
                 );
                 value_stack.push(dst);
             }
-            Ir1Op::ImportModule { specifier } => {
+            Ir1Op::ImportModule { specifier, import_attributes } => {
                 let string_reg = alloc_register(&mut register_cursor);
                 let pool_index = push_constant_optimized(&mut constant_pool, specifier.clone());
                 ir3.instructions.push(Ir3Instruction::LoadStr {
@@ -10138,6 +10192,7 @@ fn lower_ir2_to_ir3_with_input_hash(
                 ir3.instructions.push(Ir3Instruction::ImportModule {
                     specifier: string_reg,
                     dst,
+                    import_attributes: import_attributes.clone(),
                 });
                 value_stack.push(dst);
             }
@@ -28737,6 +28792,7 @@ fn confirmed_stream_readable_named_imports(body: &[Statement]) -> BTreeSet<Strin
     let mut candidates = BTreeSet::new();
     for stmt in body {
         if let Statement::Import(import) = stmt
+            && import.import_attributes.is_empty()
             && module_source_matches(&import.source, is_stream_module_specifier)
             && let ImportClause::Named { specifiers } = &import.clause
         {
@@ -28762,6 +28818,7 @@ fn confirmed_stream_writable_named_imports(body: &[Statement]) -> BTreeSet<Strin
     let mut candidates = BTreeSet::new();
     for stmt in body {
         if let Statement::Import(import) = stmt
+            && import.import_attributes.is_empty()
             && module_source_matches(&import.source, is_stream_module_specifier)
             && let ImportClause::Named { specifiers } = &import.clause
         {
@@ -28783,6 +28840,7 @@ fn confirmed_stream_passthrough_named_imports(body: &[Statement]) -> BTreeSet<St
     let mut candidates = BTreeSet::new();
     for stmt in body {
         if let Statement::Import(import) = stmt
+            && import.import_attributes.is_empty()
             && module_source_matches(&import.source, is_stream_module_specifier)
             && let ImportClause::Named { specifiers } = &import.clause
         {
@@ -28809,6 +28867,7 @@ fn confirmed_stream_named_export(
     let mut candidates = BTreeSet::new();
     for stmt in body {
         if let Statement::Import(import) = stmt
+            && import.import_attributes.is_empty()
             && (if promises_module {
                 module_source_matches(&import.source, is_stream_promises_module_specifier)
             } else {
@@ -29313,6 +29372,7 @@ fn confirmed_events_once_named_imports(body: &[Statement]) -> BTreeSet<String> {
     let mut candidates = BTreeSet::new();
     for stmt in body {
         if let Statement::Import(import) = stmt
+            && import.import_attributes.is_empty()
             && module_source_matches(&import.source, is_events_module_specifier)
             && let ImportClause::Named { specifiers } = &import.clause
         {
@@ -29980,6 +30040,7 @@ fn confirmed_http_like_namespace_import_aliases(
     let mut candidates = BTreeSet::new();
     for stmt in body {
         if let Statement::Import(import) = stmt
+            && import.import_attributes.is_empty()
             && module_source_matches(&import.source, source_matches)
         {
             match &import.clause {
@@ -30026,6 +30087,7 @@ fn confirmed_http_like_named_imports(
     let mut candidates: BTreeMap<String, &'static str> = BTreeMap::new();
     for stmt in body {
         if let Statement::Import(import) = stmt
+            && import.import_attributes.is_empty()
             && module_source_matches(&import.source, source_matches)
             && let ImportClause::Named { specifiers } = &import.clause
         {
@@ -30210,6 +30272,7 @@ fn confirmed_fs_namespace_import_aliases(body: &[Statement]) -> BTreeSet<String>
     let mut candidates = BTreeSet::new();
     for stmt in body {
         if let Statement::Import(import) = stmt
+            && import.import_attributes.is_empty()
             && module_source_matches(&import.source, is_fs_module_specifier)
         {
             match &import.clause {
@@ -30247,6 +30310,7 @@ fn confirmed_fs_named_imports(body: &[Statement]) -> BTreeMap<String, &'static s
     let mut candidates: BTreeMap<String, &'static str> = BTreeMap::new();
     for stmt in body {
         if let Statement::Import(import) = stmt
+            && import.import_attributes.is_empty()
             && module_source_matches(&import.source, is_fs_module_specifier)
             && let ImportClause::Named { specifiers } = &import.clause
         {
@@ -30421,6 +30485,7 @@ fn confirmed_fs_promises_named_imports(body: &[Statement]) -> BTreeMap<String, &
     let mut candidates: BTreeMap<String, &'static str> = BTreeMap::new();
     for stmt in body {
         if let Statement::Import(import) = stmt
+            && import.import_attributes.is_empty()
             && module_source_matches(&import.source, is_fs_promises_module_specifier)
             && let ImportClause::Named { specifiers } = &import.clause
         {
@@ -30597,6 +30662,7 @@ fn confirmed_fs_promises_namespace_import_aliases(body: &[Statement]) -> BTreeSe
     let mut candidates = BTreeSet::new();
     for stmt in body {
         if let Statement::Import(import) = stmt
+            && import.import_attributes.is_empty()
             && module_source_matches(&import.source, is_fs_promises_module_specifier)
         {
             match &import.clause {
@@ -35425,7 +35491,7 @@ fn accumulate_ir1_flow_label_ceiling(
         // is bounded (bd-j8f7q) and the module is a local file or a package,
         // whose own ceiling the interpreter checks against the bound before
         // running it.
-        Ir1Op::ImportModule { specifier }
+        Ir1Op::ImportModule { specifier, .. }
             if bounded_imports && specifier.as_str().is_some_and(is_bounded_import_specifier) =>
         {
             IFC_BOUNDED_IMPORT_LABEL
@@ -37468,6 +37534,7 @@ mod tests {
     /// IR1 prefix: an opaque module load (code outside this IR).
     fn push_opaque_ceiling_source(ops: &mut Vec<Ir1Op>) {
         ops.push(Ir1Op::ImportModule {
+            import_attributes: Default::default(),
             specifier: "./fixture_opaque.js".into(),
         });
         ops.push(Ir1Op::Pop);
@@ -38507,6 +38574,7 @@ mod tests {
             "module_import_capability.js",
         );
         ir1.ops.push(Ir1Op::ImportModule {
+            import_attributes: Default::default(),
             specifier: "./dependency.js".into(),
         });
         ir1.ops.push(Ir1Op::Return);
@@ -41510,6 +41578,7 @@ mod tests {
     #[test]
     fn classify_import_module() {
         let (effect, cap, flow) = classify_ir1_op(&Ir1Op::ImportModule {
+            import_attributes: Default::default(),
             specifier: "mod".into(),
         });
         assert_eq!(effect, EffectBoundary::ReadEffect);
@@ -41859,6 +41928,7 @@ mod tests {
         let tree = SyntaxTree {
             goal: ParseGoal::Module,
             body: vec![Statement::Import(ImportDeclaration {
+                import_attributes: Default::default(),
                 clause: ImportClause::Default {
                     local: "_".to_string(),
                 },
@@ -41875,7 +41945,7 @@ mod tests {
             .module
             .ops
             .iter()
-            .any(|op| matches!(op, Ir1Op::ImportModule { specifier } if specifier == "lodash"));
+            .any(|op| matches!(op, Ir1Op::ImportModule { specifier, .. } if specifier == "lodash"));
         assert!(has_import);
         assert_eq!(result.module.scopes[0].kind, ScopeKind::Module);
     }
@@ -41915,21 +41985,21 @@ mod tests {
 
     fn ops_have_fs_import_module(ops: &[Ir1Op]) -> bool {
         ops.iter().any(|op| {
-            matches!(op, Ir1Op::ImportModule { specifier }
+            matches!(op, Ir1Op::ImportModule { specifier, .. }
                 if module_source_matches(specifier, is_fs_module_specifier))
         })
     }
 
     fn ops_have_http_import_module(ops: &[Ir1Op]) -> bool {
         ops.iter().any(|op| {
-            matches!(op, Ir1Op::ImportModule { specifier }
+            matches!(op, Ir1Op::ImportModule { specifier, .. }
                 if module_source_matches(specifier, is_http_module_specifier))
         })
     }
 
     fn ops_have_https_import_module(ops: &[Ir1Op]) -> bool {
         ops.iter().any(|op| {
-            matches!(op, Ir1Op::ImportModule { specifier }
+            matches!(op, Ir1Op::ImportModule { specifier, .. }
                 if module_source_matches(specifier, is_https_module_specifier))
         })
     }
@@ -46588,7 +46658,7 @@ mod tests {
     /// module (i.e. the import was NOT recognized/elided).
     fn ops_have_fs_promises_import_module(ops: &[Ir1Op]) -> bool {
         ops.iter().any(|op| {
-            matches!(op, Ir1Op::ImportModule { specifier }
+            matches!(op, Ir1Op::ImportModule { specifier, .. }
                 if module_source_matches(specifier, is_fs_promises_module_specifier))
         })
     }
@@ -47116,10 +47186,9 @@ mod tests {
         let ir0 = Ir0Module::from_syntax_tree(tree, "named_reexport.mjs");
         let result = lower_ir0_to_ir1(&ir0).expect("re-export should lower");
 
-        let has_import =
-            result.module.ops.iter().any(
-                |op| matches!(op, Ir1Op::ImportModule { specifier } if specifier == "./dep.js"),
-            );
+        let has_import = result.module.ops.iter().any(
+            |op| matches!(op, Ir1Op::ImportModule { specifier, .. } if specifier == "./dep.js"),
+        );
         assert!(has_import);
         let has_export = result
             .module
@@ -47496,6 +47565,7 @@ mod tests {
             goal: ParseGoal::Module,
             body: vec![
                 Statement::Import(ImportDeclaration {
+                    import_attributes: Default::default(),
                     clause: ImportClause::Default {
                         local: "_".to_string(),
                     },
@@ -47725,6 +47795,7 @@ mod tests {
         let labels = BTreeMap::new();
         let label = infer_data_label_for_op(
             &Ir1Op::ImportModule {
+                import_attributes: Default::default(),
                 specifier: "lodash".into(),
             },
             &labels,
@@ -51045,7 +51116,7 @@ mod tests {
             .ops
             .iter()
             .filter_map(|op| match op {
-                Ir1Op::ImportModule { specifier } => specifier.as_str(),
+                Ir1Op::ImportModule { specifier, .. } => specifier.as_str(),
                 _ => None,
             })
             .collect::<Vec<_>>();

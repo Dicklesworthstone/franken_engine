@@ -67,6 +67,7 @@ fn variable_declaration(
 
 fn module_import_default(source: &'static str, local: &str, module: &str) -> Statement {
     Statement::Import(ImportDeclaration {
+        import_attributes: Default::default(),
         clause: ImportClause::Default {
             local: local.to_string(),
         },
@@ -78,6 +79,7 @@ fn module_import_default(source: &'static str, local: &str, module: &str) -> Sta
 
 fn module_import_side_effect(source: &'static str, module: &str) -> Statement {
     Statement::Import(ImportDeclaration {
+        import_attributes: Default::default(),
         clause: ImportClause::SideEffect,
         binding: None,
         source: module.into(),

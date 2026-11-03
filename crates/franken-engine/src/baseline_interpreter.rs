@@ -166,12 +166,13 @@ use crate::hostcall_telemetry::{
     RecordInput, RecorderConfig, ResourceDelta, TelemetryRecorder,
 };
 use crate::ifc_artifacts::Label;
+use crate::import_attributes::ImportAttributes;
 use crate::intrinsics_codegen::{GeneratedGlue, generate_glue};
 use crate::intrinsics_table::{IfcPropagation, ImplBinding, ThisCoercion};
 use crate::ir_contract::{
-    AccessorKind, CapabilityTag, HostcallDecisionRecord, Ir0Module, Ir3Instruction, Ir3Module,
-    IrHeader, IteratorCloseReason, RegRange, WitnessEvent, WitnessEventKind,
-    GLOBAL_FUNCTION_BINDING_KIND, GLOBAL_VAR_BINDING_KIND,
+    AccessorKind, CapabilityTag, GLOBAL_FUNCTION_BINDING_KIND, GLOBAL_VAR_BINDING_KIND,
+    HostcallDecisionRecord, Ir0Module, Ir3Instruction, Ir3Module, IrHeader, IteratorCloseReason,
+    RegRange, WitnessEvent, WitnessEventKind,
 };
 use crate::iterator_protocol::{
     CloseReason, IterationCompletion, IterationEvent, IterationKind, IterationOperation,
@@ -184,9 +185,10 @@ use crate::module_compatibility_matrix::CompatibilityMode;
 #[cfg(test)]
 use crate::module_resolver::ResolutionOutcome;
 use crate::module_resolver::{
-    ExecutionModuleResolver, ImportStyle, MetadataResolutionOutcome, ModuleMetadataTarget, ModuleRequest,
-    ModuleSourceKind, ModuleSyntax, NativeBuiltinModule, ResolutionContext, ResolutionErrorCode,
-    ResolvedModule, SharedResolutionOutcome, SharedResolvedModule, node_builtin_specifier,
+    ExecutionModuleResolver, ImportStyle, MetadataResolutionOutcome, ModuleMetadataTarget,
+    ModuleRequest, ModuleSourceKind, ModuleSyntax, NativeBuiltinModule, ResolutionContext,
+    ResolutionErrorCode, ResolvedModule, SharedResolutionOutcome, SharedResolvedModule,
+    node_builtin_specifier, validate_import_attributes,
 };
 use crate::object_model::{SymbolId, WellKnownSymbol};
 use crate::parser::{
@@ -10123,9 +10125,9 @@ enum RuntimeIteratorState {
 /// The host operation that requested a filesystem module. Source-delivered
 /// records carry their syntax explicitly and do not use filename inference.
 #[derive(Clone, Copy)]
-enum ModuleLoadKind {
+enum ModuleLoadKind<'a> {
     Require,
-    Import,
+    Import(&'a ImportAttributes),
     DynamicImport,
 }
 
@@ -13913,7 +13915,7 @@ impl CompactTier1Program {
             Ir3Instruction::PutNameWithStatus { src, status, .. } => {
                 requirement(&[*src, *status], &[])
             }
-            Ir3Instruction::ImportModule { specifier, dst } => {
+            Ir3Instruction::ImportModule { specifier, dst, .. } => {
                 requirement(&[*specifier, *dst], &[])
             }
             Ir3Instruction::Yield {
@@ -40284,6 +40286,7 @@ impl InterpreterCore {
         &self,
         specifier: &str,
         style: ImportStyle,
+        import_attributes: &ImportAttributes,
     ) -> Result<SharedResolutionOutcome, InterpreterError> {
         let installed =
             self.module_resolver
@@ -40306,7 +40309,8 @@ impl InterpreterCore {
                     .as_deref()
                     .unwrap_or_else(|| installed.resolver.entry_referrer()),
             )
-            .with_compatibility_mode(CompatibilityMode::NodeCompat);
+            .with_compatibility_mode(CompatibilityMode::NodeCompat)
+            .with_import_attributes(import_attributes.clone());
         let resolved = installed
             .resolver
             .resolve_shared(&request, &installed.context)
@@ -40330,6 +40334,7 @@ impl InterpreterCore {
                 }
             })?;
         let record = &resolved.module.record;
+        Self::check_module_import_attributes(specifier, style, record.syntax, import_attributes)?;
         if u64::try_from(record.source.len()).unwrap_or(u64::MAX)
             > self.config.module_parser_options.budget.max_source_bytes
         {
@@ -40768,6 +40773,9 @@ impl InterpreterCore {
                 Ir3Instruction::HostCall { capability, .. } => {
                     Self::estimate_string_bytes(&capability.0)
                 }
+                Ir3Instruction::ImportModule { import_attributes, .. } => {
+                    Self::import_attributes_memory_bytes(import_attributes)
+                }
                 _ => 0,
             };
             total.saturating_add(dynamic)
@@ -40966,11 +40974,38 @@ impl InterpreterCore {
         Ok(())
     }
 
+    fn import_attributes_memory_bytes(attributes: &ImportAttributes) -> u64 {
+        if attributes.is_empty() {
+            return 0;
+        }
+        Self::saturating_sum(attributes.iter().map(|(key, value)| {
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                .saturating_add(Self::estimate_string_bytes(key))
+                .saturating_add(Self::estimate_string_bytes(value))
+        }))
+        .saturating_add(std::mem::size_of::<[usize; 2]>() as u64)
+        .saturating_add(std::mem::size_of::<BTreeMap<String, String>>() as u64)
+    }
+
+    fn check_module_import_attributes(
+        specifier: &str,
+        style: ImportStyle,
+        syntax: ModuleSyntax,
+        attributes: &ImportAttributes,
+    ) -> Result<(), InterpreterError> {
+        validate_import_attributes(style, syntax, attributes).map_err(|error| {
+            InterpreterError::ModuleLoweringFailed {
+                specifier: specifier.to_string(),
+                error: error.to_string(),
+            }
+        })
+    }
+
     fn load_module_resolved(
         &mut self,
         module: &Ir3Module,
         resolved: &str,
-        load_kind: ModuleLoadKind,
+        load_kind: ModuleLoadKind<'_>,
         import_bound: Option<&Label>,
         delivered: Option<SharedResolvedModule>,
     ) -> Result<Value, InterpreterError> {
@@ -41000,16 +41035,32 @@ impl InterpreterCore {
                 .extension()
                 .is_some_and(|extension| extension.eq_ignore_ascii_case("json")),
         };
-        // Custom resolvers have the same format boundary as the deterministic
-        // resolver. Import attributes are not transported by ModuleRequest yet;
-        // no previously cached require may authorize a later untyped import.
-        if is_json && delivered.is_some() && !matches!(load_kind, ModuleLoadKind::Require) {
+        // Dynamic options have no runtime transport yet. A typed static import
+        // or require cache entry cannot authorize an untyped ImportCall.
+        if is_json && matches!(load_kind, ModuleLoadKind::DynamicImport) {
             return Err(InterpreterError::ModuleLoweringFailed {
                 specifier: resolved.to_string(),
-                error: "delivered JSON imports require import-attribute transport; use require()"
-                    .to_string(),
+                error: "dynamic JSON import requires import-options transport; use a static import with type: 'json' or require()".to_string(),
             });
         }
+        let empty_attributes = ImportAttributes::default();
+        let (style, attributes) = match load_kind {
+            ModuleLoadKind::Require => (ImportStyle::Require, &empty_attributes),
+            ModuleLoadKind::Import(attributes) => (ImportStyle::Import, attributes),
+            ModuleLoadKind::DynamicImport => (ImportStyle::Import, &empty_attributes),
+        };
+        // Delivered records declare their format, including extensionless JSON
+        // and JavaScript whose identity happens to end in .json. Only the
+        // ordinary filesystem host uses its existing filename/package rules.
+        let syntax = delivered.as_ref().map_or(
+            if is_json {
+                ModuleSyntax::Json
+            } else {
+                ModuleSyntax::EsModule
+            },
+            |source| source.record.syntax,
+        );
+        Self::check_module_import_attributes(resolved, style, syntax, attributes)?;
         let source_hash = delivered.as_ref().map(|source| source.content_hash);
         if let Some(record) = self.module_state.modules.get(resolved) {
             if source_hash.is_some() && record.resolved_source_hash != source_hash {
@@ -41409,13 +41460,19 @@ impl InterpreterCore {
         module: &Ir3Module,
         specifier: &JsString,
     ) -> Result<Value, InterpreterError> {
-        self.import_module_with_native_effect_provenance(module, specifier, &mut false)
+        self.import_module_with_native_effect_provenance(
+            module,
+            specifier,
+            &ImportAttributes::default(),
+            &mut false,
+        )
     }
 
     fn import_module_with_native_effect_provenance(
         &mut self,
         module: &Ir3Module,
         specifier: &JsString,
+        import_attributes: &ImportAttributes,
         native_effect: &mut bool,
     ) -> Result<Value, InterpreterError> {
         *native_effect = false;
@@ -41424,7 +41481,7 @@ impl InterpreterCore {
         let delivered = self
             .module_resolver
             .as_ref()
-            .map(|_| self.resolve_installed_module(specifier, ImportStyle::Import))
+            .map(|_| self.resolve_installed_module(specifier, ImportStyle::Import, import_attributes))
             .transpose()?;
         // A unit lowered under the bounded-imports contract assumed this
         // module yields at most IFC_BOUNDED_IMPORT_LABEL.
@@ -41447,6 +41504,9 @@ impl InterpreterCore {
         if delivered.is_none()
             && let Some(native) = NativeBuiltinModule::from_specifier(specifier)
         {
+            Self::check_module_import_attributes(
+                specifier, ImportStyle::Import, ModuleSyntax::EsModule, import_attributes,
+            )?;
             let namespace = self.load_ordinary_native_builtin_namespace(
                 module,
                 specifier,
@@ -41468,7 +41528,7 @@ impl InterpreterCore {
         self.load_module_resolved(
             module,
             &resolved,
-            ModuleLoadKind::Import,
+            ModuleLoadKind::Import(import_attributes),
             import_bound.as_ref(),
             delivered.map(|source| source.module),
         )
@@ -42010,7 +42070,7 @@ impl InterpreterCore {
         let delivered = self
             .module_resolver
             .as_ref()
-            .map(|_| self.resolve_installed_module(specifier, ImportStyle::Require))
+            .map(|_| self.resolve_installed_module(specifier, ImportStyle::Require, &ImportAttributes::default()))
             .transpose()?;
         let resolved = match &delivered {
             Some(source) => source.module.record.id.clone(),
@@ -43487,7 +43547,7 @@ impl InterpreterCore {
     fn file_module_parse_goal(
         &self,
         resolved: &str,
-        load_kind: ModuleLoadKind,
+        load_kind: ModuleLoadKind<'_>,
     ) -> Result<Option<ParseGoal>, InterpreterError> {
         let extension = Path::new(resolved)
             .extension()
@@ -43497,14 +43557,14 @@ impl InterpreterCore {
             Some("mjs" | "mts") => Some(ParseGoal::Module),
             Some("cjs" | "cts") => Some(ParseGoal::Script),
             Some("json") => Some(match load_kind {
-                ModuleLoadKind::Import => ParseGoal::Module,
+                ModuleLoadKind::Import(_) => ParseGoal::Module,
                 ModuleLoadKind::Require | ModuleLoadKind::DynamicImport => ParseGoal::Script,
             }),
             Some("js" | "ts" | "tsx") => self.package_parse_goal_for_module(resolved)?,
             _ => match load_kind {
                 ModuleLoadKind::DynamicImport => self.package_parse_goal_for_module(resolved)?,
                 ModuleLoadKind::Require => Some(ParseGoal::Script),
-                ModuleLoadKind::Import => Some(ParseGoal::Module),
+                ModuleLoadKind::Import(_) => Some(ParseGoal::Module),
             },
         })
     }
@@ -58230,7 +58290,7 @@ impl InterpreterCore {
                         profile_start,
                     });
                 }
-                Ir3Instruction::ImportModule { specifier, dst } => {
+                Ir3Instruction::ImportModule { specifier, dst, import_attributes } => {
                     self.pending_async_module_import = None;
                     check_hostcall_capability_gate(self, "module_load", self.ip as u32)?;
                     let specifier_label = self.join_arg_range_label(RegRange {
@@ -58242,6 +58302,7 @@ impl InterpreterCore {
                         Some("cap:module_load"),
                     );
                     let mut native_effect = false;
+                    self.clear_pending_hostcall_result_label();
                     let namespace = self.dispatch_import_hostcall_with_native_effect_provenance(
                         "module_load",
                         RegRange {
@@ -58249,6 +58310,7 @@ impl InterpreterCore {
                             count: 1,
                         },
                         Some(module),
+                        &import_attributes,
                         &mut native_effect,
                     )?;
                     let result_label = if native_effect && let Value::Object(object) = &namespace {
@@ -58268,7 +58330,12 @@ impl InterpreterCore {
                             .unwrap_or(Label::Public);
                         self.join_owned_label_with_temporary_budget(result, &observed)?
                     } else {
-                        hostcall_result_contract("module_load").result_label(&specifier_label, None)
+                        let observed = self
+                            .take_pending_hostcall_result_label()
+                            .unwrap_or(Label::Public);
+                        hostcall_result_contract("module_load")
+                            .result_label(&specifier_label, None)
+                            .join(&observed)
                     };
                     self.write_reg_with_label(dst, namespace, result_label)?;
                     self.ip += 1;
@@ -74727,7 +74794,7 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
     ) -> Result<Value, InterpreterError> {
         self.dispatch_import_hostcall_with_native_effect_provenance(
-            capability, args, module, &mut false,
+            capability, args, module, &ImportAttributes::default(), &mut false,
         )
     }
 
@@ -74736,14 +74803,18 @@ impl InterpreterCore {
         capability: &str,
         args: RegRange,
         module: Option<&Ir3Module>,
+        import_attributes: &ImportAttributes,
         native_effect: &mut bool,
     ) -> Result<Value, InterpreterError> {
         *native_effect = false;
+        // Telemetry's arguments_hash identifies register operands, as for other
+        // instructions. Static attributes are authenticated by the enclosing
+        // IR hash and checked on every request; this hash is not a route grant.
         let args_hash = self.hostcall_arguments_hash(args);
         let outcome = if capability == crate::capability::DYNAMIC_IMPORT_CAPABILITY {
             self.dynamic_import(args, module)
         } else {
-            self.dispatch_import_hostcall_inner(args, module, native_effect)
+            self.dispatch_import_hostcall_inner(args, module, import_attributes, native_effect)
         };
         // See `dispatch_require_hostcall`: nested module evaluation records
         // inner completions first, so the outer record takes its timestamp at
@@ -74757,6 +74828,7 @@ impl InterpreterCore {
         &mut self,
         args: RegRange,
         module: Option<&Ir3Module>,
+        import_attributes: &ImportAttributes,
         native_effect: &mut bool,
     ) -> Result<Value, InterpreterError> {
         let specifier_value = if args.count > 0 {
@@ -74775,7 +74847,12 @@ impl InterpreterCore {
         let module = module.ok_or_else(|| InterpreterError::InternalError {
             details: "module import hostcall missing module context".to_string(),
         })?;
-        self.import_module_with_native_effect_provenance(module, &specifier, native_effect)
+        self.import_module_with_native_effect_provenance(
+            module,
+            &specifier,
+            import_attributes,
+            native_effect,
+        )
     }
 
     /// `import(specifier)` (ES2020 12.3.10.1 with HostImportModuleDynamically
@@ -74793,6 +74870,12 @@ impl InterpreterCore {
         args: RegRange,
         module: Option<&Ir3Module>,
     ) -> Result<Value, InterpreterError> {
+        if args.count > 1 {
+            return Err(InterpreterError::ModuleLoweringFailed {
+                specifier: "<dynamic import>".to_string(),
+                error: "dynamic import options are not transported by the runtime yet".to_string(),
+            });
+        }
         let module = module.ok_or_else(|| InterpreterError::InternalError {
             details: "module:dynamic_import hostcall missing module context".to_string(),
         })?;
@@ -75034,7 +75117,9 @@ impl InterpreterCore {
         let import_bound = Self::unit_declares_bounded_imports(module)
             .then_some(crate::lowering_pipeline::IFC_BOUNDED_IMPORT_LABEL);
         if self.module_resolver.is_some() {
-            let delivered = self.resolve_installed_module(specifier, ImportStyle::Import)?;
+            let delivered = self.resolve_installed_module(
+                specifier, ImportStyle::Import, &ImportAttributes::default(),
+            )?;
             let resolved = delivered.module.record.id.clone();
             if let Some(native) = NativeBuiltinModule::from_record(&delivered.module.record) {
                 let namespace = self.load_native_builtin_namespace(
@@ -122992,6 +123077,7 @@ mod active_builtin_regressions {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: ImportAttributes::default(),
             },
         ];
         let mut core = test_core();
@@ -129974,6 +130060,7 @@ mod async_runtime_tests_current {
                 Ir3Instruction::ImportModule {
                     specifier: 0,
                     dst: 1,
+                    import_attributes: ImportAttributes::default(),
                 },
                 Ir3Instruction::Halt,
             ],
@@ -153042,13 +153129,13 @@ mod function_prototype_call_apply_tests_current {
             context: ResolutionContext::new("trace", "decision", "policy"),
         });
         assert!(matches!(
-            core.resolve_installed_module("./dependency.cjs", ImportStyle::Require),
+            core.resolve_installed_module("./dependency.cjs", ImportStyle::Require, &ImportAttributes::default()),
             Err(InterpreterError::ModuleParseFailed { error, .. })
                 if error.contains("source-byte budget")
         ));
         core.config.module_parser_options.budget.max_source_bytes = 64;
         assert!(matches!(
-            core.resolve_installed_module("./dependency.cjs", ImportStyle::Require),
+            core.resolve_installed_module("./dependency.cjs", ImportStyle::Require, &ImportAttributes::default()),
             Err(InterpreterError::ModuleLoweringFailed { error, .. })
                 if error.contains("canonical content hash is inconsistent")
         ));

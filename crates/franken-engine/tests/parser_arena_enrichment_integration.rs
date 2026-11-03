@@ -216,6 +216,7 @@ fn enrichment_arena_from_import_tree() {
     let tree = SyntaxTree {
         goal: ParseGoal::Module,
         body: vec![Statement::Import(ImportDeclaration {
+            import_attributes: Default::default(),
             clause: ImportClause::Default { local: "x".into() },
             binding: Some("x".into()),
             source: "./x.js".into(),

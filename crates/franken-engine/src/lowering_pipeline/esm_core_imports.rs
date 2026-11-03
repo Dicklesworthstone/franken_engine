@@ -111,6 +111,11 @@ fn rewritten_module(statement: &Statement) -> Option<&str> {
     let Statement::Import(import) = statement else {
         return None;
     };
+    // Attribute validation depends on the resolved format. A facade rewrite
+    // must not erase the request before the runtime can reject it.
+    if !import.import_attributes.is_empty() {
+        return None;
+    }
     handled_module(import.source.as_str()?)
 }
 
@@ -126,6 +131,9 @@ fn reexported_module(
     let ExportKind::NamedClause(clause) = &export.kind else {
         return None;
     };
+    if !clause.import_attributes().is_empty() {
+        return None;
+    }
     let head = clause.canonical_head();
     if !(head.starts_with('{') || head.starts_with("* as ")) {
         return None;
@@ -300,6 +308,7 @@ impl Rewrite {
             },
             binding: None,
             source,
+            import_attributes: Default::default(),
             span: export.span,
         };
         self.import(&import, module);

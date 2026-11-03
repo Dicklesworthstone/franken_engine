@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::capability::RuntimeCapability;
 use crate::deterministic_serde::{CanonicalSink, CanonicalValue, CanonicalWriter, encode_value};
 use crate::hash_tiers::ContentHash;
+use crate::import_attributes::{ImportAttributes, ImportAttributesError};
 use crate::module_compatibility_matrix::CompatibilityMode;
 
 pub type ResolutionResult<T> = Result<T, Box<ResolutionError>>;
@@ -60,6 +61,97 @@ impl ImportStyle {
     }
 }
 
+/// A request's attributes are format requirements, not part of the module's
+/// cache identity. Keep their validation shared by resolver adapters and runtime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportAttributeValidationError {
+    Malformed(ImportAttributesError),
+    UnsupportedOnRequire,
+    UnsupportedOnMetadata,
+    UnsupportedKey { key: String },
+    UnsupportedType { value: String },
+    MissingJsonType,
+    TypeMismatch { syntax: ModuleSyntax },
+}
+
+impl fmt::Display for ImportAttributeValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Malformed(error) => fmt::Display::fmt(error, f),
+            Self::UnsupportedOnRequire => {
+                f.write_str("import attributes are not supported by require()")
+            }
+            Self::UnsupportedOnMetadata => {
+                f.write_str("import attributes are not supported by metadata resolution")
+            }
+            Self::UnsupportedKey { key } => write!(
+                f,
+                "ERR_IMPORT_ATTRIBUTE_UNSUPPORTED: import attribute '{key}' is not supported"
+            ),
+            Self::UnsupportedType { value } => write!(
+                f,
+                "ERR_IMPORT_ATTRIBUTE_UNSUPPORTED: import attribute type '{value}' is not supported"
+            ),
+            Self::MissingJsonType => f.write_str(
+                "ERR_IMPORT_ATTRIBUTE_MISSING: JSON modules require import attribute type: 'json'",
+            ),
+            Self::TypeMismatch { syntax } => write!(
+                f,
+                "ERR_IMPORT_ATTRIBUTE_TYPE_INCOMPATIBLE: type 'json' requires JSON data; selected format is {}",
+                syntax.as_str()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ImportAttributeValidationError {}
+
+pub fn validate_import_attributes(
+    style: ImportStyle,
+    syntax: ModuleSyntax,
+    attributes: &ImportAttributes,
+) -> Result<(), ImportAttributeValidationError> {
+    attributes
+        .validate()
+        .map_err(ImportAttributeValidationError::Malformed)?;
+    if style == ImportStyle::Require {
+        return if attributes.is_empty() {
+            Ok(())
+        } else {
+            Err(ImportAttributeValidationError::UnsupportedOnRequire)
+        };
+    }
+    for (key, _) in attributes.iter() {
+        if key != "type" {
+            return Err(ImportAttributeValidationError::UnsupportedKey { key: key.clone() });
+        }
+    }
+    match attributes.get("type") {
+        Some("json") if syntax == ModuleSyntax::Json => Ok(()),
+        Some("json") => Err(ImportAttributeValidationError::TypeMismatch { syntax }),
+        Some(value) => Err(ImportAttributeValidationError::UnsupportedType {
+            value: value.to_string(),
+        }),
+        None if syntax == ModuleSyntax::Json => {
+            Err(ImportAttributeValidationError::MissingJsonType)
+        }
+        None => Ok(()),
+    }
+}
+
+pub fn validate_metadata_import_attributes(
+    attributes: &ImportAttributes,
+) -> Result<(), ImportAttributeValidationError> {
+    attributes
+        .validate()
+        .map_err(ImportAttributeValidationError::Malformed)?;
+    if attributes.is_empty() {
+        Ok(())
+    } else {
+        Err(ImportAttributeValidationError::UnsupportedOnMetadata)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModuleSourceKind {
@@ -88,6 +180,8 @@ pub struct ModuleProvenance {
 pub struct ModuleDependency {
     pub specifier: String,
     pub style: ImportStyle,
+    #[serde(default, skip_serializing_if = "ImportAttributes::is_empty")]
+    pub import_attributes: ImportAttributes,
 }
 
 impl ModuleDependency {
@@ -95,7 +189,13 @@ impl ModuleDependency {
         Self {
             specifier: specifier.into(),
             style,
+            import_attributes: ImportAttributes::default(),
         }
+    }
+
+    pub fn with_import_attributes(mut self, import_attributes: ImportAttributes) -> Self {
+        self.import_attributes = import_attributes;
+        self
     }
 }
 
@@ -255,10 +355,14 @@ impl ModuleRecord {
             .dependencies
             .iter()
             .map(|dep| {
-                CanonicalValue::map_from_entries([
+                let mut fields = vec![
                     ("specifier", CanonicalValue::str(dep.specifier.clone())),
                     ("style", CanonicalValue::str(dep.style.as_str())),
-                ])
+                ];
+                if !dep.import_attributes.is_empty() {
+                    fields.push(("import_attributes", dep.import_attributes.canonical_value()));
+                }
+                CanonicalValue::map_from_entries(fields)
             })
             .collect();
         let required_caps = self
@@ -309,7 +413,16 @@ impl ModuleRecord {
         writer.key("dependencies");
         let count = writer.array_header(self.dependencies.len());
         for dependency in self.dependencies.iter().take(count) {
-            writer.map_header(2);
+            let attributes = &dependency.import_attributes;
+            writer.map_header(if attributes.is_empty() { 2 } else { 3 });
+            if !attributes.is_empty() {
+                writer.key("import_attributes");
+                let count = writer.map_header(attributes.len());
+                for (key, value) in attributes.iter().take(count) {
+                    writer.key(key);
+                    writer.string(value);
+                }
+            }
             writer.key("specifier");
             writer.string(&dependency.specifier);
             writer.key("style");
@@ -632,6 +745,8 @@ pub struct ModuleRequest {
     pub specifier: String,
     pub referrer: Option<String>,
     pub style: ImportStyle,
+    #[serde(default, skip_serializing_if = "ImportAttributes::is_empty")]
+    pub import_attributes: ImportAttributes,
     #[serde(
         default = "default_compatibility_mode",
         skip_serializing_if = "is_native_compatibility_mode"
@@ -645,6 +760,7 @@ impl ModuleRequest {
             specifier: specifier.into(),
             referrer: None,
             style,
+            import_attributes: ImportAttributes::default(),
             compatibility_mode: default_compatibility_mode(),
         }
     }
@@ -656,6 +772,11 @@ impl ModuleRequest {
 
     pub fn with_compatibility_mode(mut self, compatibility_mode: CompatibilityMode) -> Self {
         self.compatibility_mode = compatibility_mode;
+        self
+    }
+
+    pub fn with_import_attributes(mut self, import_attributes: ImportAttributes) -> Self {
+        self.import_attributes = import_attributes;
         self
     }
 }
@@ -2686,27 +2807,24 @@ impl DeterministicModuleResolver {
     ) -> ResolutionResult<AuthorizedModuleCandidate<'_>> {
         let (canonical_specifier, record, probe_sequence) =
             self.resolve_candidate(request, context)?;
-        // Requests do not yet carry import attributes. Do not let the source
-        // cache or a JSON-looking specifier silently admit an untyped import.
-        // Metadata-only resolution remains independent of source format.
-        if request.style == ImportStyle::Import && record.syntax == ModuleSyntax::Json {
-            return Err(Box::new(
-                ResolutionError::new(
-                    ResolutionErrorCode::UnsupportedSpecifier,
-                    format!(
-                        "import of JSON module '{}' is not supported by delivered module requests until import attributes are carried; use require()",
-                        canonical_specifier
+        // Attributes authorize the selected format on every edge, independently
+        // of canonical identity or whether another style already cached it.
+        validate_import_attributes(request.style, record.syntax, &request.import_attributes)
+            .map_err(|error| {
+                Box::new(
+                    ResolutionError::new(
+                        ResolutionErrorCode::UnsupportedSpecifier,
+                        error.to_string(),
+                        context,
+                    )
+                    .with_resolution_attempt(
+                        request.specifier.clone(),
+                        Some(canonical_specifier.clone()),
+                        Some(record.provenance.kind),
+                        probe_sequence.clone(),
                     ),
-                    context,
                 )
-                .with_resolution_attempt(
-                    request.specifier.clone(),
-                    Some(canonical_specifier.clone()),
-                    Some(record.provenance.kind),
-                    probe_sequence.clone(),
-                ),
-            ));
-        }
+            })?;
         if request.style == ImportStyle::Require && record.syntax == ModuleSyntax::Wasm {
             return Err(Box::new(
                 ResolutionError::new(
@@ -2786,7 +2904,8 @@ impl DeterministicModuleResolver {
                 let request =
                     ModuleRequest::new(dependency.specifier.clone(), dependency.style)
                         .with_referrer(parent.id.as_str())
-                        .with_compatibility_mode(entry_request.compatibility_mode);
+                        .with_compatibility_mode(entry_request.compatibility_mode)
+                        .with_import_attributes(dependency.import_attributes.clone());
                 // Duplicate edges, cycles and differently styled aliases still
                 // perform their complete lookup, format and policy checks.
                 let outcome = self.resolve_authorized(&request, context, policy)?;
@@ -2817,6 +2936,21 @@ impl ModuleResolver for DeterministicModuleResolver {
         context: &ResolutionContext,
         policy: &dyn ModulePolicyHook,
     ) -> ResolutionResult<MetadataResolutionOutcome> {
+        validate_metadata_import_attributes(&request.import_attributes).map_err(|error| {
+            Box::new(
+                ResolutionError::new(
+                    ResolutionErrorCode::UnsupportedSpecifier,
+                    error.to_string(),
+                    context,
+                )
+                .with_resolution_attempt(
+                    request.specifier.clone(),
+                    None,
+                    None,
+                    Vec::new(),
+                ),
+            )
+        })?;
         let (canonical_specifier, metadata, probe_sequence) =
             if request.style == ImportStyle::Import {
                 self.resolve_url_metadata_candidate(request, context)?
@@ -3354,6 +3488,10 @@ mod tests {
         ResolutionContext::new("trace-1", "decision-1", "policy-1")
     }
 
+    fn json_import_attributes() -> ImportAttributes {
+        ImportAttributes::new(BTreeMap::from([("type".into(), "json".into())])).unwrap()
+    }
+
     #[test]
     fn json_delivery_preserves_raw_source_and_rejects_untyped_imports() {
         let mut resolver = DeterministicModuleResolver::new("/app");
@@ -3392,9 +3530,19 @@ mod tests {
             .resolve(&import, &context(), &AllowAllPolicy)
             .expect_err("source delivery cannot validate absent import attributes");
         assert_eq!(error.code, ResolutionErrorCode::UnsupportedSpecifier);
-        assert!(error.message.contains("import attributes"));
+        assert!(error.message.contains("ERR_IMPORT_ATTRIBUTE_MISSING"));
         assert_eq!(error.request_specifier, "/app/data");
         assert_eq!(error.canonical_specifier.as_deref(), Some("/app/data"));
+
+        let typed = resolver
+            .resolve(
+                &import.with_import_attributes(json_import_attributes()),
+                &context(),
+                &AllowAllPolicy,
+            )
+            .expect("typed static import admits the exact JSON source record");
+        assert_eq!(typed.module.record, outcome.module.record);
+        assert_eq!(typed.module.content_hash, outcome.module.content_hash);
 
         let metadata = resolver
             .resolve_metadata(
@@ -3404,6 +3552,164 @@ mod tests {
             )
             .expect("import.meta.resolve does not load JSON or need attributes");
         assert_eq!(metadata.module.metadata.id, outcome.module.record.id);
+    }
+
+    #[test]
+    fn import_attribute_validation_never_weakens_format_or_metadata_requirements() {
+        let typed = json_import_attributes();
+        for syntax in [
+            ModuleSyntax::EsModule,
+            ModuleSyntax::CommonJs,
+            ModuleSyntax::Wasm,
+        ] {
+            assert_eq!(
+                validate_import_attributes(ImportStyle::Import, syntax, &typed),
+                Err(ImportAttributeValidationError::TypeMismatch { syntax })
+            );
+            assert!(
+                validate_import_attributes(
+                    ImportStyle::Import,
+                    syntax,
+                    &ImportAttributes::default()
+                )
+                .is_ok()
+            );
+        }
+        assert_eq!(
+            validate_import_attributes(ImportStyle::Require, ModuleSyntax::Json, &typed),
+            Err(ImportAttributeValidationError::UnsupportedOnRequire)
+        );
+        assert_eq!(
+            validate_metadata_import_attributes(&typed),
+            Err(ImportAttributeValidationError::UnsupportedOnMetadata)
+        );
+        let unknown = ImportAttributes::new(BTreeMap::from([
+            ("type".into(), "json".into()),
+            ("integrity".into(), "opaque".into()),
+        ]))
+        .unwrap();
+        assert_eq!(
+            validate_import_attributes(ImportStyle::Import, ModuleSyntax::Json, &unknown),
+            Err(ImportAttributeValidationError::UnsupportedKey {
+                key: "integrity".into()
+            })
+        );
+        let other_type =
+            ImportAttributes::new(BTreeMap::from([("type".into(), "javascript".into())])).unwrap();
+        assert_eq!(
+            validate_import_attributes(ImportStyle::Import, ModuleSyntax::Json, &other_type),
+            Err(ImportAttributeValidationError::UnsupportedType {
+                value: "javascript".into()
+            })
+        );
+    }
+
+    #[test]
+    fn chain_dependencies_transport_attributes_on_every_alias_edge() {
+        struct Observed(std::cell::RefCell<Vec<ModuleRequest>>);
+        impl ModulePolicyHook for Observed {
+            fn authorize(
+                &self,
+                request: &ModuleRequest,
+                _: &ModuleRecord,
+                _: &ResolutionContext,
+            ) -> ResolutionResult<()> {
+                self.0.borrow_mut().push(request.clone());
+                Ok(())
+            }
+        }
+        let mut resolver = DeterministicModuleResolver::new("/app");
+        resolver
+            .register_workspace_module("/app/data", ModuleDefinition::new(ModuleSyntax::Json, "42"))
+            .unwrap();
+        let root = ModuleDefinition::new(ModuleSyntax::EsModule, "export {};")
+            .with_dependency(ModuleDependency::new("./data", ImportStyle::Require))
+            .with_dependency(
+                ModuleDependency::new("./data", ImportStyle::Import)
+                    .with_import_attributes(json_import_attributes()),
+            );
+        resolver
+            .register_workspace_module("/app/entry.mjs", root.clone())
+            .unwrap();
+        resolver
+            .register_workspace_module(
+                "/app/invalid.mjs",
+                root.with_dependency(ModuleDependency::new("./data", ImportStyle::Import)),
+            )
+            .unwrap();
+        let policy = Observed(std::cell::RefCell::new(Vec::new()));
+        let chain = resolver
+            .resolve_chain(
+                &ModuleRequest::new("/app/entry.mjs", ImportStyle::Import),
+                &context(),
+                &policy,
+            )
+            .unwrap();
+        assert_eq!(chain.len(), 2, "one canonical data record");
+        let observed = policy.0.borrow();
+        assert_eq!(
+            observed.len(),
+            3,
+            "both aliases retain independent authorization"
+        );
+        assert!(observed[1].import_attributes.is_empty());
+        assert_eq!(observed[2].import_attributes, json_import_attributes());
+        assert_eq!(observed[2].referrer.as_deref(), Some("/app/entry.mjs"));
+        drop(observed);
+        let error = resolver
+            .resolve_chain(
+                &ModuleRequest::new("/app/invalid.mjs", ImportStyle::Import),
+                &context(),
+                &policy,
+            )
+            .expect_err("an already visited JSON record cannot authorize an untyped edge");
+        assert!(error.message.contains("ERR_IMPORT_ATTRIBUTE_MISSING"));
+    }
+
+    #[test]
+    fn dependency_attributes_are_hashed_without_changing_the_selected_data_record() {
+        let plain = ModuleRecord::from_definition(
+            "/app/entry.mjs".into(),
+            ModuleSourceKind::Workspace,
+            ModuleDefinition::new(ModuleSyntax::EsModule, "export {};")
+                .with_dependency(ModuleDependency::new("./data", ImportStyle::Import)),
+        );
+        let mut typed = plain.clone();
+        typed.dependencies[0].import_attributes = json_import_attributes();
+        assert_ne!(plain.canonical_hash(), typed.canonical_hash());
+        assert_eq!(
+            typed.canonical_bytes(),
+            encode_value(&typed.canonical_value())
+        );
+        assert_eq!(
+            typed.canonical_hash(),
+            ContentHash::compute(&encode_value(&typed.canonical_value()))
+        );
+        let legacy: ModuleDependency =
+            serde_json::from_str(r#"{"specifier":"./data","style":"import"}"#).unwrap();
+        assert!(legacy.import_attributes.is_empty());
+        assert_eq!(
+            serde_json::to_string(&legacy).unwrap(),
+            r#"{"specifier":"./data","style":"import"}"#
+        );
+        let encoded = serde_json::to_string(&typed.dependencies[0]).unwrap();
+        let decoded: ModuleDependency = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded.import_attributes, json_import_attributes());
+    }
+
+    #[test]
+    fn metadata_requests_cannot_smuggle_static_import_attributes() {
+        let resolver = DeterministicModuleResolver::new("/app");
+        let error = resolver
+            .resolve_metadata(
+                &ModuleRequest::new("file:///app/missing.json", ImportStyle::Import)
+                    .with_import_attributes(json_import_attributes()),
+                &context(),
+                &AllowAllPolicy,
+            )
+            .expect_err("metadata has no import-attribute channel");
+        assert_eq!(error.code, ResolutionErrorCode::UnsupportedSpecifier);
+        assert!(error.message.contains("metadata resolution"));
     }
 
     #[test]
@@ -5724,6 +6030,7 @@ mod tests {
         let md = ModuleDependency {
             specifier: "./utils.js".to_string(),
             style: ImportStyle::Import,
+            import_attributes: ImportAttributes::default(),
         };
         let json = serde_json::to_string(&md).expect("serde serialization should succeed");
         let restored: ModuleDependency =

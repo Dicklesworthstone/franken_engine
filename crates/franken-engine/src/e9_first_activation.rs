@@ -667,6 +667,7 @@ mod tests {
     fn builder_canonicalizes_import_and_declared_require_authority_bd_iyp3h() {
         let mut import_module = lowered_module();
         import_module.instructions = vec![Ir3Instruction::ImportModule {
+            import_attributes: Default::default(),
             specifier: 0,
             dst: 1,
         }];

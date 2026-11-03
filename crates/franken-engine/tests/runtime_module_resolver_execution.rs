@@ -641,6 +641,203 @@ console.log(require('./primitive') === false, require('./text') === 'module data
 }
 
 #[test]
+fn typed_json_imports_reexports_and_require_share_one_native_value() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(OpaqueResolver::new(vec![
+            (
+                "entry.mjs",
+                definition(
+                    ModuleSyntax::EsModule,
+                    r#"
+import first from './data' with { type: 'json' };
+import { forwarded, namespace } from './bridge.mjs';
+import required from './reader.cjs';
+import primitive from './primitive' with { 'type': 'json' };
+console.log(first === forwarded, namespace.default === first, required === first, Object.keys(namespace).join(','));
+first.changed = 7;
+console.log(forwarded.changed, required.changed, primitive === false);
+"#,
+                ),
+            ),
+            (
+                "bridge.mjs",
+                definition(
+                    ModuleSyntax::EsModule,
+                    r#"
+export { default as forwarded } from './data' with { type: 'json' };
+export * as namespace from './data' with { type: 'json' };
+"#,
+                ),
+            ),
+            (
+                "reader.cjs",
+                definition(
+                    ModuleSyntax::CommonJs,
+                    "module.exports = require('./data');",
+                ),
+            ),
+            (
+                "data",
+                definition(
+                    ModuleSyntax::Json,
+                    concat!("\u{feff}", r#"{"answer":1,"answer":42,"__proto__":9}"#),
+                ),
+            ),
+            ("primitive", definition(ModuleSyntax::Json, "false")),
+        ]));
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+        let policy = Arc::new(RecordingPolicy::default());
+        let installed =
+            ExecutionModuleResolver::new(&source.module.record.id, resolver, policy.clone());
+        let result = orchestrator(lane, ModuleSyntax::EsModule)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("typed JSON reaches native initialization through imports and reexports");
+        assert_eq!(lines(&result), ["true true true default", "7 7 true"]);
+        let calls = policy.requests.lock().unwrap();
+        let data = calls
+            .iter()
+            .filter(|(request, _)| request.specifier == "./data")
+            .collect::<Vec<_>>();
+        assert_eq!(data.len(), 4, "one authorization for each source edge");
+        assert_eq!(
+            data.iter()
+                .filter(|(request, _)| request.style == ImportStyle::Require)
+                .count(),
+            1
+        );
+        for (request, _) in data {
+            if request.style == ImportStyle::Import {
+                assert_eq!(request.import_attributes.get("type"), Some("json"));
+            } else {
+                assert!(request.import_attributes.is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn typed_json_cache_admission_does_not_survive_policy_revocation() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(OpaqueResolver::new(vec![
+            (
+                "entry.mjs",
+                definition(
+                    ModuleSyntax::EsModule,
+                    "import first from './data' with { type: 'json' }; import second from './reader.cjs'; console.log(first === second);",
+                ),
+            ),
+            (
+                "reader.cjs",
+                definition(
+                    ModuleSyntax::CommonJs,
+                    "module.exports = require('./data');",
+                ),
+            ),
+            ("data", definition(ModuleSyntax::Json, r#"{"answer":42}"#)),
+        ]));
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+        let policy = Arc::new(RecordingPolicy {
+            denied: Some(("./data".into(), 2)),
+            ..RecordingPolicy::default()
+        });
+        let installed =
+            ExecutionModuleResolver::new(&source.module.record.id, resolver, policy.clone());
+        let error = orchestrator(lane, ModuleSyntax::EsModule)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect_err("a cached typed import cannot lend authority to require");
+        assert!(
+            error
+                .to_string()
+                .contains("closed-world module resolution refused"),
+            "{error}"
+        );
+        let calls = policy.requests.lock().unwrap();
+        let data = calls
+            .iter()
+            .filter(|(request, _)| request.specifier == "./data")
+            .collect::<Vec<_>>();
+        assert_eq!(data.len(), 2);
+        assert_eq!(data[0].0.import_attributes.get("type"), Some("json"));
+        assert_eq!(data[1].0.style, ImportStyle::Require);
+        assert!(data[1].0.import_attributes.is_empty());
+    }
+}
+
+#[test]
+fn static_attribute_errors_are_checked_after_valid_cached_imports() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for (source_text, expected) in [
+            (
+                "import first from './data' with { type: 'json' }; import second from './data';",
+                "ERR_IMPORT_ATTRIBUTE_MISSING",
+            ),
+            (
+                "import first from './data' with { type: 'json' }; import second from './data' with { type: 'javascript' };",
+                "ERR_IMPORT_ATTRIBUTE_UNSUPPORTED",
+            ),
+            (
+                "import first from './data' with { type: 'json' }; import second from './data' with { type: 'json', if: 'opaque' };",
+                "ERR_IMPORT_ATTRIBUTE_UNSUPPORTED",
+            ),
+            (
+                "import first from './plain.mjs'; import second from './plain.mjs' with { type: 'json' };",
+                "ERR_IMPORT_ATTRIBUTE_TYPE_INCOMPATIBLE",
+            ),
+            (
+                "import first from 'node:path'; import second from 'node:path' with { type: 'json' };",
+                "ERR_IMPORT_ATTRIBUTE_TYPE_INCOMPATIBLE",
+            ),
+            (
+                "import first from 'node:path'; import second from 'node:path' with { if: 'opaque' };",
+                "ERR_IMPORT_ATTRIBUTE_UNSUPPORTED",
+            ),
+        ] {
+            let resolver = Arc::new(
+                OpaqueResolver::new(vec![
+                    ("entry.mjs", definition(ModuleSyntax::EsModule, source_text)),
+                    ("data", definition(ModuleSyntax::Json, "42")),
+                    (
+                        "plain.mjs",
+                        definition(ModuleSyntax::EsModule, "export default 42;"),
+                    ),
+                ])
+                .with_native_builtins(),
+            );
+            let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+            let installed = ExecutionModuleResolver::new(
+                &source.module.record.id,
+                resolver.clone(),
+                Arc::new(RecordingPolicy {
+                    allow_native_builtins: true,
+                    ..RecordingPolicy::default()
+                }),
+            );
+            let error = orchestrator(lane, ModuleSyntax::EsModule)
+                .execute_resolved_entry_with_resolver(&package(), &source, installed)
+                .expect_err("cached module values never erase the later edge's attributes");
+            assert!(
+                error.to_string().contains(expected),
+                "{source_text}: {error}"
+            );
+            let requests = resolver.requests.lock().unwrap();
+            let runtime_requests = requests
+                .iter()
+                .filter(|request| request.referrer.is_some())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                runtime_requests.len(),
+                2,
+                "both declarations reach the loader: {source_text}"
+            );
+            assert_ne!(
+                runtime_requests[0].import_attributes,
+                runtime_requests[1].import_attributes
+            );
+        }
+    }
+}
+
+#[test]
 fn delivered_json_cache_hits_still_require_current_authority() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         let resolver = Arc::new(OpaqueResolver::new(vec![

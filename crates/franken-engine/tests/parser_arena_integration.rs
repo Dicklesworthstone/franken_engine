@@ -62,6 +62,7 @@ fn import_tree() -> SyntaxTree {
     SyntaxTree {
         goal: ParseGoal::Module,
         body: vec![Statement::Import(ImportDeclaration {
+            import_attributes: Default::default(),
             clause: ImportClause::Default {
                 local: "foo".to_string(),
             },
@@ -77,6 +78,7 @@ fn import_no_binding_tree() -> SyntaxTree {
     SyntaxTree {
         goal: ParseGoal::Module,
         body: vec![Statement::Import(ImportDeclaration {
+            import_attributes: Default::default(),
             clause: ImportClause::SideEffect,
             binding: None,
             source: "./side-effects.js".into(),
@@ -141,6 +143,7 @@ fn mixed_statement_tree() -> SyntaxTree {
         goal: ParseGoal::Module,
         body: vec![
             Statement::Import(ImportDeclaration {
+                import_attributes: Default::default(),
                 clause: ImportClause::Default {
                     local: "fs".to_string(),
                 },
@@ -149,6 +152,7 @@ fn mixed_statement_tree() -> SyntaxTree {
                 span: make_span(0, 20),
             }),
             Statement::Import(ImportDeclaration {
+                import_attributes: Default::default(),
                 clause: ImportClause::SideEffect,
                 binding: None,
                 source: "./polyfill.js".into(),
@@ -580,6 +584,7 @@ fn arena_error_clone() {
 #[test]
 fn arena_node_import_with_binding() {
     let node = ArenaNode::Import {
+        import_attributes: Default::default(),
         binding: Some("mod".to_string()),
         source: "./mod.js".into(),
         span: SpanHandle::from_parts(0, 1),
@@ -588,6 +593,7 @@ fn arena_node_import_with_binding() {
         binding,
         source,
         span,
+        ..
     } = &node
     {
         assert_eq!(binding.as_deref(), Some("mod"));
@@ -601,6 +607,7 @@ fn arena_node_import_with_binding() {
 #[test]
 fn arena_node_import_without_binding() {
     let node = ArenaNode::Import {
+        import_attributes: Default::default(),
         binding: None,
         source: "./side.js".into(),
         span: SpanHandle::from_parts(1, 1),
@@ -656,6 +663,7 @@ fn arena_node_expression_statement() {
 #[test]
 fn arena_node_clone_and_equality() {
     let node = ArenaNode::Import {
+        import_attributes: Default::default(),
         binding: Some("a".to_string()),
         source: "b".into(),
         span: SpanHandle::from_parts(0, 1),
@@ -1226,6 +1234,7 @@ fn exact_module_sources_roundtrip_without_aliasing_bd_lfq44() {
     let import_tree = |source: JsString| SyntaxTree {
         goal: ParseGoal::Module,
         body: vec![Statement::Import(ImportDeclaration {
+            import_attributes: Default::default(),
             clause: ImportClause::SideEffect,
             binding: None,
             source,
@@ -1855,6 +1864,7 @@ fn cross_concern_import_binding_affects_bytes() {
     let with_binding = SyntaxTree {
         goal: ParseGoal::Module,
         body: vec![Statement::Import(ImportDeclaration {
+            import_attributes: Default::default(),
             clause: ImportClause::Default {
                 local: "longBindingName".to_string(),
             },
@@ -1867,6 +1877,7 @@ fn cross_concern_import_binding_affects_bytes() {
     let without_binding = SyntaxTree {
         goal: ParseGoal::Module,
         body: vec![Statement::Import(ImportDeclaration {
+            import_attributes: Default::default(),
             clause: ImportClause::SideEffect,
             binding: None,
             source: "./m.js".into(),

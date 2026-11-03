@@ -9,12 +9,13 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 
 use crate::deterministic_serde::{self, CanonicalValue};
+use crate::import_attributes::ImportAttributes;
 use crate::js_string::{JsString, canonical_js_string_value};
 
 /// Versioned canonical AST contract binding schema + hash semantics.
 pub const CANONICAL_AST_CONTRACT_VERSION: &str = "franken-engine.parser-ast.contract.v1";
 /// Versioned schema identifier for canonical AST structure and key ordering.
-pub const CANONICAL_AST_SCHEMA_VERSION: &str = "franken-engine.parser-ast.schema.v6";
+pub const CANONICAL_AST_SCHEMA_VERSION: &str = "franken-engine.parser-ast.schema.v7";
 /// Hash algorithm used by `SyntaxTree::canonical_hash`.
 pub const CANONICAL_AST_HASH_ALGORITHM: &str = "sha256";
 /// Prefix used in canonical AST hash strings.
@@ -479,12 +480,14 @@ pub struct ImportDeclaration {
     pub clause: ImportClause,
     pub binding: Option<String>,
     pub source: JsString,
+    #[serde(default, skip_serializing_if = "ImportAttributes::is_empty")]
+    pub import_attributes: ImportAttributes,
     pub span: SourceSpan,
 }
 
 impl ImportDeclaration {
     pub fn canonical_value(&self) -> CanonicalValue {
-        CanonicalValue::map_from_entries([
+        let mut entries = vec![
             ("clause", self.clause.canonical_value()),
             (
                 "binding",
@@ -495,7 +498,14 @@ impl ImportDeclaration {
             ),
             ("source", canonical_js_string_value(&self.source)),
             ("span", self.span.canonical_value()),
-        ])
+        ];
+        if !self.import_attributes.is_empty() {
+            entries.push((
+                "import_attributes",
+                self.import_attributes.canonical_value(),
+            ));
+        }
+        CanonicalValue::map_from_entries(entries)
     }
 }
 
@@ -507,11 +517,13 @@ impl ImportDeclaration {
 /// units without making lowerers parse a display projection.  The custom wire
 /// representation keeps every historical ordinary string byte-for-byte:
 /// source-free and well-formed-source clauses still serialize as that same
-/// full string, while the novel lone-surrogate case uses a namespaced object.
+/// full string when attributes are empty. Exact UTF-16 sources and attributed
+/// reexports use a namespaced object so no consumer must reparse display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NamedExportClause {
     canonical_head: String,
     source: Option<JsString>,
+    import_attributes: ImportAttributes,
     historical_wire: Option<String>,
 }
 
@@ -529,8 +541,22 @@ impl NamedExportClause {
         Self {
             canonical_head,
             source,
+            import_attributes: ImportAttributes::default(),
             historical_wire,
         }
+    }
+
+    pub fn new_with_import_attributes(
+        canonical_head: impl Into<String>,
+        source: JsString,
+        import_attributes: ImportAttributes,
+    ) -> Self {
+        let mut clause = Self::new(canonical_head, Some(source));
+        if !import_attributes.is_empty() {
+            clause.historical_wire = None;
+        }
+        clause.import_attributes = import_attributes;
+        clause
     }
 
     pub fn canonical_head(&self) -> &str {
@@ -541,9 +567,13 @@ impl NamedExportClause {
         self.source.as_ref()
     }
 
+    pub fn import_attributes(&self) -> &ImportAttributes {
+        &self.import_attributes
+    }
+
     /// Return the historical scalar string representation when it is exact.
-    /// Lone-surrogate sources deliberately return `None`; callers must use the
-    /// structured source rather than a lossy UTF-8 projection.
+    /// Lone-surrogate sources and nonempty attributes deliberately return `None`;
+    /// callers must use the structured metadata instead of a display projection.
     pub fn historical_wire_text(&self) -> Option<String> {
         self.historical_wire().map(str::to_string)
     }
@@ -561,15 +591,22 @@ impl NamedExportClause {
             .source
             .as_ref()
             .expect("a non-scalar named-export wire value must have a source");
+        let mut entries = vec![
+            (
+                "canonical_head",
+                CanonicalValue::str(self.canonical_head.clone()),
+            ),
+            ("source", canonical_js_string_value(source)),
+        ];
+        if !self.import_attributes.is_empty() {
+            entries.push((
+                "import_attributes",
+                self.import_attributes.canonical_value(),
+            ));
+        }
         CanonicalValue::map_from_entries([(
             "$module_source",
-            CanonicalValue::map_from_entries([
-                (
-                    "canonical_head",
-                    CanonicalValue::str(self.canonical_head.clone()),
-                ),
-                ("source", canonical_js_string_value(source)),
-            ]),
+            CanonicalValue::map_from_entries(entries),
         )])
     }
 
@@ -583,6 +620,7 @@ impl NamedExportClause {
                     Self {
                         canonical_head,
                         source: Some(source),
+                        import_attributes: ImportAttributes::default(),
                         historical_wire: Some(text),
                     }
                 } else {
@@ -594,6 +632,7 @@ impl NamedExportClause {
         Self {
             canonical_head: text.clone(),
             source: None,
+            import_attributes: ImportAttributes::default(),
             historical_wire: Some(text),
         }
     }
@@ -615,6 +654,8 @@ impl From<&str> for NamedExportClause {
 struct ExactModuleSourceRef<'a> {
     canonical_head: &'a str,
     source: &'a JsString,
+    #[serde(skip_serializing_if = "ImportAttributes::is_empty")]
+    import_attributes: &'a ImportAttributes,
 }
 
 #[derive(Serialize)]
@@ -628,6 +669,8 @@ struct ExactModuleSourceEnvelopeRef<'a> {
 struct ExactModuleSource {
     canonical_head: String,
     source: JsString,
+    #[serde(default)]
+    import_attributes: ImportAttributes,
 }
 
 #[derive(Deserialize)]
@@ -661,6 +704,7 @@ impl Serialize for NamedExportClause {
             module_source: ExactModuleSourceRef {
                 canonical_head: &self.canonical_head,
                 source,
+                import_attributes: &self.import_attributes,
             },
         }
         .serialize(serializer)
@@ -675,14 +719,17 @@ impl<'de> Deserialize<'de> for NamedExportClause {
         match NamedExportClauseWire::deserialize(deserializer)? {
             NamedExportClauseWire::Historical(text) => Ok(Self::from_legacy_wire_text(text)),
             NamedExportClauseWire::Exact(ExactModuleSourceEnvelope { module_source }) => {
-                if module_source.source.is_well_formed() {
+                if module_source.source.is_well_formed()
+                    && module_source.import_attributes.is_empty()
+                {
                     return Err(<D::Error as serde::de::Error>::custom(
-                        "$module_source is reserved for non-well-formed UTF-16 sources",
+                        "$module_source requires an exact UTF-16 source or nonempty import attributes",
                     ));
                 }
-                Ok(Self::new(
+                Ok(Self::new_with_import_attributes(
                     module_source.canonical_head,
-                    Some(module_source.source),
+                    module_source.source,
+                    module_source.import_attributes,
                 ))
             }
         }
@@ -2513,7 +2560,7 @@ mod tests {
         );
         assert_eq!(
             CANONICAL_AST_SCHEMA_VERSION,
-            "franken-engine.parser-ast.schema.v6"
+            "franken-engine.parser-ast.schema.v7"
         );
         assert_eq!(CANONICAL_AST_HASH_ALGORITHM, "sha256");
         assert_eq!(CANONICAL_AST_HASH_PREFIX, "sha256:");
@@ -2580,6 +2627,7 @@ mod tests {
             goal: ParseGoal::Module,
             body: vec![
                 Statement::Import(ImportDeclaration {
+                    import_attributes: Default::default(),
                     clause: ImportClause::Default {
                         local: "x".to_string(),
                     },
@@ -2608,6 +2656,7 @@ mod tests {
         let span = SourceSpan::new(5, 15, 2, 6, 2, 16);
 
         let import = Statement::Import(ImportDeclaration {
+            import_attributes: Default::default(),
             clause: ImportClause::SideEffect,
             binding: None,
             source: "x".into(),
@@ -2642,6 +2691,7 @@ mod tests {
     #[test]
     fn statement_canonical_value_import_has_kind_import() {
         let stmt = Statement::Import(ImportDeclaration {
+            import_attributes: Default::default(),
             clause: ImportClause::Default {
                 local: "dep".to_string(),
             },
@@ -2724,6 +2774,7 @@ mod tests {
     #[test]
     fn import_declaration_with_binding_canonical_value() {
         let import = ImportDeclaration {
+            import_attributes: Default::default(),
             clause: ImportClause::Default {
                 local: "foo".to_string(),
             },
@@ -2749,6 +2800,7 @@ mod tests {
     #[test]
     fn import_declaration_without_binding_canonical_value_has_null() {
         let import = ImportDeclaration {
+            import_attributes: Default::default(),
             clause: ImportClause::SideEffect,
             binding: None,
             source: "side-effect".into(),
@@ -2895,6 +2947,7 @@ mod tests {
     #[test]
     fn import_source_serde_preserves_utf8_and_distinguishes_exact_units_bd_lfq44() {
         let ordinary = ImportDeclaration {
+            import_attributes: Default::default(),
             clause: ImportClause::SideEffect,
             binding: None,
             source: "pkg".into(),
@@ -3199,6 +3252,7 @@ mod tests {
             goal: ParseGoal::Module,
             body: vec![
                 Statement::Import(ImportDeclaration {
+                    import_attributes: Default::default(),
                     clause: ImportClause::Default {
                         local: "dep".to_string(),
                     },
@@ -3277,6 +3331,7 @@ mod tests {
     #[test]
     fn import_without_binding_serde_roundtrip() {
         let stmt = Statement::Import(ImportDeclaration {
+            import_attributes: Default::default(),
             clause: ImportClause::SideEffect,
             binding: None,
             source: "side-effect-module".into(),
@@ -3355,6 +3410,7 @@ mod tests {
     #[test]
     fn import_declaration_clone_equality() {
         let original = ImportDeclaration {
+            import_attributes: Default::default(),
             clause: ImportClause::Default {
                 local: "myDep".to_string(),
             },
@@ -3392,6 +3448,7 @@ mod tests {
             goal: ParseGoal::Module,
             body: vec![
                 Statement::Import(ImportDeclaration {
+                    import_attributes: Default::default(),
                     clause: ImportClause::SideEffect,
                     binding: None,
                     source: "effects".into(),
@@ -3421,6 +3478,7 @@ mod tests {
     #[test]
     fn import_declaration_json_field_presence() {
         let import = ImportDeclaration {
+            import_attributes: Default::default(),
             clause: ImportClause::Default {
                 local: "x".to_string(),
             },
@@ -4672,6 +4730,7 @@ mod tests {
         let span = make_span();
         let stmts: Vec<Statement> = vec![
             Statement::Import(ImportDeclaration {
+                import_attributes: Default::default(),
                 clause: ImportClause::SideEffect,
                 binding: None,
                 source: "m".into(),
@@ -5718,6 +5777,7 @@ mod tests {
     #[test]
     fn import_declaration_serde_roundtrip_with_binding() {
         let import = ImportDeclaration {
+            import_attributes: Default::default(),
             clause: ImportClause::Default {
                 local: "React".to_string(),
             },

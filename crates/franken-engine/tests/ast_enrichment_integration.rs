@@ -98,6 +98,7 @@ fn enrichment_full_program_hash_deterministic_across_constructions() {
             ParseGoal::Module,
             vec![
                 Statement::Import(ImportDeclaration {
+                    import_attributes: Default::default(),
                     clause: ImportClause::Default {
                         local: "React".to_string(),
                     },
@@ -136,6 +137,7 @@ fn enrichment_different_import_sources_produce_different_hashes() {
         tree(
             ParseGoal::Module,
             vec![Statement::Import(ImportDeclaration {
+                import_attributes: Default::default(),
                 clause: ImportClause::Default {
                     local: "x".to_string(),
                 },
@@ -1013,7 +1015,7 @@ fn enrichment_constants_are_stable() {
     );
     assert_eq!(
         CANONICAL_AST_SCHEMA_VERSION,
-        "franken-engine.parser-ast.schema.v6"
+        "franken-engine.parser-ast.schema.v7"
     );
     assert_eq!(CANONICAL_AST_HASH_ALGORITHM, "sha256");
     assert_eq!(CANONICAL_AST_HASH_PREFIX, "sha256:");
@@ -1071,6 +1073,7 @@ fn enrichment_realistic_module_round_trip() {
         vec![
             // import React from 'react';
             Statement::Import(ImportDeclaration {
+                import_attributes: Default::default(),
                 clause: ImportClause::Default {
                     local: "React".to_string(),
                 },
@@ -1080,6 +1083,7 @@ fn enrichment_realistic_module_round_trip() {
             }),
             // import { useState } from 'react';
             Statement::Import(ImportDeclaration {
+                import_attributes: Default::default(),
                 clause: ImportClause::Default {
                     local: "useState".to_string(),
                 },
@@ -1140,6 +1144,7 @@ fn enrichment_statement_span_returns_correct_for_all_18_variants() {
     let target = span(42, 84);
     let stmts: Vec<Statement> = vec![
         Statement::Import(ImportDeclaration {
+            import_attributes: Default::default(),
             clause: ImportClause::SideEffect,
             binding: None,
             source: "m".into(),
@@ -1254,6 +1259,7 @@ fn enrichment_all_18_statement_canonical_kinds_unique() {
     use frankenengine_engine::deterministic_serde::CanonicalValue;
     let stmts = vec![
         Statement::Import(ImportDeclaration {
+            import_attributes: Default::default(),
             clause: ImportClause::SideEffect,
             binding: None,
             source: "m".into(),
@@ -1709,6 +1715,7 @@ fn enrichment_syntax_tree_with_all_statement_types_round_trips() {
         ParseGoal::Script,
         vec![
             Statement::Import(ImportDeclaration {
+                import_attributes: Default::default(),
                 clause: ImportClause::Default {
                     local: "x".to_string(),
                 },

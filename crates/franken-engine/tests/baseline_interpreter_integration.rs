@@ -2236,6 +2236,7 @@ fn import_module_executes_and_returns_export() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -2286,6 +2287,7 @@ fn imported_closure_calls_use_the_exporting_module_function_table() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -2414,6 +2416,7 @@ fn imported_direct_constructor_uses_owner_prototype_and_new_target_bd_fw7zd_7() 
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -2474,6 +2477,7 @@ fn imported_reflect_construct_uses_owner_prototype_and_new_target_bd_fw7zd_7() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -2561,6 +2565,7 @@ fn imported_generators_resume_against_the_exporting_module_function_table_bd_fw7
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -2700,6 +2705,7 @@ fn imported_async_functions_use_the_exporting_module_for_direct_and_method_calls
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -2810,6 +2816,7 @@ fn imported_dynamic_function_artifacts_use_canonical_realm_across_call_forms_bd_
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -2939,6 +2946,7 @@ fn imported_dynamic_function_artifacts_use_canonical_realm_across_call_forms_bd_
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 14,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -3052,6 +3060,7 @@ fn generated_nested_closure_keeps_artifact_program_after_wrapper_unwinds_bd_fw7z
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -3151,6 +3160,7 @@ fn alternating_cross_module_recursion_result(
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -3223,6 +3233,7 @@ fn direct_cross_module_recursion_result(countdown: i64) -> Result<Value, Interpr
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -3313,6 +3324,7 @@ fn import_module_prefers_mjs_over_js_for_extensionless_specifier() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -3360,6 +3372,7 @@ fn import_module_resolves_index_mjs_for_directory_specifier() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -3403,6 +3416,7 @@ fn import_module_cjs_default_export_bridges_module_exports() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -3459,6 +3473,7 @@ fn import_module_cjs_named_exports_project_properties() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -3508,6 +3523,7 @@ fn require_module_allows_cjs_to_read_esm_namespace() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -3570,6 +3586,7 @@ fn require_module_allows_cjs_to_read_esm_default_export() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -3634,6 +3651,7 @@ module.exports = first === second;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -3683,6 +3701,7 @@ fn require_module_returns_cjs_module_exports_value() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -3736,6 +3755,7 @@ fn require_module_resolves_relative_to_cjs_entry() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -3789,6 +3809,7 @@ fn require_module_resolves_extensionless_relative_to_cjs_entry() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -3840,6 +3861,7 @@ fn require_module_resolves_parent_relative_from_cjs_entry() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -3897,6 +3919,7 @@ fn require_module_resolves_directory_relative_to_cjs_entry() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -3956,6 +3979,7 @@ fn require_module_resolves_parent_directory_relative_to_cjs_entry() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -4011,6 +4035,7 @@ fn require_module_resolves_extensionless_parent_relative_from_cjs_entry() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -4069,6 +4094,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -4124,6 +4150,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -4188,6 +4215,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -4251,6 +4279,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -4313,6 +4342,7 @@ fn require_module_prefers_index_cjs_over_index_mjs_when_relative_from_cjs_entry(
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -4374,6 +4404,7 @@ fn require_module_prefers_index_cjs_over_index_js_for_parent_relative_directory(
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -4438,6 +4469,7 @@ fn require_module_prefers_index_cjs_over_index_mjs_for_parent_relative_directory
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -4498,6 +4530,7 @@ fn require_module_resolves_index_mjs_when_only_index_mjs_relative_from_cjs_entry
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -4555,6 +4588,7 @@ fn require_module_resolves_index_js_when_only_index_js_relative_from_cjs_entry()
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -4612,6 +4646,7 @@ fn require_module_resolves_directory_with_trailing_slash_relative_from_cjs_entry
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -4667,6 +4702,7 @@ fn require_module_trailing_slash_prefers_directory_index_over_file_neighbor() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -4729,6 +4765,7 @@ fn require_module_resolves_parent_trailing_slash_relative_from_cjs_entry() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -4790,6 +4827,7 @@ fn require_module_parent_trailing_slash_prefers_directory_index_over_file_neighb
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -4852,6 +4890,7 @@ fn require_module_prefers_index_cjs_for_extensionless_index_relative_from_cjs_en
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -4908,6 +4947,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -4964,6 +5004,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -5020,6 +5061,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -5079,6 +5121,7 @@ fn require_module_resolves_nested_require_relative_to_cjs_dependency() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -5130,6 +5173,7 @@ fn require_module_nested_cjs_dirname_binding_is_relative_to_inner_module() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -5188,6 +5232,7 @@ fn require_module_nested_cjs_filename_binding_is_inner_module() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -5251,6 +5296,7 @@ fn require_module_nested_parent_relative_resolves_from_inner_module() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -5314,6 +5360,7 @@ fn require_module_nested_parent_relative_directory_resolves_from_inner_module() 
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -5383,6 +5430,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -5451,6 +5499,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -5519,6 +5568,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -5587,6 +5637,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -5658,6 +5709,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -5728,6 +5780,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -5794,6 +5847,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -5861,6 +5915,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -5929,6 +5984,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -5995,6 +6051,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -6063,6 +6120,7 @@ module.exports = mod.default;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -6131,6 +6189,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -6203,6 +6262,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -6274,6 +6334,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -6344,6 +6405,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -6416,6 +6478,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -6490,6 +6553,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -6561,6 +6625,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -6630,6 +6695,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -6704,6 +6770,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -6768,6 +6835,7 @@ module.exports = mod.default;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -6831,6 +6899,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -6894,6 +6963,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -6957,6 +7027,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -7020,6 +7091,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -7088,6 +7160,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -7158,6 +7231,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -7225,6 +7299,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -7296,6 +7371,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -7358,6 +7434,7 @@ fn require_module_nested_explicit_mjs_resolves_from_inner_module() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -7421,6 +7498,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -7484,6 +7562,7 @@ fn require_module_nested_directory_specifier_resolves_from_inner_module() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -7547,6 +7626,7 @@ fn require_module_nested_directory_without_trailing_slash_resolves_from_inner_mo
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -7616,6 +7696,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -7690,6 +7771,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -7760,6 +7842,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -7826,6 +7909,7 @@ fn require_module_nested_extensionless_prefers_cjs_in_inner_module() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -7889,6 +7973,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -7952,6 +8037,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -8015,6 +8101,7 @@ fn require_module_nested_explicit_index_cjs_resolves_from_inner_module() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -8082,6 +8169,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -8149,6 +8237,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -8220,6 +8309,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -8294,6 +8384,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -8368,6 +8459,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -8438,6 +8530,7 @@ fn require_module_nested_explicit_index_cjs_over_mjs_neighbor() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -8508,6 +8601,7 @@ fn require_module_nested_explicit_index_cjs_over_js_neighbor() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -8582,6 +8676,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -8656,6 +8751,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -8728,6 +8824,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -8798,6 +8895,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -8866,6 +8964,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -8940,6 +9039,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -9012,6 +9112,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -9082,6 +9183,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -9136,6 +9238,7 @@ fn require_module_uses_explicit_cjs_specifier_even_with_js_neighbor() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -9187,6 +9290,7 @@ fn require_module_uses_explicit_cjs_specifier_even_with_mjs_neighbor() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -9238,6 +9342,7 @@ fn require_module_uses_explicit_mjs_specifier_even_with_cjs_neighbor() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -9289,6 +9394,7 @@ fn require_module_uses_explicit_mjs_specifier_even_with_js_neighbor() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -9340,6 +9446,7 @@ fn require_module_prefers_cjs_over_mjs_for_extensionless_specifier() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -9393,6 +9500,7 @@ module.exports = value;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -9446,6 +9554,7 @@ fn require_module_resolves_index_cjs_for_directory_specifier() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -9499,6 +9608,7 @@ fn require_module_prefers_index_cjs_over_index_js() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -9550,6 +9660,7 @@ fn require_module_resolves_index_js_when_only_index_js() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -9603,6 +9714,7 @@ fn require_module_uses_explicit_index_mjs_even_with_index_cjs() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -9656,6 +9768,7 @@ fn require_module_uses_explicit_index_js_even_with_index_cjs() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -9709,6 +9822,7 @@ fn require_module_uses_explicit_index_mjs_even_with_index_js() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -9762,6 +9876,7 @@ fn require_module_uses_explicit_index_js_even_with_index_mjs() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -9815,6 +9930,7 @@ fn require_module_uses_explicit_index_cjs_even_with_index_mjs() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -9864,6 +9980,7 @@ fn require_module_falls_back_to_mjs_for_extensionless_specifier() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -9915,6 +10032,7 @@ fn require_module_falls_back_to_index_mjs_for_directory_specifier() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -9966,6 +10084,7 @@ fn require_module_prefers_js_over_mjs_for_extensionless_specifier() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -10015,6 +10134,7 @@ fn require_module_falls_back_to_js_for_extensionless_specifier() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -10066,6 +10186,7 @@ fn require_module_uses_explicit_js_specifier_even_with_cjs_neighbor() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -10117,6 +10238,7 @@ fn require_module_uses_explicit_js_specifier_even_with_mjs_neighbor() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -10166,6 +10288,7 @@ fn require_module_allows_cjs_to_read_js_default_export() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -10215,6 +10338,7 @@ fn require_module_allows_cjs_to_read_js_named_export() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -10268,6 +10392,7 @@ fn require_module_exposes_js_default_and_named_exports() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -10319,6 +10444,7 @@ module.exports = first === second;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -10372,6 +10498,7 @@ fn require_module_prefers_index_js_over_index_mjs() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -10415,6 +10542,7 @@ fn cjs_module_exposes_filename_binding() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -10475,6 +10603,7 @@ fn cjs_module_exposes_dirname_binding() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -10540,6 +10669,7 @@ fn cjs_module_exports_module_filename() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -10600,6 +10730,7 @@ fn cjs_module_exports_module_id() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -10660,6 +10791,7 @@ fn cjs_module_exports_loaded_true_after_eval() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -10722,6 +10854,7 @@ fn cjs_module_parent_tracks_require_chain() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -10788,6 +10921,7 @@ fn cjs_entry_module_parent_is_null() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -10844,6 +10978,7 @@ fn cjs_module_exports_module_path() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -10911,6 +11046,7 @@ fn require_module_cjs_cycle_reads_partial_exports() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -10973,6 +11109,7 @@ fn cjs_module_loaded_false_during_cycle() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -11038,6 +11175,7 @@ module.exports = { count: b.count };",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -11102,6 +11240,7 @@ module.exports = first === second;",
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -11149,6 +11288,7 @@ fn cjs_exports_reassignment_does_not_replace_module_exports() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -11224,6 +11364,7 @@ fn cjs_module_exports_reassignment_severs_exports_alias() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -11301,6 +11442,7 @@ fn cjs_require_binding_can_be_aliased_and_called() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,
@@ -11350,6 +11492,7 @@ fn cjs_module_require_property_is_callable() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
             Ir3Instruction::LoadStr {
                 dst: 2,

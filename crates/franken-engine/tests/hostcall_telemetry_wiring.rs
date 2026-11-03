@@ -333,6 +333,7 @@ fn import_module_without_module_grant_denies_before_resolution() {
             Ir3Instruction::ImportModule {
                 specifier: 0,
                 dst: 1,
+                import_attributes: Default::default(),
             },
         ],
         constant_pool: vec!["./missing.mjs".into()],
@@ -530,6 +531,7 @@ fn nested_module_require_product_path_captures_every_dispatch() {
                 Ir3Instruction::ImportModule {
                     specifier: 0,
                     dst: 1,
+                    import_attributes: Default::default(),
                 },
                 Ir3Instruction::Return { value: 1 },
             ],

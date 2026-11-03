@@ -283,6 +283,7 @@ pub mod idempotency_key;
 pub mod ifc_artifacts;
 pub mod ifc_label_translation_validator;
 pub mod ifc_provenance_index;
+pub mod import_attributes;
 pub mod incentive_governance_mechanism;
 pub mod incident_replay_bundle;
 pub mod interleaving_explorer;

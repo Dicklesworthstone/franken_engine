@@ -85,6 +85,7 @@ fn module_ir0_import(source: &str, binding: Option<&str>) -> Ir0Module {
     let tree = SyntaxTree {
         goal: ParseGoal::Module,
         body: vec![Statement::Import(ImportDeclaration {
+            import_attributes: Default::default(),
             clause: match binding {
                 Some(name) => ImportClause::Default {
                     local: name.to_string(),
@@ -518,7 +519,7 @@ fn ir0_to_ir1_import_with_binding() {
         .module
         .ops
         .iter()
-        .any(|op| matches!(op, Ir1Op::ImportModule { specifier } if specifier.as_str() == Some("lodash")));
+        .any(|op| matches!(op, Ir1Op::ImportModule { specifier, .. } if specifier.as_str() == Some("lodash")));
     assert!(has_import);
 
     let has_store = result
@@ -536,7 +537,7 @@ fn ir0_to_ir1_import_without_binding() {
 
     let has_import =
         result.module.ops.iter().any(
-            |op| matches!(op, Ir1Op::ImportModule { specifier } if specifier.as_str() == Some("side-effects")),
+            |op| matches!(op, Ir1Op::ImportModule { specifier, .. } if specifier.as_str() == Some("side-effects")),
         );
     assert!(has_import);
 
@@ -567,6 +568,7 @@ fn exact_import_and_reexport_sources_survive_full_lowering_bd_lfq44() {
         goal: ParseGoal::Module,
         body: vec![
             Statement::Import(ImportDeclaration {
+                import_attributes: Default::default(),
                 clause: ImportClause::SideEffect,
                 binding: None,
                 source: import_source.clone(),
@@ -590,7 +592,7 @@ fn exact_import_and_reexport_sources_survive_full_lowering_bd_lfq44() {
         .ops
         .iter()
         .filter_map(|op| match op {
-            Ir1Op::ImportModule { specifier } => Some(specifier),
+            Ir1Op::ImportModule { specifier, .. } => Some(specifier),
             _ => None,
         })
         .collect();
@@ -845,6 +847,7 @@ fn ir1_to_ir2_classifies_explicit_hostcall_as_hostcall_effect() {
 fn ir1_to_ir2_classifies_import_as_read_effect() {
     let mut ir1 = Ir1Module::new(ContentHash::compute(b"test-ir0"), "import_test.js");
     ir1.ops.push(Ir1Op::ImportModule {
+        import_attributes: Default::default(),
         specifier: "lodash".into(),
     });
     ir1.ops.push(Ir1Op::Return);
@@ -946,6 +949,7 @@ fn ir1_to_ir2_hostcall_string_literal_extracts_capability() {
 fn ir1_to_ir2_required_capabilities_collected() {
     let mut ir1 = Ir1Module::new(ContentHash::compute(b"test-ir0"), "caps_test.js");
     ir1.ops.push(Ir1Op::ImportModule {
+        import_attributes: Default::default(),
         specifier: "lodash".into(),
     });
     ir1.ops.push(Ir1Op::HostCall {
@@ -1338,6 +1342,7 @@ fn full_pipeline_module_with_import_and_export() {
         goal: ParseGoal::Module,
         body: vec![
             Statement::Import(ImportDeclaration {
+                import_attributes: Default::default(),
                 clause: ImportClause::Default {
                     local: "_".to_string(),
                 },
@@ -1675,6 +1680,7 @@ fn import_then_export_then_expression_complex_module() {
         goal: ParseGoal::Module,
         body: vec![
             Statement::Import(ImportDeclaration {
+                import_attributes: Default::default(),
                 clause: ImportClause::Default {
                     local: "React".to_string(),
                 },
@@ -1683,6 +1689,7 @@ fn import_then_export_then_expression_complex_module() {
                 span: span(),
             }),
             Statement::Import(ImportDeclaration {
+                import_attributes: Default::default(),
                 clause: ImportClause::Default {
                     local: "_".to_string(),
                 },
@@ -1841,6 +1848,7 @@ fn pipeline_required_capabilities_aggregate_in_ir3() {
         goal: ParseGoal::Module,
         body: vec![
             Statement::Import(ImportDeclaration {
+                import_attributes: Default::default(),
                 clause: ImportClause::Default {
                     local: "fs".to_string(),
                 },

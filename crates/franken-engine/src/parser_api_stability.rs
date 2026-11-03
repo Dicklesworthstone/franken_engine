@@ -392,9 +392,16 @@ impl GoldenVersionVector {
         vector
     }
 
+    /// Static import attributes and structured attributed reexports.
+    pub fn v7() -> Self {
+        let mut vector = Self::v6();
+        vector.ast_schema = "franken-engine.parser-ast.schema.v7".into();
+        vector
+    }
+
     /// The golden vector corresponding to the currently exported constants.
     pub fn current() -> Self {
-        Self::v6()
+        Self::v7()
     }
 
     /// Compare against live constants and return mismatches.
@@ -1015,7 +1022,7 @@ mod tests {
         assert_eq!(mismatches.len(), 1);
         assert_eq!(mismatches[0].0, "ast_schema");
         assert_eq!(mismatches[0].1, "franken-engine.parser-ast.schema.v1");
-        assert_eq!(mismatches[0].2, "franken-engine.parser-ast.schema.v6");
+        assert_eq!(mismatches[0].2, "franken-engine.parser-ast.schema.v7");
     }
 
     #[test]
@@ -1025,7 +1032,7 @@ mod tests {
         assert_eq!(mismatches.len(), 1);
         assert_eq!(mismatches[0].0, "ast_schema");
         assert_eq!(mismatches[0].1, "franken-engine.parser-ast.schema.v2");
-        assert_eq!(mismatches[0].2, "franken-engine.parser-ast.schema.v6");
+        assert_eq!(mismatches[0].2, "franken-engine.parser-ast.schema.v7");
     }
 
     #[test]
@@ -1035,7 +1042,7 @@ mod tests {
         assert_eq!(mismatches.len(), 1);
         assert_eq!(mismatches[0].0, "ast_schema");
         assert_eq!(mismatches[0].1, "franken-engine.parser-ast.schema.v3");
-        assert_eq!(mismatches[0].2, "franken-engine.parser-ast.schema.v6");
+        assert_eq!(mismatches[0].2, "franken-engine.parser-ast.schema.v7");
     }
 
     #[test]
@@ -1045,12 +1052,26 @@ mod tests {
         assert_eq!(mismatches.len(), 1);
         assert_eq!(mismatches[0].0, "ast_schema");
         assert_eq!(mismatches[0].1, "franken-engine.parser-ast.schema.v4");
-        assert_eq!(mismatches[0].2, "franken-engine.parser-ast.schema.v6");
+        assert_eq!(mismatches[0].2, "franken-engine.parser-ast.schema.v7");
     }
 
     #[test]
-    fn golden_v6_matches_live_constants() {
+    fn golden_v6_remains_a_historical_schema_vector() {
         let golden = GoldenVersionVector::v6();
+        let mismatches = golden.check_against_live();
+        assert_eq!(
+            mismatches,
+            vec![(
+                "ast_schema".into(),
+                "franken-engine.parser-ast.schema.v6".into(),
+                "franken-engine.parser-ast.schema.v7".into(),
+            )]
+        );
+    }
+
+    #[test]
+    fn golden_v7_matches_live_constants() {
+        let golden = GoldenVersionVector::v7();
         let mismatches = golden.check_against_live();
         assert!(
             mismatches.is_empty(),

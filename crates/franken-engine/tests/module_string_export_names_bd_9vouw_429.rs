@@ -2,8 +2,8 @@
 //! ModuleExportName): `export { a as "x-y" }`, `export { "x" as y } from`,
 //! `export * as "ns" from`, `import { "x" as y } from`. The parser refused
 //! each as unsupported syntax. An import or export that fits no form is a
-//! SyntaxError, and so is an import attribute key the host does not support
-//! (ES2025 16.2.1.7.1). Before, the parser refused these, so `Function`,
+//! SyntaxError. Attribute support is checked by the loader after resolution;
+//! well-formed unknown keys must survive the parser. Before, `Function`,
 //! dynamic import and Test262 saw a refusal rather than a SyntaxError.
 //! `export ... from` takes import attributes as an import does, and a
 //! line ending in `with` continues onto the next. Expected output and
@@ -92,9 +92,8 @@ fn export_from_takes_import_attributes_and_with_continues_the_line() {
     assert_eq!(run_module(root.path(), "main.mjs"), ["valid function"]);
 }
 
-/// Each is a SyntaxError in Node v22.2.0 (the attribute key one a TypeError
-/// there, a SyntaxError by the specification).
-const SYNTAX_ERRORS: [&str; 14] = [
+/// Malformed module grammar, independently of loader attribute support.
+const SYNTAX_ERRORS: [&str; 13] = [
     "export { \"x\" };",
     "export { \"x\" as y };",
     "var a; export { a as \"\\uD800\" };",
@@ -105,11 +104,22 @@ const SYNTAX_ERRORS: [&str; 14] = [
     "import {} \\u0066rom \"./fixture.mjs\";",
     "import* \\u0061s self from \"./fixture.mjs\";",
     "import { Mercury, Mercury as Mercury } from \"./fixture.mjs\";",
-    "import x from \"./fixture.mjs\" with { if: \"\" };",
     "export * from \"./fixture.mjs\" with { type: \"json\", \"typ\\u0065\": \"\" };",
     "export \\u0064efault 0;",
     "var a; export { a as \"b\", a as b };",
 ];
+
+#[test]
+fn unknown_attribute_keys_survive_for_loader_validation() {
+    let source = "import x from \"./fixture.mjs\" with { if: \"\" };";
+    let tree = CanonicalEs2020Parser
+        .parse(source, ParseGoal::Module)
+        .unwrap();
+    let frankenengine_engine::ast::Statement::Import(import) = &tree.body[0] else {
+        panic!("expected an import");
+    };
+    assert_eq!(import.import_attributes.get("if"), Some(""));
+}
 
 #[test]
 fn malformed_imports_and_exports_are_syntax_errors() {

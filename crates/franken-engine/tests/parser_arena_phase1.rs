@@ -36,6 +36,7 @@ fn fixture_tree() -> SyntaxTree {
         goal: ParseGoal::Module,
         body: vec![
             Statement::Import(ImportDeclaration {
+                import_attributes: Default::default(),
                 clause: ImportClause::Default {
                     local: "alpha".to_string(),
                 },
@@ -648,6 +649,7 @@ fn arena_import_without_binding_roundtrip() {
     let tree = SyntaxTree {
         goal: ParseGoal::Module,
         body: vec![Statement::Import(ImportDeclaration {
+            import_attributes: Default::default(),
             clause: ImportClause::SideEffect,
             binding: None,
             source: "./side-effect.js".into(),

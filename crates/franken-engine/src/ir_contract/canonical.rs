@@ -8,6 +8,7 @@
 use super::{Ir3FunctionDesc, Ir3Instruction, Ir3Module, RegRange};
 use crate::deterministic_serde::CanonicalWriter;
 use crate::hash_tiers::ContentHash;
+use crate::import_attributes::ImportAttributes;
 use crate::js_string::JsString;
 
 #[derive(Clone, Copy)]
@@ -17,6 +18,7 @@ enum Field<'a> {
     Bool(bool),
     Str(&'a str),
     Range(RegRange),
+    ImportAttributes(&'a ImportAttributes),
     Null,
 }
 
@@ -81,6 +83,13 @@ fn fields<const N: usize>(writer: &mut CanonicalWriter, mut entries: [(&str, Fie
             Field::Bool(value) => writer.boolean(value),
             Field::Str(value) => writer.string(value),
             Field::Null => writer.null(),
+            Field::ImportAttributes(attributes) => {
+                let count = writer.map_header(attributes.len());
+                for (key, value) in attributes.iter().take(count) {
+                    writer.key(key);
+                    writer.string(value);
+                }
+            }
             Field::Range(value) => fields(
                 writer,
                 [
@@ -332,7 +341,18 @@ fn instruction(writer: &mut CanonicalWriter, instruction: &Ir3Instruction) {
                 preserve_state
             )
         }
-        ImportModule { specifier, dst } => copied!("import_module", specifier, dst),
+        ImportModule { specifier, dst, import_attributes } => {
+            if import_attributes.is_empty() {
+                copied!("import_module", specifier, dst);
+            } else {
+                fields(writer, [
+                    ("op", Field::Str("import_module")),
+                    ("specifier", Field::from(*specifier)),
+                    ("dst", Field::from(*dst)),
+                    ("import_attributes", Field::ImportAttributes(import_attributes)),
+                ]);
+            }
+        }
         ExportBinding {
             name_pool_index,
             src,

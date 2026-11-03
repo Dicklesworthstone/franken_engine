@@ -262,7 +262,7 @@ fn canonical_ast_contract_metadata_is_versioned_and_stable() {
     );
     assert_eq!(
         CANONICAL_AST_SCHEMA_VERSION,
-        "franken-engine.parser-ast.schema.v6"
+        "franken-engine.parser-ast.schema.v7"
     );
     assert_eq!(CANONICAL_AST_HASH_ALGORITHM, "sha256");
     assert_eq!(CANONICAL_AST_HASH_PREFIX, "sha256:");

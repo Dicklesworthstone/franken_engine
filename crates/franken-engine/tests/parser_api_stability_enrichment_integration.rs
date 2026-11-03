@@ -285,8 +285,8 @@ fn enrichment_golden_v1_all_fields_non_empty() {
 #[test]
 fn enrichment_golden_current_matches_live() {
     let g = GoldenVersionVector::current();
-    assert_eq!(g, GoldenVersionVector::v6());
-    assert_eq!(g.ast_schema, "franken-engine.parser-ast.schema.v6");
+    assert_eq!(g, GoldenVersionVector::v7());
+    assert_eq!(g.ast_schema, "franken-engine.parser-ast.schema.v7");
     let mismatches = g.check_against_live();
     assert!(mismatches.is_empty(), "mismatches: {:?}", mismatches);
 }

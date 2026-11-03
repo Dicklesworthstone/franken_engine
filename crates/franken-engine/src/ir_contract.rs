@@ -16,6 +16,7 @@ use crate::ast::{AssignmentOperator, BinaryOperator, SyntaxTree, UnaryOperator};
 use crate::deterministic_serde::{self, CanonicalValue};
 use crate::hash_tiers::ContentHash;
 use crate::ifc_artifacts::Label;
+use crate::import_attributes::ImportAttributes;
 use crate::js_string::{JsString, canonical_js_string_value};
 
 mod canonical;
@@ -33,6 +34,8 @@ pub struct IrSchemaVersion {
 }
 
 impl IrSchemaVersion {
+    /// `0.18.0` retains static import attributes in IR0, IR1, IR2 and IR3.
+    /// Verified IR boundaries reject newer versions rather than erase assertions.
     /// `0.17.0` adds optional Script strictness to IR0, strict global scopes
     /// and assignment modes to IR1/IR2, and global var/function declarations
     /// to IR3.
@@ -57,7 +60,7 @@ impl IrSchemaVersion {
     /// lone-surrogate values use `$wtf16`.
     pub const CURRENT: Self = Self {
         major: 0,
-        minor: 17,
+        minor: 18,
         patch: 0,
     };
 
@@ -527,7 +530,11 @@ pub enum Ir1Op {
     /// Return from current function.
     Return,
     /// Import a module by specifier.
-    ImportModule { specifier: JsString },
+    ImportModule {
+        specifier: JsString,
+        #[serde(default, skip_serializing_if = "ImportAttributes::is_empty")]
+        import_attributes: ImportAttributes,
+    },
     /// Export a binding from the module.
     ExportBinding { name: String, binding_id: BindingId },
     /// Await an expression (async context).
@@ -874,10 +881,16 @@ impl Ir1Op {
             Self::Return => {
                 CanonicalValue::map_from_entries([("op", CanonicalValue::str("return"))])
             }
-            Self::ImportModule { specifier } => CanonicalValue::map_from_entries([
-                ("op", CanonicalValue::str("import_module")),
-                ("specifier", canonical_js_string_value(specifier)),
-            ]),
+            Self::ImportModule { specifier, import_attributes } => {
+                let mut entries = vec![
+                    ("op", CanonicalValue::str("import_module")),
+                    ("specifier", canonical_js_string_value(specifier)),
+                ];
+                if !import_attributes.is_empty() {
+                    entries.push(("import_attributes", import_attributes.canonical_value()));
+                }
+                CanonicalValue::map_from_entries(entries)
+            }
             Self::ExportBinding { name, binding_id } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("export_binding")),
                 ("binding_id", CanonicalValue::U64(u64::from(*binding_id))),
@@ -1855,7 +1868,12 @@ pub enum Ir3Instruction {
         preserve_state: bool,
     },
     /// Load (and evaluate) an ES module; returns the namespace object.
-    ImportModule { specifier: Reg, dst: Reg },
+    ImportModule {
+        specifier: Reg,
+        dst: Reg,
+        #[serde(default, skip_serializing_if = "ImportAttributes::is_empty")]
+        import_attributes: ImportAttributes,
+    },
     /// Register an export binding for the current module.
     ExportBinding { name_pool_index: u32, src: Reg },
 
@@ -2562,11 +2580,17 @@ impl Ir3Instruction {
                 ("kind", CanonicalValue::U64(u64::from(*kind))),
                 ("preserve_state", CanonicalValue::Bool(*preserve_state)),
             ]),
-            Self::ImportModule { specifier, dst } => CanonicalValue::map_from_entries([
-                ("op", CanonicalValue::str("import_module")),
-                ("specifier", CanonicalValue::U64(u64::from(*specifier))),
-                ("dst", CanonicalValue::U64(u64::from(*dst))),
-            ]),
+            Self::ImportModule { specifier, dst, import_attributes } => {
+                let mut entries = vec![
+                    ("op", CanonicalValue::str("import_module")),
+                    ("specifier", CanonicalValue::U64(u64::from(*specifier))),
+                    ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ];
+                if !import_attributes.is_empty() {
+                    entries.push(("import_attributes", import_attributes.canonical_value()));
+                }
+                CanonicalValue::map_from_entries(entries)
+            }
             Self::ExportBinding {
                 name_pool_index,
                 src,
@@ -3226,6 +3250,7 @@ impl std::error::Error for IrError {}
 pub fn verify_ir0_hash(module: &Ir0Module, expected: &ContentHash) -> Result<(), IrError> {
     verify_schema_version(&module.header)?;
     verify_ir0_script_global_schema(module)?;
+    verify_ir0_import_attributes_schema(module)?;
     let actual = module.content_hash();
     if &actual != expected {
         return Err(IrError::new(
@@ -3247,6 +3272,7 @@ pub fn verify_ir1_source(module: &Ir1Module, ir0_hash: &ContentHash) -> Result<(
     verify_ir1_derived_constructor_schema(module)?;
     verify_ir1_object_method_schema(module)?;
     verify_ir1_script_global_schema(module)?;
+    verify_ir1_import_attributes_schema(module)?;
     match &module.header.source_hash {
         Some(source_hash) if source_hash == ir0_hash => Ok(()),
         Some(source_hash) => Err(IrError::new(
@@ -3271,6 +3297,7 @@ pub fn verify_ir3_specialization(module: &Ir3Module) -> Result<(), IrError> {
     verify_schema_version(&module.header)?;
     verify_ir3_derived_constructor_schema(module)?;
     verify_ir3_object_method_schema(module)?;
+    verify_ir3_import_attributes_schema(module)?;
     let mut global_prelude = true;
     let mut global_names = std::collections::BTreeSet::new();
     for instruction in &module.instructions {
@@ -3427,6 +3454,80 @@ pub fn verify_schema_version(header: &IrHeader) -> Result<(), IrError> {
         ));
     }
 
+    Ok(())
+}
+
+const IMPORT_ATTRIBUTES_SCHEMA_VERSION: IrSchemaVersion = IrSchemaVersion {
+    major: 0,
+    minor: 18,
+    patch: 0,
+};
+
+fn require_import_attributes_schema(header: &IrHeader) -> Result<(), IrError> {
+    if header.schema_version < IMPORT_ATTRIBUTES_SCHEMA_VERSION {
+        return Err(IrError::new(
+            IrErrorCode::SchemaVersionMismatch,
+            format!(
+                "static import attributes require schema {}, provided {}",
+                IMPORT_ATTRIBUTES_SCHEMA_VERSION, header.schema_version,
+            ),
+            header.level,
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn verify_ir0_import_attributes_schema(module: &Ir0Module) -> Result<(), IrError> {
+    if module.tree.body.iter().any(|statement| match statement {
+        crate::ast::Statement::Import(import) => !import.import_attributes.is_empty(),
+        crate::ast::Statement::Export(crate::ast::ExportDeclaration {
+            kind: crate::ast::ExportKind::NamedClause(clause),
+            ..
+        }) => !clause.import_attributes().is_empty(),
+        _ => false,
+    }) {
+        require_import_attributes_schema(&module.header)?;
+    }
+    Ok(())
+}
+
+fn ir1_op_uses_import_attributes(op: &Ir1Op) -> bool {
+    match op {
+        Ir1Op::ImportModule {
+            import_attributes, ..
+        } => !import_attributes.is_empty(),
+        Ir1Op::DeclareFunction { body_ops, .. } | Ir1Op::CreateFunction { body_ops, .. } => {
+            body_ops.iter().any(ir1_op_uses_import_attributes)
+        }
+        _ => false,
+    }
+}
+
+pub(crate) fn verify_ir1_import_attributes_schema(module: &Ir1Module) -> Result<(), IrError> {
+    if module.ops.iter().any(ir1_op_uses_import_attributes) {
+        require_import_attributes_schema(&module.header)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn verify_ir2_import_attributes_schema(module: &Ir2Module) -> Result<(), IrError> {
+    if module
+        .ops
+        .iter()
+        .any(|op| ir1_op_uses_import_attributes(&op.inner))
+    {
+        require_import_attributes_schema(&module.header)?;
+    }
+    Ok(())
+}
+
+fn verify_ir3_import_attributes_schema(module: &Ir3Module) -> Result<(), IrError> {
+    if module.instructions.iter().any(|instruction| {
+        matches!(instruction, Ir3Instruction::ImportModule { import_attributes, .. }
+            if !import_attributes.is_empty())
+    }) {
+        require_import_attributes_schema(&module.header)?;
+    }
     Ok(())
 }
 
@@ -3870,7 +3971,7 @@ mod tests {
 
     #[test]
     fn schema_version_display() {
-        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.17.0");
+        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.18.0");
     }
 
     #[test]
@@ -4329,6 +4430,7 @@ mod tests {
             Ir1Op::Call { arg_count: 2 },
             Ir1Op::Return,
             Ir1Op::ImportModule {
+                import_attributes: Default::default(),
                 specifier: "mod".into(),
             },
             Ir1Op::ExportBinding {
@@ -4633,6 +4735,7 @@ mod tests {
                 dst: 2,
             },
             Ir3Instruction::ImportModule {
+                import_attributes: Default::default(),
                 specifier: 0,
                 dst: 1,
             },
@@ -5728,6 +5831,7 @@ mod tests {
             Ir1Op::Call { arg_count: 3 },
             Ir1Op::Return,
             Ir1Op::ImportModule {
+                import_attributes: Default::default(),
                 specifier: "m".into(),
             },
             Ir1Op::ExportBinding {
@@ -5764,6 +5868,7 @@ mod tests {
     #[test]
     fn ir1_import_module_preserves_historical_and_exact_wire_shapes_bd_lfq44() {
         let ordinary = Ir1Op::ImportModule {
+            import_attributes: Default::default(),
             specifier: "pkg".into(),
         };
         assert_eq!(
@@ -5779,9 +5884,11 @@ mod tests {
         );
 
         let d800 = Ir1Op::ImportModule {
+            import_attributes: Default::default(),
             specifier: JsString::from_code_units(&[0xD800]),
         };
         let dc00 = Ir1Op::ImportModule {
+            import_attributes: Default::default(),
             specifier: JsString::from_code_units(&[0xDC00]),
         };
         let d800_json = serde_json::to_string(&d800).expect("serialize exact import op");
@@ -6253,7 +6360,7 @@ mod tests {
     fn schema_version_current_value() {
         let v = IrSchemaVersion::CURRENT;
         assert_eq!(v.major, 0);
-        assert_eq!(v.minor, 17);
+        assert_eq!(v.minor, 18);
         assert_eq!(v.patch, 0);
     }
 
@@ -7206,7 +7313,7 @@ mod tests {
 
         // Verify error message contains specific version numbers
         assert!(err.message.contains("99.88.77"));
-        assert!(err.message.contains("0.17.0")); // current version
+        assert!(err.message.contains("0.18.0")); // current version
 
         // Verify error can be displayed and contains IR level
         let display = err.to_string();

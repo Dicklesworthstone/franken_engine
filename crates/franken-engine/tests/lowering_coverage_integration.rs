@@ -83,6 +83,7 @@ fn make_import(source: &str, binding: Option<&str>) -> Statement {
         None => ImportClause::SideEffect,
     };
     Statement::Import(ImportDeclaration {
+        import_attributes: Default::default(),
         clause,
         source: source.into(),
         binding: binding.map(|s| s.to_string()),

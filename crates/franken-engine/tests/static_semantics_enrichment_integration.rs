@@ -77,6 +77,7 @@ fn var_decl(
 
 fn import_stmt(binding: Option<&str>, source: &str, line: u64) -> Statement {
     Statement::Import(ImportDeclaration {
+        import_attributes: Default::default(),
         clause: match binding {
             Some(name) => ImportClause::Default {
                 local: name.to_string(),

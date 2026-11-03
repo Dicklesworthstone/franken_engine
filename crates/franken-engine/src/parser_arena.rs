@@ -9,6 +9,7 @@ use crate::ast::{
     ImportDeclaration, NamedExportClause, ParseGoal, SourceSpan, Statement, SyntaxTree,
     VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
 };
+use crate::import_attributes::ImportAttributes;
 use crate::js_string::JsString;
 
 const HANDLE_GENERATION: u32 = 1;
@@ -211,6 +212,7 @@ pub enum ArenaNode {
     Import {
         binding: Option<String>,
         source: JsString,
+        import_attributes: ImportAttributes,
         span: SpanHandle,
     },
     ExportDefault {
@@ -460,12 +462,14 @@ impl ParserArena {
                 let span = self.alloc_span(&import.span)?;
                 self.charge_bytes(NODE_BASE_ESTIMATED_BYTES)?;
                 self.charge_bytes(js_string_bytes(&import.source))?;
+                self.charge_bytes(import_attribute_bytes(&import.import_attributes))?;
                 for binding in import.clause.binding_names() {
                     self.charge_bytes(string_bytes(binding))?;
                 }
                 ArenaNode::Import {
                     binding: import.binding.clone(),
                     source: import.source.clone(),
+                    import_attributes: import.import_attributes.clone(),
                     span,
                 }
             }
@@ -479,6 +483,7 @@ impl ParserArena {
                     }
                     ExportKind::NamedClause(clause) => {
                         self.charge_bytes(string_bytes(clause.canonical_head()))?;
+                        self.charge_bytes(import_attribute_bytes(clause.import_attributes()))?;
                         if let Some(source) = clause.source() {
                             self.charge_bytes(js_string_bytes(source))?;
                         }
@@ -708,6 +713,7 @@ impl ParserArena {
             ArenaNode::Import {
                 binding,
                 source,
+                import_attributes,
                 span,
             } => Ok(Statement::Import(ImportDeclaration {
                 clause: match &binding {
@@ -718,6 +724,7 @@ impl ParserArena {
                 },
                 binding,
                 source,
+                import_attributes,
                 span: self.span(span)?.clone(),
             })),
             ArenaNode::ExportDefault { expression, span } => {
@@ -849,6 +856,14 @@ fn string_bytes(value: &str) -> u64 {
     u64::try_from(value.len()).unwrap_or(u64::MAX)
 }
 
+fn import_attribute_bytes(attributes: &ImportAttributes) -> u64 {
+    attributes.iter().fold(0u64, |bytes, (key, value)| {
+        bytes
+            .saturating_add(string_bytes(key))
+            .saturating_add(string_bytes(value))
+    })
+}
+
 fn js_string_bytes(value: &JsString) -> u64 {
     let utf8_projection_bytes = string_bytes(value.as_utf8_projection());
     if value.is_well_formed() {
@@ -933,15 +948,22 @@ fn node_audit_descriptor(node: &ArenaNode) -> String {
         ArenaNode::Import {
             binding,
             source,
+            import_attributes,
             span,
         } => {
             let source = module_source_audit_descriptor(source);
-            format!(
+            let mut descriptor = format!(
                 "import binding={} source={} span={}",
                 binding.as_deref().unwrap_or("_"),
                 source,
                 span.index()
-            )
+            );
+            if !import_attributes.is_empty() {
+                descriptor.push_str(" import_attributes=");
+                descriptor.push_str(&serde_json::to_string(import_attributes)
+                    .expect("import attribute audit serialization should be infallible"));
+            }
+            descriptor
         }
         ArenaNode::ExportDefault { expression, span } => {
             format!(
@@ -1035,6 +1057,7 @@ mod tests {
         SyntaxTree {
             goal: ParseGoal::Module,
             body: vec![Statement::Import(ImportDeclaration {
+                import_attributes: Default::default(),
                 clause: ImportClause::Default {
                     local: "foo".to_string(),
                 },
@@ -1698,6 +1721,7 @@ mod tests {
     #[test]
     fn node_audit_descriptor_import() {
         let node = ArenaNode::Import {
+            import_attributes: Default::default(),
             binding: Some("foo".to_string()),
             source: "./bar.js".into(),
             span: SpanHandle::new(0),
@@ -1711,6 +1735,7 @@ mod tests {
     #[test]
     fn node_audit_descriptor_import_no_binding() {
         let node = ArenaNode::Import {
+            import_attributes: Default::default(),
             binding: None,
             source: "./side.js".into(),
             span: SpanHandle::new(0),
@@ -1744,11 +1769,13 @@ mod tests {
     #[test]
     fn node_audit_descriptors_distinguish_exact_module_sources_bd_lfq44() {
         let import_d800 = ArenaNode::Import {
+            import_attributes: Default::default(),
             binding: None,
             source: JsString::from_code_units(&[0xD800]),
             span: SpanHandle::new(0),
         };
         let import_dc00 = ArenaNode::Import {
+            import_attributes: Default::default(),
             binding: None,
             source: JsString::from_code_units(&[0xDC00]),
             span: SpanHandle::new(0),
@@ -1760,6 +1787,7 @@ mod tests {
         assert_ne!(import_d800_desc, import_dc00_desc);
 
         let ordinary_import = ArenaNode::Import {
+            import_attributes: Default::default(),
             binding: None,
             source: JsString::from("exact_utf16=d800"),
             span: SpanHandle::new(0),
@@ -1958,6 +1986,7 @@ mod tests {
             goal: ParseGoal::Module,
             body: vec![
                 Statement::Import(ImportDeclaration {
+                    import_attributes: Default::default(),
                     clause: ImportClause::Default {
                         local: "fs".to_string(),
                     },
@@ -1990,6 +2019,7 @@ mod tests {
         let tree = SyntaxTree {
             goal: ParseGoal::Module,
             body: vec![Statement::Import(ImportDeclaration {
+                import_attributes: Default::default(),
                 clause: ImportClause::SideEffect,
                 binding: None,
                 source: "./side-effects.js".into(),
@@ -2013,6 +2043,7 @@ mod tests {
             goal: ParseGoal::Module,
             body: vec![
                 Statement::Import(ImportDeclaration {
+                    import_attributes: Default::default(),
                     clause: ImportClause::SideEffect,
                     binding: None,
                     source: d800.clone(),

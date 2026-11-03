@@ -60,6 +60,7 @@ fn import_stmt(binding: Option<&str>, source: &str) -> Statement {
         None => ImportClause::SideEffect,
     };
     Statement::Import(ImportDeclaration {
+        import_attributes: Default::default(),
         clause,
         binding: binding.map(String::from),
         source: source.into(),
@@ -521,6 +522,7 @@ fn expression_boolean_true_and_false_not_equal() {
 #[test]
 fn import_declaration_with_binding() {
     let decl = ImportDeclaration {
+        import_attributes: Default::default(),
         clause: ImportClause::Default {
             local: "foo".to_string(),
         },
@@ -535,6 +537,7 @@ fn import_declaration_with_binding() {
 #[test]
 fn import_declaration_without_binding() {
     let decl = ImportDeclaration {
+        import_attributes: Default::default(),
         clause: ImportClause::SideEffect,
         binding: None,
         source: "side-effect-only".into(),
@@ -546,6 +549,7 @@ fn import_declaration_without_binding() {
 #[test]
 fn import_declaration_canonical_value_with_binding_has_string() {
     let decl = ImportDeclaration {
+        import_attributes: Default::default(),
         clause: ImportClause::Default {
             local: "dep".to_string(),
         },
@@ -562,6 +566,7 @@ fn import_declaration_canonical_value_with_binding_has_string() {
 #[test]
 fn import_declaration_canonical_value_without_binding_has_null() {
     let decl = ImportDeclaration {
+        import_attributes: Default::default(),
         clause: ImportClause::SideEffect,
         binding: None,
         source: "side".into(),
@@ -575,6 +580,7 @@ fn import_declaration_canonical_value_without_binding_has_null() {
 #[test]
 fn import_declaration_serde_round_trip() {
     let decl = ImportDeclaration {
+        import_attributes: Default::default(),
         clause: ImportClause::Default {
             local: "x".to_string(),
         },
@@ -590,6 +596,7 @@ fn import_declaration_serde_round_trip() {
 #[test]
 fn import_declaration_serde_round_trip_no_binding() {
     let decl = ImportDeclaration {
+        import_attributes: Default::default(),
         clause: ImportClause::SideEffect,
         binding: None,
         source: "mod".into(),
@@ -603,6 +610,7 @@ fn import_declaration_serde_round_trip_no_binding() {
 #[test]
 fn import_declaration_module_source_wire_is_exact_and_backward_compatible_bd_lfq44() {
     let ordinary = ImportDeclaration {
+        import_attributes: Default::default(),
         clause: ImportClause::SideEffect,
         binding: None,
         source: "pkg".into(),
@@ -614,6 +622,7 @@ fn import_declaration_module_source_wire_is_exact_and_backward_compatible_bd_lfq
     );
 
     let exact = |unit| ImportDeclaration {
+        import_attributes: Default::default(),
         clause: ImportClause::SideEffect,
         binding: None,
         source: JsString::from_code_units(&[unit]),
@@ -1073,6 +1082,7 @@ fn determinism_hash_uniqueness_across_many_variants() {
 fn traverse_body_collecting_spans() {
     let tree = simple_module(vec![
         Statement::Import(ImportDeclaration {
+            import_attributes: Default::default(),
             clause: ImportClause::Default {
                 local: "a".to_string(),
             },
@@ -1186,6 +1196,7 @@ fn canonical_bytes_stable_after_serde_round_trip() {
 #[test]
 fn import_empty_source_string() {
     let decl = ImportDeclaration {
+        import_attributes: Default::default(),
         clause: ImportClause::Default {
             local: String::new(),
         },
@@ -1299,6 +1310,7 @@ fn expression_canonical_value_deterministic_all_variants() {
 #[test]
 fn import_declaration_canonical_value_deterministic() {
     let decl = ImportDeclaration {
+        import_attributes: Default::default(),
         clause: ImportClause::Default {
             local: "x".to_string(),
         },
@@ -1552,7 +1564,7 @@ fn canonical_ast_contract_constants_are_pinned() {
     );
     assert_eq!(
         CANONICAL_AST_SCHEMA_VERSION,
-        "franken-engine.parser-ast.schema.v6"
+        "franken-engine.parser-ast.schema.v7"
     );
     assert_eq!(CANONICAL_AST_HASH_ALGORITHM, "sha256");
     assert_eq!(CANONICAL_AST_HASH_PREFIX, "sha256:");

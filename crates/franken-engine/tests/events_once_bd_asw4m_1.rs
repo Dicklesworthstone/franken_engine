@@ -281,7 +281,7 @@ fn node_events_named_import_preserves_observable_helper_and_builtin_boundary() {
     let ir1 = lower_ir0_to_ir1(&ir0).expect("lower supported events.once ESM import");
 
     assert!(!ir1.module.ops.iter().any(|op| matches!(op,
-        Ir1Op::ImportModule { specifier } if specifier == "node:events"
+        Ir1Op::ImportModule { specifier, .. } if specifier == "node:events"
     )));
 
     // The shared factory obtains the native constructor, but once itself must
@@ -341,7 +341,7 @@ fn async_function_lowering_emits_a_real_await_instruction() {
     .expect("lower async ESM events.once source");
 
     assert!(!output.ir1.ops.iter().any(|op| matches!(op,
-        Ir1Op::ImportModule { specifier } if specifier == "node:events"
+        Ir1Op::ImportModule { specifier, .. } if specifier == "node:events"
     )));
     assert!(
         output
@@ -378,7 +378,7 @@ fn first_class_events_once_shapes_execute_and_dynamic_requires_stay_refused() {
         let ir0 = Ir0Module::from_syntax_tree(tree, "first_class_events_once.mjs");
         let ir1 = lower_ir0_to_ir1(&ir0).expect("lower first-class ESM export");
         assert!(!ir1.module.ops.iter().any(|op| matches!(op,
-            Ir1Op::ImportModule { specifier } if specifier == "node:events"
+            Ir1Op::ImportModule { specifier, .. } if specifier == "node:events"
         )));
     }
 }

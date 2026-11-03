@@ -4192,6 +4192,13 @@ impl NodeSequenceTracker {
     /// Returns `Ok(())` if accepted, `Err` if the sequence is a replay
     /// or out-of-order.
     pub fn accept(&mut self, node_id: &NodeId, sequence: u64) -> Result<(), ProtocolError> {
+        self.validate_sequence(node_id, sequence)?;
+        self.record_accepted(node_id, sequence);
+        Ok(())
+    }
+
+    /// Check replay protection without reserving the sequence.
+    fn validate_sequence(&self, node_id: &NodeId, sequence: u64) -> Result<(), ProtocolError> {
         let last = self.last_accepted.get(node_id).copied().unwrap_or(0);
         if sequence <= last {
             return Err(ProtocolError::ReplayDetected {
@@ -4200,8 +4207,12 @@ impl NodeSequenceTracker {
                 last_accepted_seq: last,
             });
         }
-        self.last_accepted.insert(node_id.clone(), sequence);
         Ok(())
+    }
+
+    /// Publish a sequence only after every admission check has succeeded.
+    fn record_accepted(&mut self, node_id: &NodeId, sequence: u64) {
+        self.last_accepted.insert(node_id.clone(), sequence);
     }
 
     /// Return the last accepted sequence for a node, or 0 if unseen.
@@ -4244,17 +4255,31 @@ impl EvidenceAccumulator {
     /// Returns `Err` if the evidence was already seen (deduplicated by
     /// `trace_id`).
     pub fn ingest(&mut self, packet: &EvidencePacket) -> Result<(), ProtocolError> {
-        let ext_evidence = self
-            .seen_evidence
-            .entry(packet.extension_id.clone())
-            .or_default();
+        self.validate_packet(packet)?;
+        self.record_validated(packet);
+        Ok(())
+    }
 
-        if !ext_evidence.insert(packet.trace_id.clone()) {
+    fn validate_packet(&self, packet: &EvidencePacket) -> Result<(), ProtocolError> {
+        if self
+            .seen_evidence
+            .get(&packet.extension_id)
+            .is_some_and(|seen| seen.contains(&packet.trace_id))
+        {
             return Err(ProtocolError::DuplicateEvidence {
                 trace_id: packet.trace_id.clone(),
                 extension_id: packet.extension_id.clone(),
             });
         }
+        Ok(())
+    }
+
+    /// Accumulate a packet whose duplicate check has already succeeded.
+    fn record_validated(&mut self, packet: &EvidencePacket) {
+        self.seen_evidence
+            .entry(packet.extension_id.clone())
+            .or_default()
+            .insert(packet.trace_id.clone());
 
         let acc = self
             .accumulated
@@ -4267,8 +4292,6 @@ impl EvidenceAccumulator {
             .entry(packet.extension_id.clone())
             .or_insert(0);
         *count = count.saturating_add(1);
-
-        Ok(())
     }
 
     /// Return the accumulated posterior delta for an extension (millionths).
@@ -4525,12 +4548,17 @@ impl FleetProtocolState {
             });
         }
 
-        // Replay protection.
+        // Preserve replay-before-duplicate error precedence, but complete both
+        // read-only checks before publishing evidence or the replay frontier.
+        // A rejected duplicate at a higher sequence must not block later
+        // legitimate evidence, heartbeats, or intents from that actor.
         self.sequence_tracker
-            .accept(&packet.node_id, packet.sequence)?;
+            .validate_sequence(&packet.node_id, packet.sequence)?;
+        self.evidence.validate_packet(packet)?;
 
-        // Accumulate evidence.
-        self.evidence.ingest(packet)?;
+        self.evidence.record_validated(packet);
+        self.sequence_tracker
+            .record_accepted(&packet.node_id, packet.sequence);
 
         Ok(())
     }
@@ -5094,6 +5122,100 @@ mod tests {
         let p2 = test_evidence("remote-1", "ext-2", 1, 100_000);
         let err = state.process_evidence(&p2).unwrap_err();
         assert!(matches!(err, ProtocolError::ReplayDetected { .. }));
+    }
+
+    #[test]
+    fn state_duplicate_evidence_cannot_poison_actor_sequence() {
+        for rejected_node in ["remote-1", "previously-unseen"] {
+            let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+            let original = test_evidence("remote-1", "ext-1", 1, 500_000);
+            state.process_evidence(&original).unwrap();
+            state
+                .process_heartbeat(&test_heartbeat("observer", 1, 1_000))
+                .unwrap();
+            state
+                .process_intent(&test_intent(
+                    "observer",
+                    "ext-1",
+                    ContainmentAction::Sandbox,
+                    2,
+                    1,
+                ))
+                .unwrap();
+
+            let mut duplicate = original.clone();
+            duplicate.node_id = NodeId::new(rejected_node);
+            duplicate.sequence = u64::MAX;
+            duplicate.posterior_delta_millionths = i64::MAX;
+            duplicate.signature = test_signature(rejected_node);
+            let before = serde_json::to_value(&state).unwrap();
+            assert!(matches!(
+                state.process_evidence(&duplicate),
+                Err(ProtocolError::DuplicateEvidence { .. })
+            ));
+            assert_eq!(serde_json::to_value(&state).unwrap(), before);
+
+            // A rejected frame must not reserve any sequence, even for an
+            // actor that has never been admitted. Every normal ingress lane
+            // must remain usable at that actor's next legitimate sequence.
+            let next_sequence = if rejected_node == "remote-1" { 2 } else { 1 };
+            let fresh = test_evidence(rejected_node, "ext-2", next_sequence, 200_000);
+            state.process_evidence(&fresh).unwrap();
+            state
+                .process_heartbeat(&test_heartbeat(rejected_node, next_sequence + 1, 2_000))
+                .unwrap();
+            state
+                .process_intent(&test_intent(
+                    rejected_node,
+                    "ext-2",
+                    ContainmentAction::Quarantine,
+                    next_sequence + 2,
+                    1,
+                ))
+                .unwrap();
+            assert_eq!(state.evidence.posterior_delta("ext-1"), 500_000);
+            assert_eq!(state.evidence.evidence_count("ext-2"), 1);
+            assert_eq!(
+                state
+                    .sequence_tracker
+                    .last_sequence(&NodeId::new(rejected_node)),
+                next_sequence + 2
+            );
+        }
+    }
+
+    #[test]
+    fn state_rejected_evidence_preserves_trace_and_error_precedence() {
+        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+        let original = test_evidence("remote-1", "ext-1", 2, 500_000);
+        state.process_evidence(&original).unwrap();
+        let before = serde_json::to_value(&state).unwrap();
+
+        // A packet that is both a replay and a duplicate keeps the established
+        // replay error, and a fresh trace on a stale sequence is not consumed.
+        assert!(matches!(
+            state.process_evidence(&original),
+            Err(ProtocolError::ReplayDetected { .. })
+        ));
+        assert_eq!(serde_json::to_value(&state).unwrap(), before);
+        let mut fresh = test_evidence("remote-1", "ext-2", 2, 200_000);
+        assert!(matches!(
+            state.process_evidence(&fresh),
+            Err(ProtocolError::ReplayDetected { .. })
+        ));
+        assert_eq!(serde_json::to_value(&state).unwrap(), before);
+
+        fresh.protocol_version = ProtocolVersion::V2;
+        assert!(matches!(
+            state.process_evidence(&fresh),
+            Err(ProtocolError::IncompatibleVersion { .. })
+        ));
+        assert_eq!(serde_json::to_value(&state).unwrap(), before);
+        fresh.protocol_version = ProtocolVersion::CURRENT;
+        fresh.sequence = 3;
+        state.process_evidence(&fresh).unwrap();
+        assert_eq!(state.evidence.posterior_delta("ext-2"), 200_000);
+        assert_eq!(state.evidence.evidence_count("ext-2"), 1);
     }
 
     #[test]

@@ -405,6 +405,30 @@ impl ReconstructionReceipt {
             });
         }
 
+        // Reconstruction admits one origin and one sequence/index base for
+        // the entire shard set, including the parity shard used for recovery.
+        // These fields are present in every commitment, so intrinsic receipt
+        // validation and ledger restoration must reject impossible provenance
+        // even when a caller has recomputed the legacy commitment and tag.
+        // The nonzero plan and exact cardinality above ensure a first shard.
+        let first = &self.contributing_shards[0];
+        let sequence_base = first
+            .sequence
+            .checked_sub(u64::from(first.shard_index))
+            .ok_or_else(|| ReceiptError::InconsistentStructure {
+                reason: "contributing shard sequence precedes its index".to_string(),
+            })?;
+        for shard in &self.contributing_shards {
+            if shard.origin_node != first.origin_node
+                || shard.sequence.checked_sub(u64::from(shard.shard_index)) != Some(sequence_base)
+            {
+                return Err(ReceiptError::InconsistentStructure {
+                    reason: "contributing shards have inconsistent origin or sequence base"
+                        .to_string(),
+                });
+            }
+        }
+
         Ok(())
     }
 
@@ -920,6 +944,89 @@ mod tests {
     }
 
     #[test]
+    fn receipt_rejects_impossible_provenance_at_all_admission_boundaries() {
+        let shards = shards_for(b"one origin and sequence base per reconstruction", 3, 4);
+        let (_, receipt) =
+            reconstruct_with_receipt(&all_data(&shards), node("recon"), 5_000).unwrap();
+        let recovery_shards: Vec<_> = shards
+            .iter()
+            .filter(|shard| shard.shard_index != 1)
+            .cloned()
+            .collect();
+        let (_, recovery) =
+            reconstruct_with_receipt(&recovery_shards, node("recon"), 5_001).unwrap();
+
+        let mut invalid_receipts = vec![receipt.clone(); 3];
+        invalid_receipts[0].contributing_shards[1].origin_node = node("foreign-origin");
+        invalid_receipts[1].contributing_shards[1].sequence += 1;
+        invalid_receipts[2].contributing_shards[1].sequence = 0;
+        let mut foreign_parity = recovery.clone();
+        foreign_parity.contributing_shards[2].origin_node = node("foreign-parity-origin");
+        invalid_receipts.push(foreign_parity);
+        let mut displaced_parity = recovery;
+        displaced_parity.contributing_shards[2].sequence += 1;
+        invalid_receipts.push(displaced_parity);
+
+        for mut invalid in invalid_receipts {
+            // A fresh commitment/tag cannot turn provenance that the actual
+            // reconstruction rejects into a structurally possible receipt.
+            reauthenticate_legacy_receipt(&mut invalid);
+            assert!(matches!(
+                invalid.verify(),
+                Err(ReceiptError::InconsistentStructure { .. })
+            ));
+
+            let mut ledger = ReconstructionReceiptLedger::new();
+            ledger.record(receipt.clone()).unwrap();
+            let before = ledger.clone();
+            assert!(ledger.record(invalid.clone()).is_err());
+            assert_eq!(ledger, before);
+
+            // The legacy reindex entry point must also refuse these receipts
+            // without publishing a partially rebuilt dedup index.
+            let mut invalid_ledger = ledger;
+            invalid_ledger.receipts.push(invalid.clone());
+            assert!(invalid_ledger.reindex().is_err());
+            assert!(invalid_ledger.contains(&receipt.receipt_commitment));
+            assert!(!invalid_ledger.contains(&invalid.receipt_commitment));
+
+            let wire = serde_json::json!({ "receipts": [receipt.clone(), invalid] });
+            assert!(serde_json::from_value::<ReconstructionReceiptLedger>(wire).is_err());
+        }
+    }
+
+    #[test]
+    fn receipt_accepts_consistent_provenance_near_sequence_limit() {
+        let payload = b"nonzero sequence bases and parity recovery remain valid";
+        let shards = encode_erasure_shards(
+            "sequence-limit",
+            node("origin"),
+            u64::MAX - 3,
+            1_000,
+            payload,
+            ErasureCodingPlan::new(3, 4).unwrap(),
+        )
+        .unwrap();
+        let recovery_shards: Vec<_> = shards
+            .iter()
+            .filter(|shard| shard.shard_index != 1)
+            .cloned()
+            .collect();
+        for available in [all_data(&shards), recovery_shards] {
+            let (reconstructed, receipt) =
+                reconstruct_with_receipt(&available, node("recon"), 2_000).unwrap();
+            assert_eq!(reconstructed, payload);
+            receipt.verify().unwrap();
+            receipt.verify_against_shards(&available, true).unwrap();
+            let mut ledger = ReconstructionReceiptLedger::new();
+            ledger.record(receipt).unwrap();
+            let restored: ReconstructionReceiptLedger =
+                serde_json::from_value(serde_json::to_value(&ledger).unwrap()).unwrap();
+            assert_eq!(restored, ledger);
+        }
+    }
+
+    #[test]
     fn receipt_verify_against_shards_passes_with_reconstruction() {
         let payload = b"cross-check against the raw shard set";
         let shards = shards_for(payload, 3, 4);
@@ -1384,15 +1491,29 @@ mod tests {
             commitment.sequence = data[1].sequence;
             commitment.shard_hash = data[1].shard_hash;
             reauthenticate_legacy_receipt(&mut receipt);
-            receipt
-                .verify()
-                .expect("each mutated receipt remains individually self-consistent");
-
-            assert!(matches!(
-                receipt.verify_against_shards(&data, false),
-                Err(ReceiptError::ReconstructionFailed { ref reason, .. })
-                    if reason.contains("mixed shard set provenance")
-            ));
+            if mutation == "sequence" {
+                // Sequence/index provenance is present in the receipt itself,
+                // so both admission paths reject it before inspecting shards.
+                assert!(matches!(
+                    receipt.verify(),
+                    Err(ReceiptError::InconsistentStructure { ref reason })
+                        if reason.contains("sequence base")
+                ));
+                assert!(matches!(
+                    receipt.verify_against_shards(&data, false),
+                    Err(ReceiptError::InconsistentStructure { ref reason })
+                        if reason.contains("sequence base")
+                ));
+            } else {
+                // Individual shard timestamps are available only in the shard
+                // set; they still require the stronger cross-shard check.
+                receipt.verify().expect("receipt omits shard timestamps");
+                assert!(matches!(
+                    receipt.verify_against_shards(&data, false),
+                    Err(ReceiptError::ReconstructionFailed { ref reason, .. })
+                        if reason.contains("mixed shard set provenance")
+                ));
+            }
         }
     }
 

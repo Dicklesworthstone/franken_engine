@@ -2280,6 +2280,9 @@ impl InterpreterCore {
         // Modules.
         for record in module_state.modules.values() {
             m.object(record.namespace_object);
+            if let Some(id) = record.import_meta_object {
+                m.object(id);
+            }
             record.exports.values().for_each(|value| m.value(value));
             if let Some(id) = record.cjs_module_object {
                 m.object(id);

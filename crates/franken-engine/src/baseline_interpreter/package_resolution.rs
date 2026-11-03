@@ -205,8 +205,8 @@ impl PackageManifest {
 /// How one `exports` target resolved. Node distinguishes an explicit `null`
 /// (the subpath is excluded; stop) from no matching condition (try the next).
 #[derive(Debug, PartialEq, Eq)]
-enum ExportsTargetResolution {
-    Found(PathBuf),
+enum ExportsTargetResolution<T = PathBuf> {
+    Found(T),
     Package(String),
     Excluded,
     NoMatch,
@@ -342,6 +342,17 @@ fn resolve_package_exports(
     exports: &PackageExports,
     conditions: &[&str],
 ) -> Result<PathBuf, String> {
+    resolve_package_exports_with(package_dir, subpath, exports, conditions,
+        &checked_package_relative_target)
+}
+
+fn resolve_package_exports_with<T>(
+    package_dir: &Path,
+    subpath: &str,
+    exports: &PackageExports,
+    conditions: &[&str],
+    materialize: &impl Fn(&Path, &str) -> Result<T, PackageTargetError>,
+) -> Result<T, String> {
     let not_exported = || format!("does not export subpath `{subpath}`");
     let subpath_entries = match exports {
         PackageExports::Map(entries) if entries.iter().any(|(key, _)| key.starts_with('.')) => {
@@ -357,7 +368,7 @@ fn resolve_package_exports(
         None => return Err(not_exported()),
         Some(entries) => package_mapping_target(entries, subpath).ok_or_else(not_exported)?,
     };
-    match resolve_package_target(package_dir, target, pattern_match, false, conditions)
+    match resolve_package_target_with(package_dir, target, pattern_match, false, conditions, materialize)
         .map_err(|error| error.to_string())?
     {
         ExportsTargetResolution::Found(path) => Ok(path),
@@ -369,6 +380,7 @@ fn resolve_package_exports(
 
 /// Node's PACKAGE_TARGET_RESOLVE with the given conditions (CommonJS
 /// `require` or ES module `import`).
+#[cfg(test)]
 fn resolve_package_target(
     package_dir: &Path,
     target: &PackageExports,
@@ -376,6 +388,18 @@ fn resolve_package_target(
     imports: bool,
     conditions: &[&str],
 ) -> Result<ExportsTargetResolution, PackageTargetError> {
+    resolve_package_target_with(package_dir, target, pattern_match, imports, conditions,
+        &checked_package_relative_target)
+}
+
+fn resolve_package_target_with<T>(
+    package_dir: &Path,
+    target: &PackageExports,
+    pattern_match: Option<&str>,
+    imports: bool,
+    conditions: &[&str],
+    materialize: &impl Fn(&Path, &str) -> Result<T, PackageTargetError>,
+) -> Result<ExportsTargetResolution<T>, PackageTargetError> {
     match target {
         PackageExports::Target(target) => {
             if let Some(relative) = target.strip_prefix("./") {
@@ -390,7 +414,7 @@ fn resolve_package_target(
                     )));
                 }
                 let Some(capture) = pattern_match else {
-                    return checked_package_relative_target(package_dir, relative)
+                    return materialize(package_dir, relative)
                         .map(ExportsTargetResolution::Found);
                 };
                 if has_forbidden_package_segment(capture) {
@@ -402,7 +426,7 @@ fn resolve_package_target(
                 // split a percent escape across its '*' ("./%*", "61.cjs").
                 // Traversal assembled across that boundary is still refused
                 // by the final package-relative check, without array fallback.
-                return checked_package_relative_target(package_dir, &relative.replace('*', capture))
+                return materialize(package_dir, &relative.replace('*', capture))
                     .map_err(|error| match error {
                         PackageTargetError::Target(detail) => PackageTargetError::Specifier(detail),
                         other => other,
@@ -447,12 +471,13 @@ fn resolve_package_target(
                 if condition != "default" && !conditions.contains(&condition.as_str()) {
                     continue;
                 }
-                match resolve_package_target(
+                match resolve_package_target_with(
                     package_dir,
                     value,
                     pattern_match,
                     imports,
                     conditions,
+                    materialize,
                 )? {
                     ExportsTargetResolution::NoMatch => continue,
                     resolved => return Ok(resolved),
@@ -471,12 +496,13 @@ fn resolve_package_target(
             // alternatives, including nested arrays.
             let mut last_outcome = Ok(ExportsTargetResolution::NoMatch);
             for alternative in alternatives {
-                match resolve_package_target(
+                match resolve_package_target_with(
                     package_dir,
                     alternative,
                     pattern_match,
                     imports,
                     conditions,
+                    materialize,
                 ) {
                     Ok(ExportsTargetResolution::NoMatch) => {}
                     Ok(ExportsTargetResolution::Excluded) => {
@@ -513,6 +539,27 @@ fn checked_package_relative_target(
         return Err(PackageTargetError::Target(invalid()));
     }
     Ok(package_dir.join(decoded))
+}
+
+/// URL metadata retains query/fragment and may name a directory or missing
+/// file. Selection still uses the same target/capture validation and ordered
+/// alternatives as executable resolution, without requiring a source record.
+fn checked_package_relative_url(
+    package_dir: &Path,
+    relative: &str,
+) -> Result<Url, PackageTargetError> {
+    let decoded = decode_package_url_path(relative).map_err(PackageTargetError::Specifier)?;
+    if decoded.split('/').any(|segment| {
+        matches!(segment, "." | "..") || segment.eq_ignore_ascii_case("node_modules")
+    }) {
+        return Err(PackageTargetError::Target(format!(
+            "has an invalid or escaping package target `./{relative}`"
+        )));
+    }
+    Url::from_directory_path(package_dir)
+        .map_err(|()| PackageTargetError::Target("package has no absolute URL base".to_string()))?
+        .join(&format!("./{relative}"))
+        .map_err(|error| PackageTargetError::Specifier(error.to_string()))
 }
 
 fn invalid_package_segments(decoded: &str) -> bool {
@@ -619,6 +666,17 @@ fn resolve_package_imports_target(
     imports: &PackageExports,
     conditions: &[&str],
 ) -> Result<ExportsTargetResolution, String> {
+    resolve_package_imports_target_with(package_dir, specifier, imports, conditions,
+        &checked_package_relative_target)
+}
+
+fn resolve_package_imports_target_with<T>(
+    package_dir: &Path,
+    specifier: &str,
+    imports: &PackageExports,
+    conditions: &[&str],
+    materialize: &impl Fn(&Path, &str) -> Result<T, PackageTargetError>,
+) -> Result<ExportsTargetResolution<T>, String> {
     let undefined = || format!("package import `{specifier}` is not defined");
     if specifier == "#" || specifier.starts_with("#/") || specifier.ends_with('/') {
         return Err(format!("invalid package import specifier `{specifier}`"));
@@ -627,7 +685,7 @@ fn resolve_package_imports_target(
         return Err(undefined());
     };
     let (target, capture) = package_mapping_target(entries, specifier).ok_or_else(undefined)?;
-    match resolve_package_target(package_dir, target, capture, true, conditions)
+    match resolve_package_target_with(package_dir, target, capture, true, conditions, materialize)
         .map_err(|error| error.to_string())?
     {
         ExportsTargetResolution::Excluded | ExportsTargetResolution::NoMatch => Err(undefined()),
@@ -744,6 +802,172 @@ impl InterpreterCore {
     ) -> Result<PathBuf, InterpreterError> {
         let conditions = self.effective_module_conditions(specifier, IMPORT_EXPORT_CONDITIONS)?;
         self.resolve_bare_package_specifier(specifier, &conditions, PackageLookupMode::PackageUrl)
+    }
+
+    /// Node's synchronous import.meta.resolve: URL selection and bounded
+    /// filesystem metadata only. Missing files and directories retain their
+    /// lexical URL; only a selected ordinary file receives realpath identity.
+    pub(super) fn resolve_import_meta_url(&mut self, specifier: &str) -> Result<String, InterpreterError> {
+        let failed = |reason| InterpreterError::ModuleResolutionFailed {
+            specifier: specifier.to_string(), reason,
+        };
+        self.check_temporary_memory_budget(Self::url_parse_working_upper_bound(
+            u64::try_from(specifier.len()).unwrap_or(u64::MAX),
+            self.current_module_specifier.as_ref().map_or(0, |origin| origin.len() as u64),
+        ))?;
+        let absolute = match Url::parse(specifier) {
+            Ok(url) => Some(url),
+            Err(url::ParseError::RelativeUrlWithoutBase) => None,
+            Err(_) => return Err(self.throw_invalid_url_error(specifier)),
+        };
+        let selected = if let Some(canonical) = node_builtin_specifier(specifier) {
+            Url::parse(canonical).map_err(|_| failed(ModuleResolutionFailureReason::MalformedSpecifier))?
+        } else if let Some(url) = absolute {
+            url
+        } else if specifier.starts_with("./") || specifier.starts_with("../") || specifier.starts_with('/') {
+            let root = self.canonical_module_root_path().ok_or_else(|| {
+                failed(ModuleResolutionFailureReason::Other("URL metadata requires a module root".to_string()))
+            })?;
+            let origin = self.current_module_specifier.as_deref().ok_or_else(|| {
+                failed(ModuleResolutionFailureReason::Other("URL metadata has no defining module".to_string()))
+            })?;
+            let origin = if Path::new(origin).is_absolute() { PathBuf::from(origin) } else { root.join(origin) };
+            let base = Url::from_file_path(origin).map_err(|()| {
+                failed(ModuleResolutionFailureReason::MalformedSpecifier)
+            })?;
+            base.join(specifier).map_err(|_| self.throw_invalid_url_error(specifier))?
+        } else {
+            let root = self.canonical_module_root_path().ok_or_else(|| {
+                failed(ModuleResolutionFailureReason::BareSpecifiersNotSupported)
+            })?;
+            let start = self.current_module_specifier.as_deref()
+                .and_then(|label| Path::new(label).parent())
+                .and_then(|directory| directory.canonicalize().ok())
+                .filter(|directory| directory.starts_with(&root))
+                .unwrap_or_else(|| root.clone());
+            let conditions = self.effective_module_conditions(specifier, IMPORT_EXPORT_CONDITIONS)?;
+            self.resolve_import_meta_package(specifier, &start, &root, &conditions)?
+        };
+        if selected.scheme() != "file" {
+            return Ok(selected.to_string());
+        }
+        let encoded = selected.path().to_ascii_lowercase();
+        if encoded.contains("%2f") || encoded.contains("%5c") || encoded.contains("%00") {
+            return Err(self.throw_legacy_url_type_error("ERR_INVALID_MODULE_SPECIFIER",
+                format!("Invalid module specifier '{specifier}': encoded separator or NUL")));
+        }
+        let path = selected.to_file_path().map_err(|()| self.throw_invalid_url_error(specifier))?;
+        let root = self.canonical_module_root_path().ok_or_else(|| {
+            failed(ModuleResolutionFailureReason::Other("URL metadata requires a module root".to_string()))
+        })?;
+        if !path.starts_with(&root) {
+            return Err(failed(ModuleResolutionFailureReason::Other("module URL escapes module root".to_string())));
+        }
+        // Missing descendants still inherit their nearest existing parent's
+        // containment boundary. This check never opens target file contents.
+        if let Some(existing) = path.ancestors().find(|ancestor| ancestor.exists()) {
+            let canonical = existing.canonicalize().map_err(|error| {
+                failed(ModuleResolutionFailureReason::Other(error.to_string()))
+            })?;
+            if !canonical.starts_with(&root) {
+                return Err(failed(ModuleResolutionFailureReason::Other("module URL escapes module root".to_string())));
+            }
+        }
+        if selected.path().ends_with('/') || !path.is_file() {
+            return Ok(selected.to_string());
+        }
+        let canonical = self.canonicalize_module_candidate(specifier, &path)?;
+        let mut resolved = Url::from_file_path(canonical).map_err(|()| {
+            failed(ModuleResolutionFailureReason::MalformedSpecifier)
+        })?;
+        resolved.set_query(selected.query());
+        resolved.set_fragment(selected.fragment());
+        Ok(resolved.to_string())
+    }
+
+    fn resolve_import_meta_package(
+        &self,
+        specifier: &str,
+        start: &Path,
+        root: &Path,
+        conditions: &[&str],
+    ) -> Result<Url, InterpreterError> {
+        let failed = |reason| InterpreterError::ModuleResolutionFailed {
+            specifier: specifier.to_string(), reason,
+        };
+        if let Some(canonical) = node_builtin_specifier(specifier) {
+            return Url::parse(canonical).map_err(|_| failed(ModuleResolutionFailureReason::MalformedSpecifier));
+        }
+        let scope = self.require_package_scope(specifier, start, root)?;
+        if specifier.starts_with('#') {
+            let (directory, manifest) = scope.ok_or_else(|| failed(ModuleResolutionFailureReason::PackageImportNotDefined))?;
+            let imports = manifest.imports.as_ref().ok_or_else(|| failed(ModuleResolutionFailureReason::PackageImportNotDefined))?;
+            let selected = resolve_package_imports_target_with(&directory, specifier, imports,
+                conditions, &checked_package_relative_url)
+                .map_err(|reason| failed(if reason.ends_with("is not defined") {
+                    ModuleResolutionFailureReason::PackageImportNotDefined
+                } else { ModuleResolutionFailureReason::Other(reason) }))?;
+            return match selected {
+                ExportsTargetResolution::Found(url) => Ok(url),
+                ExportsTargetResolution::Package(target) => self.resolve_import_meta_named_package(
+                    &target, &directory, root, conditions,
+                ),
+                ExportsTargetResolution::Excluded | ExportsTargetResolution::NoMatch => {
+                    Err(failed(ModuleResolutionFailureReason::PackageImportNotDefined))
+                }
+            };
+        }
+        self.resolve_import_meta_named_package(specifier, start, root, conditions)
+    }
+
+    fn resolve_import_meta_named_package(
+        &self,
+        specifier: &str,
+        start: &Path,
+        root: &Path,
+        conditions: &[&str],
+    ) -> Result<Url, InterpreterError> {
+        let failed = |reason| InterpreterError::ModuleResolutionFailed {
+            specifier: specifier.to_string(), reason,
+        };
+        if let Some(canonical) = node_builtin_specifier(specifier) {
+            return Url::parse(canonical).map_err(|_| failed(ModuleResolutionFailureReason::MalformedSpecifier));
+        }
+        let (name, subpath) = split_package_specifier(specifier)
+            .ok_or_else(|| failed(ModuleResolutionFailureReason::MalformedSpecifier))?;
+        let exported = |directory: &Path, exports: &PackageExports| {
+            resolve_package_exports_with(directory, &format!(".{subpath}"), exports, conditions,
+                &checked_package_relative_url)
+                .map_err(|reason| failed(if reason.starts_with("does not export subpath") {
+                    ModuleResolutionFailureReason::PackagePathNotExported
+                } else { ModuleResolutionFailureReason::Other(reason) }))
+        };
+        if let Some((directory, manifest)) = self.require_package_scope(specifier, start, root)?
+            && manifest.name.as_ref().and_then(serde_json::Value::as_str) == Some(name)
+            && let Some(exports) = manifest.exports.as_ref()
+        {
+            return exported(&directory, exports);
+        }
+        for directory in start.ancestors() {
+            if !directory.starts_with(root) { break; }
+            if directory.file_name().is_some_and(|name| name == "node_modules") { continue; }
+            let package = directory.join("node_modules").join(name);
+            if !package.is_dir() { continue; }
+            let manifest = self.read_contained_package_manifest(specifier, &package)?;
+            if let Some(exports) = manifest.as_ref().and_then(|manifest| manifest.exports.as_ref()) {
+                return exported(&package, exports);
+            }
+            if !subpath.is_empty() {
+                return checked_package_relative_url(&package, &subpath[1..])
+                    .map_err(|reason| failed(ModuleResolutionFailureReason::Other(reason.to_string())));
+            }
+            let path = manifest.as_ref().and_then(|manifest| resolve_manifest_main(&package, manifest))
+                .or_else(|| ["index.js", "index.json", "index.node"].into_iter()
+                    .map(|name| package.join(name)).find(|path| path.is_file()))
+                .ok_or_else(|| failed(ModuleResolutionFailureReason::ModuleNotFound))?;
+            return Url::from_file_path(path).map_err(|()| failed(ModuleResolutionFailureReason::MalformedSpecifier));
+        }
+        Err(failed(ModuleResolutionFailureReason::ModuleNotFound))
     }
 
     fn effective_module_conditions<'a>(

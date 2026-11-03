@@ -183,7 +183,7 @@ use crate::module_compatibility_matrix::CompatibilityMode;
 #[cfg(test)]
 use crate::module_resolver::ResolutionOutcome;
 use crate::module_resolver::{
-    ExecutionModuleResolver, ImportStyle, MetadataResolutionOutcome, ModuleRequest,
+    ExecutionModuleResolver, ImportStyle, MetadataResolutionOutcome, ModuleMetadataTarget, ModuleRequest,
     ModuleSourceKind, ModuleSyntax, NativeBuiltinModule, ResolutionContext, ResolutionErrorCode,
     ResolvedModule, SharedResolutionOutcome, SharedResolvedModule, node_builtin_specifier,
 };
@@ -3922,6 +3922,9 @@ pub enum BuiltinFunctionKind {
     /// invocation still crosses the process_spawn policy and journal seam.
     /// Append only: builtin ordinals are part of register hashing.
     NativeChildProcessFunction,
+    /// The defining module's synchronous URL metadata resolver. Append only:
+    /// builtin ordinals participate in deterministic register hashing.
+    ImportMetaResolve,
 }
 
 /// Annex B B.2.2.2-14: each String HTML method's tag and attribute name.
@@ -4140,6 +4143,15 @@ impl BuiltinFunction {
             module_specifier: require.module_specifier.clone(),
             iterator_handle: None,
             bound_object: require.bound_object,
+        }
+    }
+
+    fn import_meta_resolve(module_specifier: &str) -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ImportMetaResolve,
+            module_specifier: BuiltinModuleSpecifier::from_nonempty(module_specifier),
+            iterator_handle: None,
+            bound_object: None,
         }
     }
 
@@ -5388,7 +5400,7 @@ impl BuiltinFunction {
         match self.kind {
             BuiltinFunctionKind::Require => "require",
             BuiltinFunctionKind::ModuleCreateRequire => "createRequire",
-            BuiltinFunctionKind::RequireResolve => "resolve",
+            BuiltinFunctionKind::RequireResolve | BuiltinFunctionKind::ImportMetaResolve => "resolve",
             BuiltinFunctionKind::FunctionConstructor => "Function",
             BuiltinFunctionKind::FunctionPrototype => "",
             BuiltinFunctionKind::NativeTimerPromisesGetter => "get",
@@ -6226,6 +6238,7 @@ impl BuiltinFunction {
             | K::PromiseAllSettledRejectElement
             | K::PromiseAnyRejectElement
             | K::ModuleCreateRequire
+            | K::ImportMetaResolve
             | K::ObjectProtoSetter => Some(1),
             K::PromiseCapabilityExecutor => Some(2),
             K::IteratorNext
@@ -10141,6 +10154,8 @@ enum StarExportOrigin {
 struct ModuleRuntimeRecord {
     status: ModuleRuntimeStatus,
     namespace_object: ObjectId,
+    /// One stable import.meta object per module, retained for the realm.
+    import_meta_object: Option<ObjectId>,
     exports: BTreeMap<JsString, Value>,
     /// Export names that came from `export * from` rather than this module's
     /// own export declarations (which always win).
@@ -40414,7 +40429,33 @@ impl InterpreterCore {
             .fold(0_u64, |bytes, value| {
                 bytes.saturating_add(Self::estimate_string_bytes(value))
             });
-        self.check_temporary_memory_budget(metadata_bytes)?;
+        let target_url = match (&metadata.target, style) {
+            (ModuleMetadataTarget::Filename, ImportStyle::Require) => None,
+            (ModuleMetadataTarget::SourceUrl, ImportStyle::Import) => {
+                Some(installed.resolver.source_location(&metadata.id)
+                    .ok_or_else(|| InterpreterError::ModuleLoweringFailed {
+                        specifier: specifier.to_string(),
+                        error: "resolved URL metadata has no installed source location".to_string(),
+                    })?.url.as_str())
+            }
+            (ModuleMetadataTarget::AbsoluteUrl(url), ImportStyle::Import) => Some(url.as_str()),
+            _ => return Err(InterpreterError::ModuleLoweringFailed {
+                specifier: specifier.to_string(),
+                error: "resolved metadata target does not match lookup purpose".to_string(),
+            }),
+        };
+        let target_bytes = target_url.map_or(0, |url| {
+            Self::estimate_string_bytes(url).saturating_mul(8)
+        });
+        self.check_temporary_memory_budget(metadata_bytes.saturating_add(target_bytes))?;
+        if let Some(url) = target_url
+            && !Url::parse(url).is_ok_and(|parsed| parsed.as_str() == url)
+        {
+            return Err(InterpreterError::ModuleLoweringFailed {
+                specifier: specifier.to_string(),
+                error: "resolved URL metadata must contain a normalized absolute URL".to_string(),
+            });
+        }
         if metadata.id.is_empty()
             || resolved.module.request_specifier != specifier
             || resolved.module.canonical_specifier.is_empty()
@@ -40433,7 +40474,8 @@ impl InterpreterCore {
                 capability: missing.to_string(),
             });
         }
-        if metadata.provenance.kind == ModuleSourceKind::BuiltIn
+        if metadata.target == ModuleMetadataTarget::Filename
+            && metadata.provenance.kind == ModuleSourceKind::BuiltIn
             && node_builtin_specifier(&metadata.provenance.origin)
                 != Some(metadata.provenance.origin.as_str())
         {
@@ -40643,6 +40685,7 @@ impl InterpreterCore {
             ModuleRuntimeRecord {
                 status: ModuleRuntimeStatus::Evaluating,
                 namespace_object,
+                import_meta_object: None,
                 exports: BTreeMap::new(),
                 star_exports: BTreeMap::new(),
                 flow_label_ceiling: None,
@@ -45865,18 +45908,26 @@ impl InterpreterCore {
                 }
                 result
             }
-            BuiltinFunctionKind::RequireResolve => {
+            BuiltinFunctionKind::RequireResolve | BuiltinFunctionKind::ImportMetaResolve => {
                 check_hostcall_capability_gate(self, "module_load", self.ip as u32)?;
                 let args_label = self.join_arg_range_label(args)?;
                 let previous_module_specifier = self.current_module_specifier.clone();
-                if !builtin.module_specifier.is_empty() {
+                if builtin.kind == BuiltinFunctionKind::ImportMetaResolve {
+                    self.current_module_specifier = (!builtin.module_specifier.is_empty())
+                        .then(|| builtin.module_specifier.to_string());
+                } else if !builtin.module_specifier.is_empty() {
                     self.current_module_specifier = Some(builtin.module_specifier.to_string());
                 }
-                let result = self.require_resolve(args);
+                let result = if builtin.kind == BuiltinFunctionKind::ImportMetaResolve {
+                    self.import_meta_resolve(Some(module), args)
+                } else {
+                    self.require_resolve(args)
+                };
                 self.current_module_specifier = previous_module_specifier;
                 if result.is_ok() {
                     let result_label = hostcall_result_contract("module_load")
-                        .result_label(&args_label, None);
+                        .result_label(&args_label, None)
+                        .join(self.pending_hostcall_result_label.as_ref().unwrap_or(&Label::Public));
                     self.replace_pending_hostcall_result_label(Some(result_label))?;
                 }
                 result
@@ -70286,11 +70337,16 @@ impl InterpreterCore {
         if self.is_import_meta_object(object_id)? {
             let Some(key) = key.as_str() else {
                 return Err(InterpreterError::TypeError {
-                    expected: "well-formed import.meta contract field (url, dirname)".to_string(),
+                    expected: "well-formed import.meta contract field (url, dirname, resolve)".to_string(),
                     got: key.diagnostic(),
                 });
             };
-            return self.import_meta_property_value(object_id, key);
+            if key != "resolve" {
+                return self.import_meta_property_value(object_id, key);
+            }
+            // The callable is an ordinary own property. Honor replacements,
+            // accessors and deletion through the same path as computed reads.
+            self.record_import_meta_contract_access(key, true);
         }
         let Some((target, handler)) = self.active_proxy_record(object_id)? else {
             if self.active_inline_callback_context_label.is_some() {
@@ -70539,7 +70595,7 @@ impl InterpreterCore {
                 got: format!("depth {depth}"),
             });
         }
-        if self.is_import_meta_object(object_id)? {
+        if self.is_import_meta_object(object_id)? && key.as_str() != Some("resolve") {
             if let Some(key) = key.as_str() {
                 self.record_import_meta_contract_access(key, false);
             }
@@ -74420,6 +74476,62 @@ impl InterpreterCore {
             Ok(resolved) => Ok(Value::str(resolved)),
             Err(InterpreterError::ModuleResolutionFailed { reason, .. }) => Err(self
                 .throw_module_resolution_failure(request.as_ref(), &reason, ImportStyle::Require)),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Synchronous URL resolution is metadata only. The callable has already
+    /// installed its defining module's identity; neither its receiver nor an
+    /// optional second argument can replace that authority or its URL base.
+    fn import_meta_resolve(
+        &mut self,
+        module: Option<&Ir3Module>,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let argument = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let primitive = self.coerce_runtime_primitive(module, argument, true)?;
+        if matches!(primitive, Value::Symbol(_)) {
+            return Err(Self::symbol_to_string_error());
+        }
+        self.check_temporary_memory_budget(self.url_value_to_string_upper_bound(&primitive))?;
+        let request = match primitive {
+            Value::Str(request) => request,
+            value => JsString::from(self.value_to_string(&value)),
+        };
+        let specifier = Self::utf8_module_specifier(&request)?;
+        if self.module_resolver.is_some() {
+            let resolved = match self.resolve_installed_module_metadata(specifier, ImportStyle::Import) {
+                Ok(resolved) => resolved,
+                Err(InterpreterError::ModuleResolutionFailed { reason, .. }) => {
+                    return Err(self.throw_module_resolution_failure(
+                        request.as_ref(), &reason, ImportStyle::Import,
+                    ));
+                }
+                Err(error) => return Err(error),
+            };
+            let metadata = &resolved.module.metadata;
+            let url = match &metadata.target {
+                ModuleMetadataTarget::AbsoluteUrl(url) => url.as_str(),
+                ModuleMetadataTarget::SourceUrl => self.module_resolver.as_ref()
+                    .and_then(|installed| installed.resolver.source_location(&metadata.id))
+                    .map(|location| location.url.as_str())
+                    .ok_or_else(|| InterpreterError::InternalError {
+                        details: "authorized URL metadata lost its source location".to_string(),
+                    })?,
+                ModuleMetadataTarget::Filename => return Err(InterpreterError::InternalError {
+                    details: "filename metadata escaped URL-purpose validation".to_string(),
+                }),
+            };
+            self.check_temporary_memory_budget(Self::estimate_string_bytes(url))?;
+            return Ok(Value::str(url));
+        }
+        match self.resolve_import_meta_url(specifier) {
+            Ok(url) => {
+                self.check_temporary_memory_budget(Self::estimate_string_bytes(&url))?;
+                Ok(Value::str(url))
+            }
+            Err(InterpreterError::ModuleResolutionFailed { reason, .. }) => Err(self
+                .throw_module_resolution_failure(request.as_ref(), &reason, ImportStyle::Import)),
             Err(error) => Err(error),
         }
     }
@@ -89922,7 +90034,7 @@ impl InterpreterCore {
         kind: AccessorKind,
     ) -> Result<(), InterpreterError> {
         self.validate_executable_property_key(&key)?;
-        if self.is_import_meta_object(object_id)? {
+        if self.is_import_meta_object(object_id)? && key.as_str() != Some("resolve") {
             return Err(InterpreterError::TypeError {
                 expected: "read-only import.meta contract field".to_string(),
                 got: key
@@ -96562,10 +96674,19 @@ impl InterpreterCore {
     }
 
     fn alloc_import_meta_object(&mut self) -> Result<Value, InterpreterError> {
+        let origin = self.current_module_specifier.as_deref()
+            .or(self.entry_module_specifier.as_deref())
+            .or_else(|| self.module_resolver.as_ref().map(|installed| installed.resolver.entry_referrer()))
+            .unwrap_or("");
+        if let Some(object_id) = self.module_state.modules.get(origin)
+            .and_then(|record| record.import_meta_object)
+        {
+            return Ok(Value::Object(object_id));
+        }
+        self.check_temporary_memory_budget(Self::estimate_string_bytes(origin).saturating_mul(2))?;
+        let origin = origin.to_string();
         let location = self.module_resolver.as_ref().and_then(|installed| {
-            self.current_module_specifier
-                .as_deref()
-                .and_then(|id| installed.resolver.source_location(id))
+            installed.resolver.source_location(&origin)
         });
         let url = location.map_or(IMPORT_META_URL_VALUE, |location| location.url.as_str());
         let dirname = location
@@ -96576,13 +96697,20 @@ impl InterpreterCore {
         // and later read another module's import.meta.
         let url = Value::str(url);
         let dirname = Value::str(dirname);
-        let object_id = self.alloc_object_with_properties(&[("url", url), ("dirname", dirname)])?;
+        let resolve = Value::BuiltinFunction(BuiltinFunction::import_meta_resolve(&origin));
+        let object_id = self.alloc_object_with_properties(&[
+            ("url", url), ("dirname", dirname), ("resolve", resolve),
+        ])?;
         let index = object_id.0 as usize;
         self.mutate_heap(|heap| {
             if let Some(object) = heap.get_mut(index) {
                 object.is_import_meta = true;
             }
         });
+        self.store_prototype_link(object_id, None);
+        if let Some(record) = self.module_state.modules.get_mut(&origin) {
+            record.import_meta_object = Some(object_id);
+        }
         Ok(Value::Object(object_id))
     }
 
@@ -96635,7 +96763,7 @@ impl InterpreterCore {
             _ => {
                 self.record_import_meta_contract_access(key, false);
                 Err(InterpreterError::TypeError {
-                    expected: "allow-listed import.meta field (url, dirname)".to_string(),
+                    expected: "allow-listed import.meta field (url, dirname, resolve)".to_string(),
                     got: format!("import.meta.{key}"),
                 })
             }
@@ -137235,6 +137363,7 @@ mod async_runtime_tests_current {
                 ModuleRuntimeRecord {
                     status: ModuleRuntimeStatus::Evaluating,
                     namespace_object: namespace,
+                    import_meta_object: None,
                     exports: BTreeMap::new(),
                     star_exports: BTreeMap::new(),
                     flow_label_ceiling: None,
@@ -180858,6 +180987,7 @@ mod tests {
             ModuleRuntimeRecord {
                 status: ModuleRuntimeStatus::Evaluating,
                 namespace_object,
+                import_meta_object: None,
                 exports: BTreeMap::new(),
                 star_exports: BTreeMap::new(),
                 flow_label_ceiling: None,

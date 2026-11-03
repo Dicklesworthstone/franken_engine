@@ -2170,6 +2170,10 @@ pub enum JsValue {
     Symbol(SymbolId),
     Object(ObjectHandle),
     Function(u32),
+    /// A reference to a promise in the owning runtime's promise store.
+    /// Keeping the handle distinct from object/function handles preserves
+    /// identity when a promise is itself a rejection reason.
+    Promise(u32),
 }
 
 impl JsValue {
@@ -2180,7 +2184,7 @@ impl JsValue {
     }
 
     pub fn is_object(&self) -> bool {
-        matches!(self, Self::Object(_))
+        matches!(self, Self::Object(_) | Self::Promise(_))
     }
 
     pub fn is_callable(&self) -> bool {
@@ -2195,7 +2199,7 @@ impl JsValue {
             Self::Int(_) | Self::Float(_) => "number",
             Self::Str(_) => "string",
             Self::Symbol(_) => "symbol",
-            Self::Object(_) => "object",
+            Self::Object(_) | Self::Promise(_) => "object",
             Self::Function(_) => "function",
         }
     }
@@ -2264,6 +2268,7 @@ impl fmt::Display for JsValue {
             Self::Symbol(id) => write!(f, "Symbol({})", id.0),
             Self::Object(h) => write!(f, "[object#{}]", h.0),
             Self::Function(idx) => write!(f, "[function#{idx}]"),
+            Self::Promise(_) => write!(f, "[object Promise]"),
         }
     }
 }

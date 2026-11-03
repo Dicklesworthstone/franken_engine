@@ -442,9 +442,9 @@ impl fmt::Display for Float64 {
         } else if self.is_negative_zero() {
             write!(f, "0")
         } else {
-            // Format like JavaScript: no trailing zeros, but show decimal for floats
-            let s = format!("{}", self.0);
-            write!(f, "{s}")
+            // ECMAScript uses exponent notation outside [1e-6, 1e21),
+            // including Number results that overflow the integer fast path.
+            f.write_str(ryu_js::Buffer::new().format(self.0))
         }
     }
 }
@@ -475,6 +475,49 @@ impl From<i64> for Float64 {
     }
 }
 
+const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+const MIN_SAFE_INTEGER: i64 = -MAX_SAFE_INTEGER;
+
+/// Keep integers only where the Number representation is exact, and never
+/// erase a negative zero while converting a floating-point result.
+#[inline]
+fn js_number_to_value(value: f64) -> Value {
+    if value.is_finite()
+        && !(value == 0.0 && value.is_sign_negative())
+        && value.fract() == 0.0
+        && (MIN_SAFE_INTEGER as f64..=MAX_SAFE_INTEGER as f64).contains(&value)
+    {
+        Value::Int(value as i64)
+    } else {
+        Value::Float(Float64::new(value))
+    }
+}
+
+#[inline]
+fn js_int_to_value(value: i64) -> Value {
+    if (MIN_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(&value) {
+        Value::Int(value)
+    } else {
+        Value::Float(Float64::new(value as f64))
+    }
+}
+
+/// Both operands must be safe integers before using their exact integer
+/// result. This also covers values supplied through the public IR/state API:
+/// two out-of-range i64 values may round to the same Number before subtraction.
+#[inline]
+fn js_safe_integer_result(lhs: i64, rhs: i64, result: Option<i64>) -> Option<Value> {
+    if (MIN_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(&lhs)
+        && (MIN_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(&rhs)
+    {
+        result
+            .filter(|value| (MIN_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(value))
+            .map(Value::Int)
+    } else {
+        None
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Value — JS runtime value representation
 // ---------------------------------------------------------------------------
@@ -494,8 +537,8 @@ pub enum Value {
     Null,
     /// Boolean.
     Bool(bool),
-    /// Integer (i64). Fixed-point integers avoid floating-point
-    /// non-determinism; fractional values use millionths when needed.
+    /// Exact safe-integer representation of a JavaScript Number. Numeric
+    /// ingress and arithmetic promote values outside ±(2^53 - 1) to Float.
     Int(i64),
     /// IEEE 754 floating-point (f64). Used for fractional values, NaN,
     /// Infinity, and -0. Wrapped in Float64 for deterministic ordering.
@@ -7503,7 +7546,7 @@ impl InterpreterCore {
 
             match instr {
                 Ir3Instruction::LoadInt { dst, value } => {
-                    self.write_reg(dst, Value::Int(value))?;
+                    self.write_reg(dst, js_int_to_value(value))?;
                     self.ip += 1;
                 }
                 Ir3Instruction::LoadFloat { dst, bits } => {
@@ -10452,8 +10495,12 @@ impl InterpreterCore {
         let a = self.read_reg(lhs)?;
         let b = self.read_reg(rhs)?;
         match (&a, &b) {
-            // Int + Int: stay in integer domain
-            (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x.wrapping_add(*y))),
+            // Integer arithmetic is an optimization of Number arithmetic,
+            // never a separate wrapping integer domain (bd-9vouw.2).
+            (Value::Int(x), Value::Int(y)) => Ok(
+                js_safe_integer_result(*x, *y, x.checked_add(*y))
+                    .unwrap_or_else(|| js_number_to_value(*x as f64 + *y as f64)),
+            ),
             // Float + Float: float arithmetic
             (Value::Float(x), Value::Float(y)) => {
                 Ok(Value::Float(Float64::new(x.inner() + y.inner())))
@@ -10527,18 +10574,7 @@ impl InterpreterCore {
                     expected: "number or string".to_string(),
                     got: format!("{} + {}", a.type_name(), b.type_name()),
                 })?;
-                let result = x + y;
-                // If result is a whole number and fits in i64, return Int
-                if result.fract() == 0.0
-                    && !result.is_nan()
-                    && !result.is_infinite()
-                    && result >= i64::MIN as f64
-                    && result <= i64::MAX as f64
-                {
-                    Ok(Value::Int(result as i64))
-                } else {
-                    Ok(Value::Float(Float64::new(result)))
-                }
+                Ok(js_number_to_value(x + y))
             }
         }
     }
@@ -10547,11 +10583,14 @@ impl InterpreterCore {
         let a = self.read_reg(lhs)?;
         let b = self.read_reg(rhs)?;
 
-        // Fast path: Int op Int stays in integer domain
+        // Exact safe-integer arithmetic can avoid the floating-point path.
         if let (Value::Int(x), Value::Int(y)) = (&a, &b) {
             let result = match op {
-                "sub" => x.wrapping_sub(*y),
-                "mul" => x.wrapping_mul(*y),
+                "sub" => js_safe_integer_result(*x, *y, x.checked_sub(*y)),
+                "mul" if (*x == 0 && *y < 0) || (*y == 0 && *x < 0) => {
+                    Some(Value::Float(Float64::new(-0.0)))
+                }
+                "mul" => js_safe_integer_result(*x, *y, x.checked_mul(*y)),
                 _ => {
                     return Err(InterpreterError::TypeError {
                         expected: "sub or mul".to_string(),
@@ -10559,7 +10598,9 @@ impl InterpreterCore {
                     });
                 }
             };
-            return Ok(Value::Int(result));
+            if let Some(result) = result {
+                return Ok(result);
+            }
         }
 
         // Float path: use float arithmetic
@@ -10582,17 +10623,7 @@ impl InterpreterCore {
             }
         };
 
-        // Return Int if result is a whole number in i64 range
-        if result.fract() == 0.0
-            && !result.is_nan()
-            && !result.is_infinite()
-            && result >= i64::MIN as f64
-            && result <= i64::MAX as f64
-        {
-            Ok(Value::Int(result as i64))
-        } else {
-            Ok(Value::Float(Float64::new(result)))
-        }
+        Ok(js_number_to_value(result))
     }
 
     fn eval_div(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
@@ -10610,30 +10641,29 @@ impl InterpreterCore {
         // JS division semantics: x/0 = Infinity (or -Infinity), 0/0 = NaN
         let result = x / y;
 
-        // Return Int if result is a whole number in i64 range
-        if result.fract() == 0.0
-            && !result.is_nan()
-            && !result.is_infinite()
-            && result >= i64::MIN as f64
-            && result <= i64::MAX as f64
-        {
-            Ok(Value::Int(result as i64))
-        } else {
-            Ok(Value::Float(Float64::new(result)))
-        }
+        Ok(js_number_to_value(result))
     }
 
     fn eval_mod(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
         let a = self.read_reg(lhs)?;
         let b = self.read_reg(rhs)?;
 
-        // Fast path: Int % Int stays in integer domain
-        if let (Value::Int(x), Value::Int(y)) = (&a, &b) {
+        // The remainder of a negative dividend can be negative zero. Use
+        // integer remainder only for values already in the safe range.
+        if let (Value::Int(x), Value::Int(y)) = (&a, &b)
+            && (MIN_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(x)
+            && (MIN_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(y)
+        {
             if *y == 0 {
                 // JS: x % 0 = NaN
                 return Ok(Value::Float(Float64::new(f64::NAN)));
             }
-            return Ok(Value::Int(x.checked_rem(*y).unwrap_or(0)));
+            let remainder = x % y;
+            return Ok(if remainder == 0 && *x < 0 {
+                Value::Float(Float64::new(-0.0))
+            } else {
+                Value::Int(remainder)
+            });
         }
 
         let x = Self::coerce_to_float(&a).ok_or(InterpreterError::TypeError {
@@ -10648,17 +10678,7 @@ impl InterpreterCore {
         // JS modulo semantics: x % 0 = NaN
         let result = x % y;
 
-        // Return Int if result is a whole number in i64 range
-        if result.fract() == 0.0
-            && !result.is_nan()
-            && !result.is_infinite()
-            && result >= i64::MIN as f64
-            && result <= i64::MAX as f64
-        {
-            Ok(Value::Int(result as i64))
-        } else {
-            Ok(Value::Float(Float64::new(result)))
-        }
+        Ok(js_number_to_value(result))
     }
 
     fn eval_exp(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
@@ -10673,43 +10693,27 @@ impl InterpreterCore {
             got: format!("{} ** {}", a.type_name(), b.type_name()),
         })?;
 
-        // JS exponentiation uses float power
-        let result = x.powf(y);
-
-        // Return Int if result is a whole number in i64 range
-        if result.fract() == 0.0
-            && !result.is_nan()
-            && !result.is_infinite()
-            && result >= i64::MIN as f64
-            && result <= i64::MAX as f64
-        {
-            Ok(Value::Int(result as i64))
+        // Number::exponentiate differs from IEEE pow for a NaN exponent
+        // and for ±1 raised to an infinite exponent (ES2020 6.1.6.1.3).
+        let result = if y.is_nan() || (x.abs() == 1.0 && y.is_infinite()) {
+            f64::NAN
         } else {
-            Ok(Value::Float(Float64::new(result)))
-        }
+            x.powf(y)
+        };
+        Ok(js_number_to_value(result))
     }
 
     fn eval_unary_plus(&self, src: u32) -> Result<Value, InterpreterError> {
         let value = self.read_reg(src)?;
         match &value {
-            Value::Int(n) => Ok(Value::Int(*n)),
+            Value::Int(n) => Ok(js_int_to_value(*n)),
             Value::Float(f) => Ok(Value::Float(*f)),
             _ => {
                 let number = Self::coerce_to_float(&value).ok_or(InterpreterError::TypeError {
                     expected: "number-coercible primitive".to_string(),
                     got: value.type_name().to_string(),
                 })?;
-                // Return Int if whole number in i64 range
-                if number.fract() == 0.0
-                    && !number.is_nan()
-                    && !number.is_infinite()
-                    && number >= i64::MIN as f64
-                    && number <= i64::MAX as f64
-                {
-                    Ok(Value::Int(number as i64))
-                } else {
-                    Ok(Value::Float(Float64::new(number)))
-                }
+                Ok(js_number_to_value(number))
             }
         }
     }
@@ -10717,25 +10721,18 @@ impl InterpreterCore {
     fn eval_unary_neg(&self, src: u32) -> Result<Value, InterpreterError> {
         let value = self.read_reg(src)?;
         match &value {
-            Value::Int(n) => Ok(Value::Int(n.wrapping_neg())),
+            Value::Int(0) => Ok(Value::Float(Float64::new(-0.0))),
+            Value::Int(n) => Ok(
+                js_safe_integer_result(*n, 0, n.checked_neg())
+                    .unwrap_or_else(|| js_number_to_value(-(*n as f64))),
+            ),
             Value::Float(f) => Ok(Value::Float(Float64::new(-f.inner()))),
             _ => {
                 let number = Self::coerce_to_float(&value).ok_or(InterpreterError::TypeError {
                     expected: "number-coercible primitive".to_string(),
                     got: value.type_name().to_string(),
                 })?;
-                // Return Int if whole number in i64 range
-                let negated = -number;
-                if negated.fract() == 0.0
-                    && !negated.is_nan()
-                    && !negated.is_infinite()
-                    && negated >= i64::MIN as f64
-                    && negated <= i64::MAX as f64
-                {
-                    Ok(Value::Int(negated as i64))
-                } else {
-                    Ok(Value::Float(Float64::new(negated)))
-                }
+                Ok(js_number_to_value(-number))
             }
         }
     }
@@ -12238,6 +12235,7 @@ impl InterpreterCore {
                 crate::object_model::JsValue::Object(crate::object_model::ObjectHandle(id.0))
             }
             Value::Function(idx) => crate::object_model::JsValue::Function(*idx),
+            Value::Promise(handle) => crate::object_model::JsValue::Promise(*handle),
             _ => crate::object_model::JsValue::Str(JsString::from(val.to_string())),
         }
     }
@@ -12249,13 +12247,14 @@ impl InterpreterCore {
             crate::object_model::JsValue::Undefined => Value::Undefined,
             crate::object_model::JsValue::Null => Value::Null,
             crate::object_model::JsValue::Bool(b) => Value::Bool(*b),
-            crate::object_model::JsValue::Int(n) => Value::Int(*n),
+            crate::object_model::JsValue::Int(n) => js_int_to_value(*n),
             crate::object_model::JsValue::Str(s) => Value::Str(s.clone()),
             crate::object_model::JsValue::Float(bits) => {
                 Value::Float(Float64::new(f64::from_bits(*bits)))
             }
             crate::object_model::JsValue::Object(handle) => Value::Object(ObjectId(handle.0)),
             crate::object_model::JsValue::Function(idx) => Value::Function(*idx),
+            crate::object_model::JsValue::Promise(handle) => Value::Promise(*handle),
             crate::object_model::JsValue::Symbol(sym) => Value::Symbol(*sym),
         }
     }
@@ -13237,10 +13236,10 @@ impl InterpreterCore {
     ///
     /// Supported capabilities:
     /// - `promise:constructor` — create a pending promise, return its handle.
-    /// - `promise:resolve` — resolve a promise or create a pre-resolved one.
-    ///   arg0 = promise handle (or value to wrap), arg1 = value.
-    /// - `promise:reject` — reject a promise or create a pre-rejected one.
-    ///   arg0 = promise handle (or reason), arg1 = reason.
+    /// - `promise:resolve` — return arg0 unchanged if it is a promise;
+    ///   otherwise resolve a new promise with arg0. Extra arguments are ignored.
+    /// - `promise:reject` — reject a new promise with arg0 as its reason,
+    ///   including when arg0 is a promise. Extra arguments are ignored.
     /// - `promise:then` — register .then(onFulfilled, onRejected).
     ///   arg0 = promise handle value.
     /// - `promise:catch` — sugar for .then(undefined, onRejected).
@@ -13266,19 +13265,11 @@ impl InterpreterCore {
                 ))
             }
             "promise:resolve" => {
-                // If arg0 is a Promise, resolve it with arg1.
-                // Otherwise create a pre-resolved promise with arg0 as the value.
                 let (arg0, arg0_label) = self.promise_hostcall_argument(args, 0)?;
                 match arg0 {
-                    Value::Promise(h) => {
-                        // Resolve the existing promise with the given value.
-                        let (val, value_label) = self.promise_hostcall_argument(args, 1)?;
-                        let js_val = Self::value_to_js_value(&val);
-                        let handle = crate::promise_model::PromiseHandle(h);
-                        let settlement_label = arg0_label.join(&value_label);
-                        self.fulfill_promise(handle, js_val, settlement_label.clone())?;
-                        Ok((Value::Promise(h), settlement_label))
-                    }
+                    // PromiseResolve(%Promise%, x) preserves promise identity
+                    // and never grants settlement authority to its caller.
+                    Value::Promise(h) => Ok((Value::Promise(h), arg0_label)),
                     _ => {
                         // Promise.resolve(value): a pending promise resolved
                         // with `value`, applying thenable assimilation
@@ -13294,23 +13285,13 @@ impl InterpreterCore {
             }
             "promise:reject" => {
                 let (arg0, arg0_label) = self.promise_hostcall_argument(args, 0)?;
-                match arg0 {
-                    Value::Promise(h) => {
-                        let (reason, reason_label) = self.promise_hostcall_argument(args, 1)?;
-                        let js_reason = Self::value_to_js_value(&reason);
-                        let handle = crate::promise_model::PromiseHandle(h);
-                        let settlement_label = arg0_label.join(&reason_label);
-                        self.reject_promise(handle, js_reason, settlement_label.clone())?;
-                        Ok((Value::Promise(h), settlement_label))
-                    }
-                    _ => {
-                        // Promise.reject(reason) — create a pre-rejected promise.
-                        let js_reason = Self::value_to_js_value(&arg0);
-                        let handle = self.create_promise_accounted()?;
-                        self.reject_promise(handle, js_reason, arg0_label.clone())?;
-                        Ok((Value::Promise(handle.0), arg0_label))
-                    }
-                }
+                // Unlike resolution, rejection does not assimilate its reason.
+                // A promise argument is retained as the reason of a distinct
+                // rejected promise, never treated as a settlement target.
+                let js_reason = Self::value_to_js_value(&arg0);
+                let handle = self.create_promise_accounted()?;
+                self.reject_promise(handle, js_reason, arg0_label.clone())?;
+                Ok((Value::Promise(handle.0), arg0_label))
             }
             "promise:then" => {
                 // arg0 = promise handle, arg1 = onFulfilled (optional),
@@ -14252,8 +14233,7 @@ impl InterpreterCore {
             Value::Bool(value) => value.to_string(),
             Value::Int(value) => value.to_string(),
             Value::Float(value) => {
-                let value = value.inner();
-                if value.is_finite() {
+                if value.inner().is_finite() {
                     value.to_string()
                 } else {
                     "null".to_string()
@@ -14731,8 +14711,7 @@ impl InterpreterCore {
                 if args.count > 0 {
                     let arg = self.read_reg(args.start)?;
                     match arg {
-                        Value::Int(i64::MIN) => Ok(Value::Float(Float64::new(-(i64::MIN as f64)))),
-                        Value::Int(n) => Ok(Value::Int(n.abs())),
+                        Value::Int(n) => Ok(js_number_to_value((n as f64).abs())),
                         Value::Float(f) => Ok(Value::Float(Float64::new(f.inner().abs()))),
                         Value::Symbol(_) => Err(InterpreterError::TypeError {
                             expected: "Math.abs argument coercible to number".to_string(),
@@ -15696,22 +15675,7 @@ impl InterpreterCore {
             Value::Null => "null".to_string(),
             Value::Bool(b) => b.to_string(),
             Value::Int(n) => n.to_string(),
-            Value::Float(f) => {
-                let v = f.inner();
-                if v.is_nan() {
-                    "NaN".to_string()
-                } else if v.is_infinite() {
-                    if v.is_sign_negative() {
-                        "-Infinity".to_string()
-                    } else {
-                        "Infinity".to_string()
-                    }
-                } else if v == 0.0 && v.is_sign_negative() {
-                    "0".to_string() // JS prints -0 as "0"
-                } else {
-                    format!("{v}")
-                }
-            }
+            Value::Float(f) => f.to_string(),
             Value::Str(s) => s.to_string(),
             Value::Symbol(id) => self.symbol_display_string(*id),
             Value::Object(id) => {
@@ -17895,12 +17859,12 @@ impl InterpreterCore {
             return Some(Value::Float(Float64::new(-0.0)));
         }
         if !is_float && let Ok(value) = token.parse::<i64>() {
-            return Some(Value::Int(value));
+            return Some(js_int_to_value(value));
         }
         token
             .parse::<f64>()
             .ok()
-            .map(|value| Value::Float(Float64::new(value)))
+            .map(js_number_to_value)
     }
 
     fn json_parse_value(
@@ -26298,12 +26262,17 @@ mod tests {
     }
 
     #[test]
-    fn promise_existing_reject_joins_target_and_reason_labels_bd_ur3tk_13() {
+    fn promise_reject_preserves_reason_identity_and_label_bd_9vouw_92() {
         let module = test_module(vec![
             Ir3Instruction::HostCall {
                 capability: CapabilityTag("promise:reject".to_string()),
                 args: RegRange { start: 0, count: 2 },
                 dst: 2,
+            },
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("promise:then".to_string()),
+                args: RegRange { start: 2, count: 1 },
+                dst: 3,
             },
             Ir3Instruction::Halt,
         ]);
@@ -26323,38 +26292,173 @@ mod tests {
             ),
         ];
 
-        for (target_label, reason_label, reason) in cases {
-            let expected_label = target_label.join(&reason_label);
+        for (target_label, extra_label, extra_value) in cases {
+            let expected_label = target_label.clone();
             let mut core = quickjs_test_core();
-            let target = core.promise_store.create();
+            let target = core.create_promise_accounted().expect("source promise");
             core.write_reg_with_label(0, Value::Promise(target.0), target_label)
-                .expect("target Promise should be writable");
-            core.write_reg_with_label(1, Value::str(reason), reason_label)
-                .expect("rejection reason should be writable");
+                .expect("reason Promise should be writable");
+            core.write_reg_with_label(1, Value::str(extra_value), extra_label)
+                .expect("ignored argument should be writable");
 
             core.execute(&module)
-                .expect("existing-target Promise.reject hostcall should execute");
+                .expect("Promise.reject hostcall should execute");
 
-            assert_eq!(core.registers[2], Value::Promise(target.0));
+            let Value::Promise(rejected) = core.registers[2] else {
+                panic!("Promise.reject should return a Promise");
+            };
+            assert_ne!(rejected, target.0, "rejection allocates a new promise");
             assert_eq!(
                 core.read_reg_label(2).expect("result label should exist"),
                 expected_label,
-                "returned handle joins the target-handle and reason labels"
+                "returned handle preserves the actual reason's provenance"
             );
             let record = core
                 .promise_store
-                .get(target)
+                .get(crate::promise_model::PromiseHandle(rejected))
                 .expect("rejected Promise should exist");
             assert_eq!(
                 record.label, expected_label,
-                "settlement joins target-reference and reason provenance"
+                "settlement retains the reason's label, ignoring extra arguments"
             );
-            assert!(matches!(
-                &record.state,
+            assert_eq!(
+                record.state,
                 crate::promise_model::PromiseState::Rejected(
-                    crate::object_model::JsValue::Str(value)
-                ) if value == reason
-            ));
+                    crate::object_model::JsValue::Promise(target.0)
+                )
+            );
+            assert_eq!(
+                core.promise_store.get(target).unwrap().state,
+                crate::promise_model::PromiseState::Pending,
+                "a reference to another promise does not grant settlement authority"
+            );
+            let Value::Promise(chained) = core.registers[3] else {
+                panic!("then should return a distinct chained promise");
+            };
+            let propagated = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(chained))
+                .unwrap();
+            assert_eq!(propagated.state, record.state);
+            assert_eq!(propagated.label, expected_label);
+            assert_eq!(
+                core.read_reg_label(3).unwrap(),
+                expected_label,
+                "queued rejection propagation retains the reason's provenance"
+            );
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn promise_resolve_preserves_all_source_states_bd_9vouw_92() {
+        use crate::ifc_artifacts::Label;
+        use crate::object_model::JsValue;
+        use crate::promise_model::PromiseState;
+
+        let module = test_module(vec![
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("promise:resolve".to_string()),
+                args: RegRange { start: 0, count: 2 },
+                dst: 2,
+            },
+            Ir3Instruction::Halt,
+        ]);
+        for state in [
+            PromiseState::Pending,
+            PromiseState::Fulfilled(JsValue::Int(17)),
+            PromiseState::Rejected(JsValue::str("original rejection")),
+        ] {
+            let mut core = quickjs_test_core();
+            let source = core.create_promise_accounted().expect("source promise");
+            match &state {
+                PromiseState::Pending => {}
+                PromiseState::Fulfilled(value) => core
+                    .fulfill_promise(source, value.clone(), Label::Secret)
+                    .unwrap(),
+                PromiseState::Rejected(reason) => core
+                    .reject_promise(source, reason.clone(), Label::Secret)
+                    .unwrap(),
+            }
+            core.write_reg_with_label(0, Value::Promise(source.0), Label::Secret)
+                .unwrap();
+            core.write_reg_with_label(1, Value::str("hijacked"), Label::Public)
+                .unwrap();
+            let witness = core.promise_store.witness_log().to_vec();
+            let count = core.promise_store.len();
+
+            core.execute(&module).expect("identity resolution succeeds");
+
+            assert_eq!(core.registers[2], Value::Promise(source.0));
+            assert_eq!(core.read_reg_label(2).unwrap(), Label::Secret);
+            assert_eq!(core.promise_store.get(source).unwrap().state, state);
+            assert_eq!(
+                core.promise_store.len(),
+                count,
+                "identity allocates no promise"
+            );
+            assert_eq!(core.promise_store.witness_log(), witness);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn promise_reject_accepts_settled_promise_reasons_bd_9vouw_92() {
+        use crate::ifc_artifacts::Label;
+        use crate::object_model::JsValue;
+        use crate::promise_model::PromiseState;
+
+        for fulfilled in [false, true] {
+            let mut core = quickjs_test_core();
+            let source = core.create_promise_accounted().unwrap();
+            if fulfilled {
+                core.fulfill_promise(source, JsValue::Int(7), Label::Public)
+                    .unwrap();
+            } else {
+                core.reject_promise(source, JsValue::str("original"), Label::Public)
+                    .unwrap();
+            }
+            let original_state = core.promise_store.get(source).unwrap().state.clone();
+            core.write_reg_with_label(0, Value::Promise(source.0), Label::Secret)
+                .unwrap();
+            let (result, label) = core
+                .dispatch_promise_hostcall("promise:reject", RegRange { start: 0, count: 1 })
+                .expect("a settled promise is a valid rejection reason");
+            let Value::Promise(rejected) = result else {
+                panic!("rejection returns a promise");
+            };
+            assert_ne!(rejected, source.0);
+            assert_eq!(label, Label::Secret);
+            assert_eq!(
+                core.promise_store.get(source).unwrap().state,
+                original_state
+            );
+            let reason = &core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(rejected))
+                .unwrap()
+                .state;
+            assert_eq!(reason, &PromiseState::Rejected(JsValue::Promise(source.0)));
+            let restored: PromiseState =
+                serde_json::from_str(&serde_json::to_string(reason).unwrap()).unwrap();
+            assert_eq!(
+                restored, *reason,
+                "replay retains the promise reason identity"
+            );
+            assert_eq!(
+                InterpreterCore::js_value_to_value(&JsValue::Promise(source.0)),
+                Value::Promise(source.0)
+            );
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
         }
     }
 
@@ -34357,10 +34461,10 @@ mod tests {
                 assert_eq!(InterpreterCore::value_to_js_value(&input), expected);
             }
 
-            assert!(matches!(
+            assert_eq!(
                 InterpreterCore::value_to_js_value(&Value::Promise(7)),
-                crate::object_model::JsValue::Str(_)
-            ));
+                crate::object_model::JsValue::Promise(7)
+            );
         }
 
         #[test]

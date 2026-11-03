@@ -94,10 +94,10 @@ fn parse_module_graph(data: &[u8]) -> ModuleGraph {
 }
 
 fn generate_workspace_module(chunk: &[u8], index: usize) -> WorkspaceModule {
-    let syntax = if byte(chunk, 1) & 1 == 0 {
-        ModuleSyntax::EsModule
-    } else {
-        ModuleSyntax::CommonJs
+    let syntax = match byte(chunk, 1) % 3 {
+        0 => ModuleSyntax::EsModule,
+        1 => ModuleSyntax::CommonJs,
+        _ => ModuleSyntax::Json,
     };
 
     let module_type = byte(chunk, 2) % 8;
@@ -212,6 +212,8 @@ fn generate_module_source(syntax: ModuleSyntax, chunk: &[u8], module_type: u8) -
             4 => "module.exports = function() { return require('./lazy'); };".to_string(),
             _ => format!("exports.fuzz_{} = {};", module_type, byte(chunk, 4)),
         },
+        ModuleSyntax::Json => format!(r#"{{"value":{}}}"#, byte(chunk, 4)),
+        ModuleSyntax::Wasm => unreachable!("this source generator does not emit Wasm records"),
     }
 }
 
@@ -221,13 +223,16 @@ fn generate_dependencies(
     module_type: u8,
 ) -> Vec<ModuleDependency> {
     let mut dependencies = Vec::new();
+    if syntax == ModuleSyntax::Json {
+        return dependencies;
+    }
     let dep_count = (byte(chunk, 5) % MAX_DEPENDENCIES as u8) as usize;
 
     for i in 0..dep_count {
         let dep_type = byte(chunk, 6 + i) % 12;
         let style = match syntax {
-            ModuleSyntax::EsModule => ImportStyle::Import,
-            ModuleSyntax::CommonJs => ImportStyle::Require,
+            ModuleSyntax::EsModule | ModuleSyntax::Wasm => ImportStyle::Import,
+            ModuleSyntax::CommonJs | ModuleSyntax::Json => ImportStyle::Require,
         };
 
         let specifier = match dep_type {

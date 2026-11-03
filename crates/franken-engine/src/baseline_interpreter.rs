@@ -94,6 +94,7 @@ mod inspect;
 mod intl;
 mod intl_segmenter;
 mod iterator_helpers;
+mod json_module;
 mod json_parse;
 mod json_stringify;
 mod legacy_regexp;
@@ -38164,10 +38165,10 @@ impl InterpreterCore {
         {
             record.resolved_source_hash = Some(installed.entry_hash);
         }
-        if let Some(ceiling) = self.entry_flow_label_ceiling.clone()
-            && let Some(record) = self.module_state.modules.get_mut(&entry_specifier)
-        {
-            record.flow_label_ceiling = Some(ceiling);
+        if let Some(ceiling) = self.entry_flow_label_ceiling.take() {
+            let outcome = self.set_module_flow_label_ceiling(&entry_specifier, &ceiling);
+            self.entry_flow_label_ceiling = Some(ceiling);
+            outcome?;
         }
         self.entry_module_specifier = Some(entry_specifier.clone());
         self.current_module_specifier = Some(entry_specifier);
@@ -40868,21 +40869,18 @@ impl InterpreterCore {
         Ok(())
     }
 
-    fn init_cjs_environment(
+    /// Create the shared CommonJS cache carrier without changing lexical
+    /// bindings. JSON modules use the same metadata but execute no wrapper.
+    fn alloc_cjs_module_object(
         &mut self,
         module: &Ir3Module,
         module_specifier: &str,
         parent_module_object: Option<ObjectId>,
-    ) -> Result<CjsModuleContext, InterpreterError> {
-        self.run_pre_allocation_hook(module, AllocKind::Object, 0)?;
-        let exports_object = self.alloc_object_with_prototype(None)?;
+        exports: Value,
+    ) -> Result<ObjectId, InterpreterError> {
         self.run_pre_allocation_hook(module, AllocKind::Object, 0)?;
         let module_object = self.alloc_object_with_prototype(None)?;
-        self.set_object_property(
-            module_object,
-            "exports".to_string(),
-            Value::Object(exports_object),
-        )?;
+        self.set_object_property(module_object, "exports".to_string(), exports)?;
         self.check_temporary_memory_budget(
             Self::estimate_string_bytes(self.module_filename_view(module_specifier))
                 .saturating_add(Self::estimate_string_bytes(
@@ -40903,6 +40901,23 @@ impl InterpreterCore {
         self.set_object_property(module_object, "parent".to_string(), parent_value)?;
         self.set_object_property(module_object, "loaded".to_string(), Value::Bool(false))?;
         self.set_cjs_require_property(module_object, module_specifier)?;
+        Ok(module_object)
+    }
+
+    fn init_cjs_environment(
+        &mut self,
+        module: &Ir3Module,
+        module_specifier: &str,
+        parent_module_object: Option<ObjectId>,
+    ) -> Result<CjsModuleContext, InterpreterError> {
+        self.run_pre_allocation_hook(module, AllocKind::Object, 0)?;
+        let exports_object = self.alloc_object_with_prototype(None)?;
+        let module_object = self.alloc_cjs_module_object(
+            module,
+            module_specifier,
+            parent_module_object,
+            Value::Object(exports_object),
+        )?;
         let context = CjsModuleContext {
             module_object,
             exports_object,
@@ -40979,6 +40994,22 @@ impl InterpreterCore {
                 reason: ModuleResolutionFailureReason::NativeAddonUnsupported,
             });
         }
+        let is_json = match delivered.as_ref() {
+            Some(source) => source.record.syntax == ModuleSyntax::Json,
+            None => Path::new(resolved)
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("json")),
+        };
+        // Custom resolvers have the same format boundary as the deterministic
+        // resolver. Import attributes are not transported by ModuleRequest yet;
+        // no previously cached require may authorize a later untyped import.
+        if is_json && delivered.is_some() && !matches!(load_kind, ModuleLoadKind::Require) {
+            return Err(InterpreterError::ModuleLoweringFailed {
+                specifier: resolved.to_string(),
+                error: "delivered JSON imports require import-attribute transport; use require()"
+                    .to_string(),
+            });
+        }
         let source_hash = delivered.as_ref().map(|source| source.content_hash);
         if let Some(record) = self.module_state.modules.get(resolved) {
             if source_hash.is_some() && record.resolved_source_hash != source_hash {
@@ -41021,13 +41052,29 @@ impl InterpreterCore {
                     let syntax_message = reason
                         .strip_prefix(MODULE_SYNTAX_ERROR_REASON_PREFIX)
                         .map(str::to_string);
-                    return Err(match syntax_message {
+                    let json_label = is_json
+                        .then_some(record.flow_label_ceiling.as_ref())
+                        .flatten();
+                    let label_bytes = json_label.map(Self::estimate_label_bytes).unwrap_or(0);
+                    self.check_temporary_memory_budget(label_bytes)?;
+                    let json_label = json_label.cloned();
+                    self.json_reserve_temporary(label_bytes)?;
+                    let mut failure = match syntax_message {
                         Some(message) => self.throw_js_error("SyntaxError", message),
                         None => InterpreterError::ModuleEvaluationFailed {
                             specifier: resolved.to_string(),
                             reason,
                         },
-                    });
+                    };
+                    if matches!(failure, InterpreterError::UncaughtException { .. })
+                        && let Some(label) = json_label.as_ref()
+                        && let Err(error) = self.join_pending_exception_label(label)
+                    {
+                        failure = error;
+                    }
+                    drop(json_label);
+                    self.json_release_temporary(label_bytes);
+                    return Err(failure);
                 }
             };
             if let Some(promise) = async_promise {
@@ -41039,6 +41086,23 @@ impl InterpreterCore {
         let namespace_object = self.ensure_module_record(module, resolved)?;
         if let Some(record) = self.module_state.modules.get_mut(resolved) {
             record.resolved_source_hash = source_hash;
+        }
+
+        if is_json {
+            // Borrow captured bytes on first load as well as cache hits. JSON
+            // needs neither a generated JavaScript string nor an owned parser
+            // input, AST, lowering pass, execution snapshot or retained IR.
+            let source = match delivered.as_ref() {
+                Some(source) => Cow::Borrowed(source.record.source.as_str()),
+                None => match self.read_module_source(resolved) {
+                    Ok(source) => Cow::Owned(source),
+                    Err(error) => {
+                        self.fail_module_record(resolved, &error.to_string());
+                        return Err(error);
+                    }
+                },
+            };
+            return self.load_json_module(module, resolved, source.as_ref(), import_bound);
         }
 
         let source_is_delivered = delivered.is_some();
@@ -41083,21 +41147,10 @@ impl InterpreterCore {
                 }
             },
         };
-        let is_json = !source_is_delivered
-            && Path::new(resolved)
-                .extension()
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("json"));
-        let source = match (is_json, declared_goal) {
-            (true, Some(ParseGoal::Script)) => Self::json_module_source(&source)?,
-            // An ES module import of a .json file exposes only default.
-            (true, _) => Self::json_es_module_source(&source)?,
-            (false, _) => source,
-        };
         // Delivered sources were already prepared by their capture host.
         // Normalize filesystem TypeScript before any syntax detection so the
         // detection and execution parser consume the same JavaScript bytes.
         let source = if !source_is_delivered
-            && !is_json
             && crate::ts_normalization::source_label_has_typescript_extension(resolved)
         {
             match crate::ts_normalization::prepare_source_entry_for_public_entrypoints(
@@ -41306,9 +41359,8 @@ impl InterpreterCore {
             }
             return Err(refusal);
         }
-        if let Some(record) = self.module_state.modules.get_mut(resolved) {
-            record.flow_label_ceiling = Some(ceiling);
-        }
+        self.set_module_flow_label_ceiling(resolved, &ceiling)
+            .inspect_err(|error| self.fail_module_record(resolved, &error.to_string()))?;
         self.retain_module_program(resolved, &lowering_output.ir3)?;
         let eval_result = if is_cjs {
             self.evaluate_cjs_ir3(&lowering_output.ir3, resolved)
@@ -41452,6 +41504,37 @@ impl InterpreterCore {
             matches!(instruction, Ir3Instruction::HostCall { capability, .. }
                 if capability.0 == crate::lowering_pipeline::IFC_BOUNDED_IMPORTS_CONTRACT)
         })
+    }
+
+    /// Retain a module's flow ceiling only after its dynamic label payload
+    /// has been admitted. Replacement must not leave a new cache label behind
+    /// when the memory budget refuses the operation.
+    fn set_module_flow_label_ceiling(
+        &mut self,
+        specifier: &str,
+        ceiling: &Label,
+    ) -> Result<(), InterpreterError> {
+        let previous_bytes = self
+            .module_state
+            .modules
+            .get(specifier)
+            .ok_or_else(|| InterpreterError::ModuleEvaluationFailed {
+                specifier: specifier.to_string(),
+                reason: "module record missing before flow ceiling publication".to_string(),
+            })?
+            .flow_label_ceiling
+            .as_ref()
+            .map(Self::estimate_label_bytes)
+            .unwrap_or(0);
+        let next_bytes = Self::estimate_label_bytes(ceiling);
+        self.check_temporary_memory_budget(next_bytes)?;
+        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        self.module_state
+            .modules
+            .get_mut(specifier)
+            .expect("module record was checked before flow ceiling admission")
+            .flow_label_ceiling = Some(ceiling.clone());
+        Ok(())
     }
 
     /// Refuse an import whose module can produce a label above the
@@ -41945,10 +42028,12 @@ impl InterpreterCore {
             );
             return Ok(value);
         }
-        let is_json = delivered.is_none()
-            && Path::new(&resolved)
+        let is_json = match delivered.as_ref() {
+            Some(source) => source.module.record.syntax == ModuleSyntax::Json,
+            None => Path::new(&resolved)
                 .extension()
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("json"));
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("json")),
+        };
         let namespace = self.load_module_resolved(
             module,
             &resolved,
@@ -41959,6 +42044,16 @@ impl InterpreterCore {
         if let Some(record) = self.module_state.modules.get(&resolved)
             && let Some(module_object) = record.cjs_module_object
         {
+            // Native JSON keeps the parsed value's label on this cache
+            // carrier, including primitives with no reachable object graph.
+            if is_json {
+                return self.iterator_protocol_property(
+                    Some(module),
+                    module_object,
+                    &RuntimePropertyKey::String(JsString::from("exports")),
+                    Value::Object(module_object),
+                );
+            }
             // A `module.exports` getter runs on every require, as in Node.
             let export_value = self.prototype_chain_get_with_receiver(
                 Some(module),
@@ -41968,17 +42063,20 @@ impl InterpreterCore {
             )?;
             return Ok(export_value);
         }
-        // Requiring an ES module returns its namespace. JSON first loaded by
-        // an ES import has no CommonJS module object; require still returns
-        // that JSON value rather than its namespace wrapper.
+        // Requiring an ES module returns its namespace. A JSON namespace's
+        // default also remains the fallback for a record without a CJS carrier.
         if !is_json {
             return Ok(namespace);
         }
         let Value::Object(namespace_object) = namespace else {
             return Ok(namespace);
         };
-        let default_value = self.prototype_chain_get(namespace_object, "default")?;
-        Ok(default_value)
+        self.iterator_protocol_property(
+            Some(module),
+            namespace_object,
+            &RuntimePropertyKey::String(JsString::from("default")),
+            Value::Object(namespace_object),
+        )
     }
 
     /// Built-ins share the ordinary module identity map. Pin the descriptor
@@ -45902,7 +46000,13 @@ impl InterpreterCore {
                             Label::Public,
                         )?)
                     } else {
-                        hostcall_result_contract("module_load").result_label(&args_label, None)
+                        hostcall_result_contract("module_load")
+                            .result_label(&args_label, None)
+                            .join(
+                                self.pending_hostcall_result_label
+                                    .as_ref()
+                                    .unwrap_or(&Label::Public),
+                            )
                     };
                     self.replace_pending_hostcall_result_label(Some(result_label))?;
                 }
@@ -109163,13 +109267,23 @@ impl InterpreterCore {
     }
 
     fn module_exports_memory_bytes(&self) -> u64 {
-        Self::saturating_sum(
-            self.module_state
-                .modules
-                .values()
-                .flat_map(|record| record.exports.iter())
-                .map(|(name, value)| Self::estimate_js_string_map_entry_bytes(name, value)),
-        )
+        Self::saturating_sum(self.module_state.modules.values().map(|record| {
+            let exports = Self::saturating_sum(
+                record
+                    .exports
+                    .iter()
+                    .map(|(name, value)| Self::estimate_js_string_map_entry_bytes(name, value)),
+            );
+            // The export record also retains the ceiling used to authorize
+            // later imports. Custom labels own names even on failed records.
+            exports.saturating_add(
+                record
+                    .flow_label_ceiling
+                    .as_ref()
+                    .map(Self::estimate_label_bytes)
+                    .unwrap_or(0),
+            )
+        }))
     }
 
     fn estimate_captured_state_bytes(state: &CapturedInterpreterState) -> u64 {

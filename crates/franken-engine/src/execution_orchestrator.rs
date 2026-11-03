@@ -2604,6 +2604,14 @@ impl ExecutionOrchestrator {
                     ),
                 });
             }
+            ModuleSyntax::Json => {
+                return Err(OrchestratorError::ResolvedEntryRejected {
+                    detail: format!(
+                        "JSON module '{}' is data and must be loaded with require(), not executed as an entry",
+                        record.id
+                    ),
+                });
+            }
             _ => {}
         }
 

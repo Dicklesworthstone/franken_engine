@@ -672,6 +672,7 @@ fn syntax_str(syntax: ModuleSyntax) -> &'static str {
         ModuleSyntax::EsModule => "es_module",
         ModuleSyntax::CommonJs => "common_js",
         ModuleSyntax::Wasm => "wasm",
+        ModuleSyntax::Json => "json",
     }
 }
 

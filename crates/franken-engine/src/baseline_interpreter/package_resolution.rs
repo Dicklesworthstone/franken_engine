@@ -1213,40 +1213,7 @@ impl InterpreterCore {
         resolve_manifest_main(directory, &manifest)
     }
 
-    /// Node loads a required `.json` file as a module whose `exports` is the
-    /// parsed value. It is evaluated as `module.exports = JSON.parse(<text>)`
-    /// so the engine's own `JSON.parse` defines that value, and invalid JSON
-    /// throws the same `SyntaxError` it would there.
-    pub(super) fn json_module_source(text: &str) -> Result<String, InterpreterError> {
-        Ok(format!(
-            "module.exports = JSON.parse({});\n",
-            Self::json_module_text_literal(text)?
-        ))
-    }
 
-    /// An ES module import of a `.json` file (`import data from './x.json'
-    /// with { type: 'json' }`) loads a JSON module (ES2025 16.2.1.7): its
-    /// only export is `default`, the value `JSON.parse` gives for the text,
-    /// so invalid JSON throws that `SyntaxError`.
-    pub(super) fn json_es_module_source(text: &str) -> Result<String, InterpreterError> {
-        Ok(format!(
-            "export default JSON.parse({});\n",
-            Self::json_module_text_literal(text)?
-        ))
-    }
-
-    fn json_module_text_literal(text: &str) -> Result<String, InterpreterError> {
-        let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-        let literal =
-            serde_json::to_string(text).map_err(|error| InterpreterError::InternalError {
-                details: format!("failed to encode a JSON module as a string literal: {error}"),
-            })?;
-        // JSON leaves U+2028/U+2029 unescaped; escape them so the literal is
-        // valid for any ECMAScript parser.
-        Ok(literal
-            .replace('\u{2028}', "\\u2028")
-            .replace('\u{2029}', "\\u2029"))
-    }
 }
 
 #[cfg(test)]
@@ -2324,16 +2291,6 @@ mod tests {
         assert_eq!(split_package_specifier("@scope/"), None);
         assert_eq!(split_package_specifier(".hidden"), None);
         assert_eq!(split_package_specifier("bad%name"), None);
-    }
-
-    #[test]
-    fn json_module_source_escapes_line_separators() {
-        let source =
-            InterpreterCore::json_module_source("\u{feff}{\"a\":\"x\u{2028}y\"}").expect("source");
-        assert_eq!(
-            source,
-            "module.exports = JSON.parse(\"{\\\"a\\\":\\\"x\\u2028y\\\"}\");\n"
-        );
     }
 
     fn import_target(json: &str, specifier: &str) -> Result<ExportsTargetResolution, String> {

@@ -25,6 +25,8 @@ pub enum ModuleSyntax {
     EsModule,
     CommonJs,
     Wasm,
+    /// Original JSON data, initialized by the intrinsic parser without guest code.
+    Json,
 }
 
 impl ModuleSyntax {
@@ -33,6 +35,7 @@ impl ModuleSyntax {
             Self::EsModule => "esm",
             Self::CommonJs => "cjs",
             Self::Wasm => "wasm",
+            Self::Json => "json",
         }
     }
 }
@@ -2683,6 +2686,27 @@ impl DeterministicModuleResolver {
     ) -> ResolutionResult<AuthorizedModuleCandidate<'_>> {
         let (canonical_specifier, record, probe_sequence) =
             self.resolve_candidate(request, context)?;
+        // Requests do not yet carry import attributes. Do not let the source
+        // cache or a JSON-looking specifier silently admit an untyped import.
+        // Metadata-only resolution remains independent of source format.
+        if request.style == ImportStyle::Import && record.syntax == ModuleSyntax::Json {
+            return Err(Box::new(
+                ResolutionError::new(
+                    ResolutionErrorCode::UnsupportedSpecifier,
+                    format!(
+                        "import of JSON module '{}' is not supported by delivered module requests until import attributes are carried; use require()",
+                        canonical_specifier
+                    ),
+                    context,
+                )
+                .with_resolution_attempt(
+                    request.specifier.clone(),
+                    Some(canonical_specifier.clone()),
+                    Some(record.provenance.kind),
+                    probe_sequence.clone(),
+                ),
+            ));
+        }
         if request.style == ImportStyle::Require && record.syntax == ModuleSyntax::Wasm {
             return Err(Box::new(
                 ResolutionError::new(
@@ -3328,6 +3352,58 @@ mod tests {
 
     fn context() -> ResolutionContext {
         ResolutionContext::new("trace-1", "decision-1", "policy-1")
+    }
+
+    #[test]
+    fn json_delivery_preserves_raw_source_and_rejects_untyped_imports() {
+        let mut resolver = DeterministicModuleResolver::new("/app");
+        let source = concat!("\u{feff}", r#"{"name":"data","count":2}"#);
+        resolver
+            .register_workspace_module(
+                "/app/data",
+                ModuleDefinition::new(ModuleSyntax::Json, source)
+                    .require_capability(RuntimeCapability::ModuleLoad),
+            )
+            .expect("JSON source registration");
+        let require = ModuleRequest::new("/app/data", ImportStyle::Require);
+        let outcome = resolver
+            .resolve(&require, &context(), &AllowAllPolicy)
+            .expect("require accepts the declared JSON format without a suffix");
+        assert_eq!(outcome.module.record.syntax, ModuleSyntax::Json);
+        assert_eq!(outcome.module.record.source, source);
+        let mut stripped = outcome.module.record.clone();
+        stripped.source = source.strip_prefix('\u{feff}').unwrap().to_string();
+        assert_ne!(outcome.module.content_hash, stripped.canonical_hash());
+        let mut javascript = outcome.module.record.clone();
+        javascript.syntax = ModuleSyntax::CommonJs;
+        assert_ne!(outcome.module.content_hash, javascript.canonical_hash());
+
+        let denied = resolver
+            .resolve(
+                &require,
+                &context(),
+                &CapabilityPolicyHook::new(BTreeSet::new()),
+            )
+            .expect_err("JSON retains module capability checks");
+        assert_eq!(denied.code, ResolutionErrorCode::PolicyDenied);
+
+        let import = ModuleRequest::new("/app/data", ImportStyle::Import);
+        let error = resolver
+            .resolve(&import, &context(), &AllowAllPolicy)
+            .expect_err("source delivery cannot validate absent import attributes");
+        assert_eq!(error.code, ResolutionErrorCode::UnsupportedSpecifier);
+        assert!(error.message.contains("import attributes"));
+        assert_eq!(error.request_specifier, "/app/data");
+        assert_eq!(error.canonical_specifier.as_deref(), Some("/app/data"));
+
+        let metadata = resolver
+            .resolve_metadata(
+                &ModuleRequest::new("file:///app/data", ImportStyle::Import),
+                &context(),
+                &AllowAllPolicy,
+            )
+            .expect("import.meta.resolve does not load JSON or need attributes");
+        assert_eq!(metadata.module.metadata.id, outcome.module.record.id);
     }
 
     #[test]
@@ -5195,6 +5271,7 @@ mod tests {
         assert_eq!(ModuleSyntax::EsModule.as_str(), "esm");
         assert_eq!(ModuleSyntax::CommonJs.as_str(), "cjs");
         assert_eq!(ModuleSyntax::Wasm.as_str(), "wasm");
+        assert_eq!(ModuleSyntax::Json.as_str(), "json");
     }
 
     #[test]
@@ -5239,6 +5316,7 @@ mod tests {
             ModuleSyntax::EsModule,
             ModuleSyntax::CommonJs,
             ModuleSyntax::Wasm,
+            ModuleSyntax::Json,
         ] {
             for kind in [
                 ModuleSourceKind::BuiltIn,
@@ -5432,6 +5510,7 @@ mod tests {
             ModuleSyntax::EsModule,
             ModuleSyntax::CommonJs,
             ModuleSyntax::Wasm,
+            ModuleSyntax::Json,
         ] {
             let json = serde_json::to_string(syntax).expect("serde serialization should succeed");
             let decoded: ModuleSyntax =
@@ -5573,6 +5652,7 @@ mod tests {
     fn module_syntax_ordering() {
         assert!(ModuleSyntax::EsModule < ModuleSyntax::CommonJs);
         assert!(ModuleSyntax::CommonJs < ModuleSyntax::Wasm);
+        assert!(ModuleSyntax::Wasm < ModuleSyntax::Json);
     }
 
     #[test]
@@ -5737,11 +5817,12 @@ mod tests {
             ModuleSyntax::EsModule,
             ModuleSyntax::CommonJs,
             ModuleSyntax::Wasm,
+            ModuleSyntax::Json,
         ]
         .iter()
         .map(|s| s.as_str().to_string())
         .collect();
-        assert_eq!(displays.len(), 3);
+        assert_eq!(displays.len(), 4);
     }
 
     #[test]

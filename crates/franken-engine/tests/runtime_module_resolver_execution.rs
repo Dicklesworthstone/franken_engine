@@ -584,6 +584,229 @@ fn delivered_commonjs_graph_preserves_cycles_cache_and_per_edge_authorization() 
 }
 
 #[test]
+fn delivered_json_requires_use_intrinsic_parsing_and_one_cached_value() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(OpaqueResolver::new(vec![
+            (
+                "entry.cjs",
+                definition(
+                    ModuleSyntax::CommonJs,
+                    r#"Object.defineProperty(JSON, 'parse', { get() { throw new Error('guest JSON.parse must not run'); } });
+const first = require('./data');
+first.changed = 7;
+const second = require('./data');
+console.log(first === second, second.changed, second.answer, first.__proto__);
+console.log(Object.getPrototypeOf(first) === Object.prototype, first.items[0], first.items[1] === null);
+console.log(require('./primitive') === false, require('./text') === 'module data');"#,
+                ),
+            ),
+            (
+                "data",
+                definition(
+                    ModuleSyntax::Json,
+                    concat!(
+                        "\u{feff}",
+                        r#"{"answer":1,"answer":42,"__proto__":9,"items":[true,null]}"#,
+                    ),
+                ),
+            ),
+            ("primitive", definition(ModuleSyntax::Json, "false")),
+            ("text", definition(ModuleSyntax::Json, r#""module data""#)),
+        ]));
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let policy = Arc::new(RecordingPolicy::default());
+        let installed =
+            ExecutionModuleResolver::new(&source.module.record.id, resolver, policy.clone());
+        let result = orchestrator(lane, ModuleSyntax::CommonJs)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("native JSON data does not execute a JavaScript adapter");
+        assert_eq!(
+            lines(&result),
+            ["true 7 42 9", "true true true", "true true"]
+        );
+        let calls = policy.requests.lock().expect("policy log");
+        assert_eq!(
+            calls
+                .iter()
+                .map(|(request, _)| request.specifier.as_str())
+                .collect::<Vec<_>>(),
+            ["./data", "./data", "./primitive", "./text"]
+        );
+        assert!(calls.iter().all(|(request, _)| {
+            request.style == ImportStyle::Require
+                && request.referrer.as_deref()
+                    == Some(format!("{ID_PREFIX}{ROOT}/entry.cjs").as_str())
+        }));
+    }
+}
+
+#[test]
+fn delivered_json_cache_hits_still_require_current_authority() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(OpaqueResolver::new(vec![
+            (
+                "entry.cjs",
+                definition(
+                    ModuleSyntax::CommonJs,
+                    "console.log(require('./data').answer); require('./data');",
+                ),
+            ),
+            ("data", definition(ModuleSyntax::Json, r#"{"answer":42}"#)),
+        ]));
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let policy = Arc::new(RecordingPolicy {
+            denied: Some(("./data".to_string(), 2)),
+            ..RecordingPolicy::default()
+        });
+        let installed =
+            ExecutionModuleResolver::new(&source.module.record.id, resolver, policy.clone());
+        let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
+        let error = engine
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect_err("cached JSON cannot retain an earlier route grant");
+        assert!(
+            error.to_string().contains("closed-world module resolution refused"),
+            "{error}"
+        );
+        assert_eq!(policy.requests.lock().expect("policy log").len(), 2);
+        assert_eq!(
+            engine
+                .last_failed_console_output()
+                .iter()
+                .map(|entry| entry.message.as_str())
+                .collect::<Vec<_>>(),
+            ["42"]
+        );
+    }
+}
+
+#[test]
+fn delivered_json_errors_remain_syntax_errors_on_a_repeated_require() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(OpaqueResolver::new(vec![
+            (
+                "entry.cjs",
+                definition(
+                    ModuleSyntax::CommonJs,
+                    r#"function load() {
+    try { require('./broken'); console.log('unexpected'); }
+    catch (error) { console.log(error.name); }
+}
+load();
+load();"#,
+                ),
+            ),
+            ("broken", definition(ModuleSyntax::Json, r#"{"items":[1,]}"#)),
+        ]));
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(RecordingPolicy::default()),
+        );
+        let result = orchestrator(lane, ModuleSyntax::CommonJs)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("invalid JSON is a guest SyntaxError, including failure replay");
+        assert_eq!(lines(&result), ["SyntaxError", "SyntaxError"]);
+    }
+}
+
+#[test]
+fn delivered_json_cannot_execute_as_a_javascript_entry() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = OpaqueResolver::new(vec![(
+            "data",
+            definition(ModuleSyntax::Json, "42"),
+        )]);
+        let source = resolver
+            .resolve(
+                &ModuleRequest::new(format!("{ROOT}/data"), ImportStyle::Require),
+                &ResolutionContext::new("admission", "admission-decision", "admission-policy"),
+                &AllowAllPolicy,
+            )
+            .expect("JSON data source can be admitted for require");
+        let error = orchestrator(lane, ModuleSyntax::CommonJs)
+            .execute_resolved_entry(&package(), &source)
+            .expect_err("JSON source must never run as JavaScript");
+        assert!(
+            matches!(error, OrchestratorError::ResolvedEntryRejected { .. }),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn delivered_json_checks_source_hashes_before_initialization_and_cache_hits() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for corruption in [Corruption::StaleHash, Corruption::ChangeCachedSource] {
+            let mut resolver = OpaqueResolver::new(vec![
+                (
+                    "entry.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        "require('./dep.cjs'); require('./dep.cjs');",
+                    ),
+                ),
+                (
+                    "dep.cjs",
+                    definition(ModuleSyntax::Json, r#"{"answer":42}"#),
+                ),
+            ]);
+            resolver.corruption = corruption;
+            let resolver = Arc::new(resolver);
+            let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+            let installed = ExecutionModuleResolver::new(
+                &source.module.record.id,
+                resolver,
+                Arc::new(AllowAllPolicy),
+            );
+            let error = orchestrator(lane, ModuleSyntax::CommonJs)
+                .execute_resolved_entry_with_resolver(&package(), &source, installed)
+                .expect_err("a JSON module never uses unauthenticated source");
+            let expected = match corruption {
+                Corruption::StaleHash => "canonical content hash is inconsistent",
+                _ => "changed after its first authorized load",
+            };
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+    }
+}
+
+#[test]
+fn delivered_json_admission_uses_the_original_source_byte_budget() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let source_text = format!("{}{}", " ".repeat(128), r#"{"answer":42}"#);
+        let resolver = Arc::new(OpaqueResolver::new(vec![
+            (
+                "entry.cjs",
+                definition(ModuleSyntax::CommonJs, "require('./data');"),
+            ),
+            ("data", definition(ModuleSyntax::Json, &source_text)),
+        ]));
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let mut config = OrchestratorConfig {
+            force_lane: Some(lane),
+            parse_goal: ParseGoal::Script,
+            commonjs_entry: true,
+            ..OrchestratorConfig::default()
+        };
+        config.parser_options.budget.max_source_bytes = 64;
+        let mut engine =
+            ExecutionOrchestrator::try_new_lab_with_runtime_config(config, RuntimeConfig::default())
+                .expect("native test runtime");
+        let error = engine
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect_err("intrinsic JSON initialization preserves source admission");
+        assert!(error.to_string().contains("parser source-byte budget"), "{error}");
+    }
+}
+
+#[test]
 fn delivered_dynamic_import_jobs_keep_the_initiating_opaque_referrer() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         let resolver = Arc::new(OpaqueResolver::new(vec![

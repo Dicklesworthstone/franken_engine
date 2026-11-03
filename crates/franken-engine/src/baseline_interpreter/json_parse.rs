@@ -113,6 +113,33 @@ fn json_primitive_source_end(units: &[u16], start: usize) -> usize {
 }
 
 impl InterpreterCore {
+    /// Parse module data without calling guest-visible JSON.parse or coercion.
+    ///
+    /// The loader retains the original source for authentication and admission.
+    /// A single UTF-8 BOM is ignored only for decoding, matching Node's JSON
+    /// file loader while leaving ordinary JSON.parse's grammar unchanged.
+    pub(super) fn json_parse_module_source(
+        &mut self,
+        source: &str,
+    ) -> Result<Value, InterpreterError> {
+        self.json_charge_work()?;
+        let source = source.strip_prefix('\u{feff}').unwrap_or(source);
+        self.check_string_limit(source.len())?;
+        let unit_count = source.encode_utf16().count();
+        let unit_bytes = u64::try_from(unit_count)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(2);
+        self.json_reserve_temporary(unit_bytes)?;
+        // Reserve the exact admitted length so Vec growth cannot allocate an
+        // uncharged second input buffer. Parsing runs without guest callbacks.
+        let mut units = Vec::with_capacity(unit_count);
+        units.extend(source.encode_utf16());
+        let outcome = self.json_parse_document(&units);
+        drop(units);
+        self.json_release_temporary(unit_bytes);
+        outcome
+    }
+
     pub(super) fn json_parse_builtin(
         &mut self,
         module: Option<&Ir3Module>,
@@ -957,6 +984,142 @@ mod tests {
     fn parse(core: &mut InterpreterCore, input: Value) -> Result<Value, InterpreterError> {
         core.seed_register(0, input)?;
         core.dispatch_builtin_hostcall("builtin:JsonParse", RegRange { start: 0, count: 1 }, None)
+    }
+
+    #[test]
+    fn module_source_uses_native_json_semantics_after_one_leading_bom() {
+        let mut core = core();
+        let Value::Object(id) = core
+            .json_parse_module_source(concat!(
+                "\u{feff}",
+                r#"{"__proto__":7,"\ud800":1,"\ud801":2,"z":-0}"#,
+            ))
+            .unwrap()
+        else {
+            panic!("JSON module must produce its parsed object");
+        };
+        let prototype = core.ensure_builtin_prototype("Object").unwrap();
+        let object = &core.heap[id.0 as usize];
+        assert_eq!(object.prototype, Some(prototype));
+        assert_eq!(object.properties.get("__proto__"), Some(&Value::Int(7)));
+        for (unit, expected) in [(0xD800, 1), (0xD801, 2)] {
+            assert_eq!(
+                object
+                    .properties
+                    .get_exact(&JsString::from_code_units(&[unit])),
+                Some(&Value::Int(expected))
+            );
+        }
+        let Some(Value::Float(zero)) = object.properties.get("z") else {
+            panic!("JSON -0 must keep its binary64 sign");
+        };
+        assert_eq!(zero.inner().to_bits(), (-0.0f64).to_bits());
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn module_bom_handling_does_not_relax_json_parse_or_accept_two_boms() {
+        let mut core = core();
+        assert!(matches!(
+            core.json_parse_module_source("\u{feff}\u{feff}null"),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        core.replace_pending_abrupt_slots(None, None).unwrap();
+        assert!(matches!(
+            parse(&mut core, Value::str("\u{feff}null")),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn module_source_admits_scratch_before_allocation_and_keeps_host_limits() {
+        let mut limited = core();
+        limited.config.max_string_size = 3;
+        let heap_before = limited.heap_size();
+        assert!(matches!(
+            limited.json_parse_module_source("true"),
+            Err(InterpreterError::StringLimitExceeded { length: 4, max: 3 })
+        ));
+        assert_eq!(limited.heap_size(), heap_before);
+        assert!(limited.pending_exception.is_none());
+        assert_eq!(limited.json_parse_temporary_bytes, 0);
+
+        let mut limited = core();
+        let baseline = limited.estimated_memory_bytes();
+        limited.config.max_total_memory_bytes = baseline + 27;
+        let heap_before = limited.heap_size();
+        assert!(matches!(
+            limited.json_parse_module_source(r#""abcdefghijkl""#),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(limited.heap_size(), heap_before);
+        assert!(limited.pending_exception.is_none());
+        assert_eq!(limited.json_parse_temporary_bytes, 0);
+        assert_eq!(limited.estimated_memory_bytes(), baseline);
+
+        let mut cancelled = core();
+        let token = CancellationToken::new();
+        token.cancel();
+        cancelled.config.cancellation_token = Some(token);
+        let heap_before = cancelled.heap_size();
+        assert_eq!(
+            cancelled.json_parse_module_source("[1,2]"),
+            Err(InterpreterError::Cancelled)
+        );
+        assert_eq!(cancelled.heap_size(), heap_before);
+        assert!(cancelled.pending_exception.is_none());
+        assert_eq!(cancelled.json_parse_temporary_bytes, 0);
+    }
+
+    #[test]
+    fn module_source_preserves_context_on_values_and_syntax_errors() {
+        let mut core = core();
+        core.active_inline_callback_context_label = Some(Label::Secret);
+        core.sync_estimated_memory_bytes().unwrap();
+        let Value::Object(root) = core
+            .json_parse_module_source(r#"{"empty":{},"items":[]}"#)
+            .unwrap()
+        else {
+            panic!("JSON module object expected");
+        };
+        for name in ["empty", "items"] {
+            assert_eq!(core.own_property_label(root, name), Label::Secret);
+            let Some(Value::Object(child)) = core.heap[root.0 as usize].properties.get(name)
+            else {
+                panic!("nested container expected");
+            };
+            assert_eq!(core.object_mutation_labels.get(child), Some(&Label::Secret));
+        }
+        assert_eq!(
+            core.object_mutation_labels.get(&root),
+            Some(&Label::Secret)
+        );
+        assert!(matches!(
+            core.json_parse_module_source(r#"{"items":[1]} invalid"#),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        assert_eq!(core.pending_exception_label, Label::Secret);
+        assert!(
+            core.object_mutation_labels
+                .keys()
+                .all(|id| (id.0 as usize) < core.heap.len())
+        );
+        assert_eq!(core.active_inline_callback_context_label, Some(Label::Secret));
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     fn parse_record(core: &mut InterpreterCore, text: &str) -> (JsonParseRecord, u64, Vec<u16>) {

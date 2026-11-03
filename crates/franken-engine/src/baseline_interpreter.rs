@@ -183,9 +183,9 @@ use crate::module_compatibility_matrix::CompatibilityMode;
 #[cfg(test)]
 use crate::module_resolver::ResolutionOutcome;
 use crate::module_resolver::{
-    ExecutionModuleResolver, ImportStyle, ModuleRequest, ModuleSyntax, NativeBuiltinModule,
-    ResolutionContext, ResolutionErrorCode, ResolvedModule, SharedResolutionOutcome,
-    SharedResolvedModule,
+    ExecutionModuleResolver, ImportStyle, MetadataResolutionOutcome, ModuleRequest,
+    ModuleSourceKind, ModuleSyntax, NativeBuiltinModule, ResolutionContext, ResolutionErrorCode,
+    ResolvedModule, SharedResolutionOutcome, SharedResolvedModule, node_builtin_specifier,
 };
 use crate::object_model::{SymbolId, WellKnownSymbol};
 use crate::parser::{
@@ -40365,6 +40365,87 @@ impl InterpreterCore {
         Ok(resolved)
     }
 
+    /// Resolve an admitted metadata route without requesting an executable
+    /// record or touching the module evaluation cache. Policy and resolution
+    /// authority are rechecked even when the same filename was already given.
+    fn resolve_installed_module_metadata(
+        &self,
+        specifier: &str,
+        style: ImportStyle,
+    ) -> Result<MetadataResolutionOutcome, InterpreterError> {
+        let installed = self.module_resolver.as_ref().ok_or_else(|| {
+            InterpreterError::InternalError {
+                details: "closed-world module metadata resolution has no installed resolver"
+                    .to_string(),
+            }
+        })?;
+        if !self.config.granted_capabilities.contains(&RuntimeCapability::ModuleLoad) {
+            return Err(InterpreterError::CapabilityDenied {
+                capability: RuntimeCapability::ModuleLoad.to_string(),
+            });
+        }
+        let request = ModuleRequest::new(specifier, style)
+            .with_referrer(
+                self.current_module_specifier.as_deref()
+                    .unwrap_or_else(|| installed.resolver.entry_referrer()),
+            )
+            .with_compatibility_mode(CompatibilityMode::NodeCompat);
+        let resolved = installed.resolver.resolve_metadata(&request, &installed.context)
+            .map_err(|error| {
+                if let Some(reason) = ModuleResolutionFailureReason::from_captured_code(error.code) {
+                    InterpreterError::ModuleResolutionFailed {
+                        specifier: specifier.to_string(),
+                        reason,
+                    }
+                } else {
+                    InterpreterError::ModuleLoweringFailed {
+                        specifier: specifier.to_string(),
+                        error: format!("closed-world module resolution refused: {error}"),
+                    }
+                }
+            })?;
+        let metadata = &resolved.module.metadata;
+        let metadata_bytes = [
+            metadata.id.as_str(),
+            metadata.provenance.origin.as_str(),
+            resolved.module.request_specifier.as_str(),
+            resolved.module.canonical_specifier.as_str(),
+        ].into_iter().chain(resolved.module.probe_sequence.iter().map(String::as_str))
+            .fold(0_u64, |bytes, value| {
+                bytes.saturating_add(Self::estimate_string_bytes(value))
+            });
+        self.check_temporary_memory_budget(metadata_bytes)?;
+        if metadata.id.is_empty()
+            || resolved.module.request_specifier != specifier
+            || resolved.module.canonical_specifier.is_empty()
+            || !metadata.required_capabilities.contains(&RuntimeCapability::ModuleLoad)
+        {
+            return Err(InterpreterError::ModuleLoweringFailed {
+                specifier: specifier.to_string(),
+                error: "resolved module metadata has inconsistent identity or resolution authority"
+                    .to_string(),
+            });
+        }
+        if let Some(missing) = metadata.required_capabilities
+            .difference(&self.config.granted_capabilities).next()
+        {
+            return Err(InterpreterError::CapabilityDenied {
+                capability: missing.to_string(),
+            });
+        }
+        if metadata.provenance.kind == ModuleSourceKind::BuiltIn
+            && node_builtin_specifier(&metadata.provenance.origin)
+                != Some(metadata.provenance.origin.as_str())
+        {
+            return Err(InterpreterError::ModuleLoweringFailed {
+                specifier: specifier.to_string(),
+                error: "resolved builtin metadata must name an exact canonical Node builtin"
+                    .to_string(),
+            });
+        }
+        Ok(resolved)
+    }
+
     /// The module-map key of a resolved module file: the entry module's own
     /// specifier when the file is the entry's (bd-9vouw.411). The entry is
     /// recorded under its source label, the path as the caller gave it
@@ -74298,7 +74379,7 @@ impl InterpreterCore {
         };
         let specifier = Self::utf8_module_specifier(&request)?;
         if self.module_resolver.is_some() {
-            let resolved = match self.resolve_installed_module(specifier, ImportStyle::Require) {
+            let resolved = match self.resolve_installed_module_metadata(specifier, ImportStyle::Require) {
                 Ok(resolved) => resolved,
                 Err(InterpreterError::ModuleResolutionFailed { reason, .. }) => {
                     return Err(self.throw_module_resolution_failure(
@@ -74309,20 +74390,31 @@ impl InterpreterCore {
                 }
                 Err(error) => return Err(error),
             };
-            if let Some(native) = NativeBuiltinModule::from_record(&resolved.module.record) {
-                let name = if NativeBuiltinModule::from_specifier(specifier) == Some(native) {
+            let metadata = &resolved.module.metadata;
+            if metadata.provenance.kind == ModuleSourceKind::BuiltIn {
+                let canonical = metadata.provenance.origin.as_str();
+                let name = if node_builtin_specifier(specifier) == Some(canonical) {
                     specifier
                 } else {
-                    native.canonical_specifier()
+                    canonical
                 };
                 return Ok(Value::str(name));
             }
+            let filename = self.module_filename_view(&metadata.id);
+            self.check_temporary_memory_budget(Self::estimate_string_bytes(filename))?;
             return Ok(Value::str(
-                self.module_filename_view(&resolved.module.record.id),
+                filename,
             ));
         }
-        if is_node_core_module_specifier(specifier) {
+        if node_builtin_specifier(specifier).is_some() {
             return Ok(Value::Str(request));
+        }
+        if is_node_core_module_specifier(specifier) {
+            return Err(self.throw_module_resolution_failure(
+                request.as_ref(),
+                &ModuleResolutionFailureReason::ModuleNotFound,
+                ImportStyle::Require,
+            ));
         }
         match self.resolve_require_specifier(specifier) {
             Ok(resolved) => Ok(Value::str(resolved)),

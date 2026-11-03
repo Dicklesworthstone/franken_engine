@@ -197,6 +197,19 @@ pub struct ModuleRecord {
     pub provenance: ModuleProvenance,
 }
 
+/// Authority to disclose a resolved identity, without executable source.
+///
+/// These capabilities govern metadata resolution only. A filename lookup
+/// requires ModuleLoad, but does not acquire the capabilities needed to load
+/// or execute that file. Builtin metadata uses the exact canonical node: name
+/// as its provenance origin; it does not identify an executable provider.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModuleMetadata {
+    pub id: String,
+    pub required_capabilities: BTreeSet<RuntimeCapability>,
+    pub provenance: ModuleProvenance,
+}
+
 impl ModuleRecord {
     fn from_definition(
         id: String,
@@ -340,6 +353,89 @@ impl std::ops::Deref for SharedModuleRecord {
 
     fn deref(&self) -> &Self::Target {
         self.record()
+    }
+}
+
+/// Exact Node 22/24 builtin-name inventory for metadata resolution.
+///
+/// Recognizing a name does not instantiate a provider or authorize loading it.
+/// The four prefix-only names must not shadow packages with the same bare name.
+/// Unlike reserved-prefix routing, this rejects unknown node: specifiers.
+pub fn node_builtin_specifier(specifier: &str) -> Option<&'static str> {
+    match specifier {
+        "_http_agent" | "node:_http_agent" => Some("node:_http_agent"),
+        "_http_client" | "node:_http_client" => Some("node:_http_client"),
+        "_http_common" | "node:_http_common" => Some("node:_http_common"),
+        "_http_incoming" | "node:_http_incoming" => Some("node:_http_incoming"),
+        "_http_outgoing" | "node:_http_outgoing" => Some("node:_http_outgoing"),
+        "_http_server" | "node:_http_server" => Some("node:_http_server"),
+        "_stream_duplex" | "node:_stream_duplex" => Some("node:_stream_duplex"),
+        "_stream_passthrough" | "node:_stream_passthrough" => Some("node:_stream_passthrough"),
+        "_stream_readable" | "node:_stream_readable" => Some("node:_stream_readable"),
+        "_stream_transform" | "node:_stream_transform" => Some("node:_stream_transform"),
+        "_stream_wrap" | "node:_stream_wrap" => Some("node:_stream_wrap"),
+        "_stream_writable" | "node:_stream_writable" => Some("node:_stream_writable"),
+        "_tls_common" | "node:_tls_common" => Some("node:_tls_common"),
+        "_tls_wrap" | "node:_tls_wrap" => Some("node:_tls_wrap"),
+        "assert" | "node:assert" => Some("node:assert"),
+        "assert/strict" | "node:assert/strict" => Some("node:assert/strict"),
+        "async_hooks" | "node:async_hooks" => Some("node:async_hooks"),
+        "buffer" | "node:buffer" => Some("node:buffer"),
+        "child_process" | "node:child_process" => Some("node:child_process"),
+        "cluster" | "node:cluster" => Some("node:cluster"),
+        "console" | "node:console" => Some("node:console"),
+        "constants" | "node:constants" => Some("node:constants"),
+        "crypto" | "node:crypto" => Some("node:crypto"),
+        "dgram" | "node:dgram" => Some("node:dgram"),
+        "diagnostics_channel" | "node:diagnostics_channel" => Some("node:diagnostics_channel"),
+        "dns" | "node:dns" => Some("node:dns"),
+        "dns/promises" | "node:dns/promises" => Some("node:dns/promises"),
+        "domain" | "node:domain" => Some("node:domain"),
+        "events" | "node:events" => Some("node:events"),
+        "fs" | "node:fs" => Some("node:fs"),
+        "fs/promises" | "node:fs/promises" => Some("node:fs/promises"),
+        "http" | "node:http" => Some("node:http"),
+        "http2" | "node:http2" => Some("node:http2"),
+        "https" | "node:https" => Some("node:https"),
+        "inspector" | "node:inspector" => Some("node:inspector"),
+        "inspector/promises" | "node:inspector/promises" => Some("node:inspector/promises"),
+        "module" | "node:module" => Some("node:module"),
+        "net" | "node:net" => Some("node:net"),
+        "os" | "node:os" => Some("node:os"),
+        "path" | "node:path" => Some("node:path"),
+        "path/posix" | "node:path/posix" => Some("node:path/posix"),
+        "path/win32" | "node:path/win32" => Some("node:path/win32"),
+        "perf_hooks" | "node:perf_hooks" => Some("node:perf_hooks"),
+        "process" | "node:process" => Some("node:process"),
+        "punycode" | "node:punycode" => Some("node:punycode"),
+        "querystring" | "node:querystring" => Some("node:querystring"),
+        "readline" | "node:readline" => Some("node:readline"),
+        "readline/promises" | "node:readline/promises" => Some("node:readline/promises"),
+        "repl" | "node:repl" => Some("node:repl"),
+        "stream" | "node:stream" => Some("node:stream"),
+        "stream/consumers" | "node:stream/consumers" => Some("node:stream/consumers"),
+        "stream/promises" | "node:stream/promises" => Some("node:stream/promises"),
+        "stream/web" | "node:stream/web" => Some("node:stream/web"),
+        "string_decoder" | "node:string_decoder" => Some("node:string_decoder"),
+        "sys" | "node:sys" => Some("node:sys"),
+        "timers" | "node:timers" => Some("node:timers"),
+        "timers/promises" | "node:timers/promises" => Some("node:timers/promises"),
+        "tls" | "node:tls" => Some("node:tls"),
+        "trace_events" | "node:trace_events" => Some("node:trace_events"),
+        "tty" | "node:tty" => Some("node:tty"),
+        "url" | "node:url" => Some("node:url"),
+        "util" | "node:util" => Some("node:util"),
+        "util/types" | "node:util/types" => Some("node:util/types"),
+        "v8" | "node:v8" => Some("node:v8"),
+        "vm" | "node:vm" => Some("node:vm"),
+        "wasi" | "node:wasi" => Some("node:wasi"),
+        "worker_threads" | "node:worker_threads" => Some("node:worker_threads"),
+        "zlib" | "node:zlib" => Some("node:zlib"),
+        "node:sea" => Some("node:sea"),
+        "node:sqlite" => Some("node:sqlite"),
+        "node:test" => Some("node:test"),
+        "node:test/reporters" => Some("node:test/reporters"),
+        _ => None,
     }
 }
 
@@ -605,6 +701,27 @@ pub struct SharedResolvedModule {
     pub record: Arc<SharedModuleRecord>,
     pub content_hash: ContentHash,
     pub probe_sequence: Vec<String>,
+}
+
+/// A selected identity whose source has not been loaded or prepared.
+///
+/// This type intentionally has no syntax, source, dependency graph or content
+/// hash. It cannot satisfy an executable resolution request or populate the
+/// interpreter's module cache. The id may be opaque; trusted source locations
+/// provide file names, while builtin provenance carries its canonical name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedModuleMetadata {
+    pub request_specifier: String,
+    pub canonical_specifier: String,
+    pub metadata: ModuleMetadata,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub probe_sequence: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MetadataResolutionOutcome {
+    pub module: ResolvedModuleMetadata,
+    pub event: ResolutionEvent,
 }
 
 impl From<ResolvedModule> for SharedResolvedModule {
@@ -1285,6 +1402,30 @@ pub trait ModulePolicyHook {
         resolved: &ModuleRecord,
         context: &ResolutionContext,
     ) -> ResolutionResult<()>;
+
+    /// Authorize disclosure of a selected identity on every metadata request.
+    /// Source-only policies must opt in explicitly: a fabricated empty record
+    /// would erase the policy's source-sensitive conditions.
+    fn authorize_metadata(
+        &self,
+        request: &ModuleRequest,
+        metadata: &ModuleMetadata,
+        context: &ResolutionContext,
+    ) -> ResolutionResult<()> {
+        Err(Box::new(
+            ResolutionError::new(
+                ResolutionErrorCode::PolicyDenied,
+                "module policy does not authorize metadata-only resolution",
+                context,
+            )
+            .with_resolution_attempt(
+                request.specifier.clone(),
+                Some(metadata.id.clone()),
+                Some(metadata.provenance.kind),
+                Vec::new(),
+            ),
+        ))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -1295,6 +1436,15 @@ impl ModulePolicyHook for AllowAllPolicy {
         &self,
         _request: &ModuleRequest,
         _resolved: &ModuleRecord,
+        _context: &ResolutionContext,
+    ) -> ResolutionResult<()> {
+        Ok(())
+    }
+
+    fn authorize_metadata(
+        &self,
+        _request: &ModuleRequest,
+        _metadata: &ModuleMetadata,
         _context: &ResolutionContext,
     ) -> ResolutionResult<()> {
         Ok(())
@@ -1390,8 +1540,39 @@ impl ModulePolicyHook for CapabilityPolicyHook {
         resolved: &ModuleRecord,
         context: &ResolutionContext,
     ) -> ResolutionResult<()> {
+        self.authorize_module_identity(
+            request,
+            &resolved.id,
+            &resolved.required_capabilities,
+            context,
+        )
+    }
+
+    fn authorize_metadata(
+        &self,
+        request: &ModuleRequest,
+        metadata: &ModuleMetadata,
+        context: &ResolutionContext,
+    ) -> ResolutionResult<()> {
+        self.authorize_module_identity(
+            request,
+            &metadata.id,
+            &metadata.required_capabilities,
+            context,
+        )
+    }
+}
+
+impl CapabilityPolicyHook {
+    fn authorize_module_identity(
+        &self,
+        request: &ModuleRequest,
+        id: &str,
+        required_capabilities: &BTreeSet<RuntimeCapability>,
+        context: &ResolutionContext,
+    ) -> ResolutionResult<()> {
         if self.denied_specifiers.contains(&request.specifier)
-            || self.denied_specifiers.contains(&resolved.id)
+            || self.denied_specifiers.contains(id)
         {
             return Err(Box::new(ResolutionError::new(
                 ResolutionErrorCode::PolicyDenied,
@@ -1403,8 +1584,7 @@ impl ModulePolicyHook for CapabilityPolicyHook {
             )));
         }
 
-        let missing: Vec<RuntimeCapability> = resolved
-            .required_capabilities
+        let missing: Vec<RuntimeCapability> = required_capabilities
             .difference(&self.granted_capabilities)
             .copied()
             .collect();
@@ -1421,7 +1601,7 @@ impl ModulePolicyHook for CapabilityPolicyHook {
             ResolutionErrorCode::PolicyDenied,
             format!(
                 "resolution denied due to missing capabilities [{}] for module '{}'",
-                missing_list, resolved.id
+                missing_list, id
             ),
             context,
         )))
@@ -1447,6 +1627,27 @@ pub trait ModuleResolver {
         policy: &dyn ModulePolicyHook,
     ) -> ResolutionResult<SharedResolutionOutcome> {
         self.resolve(request, context, policy).map(Into::into)
+    }
+
+    /// Select and authorize metadata without loading source, constructing a
+    /// ModuleRecord, parsing, hashing executable contents or visiting outgoing
+    /// dependencies. Metadata admission never grants an executable route.
+    /// Implementations without this contract refuse instead of falling back
+    /// to resolve or resolve_shared, which may perform those operations.
+    fn resolve_metadata(
+        &self,
+        request: &ModuleRequest,
+        context: &ResolutionContext,
+        _policy: &dyn ModulePolicyHook,
+    ) -> ResolutionResult<MetadataResolutionOutcome> {
+        Err(Box::new(
+            ResolutionError::new(
+                ResolutionErrorCode::UnsupportedSpecifier,
+                "module resolver does not provide metadata-only resolution",
+                context,
+            )
+            .with_resolution_attempt(request.specifier.clone(), None, None, Vec::new()),
+        ))
     }
 
     fn resolve_chain(
@@ -1484,6 +1685,17 @@ impl ModulePolicyHook for ExecutionModulePolicy<'_> {
     ) -> ResolutionResult<()> {
         self.0
             .authorize(request, resolved, context)
+            .map_err(|error| Box::new((*error).into_policy_denial()))
+    }
+
+    fn authorize_metadata(
+        &self,
+        request: &ModuleRequest,
+        metadata: &ModuleMetadata,
+        context: &ResolutionContext,
+    ) -> ResolutionResult<()> {
+        self.0
+            .authorize_metadata(request, metadata, context)
             .map_err(|error| Box::new((*error).into_policy_denial()))
     }
 }
@@ -1557,6 +1769,18 @@ impl ExecutionModuleResolver {
         context: &ResolutionContext,
     ) -> ResolutionResult<SharedResolutionOutcome> {
         self.resolver.resolve_shared(
+            request,
+            context,
+            &ExecutionModulePolicy(self.policy.as_ref()),
+        )
+    }
+
+    pub fn resolve_metadata(
+        &self,
+        request: &ModuleRequest,
+        context: &ResolutionContext,
+    ) -> ResolutionResult<MetadataResolutionOutcome> {
+        self.resolver.resolve_metadata(
             request,
             context,
             &ExecutionModulePolicy(self.policy.as_ref()),
@@ -2343,6 +2567,103 @@ impl ModuleResolver for DeterministicModuleResolver {
         Ok(self
             .resolve_authorized(request, context, policy)?
             .into_outcome(context))
+    }
+
+    fn resolve_metadata(
+        &self,
+        request: &ModuleRequest,
+        context: &ResolutionContext,
+        policy: &dyn ModulePolicyHook,
+    ) -> ResolutionResult<MetadataResolutionOutcome> {
+        let (canonical_specifier, metadata, probe_sequence) =
+            if let Some(canonical) = node_builtin_specifier(&request.specifier) {
+                let registered = self
+                    .builtins
+                    .get(&request.specifier)
+                    .or_else(|| self.builtins.get(canonical))
+                    .or_else(|| {
+                        canonical.strip_prefix("node:")
+                            .and_then(|bare| self.builtins.get(bare))
+                    });
+                (
+                    canonical.to_string(),
+                    ModuleMetadata {
+                        id: registered.map_or_else(
+                            || format!("builtin:{canonical}"),
+                            |record| record.id.clone(),
+                        ),
+                        required_capabilities: BTreeSet::from([RuntimeCapability::ModuleLoad]),
+                        provenance: ModuleProvenance {
+                            kind: ModuleSourceKind::BuiltIn,
+                            origin: canonical.to_string(),
+                        },
+                    },
+                    vec![request.specifier.clone()],
+                )
+            } else if request.specifier.starts_with("node:") {
+                return Err(Box::new(
+                    ResolutionError::new(
+                        ResolutionErrorCode::ModuleNotFound,
+                        "unknown Node builtin module",
+                        context,
+                    )
+                    .with_resolution_attempt(
+                        request.specifier.clone(),
+                        None,
+                        Some(ModuleSourceKind::BuiltIn),
+                        vec![request.specifier.clone()],
+                    ),
+                ));
+            } else {
+                // Borrow the selected record's identity only. Loading-format
+                // restrictions and execution capabilities do not apply to a
+                // path lookup; no source, hash or dependency is materialized.
+                let (canonical, record, probes) = self.resolve_candidate(request, context)?;
+                if record.provenance.kind == ModuleSourceKind::BuiltIn
+                    && node_builtin_specifier(&record.provenance.origin)
+                        != Some(record.provenance.origin.as_str())
+                {
+                    return Err(Box::new(
+                        ResolutionError::new(
+                            ResolutionErrorCode::UnsupportedSpecifier,
+                            "custom builtin has no canonical Node metadata contract",
+                            context,
+                        )
+                        .with_resolution_attempt(
+                            request.specifier.clone(),
+                            Some(canonical),
+                            Some(ModuleSourceKind::BuiltIn),
+                            probes,
+                        ),
+                    ));
+                }
+                (
+                    canonical,
+                    ModuleMetadata {
+                        id: record.id.clone(),
+                        required_capabilities: BTreeSet::from([RuntimeCapability::ModuleLoad]),
+                        provenance: record.provenance.clone(),
+                    },
+                    probes,
+                )
+            };
+        policy.authorize_metadata(request, &metadata, context).map_err(|error| {
+            Box::new((*error).into_policy_denial().with_resolution_attempt(
+                request.specifier.clone(),
+                Some(canonical_specifier.clone()),
+                Some(metadata.provenance.kind),
+                probe_sequence.clone(),
+            ))
+        })?;
+        Ok(MetadataResolutionOutcome {
+            module: ResolvedModuleMetadata {
+                request_specifier: request.specifier.clone(),
+                canonical_specifier,
+                metadata,
+                probe_sequence,
+            },
+            event: success_event(context),
+        })
     }
 
     fn resolve_chain(

@@ -63,6 +63,8 @@ const DETACHED_EVIDENCE_SIGNATURE_DOMAIN: &str = "franken-engine.detached-eviden
 const EVIDENCE_CHAIN_LINK_DOMAIN: &str = "franken-engine.evidence-chain-link.v1";
 const EVIDENCE_CHAIN_RECEIPT_SIGNATURE_DOMAIN: &str =
     "franken-engine.evidence-chain-receipt-signature.v1";
+const ORCHESTRATOR_EVIDENCE_LEDGER_ID_DOMAIN: &str =
+    "franken-engine.execution-orchestrator.evidence-ledger-id.v2";
 
 /// Schema for the signed receipt that seals an exact ordered evidence batch.
 pub const EVIDENCE_CHAIN_RECEIPT_SCHEMA_VERSION: &str = "franken-engine.evidence-chain-receipt.v1";
@@ -666,6 +668,39 @@ pub struct EvidenceVerificationIdentity {
     pub producer_id: String,
     pub key_provenance: EvidenceKeyProvenance,
     pub verification_key: VerificationKey,
+}
+
+/// Derive the orchestrator's ledger identity from its exact public coordinates.
+/// This preserves the existing v2 ledger commitment and lets replay verify it
+/// without constructing an execution runtime. The identity must be resolved
+/// through an independently trusted registry; this function does not enroll it.
+pub fn derive_runtime_evidence_ledger_id(
+    policy_id: &str,
+    epoch: SecurityEpoch,
+    trace_id_prefix: &str,
+    identity: &EvidenceVerificationIdentity,
+    chain_instance_id: &str,
+) -> Result<String, LedgerError> {
+    if chain_instance_id.trim().is_empty() {
+        return Err(LedgerError::SchemaValidationFailed {
+            reason: "orchestrator evidence chain instance id must not be empty".to_string(),
+        });
+    }
+    let payload = serde_json::to_vec(&(
+        ORCHESTRATOR_EVIDENCE_LEDGER_ID_DOMAIN,
+        policy_id,
+        epoch.as_u64(),
+        trace_id_prefix,
+        identity,
+        chain_instance_id,
+    ))
+    .map_err(|error| LedgerError::SchemaValidationFailed {
+        reason: format!("orchestrator evidence ledger id serialization failed: {error}"),
+    })?;
+    Ok(format!(
+        "evidence-ledger-{}",
+        ContentHash::compute(&payload).to_hex()
+    ))
 }
 
 impl EvidenceVerificationIdentity {
@@ -2721,6 +2756,31 @@ impl EvidenceTrustRegistry {
     ) -> Result<(), LedgerError> {
         self.registry
             .verify_registered_detached(envelope, payload, expected_signed_epoch)
+    }
+
+    /// Authenticate an exact runtime evidence batch at an externally supplied
+    /// ledger position. The receipt's embedded key only selects a registered
+    /// identity; activation, retirement, and provenance are checked against
+    /// this registry before the complete batch is verified.
+    pub fn verify_chain_artifact(
+        &self,
+        artifact: &EvidenceChainArtifact,
+        expected_ledger_id: &str,
+        expected_run_id: &str,
+        expected_first_sequence: u64,
+        expected_previous_chain_hash: Option<&str>,
+    ) -> Result<(), LedgerError> {
+        self.ensure_runtime_scope()?;
+        let trusted_identity = self
+            .registry
+            .trusted_identity_for_envelope(artifact.receipt.signed_envelope())?;
+        artifact.verify_with_context(
+            &trusted_identity,
+            expected_ledger_id,
+            expected_run_id,
+            expected_first_sequence,
+            expected_previous_chain_hash,
+        )
     }
 }
 
@@ -6471,6 +6531,36 @@ mod tests {
     }
 
     #[test]
+    fn runtime_ledger_derivation_preserves_orchestrator_v2_commitment() {
+        // Independently encode the pre-refactor v2 tuple for the existing
+        // public perf-key fixture, then SHA-256 it. This compatibility vector
+        // pins the domain, field order, epoch representation, and public-key
+        // wire shape instead of obtaining the expectation from this helper.
+        let identity = perf_runtime_authority().verification_identity();
+        assert_eq!(
+            derive_runtime_evidence_ledger_id(
+                "policy-v2",
+                SecurityEpoch::from_raw(7),
+                "frankenctl-run",
+                &identity,
+                "instance-v2",
+            )
+            .expect("v2 ledger identity"),
+            "evidence-ledger-ef2767c5fb0784232352f63030c4854a185eebd43fe4b3fd8f7cb5972651fda6"
+        );
+        assert!(
+            derive_runtime_evidence_ledger_id(
+                "policy-v2",
+                SecurityEpoch::from_raw(7),
+                "frankenctl-run",
+                &identity,
+                "  ",
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn runtime_authority_clone_preserves_signing_key() {
         let authority = perf_runtime_authority();
         let cloned = authority.clone();
@@ -6810,6 +6900,153 @@ mod tests {
                 .is_err(),
             "a signed batch cannot be spliced into another ledger identity"
         );
+    }
+
+    #[test]
+    fn bd_8yhg4_registry_authenticates_exact_chain_before_replay() {
+        let authority = perf_runtime_authority();
+        let entries = vec![
+            bd_8yhg4_chain_entry(&authority, "registry-decision-1", 1),
+            bd_8yhg4_chain_entry(&authority, "registry-decision-2", 2),
+        ];
+        let receipt = EvidenceChainReceipt::issue_with_authority(
+            "registry-ledger",
+            0,
+            None,
+            &entries,
+            &EvidenceSigningAuthority::Runtime(authority.clone()),
+        )
+        .expect("signed chain");
+        let artifact = EvidenceChainArtifact::new(entries, receipt);
+        let registry = EvidenceTrustRegistry::from_runtime_identities(
+            SecurityEpoch::from_raw(1),
+            [authority.verification_identity()],
+        )
+        .expect("trusted registry");
+        let verify = |candidate: &EvidenceChainArtifact| {
+            registry.verify_chain_artifact(candidate, "registry-ledger", "trace-bd-8yhg4", 0, None)
+        };
+        verify(&artifact).expect("genuine exact artifact");
+
+        let mut changed_entry_signature = artifact.clone();
+        changed_entry_signature.entries[0]
+            .signed_envelope
+            .signature
+            .lower[0] ^= 1;
+        assert!(verify(&changed_entry_signature).is_err());
+        let mut changed_receipt_signature = artifact.clone();
+        changed_receipt_signature
+            .receipt
+            .signed_envelope
+            .signature
+            .upper[0] ^= 1;
+        assert!(verify(&changed_receipt_signature).is_err());
+        let mut missing = artifact.clone();
+        missing.entries.pop();
+        assert!(verify(&missing).is_err());
+        let mut duplicate = artifact.clone();
+        duplicate.entries[1] = duplicate.entries[0].clone();
+        assert!(verify(&duplicate).is_err());
+        let mut reordered = artifact.clone();
+        reordered.entries.swap(0, 1);
+        assert!(verify(&reordered).is_err());
+        let mut changed_sequence = artifact.clone();
+        changed_sequence.receipt.links[0].sequence = 1;
+        assert!(verify(&changed_sequence).is_err());
+        let mut changed_head = artifact.clone();
+        changed_head.receipt.head_chain_hash = "00".repeat(32);
+        assert!(verify(&changed_head).is_err());
+        assert!(
+            registry
+                .verify_chain_artifact(&artifact, "other-ledger", "trace-bd-8yhg4", 0, None)
+                .is_err()
+        );
+
+        let unregistered = EvidenceTrustRegistry::new_runtime(SecurityEpoch::from_raw(1));
+        assert!(
+            unregistered
+                .verify_chain_artifact(&artifact, "registry-ledger", "trace-bd-8yhg4", 0, None)
+                .is_err(),
+            "the artifact's embedded verification key must not enroll itself"
+        );
+        let other_authority = RuntimeEvidenceAuthority::generate_runtime_owned(
+            authority.producer_id(),
+            SecurityEpoch::from_raw(1),
+            1,
+            None,
+        )
+        .expect("distinct runtime key");
+        let wrong_key = EvidenceTrustRegistry::from_runtime_identities(
+            SecurityEpoch::from_raw(1),
+            [other_authority.verification_identity()],
+        )
+        .expect("other registry");
+        assert!(
+            wrong_key
+                .verify_chain_artifact(&artifact, "registry-ledger", "trace-bd-8yhg4", 0, None)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn bd_8yhg4_registry_chain_verification_preserves_key_lifecycle() {
+        let authority = perf_runtime_authority();
+        let entries = vec![bd_8yhg4_chain_entry(&authority, "rotation-decision", 1)];
+        let receipt = EvidenceChainReceipt::issue_with_authority(
+            "rotation-ledger",
+            0,
+            None,
+            &entries,
+            &EvidenceSigningAuthority::Runtime(authority.clone()),
+        )
+        .expect("signed chain");
+        let artifact = EvidenceChainArtifact::new(entries, receipt);
+        let verify = |registry: &EvidenceTrustRegistry| {
+            registry.verify_chain_artifact(&artifact, "rotation-ledger", "trace-bd-8yhg4", 0, None)
+        };
+        let stale_registry = EvidenceTrustRegistry::from_runtime_identities(
+            SecurityEpoch::GENESIS,
+            [authority.verification_identity()],
+        )
+        .expect("structurally valid older registry");
+        assert!(verify(&stale_registry).is_err());
+
+        for (activation, should_verify) in [(1, false), (2, true)] {
+            let successor = RuntimeEvidenceAuthority::generate_runtime_owned(
+                authority.producer_id(),
+                SecurityEpoch::from_raw(activation),
+                2,
+                Some(authority.key_provenance().key_id.clone()),
+            )
+            .expect("successor");
+            let snapshot = EvidenceTrustSnapshot::from_runtime_identities(
+                SecurityEpoch::from_raw(2),
+                [
+                    successor.verification_identity(),
+                    authority.verification_identity(),
+                ],
+            )
+            .expect("complete lineage");
+            assert_eq!(
+                verify(&snapshot.to_runtime_registry().expect("registry")).is_ok(),
+                should_verify,
+                "historical signatures are valid only before successor activation"
+            );
+        }
+
+        let lab = LabEvidenceAuthority::deterministic_fixture(
+            "chain-replay-lab",
+            "chain-replay-fixture",
+            SecurityEpoch::from_raw(1),
+        )
+        .expect("explicit lab fixture");
+        let lab_registry = EvidenceTrustRegistry::from_lab_identities(
+            SecurityEpoch::from_raw(1),
+            [lab.verification_identity()],
+        )
+        .expect("lab registry");
+        let error = verify(&lab_registry).expect_err("runtime replay rejects lab registries");
+        assert!(error.to_string().contains("lab evidence trust registry"));
     }
 
     #[test]

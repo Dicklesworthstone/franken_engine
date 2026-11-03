@@ -44,6 +44,7 @@ use crate::evidence_ledger::{
     CandidateAction, ChosenAction, DecisionType, EvidenceChainArtifact, EvidenceChainReceipt,
     EvidenceEntry, EvidenceEntryBuilder, EvidenceSigningAuthority, EvidenceVerificationIdentity,
     InMemoryLedger, LabEvidenceAuthority, LedgerError, RuntimeEvidenceAuthority, Witness,
+    derive_runtime_evidence_ledger_id,
 };
 use crate::execution_cell::{
     CellEffectGuard, CellError, CellEvent, CellExecutionAuthority, CellExecutionAuthoritySnapshot,
@@ -145,8 +146,6 @@ const SCALE_MILLION: i64 = 1_000_000;
 const ADAPTIVE_ROUTING_DECISION_SCHEMA: &str = "franken-engine.adaptive-routing-decision.v2";
 const EVIDENCE_COMPRESSION_SKETCH_SCHEMA: &str = "franken-engine.evidence-compression-sketch.v3";
 const EVIDENCE_COMPRESSION_SKETCH_MAX_BYTES: usize = 512;
-const ORCHESTRATOR_EVIDENCE_LEDGER_ID_DOMAIN: &str =
-    "franken-engine.execution-orchestrator.evidence-ledger-id.v2";
 const LAB_EVIDENCE_CHAIN_INSTANCE_ID: &str =
     "franken-engine.execution-orchestrator.lab-chain-instance.v1";
 const RUNTIME_EVIDENCE_CHAIN_INSTANCE_DOMAIN: &str =
@@ -2383,26 +2382,13 @@ impl ExecutionOrchestrator {
         identity: &EvidenceVerificationIdentity,
         chain_instance_id: &str,
     ) -> Result<String, LedgerError> {
-        if chain_instance_id.trim().is_empty() {
-            return Err(LedgerError::SchemaValidationFailed {
-                reason: "orchestrator evidence chain instance id must not be empty".to_string(),
-            });
-        }
-        let payload = serde_json::to_vec(&(
-            ORCHESTRATOR_EVIDENCE_LEDGER_ID_DOMAIN,
+        derive_runtime_evidence_ledger_id(
             &config.policy_id,
-            config.epoch.as_u64(),
+            config.epoch,
             &config.trace_id_prefix,
             identity,
             chain_instance_id,
-        ))
-        .map_err(|error| LedgerError::SchemaValidationFailed {
-            reason: format!("orchestrator evidence ledger id serialization failed: {error}"),
-        })?;
-        Ok(format!(
-            "evidence-ledger-{}",
-            ContentHash::compute(&payload).to_hex()
-        ))
+        )
     }
 
     fn fresh_runtime_evidence_chain_instance_id() -> Result<String, LedgerError> {
@@ -3627,7 +3613,10 @@ impl ExecutionOrchestrator {
             (prepared.source_ingestion, prepared.prepared_source)
         };
         let script_strict = self.config.parse_goal == ParseGoal::Module
-            || crate::parser::source_has_use_strict_directive(&parse_source, self.config.parse_goal);
+            || crate::parser::source_has_use_strict_directive(
+                &parse_source,
+                self.config.parse_goal,
+            );
         let parser_source = ParserSource {
             label: effective_source_label.to_string(),
             text: parse_source,

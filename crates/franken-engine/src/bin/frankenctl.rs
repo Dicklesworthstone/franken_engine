@@ -51,8 +51,9 @@ use frankenengine_engine::differential_oracle_perf::{
 };
 use frankenengine_engine::e8_analyzed_subset::{E8AnalyzedSubsetScan, scan_source};
 use frankenengine_engine::evidence_ledger::{
-    CandidateAction, ChosenAction, DecisionType, EVIDENCE_CHAIN_RECEIPT_SCHEMA_VERSION,
-    EvidenceChainArtifact, EvidenceVerificationIdentity, RuntimeEvidenceAuthority,
+    EVIDENCE_CHAIN_RECEIPT_SCHEMA_VERSION, EvidenceChainArtifact, EvidenceSignatureEnvelope,
+    EvidenceTrustSnapshot, EvidenceVerificationIdentity, RuntimeEvidenceAuthority,
+    derive_runtime_evidence_ledger_id,
 };
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorError,
@@ -142,6 +143,7 @@ use sha2::{Digest, Sha256};
 
 const FRANKENCTL_SCHEMA_VERSION: &str = "franken-engine.frankenctl.v1";
 const RUN_COMMAND_SCHEMA_VERSION: &str = "franken-engine.frankenctl.run.v2";
+const RUN_REPLAY_INPUT_SIGNATURE_DOMAIN: &str = "franken-engine.frankenctl.run-replay-input.v1";
 const AGENT_SANDBOX_COMMAND_SCHEMA_VERSION: &str = "franken-engine.frankenctl.agent-sandbox.v2";
 const ORCHESTRATION_FAILURE_SCHEMA_VERSION: &str =
     "franken-engine.frankenctl.orchestration-failure.v1";
@@ -375,6 +377,9 @@ struct RunArgs {
     /// Write the run's recorded nondeterminism trace here (bd-9mr8o), the
     /// exact input `frankenctl replay debug --trace` consumes.
     emit_trace: Option<PathBuf>,
+    /// Export public verification material for an operator to retain and pin
+    /// separately from the untrusted run report. This does not enroll a key.
+    emit_evidence_trust: Option<PathBuf>,
     data_contract: Option<PathBuf>,
     data_contract_purpose: String,
     /// Directory for the E8 certificate bundle (bd-fqlfw.8.3); requires
@@ -628,6 +633,13 @@ struct ReplayArgs {
     mode: ReplayMode,
     out: Option<PathBuf>,
     fleet_trace: Option<PathBuf>,
+    evidence_trust: Option<ReplayEvidenceTrustArgs>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReplayEvidenceTrustArgs {
+    snapshot: PathBuf,
+    expected_digest: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1081,6 +1093,8 @@ struct RunCommandOutput {
     evidence_ledger_id: String,
     evidence_chain_head: String,
     evidence_chain_artifact: EvidenceChainArtifact,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    evidence_trust_snapshot_digest: Option<String>,
     // bd-drb55: the sealed post-execution IR4 witness and its content hash.
     // The hash is also bound into the signed evidence chain (meta key
     // `ir4_witness_hash`), so report-level witness tampering is detectable
@@ -1088,15 +1102,15 @@ struct RunCommandOutput {
     ir4_witness_hash: String,
     ir4_witness: Ir4Module,
     replay_input: RunReplayInput,
+    replay_input_signature: EvidenceSignatureEnvelope,
     console_output: Vec<ConsoleEntry>,
     observability_mode: ObservabilityModeOutput,
 }
 
-/// Self-contained, unsigned material needed to reproduce a successful
-/// `frankenctl run`. Runtime evidence signatures are intentionally excluded:
-/// every replay invocation owns a fresh signing key, while the IR3 linkage,
-/// IR4 witness, result, console transcript, and nondeterminism transcript are
-/// deterministic execution content.
+/// Deterministic material needed to reproduce a successful `frankenctl run`.
+/// The original run signs these bytes in a separate detached envelope; a
+/// replay owns a fresh signing key, so the signature is excluded from input
+/// comparison. Imported module files are retained separately by the caller.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct RunReplayInput {
     source: String,
@@ -1142,6 +1156,8 @@ struct UnsignedExecutionContent {
 struct ReplayableRunReport {
     schema_version: String,
     extension_id: String,
+    trace_id: String,
+    decision_id: String,
     policy_id: String,
     parse_goal: String,
     ir4_witness_hash: String,
@@ -1150,29 +1166,22 @@ struct ReplayableRunReport {
     instructions_executed: u64,
     console_output: Vec<ConsoleEntry>,
     replay_input: RunReplayInput,
+    // Older reports still support unauthenticated deterministic re-execution,
+    // but authenticated replay requires the complete signed input envelope.
+    #[serde(default)]
+    replay_input_signature: Option<EvidenceSignatureEnvelope>,
     // Decision artifacts, re-derived by re-execution (bd-mpu1z).
     lane: String,
     lane_reason: String,
     containment_action: String,
     expected_loss_millionths: i64,
     evidence_entries: usize,
-    evidence_chain_artifact: ReportedEvidenceChain,
-}
-
-/// The decision content of a run report's evidence chain. Strict replay
-/// re-derives every decision by re-executing the recorded input, so a forged
-/// decision is a divergence however it is signed (bd-mpu1z). Ids, timestamps
-/// and signatures are per run and not compared.
-#[derive(Debug, Deserialize)]
-struct ReportedEvidenceChain {
-    entries: Vec<ReportedEvidenceDecision>,
-}
-
-#[derive(Debug, PartialEq, Deserialize)]
-struct ReportedEvidenceDecision {
-    decision_type: DecisionType,
-    candidates: Vec<CandidateAction>,
-    chosen_action: ChosenAction,
+    evidence_chain_instance_id: String,
+    evidence_ledger_id: String,
+    evidence_chain_head: String,
+    // Preserve the exact signed entries and receipt. Authentication must not
+    // deserialize a lossy decision-only projection of the recorded evidence.
+    evidence_chain_artifact: EvidenceChainArtifact,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1606,6 +1615,11 @@ struct ReplayCommandOutput {
     critical_divergences: usize,
     complete: bool,
     replay_kind: String,
+    /// True only after verification against the independently pinned runtime
+    /// trust snapshot. Deterministic re-execution alone does not authenticate.
+    evidence_authenticated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    evidence_trust_snapshot_digest: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ir3_hash_match: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2435,6 +2449,7 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut explain = false;
     let mut explain_out: Option<PathBuf> = None;
     let mut emit_trace: Option<PathBuf> = None;
+    let mut emit_evidence_trust: Option<PathBuf> = None;
     let mut data_contract: Option<PathBuf> = None;
     let mut data_contract_purpose = DEFAULT_DATA_CONTRACT_PURPOSE.to_string();
     let mut certificate_out: Option<PathBuf> = None;
@@ -2516,6 +2531,13 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
             "--emit-trace" => {
                 emit_trace = Some(PathBuf::from(next_arg(args, &mut index, "--emit-trace")?));
             }
+            "--emit-evidence-trust" => {
+                emit_evidence_trust = Some(PathBuf::from(next_arg(
+                    args,
+                    &mut index,
+                    "--emit-evidence-trust",
+                )?));
+            }
             flag => {
                 if !limits.parse_flag(args, &mut index)? {
                     return Err(format!("unknown run flag `{flag}`"));
@@ -2556,6 +2578,7 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
         explain,
         explain_out,
         emit_trace,
+        emit_evidence_trust,
         data_contract,
         data_contract_purpose,
         certificate_out,
@@ -3146,6 +3169,8 @@ fn parse_replay_run_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut mode = ReplayMode::Strict;
     let mut out: Option<PathBuf> = None;
     let mut fleet_trace: Option<PathBuf> = None;
+    let mut trust_snapshot: Option<PathBuf> = None;
+    let mut expected_trust_digest: Option<String> = None;
 
     let mut index = 0usize;
     while index < args.len() {
@@ -3163,10 +3188,49 @@ fn parse_replay_run_command(args: &[String]) -> Result<CommandSpec, String> {
             "--fleet-trace" => {
                 fleet_trace = Some(PathBuf::from(next_arg(args, &mut index, "--fleet-trace")?))
             }
+            "--trust-snapshot" => {
+                trust_snapshot = Some(PathBuf::from(next_arg(
+                    args,
+                    &mut index,
+                    "--trust-snapshot",
+                )?));
+            }
+            "--expected-trust-digest" => {
+                let digest = next_arg(args, &mut index, "--expected-trust-digest")?;
+                if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                    return Err(
+                        "--expected-trust-digest requires exactly 64 hexadecimal digits"
+                            .to_string(),
+                    );
+                }
+                expected_trust_digest = Some(digest.to_ascii_lowercase());
+            }
             flag => return Err(format!("unknown replay run flag `{flag}`")),
         }
         index += 1;
     }
+
+    let evidence_trust = match (trust_snapshot, expected_trust_digest) {
+        (None, None) => None,
+        (Some(snapshot), Some(expected_digest)) => {
+            if compare_trace.is_some() || fleet_trace.is_some() {
+                return Err(
+                    "evidence authentication applies only to run-report re-execution; --trust-snapshot cannot be combined with --compare-trace or --fleet-trace"
+                        .to_string(),
+                );
+            }
+            Some(ReplayEvidenceTrustArgs {
+                snapshot,
+                expected_digest,
+            })
+        }
+        _ => {
+            return Err(
+                "--trust-snapshot and --expected-trust-digest must be supplied together"
+                    .to_string(),
+            );
+        }
+    };
 
     Ok(CommandSpec::Replay(ReplayArgs {
         trace: trace.ok_or_else(|| "replay run requires --trace <path>".to_string())?,
@@ -3174,6 +3238,7 @@ fn parse_replay_run_command(args: &[String]) -> Result<CommandSpec, String> {
         mode,
         out,
         fleet_trace,
+        evidence_trust,
     }))
 }
 
@@ -4666,7 +4731,7 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         orchestrator_config,
         run_runtime_config(args.instruction_budget, &args.limits),
         AmbientAuthorityGrant::DenyAll,
-        evidence_authority,
+        evidence_authority.clone(),
     )
     .map_err(|error| format!("failed to initialize execution orchestrator: {error}"))?;
     // bd-fqlfw.8.2: the bound contract's ingress label + sink surface gates
@@ -4719,6 +4784,21 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         .map_err(|error| {
             format!("generated run evidence chain failed exact verification: {error}")
         })?;
+    let evidence_trust_snapshot_digest = if let Some(path) = args.emit_evidence_trust.as_ref() {
+        let snapshot = EvidenceTrustSnapshot::from_runtime_identities(
+            result.epoch,
+            [trusted_runtime_identity],
+        )
+        .map_err(|error| format!("failed to export runtime evidence trust: {error}"))?;
+        let digest = snapshot
+            .canonical_digest()
+            .map_err(|error| format!("failed to hash runtime evidence trust: {error}"))?
+            .to_hex();
+        write_json_file(path, &snapshot)?;
+        Some(digest)
+    } else {
+        None
+    };
     // bd-9mr8o: hand operators the exact trace `frankenctl replay debug
     // --trace` consumes, enabling the end-to-end --input inspection loop.
     if let Some(path) = args.emit_trace.as_ref() {
@@ -4788,6 +4868,17 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         randomness_transcript: result.nondeterminism_trace.clone(),
         unsigned_execution_content,
     };
+    let replay_input_signature = evidence_authority
+        .sign_detached(
+            &run_replay_input_preimage(
+                &result.trace_id,
+                &evidence_ledger_id,
+                &result.evidence_chain_receipt.head_chain_hash,
+                &replay_input,
+            )?,
+            result.epoch,
+        )
+        .map_err(|error| format!("failed to sign run replay input: {error}"))?;
     let output = RunCommandOutput {
         schema_version: RUN_COMMAND_SCHEMA_VERSION.to_string(),
         extension_id: result.extension_id.clone(),
@@ -4812,9 +4903,11 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         evidence_ledger_id,
         evidence_chain_head: result.evidence_chain_receipt.head_chain_hash.clone(),
         evidence_chain_artifact,
+        evidence_trust_snapshot_digest,
         ir4_witness_hash: result.ir4_witness.content_hash().to_hex(),
         ir4_witness: result.ir4_witness.clone(),
         replay_input,
+        replay_input_signature,
         console_output: result.console_output.clone(),
         observability_mode: default_capture_observability_mode(),
     };
@@ -9216,6 +9309,10 @@ fn load_fleet_node(path: &std::path::Path) -> Result<FleetTraceNode, String> {
 }
 
 fn execute_replay(args: ReplayArgs) -> Result<i32, String> {
+    if args.evidence_trust.is_some() && (args.compare_trace.is_some() || args.fleet_trace.is_some())
+    {
+        return Err("evidence authentication applies only to run-report re-execution".to_string());
+    }
     if args.compare_trace.is_none() {
         if args.fleet_trace.is_some() {
             return Err(
@@ -9309,6 +9406,8 @@ fn execute_replay(args: ReplayArgs) -> Result<i32, String> {
         critical_divergences: engine.critical_divergences(),
         complete: engine.is_complete(),
         replay_kind: "trace_compare".to_string(),
+        evidence_authenticated: false,
+        evidence_trust_snapshot_digest: None,
         ir3_hash_match: None,
         unsigned_execution_content_match: None,
         randomness_transcript_match: None,
@@ -9335,6 +9434,14 @@ fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
             report.schema_version
         ));
     }
+
+    // This preflight precedes source preparation and every execution effect.
+    // No identity or digest embedded in the claimant report is a trust input.
+    let evidence_trust_snapshot_digest = args
+        .evidence_trust
+        .as_ref()
+        .map(|trust| authenticate_run_report_evidence(&report, trust))
+        .transpose()?;
 
     let input = &report.replay_input;
     let expected_unsigned = UnsignedExecutionContent {
@@ -9464,6 +9571,8 @@ fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
         },
         complete: divergences.is_empty(),
         replay_kind: "reexecution".to_string(),
+        evidence_authenticated: evidence_trust_snapshot_digest.is_some(),
+        evidence_trust_snapshot_digest,
         ir3_hash_match: Some(ir3_hash_match),
         unsigned_execution_content_match: Some(unsigned_execution_content_match),
         randomness_transcript_match: Some(randomness_transcript_match),
@@ -9475,6 +9584,152 @@ fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
     }
     print_json(&output)?;
     Ok(0)
+}
+
+/// Canonical typed input bytes bound to the exact signed run/ledger/head.
+/// Signatures are detached from deterministic input comparison, allowing a
+/// replay to use a fresh runtime identity without changing the program input.
+fn run_replay_input_preimage(
+    trace_id: &str,
+    ledger_id: &str,
+    chain_head: &str,
+    input: &RunReplayInput,
+) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&(
+        RUN_REPLAY_INPUT_SIGNATURE_DOMAIN,
+        RUN_COMMAND_SCHEMA_VERSION,
+        trace_id,
+        ledger_id,
+        chain_head,
+        input,
+    ))
+    .map_err(|error| format!("failed to encode signed run replay input: {error}"))
+}
+
+/// Authenticate the original batch and replay inputs independently of
+/// re-execution, which has a fresh runtime signing identity.
+fn authenticate_run_report_evidence(
+    report: &ReplayableRunReport,
+    trust: &ReplayEvidenceTrustArgs,
+) -> Result<String, String> {
+    let verify = || -> Result<String, String> {
+        let snapshot = load_json_file::<EvidenceTrustSnapshot>(&trust.snapshot)?;
+        let digest = snapshot
+            .canonical_digest()
+            .map_err(|error| format!("invalid runtime trust snapshot: {error}"))?
+            .to_hex();
+        if digest != trust.expected_digest {
+            return Err(
+                "trust snapshot digest does not match the operator's independent pin".to_string(),
+            );
+        }
+        let registry = snapshot
+            .to_runtime_registry()
+            .map_err(|error| format!("invalid runtime trust registry: {error}"))?;
+        let artifact = &report.evidence_chain_artifact;
+        registry
+            .verify_chain_artifact(
+                artifact,
+                &report.evidence_ledger_id,
+                &report.trace_id,
+                0,
+                None,
+            )
+            .map_err(|error| format!("signed evidence chain rejected: {error}"))?;
+
+        if report.evidence_entries != artifact.entries.len() {
+            return Err("reported evidence count differs from the authenticated batch".to_string());
+        }
+        if report.evidence_chain_head != artifact.receipt.head_chain_hash {
+            return Err("reported evidence head differs from the authenticated chain".to_string());
+        }
+        let input = &report.replay_input;
+        let epoch = SecurityEpoch::from_raw(input.policy_epoch);
+        if report.policy_id != input.policy_id || report.extension_id != input.extension_id {
+            return Err("report policy/extension differs from the replay input".to_string());
+        }
+        for entry in &artifact.entries {
+            if entry.policy_id != report.policy_id || entry.epoch_id != epoch {
+                return Err(
+                    "report policy/epoch differs from the authenticated evidence".to_string(),
+                );
+            }
+            if entry.metadata.get("extension_id") != Some(&report.extension_id) {
+                return Err("report extension differs from the authenticated evidence".to_string());
+            }
+        }
+
+        let signer = artifact.receipt.signed_envelope();
+        let input_signature = report.replay_input_signature.as_ref().ok_or_else(|| {
+            "authenticated replay requires a signed replay input; this older report supports unauthenticated re-execution only"
+                .to_string()
+        })?;
+        if input_signature.producer_id != signer.producer_id
+            || input_signature.key_provenance != signer.key_provenance
+            || input_signature.verification_key != signer.verification_key
+        {
+            return Err(
+                "replay input and evidence chain must have the same runtime signer".to_string(),
+            );
+        }
+        registry
+            .verify_detached(
+                input_signature,
+                &run_replay_input_preimage(
+                    &report.trace_id,
+                    &report.evidence_ledger_id,
+                    &report.evidence_chain_head,
+                    input,
+                )?,
+                epoch,
+            )
+            .map_err(|error| format!("signed replay input rejected: {error}"))?;
+        // Selection uses the claimant's coordinates, but the returned key and
+        // provenance come only from the externally pinned, validated snapshot.
+        let identity = snapshot
+            .identities
+            .iter()
+            .find(|identity| {
+                identity.producer_id == signer.producer_id
+                    && identity.key_provenance.key_id == signer.key_provenance.key_id
+            })
+            .ok_or_else(|| "authenticated signer is absent from the trust snapshot".to_string())?;
+        let expected_ledger = derive_runtime_evidence_ledger_id(
+            &report.policy_id,
+            epoch,
+            "frankenctl-run",
+            identity,
+            &report.evidence_chain_instance_id,
+        )
+        .map_err(|error| format!("invalid evidence chain instance: {error}"))?;
+        if report.evidence_ledger_id != expected_ledger {
+            return Err(
+                "reported chain instance does not derive the authenticated ledger".to_string(),
+            );
+        }
+
+        let primary = artifact
+            .entries
+            .first()
+            .ok_or_else(|| "empty authenticated batch".to_string())?;
+        if primary.decision_id != report.decision_id {
+            return Err(
+                "reported decision id differs from the authenticated primary decision".to_string(),
+            );
+        }
+        if primary.metadata.get("ir4_witness_hash") != Some(&report.ir4_witness_hash)
+            || report.ir4_witness.content_hash().to_hex() != report.ir4_witness_hash
+            || report.ir4_witness.instructions_executed != report.instructions_executed
+        {
+            return Err(
+                "report IR4 witness differs from the authenticated execution commitment"
+                    .to_string(),
+            );
+        }
+        Ok(digest)
+    };
+    verify()
+        .map_err(|error| format!("run evidence authentication failed before re-execution: {error}"))
 }
 
 /// `frankenctl replay debug`: drive the evidence-aware time-travel debugger
@@ -12755,6 +13010,7 @@ fn run_usage() -> String {
         "      [--data-contract <contract.json>] [--purpose <purpose>] [--certificate-out <bundle-dir>]",
         "      [--explain [bundle.json]] [--explain-out <bundle.json>]",
         "      [--emit-trace <trace.json>] [--cell-close-budget-ms <n>]",
+        "      [--emit-evidence-trust <public-trust.json>]",
         "      [--instruction-budget <n>] [--parser-max-tokens <n>] [--max-heap-objects <n>]",
         "      [--max-heap-bytes <n>] [--max-console-entries <n>] [--max-source-bytes <n>]",
         "",
@@ -12780,6 +13036,12 @@ fn run_usage() -> String {
         "  --emit-trace writes the run's recorded nondeterminism trace — the",
         "  exact input `frankenctl replay debug --trace` consumes, enabling",
         "  end-to-end interpreter-state inspection with `--input <source>`.",
+        "",
+        "  --emit-evidence-trust exports only the run signer's public runtime",
+        "  trust snapshot; the report prints its evidence_trust_snapshot_digest.",
+        "  This is the canonical semantic snapshot digest, not the file's SHA256.",
+        "  Retain and pin that digest through a trusted channel at run time for",
+        "  authenticated replay. Export alone does not enroll a trusted runtime.",
         "",
         "  --certificate-out <bundle-dir> (requires --data-contract) writes the",
         "  signed E8 certificate bundle assembled from the run's recorded",
@@ -13076,12 +13338,13 @@ fn run_report_decision_divergences(
         .zip(&replayed.evidence_entries)
         .enumerate()
     {
-        let actual = ReportedEvidenceDecision {
-            decision_type: actual.decision_type,
-            candidates: actual.candidates.clone(),
-            chosen_action: actual.chosen_action.clone(),
-        };
-        if *reported != actual {
+        // Signatures, timestamps and producer identities differ on a fresh
+        // replay. The original batch is authenticated separately when trust
+        // inputs are supplied; the deterministic decisions still compare.
+        if reported.decision_type != actual.decision_type
+            || reported.candidates != actual.candidates
+            || reported.chosen_action != actual.chosen_action
+        {
             divergences.push(format!(
                 "evidence entry {index}: re-executed decision `{}` differs from the reported `{}`",
                 actual.chosen_action.action_name, reported.chosen_action.action_name
@@ -13097,12 +13360,26 @@ fn replay_run_usage() -> String {
         "  frankenctl replay run --trace <trace.json> [--compare-trace <trace.json>]",
         "      [--mode strict|best-effort|validate] [--out <report.json>]",
         "      [--fleet-trace <dir|trace.json>]",
+        "      [--trust-snapshot <public-trust.json> --expected-trust-digest <sha256>]",
         "",
         "notes:",
         "  Without --compare-trace, --trace must be a frankenctl run report;",
         "  replay re-parses, re-lowers, and re-executes its embedded source and",
         "  compares the IR3 hash, unsigned IR4 execution content, and recorded",
         "  nondeterminism transcript. Synthetic trace self-comparison is refused.",
+        "  Without trust flags, this checks reproducibility and reports",
+        "  evidence_authenticated=false; it does not authenticate runtime origin.",
+        "  Supply both trust flags to authenticate the exact signed evidence",
+        "  batch and signed replay input before executing any source, in every",
+        "  replay mode. The pin is the canonical semantic trust-snapshot digest,",
+        "  not a hash of the JSON file bytes. Pin the",
+        "  snapshot digest independently of the report being checked. A digest",
+        "  copied from an untrusted report is not a trust anchor. Runtime-only",
+        "  key provenance and rotation windows are checked by the trust registry.",
+        "  Older reports without signed inputs cannot use authenticated replay.",
+        "  Imported/required module file contents are read again from disk and",
+        "  are not recorded by this signature; retain those dependencies separately.",
+        "  Trust flags cannot be combined with --compare-trace or --fleet-trace.",
         "  --compare-trace explicitly compares two nondeterminism trace files.",
         "  --fleet-trace stitches per-node traces into one globally-consistent",
         "  replay order using a Lamport total-order merge (clock asc, node id,",
@@ -14858,7 +15135,75 @@ mod tests {
                 mode: ReplayMode::Validate,
                 out: None,
                 fleet_trace: None,
+                evidence_trust: None,
             })
+        );
+    }
+
+    #[test]
+    fn parse_replay_run_authentication_requires_paired_applicable_flags() {
+        let base = vec!["--trace".to_string(), "run.json".to_string()];
+        let digest = "ab".repeat(32);
+        let mut valid = base.clone();
+        valid.extend([
+            "--trust-snapshot".to_string(),
+            "trusted.json".to_string(),
+            "--expected-trust-digest".to_string(),
+            digest.to_ascii_uppercase(),
+        ]);
+        let CommandSpec::Replay(parsed) = parse_replay_run_command(&valid).expect("paired trust")
+        else {
+            panic!("expected replay");
+        };
+        assert_eq!(
+            parsed.evidence_trust,
+            Some(ReplayEvidenceTrustArgs {
+                snapshot: PathBuf::from("trusted.json"),
+                expected_digest: digest.clone(),
+            })
+        );
+
+        for flags in [
+            vec!["--trust-snapshot", "trusted.json"],
+            vec!["--expected-trust-digest", digest.as_str()],
+            vec![
+                "--trust-snapshot",
+                "trusted.json",
+                "--expected-trust-digest",
+                "not-a-digest",
+            ],
+        ] {
+            let mut incomplete = base.clone();
+            incomplete.extend(flags.into_iter().map(str::to_string));
+            assert!(parse_replay_run_command(&incomplete).is_err());
+        }
+        for incompatible in ["--compare-trace", "--fleet-trace"] {
+            let mut combined = valid.clone();
+            combined.extend([incompatible.to_string(), "other.json".to_string()]);
+            let error =
+                parse_replay_run_command(&combined).expect_err("trust only applies to reports");
+            assert!(error.contains("only to run-report re-execution"));
+        }
+    }
+
+    #[test]
+    fn parse_run_command_accepts_separate_public_evidence_trust_export() {
+        let args = [
+            "--input",
+            "program.js",
+            "--extension-id",
+            "trust-export",
+            "--emit-evidence-trust",
+            "public.json",
+        ]
+        .map(str::to_string);
+        let CommandSpec::Run(parsed) = parse_run_command(&args).expect("public trust export")
+        else {
+            panic!("expected run");
+        };
+        assert_eq!(
+            parsed.emit_evidence_trust,
+            Some(PathBuf::from("public.json"))
         );
     }
 

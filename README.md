@@ -679,7 +679,29 @@ A recurring motif across every wave of the project: any time a content hash mixe
 
 Run: `./scripts/run_replay_coverage_metric_gate.sh ci`.
 
-The CLI surface for replay is `frankenctl replay run --mode strict|validate --trace <path> [--compare-trace <path>]`. `strict` mode aborts on the first divergence; `validate` records all divergences for triage.
+The CLI surface for replay is `frankenctl replay run --mode strict|best-effort|validate --trace <path> [--compare-trace <path>]`. Without `--compare-trace`, it re-executes a captured run report; with that flag, it compares two nondeterminism traces. `strict` mode fails on divergence; the other modes report divergences for triage.
+
+### Authenticated run-report replay
+
+To authenticate a run as well as reproduce its decisions, export its public runtime trust snapshot when producing the report:
+
+```bash
+frankenctl run --input ./demo.js --extension-id demo-ext \
+  --out ./artifacts/demo.run.json \
+  --emit-evidence-trust ./artifacts/demo.trust.json
+```
+
+Retain the producer's `evidence_trust_snapshot_digest` independently while observing the trusted original run. This is the snapshot's canonical semantic digest, not a hash of its JSON file bytes. Set `TRUSTED_RUN_DIGEST` from that retained value in the verifier's environment:
+
+```bash
+frankenctl replay run --trace ./artifacts/demo.run.json --mode strict \
+  --trust-snapshot ./artifacts/demo.trust.json \
+  --expected-trust-digest "$TRUSTED_RUN_DIGEST"
+```
+
+Before executing source, replay verifies the pinned runtime identity and key lifecycle, the exact ordered evidence chain and receipt, the run/ledger coordinates and IR4 commitment, and the detached signature over the recorded source and execution inputs. Both trust flags are required together and apply in every replay mode. They cannot be combined with `--compare-trace` or `--fleet-trace`.
+
+Successful authentication reports `evidence_authenticated: true`; deterministic replay without these flags reports `false`. Reports created before signed replay inputs were added remain usable for unauthenticated re-execution and are rejected when authentication is requested. A digest read only from an untrusted report is not an independent trust anchor. The public snapshot contains no private signing key and does not enroll the runtime into an external trust system. Imported module file contents are still read from the filesystem during replay; retain those dependencies separately because this report format does not capture and authenticate their bytes.
 
 ### Counterfactual replay
 
@@ -1548,7 +1570,7 @@ These seven cover binary checks, compile/run artifacts, strict replay, and diagn
 | `frankenctl benchmark compare --manifest <path> [--out-dir …] [--run-id …] [--run-date …]` | Compare runs against a manifest. |
 | `frankenctl benchmark score --input <path> [--output …] [--trace-id …] [--decision-id …] [--policy-id …]` | Score a publication-gate input against Node/Bun comparisons. |
 | `frankenctl benchmark verify --bundle <dir> [--output …] [--summary]` | Verify a benchmark claim bundle and render a verdict report. |
-| `frankenctl replay run --trace <path> [--compare-trace <path>] [--mode strict\|validate] [--out <path>]` | Replay a captured nondeterminism trace; `validate` compares against `--compare-trace`. |
+| `frankenctl replay run --trace <path> [--compare-trace <path>] [--mode strict\|best-effort\|validate] [--out <path>] [--trust-snapshot <path> --expected-trust-digest <64hex>]` | Re-execute a run report, optionally authenticating its evidence and recorded inputs against an independently pinned runtime trust snapshot. With `--compare-trace`, compare two nondeterminism traces instead. |
 | `frankenctl react compile --input <path> --source-form jsx\|tsx\|jsx-fragment --runtime classic\|automatic [--out …] …` | Compile a React component source under a specific runtime. |
 | `frankenctl react build --entry <path> --target ssr\|client\|hydration [--out …] …` | Build a React target through the FRX pipeline. |
 | `frankenctl react doctor --catalog <path> [--summary] [--current-epoch …] [--min-severity …] [--target …] [--include-resolved] …` | Diagnose a React component catalog. |

@@ -9061,28 +9061,31 @@ fn lower_ir2_to_ir3_with_input_hash(
     // silently swapping fields as this execution contract evolves.
     // After the main code + Halt, each body is lowered into the instruction
     // stream and registered in function_table.  Index 0 is reserved for main.
-    #[derive(Clone, Default)]
-    struct DeferredFunction {
-        body_ops: Vec<Ir1Op>,
-        param_names: Vec<String>,
-        name: Option<String>,
-        free_vars: Vec<String>,
-        free_var_ids: Vec<BindingId>,
-        runtime_global_loads: Vec<(String, BindingId)>,
-        child_captured_locals: Vec<(String, BindingId)>,
-        local_lexical_bindings: Vec<ResolvedBinding>,
+    #[derive(Clone, Copy)]
+    struct DeferredFunction<'a> {
+        // Every carrier below points into immutable IR2. Keeping these as
+        // views avoids recursively cloning nested function bodies merely to
+        // defer their IR3 emission (bd-qzf31).
+        body_ops: &'a [Ir1Op],
+        param_names: &'a [String],
+        name: Option<&'a String>,
+        free_vars: &'a [String],
+        free_var_ids: &'a [BindingId],
+        runtime_global_loads: &'a [(String, BindingId)],
+        child_captured_locals: &'a [(String, BindingId)],
+        local_lexical_bindings: &'a [ResolvedBinding],
         is_generator: bool,
         is_arrow: bool,
         rest_param_index: Option<u32>,
         /// Function.prototype.toString's text (bd-9vouw.184).
-        source_text: Option<crate::ast::FunctionSourceText>,
+        source_text: Option<&'a crate::ast::FunctionSourceText>,
         /// Not strict mode code (bd-9vouw.272).
         sloppy: bool,
         /// A named function expression whose own name the body mentions:
         /// that name is the closure's immutable self binding (bd-9vouw.331).
         self_capture: bool,
     }
-    let mut deferred_functions = Vec::<DeferredFunction>::new();
+    let mut deferred_functions = Vec::<DeferredFunction<'_>>::new();
 
     // Build name→BindingId lookup from the module's scope tree so the
     // IR3 lowering can resolve free-variable names to register indices.
@@ -11197,18 +11200,18 @@ fn lower_ir2_to_ir3_with_input_hash(
                     }
                     let function_index = deferred_functions.len() as u32 + 1;
                     deferred_functions.push(DeferredFunction {
-                        body_ops: body_ops.clone(),
-                        param_names: param_names.clone(),
-                        name: Some(name.clone()),
-                        free_vars: free_vars.clone(),
-                        free_var_ids: free_var_ids.clone(),
-                        runtime_global_loads: runtime_global_loads.clone(),
-                        child_captured_locals: child_captured_locals.clone(),
-                        local_lexical_bindings: local_lexical_bindings.clone(),
+                        body_ops: body_ops.as_slice(),
+                        param_names: param_names.as_slice(),
+                        name: Some(name),
+                        free_vars: free_vars.as_slice(),
+                        free_var_ids: free_var_ids.as_slice(),
+                        runtime_global_loads: runtime_global_loads.as_slice(),
+                        child_captured_locals: child_captured_locals.as_slice(),
+                        local_lexical_bindings: local_lexical_bindings.as_slice(),
                         is_generator: *is_generator,
                         is_arrow: false,
                         rest_param_index: *rest_param_index,
-                        source_text: source_text.clone(),
+                        source_text: source_text.as_ref(),
                         sloppy: *sloppy,
                         self_capture: false,
                     });
@@ -11344,18 +11347,18 @@ fn lower_ir2_to_ir3_with_input_hash(
                 }
                 let function_index = deferred_functions.len() as u32 + 1;
                 deferred_functions.push(DeferredFunction {
-                    body_ops: body_ops.clone(),
-                    param_names: param_names.clone(),
-                    name: name.clone(),
-                    free_vars: free_vars.clone(),
-                    free_var_ids: free_var_ids.clone(),
-                    runtime_global_loads: runtime_global_loads.clone(),
-                    child_captured_locals: child_captured_locals.clone(),
-                    local_lexical_bindings: local_lexical_bindings.clone(),
+                    body_ops: body_ops.as_slice(),
+                    param_names: param_names.as_slice(),
+                    name: name.as_ref(),
+                    free_vars: free_vars.as_slice(),
+                    free_var_ids: free_var_ids.as_slice(),
+                    runtime_global_loads: runtime_global_loads.as_slice(),
+                    child_captured_locals: child_captured_locals.as_slice(),
+                    local_lexical_bindings: local_lexical_bindings.as_slice(),
                     is_generator: *is_generator,
                     is_arrow: *is_arrow,
                     rest_param_index: *rest_param_index,
-                    source_text: source_text.clone(),
+                    source_text: source_text.as_ref(),
                     sloppy: *sloppy,
                     self_capture: self_capture_name.is_some(),
                 });
@@ -11816,13 +11819,11 @@ fn lower_ir2_to_ir3_with_input_hash(
             source_text: fn_source_text,
             sloppy: fn_sloppy,
             self_capture: fn_self_capture,
-        } = std::mem::take(&mut deferred_functions[deferred_idx]);
-        // Taken, not cloned: a processed entry is never read again (only the
-        // list's length numbers later bodies), and a body's clone copied
-        // every nested body inside it too.
+        } = deferred_functions[deferred_idx];
+        // The queue entry is Copy because it contains only immutable views and
+        // scalar metadata. Releasing the vector borrow here lets nested bodies
+        // append more views without ever copying an IR1 body.
         deferred_idx += 1;
-        let (body_ops, param_names, fn_name, free_vars, free_var_ids) =
-            (&body_ops, &param_names, &fn_name, &free_vars, &free_var_ids);
         let entry = ir3.instructions.len() as u32;
         let arity = param_names.len() as u32;
         let mut fn_reg: Reg = 0;
@@ -11868,7 +11869,7 @@ fn lower_ir2_to_ir3_with_input_hash(
         // `entry`, where call setup recognizes it and stages the caller's
         // full argument list; the marker then yields that object.
         let arguments_register = (!fn_is_arrow
-            && function_reads_arguments(&fn_runtime_global_loads, body_ops))
+            && function_reads_arguments(fn_runtime_global_loads, body_ops))
         .then(|| {
             let register = fn_reg;
             fn_reg = fn_reg.saturating_add(1);
@@ -13639,18 +13640,18 @@ fn lower_ir2_to_ir3_with_input_hash(
                     }
                     let function_index = deferred_functions.len() as u32 + 1;
                     deferred_functions.push(DeferredFunction {
-                        body_ops: inner_body.clone(),
-                        param_names: inner_params.clone(),
-                        name: Some(inner_name.clone()),
-                        free_vars: inner_fv.clone(),
-                        free_var_ids: inner_fv_ids.clone(),
-                        runtime_global_loads: inner_runtime_global_loads.clone(),
-                        child_captured_locals: inner_child_captured_locals.clone(),
-                        local_lexical_bindings: inner_local_lexical_bindings.clone(),
+                        body_ops: inner_body.as_slice(),
+                        param_names: inner_params.as_slice(),
+                        name: Some(inner_name),
+                        free_vars: inner_fv.as_slice(),
+                        free_var_ids: inner_fv_ids.as_slice(),
+                        runtime_global_loads: inner_runtime_global_loads.as_slice(),
+                        child_captured_locals: inner_child_captured_locals.as_slice(),
+                        local_lexical_bindings: inner_local_lexical_bindings.as_slice(),
                         is_generator: *inner_gen,
                         is_arrow: false,
                         rest_param_index: *inner_rest,
-                        source_text: inner_source_text.clone(),
+                        source_text: inner_source_text.as_ref(),
                         sloppy: *inner_sloppy,
                         self_capture: false,
                     });
@@ -13778,18 +13779,18 @@ fn lower_ir2_to_ir3_with_input_hash(
                     }
                     let function_index = deferred_functions.len() as u32 + 1;
                     deferred_functions.push(DeferredFunction {
-                        body_ops: inner_body.clone(),
-                        param_names: inner_params.clone(),
-                        name: inner_name.clone(),
-                        free_vars: inner_fv.clone(),
-                        free_var_ids: inner_fv_ids.clone(),
-                        runtime_global_loads: inner_runtime_global_loads.clone(),
-                        child_captured_locals: inner_child_captured_locals.clone(),
-                        local_lexical_bindings: inner_local_lexical_bindings.clone(),
+                        body_ops: inner_body.as_slice(),
+                        param_names: inner_params.as_slice(),
+                        name: inner_name.as_ref(),
+                        free_vars: inner_fv.as_slice(),
+                        free_var_ids: inner_fv_ids.as_slice(),
+                        runtime_global_loads: inner_runtime_global_loads.as_slice(),
+                        child_captured_locals: inner_child_captured_locals.as_slice(),
+                        local_lexical_bindings: inner_local_lexical_bindings.as_slice(),
                         is_generator: *inner_gen,
                         is_arrow: *inner_arrow,
                         rest_param_index: *inner_rest,
-                        source_text: inner_source_text.clone(),
+                        source_text: inner_source_text.as_ref(),
                         sloppy: *inner_sloppy,
                         self_capture: self_capture_name.is_some(),
                     });
@@ -14355,7 +14356,7 @@ fn lower_ir2_to_ir3_with_input_hash(
         // bd-9vouw.184: Function.prototype.toString's text.
         if let Some(text) = fn_source_text {
             let function_index = u32::try_from(ir3.function_table.len()).unwrap_or(u32::MAX);
-            ir3.function_sources.insert(function_index, text);
+            ir3.function_sources.insert(function_index, text.clone());
         }
         // bd-9vouw.272: its own `caller`/`arguments` and `callee`. A
         // destructured or defaulted parameter has a synthetic slot, and a
@@ -14373,7 +14374,7 @@ fn lower_ir2_to_ir3_with_input_hash(
             entry,
             arity,
             frame_size: fn_register_high_water.max(fn_reg).max(1),
-            name: fn_name.clone(),
+            name: fn_name.cloned(),
             is_generator: fn_is_generator,
             rest_param_index: fn_rest_param_index,
         });

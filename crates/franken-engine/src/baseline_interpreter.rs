@@ -10517,7 +10517,11 @@ impl GeneratorExecutionSnapshot {
     /// deterministic lane, 8,192 on the throughput lane) that were almost all
     /// cleared (bd-9vouw.167). `register_len` keeps the length to restore.
     fn trim_cleared_register_tail(&mut self) {
-        let live = live_register_prefix_len(&self.registers, &self.register_labels);
+        let live = live_register_prefix_len(
+            &self.registers,
+            &self.register_labels,
+            self.register_dirty_end,
+        );
         if live < self.registers.len() {
             self.registers.truncate(live);
             self.registers.shrink_to_fit();
@@ -10531,8 +10535,30 @@ impl GeneratorExecutionSnapshot {
 
 /// Length of the files' live prefix: every register past it is undefined
 /// with a Public label, as are the slots one file has past the other's end
-/// (bd-9vouw.167).
-fn live_register_prefix_len(registers: &[Value], register_labels: &[Label]) -> usize {
+/// (bd-9vouw.167). Writes maintain `dirty_end` for both files, so parking an
+/// activation need not scan its cleared physical tail on every yield or
+/// isolated await (bd-9vouw.500). Clamp each file independently: isolated
+/// wrappers can keep a longer label file, and restored bounds can exceed a
+/// file that has since been truncated.
+fn live_register_prefix_len(
+    registers: &[Value],
+    register_labels: &[Label],
+    dirty_end: usize,
+) -> usize {
+    let live = live_register_prefix_len_by_walk(
+        &registers[..dirty_end.min(registers.len())],
+        &register_labels[..dirty_end.min(register_labels.len())],
+    );
+    debug_assert_eq!(
+        live,
+        live_register_prefix_len_by_walk(registers, register_labels),
+        "a register past register_dirty_end holds a value or non-Public label (bd-9vouw.500)"
+    );
+    live
+}
+
+/// Full-file oracle for the dirty bound, also used on its bounded prefixes.
+fn live_register_prefix_len_by_walk(registers: &[Value], register_labels: &[Label]) -> usize {
     let values_end = registers
         .iter()
         .rposition(|value| !matches!(value, Value::Undefined))
@@ -54268,10 +54294,14 @@ impl InterpreterCore {
         };
         let mut execution = GeneratorExecutionSnapshot {
             registers,
+        // Only materialized parameters are written below. Starting at the
+        // physical window's end would make every later park scan that whole
+        // cleared tail even when the generator only uses a few registers.
+        let register_dirty_end = arguments.len().min(max_registers);
             register_labels,
             register_len: max_registers,
             register_label_len: max_registers,
-            register_dirty_end: max_registers,
+            register_dirty_end,
             registers_value_bytes: None,
             register_labels_bytes: None,
             delegation: None,
@@ -54339,7 +54369,11 @@ impl InterpreterCore {
         // files cleared throughout: they become the spare the next install
         // refills, instead of being truncated, reallocated and padded back
         // to full windows on every step (bd-9vouw.500).
-        let live = live_register_prefix_len(&self.registers, &self.register_labels);
+        let live = live_register_prefix_len(
+            &self.registers,
+            &self.register_labels,
+            self.register_dirty_end,
+        );
         let registers: Vec<Value> = self.registers.value[..live.min(register_len)]
             .iter_mut()
             .map(|value| std::mem::replace(value, Value::Undefined))
@@ -54397,7 +54431,7 @@ impl InterpreterCore {
         let cap = SPARE_REGISTER_FILE_WINDOWS.saturating_mul(self.config.max_registers as usize);
         if registers.len() <= cap && labels.len() <= cap {
             debug_assert_eq!(
-                live_register_prefix_len(&registers, &labels),
+                live_register_prefix_len_by_walk(&registers, &labels),
                 0,
                 "a spare register file holds a value or a label (bd-9vouw.500)"
             );
@@ -107929,7 +107963,8 @@ impl InterpreterCore {
     /// register past it is cleared (undefined with a Public label), the state
     /// `clear_current_register_frame_width` leaves (bd-9vouw.167). A register
     /// without a parallel label counts as live, so a short label file still
-    /// fails the caller's own range checks.
+    /// fails the caller's own range checks. With complete parallel files,
+    /// the dirty bound excludes the already-cleared physical tail.
     fn register_window_live_end(&self, start: usize, end: usize) -> usize {
         (start..end)
             .rev()
@@ -108121,6 +108156,31 @@ impl InterpreterCore {
                     }))
                 }),
                 _ => 0,
+        let live_end =
+            if start < end && (end > self.registers.len() || end > self.register_labels.len()) {
+                // Missing capacity is observable to the suspension preflight.
+                // Do not let the dirty bound hide an invalid parallel file.
+                end
+            } else {
+                (start..end.min(self.register_dirty_end))
+                    .rev()
+                    .find(|&index| {
+                        !matches!(self.registers.get(index), Some(Value::Undefined))
+                            || !matches!(self.register_labels.get(index), Some(Label::Public))
+                    })
+                    .map_or(start, |index| index + 1)
+            };
+        #[cfg(any(test, debug_assertions))]
+        debug_assert_eq!(
+            live_end,
+            self.register_window_live_end_by_walk(start, end),
+            "async register window exceeded its dirty bound (bd-9vouw.500)"
+        );
+        live_end
+    }
+
+    #[cfg(any(test, debug_assertions))]
+    fn register_window_live_end_by_walk(&self, start: usize, end: usize) -> usize {
             };
             if let Some(key) = key {
                 memo.insert(key, estimate);
@@ -163076,6 +163136,209 @@ mod tests {
                 .expect("compact overflowing-range plan")
                 .verified_function_frame_clear_width,
             None
+    #[test]
+    fn bounded_register_liveness_preserves_unequal_files_bd_9vouw_500() {
+        // These include the two normal lane widths, empty/unequal files,
+        // and a conservative bound left above a truncated file's end.
+        for value_len in [0, 1, 7, 256, 4096] {
+            for label_len in [0, 1, 7, 256, 4096] {
+                for dirty_end in [0, 1, 5, 256, usize::MAX] {
+                    let value_limit = value_len.min(dirty_end);
+                    let label_limit = label_len.min(dirty_end);
+                    let positions =
+                        |limit: usize| [None, limit.checked_sub(1), (limit > 1).then_some(0)];
+                    for value_index in positions(value_limit) {
+                        for label_index in positions(label_limit) {
+                            let mut registers = vec![Value::Undefined; value_len];
+                            let mut labels = vec![Label::Public; label_len];
+                            if let Some(index) = value_index {
+                                registers[index] = Value::Null;
+                            }
+                            if let Some(index) = label_index {
+                                labels[index] = Label::Secret;
+                            }
+                            let expected = value_index
+                                .map_or(0, |index| index + 1)
+                                .max(label_index.map_or(0, |index| index + 1));
+                            assert_eq!(
+                                live_register_prefix_len(&registers, &labels, dirty_end),
+                                expected,
+                                "values={value_len}, labels={label_len}, bound={dirty_end}"
+                            );
+                            assert_eq!(
+                                live_register_prefix_len_by_walk(&registers, &labels),
+                                expected
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "a register past register_dirty_end")]
+    fn bounded_register_liveness_detects_untracked_labels_bd_9vouw_500() {
+        let registers = vec![Value::Undefined; 64];
+        let mut labels = vec![Label::Public; 64];
+        labels[63] = Label::Secret;
+        // A missed label-only write must fail the debug oracle before a
+        // parked snapshot could silently omit its taint.
+        let _ = live_register_prefix_len(&registers, &labels, 4);
+    }
+
+    #[test]
+    fn generator_initial_dirty_bound_covers_materialized_parameters_bd_9vouw_500() {
+        for (arity, rest, arguments, labels, dirty_end, live) in [
+            (3, None, vec![], vec![], 0, 0),
+            (
+                3,
+                None,
+                vec![Value::Int(7), Value::Undefined],
+                vec![Label::Public, Label::Secret],
+                2,
+                2,
+            ),
+            (3, None, vec![Value::Undefined], vec![Label::Public], 1, 0),
+            (
+                1,
+                None,
+                vec![Value::Int(7), Value::Int(8)],
+                vec![Label::Public, Label::Secret],
+                1,
+                1,
+            ),
+            (3, Some(2), vec![Value::Int(7)], vec![Label::Public], 3, 3),
+        ] {
+            let mut core = quickjs_test_core();
+            let window = core.config.max_registers as usize;
+            let module = test_module_with_functions(
+                vec![Ir3Instruction::Return { value: 0 }],
+                vec![Ir3FunctionDesc {
+                    entry: 0,
+                    arity,
+                    frame_size: window as u32,
+                    name: Some("parked_parameters".to_string()),
+                    is_generator: true,
+                    rest_param_index: rest,
+                }],
+            );
+            let execution = core
+                .prepare_generator_execution(
+                    &module,
+                    GeneratorInvocation {
+                        function_index: 0,
+                        closure_index: None,
+                        arguments,
+                        argument_labels: labels,
+                        this_value: Value::Undefined,
+                        this_label: Label::Public,
+                        inline_context_label: None,
+                        module_specifier: None,
+                        generated_function_artifact: None,
+                    },
+                )
+                .expect("generator parameters fit");
+            assert_eq!(execution.register_dirty_end, dirty_end);
+            assert_eq!(execution.registers.len(), live);
+            assert_eq!(execution.register_labels.len(), live);
+            assert_eq!(execution.register_len, window);
+            assert_eq!(execution.register_label_len, window);
+            if let Some(rest_index) = rest {
+                assert!(matches!(
+                    execution.registers[rest_index as usize],
+                    Value::Object(_)
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn parked_activation_preserves_unequal_files_and_dirty_bound_bd_9vouw_500() {
+        for labels_longer in [false, true] {
+            let mut core = quickjs_test_core();
+            let window = core.config.max_registers as usize;
+            let (value_len, label_len, value_index, label_index) = if labels_longer {
+                (8, window, 3, 13)
+            } else {
+                (window, 8, 13, 3)
+            };
+            let value = Value::str("owned by parked activation");
+            let label = Label::Custom {
+                name: "parked-label".to_string(),
+                level: 42,
+            };
+            core.write_reg(value_index, value.clone())
+                .expect("value write");
+            core.set_register_label(label_index, label.clone())
+                .expect("label-only write");
+            // A cleared high write leaves a conservative bound. Parking
+            // must save that bound, not substitute the shorter live prefix.
+            core.write_reg(20, Value::Int(1)).expect("high write");
+            core.write_reg(20, Value::Undefined)
+                .expect("clear high value");
+            core.mutate_registers(|registers| registers.truncate(value_len));
+            core.register_labels.truncate(label_len);
+            let value_bytes = core.registers_memory_bytes();
+            let label_bytes = core.register_labels_memory_bytes();
+            let total_bytes = core.estimated_memory_bytes();
+
+            for _ in 0..3 {
+                let execution = core.take_generator_execution();
+                assert_eq!(execution.registers.len(), value_len.min(14));
+                assert_eq!(execution.register_labels.len(), label_len.min(14));
+                assert_eq!(execution.register_dirty_end, 21);
+                assert_eq!(execution.registers_value_bytes, Some(value_bytes));
+                assert_eq!(execution.register_labels_bytes, Some(label_bytes));
+                assert_eq!(core.register_dirty_end, 0);
+                assert!(core.registers.is_empty() && core.register_labels.is_empty());
+                core.install_generator_execution(execution);
+                assert_eq!(core.registers.len(), value_len);
+                assert_eq!(core.register_labels.len(), label_len);
+                assert_eq!(core.register_dirty_end, 21);
+                assert_eq!(core.read_reg(value_index).expect("restored value"), value);
+                assert_eq!(
+                    core.get_register_label(label_index)
+                        .expect("restored label"),
+                    &label
+                );
+                assert_eq!(core.registers_memory_bytes(), value_bytes);
+                assert_eq!(core.register_labels_memory_bytes(), label_bytes);
+                assert_eq!(core.estimated_memory_bytes(), total_bytes);
+                assert_eq!(core.recompute_estimated_memory_bytes(), total_bytes);
+            }
+        }
+    }
+
+    #[test]
+    fn async_register_window_preserves_missing_capacity_bd_9vouw_500() {
+        let mut core = quickjs_test_core();
+        let window = core.config.max_registers as usize;
+        core.write_reg(5, Value::Int(7)).expect("value write");
+        core.set_register_label(13, Label::Secret)
+            .expect("label-only write");
+        for (start, end, expected) in [
+            (0, window, 14),
+            (3, 8, 6),
+            (6, 12, 6),
+            (14, window, 14),
+            (20, 20, 20),
+            (20, 10, 20),
+        ] {
+            assert_eq!(core.register_window_live_end(start, end), expected);
+            assert_eq!(core.register_window_live_end_by_walk(start, end), expected);
+        }
+        // The old scan treats missing parallel capacity as live so the
+        // await preflight refuses it. A dirty bound must not conceal it.
+        core.register_labels.truncate(8);
+        assert_eq!(core.register_window_live_end(3, window), window);
+        assert_eq!(core.register_window_live_end(20, window), window);
+        core.mutate_registers(|registers| registers.truncate(4));
+        assert_eq!(core.register_window_live_end(0, 8), 8);
+        assert_eq!(core.register_window_live_end(3, 4), 3);
+    }
+
         );
     }
 

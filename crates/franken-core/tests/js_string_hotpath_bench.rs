@@ -154,3 +154,119 @@ fn string_hotpath_matrix() {
         });
     }
 }
+
+fn progressive_search(text: &JsString, pattern: &JsString, reverse: bool) -> usize {
+    let mut checksum = 0_usize;
+    let mut from = if reverse { text.utf16_len() } else { 0 };
+    loop {
+        let found = if reverse {
+            text.utf16_last_index_of(pattern, from)
+        } else {
+            text.utf16_index_of(pattern, from)
+        };
+        let Some(found) = found else { break };
+        checksum = checksum.wrapping_add(found + 1);
+        if reverse {
+            let Some(next) = found.checked_sub(1) else {
+                break;
+            };
+            from = next;
+        } else {
+            from = found + 1;
+        }
+    }
+    checksum
+}
+
+fn reference_search_sum(text: &str, needle: &str) -> usize {
+    let units: Vec<_> = text.encode_utf16().collect();
+    let pattern: Vec<_> = needle.encode_utf16().collect();
+    units
+        .windows(pattern.len())
+        .enumerate()
+        .filter(|(_, candidate)| *candidate == pattern)
+        .map(|(index, _)| index + 1)
+        .sum()
+}
+
+#[test]
+#[ignore = "release-mode progressive-search microbenchmark; no timing assertions in CI"]
+fn string_progressive_search_matrix() {
+    // The same program can run against an unchanged core. The primary
+    // workload searches successive matches instead of repeatedly scanning
+    // from zero; expected positions come from independent UTF-16 windows.
+    let comma = JsString::from(",");
+    for repeats in [256, 1024, 4096] {
+        let source = "aé中😀,".repeat(repeats);
+        let text = JsString::from(source.as_str());
+        let expected = reference_search_sum(&source, ",");
+        for reverse in [false, true] {
+            let name = if reverse {
+                "progressive_unicode_last_index_of"
+            } else {
+                "progressive_unicode_index_of"
+            };
+            measure(name, text.utf16_len(), 4, || {
+                let sum = progressive_search(black_box(&text), black_box(&comma), reverse);
+                assert_eq!(sum, expected);
+                sum
+            });
+        }
+    }
+
+    let ascii_source = "abcde,".repeat(4096);
+    let ascii = JsString::from(ascii_source.as_str());
+    let ascii_expected = reference_search_sum(&ascii_source, ",");
+    measure("progressive_ascii_index_of", ascii.utf16_len(), 4, || {
+        let sum = progressive_search(black_box(&ascii), black_box(&comma), false);
+        assert_eq!(sum, ascii_expected);
+        sum
+    });
+    let short_source = "aé中😀,".repeat(8);
+    let short = JsString::from(short_source.as_str());
+    let short_expected = reference_search_sum(&short_source, ",");
+    measure("progressive_short_unicode", short.utf16_len(), 1024, || {
+        let sum = progressive_search(black_box(&short), black_box(&comma), false);
+        assert_eq!(sum, short_expected);
+        sum
+    });
+
+    let source = "aé中😀,".repeat(4096);
+    let text = JsString::from(source.as_str());
+    let length = text.utf16_len();
+    let middle = length / 2;
+    measure("cold_unicode_middle_index_of", length, 128, || {
+        let fresh = JsString::from(black_box(source.as_str()));
+        let found = fresh.utf16_index_of(black_box(&comma), black_box(middle));
+        assert_eq!(found, Some(middle + 5));
+        found.unwrap() + 1
+    });
+    let absent = JsString::from("not-present");
+    measure("unicode_absent_index_of", length, 1024, || {
+        let found = black_box(&text).utf16_index_of(black_box(&absent), 0);
+        assert_eq!(found, None);
+        usize::from(found.is_some())
+    });
+    let astral = JsString::from("😀");
+    measure("unicode_split_pair_index_of", length, 1024, || {
+        let found = black_box(&text).utf16_index_of(black_box(&astral), middle + 4);
+        assert_eq!(found, Some(middle + 9));
+        found.unwrap() + 1
+    });
+    measure("unicode_split_pair_last_index_of", length, 1024, || {
+        let found = black_box(&text).utf16_last_index_of(black_box(&astral), middle + 4);
+        assert_eq!(found, Some(middle + 3));
+        found.unwrap() + 1
+    });
+
+    let piece = JsString::from("aé中😀,".repeat(2048));
+    let rope = piece.concat(&piece);
+    assert!(rope.unjoined_concat_children().is_some());
+    let expected = reference_search_sum(&source, ",");
+    measure("progressive_unjoined_rope_index_of", length, 4, || {
+        let sum = progressive_search(black_box(&rope), black_box(&comma), false);
+        assert_eq!(sum, expected);
+        sum
+    });
+    assert!(rope.unjoined_concat_children().is_some());
+}

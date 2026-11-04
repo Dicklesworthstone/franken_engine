@@ -184,6 +184,32 @@ impl Text {
         self.indexed_boundary(text, position)
             .unwrap_or_else(|| utf16_boundary(text, length, position))
     }
+
+    /// Search callers retain this carrier so repeated non-ASCII searches
+    /// reuse the same already-reserved checkpoints as indexed reads. Passing
+    /// only `&str` discarded that index and decoded the growing prefix for
+    /// every `indexOf(pattern, from)` in a tokenizer loop (bd-9vouw.475).
+    /// Cold edge queries and unindexed text keep the search-specific scan.
+    pub(super) fn utf16_search_boundary(
+        &self,
+        text: &str,
+        length: usize,
+        position: usize,
+    ) -> (usize, bool) {
+        // A published rope can retain an index reserved from lengths even
+        // when its joined contents admit a bounded fringe proof. Keep those
+        // cold searches allocation-free; populated indices remain the hot path.
+        if let Self::Concat(node) = self
+            && node.index.enabled()
+            && node.index.checkpoints.get().is_none()
+            && let Some(byte) = ascii_middle_boundary(text, length, position)
+                .or_else(|| fixed_width::three_byte_boundary(text, length, position))
+        {
+            return (byte, false);
+        }
+        self.indexed_boundary(text, position)
+            .unwrap_or_else(|| utf16_search_boundary(text, length, position))
+    }
 }
 
 /// Locate a UTF-16 boundary in well-formed UTF-8. A true second component
@@ -557,6 +583,118 @@ mod tests {
         let position = units.len() / 2;
         assert_eq!(value.code_unit_at(position), Some(units[position]));
         assert!(node.index.checkpoints.get().is_some());
+    }
+
+    #[test]
+    fn repeated_searches_share_reserved_checkpoints_and_keep_cold_edges_lazy() {
+        let value = JsString::from("aé中😀,".repeat(4096));
+        let Text::Concat(node) = &value.utf8 else {
+            panic!("mixed fixture requires an indexed flat leaf");
+        };
+        let retained = value.retained_bytes(16);
+        let comma = JsString::from(",");
+        let astral = JsString::from("😀");
+        let length = value.utf16_len();
+        assert_eq!(value.utf16_index_of(&comma, 0), Some(5));
+        assert_eq!(value.utf16_index_of(&comma, INDEX_STRIDE), Some(65));
+        assert_eq!(
+            value.utf16_last_index_of(&comma, usize::MAX),
+            Some(length - 1)
+        );
+        assert!(node.index.checkpoints.get().is_none());
+
+        // This starts at the low half of a pair. Forward search skips that
+        // whole scalar; reverse search must still include its high half.
+        let middle = length / 2;
+        assert_eq!(value.utf16_index_of(&astral, middle + 4), Some(middle + 9));
+        assert_eq!(
+            value.utf16_last_index_of(&astral, middle + 4),
+            Some(middle + 3)
+        );
+        let checkpoints = node
+            .index
+            .checkpoints
+            .get()
+            .expect("search must use its reserved index");
+        let checkpoint_storage = checkpoints.as_ptr();
+        let units = value.code_units_vec();
+        for position in 0..length {
+            let expected_forward = units[position..]
+                .iter()
+                .position(|&unit| unit == u16::from(b','))
+                .map(|offset| position + offset);
+            let expected_reverse = units[..=position]
+                .iter()
+                .rposition(|&unit| unit == u16::from(b','));
+            assert_eq!(value.utf16_index_of(&comma, position), expected_forward);
+            assert_eq!(
+                value.utf16_last_index_of(&comma, position),
+                expected_reverse
+            );
+            // The lookup's starting scalar is at most one stride behind
+            // the requested UTF-16 position, including split pairs. This
+            // bounds repeated coordinate work independently of text length.
+            let checkpoint = checkpoints[position / INDEX_STRIDE];
+            assert!(position - checkpoint.unit <= INDEX_STRIDE);
+        }
+        assert_eq!(
+            node.index.checkpoints.get().unwrap().as_ptr(),
+            checkpoint_storage
+        );
+        assert_eq!(value.retained_bytes(16), retained);
+    }
+
+    #[test]
+    fn published_rope_searches_keep_bounded_fringe_proofs_without_indexing() {
+        for (left, right, needle) in [
+            (format!("é{}", "a".repeat(4096)), "a".repeat(4096), "a"),
+            (
+                format!("a{}", "中".repeat(4096)),
+                format!("{}z", "中".repeat(4096)),
+                "中",
+            ),
+        ] {
+            let units: Vec<_> = format!("{left}{right}").encode_utf16().collect();
+            let pattern: Vec<_> = needle.encode_utf16().collect();
+            let value = JsString::from(left).concat(&JsString::from(right));
+            let _ = value.as_utf8_projection();
+            let Text::Concat(node) = &value.utf8 else {
+                panic!("fixture requires a published concatenation");
+            };
+            assert!(node.joined.get().is_some());
+            assert!(node.index.enabled());
+            assert!(node.index.checkpoints.get().is_none());
+            let retained = value.retained_bytes(16);
+            let needle = JsString::from(needle);
+            for position in [
+                256,
+                512,
+                1024,
+                units.len() / 2,
+                units.len() - 512,
+                units.len() - 256,
+            ] {
+                let expected_forward = units
+                    .windows(pattern.len())
+                    .enumerate()
+                    .find(|(index, candidate)| *index >= position && *candidate == pattern)
+                    .map(|(index, _)| index);
+                let expected_reverse = units
+                    .windows(pattern.len())
+                    .enumerate()
+                    .rfind(|(index, candidate)| *index <= position && *candidate == pattern)
+                    .map(|(index, _)| index);
+                assert_eq!(value.utf16_index_of(&needle, position), expected_forward);
+                assert_eq!(
+                    value.utf16_last_index_of(&needle, position),
+                    expected_reverse
+                );
+            }
+            // A table would require decoding the entire joined string. Both
+            // fixtures already prove these coordinates from bounded fringes.
+            assert!(node.index.checkpoints.get().is_none());
+            assert_eq!(value.retained_bytes(16), retained);
+        }
     }
 
     #[test]

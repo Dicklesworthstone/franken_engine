@@ -1,16 +1,17 @@
-//! Allocation-free search coordinates for published, well-formed strings.
+//! Search coordinates for published, well-formed strings.
 //!
 //! Byte search itself is delegated to str. Cached total lengths and the
-//! existing indexed-access boundary proof locate the requested UTF-16 start;
-//! the returned match is counted from its closest known coordinate, excluding
-//! the needle's already-known length. Neither input gains an index or cache.
-//! Unpublished ropes and exact-only strings keep their existing search paths.
+//! existing reserved index locate the requested UTF-16 start; cold edge
+//! queries and unindexed text retain bounded boundary proofs and scanning.
+//! The returned match is counted from its closest known coordinate, excluding
+//! the needle's already-known length. Unpublished ropes and exact-only strings
+//! keep their existing search paths.
 
-use super::access;
+use super::Text;
 
 /// The public caller already handled empty/oversized needles and clamped from.
 pub(super) fn index_of(
-    text: &str,
+    text: &Text,
     length: usize,
     pattern: &str,
     pattern_units: usize,
@@ -32,7 +33,7 @@ pub(super) fn index_of(
 
 /// last_start is the largest permitted starting position, not a match end.
 pub(super) fn last_index_of(
-    text: &str,
+    text: &Text,
     length: usize,
     pattern: &str,
     pattern_units: usize,
@@ -70,12 +71,12 @@ pub(super) fn last_index_of(
 /// boundary routine already proves its byte start; an astral scalar always
 /// occupies four UTF-8 bytes and two UTF-16 units. No second prefix scan.
 fn search_boundary(
-    text: &str,
+    text: &Text,
     length: usize,
     position: usize,
     round_up: bool,
 ) -> (usize, usize) {
-    let (byte, split_pair) = access::utf16_search_boundary(text, length, position);
+    let (byte, split_pair) = text.utf16_search_boundary(text.as_str(), length, position);
     if !split_pair {
         (byte, position)
     } else if round_up {
@@ -126,10 +127,12 @@ fn match_index(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::js_string::{JsString, access};
 
     #[test]
     fn boundary_rounding_matches_each_exact_utf16_position() {
         for text in ["", "ascii", "\0é中😀\u{10ffff}!", "😀😀a😀", "a中a中"] {
+            let value = JsString::from(text);
             let length = text.encode_utf16().count();
             for position in 0..=length {
                 assert_eq!(
@@ -141,8 +144,8 @@ mod tests {
                 }).chain([(text.len(), length)]).collect();
                 let down = boundaries.iter().rfind(|(_, unit)| *unit <= position).copied().unwrap();
                 let up = boundaries.iter().find(|(_, unit)| *unit >= position).copied().unwrap();
-                assert_eq!(search_boundary(text, length, position, false), down);
-                assert_eq!(search_boundary(text, length, position, true), up);
+                assert_eq!(search_boundary(&value.utf8, length, position, false), down);
+                assert_eq!(search_boundary(&value.utf8, length, position, true), up);
             }
         }
     }
@@ -198,6 +201,7 @@ mod tests {
     fn fixed_width_bmp_matches_never_decode_a_coordinate_span() {
         for repeats in [1, 7, 257, 8192] {
             let text = "\u{800}\u{20ac}\u{65e5}\u{d7ff}\u{e000}\u{ffff}".repeat(repeats);
+            let value = JsString::from(text.as_str());
             let length = text.encode_utf16().count();
             assert_eq!(text.len(), length * 3);
             for position in [0, 1, length / 2, length - 1] {
@@ -218,9 +222,14 @@ mod tests {
                 let pattern = "\u{65e5}\u{d7ff}";
                 let expected_first = (from..=length - 2).find(|&index| index % 6 == 2);
                 let expected_last = (0..=from.min(length - 2)).rfind(|&index| index % 6 == 2);
-                assert_eq!(index_of(&text, length, pattern, 2, from), expected_first);
-                assert_eq!(last_index_of(&text, length, pattern, 2,
-                    from.min(length - 2)), expected_last);
+                assert_eq!(
+                    index_of(&value.utf8, length, pattern, 2, from),
+                    expected_first
+                );
+                assert_eq!(
+                    last_index_of(&value.utf8, length, pattern, 2, from.min(length - 2)),
+                    expected_last
+                );
             }
         }
     }
@@ -247,6 +256,7 @@ mod tests {
     #[test]
     fn searches_preserve_byte_windows_and_split_pair_offsets() {
         for text in ["é😀é😀", "中aé中aé", "😀a😀a😀", "é中😀", "aaéaaaé"] {
+            let value = JsString::from(text);
             let length = text.encode_utf16().count();
             let units: Vec<_> = text.encode_utf16().collect();
             let bounds: Vec<_> = text.char_indices().map(|(byte, _)| byte)
@@ -262,9 +272,12 @@ mod tests {
                         let last = units.windows(needle_units.len()).enumerate()
                             .rfind(|(i, candidate)| *i <= from && *candidate == needle_units.as_slice())
                             .map(|(i, _)| i);
-                        assert_eq!(index_of(text, length, needle, needle_units.len(), from), first);
                         assert_eq!(
-                            last_index_of(text, length, needle, needle_units.len(), from),
+                            index_of(&value.utf8, length, needle, needle_units.len(), from),
+                            first
+                        );
+                        assert_eq!(
+                            last_index_of(&value.utf8, length, needle, needle_units.len(), from),
                             last
                         );
                     }

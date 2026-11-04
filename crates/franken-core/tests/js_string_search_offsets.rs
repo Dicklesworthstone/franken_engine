@@ -118,3 +118,89 @@ fn exact_only_haystacks_and_needles_still_distinguish_lone_surrogates() {
         }
     }
 }
+
+#[test]
+fn indexed_searches_match_shifted_checkpoints_and_split_pairs() {
+    for shift in 0..65 {
+        let text = JsString::from(format!("{}{}", "x".repeat(shift), "aé中😀,𐀀,".repeat(160)));
+        let length = text.utf16_len();
+        let retained = text.retained_bytes(16);
+        let positions = [
+            0,
+            1,
+            2,
+            3,
+            4,
+            62,
+            63,
+            64,
+            65,
+            127,
+            128,
+            129,
+            length / 2 - 1,
+            length / 2,
+            length / 2 + 1,
+            length - 65,
+            length - 64,
+            length - 1,
+            length,
+            length + 1,
+            usize::MAX,
+        ];
+        for needle in [
+            JsString::from(","),
+            JsString::from("😀"),
+            JsString::from("é中"),
+            JsString::from("中😀,𐀀,a"),
+            JsString::from("not-present"),
+            JsString::from_code_units(&[0xD83D]),
+            JsString::from_code_units(&[0xDE00]),
+        ] {
+            check(&text, &needle, positions);
+        }
+        assert_eq!(text.retained_bytes(16), retained);
+    }
+}
+
+#[test]
+fn progressive_unicode_searches_visit_every_match_in_both_directions() {
+    let source = "aé中😀,😀,,𐀀,".repeat(512);
+    let text = JsString::from(source.as_str());
+    let units: Vec<_> = source.encode_utf16().collect();
+    let retained = text.retained_bytes(16);
+    for needle in [",", "😀", "😀,", ",,", "𐀀,a", "é中"] {
+        let needle = JsString::from(needle);
+        let pattern = needle.code_units_vec();
+        let expected: Vec<_> = units
+            .windows(pattern.len())
+            .enumerate()
+            .filter(|(_, candidate)| *candidate == pattern)
+            .map(|(position, _)| position)
+            .collect();
+        let mut forward = Vec::new();
+        let mut from = 0;
+        while let Some(found) = text.utf16_index_of(&needle, from) {
+            assert!(found >= from && found < units.len());
+            forward.push(found);
+            from = found + 1;
+        }
+        assert_eq!(forward, expected);
+        let mut reverse = Vec::new();
+        let mut from = units.len();
+        while let Some(found) = text.utf16_last_index_of(&needle, from) {
+            assert!(found <= from && found < units.len());
+            reverse.push(found);
+            let Some(next) = found.checked_sub(1) else {
+                break;
+            };
+            from = next;
+        }
+        assert_eq!(reverse, expected.iter().rev().copied().collect::<Vec<_>>());
+    }
+    assert_eq!(text.retained_bytes(16), retained);
+    assert_eq!(
+        serde_json::to_string(&text).unwrap(),
+        serde_json::to_string(&source).unwrap()
+    );
+}

@@ -118,9 +118,10 @@ impl ImportAttributes {
     }
 
     pub fn canonical_value(&self) -> CanonicalValue {
-        CanonicalValue::map_from_entries(
+        CanonicalValue::Map(
             self.iter()
-                .map(|(key, value)| (key.clone(), CanonicalValue::str(value.clone()))),
+                .map(|(key, value)| (key.clone(), CanonicalValue::str(value.clone())))
+                .collect(),
         )
     }
 }

@@ -932,7 +932,7 @@ fn enrichment_compile_receipt_changes_with_config() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn enrichment_key_extraction_removes_from_props() {
+fn enrichment_key_summary_preserves_config_order() {
     let node = div_node(
         vec![
             str_attr("id", "root"),
@@ -943,15 +943,12 @@ fn enrichment_key_extraction_removes_from_props() {
     );
     let result = lower_jsx_to_react(&node, &automatic()).unwrap();
     assert!(result.element.props.extracted_key.is_some());
-    // key should NOT appear in named props
-    let key_in_entries = result
-        .element
-        .props
-        .entries
-        .iter()
-        .any(|e| matches!(e, PropsEntry::Named(p) if p.name == "key"));
-    assert!(!key_in_entries);
-    // Other props remain
+    assert!(matches!(
+        result.element.props.entries.as_slice(),
+        [PropsEntry::Named(id), PropsEntry::Named(key), PropsEntry::Named(class_name)]
+            if id.name == "id" && key.name == "key" && class_name.name == "className"
+    ));
+    // The summary does not remove key's expression from the ordered config.
     assert_eq!(result.element.props.named_count(), 2); // id and className
 }
 

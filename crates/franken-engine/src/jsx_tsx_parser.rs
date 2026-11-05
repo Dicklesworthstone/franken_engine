@@ -199,7 +199,10 @@ impl JsxElementName {
     /// Member expressions always resolve through JavaScript, including `ui.Button`.
     pub fn is_component(&self) -> bool {
         match self {
-            Self::Identifier { name, .. } => name.starts_with(|c: char| c.is_ascii_uppercase()),
+            Self::Identifier { name, .. } => {
+                !name.contains('-')
+                    && name.starts_with(|c: char| c.is_ascii_uppercase() || matches!(c, '_' | '$'))
+            }
             Self::MemberExpression { segments, .. } => !segments.is_empty(),
             Self::NamespacedName { .. } => false,
         }
@@ -518,46 +521,71 @@ pub struct JsxParseResult {
 /// statements are outside this fragment API. Every valid construct produces a
 /// typed node with a stable span.
 pub fn parse_jsx(source: &str, config: &JsxParserConfig) -> Result<JsxParseResult, JsxParseError> {
-    let trimmed = source.trim();
-    if trimmed.is_empty() {
-        return Err(JsxParseError::EmptyInput);
-    }
-
-    let mut diagnostics = Vec::new();
-    let mut families_used = Vec::new();
-    let mut cursor = Cursor::new(trimmed);
-
-    let node = parse_jsx_node(&mut cursor, config, 0, &mut diagnostics, &mut families_used)?;
-
-    cursor.skip_whitespace();
-    if !cursor.at_end() {
+    let (mut parsed, consumed) = parse_jsx_prefix(source, config)?;
+    if !source[consumed..].trim().is_empty() {
+        let mut cursor = Cursor::new(source);
+        while cursor.pos < consumed {
+            cursor.advance();
+        }
+        cursor.skip_whitespace();
         let start = cursor.span_start();
         cursor.advance();
-        diagnostics.push(JsxDiagnostic {
+        parsed.diagnostics.push(JsxDiagnostic {
             code: JsxDiagnosticCode::UnsupportedJsxSyntax,
             severity: JsxDiagnosticSeverity::Error,
             message: "Expected one JSX expression; trailing input is not supported".to_string(),
             span: Some(cursor.make_span(start)),
         });
+        return Err(JsxParseError::FailClosed {
+            diagnostics: parsed.diagnostics,
+        });
     }
+    Ok(parsed)
+}
 
-    if !diagnostics
+/// Parse a JSX prefix and return the consumed UTF-8 byte count without consuming
+/// following JavaScript. Only expression-aware callers should use this entrypoint.
+pub(crate) fn parse_jsx_prefix(
+    source: &str,
+    config: &JsxParserConfig,
+) -> Result<(JsxParseResult, usize), JsxParseError> {
+    parse_jsx_prefix_at_depth(source, config, 0)
+}
+
+fn parse_jsx_prefix_at_depth(
+    source: &str,
+    config: &JsxParserConfig,
+    depth: usize,
+) -> Result<(JsxParseResult, usize), JsxParseError> {
+    if source.trim().is_empty() {
+        return Err(JsxParseError::EmptyInput);
+    }
+    let mut diagnostics = Vec::new();
+    let mut families_used = Vec::new();
+    let mut cursor = Cursor::new(source);
+    let node = parse_jsx_node(
+        &mut cursor,
+        config,
+        depth,
+        &mut diagnostics,
+        &mut families_used,
+    )?;
+    if diagnostics
         .iter()
-        .all(|d| d.severity != JsxDiagnosticSeverity::Error)
+        .any(|d| d.severity == JsxDiagnosticSeverity::Error)
     {
         return Err(JsxParseError::FailClosed { diagnostics });
     }
-
-    Ok(JsxParseResult {
-        node,
-        diagnostics,
-        feature_families_used: {
-            let mut fam: Vec<_> = families_used.into_iter().collect();
-            fam.sort();
-            fam.dedup();
-            fam
+    families_used.sort();
+    families_used.dedup();
+    Ok((
+        JsxParseResult {
+            node,
+            diagnostics,
+            feature_families_used: families_used,
         },
-    })
+        cursor.pos,
+    ))
 }
 
 /// Internal cursor for character-by-character parsing.
@@ -732,7 +760,7 @@ fn parse_element(
     cursor.advance();
 
     let name = parse_element_name(cursor, config, diagnostics, families)?;
-    let attributes = parse_attributes(cursor, config, diagnostics, families)?;
+    let attributes = parse_attributes(cursor, config, depth, diagnostics, families)?;
 
     cursor.skip_whitespace();
 
@@ -872,7 +900,8 @@ fn parse_element_name(
 
 fn parse_attributes(
     cursor: &mut Cursor<'_>,
-    _config: &JsxParserConfig,
+    config: &JsxParserConfig,
+    depth: usize,
     diagnostics: &mut Vec<JsxDiagnostic>,
     families: &mut Vec<JsxFeatureFamily>,
 ) -> Result<Vec<JsxAttribute>, JsxParseError> {
@@ -893,7 +922,7 @@ fn parse_attributes(
             cursor.advance(); // .
             cursor.advance(); // .
             cursor.advance(); // .
-            let expr = read_until_balanced_brace(cursor);
+            let expr = read_attribute_expression(cursor, config, depth)?;
             families.push(JsxFeatureFamily::SpreadAttribute);
             attrs.push(JsxAttribute::Spread {
                 expression: expr,
@@ -933,7 +962,7 @@ fn parse_attributes(
                 }
             } else if cursor.peek() == Some('{') {
                 cursor.advance(); // {
-                let expr = read_until_balanced_brace(cursor);
+                let expr = read_attribute_expression(cursor, config, depth)?;
                 families.push(JsxFeatureFamily::ExpressionAttribute);
                 attrs.push(JsxAttribute::Named {
                     name: attr_name,
@@ -1011,7 +1040,11 @@ fn parse_children(
         if cursor.peek() == Some('{') {
             let start = cursor.span_start();
             cursor.advance(); // {
-            let expr = read_until_balanced_brace(cursor);
+            let (expr, has_tokens) = read_until_balanced_brace(cursor, config, depth)?;
+            if !has_tokens {
+                // Empty containers and JSX comments do not create React children.
+                continue;
+            }
             families.push(JsxFeatureFamily::ExpressionChild);
             children.push(JsxChild::ExpressionContainer {
                 expression: expr,
@@ -1079,23 +1112,437 @@ fn read_until_char(cursor: &mut Cursor<'_>, terminator: char) -> String {
     value
 }
 
-fn read_until_balanced_brace(cursor: &mut Cursor<'_>) -> String {
-    let mut depth = 1usize;
-    let mut value = String::new();
-    while let Some(ch) = cursor.peek() {
-        if ch == '{' {
-            depth += 1;
-        } else if ch == '}' {
-            depth -= 1;
-            if depth == 0 {
-                cursor.advance(); // consume closing }
-                break;
+/// Replace JSX occurring in executable expression positions, preserving the
+/// original spelling of strings, comments, regular expressions and template text.
+/// The callback owns lowering/code generation; its output is parenthesized.
+pub(crate) fn transform_jsx_expressions<E, F>(
+    source: &str,
+    config: &JsxParserConfig,
+    mut transform: F,
+) -> Result<String, E>
+where
+    E: From<JsxParseError>,
+    F: FnMut(JsxParseResult) -> Result<String, E>,
+{
+    let mut scanner = JsExpressionScanner::new(source, config, 0, true);
+    scanner.scan_code(None, 0, false, false)?;
+    let mut output = String::with_capacity(source.len());
+    let mut copied = 0;
+    for region in scanner.jsx_regions {
+        output.push_str(&source[copied..region.start]);
+        output.push('(');
+        output.push_str(&transform(region.parsed)?);
+        output.push(')');
+        copied = region.end;
+    }
+    output.push_str(&source[copied..]);
+    Ok(output)
+}
+
+// Bound lexical recursion separately from JSX nesting: ordinary JavaScript
+// parentheses must not consume the JSX element depth budget.
+const MAX_JS_EXPRESSION_NESTING: usize = 256;
+
+struct EmbeddedJsxRegion {
+    start: usize,
+    end: usize,
+    parsed: JsxParseResult,
+}
+
+struct JsExpressionScanner<'a> {
+    source: &'a str,
+    config: &'a JsxParserConfig,
+    pos: usize,
+    jsx_depth: usize,
+    collect_jsx: bool,
+    saw_token: bool,
+    jsx_regions: Vec<EmbeddedJsxRegion>,
+}
+
+impl<'a> JsExpressionScanner<'a> {
+    fn new(
+        source: &'a str,
+        config: &'a JsxParserConfig,
+        jsx_depth: usize,
+        collect_jsx: bool,
+    ) -> Self {
+        Self {
+            source,
+            config,
+            pos: 0,
+            jsx_depth,
+            collect_jsx,
+            saw_token: false,
+            jsx_regions: Vec::new(),
+        }
+    }
+
+    fn error(&self, message: &str) -> JsxParseError {
+        JsxParseError::FailClosed {
+            diagnostics: vec![JsxDiagnostic {
+                code: JsxDiagnosticCode::UnclosedExpressionContainer,
+                severity: JsxDiagnosticSeverity::Error,
+                message: format!("{message} at expression byte {}", self.pos),
+                span: None,
+            }],
+        }
+    }
+
+    fn byte(&self, ahead: usize) -> Option<u8> {
+        self.source.as_bytes().get(self.pos + ahead).copied()
+    }
+
+    fn scan_code(
+        &mut self,
+        closing: Option<u8>,
+        nesting: usize,
+        statement_context: bool,
+        for_header: bool,
+    ) -> Result<(), JsxParseError> {
+        if nesting > MAX_JS_EXPRESSION_NESTING {
+            return Err(JsxParseError::DepthExceeded {
+                depth: nesting,
+                limit: MAX_JS_EXPRESSION_NESTING,
+            });
+        }
+
+        let mut expect_operand = true;
+        let mut after_dot = false;
+        let mut control_parenthesis = false;
+        let mut for_parenthesis = false;
+        let mut function_parenthesis = None;
+        let mut statement_start = statement_context;
+        // Some marks a block; its boolean says whether a statement, rather
+        // than a function-expression value, follows the closing brace.
+        let mut next_block = None;
+        while let Some(byte) = self.byte(0) {
+            if byte.is_ascii_whitespace() {
+                self.pos += 1;
+                continue;
+            }
+            if byte >= 0x80 {
+                let ch = self.source[self.pos..].chars().next().unwrap_or_default();
+                if ch.is_whitespace() {
+                    self.pos += ch.len_utf8();
+                    continue;
+                }
+            }
+            if matches!(byte, b')' | b']' | b'}') {
+                if closing == Some(byte) {
+                    self.pos += 1;
+                    return Ok(());
+                }
+                return Err(self.error("Mismatched JavaScript expression delimiter"));
+            }
+            if byte == b'/' && self.byte(1) == Some(b'/') {
+                self.pos += 2;
+                while let Some(ch) = self.source[self.pos..].chars().next() {
+                    if matches!(ch, '\r' | '\n' | '\u{2028}' | '\u{2029}') {
+                        break;
+                    }
+                    self.pos += ch.len_utf8();
+                }
+                continue;
+            }
+            if byte == b'/' && self.byte(1) == Some(b'*') {
+                self.pos += 2;
+                let Some(end) = self.source[self.pos..].find("*/") else {
+                    return Err(self.error("Unterminated block comment"));
+                };
+                self.pos += end + 2;
+                continue;
+            }
+
+            self.saw_token = true;
+            let at_statement_start = statement_start;
+            statement_start = false;
+            let block_after_previous = next_block.take();
+            match byte {
+                b'\'' | b'"' => {
+                    self.scan_quoted(byte)?;
+                    expect_operand = false;
+                    after_dot = false;
+                }
+                b'\x60' => {
+                    self.scan_template(nesting + 1)?;
+                    expect_operand = false;
+                    after_dot = false;
+                }
+                b'/' if expect_operand => {
+                    self.scan_regex()?;
+                    expect_operand = false;
+                    after_dot = false;
+                }
+                b'<' if matches!(self.byte(1), Some(b'<' | b'=')) => {
+                    self.pos += 2;
+                    if self.byte(0) == Some(b'=') {
+                        self.pos += 1;
+                    }
+                    expect_operand = true;
+                    after_dot = false;
+                }
+                b'<' if expect_operand
+                    && self.byte(1).is_some_and(|next| {
+                        next == b'>' || next.is_ascii_alphabetic() || matches!(next, b'_' | b'$')
+                    }) =>
+                {
+                    let start = self.pos;
+                    let (parsed, consumed) = parse_jsx_prefix_at_depth(
+                        &self.source[start..],
+                        self.config,
+                        self.jsx_depth + 1,
+                    )?;
+                    self.pos += consumed;
+                    if self.collect_jsx {
+                        self.jsx_regions.push(EmbeddedJsxRegion {
+                            start,
+                            end: self.pos,
+                            parsed,
+                        });
+                    }
+                    expect_operand = false;
+                    after_dot = false;
+                }
+                b'(' => {
+                    let is_control = control_parenthesis;
+                    let is_for = for_parenthesis;
+                    let function_body = function_parenthesis.take();
+                    control_parenthesis = false;
+                    for_parenthesis = false;
+                    self.pos += 1;
+                    self.scan_code(Some(b')'), nesting + 1, false, is_for)?;
+                    expect_operand = is_control;
+                    statement_start = is_control && statement_context;
+                    next_block = function_body.or_else(|| is_control.then_some(true));
+                    after_dot = false;
+                }
+                b'[' => {
+                    self.pos += 1;
+                    self.scan_code(Some(b']'), nesting + 1, false, false)?;
+                    expect_operand = false;
+                    after_dot = false;
+                }
+                b'{' => {
+                    let block_kind =
+                        block_after_previous.or_else(|| at_statement_start.then_some(true));
+                    self.pos += 1;
+                    self.scan_code(Some(b'}'), nesting + 1, block_kind.is_some(), false)?;
+                    expect_operand = block_kind.unwrap_or(false);
+                    statement_start = expect_operand && statement_context;
+                    after_dot = false;
+                }
+                b'=' if self.byte(1) == Some(b'>') => {
+                    self.pos += 2;
+                    expect_operand = true;
+                    next_block = Some(false);
+                    after_dot = false;
+                }
+                b'.' if self.byte(1) == Some(b'.') && self.byte(2) == Some(b'.') => {
+                    self.pos += 3;
+                    expect_operand = true;
+                    after_dot = false;
+                }
+                b'.' => {
+                    self.pos += 1;
+                    expect_operand = false;
+                    after_dot = true;
+                }
+                b'?' if self.byte(1) == Some(b'.') => {
+                    self.pos += 2;
+                    expect_operand = false;
+                    after_dot = true;
+                }
+                b'+' | b'-' if self.byte(1) == Some(byte) => {
+                    self.pos += 2;
+                    after_dot = false;
+                }
+                b'0'..=b'9' => {
+                    self.pos += 1;
+                    while self.byte(0).is_some_and(|next| {
+                        next.is_ascii_alphanumeric() || matches!(next, b'.' | b'_')
+                    }) {
+                        self.pos += 1;
+                    }
+                    expect_operand = false;
+                    after_dot = false;
+                }
+                byte if byte.is_ascii_alphabetic()
+                    || matches!(byte, b'_' | b'$')
+                    || byte >= 0x80 =>
+                {
+                    let start = self.pos;
+                    while let Some(ch) = self.source[self.pos..].chars().next() {
+                        if ch.is_alphanumeric()
+                            || matches!(ch, '_' | '$')
+                            || (!ch.is_ascii() && !ch.is_whitespace())
+                        {
+                            self.pos += ch.len_utf8();
+                        } else {
+                            break;
+                        }
+                    }
+                    let word = &self.source[start..self.pos];
+                    control_parenthesis = !after_dot
+                        && matches!(word, "if" | "for" | "while" | "with" | "switch" | "catch");
+                    for_parenthesis = !after_dot && word == "for";
+                    if !after_dot && word == "function" {
+                        function_parenthesis = Some(at_statement_start && statement_context);
+                    }
+                    next_block = (!after_dot && matches!(word, "else" | "do" | "try" | "finally"))
+                        .then_some(true);
+                    expect_operand = !after_dot
+                        && (control_parenthesis
+                            || next_block.is_some()
+                            || (for_header && word == "of")
+                            || matches!(
+                                word,
+                                "return"
+                                    | "throw"
+                                    | "case"
+                                    | "delete"
+                                    | "void"
+                                    | "typeof"
+                                    | "new"
+                                    | "yield"
+                                    | "await"
+                                    | "in"
+                                    | "instanceof"
+                            ));
+                    after_dot = false;
+                }
+                _ => {
+                    self.pos += 1;
+                    expect_operand = true;
+                    after_dot = false;
+                    if byte == b';' {
+                        statement_start = statement_context;
+                    }
+                }
             }
         }
-        value.push(ch);
+        if closing.is_some() {
+            Err(self.error("Unterminated JavaScript expression container"))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn scan_quoted(&mut self, quote: u8) -> Result<(), JsxParseError> {
+        self.pos += 1;
+        while let Some(byte) = self.byte(0) {
+            self.pos += 1;
+            match byte {
+                b'\\' => {
+                    if self.byte(0).is_none() {
+                        break;
+                    }
+                    self.pos += 1;
+                    if self.source.as_bytes()[self.pos - 1] == b'\r' && self.byte(0) == Some(b'\n')
+                    {
+                        self.pos += 1;
+                    }
+                }
+                byte if byte == quote => return Ok(()),
+                b'\r' | b'\n' => return Err(self.error("Unterminated quoted string")),
+                _ => {}
+            }
+        }
+        Err(self.error("Unterminated quoted string"))
+    }
+
+    fn scan_template(&mut self, nesting: usize) -> Result<(), JsxParseError> {
+        if nesting > MAX_JS_EXPRESSION_NESTING {
+            return Err(JsxParseError::DepthExceeded {
+                depth: nesting,
+                limit: MAX_JS_EXPRESSION_NESTING,
+            });
+        }
+        self.pos += 1;
+        while let Some(byte) = self.byte(0) {
+            match byte {
+                b'\\' => {
+                    self.pos += 1;
+                    if self.byte(0).is_some() {
+                        self.pos += 1;
+                    }
+                }
+                b'\x60' => {
+                    self.pos += 1;
+                    return Ok(());
+                }
+                b'$' if self.byte(1) == Some(b'{') => {
+                    self.pos += 2;
+                    self.scan_code(Some(b'}'), nesting + 1, false, false)?;
+                }
+                _ => self.pos += 1,
+            }
+        }
+        Err(self.error("Unterminated template literal"))
+    }
+
+    fn scan_regex(&mut self) -> Result<(), JsxParseError> {
+        self.pos += 1;
+        let mut in_character_class = false;
+        while let Some(byte) = self.byte(0) {
+            self.pos += 1;
+            match byte {
+                b'\\' => {
+                    if self.byte(0).is_none() {
+                        break;
+                    }
+                    self.pos += 1;
+                }
+                b'[' => in_character_class = true,
+                b']' => in_character_class = false,
+                b'/' if !in_character_class => {
+                    while self.byte(0).is_some_and(|flag| flag.is_ascii_alphabetic()) {
+                        self.pos += 1;
+                    }
+                    return Ok(());
+                }
+                b'\r' | b'\n' => return Err(self.error("Unterminated regular expression")),
+                _ => {}
+            }
+        }
+        Err(self.error("Unterminated regular expression"))
+    }
+}
+
+fn read_until_balanced_brace(
+    cursor: &mut Cursor<'_>,
+    config: &JsxParserConfig,
+    jsx_depth: usize,
+) -> Result<(String, bool), JsxParseError> {
+    let start = cursor.pos;
+    let mut scanner = JsExpressionScanner::new(cursor.remaining(), config, jsx_depth, false);
+    scanner.scan_code(Some(b'}'), 0, false, false)?;
+    let consumed = scanner.pos;
+    let has_tokens = scanner.saw_token;
+    let value = cursor.remaining()[..consumed - 1].to_string();
+    while cursor.pos < start + consumed {
         cursor.advance();
     }
-    value
+    Ok((value, has_tokens))
+}
+
+fn read_attribute_expression(
+    cursor: &mut Cursor<'_>,
+    config: &JsxParserConfig,
+    jsx_depth: usize,
+) -> Result<String, JsxParseError> {
+    let start = cursor.span_start();
+    let (value, has_tokens) = read_until_balanced_brace(cursor, config, jsx_depth)?;
+    if !has_tokens {
+        return Err(JsxParseError::FailClosed {
+            diagnostics: vec![JsxDiagnostic {
+                code: JsxDiagnosticCode::EmptyExpression,
+                severity: JsxDiagnosticSeverity::Error,
+                message: "JSX attributes require a nonempty expression".to_string(),
+                span: Some(cursor.make_span(start)),
+            }],
+        });
+    }
+    Ok(value)
 }
 
 // ---------------------------------------------------------------------------
@@ -1885,6 +2332,235 @@ mod tests {
             }));
         }
         assert!(parse_jsx(" \n<div/> \r\n\t", &default_config()).is_ok());
+    }
+
+    #[test]
+    fn test_root_span_retains_leading_source_lines_and_columns() {
+        let source = "\n\n  <App/>\n";
+        let parsed = parse_jsx(source, &default_config()).expect("leading whitespace is valid");
+        let span = parsed.node.span();
+        assert_eq!(span.start_offset, 4);
+        assert_eq!(span.start_line, 3);
+        assert_eq!(span.start_column, 3);
+        assert_eq!(span.end_offset, 10);
+    }
+
+    #[test]
+    fn test_jsx_prefix_consumes_one_complete_expression_in_bytes() {
+        let source = " \n<div>é😀</div> + trailing";
+        let (parsed, consumed) =
+            parse_jsx_prefix(source, &default_config()).expect("prefix should parse");
+        assert_eq!(&source[consumed..], " + trailing");
+        assert_eq!(parsed.node.span().end_offset, consumed as u64);
+        assert!(parse_jsx(source, &default_config()).is_err());
+    }
+
+    #[test]
+    fn test_component_identifier_prefixes_and_custom_tags() {
+        for (name, component) in [
+            ("_Widget", true),
+            ("$Widget", true),
+            ("Widget", true),
+            ("widget", false),
+            ("Upper-case", false),
+            ("my-element", false),
+        ] {
+            let parsed = parse_jsx(&format!("<{name}/>"), &default_config())
+                .expect("identifier fixture should parse");
+            let JsxNode::Element(element) = parsed.node else {
+                panic!("expected element");
+            };
+            assert_eq!(element.name.is_component(), component, "{name}");
+        }
+    }
+
+    #[test]
+    fn test_expression_braces_respect_javascript_lexical_regions() {
+        for expression in [
+            r#""}" + "{""#,
+            r#"({text: "}", nested: {value: "{"}})"#,
+            r#"/[{}<>]/.test(value) ? "<NotJsx/>" : value / 2"#,
+            "\x60raw } \x24{condition ? \"}\" : \"{\"}\x60",
+            "value /* } { <No/> */ + 1 // } <No/>\n",
+            r#"items.map(item => (<li title="}">{item.name}</li>))"#,
+            r#"(() => { if (ok) /}/.test(text); return <Ready/>; })()"#,
+        ] {
+            let source = format!("<div value={{{expression}}}>{{{expression}}}</div>");
+            let parsed =
+                parse_jsx(&source, &default_config()).expect("lexical fixture should parse");
+            let JsxNode::Element(element) = parsed.node else {
+                panic!("expected element");
+            };
+            assert!(matches!(
+                element.attributes.as_slice(),
+                [JsxAttribute::Named {
+                    value: JsxAttributeValue::Expression { expression: actual },
+                    ..
+                }] if actual == expression
+            ));
+            assert!(matches!(
+                element.children.as_slice(),
+                [JsxChild::ExpressionContainer { expression: actual, .. }] if actual == expression
+            ));
+        }
+    }
+
+    fn replace_embedded_jsx_names(source: &str) -> Result<String, JsxParseError> {
+        transform_jsx_expressions(source, &default_config(), |parsed| {
+            let name = match parsed.node {
+                JsxNode::Element(element) => element.name.to_string_repr(),
+                JsxNode::Fragment(_) => "Fragment".to_string(),
+            };
+            Ok(format!("render_{name}"))
+        })
+    }
+
+    #[test]
+    fn test_expression_transform_handles_map_ternary_and_comparison() {
+        for (source, expected) in [
+            (
+                "items.map(item => (<Row key={item.id}>{item.name}</Row>))",
+                "items.map(item => ((render_Row)))",
+            ),
+            (
+                "a < b ? <Small/> : <Large/>",
+                "a < b ? (render_Small) : (render_Large)",
+            ),
+            (
+                "a<<b ? <Small/> : <Large/>",
+                "a<<b ? (render_Small) : (render_Large)",
+            ),
+            (
+                "of / divisor ? <Yes/> : <No/>",
+                "of / divisor ? (render_Yes) : (render_No)",
+            ),
+            ("ready && <><Item/></>", "ready && (render_Fragment)"),
+            (
+                "object.return / divisor < limit ? <Small/> : <Large/>",
+                "object.return / divisor < limit ? (render_Small) : (render_Large)",
+            ),
+        ] {
+            assert_eq!(replace_embedded_jsx_names(source).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn test_expression_transform_preserves_literals_comments_and_regex() {
+        for (source, expected) in [
+            (
+                r#""<Fake/>" + '<AlsoFake/>' /* <Comment/> */ + (<Real/>)"#,
+                r#""<Fake/>" + '<AlsoFake/>' /* <Comment/> */ + ((render_Real))"#,
+            ),
+            (
+                r#"/<Never>{1}[{}]/.test(value) ? <Hit/> : <Miss/>"#,
+                r#"/<Never>{1}[{}]/.test(value) ? (render_Hit) : (render_Miss)"#,
+            ),
+            (
+                "value // <Comment/>\n ? <Yes/> : <No/>",
+                "value // <Comment/>\n ? (render_Yes) : (render_No)",
+            ),
+            (
+                "(() => { if (ok) /}/.test(text); return <Ready/>; })()",
+                "(() => { if (ok) /}/.test(text); return (render_Ready); })()",
+            ),
+            (
+                "(() => { {} /}/.test('}'); return <Ready/>; })()",
+                "(() => { {} /}/.test('}'); return (render_Ready); })()",
+            ),
+            (
+                "function(){} / 2 ? <Yes/> : <No/>",
+                "function(){} / 2 ? (render_Yes) : (render_No)",
+            ),
+            (
+                "(() => { for (const item of /[{}]/.exec(text)) {} return <Ready/>; })()",
+                "(() => { for (const item of /[{}]/.exec(text)) {} return (render_Ready); })()",
+            ),
+        ] {
+            assert_eq!(replace_embedded_jsx_names(source).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn test_expression_transform_only_rewrites_template_interpolations() {
+        let source = "\x60raw <Ignored/> \x24{flag ? <Yes/> : <No/>}\x60";
+        let expected = "\x60raw <Ignored/> \x24{flag ? (render_Yes) : (render_No)}\x60";
+        assert_eq!(replace_embedded_jsx_names(source).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_empty_and_comment_only_children_do_not_render() {
+        let parsed = parse_jsx("<p>a{/* } <Ignored/> */}{}b</p>", &default_config())
+            .expect("comments and empty child containers should parse");
+        let JsxNode::Element(element) = parsed.node else {
+            panic!("expected element");
+        };
+        assert!(matches!(
+            element.children.as_slice(),
+            [JsxChild::Text { value: a, .. }, JsxChild::Text { value: b, .. }]
+                if a == "a" && b == "b"
+        ));
+        for source in [
+            "<A value={} />",
+            "<A value={/* comment */} />",
+            "<A {...} />",
+        ] {
+            let error = parse_jsx(source, &default_config()).unwrap_err();
+            assert!(matches!(
+                error,
+                JsxParseError::FailClosed { diagnostics }
+                    if diagnostics.iter().any(|d| d.code == JsxDiagnosticCode::EmptyExpression)
+            ));
+        }
+    }
+
+    #[test]
+    fn test_unterminated_javascript_regions_fail_closed() {
+        for source in [
+            r#"<A value={"unterminated} />"#,
+            "<A>{/* unterminated }</A>",
+            "<A>{\x60unterminated }</A>",
+            "<A>{/[unterminated/}</A>",
+            "<A>{({value: 1})</A>",
+        ] {
+            assert!(
+                matches!(
+                    parse_jsx(source, &default_config()),
+                    Err(JsxParseError::FailClosed { .. })
+                ),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_expression_containers_cannot_bypass_jsx_depth_limit() {
+        let config = JsxParserConfig {
+            max_depth: 1,
+            ..default_config()
+        };
+        assert!(matches!(
+            parse_jsx("<A>{<B>{<C/>}</B>}</A>", &config),
+            Err(JsxParseError::DepthExceeded { depth: 2, limit: 1 })
+        ));
+    }
+
+    #[test]
+    fn test_expression_lexical_nesting_is_bounded() {
+        let nesting = MAX_JS_EXPRESSION_NESTING + 1;
+        let source = format!("<A>{{{}0{}}}</A>", "(".repeat(nesting), ")".repeat(nesting));
+        assert!(matches!(
+            parse_jsx(&source, &default_config()),
+            Err(JsxParseError::DepthExceeded { .. })
+        ));
+    }
+
+    #[test]
+    fn test_expression_transform_propagates_callback_failure() {
+        let result: Result<String, JsxParseError> =
+            transform_jsx_expressions("<A/>", &default_config(), |_| {
+                Err(JsxParseError::EmptyInput)
+            });
+        assert_eq!(result, Err(JsxParseError::EmptyInput));
     }
 
     // --- Parsing: error cases ---

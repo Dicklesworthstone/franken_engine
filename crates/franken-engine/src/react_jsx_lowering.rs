@@ -253,22 +253,27 @@ pub enum PropsEntry {
 /// The props object for a lowered element.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoweredProps {
-    /// Ordered entries (named props and spreads interleaved).
+    /// Ordered config entries, including every `key`, `ref`, and spread.
+    /// Emit these entries in order so overwritten expressions still execute.
     pub entries: Vec<PropsEntry>,
     /// Whether spreads are present (requires runtime merging).
     pub has_spreads: bool,
-    /// The extracted `key` prop, if any.
+    /// Summary of the last explicitly named `key`; spreads may override it.
+    /// Code generation must evaluate `entries`, never this summary separately.
     pub extracted_key: Option<LoweredPropValue>,
-    /// The extracted `ref` prop, if any.
+    /// Summary of the last explicitly named `ref`; spreads may override it.
+    /// Code generation must evaluate `entries`, never this summary separately.
     pub extracted_ref: Option<LoweredPropValue>,
 }
 
 impl LoweredProps {
-    /// Returns the number of named props (excluding spreads).
+    /// Returns the number of ordinary named props (excluding spreads, key, and ref).
     pub fn named_count(&self) -> usize {
         self.entries
             .iter()
-            .filter(|e| matches!(e, PropsEntry::Named(_)))
+            .filter(|entry| {
+                matches!(entry, PropsEntry::Named(prop) if prop.name != "key" && prop.name != "ref")
+            })
             .count()
     }
 
@@ -784,13 +789,9 @@ impl<'a> LoweringCtx<'a> {
         // Build source location for dev mode
         let source_location = self.build_source_location(&element.span);
 
-        // Determine static children flag: true only when there are multiple
-        // children AND all of them are statically-known (text or element, not
-        // expression). An empty list is not "static children".
-        let is_static_children = children.len() > 1
-            && children
-                .iter()
-                .all(|c| matches!(c, LoweredChild::Text { .. } | LoweredChild::Element(_)));
+        // jsxDEV marks a compiler-created array with a fixed child count as
+        // static, even when its values come from expressions.
+        let is_static_children = children.len() > 1;
 
         // Build the call convention and lowered element
         self.build_lowered_element(BuildElementInput {
@@ -884,7 +885,8 @@ impl<'a> LoweringCtx<'a> {
                         }
                     };
 
-                    // Extract key and ref — they are not passed as regular props in React
+                    // Retain key/ref in the ordered config. Summaries support
+                    // analysis without discarding duplicate expression effects.
                     if name == "key" {
                         self.record_feature(JsxFeatureFamily::KeyProp);
                         if seen_key {
@@ -897,14 +899,12 @@ impl<'a> LoweringCtx<'a> {
                         }
                         seen_key = true;
                         self.stats.keys_extracted += 1;
-                        extracted_key = Some(lowered_value);
-                        continue;
+                        extracted_key = Some(lowered_value.clone());
                     }
 
                     if name == "ref" {
                         self.stats.refs_extracted += 1;
-                        extracted_ref = Some(lowered_value);
-                        continue;
+                        extracted_ref = Some(lowered_value.clone());
                     }
 
                     entries.push(PropsEntry::Named(LoweredProp {
@@ -1931,7 +1931,7 @@ mod tests {
         let result = lower_jsx_to_react(&node, &classic_config())
             .expect("operation should succeed for valid inputs");
         assert!(result.element.props.extracted_key.is_some());
-        assert_eq!(result.element.props.named_count(), 1); // only 'data', 'key' extracted
+        assert_eq!(result.element.props.named_count(), 1); // only 'data' is an ordinary prop
         assert_eq!(result.stats.keys_extracted, 1);
     }
 
@@ -1957,6 +1957,62 @@ mod tests {
             .expect("operation should succeed for valid inputs");
         assert!(result.element.props.extracted_ref.is_some());
         assert_eq!(result.stats.refs_extracted, 1);
+    }
+
+    #[test]
+    fn test_config_preserves_key_ref_and_spread_evaluation_order() {
+        use crate::jsx_tsx_parser::{JsxParserConfig, parse_jsx};
+
+        let source = concat!(
+            "<Widget first={mark(1)} key={mark(2)} {...spread()} ",
+            "ref={mark(3)} key={mark(4)} ref={mark(5)} last={mark(6)} />",
+        );
+        let parsed = parse_jsx(source, &JsxParserConfig::default())
+            .expect("ordered config fixture should parse");
+
+        for config in [classic_config(), automatic_config(), dev_automatic_config()] {
+            let result = lower_jsx_to_react(&parsed.node, &config)
+                .expect("ordered config fixture should lower");
+            let props = &result.element.props;
+            let ordered: Vec<(&str, &str)> = props
+                .entries
+                .iter()
+                .map(|entry| match entry {
+                    PropsEntry::Named(prop) => match &prop.value {
+                        LoweredPropValue::Expression { expression } => {
+                            (prop.name.as_str(), expression.as_str())
+                        }
+                        _ => panic!("fixture uses expression attributes"),
+                    },
+                    PropsEntry::Spread { expression, .. } => ("...", expression.as_str()),
+                })
+                .collect();
+
+            assert_eq!(
+                ordered,
+                [
+                    ("first", "mark(1)"),
+                    ("key", "mark(2)"),
+                    ("...", "spread()"),
+                    ("ref", "mark(3)"),
+                    ("key", "mark(4)"),
+                    ("ref", "mark(5)"),
+                    ("last", "mark(6)"),
+                ]
+            );
+            assert!(matches!(
+                &props.extracted_key,
+                Some(LoweredPropValue::Expression { expression }) if expression == "mark(4)"
+            ));
+            assert!(matches!(
+                &props.extracted_ref,
+                Some(LoweredPropValue::Expression { expression }) if expression == "mark(5)"
+            ));
+            assert!(props.has_spreads);
+            assert_eq!(props.named_count(), 2);
+            assert_eq!(result.stats.keys_extracted, 2);
+            assert_eq!(result.stats.refs_extracted, 2);
+        }
     }
 
     #[test]
@@ -2467,6 +2523,23 @@ mod tests {
             .expect("operation should succeed for valid inputs");
         assert_eq!(result.stats.elements_lowered, 1);
         assert_eq!(result.stats.fragments_lowered, 1);
+    }
+
+    #[test]
+    fn test_development_static_children_tracks_array_shape_not_values() {
+        use crate::jsx_tsx_parser::{JsxParserConfig, parse_jsx};
+
+        for (source, expected) in [
+            ("<div>{first}{second}</div>", true),
+            ("<>{first}{second}</>", true),
+            ("<div>{items}</div>", false),
+        ] {
+            let parsed = parse_jsx(source, &JsxParserConfig::default())
+                .expect("development children fixture should parse");
+            let lowered = lower_parse_result(&parsed, &dev_automatic_config())
+                .expect("development children fixture should lower");
+            assert_eq!(lowered.element.is_static_children, expected, "{source}");
+        }
     }
 
     // --- Duplicate Key ---

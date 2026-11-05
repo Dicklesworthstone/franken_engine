@@ -113,7 +113,7 @@
         "tag": "div",
         "type": "intrinsic"
       },
-      "is_static_children": false,
+      "is_static_children": true,
       "props": {
         "entries": [
           {

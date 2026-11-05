@@ -1723,13 +1723,13 @@ fn enrichment_parse_fragment_inside_fragment() {
 // ── Cross-cutting: whitespace trimming on input ────────────────────────
 
 #[test]
-fn enrichment_parse_leading_trailing_whitespace_trimmed() {
-    // parse_jsx trims input before parsing
+fn enrichment_parse_leading_trailing_whitespace_preserves_span() {
     let result = parse_jsx("  <div />  ", &default_config()).unwrap();
     match &result.node {
         JsxNode::Element(el) => {
             assert_eq!(el.name.to_string_repr(), "div");
             assert!(el.self_closing);
+            assert_eq!(el.span.start_offset, 2);
         }
         _ => panic!("expected element"),
     }
@@ -2404,7 +2404,7 @@ fn enrichment_element_name_is_component_underscore_prefix() {
         name: "_private".into(),
         span: span(0, 8),
     };
-    assert!(!name.is_component());
+    assert!(name.is_component());
 }
 
 #[test]
@@ -2413,7 +2413,7 @@ fn enrichment_element_name_is_component_dollar_prefix() {
         name: "$styled".into(),
         span: span(0, 7),
     };
-    assert!(!name.is_component());
+    assert!(name.is_component());
 }
 
 #[test]

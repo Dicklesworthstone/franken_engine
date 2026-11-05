@@ -206,7 +206,7 @@ fn test_classic_multiple_children() {
 }
 
 #[test]
-fn test_classic_key_not_in_props() {
+fn test_classic_key_retained_in_config_order() {
     let node = component_node(
         "Item",
         vec![expr_attr("key", "item.id"), str_attr("data", "value")],
@@ -215,16 +215,23 @@ fn test_classic_key_not_in_props() {
     let result = lower_jsx_to_react(&node, &classic()).unwrap();
 
     assert!(result.element.props.extracted_key.is_some());
-    // key should NOT be in the named props
     assert_eq!(result.element.props.named_count(), 1);
-    assert!(result.element.props.entries.iter().all(|e| match e {
-        PropsEntry::Named(p) => p.name != "key",
-        _ => true,
-    }));
+    assert!(matches!(
+        result.element.props.entries.as_slice(),
+        [PropsEntry::Named(key), PropsEntry::Named(data)]
+            if key.name == "key" && data.name == "data"
+    ));
+    assert!(matches!(
+        &result.element.props.entries[0],
+        PropsEntry::Named(key) if matches!(
+            &key.value,
+            LoweredPropValue::Expression { expression } if expression == "item.id"
+        )
+    ));
 }
 
 #[test]
-fn test_classic_ref_not_in_props() {
+fn test_classic_ref_retained_in_config_order() {
     let node = div_node(
         vec![expr_attr("ref", "myRef"), str_attr("id", "main")],
         vec![],
@@ -233,6 +240,18 @@ fn test_classic_ref_not_in_props() {
 
     assert!(result.element.props.extracted_ref.is_some());
     assert_eq!(result.element.props.named_count(), 1);
+    assert!(matches!(
+        result.element.props.entries.as_slice(),
+        [PropsEntry::Named(reference), PropsEntry::Named(id)]
+            if reference.name == "ref" && id.name == "id"
+    ));
+    assert!(matches!(
+        &result.element.props.entries[0],
+        PropsEntry::Named(reference) if matches!(
+            &reference.value,
+            LoweredPropValue::Expression { expression } if expression == "myRef"
+        )
+    ));
 }
 
 #[test]

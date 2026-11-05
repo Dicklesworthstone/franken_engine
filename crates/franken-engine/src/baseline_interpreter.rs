@@ -54270,6 +54270,10 @@ impl InterpreterCore {
         let max_registers = self.config.max_registers as usize;
         let mut registers = vec![Value::Undefined; max_registers];
         let mut register_labels = vec![Label::Public; max_registers];
+        // Only materialized parameters are written below. Starting at the
+        // physical window's end would make every later park scan that whole
+        // cleared tail even when the generator only uses a few registers.
+        let register_dirty_end = arguments.len().min(max_registers);
         for (index, (value, label)) in arguments
             .into_iter()
             .zip(argument_labels)
@@ -54294,10 +54298,6 @@ impl InterpreterCore {
         };
         let mut execution = GeneratorExecutionSnapshot {
             registers,
-        // Only materialized parameters are written below. Starting at the
-        // physical window's end would make every later park scan that whole
-        // cleared tail even when the generator only uses a few registers.
-        let register_dirty_end = arguments.len().min(max_registers);
             register_labels,
             register_len: max_registers,
             register_label_len: max_registers,
@@ -107966,6 +107966,31 @@ impl InterpreterCore {
     /// fails the caller's own range checks. With complete parallel files,
     /// the dirty bound excludes the already-cleared physical tail.
     fn register_window_live_end(&self, start: usize, end: usize) -> usize {
+        let live_end =
+            if start < end && (end > self.registers.len() || end > self.register_labels.len()) {
+                // Missing capacity is observable to the suspension preflight.
+                // Do not let the dirty bound hide an invalid parallel file.
+                end
+            } else {
+                (start..end.min(self.register_dirty_end))
+                    .rev()
+                    .find(|&index| {
+                        !matches!(self.registers.get(index), Some(Value::Undefined))
+                            || !matches!(self.register_labels.get(index), Some(Label::Public))
+                    })
+                    .map_or(start, |index| index + 1)
+            };
+        #[cfg(any(test, debug_assertions))]
+        debug_assert_eq!(
+            live_end,
+            self.register_window_live_end_by_walk(start, end),
+            "async register window exceeded its dirty bound (bd-9vouw.500)"
+        );
+        live_end
+    }
+
+    #[cfg(any(test, debug_assertions))]
+    fn register_window_live_end_by_walk(&self, start: usize, end: usize) -> usize {
         (start..end)
             .rev()
             .find(|&index| {
@@ -108156,31 +108181,6 @@ impl InterpreterCore {
                     }))
                 }),
                 _ => 0,
-        let live_end =
-            if start < end && (end > self.registers.len() || end > self.register_labels.len()) {
-                // Missing capacity is observable to the suspension preflight.
-                // Do not let the dirty bound hide an invalid parallel file.
-                end
-            } else {
-                (start..end.min(self.register_dirty_end))
-                    .rev()
-                    .find(|&index| {
-                        !matches!(self.registers.get(index), Some(Value::Undefined))
-                            || !matches!(self.register_labels.get(index), Some(Label::Public))
-                    })
-                    .map_or(start, |index| index + 1)
-            };
-        #[cfg(any(test, debug_assertions))]
-        debug_assert_eq!(
-            live_end,
-            self.register_window_live_end_by_walk(start, end),
-            "async register window exceeded its dirty bound (bd-9vouw.500)"
-        );
-        live_end
-    }
-
-    #[cfg(any(test, debug_assertions))]
-    fn register_window_live_end_by_walk(&self, start: usize, end: usize) -> usize {
             };
             if let Some(key) = key {
                 memo.insert(key, estimate);
@@ -163136,6 +163136,9 @@ mod tests {
                 .expect("compact overflowing-range plan")
                 .verified_function_frame_clear_width,
             None
+        );
+    }
+
     #[test]
     fn bounded_register_liveness_preserves_unequal_files_bd_9vouw_500() {
         // These include the two normal lane widths, empty/unequal files,
@@ -163337,9 +163340,6 @@ mod tests {
         core.mutate_registers(|registers| registers.truncate(4));
         assert_eq!(core.register_window_live_end(0, 8), 8);
         assert_eq!(core.register_window_live_end(3, 4), 3);
-    }
-
-        );
     }
 
     fn test_module_with_functions(

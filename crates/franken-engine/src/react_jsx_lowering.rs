@@ -949,7 +949,7 @@ impl<'a> LoweringCtx<'a> {
         for child in children {
             match child {
                 JsxChild::Text { value, span } => {
-                    // Trim whitespace-only text nodes (React convention)
+                    // Preserve inline spaces while removing multiline indentation.
                     let trimmed = trim_jsx_text(value);
                     if trimmed.is_empty() {
                         self.emit_diagnostic(
@@ -1123,45 +1123,26 @@ impl<'a> LoweringCtx<'a> {
 // JSX Text Trimming (React whitespace rules)
 // ---------------------------------------------------------------------------
 
-/// Trim JSX text content following React's whitespace rules:
-/// - Remove leading/trailing whitespace lines entirely
-/// - Collapse internal whitespace sequences to single spaces
-/// - Preserve intentional text content
+/// Normalize JSX text without removing intentional inline spacing.
+/// Tabs become spaces; only spaces touching a line boundary are trimmed.
+/// Empty indentation lines disappear and remaining lines join with one space.
 fn trim_jsx_text(text: &str) -> String {
-    let lines: Vec<&str> = text.lines().collect();
-    if lines.is_empty() {
-        return String::new();
-    }
-
-    // Single-line: trim both ends; if only whitespace, empty
-    if lines.len() == 1 {
-        let trimmed = lines[0].trim();
-        return trimmed.to_string();
-    }
-
-    let mut result_parts: Vec<String> = Vec::new();
-    for (i, line) in lines.iter().enumerate() {
-        let mut trimmed = line.to_string();
-
-        // Trim leading whitespace on all lines except the first
-        if i > 0 {
-            trimmed = trimmed.trim_start().to_string();
+    // Splitting CRLF into two boundaries adds only an empty line, which is
+    // discarded below. Unlike str::lines, split retains the final empty line.
+    let lines: Vec<&str> = text.split(['\r', '\n']).collect();
+    let mut result_parts = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        let mut normalized = line.replace('\t', " ");
+        if index > 0 {
+            normalized = normalized.trim_start_matches(' ').to_string();
         }
-
-        // Trim trailing whitespace on all lines except the last
-        if i < lines.len() - 1 {
-            trimmed = trimmed.trim_end().to_string();
+        if index + 1 < lines.len() {
+            normalized = normalized.trim_end_matches(' ').to_string();
         }
-
-        if !trimmed.is_empty() {
-            result_parts.push(trimmed);
+        if !normalized.is_empty() {
+            result_parts.push(normalized);
         }
     }
-
-    if result_parts.is_empty() {
-        return String::new();
-    }
-
     result_parts.join(" ")
 }
 
@@ -2276,7 +2257,7 @@ mod tests {
 
     #[test]
     fn test_trim_jsx_text_whitespace_only() {
-        assert_eq!(trim_jsx_text("   "), "");
+        assert_eq!(trim_jsx_text("   "), "   ");
         assert_eq!(trim_jsx_text("\n  \n"), "");
     }
 
@@ -2288,6 +2269,57 @@ mod tests {
     #[test]
     fn test_trim_jsx_text_multiline() {
         assert_eq!(trim_jsx_text("Hello\n  World"), "Hello World");
+    }
+
+    #[test]
+    fn test_jsx_text_preserves_inline_and_unicode_spacing() {
+        for (source, expected) in [
+            (" Hello  world ", " Hello  world "),
+            ("\tHello\t", " Hello "),
+            (" a \n b ", " a b "),
+            (" a \r\n b ", " a b "),
+            (" a \r b ", " a b "),
+            (" hello \n", " hello"),
+            ("\n hello ", "hello "),
+            ("\n \u{a0}\n", "\u{a0}"),
+        ] {
+            assert_eq!(trim_jsx_text(source), expected, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn test_text_around_nested_elements_and_expressions_keeps_separators() {
+        let parsed = crate::jsx_tsx_parser::parse_jsx(
+            "<p>Hello <b>world</b> {name} !</p>",
+            &crate::jsx_tsx_parser::JsxParserConfig::default(),
+        )
+        .expect("mixed children parse");
+        let lowered = lower_parse_result(&parsed, &classic_config()).expect("mixed children lower");
+        assert_eq!(lowered.element.children.len(), 5);
+        for (index, expected) in [(0, "Hello "), (2, " "), (4, " !")] {
+            assert!(matches!(
+                &lowered.element.children[index],
+                LoweredChild::Text { value, .. } if value == expected
+            ));
+        }
+    }
+
+    #[test]
+    fn test_lowercase_member_names_lower_to_references() {
+        let parsed = crate::jsx_tsx_parser::parse_jsx(
+            "<ui.controls.Button />",
+            &crate::jsx_tsx_parser::JsxParserConfig::default(),
+        )
+        .expect("lowercase member name parses");
+        for config in [classic_config(), automatic_config()] {
+            let lowered = lower_parse_result(&parsed, &config).expect("member expression lowers");
+            assert_eq!(
+                lowered.element.element_type,
+                ElementType::Component {
+                    name: "ui.controls.Button".to_string(),
+                }
+            );
+        }
     }
 
     #[test]

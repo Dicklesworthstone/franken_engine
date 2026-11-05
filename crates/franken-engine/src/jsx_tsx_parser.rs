@@ -195,13 +195,12 @@ impl JsxElementName {
         }
     }
 
-    /// Whether this name starts with an uppercase letter (component vs intrinsic).
+    /// Whether this name denotes a component reference instead of an intrinsic.
+    /// Member expressions always resolve through JavaScript, including `ui.Button`.
     pub fn is_component(&self) -> bool {
         match self {
             Self::Identifier { name, .. } => name.starts_with(|c: char| c.is_ascii_uppercase()),
-            Self::MemberExpression { segments, .. } => segments
-                .first()
-                .is_some_and(|s| s.starts_with(|c: char| c.is_ascii_uppercase())),
+            Self::MemberExpression { segments, .. } => !segments.is_empty(),
             Self::NamespacedName { .. } => false,
         }
     }
@@ -512,10 +511,12 @@ pub struct JsxParseResult {
 // Core Parsing
 // ---------------------------------------------------------------------------
 
-/// Parse a JSX source fragment into typed AST nodes.
+/// Parse one complete JSX expression into typed AST nodes.
 ///
 /// Returns a fail-closed error if the input contains malformed or unsupported
-/// JSX syntax. Every valid construct produces a typed node with a stable span.
+/// JSX syntax or non-whitespace after the root expression. Surrounding JavaScript
+/// statements are outside this fragment API. Every valid construct produces a
+/// typed node with a stable span.
 pub fn parse_jsx(source: &str, config: &JsxParserConfig) -> Result<JsxParseResult, JsxParseError> {
     let trimmed = source.trim();
     if trimmed.is_empty() {
@@ -527,6 +528,18 @@ pub fn parse_jsx(source: &str, config: &JsxParserConfig) -> Result<JsxParseResul
     let mut cursor = Cursor::new(trimmed);
 
     let node = parse_jsx_node(&mut cursor, config, 0, &mut diagnostics, &mut families_used)?;
+
+    cursor.skip_whitespace();
+    if !cursor.at_end() {
+        let start = cursor.span_start();
+        cursor.advance();
+        diagnostics.push(JsxDiagnostic {
+            code: JsxDiagnosticCode::UnsupportedJsxSyntax,
+            severity: JsxDiagnosticSeverity::Error,
+            message: "Expected one JSX expression; trailing input is not supported".to_string(),
+            span: Some(cursor.make_span(start)),
+        });
+    }
 
     if !diagnostics
         .iter()
@@ -570,8 +583,10 @@ impl<'a> Cursor<'a> {
     }
 
     fn peek_str(&self, n: usize) -> &str {
-        let end = (self.pos + n).min(self.source.len());
-        &self.source[self.pos..end]
+        let end = self.pos.saturating_add(n).min(self.source.len());
+        // These probes match ASCII syntax. A byte count inside a Unicode
+        // scalar cannot match that syntax and must not panic on ordinary text.
+        self.source.get(self.pos..end).unwrap_or_default()
     }
 
     fn advance(&mut self) -> Option<char> {
@@ -1820,6 +1835,56 @@ mod tests {
             span: SourceSpan::new(0, 3, 1, 1, 1, 4),
         };
         assert!(name.is_component());
+    }
+
+    #[test]
+    fn test_lowercase_member_names_are_component_references() {
+        for name in ["ui.Button", "ui.controls.button", "this.Panel"] {
+            let source = format!("<{name} />");
+            let result = parse_jsx(&source, &default_config())
+                .expect("member expressions are valid JSX names");
+            let JsxNode::Element(element) = result.node else {
+                panic!("expected element");
+            };
+            assert!(element.name.is_component(), "{name}");
+            assert_eq!(element.name.to_string_repr(), name);
+        }
+    }
+
+    #[test]
+    fn test_unicode_text_does_not_panic_in_ascii_syntax_probes() {
+        let result = parse_jsx("<p>é😀東京</p>", &default_config())
+            .expect("Unicode text is ordinary JSX content");
+        let JsxNode::Element(element) = result.node else {
+            panic!("expected element");
+        };
+        assert!(matches!(
+            element.children.as_slice(),
+            [JsxChild::Text { value, .. }] if value == "é😀東京"
+        ));
+    }
+
+    #[test]
+    fn test_root_expression_rejects_every_trailing_source_form() {
+        for source in [
+            "<div/>discarded()",
+            "<div/><span/>",
+            "<></>text",
+            "<div/>;",
+            "<div/> // trailing JavaScript",
+        ] {
+            let error = parse_jsx(source, &default_config())
+                .expect_err("an expression parser must not discard trailing code");
+            let JsxParseError::FailClosed { diagnostics } = error else {
+                panic!("expected fail-closed diagnostic for {source}");
+            };
+            assert!(diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == JsxDiagnosticCode::UnsupportedJsxSyntax
+                    && diagnostic.message.contains("trailing input")
+                    && diagnostic.span.is_some()
+            }));
+        }
+        assert!(parse_jsx(" \n<div/> \r\n\t", &default_config()).is_ok());
     }
 
     // --- Parsing: error cases ---

@@ -435,7 +435,7 @@ fn enrichment_element_name_is_component_member_expression_lower() {
         segments: vec!["ctx".into(), "provider".into()],
         span: span(0, 12),
     };
-    assert!(!name.is_component());
+    assert!(name.is_component());
 }
 
 #[test]

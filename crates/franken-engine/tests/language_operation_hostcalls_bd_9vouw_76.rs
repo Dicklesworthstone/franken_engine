@@ -19,7 +19,7 @@ use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterC
 use frankenengine_engine::capability::{
     RuntimeCapability, hostcall_registry_row, is_language_operation_tag,
 };
-use frankenengine_engine::ir_contract::{Ir0Module, WitnessEventKind};
+use frankenengine_engine::ir_contract::{Ir0Module, WitnessEvent, WitnessEventKind};
 use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
@@ -30,9 +30,14 @@ struct Run {
     capability_checked_events: usize,
     dispatched_events: usize,
     telemetry_records: usize,
+    witness_events: Vec<WitnessEvent>,
 }
 
 fn run(source: &str) -> Run {
+    run_with_capabilities(source, &[])
+}
+
+fn run_with_capabilities(source: &str, extra_capabilities: &[RuntimeCapability]) -> Run {
     let tree = CanonicalEs2020Parser
         .parse_with_options(
             ParserSource {
@@ -59,6 +64,9 @@ fn run(source: &str) -> Run {
     ]
     .into_iter()
     .collect();
+    config
+        .granted_capabilities
+        .extend(extra_capabilities.iter().cloned());
     let mut core = InterpreterCore::new(config, "ops");
     let result = core
         .execute(&module)
@@ -87,6 +95,7 @@ fn run(source: &str) -> Run {
             .filter(|event| event.kind == WitnessEventKind::HostcallDispatched)
             .count(),
         telemetry_records,
+        witness_events: result.witness_events,
     }
 }
 
@@ -228,4 +237,59 @@ fn language_operation_tags_need_no_authority() {
     ] {
         assert!(!is_language_operation_tag(tag), "{tag}");
     }
+}
+
+/// A long-lived interval has constant timer state and must also have a
+/// bounded IR4 transcript. Scheduling, clearing and the final log remain
+/// individual host effects; every callback still contributes to the seal.
+#[test]
+fn interval_callback_witness_is_bounded_and_commits_to_every_tick() {
+    let program = |ticks| {
+        format!(
+            "let count = 0; const timer = setInterval(() => {{ \
+             count += 1; if (count === {ticks}) {{ clearInterval(timer); console.log(count); }} \
+             }}, 1);"
+        )
+    };
+    let once = run_with_capabilities(&program(1), &[RuntimeCapability::Timer]);
+    let many = run_with_capabilities(&program(20_000), &[RuntimeCapability::Timer]);
+    assert_eq!(once.console, vec!["1"]);
+    assert_eq!(many.console, vec!["20000"]);
+    assert_eq!(many.decisions, once.decisions);
+    assert_eq!(
+        many.capability_checked_events,
+        once.capability_checked_events
+    );
+    assert_eq!(many.dispatched_events, once.dispatched_events);
+    assert_eq!(many.witness_events.len(), once.witness_events.len());
+    assert!(
+        serde_json::to_vec(&many.witness_events).unwrap().len() < 16_384,
+        "twenty thousand interval ticks must not retain twenty thousand witness rows"
+    );
+    let once_commitment = once.witness_events.last().unwrap();
+    let many_commitment = many.witness_events.last().unwrap();
+    assert_eq!(many_commitment.kind, WitnessEventKind::ExecutionCompleted);
+    assert_ne!(many_commitment.payload_hash, once_commitment.payload_hash);
+}
+
+/// Folding invocation markers must not fold the console effects in the
+/// callback body, or suppress delivery after the first tick.
+#[test]
+fn interval_callback_host_effects_remain_individually_recorded() {
+    let result = run_with_capabilities(
+        "let count = 0; const timer = setInterval(() => { \
+         count += 1; console.log(count); if (count === 3) clearInterval(timer); \
+         }, 1);",
+        &[RuntimeCapability::Timer],
+    );
+    assert_eq!(result.console, vec!["1", "2", "3"]);
+    assert_eq!(
+        result
+            .decisions
+            .iter()
+            .filter(|tag| tag.as_str() == "console:log")
+            .count(),
+        3,
+        "each real console effect must retain its own authority decision"
+    );
 }

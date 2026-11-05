@@ -15923,6 +15923,10 @@ pub struct InterpreterCore {
     tier_i_specialized_instructions_executed: u64,
     /// Witness events.
     witness_events: Vec<WitnessEvent>,
+    /// Ordered timer callback commitment (count, SHA-256), sealed into one
+    /// witness event at result handoff instead of retaining a row per tick
+    /// (bd-9vouw.76). Contains no guest references or dynamic allocation.
+    timer_callback_witness: Option<(u64, ContentHash)>,
     /// Hostcall decisions.
     hostcall_decisions: Vec<HostcallDecisionRecord>,
     /// Effect-free hostcall grants counted instead of recorded
@@ -17416,6 +17420,7 @@ impl InterpreterCore {
             tier_i_instructions_executed: 0,
             tier_i_specialized_instructions_executed: 0,
             witness_events: Vec::new(),
+            timer_callback_witness: None,
             hostcall_decisions: Vec::new(),
             folded_hostcall_decisions: 0,
             recorded_effect_free_grants: BTreeSet::new(),
@@ -37720,6 +37725,7 @@ impl InterpreterCore {
         requested_hook_action: Option<HookAction>,
         trace_handoff: TraceHandoff,
     ) -> ExecutionResult {
+        self.seal_timer_callback_witness();
         // Finalise the nondeterminism trace at the end-of-execution virtual
         // timestamp so the exposed copy is replay-ready: `validate_for_replay`
         // and `ReplayEngine` both require a finalised trace.
@@ -76861,13 +76867,10 @@ impl InterpreterCore {
         args: Vec<Value>,
         label: Label,
     ) -> Result<Value, InterpreterError> {
-        use crate::ir_contract::WitnessEventKind;
-
-        // Witness marker for deterministic replay: this timer macrotask fired.
-        self.emit_witness(
-            WitnessEventKind::ExecutionCompleted,
-            Some(&format!("timer_callback_{callback}")),
-        );
+        // Bind every fired callback to the replay witness without retaining
+        // an event per interval tick (bd-9vouw.76). Host effects performed by
+        // the callback still emit their complete individual records.
+        self.record_timer_callback_witness(&callback)?;
 
         // Run the callback body for real (bd-zqb1x): `setTimeout(() => { ... })`
         // must execute its closure, not merely emit a witness. Timer callbacks
@@ -118866,6 +118869,63 @@ impl InterpreterCore {
 
     // -- Witness emission --------------------------------------------------
 
+    /// Commit to timer invocation order, exact callable identity, and its
+    /// position among retained witness events. Typed serialization includes
+    /// builtin bindings/module identity that Display omits. Streaming into
+    /// SHA-256 keeps both retained and temporary storage constant-sized.
+    fn record_timer_callback_witness(&mut self, callback: &Value) -> Result<(), InterpreterError> {
+        struct HashWriter<'a>(&'a mut Sha256);
+
+        impl Write for HashWriter<'_> {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                Digest::update(self.0, bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let (count, previous) = self
+            .timer_callback_witness
+            .unwrap_or((0, ContentHash::default()));
+        let count = count
+            .checked_add(1)
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "timer callback witness count overflow".to_string(),
+            })?;
+        let mut hasher = Sha256::new();
+        hasher.update(b"franken-engine.timer-callback-chain.v1\0");
+        hasher.update(previous.as_bytes());
+        hasher.update(count.to_be_bytes());
+        hasher.update(self.witness_seq.to_be_bytes());
+        hasher.update((self.ip as u64).to_be_bytes());
+        hasher.update(self.instructions_executed.to_be_bytes());
+        serde_json::to_writer(HashWriter(&mut hasher), callback).map_err(|error| {
+            InterpreterError::InternalError {
+                details: format!("timer callback witness serialization failed: {error}"),
+            }
+        })?;
+        self.timer_callback_witness =
+            Some((count, ContentHash::from_bytes(hasher.finalize().into())));
+        Ok(())
+    }
+
+    /// The existing timer completion marker carries one domain-separated
+    /// aggregate instead of a row for every callback. The IR4 seal and strict
+    /// re-execution bind this payload just like every retained witness event.
+    /// Taking it here also prevents a successful reused core from carrying a
+    /// previous execution's callbacks into its next result.
+    fn seal_timer_callback_witness(&mut self) {
+        if let Some((count, digest)) = self.timer_callback_witness.take() {
+            self.emit_witness(
+                WitnessEventKind::ExecutionCompleted,
+                Some(&format!("timer_callbacks_v1:{count}:{}", digest.to_hex())),
+            );
+        }
+    }
+
     fn emit_witness(&mut self, kind: WitnessEventKind, detail: Option<&str>) {
         let payload = detail.unwrap_or("").as_bytes();
         self.witness_events.push(WitnessEvent {
@@ -160479,6 +160539,122 @@ mod event_loop_timer_microtask_tests {
     }
 
     #[test]
+    fn timer_callback_commitment_binds_identity_order_and_position_bd_9vouw_76() {
+        fn commitment(callbacks: &[Value], sequence: u64, ip: usize, tick: u64) -> ContentHash {
+            let mut core = test_core("timer-witness-inputs");
+            core.witness_seq = sequence;
+            core.ip = ip;
+            core.instructions_executed = tick;
+            for callback in callbacks {
+                core.record_timer_callback_witness(callback).unwrap();
+            }
+            core.timer_callback_witness.unwrap().1
+        }
+
+        let first = Value::Closure(1);
+        let second = Value::Closure(2);
+        let baseline = commitment(&[first.clone(), second.clone()], 3, 4, 5);
+        assert_eq!(
+            baseline,
+            commitment(&[first.clone(), second.clone()], 3, 4, 5)
+        );
+        assert_ne!(
+            baseline,
+            commitment(&[second.clone(), first.clone()], 3, 4, 5)
+        );
+        assert_ne!(baseline, commitment(std::slice::from_ref(&first), 3, 4, 5));
+        assert_ne!(
+            baseline,
+            commitment(&[first.clone(), second.clone()], 4, 4, 5)
+        );
+        assert_ne!(
+            baseline,
+            commitment(&[first.clone(), second.clone()], 3, 5, 5)
+        );
+        assert_ne!(baseline, commitment(&[first, second], 3, 4, 6));
+        assert_ne!(
+            commitment(&[Value::Function(1)], 0, 0, 0),
+            commitment(&[Value::Closure(1)], 0, 0, 0),
+            "callable kinds with the same numeric handle must remain distinct"
+        );
+        assert_ne!(
+            commitment(
+                &[Value::BuiltinFunction(BuiltinFunction::require("a.js"))],
+                0,
+                0,
+                0
+            ),
+            commitment(
+                &[Value::BuiltinFunction(BuiltinFunction::require("b.js"))],
+                0,
+                0,
+                0
+            ),
+            "the commitment must include builtin module identity, not just its display name"
+        );
+    }
+
+    #[test]
+    fn timer_callback_commitment_preserves_effects_denials_and_reuse_bd_9vouw_76() {
+        let mut core = test_core("timer-witness-handoff");
+        for _ in 0..20_000 {
+            core.record_timer_callback_witness(&Value::Closure(1))
+                .unwrap();
+        }
+        assert!(
+            core.witness_events.is_empty(),
+            "ticks retain no per-callback rows"
+        );
+        assert_eq!(core.timer_callback_witness.unwrap().0, 20_000);
+
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::Console);
+        for index in [1, 2] {
+            assert!(check_hostcall_capability_gate(&mut core, "console:log", index).unwrap());
+        }
+        for index in [3, 4] {
+            assert!(matches!(
+                check_hostcall_capability_gate(&mut core, "fs:read", index),
+                Err(InterpreterError::CapabilityDenied { .. })
+            ));
+        }
+        let effects_and_denials = core.witness_events.clone();
+        let decisions = core.hostcall_decisions.clone();
+        assert_eq!(decisions.len(), 4);
+        assert!(decisions[..2].iter().all(|decision| decision.allowed));
+        assert!(decisions[2..].iter().all(|decision| !decision.allowed));
+
+        let result = core.take_execution_result(
+            LabeledReturn {
+                value: Value::Undefined,
+                label: Label::Public,
+            },
+            None,
+        );
+        assert_eq!(
+            &result.witness_events[..effects_and_denials.len()],
+            effects_and_denials.as_slice(),
+            "folding timer callbacks must preserve every security witness verbatim"
+        );
+        assert_eq!(result.witness_events.len(), effects_and_denials.len() + 1);
+        assert_eq!(result.hostcall_decisions, decisions);
+        assert!(core.timer_callback_witness.is_none());
+
+        let next = core.take_execution_result(
+            LabeledReturn {
+                value: Value::Undefined,
+                label: Label::Public,
+            },
+            None,
+        );
+        assert!(
+            next.witness_events.is_empty(),
+            "a handoff consumes the aggregate once"
+        );
+    }
+
+    #[test]
     fn timer_ordering() {
         // Shorter-delay timers must fire before longer-delay timers, even when
         // scheduled in the opposite order. Observed via the deterministic
@@ -175776,6 +175952,7 @@ mod tests {
             .iter()
             .filter(|event| event.kind == WitnessEventKind::ExecutionCompleted)
             .count();
+        let callback_witness_before = core.timer_callback_witness;
 
         token.cancel();
         assert_eq!(
@@ -175785,6 +175962,7 @@ mod tests {
         assert!(core.active_timers.is_empty());
         assert!(core.pending_timer_tasks.is_empty());
         assert!(!core.event_loop.has_pending_work());
+        assert_eq!(core.timer_callback_witness, callback_witness_before);
         assert_eq!(
             core.witness_events
                 .iter()
@@ -175797,6 +175975,7 @@ mod tests {
         token.reset();
         core.run_event_loop_until_idle_with_module(None)
             .expect("revoked timer cannot reappear after token reset");
+        assert_eq!(core.timer_callback_witness, callback_witness_before);
         assert_eq!(
             core.witness_events
                 .iter()

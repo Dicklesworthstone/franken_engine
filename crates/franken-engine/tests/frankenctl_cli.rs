@@ -2457,6 +2457,103 @@ fn frankenctl_run_report_reexecutes_javascript_and_detects_source_and_policy_div
     let _ = fs::remove_file(changed_policy_report_path);
 }
 
+/// Timer callbacks are folded into a bounded commitment, but the signed
+/// witness and strict re-execution must still bind that complete commitment.
+#[test]
+fn frankenctl_replay_rejects_forged_or_removed_timer_commitment_bd_9vouw_76() {
+    use frankenengine_engine::ir_contract::Ir4Module;
+
+    let source_path = temp_path("frankenctl_timer_witness_source", "js");
+    let report_path = temp_path("frankenctl_timer_witness_report", "json");
+    write_source(
+        &source_path,
+        "let count = 0; const timer = setInterval(() => { \
+         count += 1; if (count === 32) { clearInterval(timer); console.log(count); } \
+         }, 1);",
+    );
+    let run = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .arg("run")
+        .arg("--input")
+        .arg(&source_path)
+        .args(["--extension-id", "timer-witness-reexecution", "--out"])
+        .arg(&report_path)
+        .output()
+        .expect("timer run should execute");
+    assert!(
+        run.status.success(),
+        "timer run failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(&report_path).unwrap()).unwrap();
+    let witness: Ir4Module = serde_json::from_value(report["ir4_witness"].clone()).unwrap();
+    assert_ne!(
+        witness.events.last().unwrap().payload_hash,
+        ContentHash::compute(b""),
+        "a completed timer run must seal its nonempty callback commitment"
+    );
+
+    let replay = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args(["replay", "run", "--trace"])
+        .arg(&report_path)
+        .args(["--mode", "strict"])
+        .output()
+        .expect("timer replay should execute");
+    assert!(
+        replay.status.success(),
+        "timer replay failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&replay.stdout),
+        String::from_utf8_lossy(&replay.stderr)
+    );
+    assert_eq!(
+        parse_stdout_json(&replay)["unsigned_execution_content_match"].as_bool(),
+        Some(true)
+    );
+
+    for mutation in ["forged", "removed"] {
+        let mut changed_witness = witness.clone();
+        if mutation == "forged" {
+            changed_witness.events.last_mut().unwrap().payload_hash =
+                ContentHash::compute(b"forged timer callback commitment");
+        } else {
+            changed_witness.events.pop().unwrap();
+        }
+        // Change both copies and recompute their hashes: detecting a mismatch
+        // between the report and its replay input would not prove replay
+        // validates the folded callbacks. Actual re-execution must disagree.
+        let encoded = serde_json::to_value(&changed_witness).unwrap();
+        let hash = serde_json::Value::String(changed_witness.content_hash().to_hex());
+        let mut tampered = report.clone();
+        tampered["ir4_witness"] = encoded.clone();
+        tampered["ir4_witness_hash"] = hash.clone();
+        tampered["replay_input"]["unsigned_execution_content"]["ir4_witness"] = encoded;
+        tampered["replay_input"]["unsigned_execution_content"]["ir4_witness_hash"] = hash;
+
+        let tampered_path = temp_path(&format!("frankenctl_timer_witness_{mutation}"), "json");
+        fs::write(&tampered_path, serde_json::to_vec(&tampered).unwrap()).unwrap();
+        let replay = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+            .args(["replay", "run", "--trace"])
+            .arg(&tampered_path)
+            .args(["--mode", "strict"])
+            .output()
+            .expect("tampered timer replay should execute");
+        assert!(
+            !replay.status.success(),
+            "{mutation} timer commitment replayed"
+        );
+        assert!(
+            String::from_utf8_lossy(&replay.stderr)
+                .contains("re-executed unsigned execution content differs"),
+            "tamper must be rejected by live re-execution: {}",
+            String::from_utf8_lossy(&replay.stderr)
+        );
+        let _ = fs::remove_file(tampered_path);
+    }
+    let _ = fs::remove_file(source_path);
+    let _ = fs::remove_file(report_path);
+}
+
 #[test]
 fn frankenctl_replay_trace_without_compare_is_not_a_run_report() {
     let trace_path = temp_path("frankenctl_replay_validate_requires_compare", "json");

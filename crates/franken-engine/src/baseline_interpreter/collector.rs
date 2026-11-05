@@ -1775,6 +1775,7 @@ impl InterpreterCore {
             // Evidence and telemetry records name ids but never dereference
             // them.
             witness_events: _,
+            timer_callback_witness: _,
             hostcall_decisions: _,
             folded_hostcall_decisions: _,
             recorded_effect_free_grants: _,

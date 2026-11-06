@@ -31,10 +31,14 @@ fn scratch_dir() -> PathBuf {
 }
 
 fn run_report(dir: &Path) -> PathBuf {
+    run_report_for_source(dir, "const answer = 40 + 2;\nconsole.log(answer);\n")
+}
+
+fn run_report_for_source(dir: &Path, source: &str) -> PathBuf {
     let input = dir.join("program.js");
     let report = dir.join("program.report.json");
     let trust = dir.join("public-trust.json");
-    fs::write(&input, "const answer = 40 + 2;\nconsole.log(answer);\n").expect("program");
+    fs::write(&input, source).expect("program");
     let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
         .args([
             "run",
@@ -132,6 +136,61 @@ fn untampered_report_replays_with_matching_decisions() {
     assert_eq!(summary["divergence_count"], 0);
     assert_eq!(summary["evidence_authenticated"], false);
     assert!(summary.get("evidence_trust_snapshot_digest").is_none());
+}
+
+#[test]
+fn bounded_microtask_commitment_replays_and_rejects_consistent_tampering() {
+    use frankenengine_engine::hash_tiers::ContentHash;
+    use frankenengine_engine::ir_contract::{Ir4Module, WitnessEventKind};
+
+    let dir = scratch_dir();
+    let report = run_report_for_source(
+        &dir,
+        "let count = 0; for (let i = 0; i < 256; i++) { \
+         queueMicrotask(() => { count += 1; }); } \
+         queueMicrotask(() => console.log(count));",
+    );
+    assert!(
+        fs::metadata(&report).unwrap().len() < 256_000,
+        "the report must not grow a grant/dispatch pair for every microtask"
+    );
+    let output = replay(&report, "strict");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("replay summary");
+    assert_eq!(summary["complete"], true);
+    assert_eq!(summary["unsigned_execution_content_match"], true);
+    assert_eq!(summary["divergence_count"], 0);
+
+    // Recompute the forged hash and edit both report copies. Their internal
+    // consistency must not substitute for independently re-executing the
+    // original source and recomputing its ordered enqueue commitment.
+    let forged = tamper(&report, |value| {
+        let mut witness: Ir4Module = serde_json::from_value(value["ir4_witness"].clone()).unwrap();
+        let aggregate = witness.events.last_mut().expect("microtask commitment");
+        assert_eq!(aggregate.kind, WitnessEventKind::ExecutionCompleted);
+        aggregate.payload_hash = ContentHash::compute(b"forged microtask enqueue order");
+        let hash = witness.content_hash().to_hex();
+        let witness = serde_json::to_value(witness).unwrap();
+        value["ir4_witness"] = witness.clone();
+        value["ir4_witness_hash"] = hash.clone().into();
+        value["replay_input"]["unsigned_execution_content"]["ir4_witness"] = witness;
+        value["replay_input"]["unsigned_execution_content"]["ir4_witness_hash"] = hash.into();
+    });
+    let output = replay(&forged, "strict");
+    assert!(
+        !output.status.success(),
+        "a forged enqueue commitment must not replay"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("re-executed unsigned execution content differs"),
+        "{stderr}"
+    );
 }
 
 #[test]

@@ -2057,14 +2057,17 @@ fn generated_code_fault_code(err: &InterpreterError) -> &'static str {
     }
 }
 
-/// Whether a hostcall has no host effect: its registry authority is
-/// `Builtin` (a computation over guest values) or none. Its grant carries
-/// nothing beyond the decision itself, so repeats of it can be folded.
+/// Whether a hostcall has no external host effect: its registry authority is
+/// `Builtin` (a computation over guest values) or none, or it enqueues a
+/// deterministic guest microtask. Repeated grants can be counted instead of
+/// retained. Microtask enqueues additionally commit their exact callable and
+/// execution position to the IR4 witness; Timer authority remains mandatory.
 fn hostcall_is_effect_free(tag: &str) -> bool {
     tag != crate::capability::UTIL_PROCESS_ARGV_CAPABILITY
         && tag != crate::capability::UTIL_PROCESS_EXEC_ARGV_CAPABILITY
-        && hostcall_registry_row(tag)
-            .is_some_and(|row| matches!(row.authority, None | Some(RuntimeCapability::Builtin)))
+        && (tag == "builtin:QueueMicrotask"
+            || hostcall_registry_row(tag)
+                .is_some_and(|row| matches!(row.authority, None | Some(RuntimeCapability::Builtin))))
 }
 
 /// Shared capability gate logic for both Call and HostCall instructions.
@@ -13399,9 +13402,10 @@ pub struct ExecutionResult {
     pub witness_events: Vec<WitnessEvent>,
     /// Hostcall decisions recorded.
     pub hostcall_decisions: Vec<HostcallDecisionRecord>,
-    /// Grants of effect-free hostcalls (registry authority `Builtin` or none)
-    /// that repeated their tag's last recorded grant and were counted here
-    /// instead of recorded (bd-9vouw.83).
+    /// Grants of effect-free hostcalls (registry authority `Builtin` or none,
+    /// plus deterministic guest microtask enqueues) that repeated their tag's
+    /// last recorded grant and were counted here instead of recorded
+    /// (bd-9vouw.83, bd-9vouw.76).
     pub folded_hostcall_decisions: u64,
     /// Structured events emitted.
     pub events: Vec<InterpreterEvent>,
@@ -15927,6 +15931,10 @@ pub struct InterpreterCore {
     /// witness event at result handoff instead of retaining a row per tick
     /// (bd-9vouw.76). Contains no guest references or dynamic allocation.
     timer_callback_witness: Option<(u64, ContentHash)>,
+    /// Ordered commitment to successful guest microtask enqueues. This keeps
+    /// queueMicrotask's IR4 records bounded while every enqueue still checks
+    /// live Timer authority and every denial remains individually recorded.
+    microtask_enqueue_witness: Option<(u64, ContentHash)>,
     /// Hostcall decisions.
     hostcall_decisions: Vec<HostcallDecisionRecord>,
     /// Effect-free hostcall grants counted instead of recorded
@@ -17421,6 +17429,7 @@ impl InterpreterCore {
             tier_i_specialized_instructions_executed: 0,
             witness_events: Vec::new(),
             timer_callback_witness: None,
+            microtask_enqueue_witness: None,
             hostcall_decisions: Vec::new(),
             folded_hostcall_decisions: 0,
             recorded_effect_free_grants: BTreeSet::new(),
@@ -37726,6 +37735,7 @@ impl InterpreterCore {
         trace_handoff: TraceHandoff,
     ) -> ExecutionResult {
         self.seal_timer_callback_witness();
+        self.seal_microtask_enqueue_witness();
         // Finalise the nondeterminism trace at the end-of-execution virtual
         // timestamp so the exposed copy is replay-ready: `validate_for_replay`
         // and `ReplayEngine` both require a finalised trace.
@@ -77407,6 +77417,15 @@ impl InterpreterCore {
                 got: callback.type_name().to_string(),
             });
         };
+        // Hash only the callable identity (closure/function handle or typed
+        // builtin binding), never its captured heap graph. Prepare the next
+        // commitment before changing queue ownership and publish it only when
+        // the enqueue succeeds, so rejected attempts do not claim delivery.
+        let next_witness = self.callback_witness_step(
+            callback,
+            self.microtask_enqueue_witness,
+            b"franken-engine.microtask-enqueue-chain.v1\0",
+        )?;
         let previous_promise_bytes = self.promise_runtime_memory_bytes();
         let task = crate::promise_model::Microtask::QueuedCallback {
             handler,
@@ -77431,6 +77450,7 @@ impl InterpreterCore {
         self.apply_memory_component_delta(previous_promise_bytes, next_promise_bytes)?;
         self.event_loop.microtasks.enqueue(task);
         self.settle_projected_promise_bytes(next_promise_bytes)?;
+        self.microtask_enqueue_witness = Some(next_witness);
         Ok(Value::Undefined)
     }
 
@@ -118891,11 +118911,17 @@ impl InterpreterCore {
 
     // -- Witness emission --------------------------------------------------
 
-    /// Commit to timer invocation order, exact callable identity, and its
+    /// Commit to callback order, exact callable identity, and its
     /// position among retained witness events. Typed serialization includes
     /// builtin bindings/module identity that Display omits. Streaming into
-    /// SHA-256 keeps both retained and temporary storage constant-sized.
-    fn record_timer_callback_witness(&mut self, callback: &Value) -> Result<(), InterpreterError> {
+    /// SHA-256 keeps both retained and temporary storage constant-sized; a
+    /// closure/function is its handle, not a traversal of its captured graph.
+    fn callback_witness_step(
+        &self,
+        callback: &Value,
+        previous: Option<(u64, ContentHash)>,
+        domain: &[u8],
+    ) -> Result<(u64, ContentHash), InterpreterError> {
         struct HashWriter<'a>(&'a mut Sha256);
 
         impl Write for HashWriter<'_> {
@@ -118909,16 +118935,14 @@ impl InterpreterCore {
             }
         }
 
-        let (count, previous) = self
-            .timer_callback_witness
-            .unwrap_or((0, ContentHash::default()));
+        let (count, previous) = previous.unwrap_or((0, ContentHash::default()));
         let count = count
             .checked_add(1)
             .ok_or_else(|| InterpreterError::InternalError {
-                details: "timer callback witness count overflow".to_string(),
+                details: "callback witness count overflow".to_string(),
             })?;
         let mut hasher = Sha256::new();
-        hasher.update(b"franken-engine.timer-callback-chain.v1\0");
+        hasher.update(domain);
         hasher.update(previous.as_bytes());
         hasher.update(count.to_be_bytes());
         hasher.update(self.witness_seq.to_be_bytes());
@@ -118926,11 +118950,18 @@ impl InterpreterCore {
         hasher.update(self.instructions_executed.to_be_bytes());
         serde_json::to_writer(HashWriter(&mut hasher), callback).map_err(|error| {
             InterpreterError::InternalError {
-                details: format!("timer callback witness serialization failed: {error}"),
+                details: format!("callback witness serialization failed: {error}"),
             }
         })?;
-        self.timer_callback_witness =
-            Some((count, ContentHash::from_bytes(hasher.finalize().into())));
+        Ok((count, ContentHash::from_bytes(hasher.finalize().into())))
+    }
+
+    fn record_timer_callback_witness(&mut self, callback: &Value) -> Result<(), InterpreterError> {
+        self.timer_callback_witness = Some(self.callback_witness_step(
+            callback,
+            self.timer_callback_witness,
+            b"franken-engine.timer-callback-chain.v1\0",
+        )?);
         Ok(())
     }
 
@@ -118944,6 +118975,21 @@ impl InterpreterCore {
             self.emit_witness(
                 WitnessEventKind::ExecutionCompleted,
                 Some(&format!("timer_callbacks_v1:{count}:{}", digest.to_hex())),
+            );
+        }
+    }
+
+    /// Preserve every successful enqueue's identity and order without keeping
+    /// a grant/dispatch pair for every microtask. Strict replay recomputes this
+    /// domain-separated payload through the same IR4 sealing path as timers.
+    fn seal_microtask_enqueue_witness(&mut self) {
+        if let Some((count, digest)) = self.microtask_enqueue_witness.take() {
+            self.emit_witness(
+                WitnessEventKind::ExecutionCompleted,
+                Some(&format!(
+                    "microtask_enqueues_v1:{count}:{}",
+                    digest.to_hex()
+                )),
             );
         }
     }
@@ -160779,6 +160825,181 @@ mod event_loop_timer_microtask_tests {
             next.witness_events.is_empty(),
             "a handoff consumes the aggregate once"
         );
+    }
+
+    #[test]
+    fn microtask_grant_folding_preserves_live_authority_and_hooks_bd_9vouw_76() {
+        use std::sync::Mutex;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        #[derive(Default)]
+        struct MicrotaskHook {
+            decisions: Mutex<Vec<bool>>,
+            refuse: AtomicBool,
+        }
+
+        impl InterpreterHook for MicrotaskHook {
+            fn pre_property_access(
+                &self,
+                _ctx: &HookContext,
+                _target: &ObjectRef,
+                _key: &PropertyKey,
+            ) -> HookAction {
+                HookAction::Allow
+            }
+            fn pre_call(
+                &self,
+                _ctx: &HookContext,
+                _callee: &FunctionRef,
+                _args: &[Value],
+            ) -> HookAction {
+                HookAction::Allow
+            }
+            fn pre_allocation(
+                &self,
+                _ctx: &HookContext,
+                _kind: AllocKind,
+                _size_hint: usize,
+            ) -> HookAction {
+                HookAction::Allow
+            }
+            fn pre_import(&self, _ctx: &HookContext, _specifier: &str) -> HookAction {
+                HookAction::Allow
+            }
+            fn pre_hostcall(
+                &self,
+                _ctx: &HookContext,
+                capability: &str,
+                allowed: bool,
+            ) -> HookAction {
+                assert_eq!(capability, "builtin:QueueMicrotask");
+                self.decisions.lock().unwrap().push(allowed);
+                if self.refuse.load(Ordering::SeqCst) {
+                    HookAction::Terminate("microtask policy revoked".to_string())
+                } else {
+                    HookAction::Allow
+                }
+            }
+        }
+
+        let mut core = test_core("microtask-live-grant");
+        let hook = Arc::new(MicrotaskHook::default());
+        core.set_hook(hook.clone());
+        let tag = "builtin:QueueMicrotask";
+        assert_eq!(
+            hostcall_registry_row(tag).unwrap().authority,
+            Some(RuntimeCapability::Timer)
+        );
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::Timer);
+        assert!(check_hostcall_capability_gate(&mut core, tag, 1).unwrap());
+        assert!(!check_hostcall_capability_gate(&mut core, tag, 2).unwrap());
+        core.config
+            .granted_capabilities
+            .remove(&RuntimeCapability::Timer);
+        for instruction in [3, 4] {
+            assert!(matches!(
+                check_hostcall_capability_gate(&mut core, tag, instruction),
+                Err(InterpreterError::CapabilityDenied { .. })
+            ));
+        }
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::Timer);
+        assert!(check_hostcall_capability_gate(&mut core, tag, 5).unwrap());
+        assert!(!check_hostcall_capability_gate(&mut core, tag, 6).unwrap());
+        hook.refuse.store(true, Ordering::SeqCst);
+        assert!(matches!(
+            check_hostcall_capability_gate(&mut core, tag, 7),
+            Err(InterpreterError::ContainmentActionRequested { .. })
+        ));
+        assert_eq!(
+            *hook.decisions.lock().unwrap(),
+            [true, true, false, false, true, true, true],
+            "folding evidence must never cache the live authority or hook decision"
+        );
+        assert_eq!(core.folded_hostcall_decisions, 2);
+        assert_eq!(
+            core.hostcall_decisions
+                .iter()
+                .map(|decision| (decision.instruction_index, decision.allowed))
+                .collect::<Vec<_>>(),
+            [(1, true), (3, false), (4, false), (5, true)],
+            "every denial and the first re-grant must remain individually retained"
+        );
+    }
+
+    #[test]
+    fn microtask_commitment_only_records_success_and_is_consumed_once_bd_9vouw_76() {
+        let mut core = test_core("microtask-witness-handoff");
+        let callback = Value::Closure(push_empty_closure(&mut core, 0).0);
+        core.sync_estimated_memory_bytes().unwrap();
+        assert!(matches!(
+            core.queue_microtask_from_value(&Value::Int(1)),
+            Err(InterpreterError::TypeError { .. })
+        ));
+        assert!(core.microtask_enqueue_witness.is_none());
+        let budget = core.config.max_total_memory_bytes;
+        core.config.max_total_memory_bytes = 0;
+        assert!(matches!(
+            core.queue_microtask_from_value(&callback),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(core.microtask_enqueue_witness.is_none());
+        assert!(core.event_loop.microtasks.is_empty());
+        core.config.max_total_memory_bytes = budget;
+        core.queue_microtask_from_value(&callback).unwrap();
+        let (count, digest) = core.microtask_enqueue_witness.unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(core.event_loop.microtasks.pending_count(), 1);
+        let timer_digest = core
+            .callback_witness_step(&callback, None, b"franken-engine.timer-callback-chain.v1\0")
+            .unwrap()
+            .1;
+        assert_ne!(
+            digest, timer_digest,
+            "different callback operations are domain-separated"
+        );
+
+        let result = core.take_execution_result(
+            LabeledReturn {
+                value: Value::Undefined,
+                label: Label::Public,
+            },
+            None,
+        );
+        assert_eq!(result.witness_events.len(), 1);
+        assert_eq!(
+            result.witness_events[0].payload_hash,
+            ContentHash::compute(
+                format!("microtask_enqueues_v1:{count}:{}", digest.to_hex()).as_bytes()
+            )
+        );
+        assert!(core.microtask_enqueue_witness.is_none());
+        let next = core.take_execution_result(
+            LabeledReturn {
+                value: Value::Undefined,
+                label: Label::Public,
+            },
+            None,
+        );
+        assert!(next.witness_events.is_empty());
+
+        // The successful handoff also clears the first-grant set. A reused
+        // core records its next grant even when the same builtin is called.
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::Timer);
+        assert!(check_hostcall_capability_gate(&mut core, "builtin:QueueMicrotask", 1).unwrap());
+        core.take_execution_result(
+            LabeledReturn {
+                value: Value::Undefined,
+                label: Label::Public,
+            },
+            None,
+        );
+        assert!(check_hostcall_capability_gate(&mut core, "builtin:QueueMicrotask", 1).unwrap());
     }
 
     #[test]

@@ -11,6 +11,8 @@
 //! Effect-free builtins that do need authority (`JSON.stringify`,
 //! `Object.keys`, `parseInt`, `String.fromCharCode`) record their first
 //! grant per tag and count the repeats (bd-9vouw.83).
+//! Deterministic queueMicrotask enqueues retain Timer authority and commit
+//! exact callable order to a bounded SHA-256 witness (bd-9vouw.76).
 
 #![forbid(unsafe_code)]
 
@@ -292,4 +294,129 @@ fn interval_callback_host_effects_remain_individually_recorded() {
         3,
         "each real console effect must retain its own authority decision"
     );
+}
+
+/// Repeated queueMicrotask enqueues retain constant IR4 storage, while their
+/// callbacks all run and their decision total still accounts for every check.
+#[test]
+fn microtask_enqueue_witness_is_bounded_and_counts_every_grant() {
+    let program = |tasks| {
+        format!(
+            "let count = 0; for (let i = 0; i < {tasks}; i++) {{ \
+             queueMicrotask(() => {{ count += 1; }}); }} \
+             queueMicrotask(() => console.log(count));"
+        )
+    };
+    let once = run_with_capabilities(&program(1), &[RuntimeCapability::Timer]);
+    let many = run_with_capabilities(&program(20_000), &[RuntimeCapability::Timer]);
+    assert_eq!(once.console, vec!["1"]);
+    assert_eq!(many.console, vec!["20000"]);
+    assert_eq!(many.decisions, once.decisions);
+    assert_eq!(
+        many.capability_checked_events,
+        once.capability_checked_events
+    );
+    assert_eq!(many.dispatched_events, once.dispatched_events);
+    assert_eq!(many.witness_events.len(), once.witness_events.len());
+    assert_eq!(many.decision_count, once.decision_count + 19_999);
+    assert!(
+        serde_json::to_vec(&many.witness_events).unwrap().len() < 16_384,
+        "twenty thousand enqueues must not retain twenty thousand witness rows"
+    );
+    assert_ne!(
+        many.witness_events.last().unwrap().payload_hash,
+        once.witness_events.last().unwrap().payload_hash,
+        "the bounded commitment must still distinguish the number of enqueues"
+    );
+}
+
+#[test]
+fn microtask_commitment_binds_callable_order_even_when_outputs_match() {
+    let declarations = "function first() {} function second() {} ";
+    let ordered = format!("{declarations} queueMicrotask(first); queueMicrotask(second);");
+    let reversed = format!("{declarations} queueMicrotask(second); queueMicrotask(first);");
+    let repeated = format!("{declarations} queueMicrotask(first); queueMicrotask(first);");
+    let a = run_with_capabilities(&ordered, &[RuntimeCapability::Timer]);
+    let b = run_with_capabilities(&reversed, &[RuntimeCapability::Timer]);
+    let c = run_with_capabilities(&repeated, &[RuntimeCapability::Timer]);
+    assert!(a.console.is_empty() && b.console.is_empty() && c.console.is_empty());
+    assert_eq!(a.decision_count, b.decision_count);
+    assert_eq!(a.decision_count, c.decision_count);
+    let commitment = |run: &Run| run.witness_events.last().unwrap().payload_hash;
+    assert_ne!(commitment(&a), commitment(&b));
+    assert_ne!(commitment(&a), commitment(&c));
+    let again = run_with_capabilities(&ordered, &[RuntimeCapability::Timer]);
+    assert_eq!(a.witness_events, again.witness_events);
+}
+
+/// First-class references use the same enqueue core. Folding their scheduling
+/// evidence cannot suppress the real effects of any callback.
+#[test]
+fn first_class_microtask_callbacks_retain_individual_host_effects() {
+    let result = run_with_capabilities(
+        "const enqueue = queueMicrotask; \
+         for (let i = 0; i < 3; i++) enqueue(() => console.log(i));",
+        &[RuntimeCapability::Timer],
+    );
+    assert_eq!(result.console, vec!["0", "1", "2"]);
+    assert_eq!(
+        result
+            .decisions
+            .iter()
+            .filter(|tag| tag.as_str() == "console:log")
+            .count(),
+        3
+    );
+    assert_eq!(
+        result
+            .decisions
+            .iter()
+            .filter(|tag| tag.as_str() == "builtin:QueueMicrotask")
+            .count(),
+        1
+    );
+    assert_eq!(result.decision_count, 6);
+}
+
+#[test]
+fn nested_microtask_enqueues_survive_callback_snapshot_restore() {
+    let program = |tasks| {
+        format!(
+            "let count = 0; function step() {{ count += 1; \
+             if (count < {tasks}) queueMicrotask(step); else console.log(count); }} \
+             queueMicrotask(step);"
+        )
+    };
+    let once = run_with_capabilities(&program(1), &[RuntimeCapability::Timer]);
+    let many = run_with_capabilities(&program(2_000), &[RuntimeCapability::Timer]);
+    assert_eq!(many.console, vec!["2000"]);
+    assert_eq!(many.decision_count, once.decision_count + 1_999);
+    assert_eq!(many.witness_events.len(), once.witness_events.len());
+    assert_ne!(
+        many.witness_events.last().unwrap().payload_hash,
+        once.witness_events.last().unwrap().payload_hash,
+        "nested callback frames must not roll back the enqueue commitment"
+    );
+}
+
+/// The original promise-heavy report-growth repro must keep all settlements
+/// and results while retaining only the distinct builtin grants.
+#[test]
+fn promise_microtask_workload_keeps_bounded_witness_records() {
+    let program = |tasks| {
+        format!(
+            "const pending = []; for (let i = 0; i < {tasks}; i++) {{ \
+             pending.push(new Promise(resolve => queueMicrotask(() => resolve(i))) \
+             .then(value => value + 1)); }} \
+             Promise.all(pending).then(values => console.log(values.length, \
+             values.reduce((sum, value) => sum + value, 0)));"
+        )
+    };
+    let once = run_with_capabilities(&program(1), &[RuntimeCapability::Timer]);
+    let many = run_with_capabilities(&program(2_000), &[RuntimeCapability::Timer]);
+    assert_eq!(once.console, vec!["1 1"]);
+    assert_eq!(many.console, vec!["2000 2001000"]);
+    assert_eq!(many.decisions, once.decisions);
+    assert_eq!(many.witness_events.len(), once.witness_events.len());
+    assert!(serde_json::to_vec(&many.witness_events).unwrap().len() < 16_384);
 }

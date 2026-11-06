@@ -6,7 +6,8 @@
 //! cache), named properties, a single element, shift then unshift on a
 //! 2,000-element array, a BFS, 2,000 unshifts, unshift of several items, onto an
 //! empty array and of none, a deque mixing unshift, push and shift, 500
-//! middle-element splices, splices that grow, shrink and keep the length, splice
+//! middle-element splices, repeated prefix splices that grow, shrink and keep
+//! the length, splice
 //! without a delete count, with a negative start and with no arguments, and a
 //! subclass receiver (its removed array comes from @@species). Generic path:
 //! holes, an element inherited from Array.prototype, frozen, sealed,
@@ -125,6 +126,19 @@ var nt = Object.preventExtensions([1, 2, 3, 4]);
 try { nt.splice(1, 1, "a", "b"); console.log("no error"); } catch (err) { console.log(err.constructor.name, JSON.stringify(nt)); }
 var ne2 = Object.preventExtensions([1, 2, 3]);
 console.log(JSON.stringify(ne2.splice(1, 1, "x")), JSON.stringify(ne2));
+var front = [], frontRemoved = [];
+for (var fi = 0; fi < 1024; fi++) front.push(fi);
+front.tag = "kept";
+for (var fi = 0; fi < 128; fi++) frontRemoved.push(front.splice(0, 3, -fi)[1]);
+console.log(front.length, front[0], front[1], frontRemoved[0], frontRemoved[127], front.tag);
+console.log(JSON.stringify(front.splice(0, 1, "head", "next")), JSON.stringify(front.splice(0, 2, "same", "size")), front.length, front[0], front[1], front[2]);
+var drained = 0, lastRemoved;
+while (front.length) {
+  var batch = front.splice(0, 7);
+  drained += batch.length;
+  lastRemoved = batch[batch.length - 1];
+}
+console.log(drained, lastRemoved, front.length, JSON.stringify(front), Object.keys(front).join(","));
 "#;
 
 const EXPECTED: &[&str] = &[
@@ -164,6 +178,9 @@ const EXPECTED: &[&str] = &[
     "TypeError [\"s2\",197]",
     "TypeError [1,2,3,4]",
     "[2] [1,\"x\",3]",
+    "768 -127 257 1 255 kept",
+    "[-127] [\"head\",\"next\"] 769 same size 257",
+    "769 1023 0 [] tag",
 ];
 
 #[test]

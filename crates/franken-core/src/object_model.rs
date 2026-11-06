@@ -543,7 +543,9 @@ impl<V> OrderedStringMap<V> {
     /// them move by the difference; entries are added or removed only at
     /// the top. Returns the items back, changing nothing, unless the index
     /// keys are exactly `0..len`, `start + delete_count <= len` and the new
-    /// length stays within the array index range (bd-9vouw.472).
+    /// length stays within the array index range (bd-9vouw.472). Prefix
+    /// length changes use the dense queue, so repeated front splices do not
+    /// rotate the surviving suffix on every call.
     pub fn splice_dense_index_values(
         &mut self,
         len: u32,
@@ -562,6 +564,17 @@ impl<V> OrderedStringMap<V> {
         };
         if !self.array_entries.is_dense_prefix(len) {
             return Err(items);
+        }
+        if start == 0 && new_len != len {
+            match self
+                .array_entries
+                .splice_dense_prefix(len, delete_count, items)
+            {
+                Ok(removed) => return Ok(removed),
+                // Optional queue preparation can refuse an allocation;
+                // retain the existing dense algorithm with the same values.
+                Err(returned) => items = returned,
+            }
         }
         let replaced = items.len().min(delete_count as usize);
         let extra = items.split_off(replaced);

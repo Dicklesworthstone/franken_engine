@@ -83570,6 +83570,9 @@ impl InterpreterCore {
         {
             return Ok(Err(items));
         }
+        let inserted_are_plain = items
+            .iter()
+            .all(|item| !matches!(item, Value::Accessor { .. }));
         for item in &items {
             validate_symbol_value(&self.symbol_state, item).map_err(|got| {
                 InterpreterError::TypeError {
@@ -83619,20 +83622,39 @@ impl InterpreterCore {
         };
         self.estimated_memory_bytes = requested_bytes;
         if new_len != len {
-            let shrunk_by_one = new_len + 1 == len
-                && self.set_array_length_after_dense_tail_removal(
-                    array_id,
-                    len,
-                    new_len,
-                    &new_len.to_string(),
-                )?;
-            if !shrunk_by_one {
-                let new_len_int = i64::try_from(new_len).unwrap_or(i64::MAX);
-                self.set_object_property(array_id, "length".to_string(), Value::Int(new_len_int))?;
-                self.refresh_dense_length_cache(array_id, new_len, true);
-            }
+            // Admission proved a writable own Int length, and successful
+            // carrier mutation proves exactly the new dense prefix. No guest
+            // callback occurs between those steps, so no further index can
+            // need truncation. Preserve the length's label/attributes while
+            // avoiding the generic setter's full scan on a batch shrink.
+            let new_len_u32 = as_u32(new_len).expect("new array length was checked");
+            let new_length = Value::Int(i64::from(new_len_u32));
+            let previous_bytes = self.heap[heap_index]
+                .properties
+                .get("length")
+                .map_or(0, |previous| {
+                    Self::estimate_property_entry_bytes("length", previous)
+                });
+            let next_bytes = Self::estimate_property_entry_bytes("length", &new_length);
+            self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+            self.mutate_heap(|heap| {
+                let object = &mut heap[heap_index];
+                *object
+                    .properties
+                    .get_mut("length")
+                    .expect("dense splice preserves the admitted length property") = new_length;
+                object.cached_dense_length = Some(new_len_u32);
+            });
         }
         self.gc_write_barrier(array_id);
+        // The admission guard proved every surviving element plain. Only
+        // inserted values can change that fact; retain it after the length
+        // write so repeated prefix splices do not rescan the whole suffix.
+        self.heap
+            .slot(heap_index)
+            .expect("spliced array remains live")
+            .dense_moves_plain
+            .set(Some(inserted_are_plain));
         Ok(Ok(removed))
     }
 
@@ -120363,6 +120385,70 @@ mod shared_binding_cell_accounting_tests_bd_sblaq {
     }
 
     #[test]
+    fn dense_prefix_splices_retain_plain_proof_and_exact_accounting() {
+        let mut core = accounting_test_core();
+        let mut expected: Vec<_> = (0..256).map(Value::Int).collect();
+        let array = core
+            .alloc_array_from_values(&expected)
+            .expect("array allocation");
+        core.set_own_property_label(array, "length", &Label::Secret)
+            .expect("length provenance");
+        for step in 0..32 {
+            // Shrink by a large batch, replace at equal length, then grow.
+            // Every step must preserve the proof without a later full-array
+            // admission scan and retain the length property's provenance.
+            for (delete_count, items) in [
+                (129, vec![Value::Int(-step)]),
+                (1, vec![Value::str("replacement")]),
+                (1, (0..129).map(|n| Value::Int(n + step)).collect()),
+            ] {
+                let len = expected.len();
+                let removed: Vec<_> = expected.splice(..delete_count, items.clone()).collect();
+                assert_eq!(
+                    core.splice_dense_array_in_place(array, len, 0, delete_count, items)
+                        .expect("prefix splice"),
+                    Ok(removed)
+                );
+                assert_eq!(
+                    core.heap
+                        .slot(array.0 as usize)
+                        .unwrap()
+                        .dense_moves_plain
+                        .get(),
+                    Some(true),
+                    "plain splices must retain admission between calls"
+                );
+                assert_eq!(core.array_like_length(array).expect("length"), expected.len());
+                assert_eq!(core.own_property_label(array, "length"), Label::Secret);
+                assert_eq!(
+                    core.heap[array.0 as usize].own_property_attributes(
+                        &RuntimePropertyKey::String(JsString::from("length")),
+                    ),
+                    PropertyAttributes::DEFAULT
+                );
+                assert_eq!(
+                    core.heap[array.0 as usize]
+                        .properties
+                        .index_values()
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                    expected
+                );
+                assert_invariant(&core, "after dense prefix splice");
+            }
+        }
+        assert_eq!(
+            core.splice_dense_array_in_place(array, expected.len(), 0, expected.len(), Vec::new())
+                .expect("drain dense prefix"),
+            Ok(expected)
+        );
+        assert_eq!(core.array_like_length(array).expect("empty length"), 0);
+        assert_eq!(core.own_property_label(array, "length"), Label::Secret);
+        assert_eq!(core.heap[array.0 as usize].cached_dense_length, Some(0));
+        assert_invariant(&core, "after complete prefix splice drain");
+    }
+
+    #[test]
     fn dense_move_proof_refuses_accessor_and_labeled_appends() {
         let mut core = accounting_test_core();
         let module = lower_script_bd_9vouw_31("undefined;");
@@ -120471,6 +120557,47 @@ mod shared_binding_cell_accounting_tests_bd_sblaq {
                 .dense_array_moves_are_plain(array, 2)
                 .expect("accessor guard")
         );
+
+        // Splice can introduce an accessor while growing, shrinking, or
+        // replacing at equal length. None may cache the original plain proof.
+        for delete_count in 0..=2 {
+            let array = core
+                .alloc_array_from_values(&[Value::Int(1), Value::Int(2)])
+                .expect("array allocation");
+            assert!(
+                core.splice_dense_array_in_place(
+                    array,
+                    2,
+                    0,
+                    delete_count,
+                    vec![Value::Accessor { get: None, set: None }],
+                )
+                .expect("accessor splice")
+                .is_ok()
+            );
+            let new_len = 3 - delete_count;
+            assert_eq!(
+                core.heap
+                    .slot(array.0 as usize)
+                    .unwrap()
+                    .dense_moves_plain
+                    .get(),
+                Some(false)
+            );
+            assert!(
+                !core
+                    .dense_array_moves_are_plain(array, new_len)
+                    .expect("spliced accessor guard")
+            );
+            let before = core.heap[array.0 as usize].properties.clone();
+            assert_eq!(
+                core.splice_dense_array_in_place(array, new_len, 0, 1, Vec::new())
+                    .expect("accessor falls back"),
+                Err(Vec::new())
+            );
+            assert_eq!(core.heap[array.0 as usize].properties, before);
+            assert_invariant(&core, "after accessor splice refusal");
+        }
     }
 
     /// bd-9vouw.31: drive the cold-cell ledger through every transition a real

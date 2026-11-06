@@ -148,6 +148,70 @@ impl<V> IndexedValues<V> {
         Ok(())
     }
 
+    /// Optional queue path for a length-changing dense prefix splice.
+    /// Only removed and inserted values move after the one-time conversion;
+    /// surviving values keep their ring slots and keys keep their indices.
+    /// A refusal returns the items with the logical map unchanged so the
+    /// caller can use the existing generic dense splice algorithm.
+    pub(in crate::object_model) fn splice_dense_prefix(
+        &mut self,
+        len: u32,
+        delete_count: u32,
+        items: Vec<V>,
+    ) -> Result<Vec<V>, Vec<V>> {
+        let Some(new_len) = len.checked_sub(delete_count).and_then(|remaining| {
+            u32::try_from(items.len())
+                .ok()
+                .and_then(|count| remaining.checked_add(count))
+        }) else {
+            return Err(items);
+        };
+        if new_len == len || !self.is_dense_prefix(len) {
+            return Err(items);
+        }
+
+        // Prepare every fallible buffer and key before taking a value out.
+        // No destructor for V runs while the two queue lengths differ, and
+        // a caught key-construction panic cannot leave partial numeric keys.
+        let mut removed = Vec::new();
+        if removed.try_reserve_exact(delete_count as usize).is_err() {
+            return Err(items);
+        }
+        let growth = new_len.saturating_sub(len) as usize;
+        let mut added_keys = Vec::new();
+        if added_keys.try_reserve_exact(growth).is_err() {
+            return Err(items);
+        }
+        added_keys.extend((len..new_len).map(|index| index.to_string()));
+        if !self.prepare_queue() {
+            return Err(items);
+        }
+        let Self::Queue(entries) = self else {
+            unreachable!()
+        };
+        if entries.keys.try_reserve(growth).is_err() || entries.values.try_reserve(growth).is_err()
+        {
+            return Err(items);
+        }
+
+        // Reserving the final length above suffices: removal happens first.
+        // Drain only the prefix, leaving the surviving suffix in its slots.
+        removed.extend(entries.values.drain(..delete_count as usize));
+        for item in items.into_iter().rev() {
+            entries.values.push_front(item);
+        }
+        if new_len < len {
+            entries.keys.truncate(new_len as usize);
+            entries.shrink_spare_capacity();
+        } else {
+            entries.keys.extend(added_keys);
+        }
+        if entries.len() == 0 {
+            self.clear();
+        }
+        Ok(removed)
+    }
+
     /// Operations that can expose holes retain their existing panic-safe
     /// packed/holey semantics. This linear conversion belongs to those
     /// already-linear operations, never to ordinary indexed reads or writes.
@@ -227,6 +291,159 @@ mod tests {
         for (index, (key, _)) in values.values().enumerate() {
             assert_eq!(key, &index.to_string());
         }
+    }
+
+    #[test]
+    fn prefix_splices_preserve_survivor_slots_and_logical_key_allocations() {
+        let mut actual = OrderedStringMap::new();
+        actual.array_entries = dense(4096);
+        assert_eq!(
+            actual.splice_dense_index_values(4096, 0, 1, Vec::new()),
+            Ok(vec![0])
+        );
+        let mut expected: Vec<_> = (1..4096_u64).collect();
+        let key_address = actual.array_entries.get(&0).unwrap().0.as_ptr();
+        let survivor_address = actual.get_index(3000).unwrap() as *const u64;
+        // Both directions stay within the prepared queue's capacity and
+        // above its shrink threshold. A prefix splice must not relocate a
+        // surviving suffix even when it both removes and inserts values.
+        for step in 0..1000_u32 {
+            let items = vec![10_000 + u64::from(step)];
+            let removed: Vec<_> = expected.splice(..2, items.clone()).collect();
+            assert_eq!(
+                actual.splice_dense_index_values(4095 - step, 0, 2, items),
+                Ok(removed)
+            );
+            assert_eq!(
+                actual.get_index(2999 - step).unwrap() as *const u64,
+                survivor_address
+            );
+            assert_eq!(
+                actual.array_entries.get(&0).unwrap().0.as_ptr(),
+                key_address
+            );
+            check_queue_bounds(&actual.array_entries);
+        }
+        for step in 0..1000_u32 {
+            let items = vec![20_000 + u64::from(step), 30_000 + u64::from(step)];
+            let removed: Vec<_> = expected.splice(..1, items.clone()).collect();
+            assert_eq!(
+                actual.splice_dense_index_values(3095 + step, 0, 1, items),
+                Ok(removed)
+            );
+            assert_eq!(
+                actual.get_index(2001 + step).unwrap() as *const u64,
+                survivor_address
+            );
+            assert_eq!(
+                actual.array_entries.get(&0).unwrap().0.as_ptr(),
+                key_address
+            );
+            check_queue_bounds(&actual.array_entries);
+        }
+        assert_eq!(actual.index_values().copied().collect::<Vec<_>>(), expected);
+        for (index, (key, _)) in actual.array_entries.values().enumerate() {
+            assert_eq!(key, &index.to_string());
+        }
+    }
+
+    #[test]
+    fn prefix_splices_match_vec_and_wire_from_every_dense_carrier() {
+        let lone = JsString::from_code_units(&[0xd800]);
+        for len in 0..8_u32 {
+            for delete_count in 0..=len {
+                for count in 0..5_u64 {
+                    for carrier in 0..4 {
+                        let mut actual = OrderedStringMap::new();
+                        let mut model: Vec<_> =
+                            (0..len).map(|n| (n != 1).then_some(u64::from(n))).collect();
+                        for (index, value) in model.iter().enumerate() {
+                            actual.insert(index.to_string(), *value);
+                        }
+                        actual.insert("tag".into(), Some(900));
+                        actual.insert_exact(lone.clone(), Some(901));
+                        match carrier {
+                            0 => {}
+                            1 if len != 0 => assert!(actual.array_entries.prepare_queue()),
+                            2 => actual.array_entries.make_holey(),
+                            3 => actual.array_entries.promote(),
+                            _ => {}
+                        }
+                        let before_carrier = std::mem::discriminant(&actual.array_entries);
+                        let items: Vec<_> = (0..count).map(|n| Some(100 + n)).collect();
+                        let removed: Vec<_> = model
+                            .splice(..delete_count as usize, items.clone())
+                            .collect();
+                        assert_eq!(
+                            actual.splice_dense_index_values(len, 0, delete_count, items),
+                            Ok(removed)
+                        );
+                        if count == u64::from(delete_count) {
+                            assert_eq!(
+                                std::mem::discriminant(&actual.array_entries),
+                                before_carrier,
+                                "equal-length replacement needs no representation conversion"
+                            );
+                        } else {
+                            check_queue_bounds(&actual.array_entries);
+                        }
+                        let mut expected = OrderedStringMap::new();
+                        for (index, value) in model.into_iter().enumerate() {
+                            expected.insert(index.to_string(), value);
+                        }
+                        expected.insert("tag".into(), Some(900));
+                        expected.insert_exact(lone.clone(), Some(901));
+                        assert_eq!(actual, expected);
+                        let wire = serde_json::to_string(&actual).unwrap();
+                        assert_eq!(wire, serde_json::to_string(&expected).unwrap());
+                        let restored: OrderedStringMap<Option<u64>> =
+                            serde_json::from_str(&wire).unwrap();
+                        assert_eq!(restored, actual);
+                        assert_eq!(restored.exact_keys(), actual.exact_keys());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn prefix_splice_drain_keeps_geometric_headroom_and_releases_backings() {
+        let mut actual = OrderedStringMap::new();
+        actual.array_entries = dense(8192);
+        let mut previous = (0, 0);
+        let mut capacity_changes = 0;
+        for len in (2..=8192_u32).rev() {
+            assert_eq!(
+                actual
+                    .splice_dense_index_values(len, 0, 2, vec![u64::MAX])
+                    .unwrap()
+                    .len(),
+                2
+            );
+            check_queue_bounds(&actual.array_entries);
+            assert_eq!(actual.array_entries.len(), len as usize - 1);
+            let IndexedValues::Queue(entries) = &actual.array_entries else {
+                panic!("non-empty prefix splice should retain the queue")
+            };
+            let capacity = (entries.keys.capacity(), entries.values.capacity());
+            if capacity != previous {
+                capacity_changes += 1;
+                previous = capacity;
+            }
+        }
+        assert!(
+            capacity_changes < 64,
+            "{capacity_changes} resizes in a linear drain"
+        );
+        assert_eq!(
+            actual.splice_dense_index_values(1, 0, 1, Vec::new()),
+            Ok(vec![u64::MAX])
+        );
+        let IndexedValues::Packed(entries) = &actual.array_entries else {
+            panic!("empty splice must release the queue")
+        };
+        assert_eq!(entries.capacity(), 0);
+        check_queue_bounds(&actual.array_entries);
     }
 
     #[test]
@@ -364,6 +581,12 @@ mod tests {
             actual.unshift_dense_index_values(128, vec![Some(777)]),
             Err(vec![Some(777)])
         );
+        for (len, delete_count) in [(128, 1), (129, 130), (129, u32::MAX)] {
+            assert_eq!(
+                actual.splice_dense_index_values(len, 0, delete_count, vec![Some(777)]),
+                Err(vec![Some(777)])
+            );
+        }
         assert_eq!(serde_json::to_string(&actual).unwrap(), original_wire);
         let mut expected = actual.clone();
         expected.array_entries.promote();
@@ -371,6 +594,12 @@ mod tests {
             assert_eq!(map.remove("7"), Some(Some(6)));
             assert_eq!(map.get_index(7), None);
             assert_eq!(map.shift_dense_index_values(128), None);
+            let holed_wire = serde_json::to_string(&map).unwrap();
+            assert_eq!(
+                map.splice_dense_index_values(128, 0, 2, vec![Some(888)]),
+                Err(vec![Some(888)])
+            );
+            assert_eq!(serde_json::to_string(&map).unwrap(), holed_wire);
             map.insert("7".into(), Some(66));
             map.insert("131".into(), Some(131));
             map.insert("4294967294".into(), Some(99));
@@ -429,6 +658,30 @@ mod tests {
         assert_eq!(values.get(&0).unwrap().1.id, 33);
         assert_eq!(values.get(&1).unwrap().1.id, 1);
         check_queue_bounds(&values);
+        // A removed vector can run arbitrary destructors only after all
+        // splice movement, logical keys and capacity accounting are settled.
+        let Ok(removed) = values.splice_dense_prefix(32, 3, vec![owned(34)]) else {
+            panic!("dense shrinking prefix splice")
+        };
+        panic_next.set(true);
+        assert!(catch_unwind(AssertUnwindSafe(|| drop(removed))).is_err());
+        assert_eq!(values.len(), 30);
+        assert_eq!(values.get(&0).unwrap().1.id, 34);
+        assert_eq!(values.get(&1).unwrap().1.id, 3);
+        check_queue_bounds(&values);
+        let Ok(removed) = values.splice_dense_prefix(30, 1, vec![owned(35), owned(36), owned(37)])
+        else {
+            panic!("dense growing prefix splice")
+        };
+        assert_eq!(
+            removed.iter().map(|value| value.id).collect::<Vec<_>>(),
+            [34]
+        );
+        drop(removed);
+        assert_eq!(values.len(), 32);
+        assert_eq!(values.get(&0).unwrap().1.id, 35);
+        assert_eq!(values.get(&3).unwrap().1.id, 3);
+        check_queue_bounds(&values);
         // A true property deletion preserves later indices while converting
         // the ring into holey storage; no value may be cloned or lost.
         drop(values.remove(&7));
@@ -437,6 +690,6 @@ mod tests {
         drop(values);
         let mut dropped = drops.borrow().clone();
         dropped.sort_unstable();
-        assert_eq!(dropped, (0..34).collect::<Vec<_>>());
+        assert_eq!(dropped, (0..38).collect::<Vec<_>>());
     }
 }

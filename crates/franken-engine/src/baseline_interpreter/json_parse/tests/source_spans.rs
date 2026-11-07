@@ -21,8 +21,8 @@ fn primitive_record_needs_only_fixed_metadata_even_for_large_source() {
             .json_parse_record(&units, &mut pos, value, &mut charged)
             .unwrap();
         assert_eq!(pos, units.len());
-        assert_eq!(record.source, Some(0..units.len()));
-        assert_eq!(record.source_units(&units).unwrap().as_ptr(), units.as_ptr());
+        assert_eq!(record.root.source, Some(0..units.len()));
+        assert_eq!(record.root.source_units(&units).unwrap().as_ptr(), units.as_ptr());
         assert_eq!(charged, bytes, "source spelling must not be copied here");
         assert_eq!(core.json_parse_temporary_bytes, bytes);
         drop(record);
@@ -38,13 +38,22 @@ fn wide_records_borrow_distinct_original_spans_and_preserve_last_duplicate() {
     let width = 1024;
     let text = format!("[{}]", vec!["1.2300e+005"; width].join(","));
     let (record, charged, units) = parse_record(&mut core, &text);
-    assert_eq!(record.elements.len(), width);
+    assert_eq!(record.root.elements.len(), width);
+    let node_bytes = std::mem::size_of::<JsonParseRecord>() as u64;
+    let arena_slot = std::mem::size_of::<Option<JsonParseRecord>>() as u64;
+    let edge_slot = std::mem::size_of::<Option<usize>>() as u64;
     assert_eq!(
         charged,
-        (width as u64 + 1) * std::mem::size_of::<JsonParseRecord>() as u64
+        node_bytes
+            + record.nodes.capacity() as u64 * arena_slot
+            + record.root.elements.capacity() as u64 * edge_slot
     );
-    for (index, child) in record.elements.iter().enumerate() {
-        let child = child.as_ref().unwrap();
+    assert!(
+        charged <= node_bytes + 2 * width as u64 * (arena_slot + edge_slot),
+        "flat records must retain bounded linear metadata, never source copies"
+    );
+    for (index, child) in record.root.elements.iter().enumerate() {
+        let child = record.nodes[child.unwrap()].as_ref().unwrap();
         let start = 1 + index * 12;
         assert_eq!(child.source, Some(start..start + 11));
         assert_eq!(child.source_units(&units).unwrap(), &units[start..start + 11]);
@@ -58,15 +67,13 @@ fn wide_records_borrow_distinct_original_spans_and_preserve_last_duplicate() {
 
     let text = r#"{"dup":{"discarded":"é😀"},"dup":6.00,"\ud800":7e0}"#;
     let (mut record, charged, units) = parse_record(&mut core, text);
-    let child = record.take_entry(&JsString::from("dup")).unwrap();
+    let child = take_root_entry(&mut record, &JsString::from("dup")).unwrap();
     assert_eq!(
         child.source_units(&units).map(JsString::from_code_units),
         Some(JsString::from("6.00"))
     );
     assert!(child.entries.is_empty());
-    let child = record
-        .take_entry(&JsString::from_code_units(&[0xd800]))
-        .unwrap();
+    let child = take_root_entry(&mut record, &JsString::from_code_units(&[0xd800])).unwrap();
     assert_eq!(
         child.source_units(&units).map(JsString::from_code_units),
         Some(JsString::from("7e0"))
@@ -89,12 +96,12 @@ fn exact_source_spans_remain_code_unit_offsets_after_astral_text_and_escapes() {
     let record = core
         .json_parse_record(&units, &mut pos, value, &mut charged)
         .unwrap();
-    for (child, span) in record.elements.iter().zip([1..5, 6..12, 13..15]) {
-        let child = child.as_ref().unwrap();
+    for (child, span) in record.root.elements.iter().zip([1..5, 6..12, 13..15]) {
+        let child = record.nodes[child.unwrap()].as_ref().unwrap();
         assert_eq!(child.source, Some(span.clone()));
         assert_eq!(child.source_units(&units), Some(&units[span]));
     }
-    assert!(record.source.is_none());
+    assert!(record.root.source.is_none());
     drop(record);
     core.json_release_temporary(charged);
     assert_eq!(core.json_parse_temporary_bytes, 0);

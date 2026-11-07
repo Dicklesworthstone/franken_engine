@@ -184,31 +184,115 @@ fn parse_frame_memory_refusal_keeps_outer_reservations_and_allows_reuse() {
 }
 
 #[test]
-fn recursive_reviver_records_are_refused_before_allocating_a_deep_tree() {
+fn five_thousand_source_records_are_built_and_dropped_without_recursion() {
     let mut core = core();
-    let units: Vec<u16> = nested_document(5000, false, true, "0")
+    let depth = 5000;
+    let text = nested_document(depth, false, true, "1.2300e+5");
+    let (record, charged, units) = parse_record(&mut core, &text);
+    assert_eq!(record.nodes.len(), depth);
+    let mut node = &record.root;
+    for level in 0..depth {
+        let index = if level % 2 == 0 {
+            node.elements[0].unwrap()
+        } else {
+            assert_eq!(node.entries[0].key, JsString::from("x"));
+            node.entries[0].record.unwrap()
+        };
+        node = record.nodes[index].as_ref().unwrap();
+    }
+    assert_eq!(
+        node.source_units(&units).map(JsString::from_code_units),
+        Some(JsString::from("1.2300e+5"))
+    );
+    assert_eq!(core.json_parse_temporary_bytes, charged);
+    drop(record);
+    core.json_release_temporary(charged);
+    assert_eq!(core.json_parse_temporary_bytes, 0);
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+}
+
+#[test]
+fn discarded_deep_duplicate_records_keep_the_final_source_and_drop_flat() {
+    let mut core = core();
+    let depth = 5000;
+    let old_value = nested_document(depth, false, false, "0");
+    let text = format!(r#"{{"dup":{old_value},"dup":7.00}}"#);
+    let (mut record, charged, units) = parse_record(&mut core, &text);
+    assert_eq!(record.root.entries.len(), 1);
+    assert!(record.nodes.len() > depth);
+    let child = take_root_entry(&mut record, &JsString::from("dup")).unwrap();
+    assert_eq!(child.value, Value::Float(Float64::new(7.0)));
+    assert_eq!(
+        child.source_units(&units).map(JsString::from_code_units),
+        Some(JsString::from("7.00"))
+    );
+    drop(child);
+    drop(record);
+    core.json_release_temporary(charged);
+    assert_eq!(core.json_parse_temporary_bytes, 0);
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+}
+
+#[test]
+fn partial_deep_record_arena_is_released_after_memory_refusal() {
+    let mut core = core();
+    let units: Vec<u16> = nested_document(5000, false, false, "0")
         .encode_utf16()
         .collect();
     let value = core.json_parse_document(&units).unwrap();
+    let baseline = core.estimated_memory_bytes();
+    core.config.max_total_memory_bytes = baseline + 256 * 1024;
     let mut charged = 0;
     let result = core.json_parse_record(&units, &mut 0, value, &mut charged);
     assert!(matches!(
         result,
-        Err(InterpreterError::StackOverflow {
-            depth: 201,
-            max: 200,
-        })
+        Err(InterpreterError::MemoryBudgetExceeded { .. })
     ));
-    assert_eq!(charged, 0, "refuse before constructing recursive records");
+    assert!(charged > std::mem::size_of::<JsonParseRecord>() as u64);
+    assert_eq!(core.json_parse_temporary_bytes, charged);
+    core.json_release_temporary(charged);
     assert_eq!(core.json_parse_temporary_bytes, 0);
+    assert_eq!(core.estimated_memory_bytes(), baseline);
     assert!(core.pending_exception.is_none());
 }
 
 #[test]
-fn reviver_record_depth_scan_ignores_string_delimiters_and_preserves_boundary() {
+fn source_record_closing_work_is_metered_and_releases_builder_frames() {
+    let mut core = core();
+    let depth = 1024;
+    let units: Vec<u16> = nested_document(depth, false, false, "0")
+        .encode_utf16()
+        .collect();
+    let value = core.json_parse_document(&units).unwrap();
+    let baseline = core.estimated_memory_bytes();
+    let budget = core.instructions_executed + depth as u64 + 1;
+    core.config.instruction_budget = budget;
+    let mut charged = 0;
+    let result = core.json_parse_record(&units, &mut 0, value, &mut charged);
+    assert!(matches!(
+        result,
+        Err(InterpreterError::BudgetExhausted {
+            executed,
+            budget: limit,
+        }) if executed == budget && limit == budget
+    ));
+    assert_eq!(core.json_parse_temporary_bytes, charged);
+    core.json_release_temporary(charged);
+    assert_eq!(core.estimated_memory_bytes(), baseline);
+    assert!(core.pending_exception.is_none());
+}
+
+#[test]
+fn deep_record_spans_ignore_string_delimiters_and_handle_empty_containers() {
     for text in [
-        nested_document(200, false, false, r#""[{\"}]\\""#),
-        format!("{}{}", "[".repeat(201), "]".repeat(201)),
+        nested_document(1024, false, false, r#""[{\"}]\\""#),
+        format!("{}{}", "[".repeat(1024), "]".repeat(1024)),
     ] {
         let mut core = core();
         let (record, charged, _) = parse_record(&mut core, &text);

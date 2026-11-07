@@ -567,17 +567,116 @@ fn deep_syntax_failures_leave_subsequent_json_parse_usable() {
 }
 
 #[test]
-fn deep_reviver_source_records_refuse_before_any_guest_callback() {
-    assert_output(
+fn deep_reviver_records_preserve_postorder_and_original_primitive_source() {
+    assert_output_with_cores(
         r#"
-        let calls = 0;
-        const text = '['.repeat(1024) + '0' + ']'.repeat(1024);
-        try {
-            JSON.parse(text, function(key, value) { calls++; return value; });
-        } catch (error) { log(error instanceof RangeError); }
-        log(calls);
-        log(JSON.parse('7', function(key, value) { return value + 1; }));
+        const depth = 512;
+        let calls = 0, source, first, last;
+        const text = '['.repeat(depth) + '1.2300e+5' + ']'.repeat(depth);
+        let result = JSON.parse(text, function(key, value, context) {
+            if (calls === 0) first = key;
+            calls++;
+            last = key;
+            if (typeof value === 'number') source = context.source;
+            return value;
+        });
+        for (let i = 0; i < depth; i++) result = result[0];
+        log(result, calls, source, first === '0', last === '');
         "#,
-        &["true", "0", "8"],
+        &["123000 513 1.2300e+5 true true"],
+        configured_cores(Some(5_000_000)),
+    );
+}
+
+#[test]
+fn replacement_below_a_deep_original_path_discards_descendant_source_records() {
+    assert_output_with_cores(
+        r#"
+        const depth = 240;
+        const text = '{"x":'.repeat(depth)
+            + '{"original":1.00,"later":{"x":2.00}}' + '}'.repeat(depth);
+        let calls = 0, originalSource, replacedSource;
+        let result = JSON.parse(text, function(key, value, context) {
+            calls++;
+            if (key === 'original') {
+                originalSource = context.source;
+                this.later = {x: 2};
+            }
+            if (key === 'x' && typeof value === 'number') replacedSource = context.source;
+            return value;
+        });
+        for (let i = 0; i < depth; i++) result = result.x;
+        log(calls, originalSource, replacedSource === undefined, result.later.x);
+        "#,
+        &["244 1.00 true 2"],
+        configured_cores(Some(5_000_000)),
+    );
+}
+
+#[test]
+fn a_cycle_introduced_below_deep_parsed_data_still_raises_a_range_error() {
+    assert_output_with_cores(
+        r#"
+        const text = '{"x":'.repeat(240)
+            + '{"first":0,"later":{}}' + '}'.repeat(240);
+        let reached = false, rangeError = false, rootCalled = false;
+        try {
+            JSON.parse(text, function(key, value) {
+                if (key === 'first') {
+                    reached = true;
+                    this.later.loop = this.later;
+                }
+                if (key === '') rootCalled = true;
+                return value;
+            });
+        } catch (error) { rangeError = error instanceof RangeError; }
+        log(reached, rangeError, rootCalled);
+        log(JSON.parse('7'));
+        "#,
+        &["true true false", "7"],
+        configured_cores(Some(5_000_000)),
+    );
+}
+
+#[test]
+fn a_discarded_deep_duplicate_keeps_only_the_last_reviver_source() {
+    assert_output_with_cores(
+        r#"
+        const text = '{"dup":' + '['.repeat(5000) + '0'
+            + ']'.repeat(5000) + ',"dup":7.00}';
+        let calls = 0, source;
+        const result = JSON.parse(text, function(key, value, context) {
+            calls++;
+            if (key === 'dup') source = context.source;
+            return value;
+        });
+        log(result.dup, calls, source);
+        "#,
+        &["7 2 7.00"],
+        configured_cores(Some(1_000_000)),
+    );
+}
+
+#[test]
+fn abrupt_deep_reviver_preserves_escaped_source_across_reentrant_parse() {
+    assert_output_with_cores(
+        r#"
+        const text = '['.repeat(320) + '1.2300e+005' + ']'.repeat(320);
+        const marker = {};
+        let saved, nested, same = false;
+        try {
+            JSON.parse(text, function(key, value, context) {
+                saved = context;
+                JSON.parse('9e0', function(innerKey, innerValue, innerContext) {
+                    nested = innerContext.source;
+                    return innerValue;
+                });
+                throw marker;
+            });
+        } catch (error) { same = error === marker; }
+        log(same, saved.source, nested, JSON.parse('7'));
+        "#,
+        &["true 1.2300e+005 9e0 7"],
+        configured_cores(Some(5_000_000)),
     );
 }

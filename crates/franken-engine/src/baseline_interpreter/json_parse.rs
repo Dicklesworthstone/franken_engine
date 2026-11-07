@@ -10,6 +10,7 @@ use super::*;
 mod document;
 mod raw_validation;
 mod reachable;
+mod records;
 
 /// Which edges a reachable-label walk follows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,21 +24,28 @@ enum ReachableEdges {
 
 /// A JSON Parse Record (JSON.parse source text access, bd-9vouw.380): the
 /// value one parse node produced, a primitive's source span, and the
-/// records of an array's elements or an object's entries, each taken once
-/// as the reviver walk reaches it.
+/// indices of an array's elements or an object's entries, each taken once
+/// from the owning arena as the reviver walk reaches it.
 struct JsonParseRecord {
     value: Value,
     // Offsets into the operation's immutable UTF-16 input. Materialize only
     // when a still-matching primitive reaches its reviver callback.
     source: Option<std::ops::Range<usize>>,
-    elements: Vec<Option<JsonParseRecord>>,
+    elements: Vec<Option<usize>>,
     entries: Vec<JsonParseRecordEntry>,
 }
 
-/// One reviver operation owns the record tree and borrows the input buffer
+/// Every descendant is owned once by this arena. Edges contain indices, so
+/// even a discarded deep duplicate or an abrupt callback cannot recurse in Drop.
+struct JsonParseRecords {
+    root: JsonParseRecord,
+    nodes: Vec<Option<JsonParseRecord>>,
+}
+
+/// One reviver operation owns the flat records and borrows the input buffer
 /// whose temporary charge remains with json_parse_builtin_inner.
 struct JsonReviverInput<'a> {
-    record: JsonParseRecord,
+    records: JsonParseRecords,
     units: &'a [u16],
 }
 
@@ -46,7 +54,7 @@ struct JsonReviverInput<'a> {
 struct JsonParseRecordEntry {
     key: JsString,
     ordinal: usize,
-    record: Option<JsonParseRecord>,
+    record: Option<usize>,
 }
 
 impl JsonParseRecord {
@@ -76,7 +84,7 @@ impl JsonParseRecord {
         });
     }
 
-    fn take_entry(&mut self, key: &JsString) -> Option<JsonParseRecord> {
+    fn take_entry(&mut self, key: &JsString) -> Option<usize> {
         let index = self
             .entries
             .binary_search_by(|entry| entry.key.cmp(key))
@@ -279,9 +287,8 @@ impl InterpreterCore {
                 holder,
                 JsString::from(""),
                 &reviver,
-                0,
                 JsonReviverInput {
-                    record,
+                    records: record,
                     units: &units,
                 },
             )
@@ -293,148 +300,6 @@ impl InterpreterCore {
         drop(units);
         self.json_release_temporary(unit_bytes);
         outcome
-    }
-
-    /// The JSON Parse Record of the validated text at `pos`, whose parse
-    /// produced `value`; a container's children are read back from the
-    /// parsed objects before any reviver runs. Each record is charged to
-    /// `charged` as it is built.
-    fn json_parse_record(
-        &mut self,
-        units: &[u16],
-        pos: &mut usize,
-        value: Value,
-        charged: &mut u64,
-    ) -> Result<JsonParseRecord, InterpreterError> {
-        // Source records still own recursive trees. Check their depth without
-        // recursion before constructing anything: their builder AND destructor
-        // must remain bounded until both use an iterative representation.
-        // Ordinary parsing and JSON modules do not have this restriction.
-        self.json_check_reviver_record_depth(units, *pos)?;
-        self.json_parse_record_inner(units, pos, value, charged)
-    }
-
-    fn json_check_reviver_record_depth(
-        &mut self,
-        units: &[u16],
-        mut pos: usize,
-    ) -> Result<(), InterpreterError> {
-        let mut depth = 0_usize;
-        let mut work = 0_u16;
-        while pos < units.len() {
-            if work == 0 {
-                self.json_charge_work()?;
-                work = 256;
-            }
-            work -= 1;
-            match units[pos] {
-                0x7B | 0x5B => {
-                    if depth > 200 {
-                        return Err(InterpreterError::StackOverflow { depth, max: 200 });
-                    }
-                    depth += 1;
-                    pos += 1;
-                }
-                0x7D | 0x5D => {
-                    depth = depth.saturating_sub(1);
-                    pos += 1;
-                }
-                0x22 | 0x2D | 0x30..=0x39 | 0x74 | 0x66 | 0x6E => {
-                    if depth > 200 {
-                        return Err(InterpreterError::StackOverflow { depth, max: 200 });
-                    }
-                    // The text has already passed JSON validation. Skip one
-                    // exact token so braces and escaped quotes inside strings
-                    // cannot be mistaken for container boundaries.
-                    pos = json_primitive_source_end(units, pos);
-                }
-                _ => pos += 1,
-            }
-        }
-        Ok(())
-    }
-
-    fn json_parse_record_inner(
-        &mut self,
-        units: &[u16],
-        pos: &mut usize,
-        value: Value,
-        charged: &mut u64,
-    ) -> Result<JsonParseRecord, InterpreterError> {
-        self.json_charge_work()?;
-        let bytes = std::mem::size_of::<JsonParseRecord>() as u64;
-        self.json_reserve_temporary(bytes)?;
-        *charged += bytes;
-        Self::json_skip_ws(units, pos);
-        let start = *pos;
-        let mut record = JsonParseRecord {
-            value,
-            source: None,
-            elements: Vec::new(),
-            entries: Vec::new(),
-        };
-        match units.get(*pos) {
-            Some(0x7B) => {
-                *pos += 1;
-                loop {
-                    Self::json_skip_ws(units, pos);
-                    if units.get(*pos) == Some(&0x7D) {
-                        *pos += 1;
-                        break;
-                    }
-                    let Some(key) = Self::json_parse_string(units, pos) else {
-                        break;
-                    };
-                    Self::json_skip_ws(units, pos);
-                    *pos += 1;
-                    let child = self.json_parsed_child(&record.value, &key);
-                    let child = self.json_parse_record_inner(units, pos, child, charged)?;
-                    // Stage in source order, including duplicates, then index
-                    // once. Charge every staged entry, even if deduplication
-                    // later drops it; no sorting scratch allocation is needed.
-                    let bytes = Self::estimate_js_string_bytes(&key)
-                        .saturating_add(std::mem::size_of::<JsonParseRecordEntry>() as u64);
-                    self.json_reserve_temporary(bytes)?;
-                    *charged += bytes;
-                    record.entries.push(JsonParseRecordEntry {
-                        key,
-                        ordinal: record.entries.len(),
-                        record: Some(child),
-                    });
-                    Self::json_skip_ws(units, pos);
-                    if units.get(*pos) == Some(&0x2C) {
-                        *pos += 1;
-                    }
-                }
-                record.finish_entries();
-            }
-            Some(0x5B) => {
-                *pos += 1;
-                loop {
-                    Self::json_skip_ws(units, pos);
-                    if *pos >= units.len() {
-                        break;
-                    }
-                    if units.get(*pos) == Some(&0x5D) {
-                        *pos += 1;
-                        break;
-                    }
-                    let key = JsString::from(record.elements.len().to_string());
-                    let child = self.json_parsed_child(&record.value, &key);
-                    let child = self.json_parse_record_inner(units, pos, child, charged)?;
-                    record.elements.push(Some(child));
-                    Self::json_skip_ws(units, pos);
-                    if units.get(*pos) == Some(&0x2C) {
-                        *pos += 1;
-                    }
-                }
-            }
-            _ => {
-                *pos = json_primitive_source_end(units, start);
-                record.source = Some(start.min(*pos)..*pos);
-            }
-        }
-        Ok(record)
     }
 
     /// The parsed value of `key` in the parsed container `parent`.
@@ -695,12 +560,12 @@ impl InterpreterCore {
         holder: ObjectId,
         name: JsString,
         reviver: &Value,
-        depth: usize,
         input: JsonReviverInput<'_>,
     ) -> Result<Value, InterpreterError> {
-        // Guest mutations can introduce cycles after lexical parsing. Use an
-        // explicit work stack: a Rust-recursive walk can overflow the native
-        // test/worker stack before reaching the interpreter's depth guard.
+        // Original records are finite and consumed once, so deeply parsed
+        // data needs no recursion guard. Guest mutations may introduce cycles:
+        // those paths lose their matching records and retain a bounded dynamic
+        // descent. Both records and frames use explicit, admitted heap storage.
         enum Children {
             None,
             Array {
@@ -722,21 +587,18 @@ impl InterpreterCore {
             charged: u64,
             /// The parse record when `value` is still the parsed one.
             record: Option<JsonParseRecord>,
+            /// Consecutive frames not backed by matching original records.
+            dynamic_depth: usize,
         }
         let mut frames = Vec::<Frame>::new();
+        let mut frame_bytes = 0_u64;
         let source_units = input.units;
-        let mut next = Some((holder, name, Some(input.record)));
+        let mut source_records = input.records.nodes;
+        let mut next = Some((holder, name, Some(input.records.root)));
         let mut retained = 0_u64;
         let outcome = (|| {
             loop {
                 if let Some((holder, name, record)) = next.take() {
-                    let current_depth = depth.saturating_add(frames.len());
-                    if current_depth > 200 {
-                        return Err(InterpreterError::StackOverflow {
-                            depth: current_depth,
-                            max: 200,
-                        });
-                    }
                     self.json_charge_work()?;
                     let key = RuntimePropertyKey::String(name.clone());
                     // Preserve inherited/Proxy selection provenance before
@@ -749,19 +611,30 @@ impl InterpreterCore {
                     )?;
                     let label = self.json_parse_context_label()?;
                     self.json_observe_label(label)?;
+                    // Only a consumed, still-matching parse record certifies
+                    // this part of the originally acyclic tree. A sibling's
+                    // replacement must not reset the dynamic descent guard.
+                    let record = record.filter(|record| Self::same_value(&record.value, &value));
+                    let dynamic_depth = if record.is_some() {
+                        0
+                    } else {
+                        frames
+                            .last()
+                            .map_or(0, |frame| frame.dynamic_depth)
+                            .saturating_add(1)
+                    };
+                    if dynamic_depth > 200 {
+                        return Err(InterpreterError::StackOverflow {
+                            depth: dynamic_depth,
+                            max: 200,
+                        });
+                    }
                     self.json_observe_reachable_value(&value)?;
-                    let charged = (std::mem::size_of::<Frame>() as u64)
-                        .saturating_add(Self::estimate_js_string_bytes(&name))
+                    let charged = Self::estimate_js_string_bytes(&name)
                         .saturating_add(Self::estimate_value_bytes(&value));
                     self.json_reserve_temporary(charged)?;
                     retained += charged;
-                    frames.try_reserve(1).map_err(|_| {
-                        self.memory_budget_error(u64::MAX, self.heap_object_count_u32())
-                    })?;
-                    // A record describes the value only while it is the
-                    // parsed one (SameValue): a reviver's replacement, or a
-                    // value it added, has no source.
-                    let record = record.filter(|record| Self::same_value(&record.value, &value));
+                    self.json_reserve_record_slot(&mut frames, &mut frame_bytes)?;
                     frames.push(Frame {
                         holder,
                         name,
@@ -769,6 +642,7 @@ impl InterpreterCore {
                         children: Children::None,
                         charged,
                         record,
+                        dynamic_depth,
                     });
                     let frame = frames.last_mut().expect("pushed reviver frame");
                     if frame.value.is_object_like()
@@ -798,10 +672,10 @@ impl InterpreterCore {
                             let keys = self.proxy_own_enumerable_string_keys(module, object)?;
                             let observed = self.json_parse_context_label()?;
                             self.json_observe_label(observed)?;
-                            let bytes = keys.iter().fold(0_u64, |bytes, key| {
-                                bytes
-                                    .saturating_add(Self::estimate_js_string_bytes(key))
-                                    .saturating_add(std::mem::size_of::<JsString>() as u64)
+                            let slots = (keys.capacity() as u64)
+                                .saturating_mul(std::mem::size_of::<JsString>() as u64);
+                            let bytes = keys.iter().fold(slots, |bytes, key| {
+                                bytes.saturating_add(Self::estimate_js_string_bytes(key))
                             });
                             self.json_reserve_temporary(bytes)?;
                             retained += bytes;
@@ -827,6 +701,8 @@ impl InterpreterCore {
                             .and_then(|record| {
                                 record.elements.get_mut(usize::try_from(*index).ok()?)
                             })
+                            .and_then(Option::take)
+                            .and_then(|index| source_records.get_mut(index))
                             .and_then(Option::take);
                         next = Some((*object, JsString::from(index.to_string()), child));
                         *index += 1;
@@ -841,7 +717,9 @@ impl InterpreterCore {
                         let child = frame
                             .record
                             .as_mut()
-                            .and_then(|record| record.take_entry(&key));
+                            .and_then(|record| record.take_entry(&key))
+                            .and_then(|index| source_records.get_mut(index))
+                            .and_then(Option::take);
                         next = Some((*object, key, child));
                         *index += 1;
                         continue;
@@ -884,6 +762,7 @@ impl InterpreterCore {
             }
         })();
         drop(frames);
+        self.json_release_temporary(frame_bytes);
         self.json_release_temporary(retained);
         outcome
     }
@@ -1180,7 +1059,7 @@ mod tests {
         );
     }
 
-    fn parse_record(core: &mut InterpreterCore, text: &str) -> (JsonParseRecord, u64, Vec<u16>) {
+    fn parse_record(core: &mut InterpreterCore, text: &str) -> (JsonParseRecords, u64, Vec<u16>) {
         let units: Vec<u16> = text.encode_utf16().collect();
         let value = core.json_parse_document(&units).unwrap();
         let mut charged = 0;
@@ -1192,23 +1071,28 @@ mod tests {
         (record, charged, units)
     }
 
+    fn take_root_entry(records: &mut JsonParseRecords, key: &JsString) -> Option<JsonParseRecord> {
+        let index = records.root.take_entry(key)?;
+        records.nodes.get_mut(index)?.take()
+    }
+
     #[test]
     fn source_record_index_keeps_final_duplicate_and_consumes_once() {
         let mut core = core();
         let (mut record, charged, units) =
             parse_record(&mut core, r#"{"z":0,"a":1.00,"middle":3,"a":2e0,"z":-0}"#);
-        assert_eq!(record.entries.len(), 3);
+        assert_eq!(record.root.entries.len(), 3);
         for (key, source) in [("z", "-0"), ("middle", "3"), ("a", "2e0")] {
             let key = JsString::from(key);
-            let child = record.take_entry(&key).expect("parsed key");
+            let child = take_root_entry(&mut record, &key).expect("parsed key");
             assert_eq!(
                 child.source_units(&units).map(JsString::from_code_units),
                 Some(JsString::from(source))
             );
-            assert!(record.take_entry(&key).is_none());
+            assert!(take_root_entry(&mut record, &key).is_none());
         }
-        assert!(record.take_entry(&JsString::from("missing")).is_none());
-        let Value::Object(id) = record.value else {
+        assert!(take_root_entry(&mut record, &JsString::from("missing")).is_none());
+        let Value::Object(id) = record.root.value else {
             panic!("object expected");
         };
         assert_eq!(
@@ -1231,10 +1115,9 @@ mod tests {
             &mut core,
             r#"{"\ud800":1,"\ud801":2,"\ufffd":3,"\ud800":4.00}"#,
         );
-        assert_eq!(record.entries.len(), 3);
+        assert_eq!(record.root.entries.len(), 3);
         for (unit, source) in [(0xD800, "4.00"), (0xD801, "2"), (0xFFFD, "3")] {
-            let child = record
-                .take_entry(&JsString::from_code_units(&[unit]))
+            let child = take_root_entry(&mut record, &JsString::from_code_units(&[unit]))
                 .expect("distinct exact key");
             assert_eq!(
                 child.source_units(&units).map(JsString::from_code_units),
@@ -1256,17 +1139,17 @@ mod tests {
             .collect();
         let text = format!("{{{}}}", entries.join(","));
         let (mut record, charged, units) = parse_record(&mut core, &text);
-        assert_eq!(record.entries.len(), width);
+        assert_eq!(record.root.entries.len(), width);
         assert!(
             record
+                .root
                 .entries
                 .windows(2)
                 .all(|pair| pair[0].key < pair[1].key)
         );
         // Use a different order from both the source and the sorted index.
         for index in (0..width).step_by(2).chain((1..width).step_by(2)) {
-            let child = record
-                .take_entry(&JsString::from(format!("k{index:04}")))
+            let child = take_root_entry(&mut record, &JsString::from(format!("k{index:04}")))
                 .expect("indexed key");
             assert_eq!(child.value, Value::Int(index as i64));
             assert_eq!(
@@ -1274,7 +1157,7 @@ mod tests {
                 Some(JsString::from(index.to_string()))
             );
         }
-        assert!(record.entries.iter().all(|entry| entry.record.is_none()));
+        assert!(record.root.entries.iter().all(|entry| entry.record.is_none()));
         drop(record);
         core.json_release_temporary(charged);
         assert_eq!(core.json_parse_temporary_bytes, 0);
@@ -1347,9 +1230,9 @@ mod tests {
             .json_parse_record(&units[..6], &mut pos, parsed, &mut charged)
             .unwrap();
         assert_eq!(pos, 6);
-        assert_eq!(record.source, Some(0..6));
+        assert_eq!(record.root.source, Some(0..6));
         assert_eq!(
-            record.source_units(&units).map(JsString::from_code_units),
+            record.root.source_units(&units).map(JsString::from_code_units),
             Some(text)
         );
         drop(record);

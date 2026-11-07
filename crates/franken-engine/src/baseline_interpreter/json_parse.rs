@@ -1,11 +1,13 @@
 //! Native JSON.parse: coercion, transactional parsing, and reviver execution.
 //!
-//! The UTF-16 token parser lives in the parent module. No guest callback runs
+//! UTF-16 lexical helpers live in the parent module; container parsing uses
+//! an explicit, metered work stack. No guest callback runs
 //! while its unpublished heap suffix is transactional: input coercion happens
 //! before the checkpoint, and revivers run only after the complete text parses.
 
 use super::*;
 
+mod document;
 mod raw_validation;
 mod reachable;
 
@@ -304,6 +306,61 @@ impl InterpreterCore {
         value: Value,
         charged: &mut u64,
     ) -> Result<JsonParseRecord, InterpreterError> {
+        // Source records still own recursive trees. Check their depth without
+        // recursion before constructing anything: their builder AND destructor
+        // must remain bounded until both use an iterative representation.
+        // Ordinary parsing and JSON modules do not have this restriction.
+        self.json_check_reviver_record_depth(units, *pos)?;
+        self.json_parse_record_inner(units, pos, value, charged)
+    }
+
+    fn json_check_reviver_record_depth(
+        &mut self,
+        units: &[u16],
+        mut pos: usize,
+    ) -> Result<(), InterpreterError> {
+        let mut depth = 0_usize;
+        let mut work = 0_u16;
+        while pos < units.len() {
+            if work == 0 {
+                self.json_charge_work()?;
+                work = 256;
+            }
+            work -= 1;
+            match units[pos] {
+                0x7B | 0x5B => {
+                    if depth > 200 {
+                        return Err(InterpreterError::StackOverflow { depth, max: 200 });
+                    }
+                    depth += 1;
+                    pos += 1;
+                }
+                0x7D | 0x5D => {
+                    depth = depth.saturating_sub(1);
+                    pos += 1;
+                }
+                0x22 | 0x2D | 0x30..=0x39 | 0x74 | 0x66 | 0x6E => {
+                    if depth > 200 {
+                        return Err(InterpreterError::StackOverflow { depth, max: 200 });
+                    }
+                    // The text has already passed JSON validation. Skip one
+                    // exact token so braces and escaped quotes inside strings
+                    // cannot be mistaken for container boundaries.
+                    pos = json_primitive_source_end(units, pos);
+                }
+                _ => pos += 1,
+            }
+        }
+        Ok(())
+    }
+
+    fn json_parse_record_inner(
+        &mut self,
+        units: &[u16],
+        pos: &mut usize,
+        value: Value,
+        charged: &mut u64,
+    ) -> Result<JsonParseRecord, InterpreterError> {
         self.json_charge_work()?;
         let bytes = std::mem::size_of::<JsonParseRecord>() as u64;
         self.json_reserve_temporary(bytes)?;
@@ -331,7 +388,7 @@ impl InterpreterCore {
                     Self::json_skip_ws(units, pos);
                     *pos += 1;
                     let child = self.json_parsed_child(&record.value, &key);
-                    let child = self.json_parse_record(units, pos, child, charged)?;
+                    let child = self.json_parse_record_inner(units, pos, child, charged)?;
                     // Stage in source order, including duplicates, then index
                     // once. Charge every staged entry, even if deduplication
                     // later drops it; no sorting scratch allocation is needed.
@@ -364,7 +421,7 @@ impl InterpreterCore {
                     }
                     let key = JsString::from(record.elements.len().to_string());
                     let child = self.json_parsed_child(&record.value, &key);
-                    let child = self.json_parse_record(units, pos, child, charged)?;
+                    let child = self.json_parse_record_inner(units, pos, child, charged)?;
                     record.elements.push(Some(child));
                     Self::json_skip_ws(units, pos);
                     if units.get(*pos) == Some(&0x2C) {
@@ -486,7 +543,7 @@ impl InterpreterCore {
         }
         let heap_checkpoint = self.heap.len();
         let memory_checkpoint = self.estimated_memory_bytes;
-        let parsed = self.json_parse_value(units, &mut pos, 0);
+        let parsed = self.json_parse_document_value(units, &mut pos);
         match parsed {
             Ok(Some(value)) => {
                 Self::json_skip_ws(units, &mut pos);
@@ -967,6 +1024,7 @@ impl InterpreterCore {
 mod tests {
     use super::*;
 
+    mod depth;
     mod source_spans;
 
     fn core() -> InterpreterCore {
@@ -1524,53 +1582,15 @@ mod tests {
     }
 
     #[test]
-    fn depth_and_instruction_exhaustion_are_not_syntax_errors() {
-        let nested = format!("{}0{}", "[".repeat(202), "]".repeat(202));
-        let mut document_core = core();
-        let units: Vec<u16> = nested.encode_utf16().collect();
-        let document_outcome = document_core.json_parse_document(&units);
-        assert!(matches!(
-            document_outcome,
-            Err(InterpreterError::StackOverflow { .. })
-        ));
-        assert!(document_core.pending_exception.is_none());
-        assert!(document_core.active_inline_callback_context_label.is_none());
-        assert_eq!(
-            document_core.estimated_memory_bytes(),
-            document_core.recompute_estimated_memory_bytes()
-        );
-
-        // The document parser preserves its typed depth fault. At the JS
-        // boundary, bd-9vouw.72 deliberately exposes stack overflow as a
-        // RangeError; instruction/memory/containment refusals stay host faults.
+    fn instruction_exhaustion_is_not_a_syntax_error() {
         let mut core = core();
-        let outcome = parse(&mut core, Value::str(nested));
-        assert!(
-            matches!(&outcome, Err(InterpreterError::UncaughtException { value })
-                if value == "RangeError: Maximum call stack size exceeded"),
-            "depth refusal must not become SyntaxError; observed {outcome:?}"
-        );
-        let Some(Value::Object(error)) = core.pending_exception.as_ref() else {
-            panic!("the JS boundary must retain the actual RangeError object");
-        };
-        assert_eq!(
-            core.chain_data_property(*error, "name"),
-            Some(&Value::str("RangeError"))
-        );
-        assert_eq!(core.pending_exception_label, Label::Public);
-        assert!(core.active_inline_callback_context_label.is_none());
-        assert_eq!(
-            core.estimated_memory_bytes(),
-            core.recompute_estimated_memory_bytes()
-        );
-        core.replace_pending_abrupt_slots(None, None)
-            .expect("consume the language exception through its accounted boundary");
         core.config.instruction_budget = core.instructions_executed;
         assert!(matches!(
             parse(&mut core, Value::str("[1]")),
             Err(InterpreterError::BudgetExhausted { .. })
         ));
         assert!(core.pending_exception.is_none());
+        assert_eq!(core.json_parse_temporary_bytes, 0);
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()

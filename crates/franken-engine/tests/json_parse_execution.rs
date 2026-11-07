@@ -36,12 +36,19 @@ fn lower(source: &str) -> Ir3Module {
 }
 
 fn cores() -> impl Iterator<Item = InterpreterCore> {
+    configured_cores(None)
+}
+
+fn configured_cores(instruction_budget: Option<u64>) -> impl Iterator<Item = InterpreterCore> {
     [
         InterpreterConfig::quickjs_defaults(),
         InterpreterConfig::v8_defaults(),
     ]
     .into_iter()
-    .map(|mut config| {
+    .map(move |mut config| {
+        if let Some(budget) = instruction_budget {
+            config.instruction_budget = budget;
+        }
         config.granted_capabilities = [
             RuntimeCapability::VmDispatch,
             RuntimeCapability::HeapAllocate,
@@ -55,8 +62,16 @@ fn cores() -> impl Iterator<Item = InterpreterCore> {
 }
 
 fn assert_output(source: &str, expected: &[&str]) {
+    assert_output_with_cores(source, expected, cores());
+}
+
+fn assert_output_with_cores(
+    source: &str,
+    expected: &[&str],
+    interpreters: impl Iterator<Item = InterpreterCore>,
+) {
     let module = lower(source);
-    for mut core in cores() {
+    for mut core in interpreters {
         let result = core
             .execute(&module)
             .expect("native JSON execution must succeed");
@@ -516,4 +531,53 @@ fn is_depth_refusal<T>(result: &Result<T, InterpreterError>, max: Option<usize>)
         ),
         _ => false,
     }
+}
+
+#[test]
+fn deep_arrays_and_objects_use_parser_frames_in_both_execution_profiles() {
+    assert_output_with_cores(
+        r#"
+        const depth = 5000;
+        let array = JSON.parse('['.repeat(depth) + '42' + ']'.repeat(depth));
+        for (let i = 0; i < depth; i++) array = array[0];
+        log(array);
+        let object = JSON.parse('{"x":'.repeat(depth) + '7' + '}'.repeat(depth), null);
+        for (let i = 0; i < depth; i++) object = object.x;
+        log(object);
+        "#,
+        &["42", "7"],
+        configured_cores(Some(1_000_000)),
+    );
+}
+
+#[test]
+fn deep_syntax_failures_leave_subsequent_json_parse_usable() {
+    assert_output(
+        r#"
+        const prefix = '['.repeat(1024);
+        const suffix = ']'.repeat(1024);
+        try { JSON.parse(prefix + '0' + suffix + ' trailing'); }
+        catch (error) { log(error instanceof SyntaxError); }
+        try { JSON.parse(prefix + '0,' + suffix); }
+        catch (error) { log(error instanceof SyntaxError); }
+        log(JSON.parse('{"ok":9}').ok);
+        "#,
+        &["true", "true", "9"],
+    );
+}
+
+#[test]
+fn deep_reviver_source_records_refuse_before_any_guest_callback() {
+    assert_output(
+        r#"
+        let calls = 0;
+        const text = '['.repeat(1024) + '0' + ']'.repeat(1024);
+        try {
+            JSON.parse(text, function(key, value) { calls++; return value; });
+        } catch (error) { log(error instanceof RangeError); }
+        log(calls);
+        log(JSON.parse('7', function(key, value) { return value + 1; }));
+        "#,
+        &["true", "0", "8"],
+    );
 }

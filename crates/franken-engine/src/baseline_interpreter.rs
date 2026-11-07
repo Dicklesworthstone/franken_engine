@@ -118639,12 +118639,10 @@ impl InterpreterCore {
             })
     }
 
-    // -- JSON.parse recursive-descent parser (bd-9a8cz.4) ------------------
-    // Parses the full JSON grammar into heap Values. `Option` distinguishes
-    // parse success/failure (None => invalid JSON => caller throws SyntaxError);
-    // `Result` carries heap-allocation errors. The cursor operates on exact
-    // UTF-16 code units so raw lone surrogates never pass through a lossy UTF-8
-    // projection (bd-4v2up).
+    // -- JSON.parse lexical helpers (bd-9a8cz.4, bd-ktt99) ----------------
+    // The iterative container machine lives in json_parse::document. Tokens
+    // operate on exact UTF-16 code units so raw lone surrogates never pass
+    // through a lossy UTF-8 projection (bd-4v2up).
 
     fn json_skip_ws(units: &[u16], pos: &mut usize) {
         while matches!(units.get(*pos), Some(0x20 | 0x09 | 0x0A | 0x0D)) {
@@ -118765,122 +118763,6 @@ impl InterpreterCore {
             .parse::<f64>()
             .ok()
             .map(|value| Value::Float(Float64::new(value)))
-    }
-
-    fn json_parse_value(
-        &mut self,
-        units: &[u16],
-        pos: &mut usize,
-        depth: usize,
-    ) -> Result<Option<Value>, InterpreterError> {
-        if depth > 200 {
-            return Err(InterpreterError::StackOverflow { depth, max: 200 });
-        }
-        self.json_charge_work()?;
-        Self::json_skip_ws(units, pos);
-        let Some(&unit) = units.get(*pos) else {
-            return Ok(None);
-        };
-        match unit {
-            0x7B => self.json_parse_object(units, pos, depth),
-            0x5B => self.json_parse_array(units, pos, depth),
-            0x22 => Ok(Self::json_parse_string(units, pos).map(Value::str)),
-            0x74 if units[*pos..].starts_with(&[0x74, 0x72, 0x75, 0x65]) => {
-                *pos += 4;
-                Ok(Some(Value::Bool(true)))
-            }
-            0x66 if units[*pos..].starts_with(&[0x66, 0x61, 0x6C, 0x73, 0x65]) => {
-                *pos += 5;
-                Ok(Some(Value::Bool(false)))
-            }
-            0x6E if units[*pos..].starts_with(&[0x6E, 0x75, 0x6C, 0x6C]) => {
-                *pos += 4;
-                Ok(Some(Value::Null))
-            }
-            0x2D | 0x30..=0x39 => Ok(Self::json_parse_number(units, pos)),
-            _ => Ok(None),
-        }
-    }
-
-    fn json_parse_object(
-        &mut self,
-        units: &[u16],
-        pos: &mut usize,
-        depth: usize,
-    ) -> Result<Option<Value>, InterpreterError> {
-        *pos += 1; // consume '{'
-        let prototype = self.ensure_builtin_prototype("Object")?;
-        let id = self.alloc_object_with_prototype(Some(prototype))?;
-        Self::json_skip_ws(units, pos);
-        if units.get(*pos) == Some(&0x7D) {
-            *pos += 1;
-            return Ok(Some(Value::Object(id)));
-        }
-        loop {
-            Self::json_skip_ws(units, pos);
-            let Some(key) = Self::json_parse_string(units, pos) else {
-                return Ok(None);
-            };
-            Self::json_skip_ws(units, pos);
-            if units.get(*pos) != Some(&0x3A) {
-                return Ok(None);
-            }
-            *pos += 1;
-            let Some(value) = self.json_parse_value(units, pos, depth + 1)? else {
-                return Ok(None);
-            };
-            // Preserve exact UTF-16 key identity, including __proto__ as an
-            // ordinary own data property and distinct unpaired surrogates.
-            self.json_store_parsed_property(id, key, value)?;
-            Self::json_skip_ws(units, pos);
-            match units.get(*pos) {
-                Some(0x2C) => *pos += 1,
-                Some(0x7D) => {
-                    *pos += 1;
-                    return Ok(Some(Value::Object(id)));
-                }
-                _ => return Ok(None),
-            }
-        }
-    }
-
-    fn json_parse_array(
-        &mut self,
-        units: &[u16],
-        pos: &mut usize,
-        depth: usize,
-    ) -> Result<Option<Value>, InterpreterError> {
-        *pos += 1; // consume '['
-        let prototype = self.ensure_builtin_prototype("Array")?;
-        let id = self.alloc_array_with_prototype(Some(prototype))?;
-        Self::json_skip_ws(units, pos);
-        if units.get(*pos) == Some(&0x5D) {
-            *pos += 1;
-            self.json_finalize_array_len(id, 0)?;
-            return Ok(Some(Value::Object(id)));
-        }
-        let mut len: u32 = 0;
-        loop {
-            let Some(value) = self.json_parse_value(units, pos, depth + 1)? else {
-                return Ok(None);
-            };
-            self.json_store_parsed_property(id, JsString::from(len.to_string()), value)?;
-            len = len
-                .checked_add(1)
-                .ok_or_else(|| InterpreterError::RangeError {
-                    message: "JSON array length exceeds the array-index range".to_string(),
-                })?;
-            Self::json_skip_ws(units, pos);
-            match units.get(*pos) {
-                Some(0x2C) => *pos += 1,
-                Some(0x5D) => {
-                    *pos += 1;
-                    self.json_finalize_array_len(id, len)?;
-                    return Ok(Some(Value::Object(id)));
-                }
-                _ => return Ok(None),
-            }
-        }
     }
 
     fn json_finalize_array_len(&mut self, id: ObjectId, len: u32) -> Result<(), InterpreterError> {

@@ -680,3 +680,40 @@ fn abrupt_deep_reviver_preserves_escaped_source_across_reentrant_parse() {
         configured_cores(Some(5_000_000)),
     );
 }
+
+#[test]
+fn long_json_tokens_and_whitespace_consume_budget_in_both_execution_profiles() {
+    for (short, document) in [
+        ("\"x\"", format!("\"{}\"", "x".repeat(65_536))),
+        ("1", format!("1{}", "0".repeat(65_536))),
+        ("0", format!("{}0", " ".repeat(65_536))),
+        ("0", format!("0{}", " ".repeat(65_536))),
+    ] {
+        let short_module = lower(&format!("JSON.parse({short:?});"));
+        let baseline_work = cores()
+            .map(|mut core| {
+                core.execute(&short_module)
+                    .expect("short control must execute")
+                    .instructions_executed
+            })
+            .max()
+            .unwrap();
+        // The same source shape and native dispatch fit this budget. The
+        // literal is loaded directly; guest string construction cannot be
+        // mistaken for lexical parser work.
+        let module = lower(&format!("JSON.parse({document:?});"));
+        for mut core in configured_cores(Some(baseline_work + 4)) {
+            assert!(
+                matches!(
+                    core.execute(&module),
+                    Err(InterpreterError::BudgetExhausted { .. })
+                ),
+                "a long JSON token or whitespace run must consume lexical work"
+            );
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+}

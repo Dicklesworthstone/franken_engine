@@ -398,6 +398,13 @@ impl InterpreterCore {
     }
 
     fn json_parse_document(&mut self, units: &[u16]) -> Result<Value, InterpreterError> {
+        // Admit proportional lexical work before a long string, number or
+        // whitespace run can scan a constant-size syntax tree. The value
+        // parser charges the first interval, preserving short-input counts.
+        // This is admission cost, not a checkpoint inside native conversion.
+        for _ in 0..units.len().saturating_sub(1) / 256 {
+            self.json_charge_work()?;
+        }
         let mut pos = 0;
         Self::json_skip_ws(units, &mut pos);
         if matches!(units.get(pos), Some(0x7B | 0x5B)) {
@@ -904,6 +911,7 @@ mod tests {
     use super::*;
 
     mod depth;
+    mod lexical_work;
     mod source_spans;
 
     fn core() -> InterpreterCore {

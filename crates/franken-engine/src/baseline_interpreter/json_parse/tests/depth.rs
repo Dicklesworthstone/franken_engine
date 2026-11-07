@@ -137,9 +137,10 @@ fn closing_a_deep_document_is_metered_and_rolls_back_on_budget_exhaustion() {
         .collect();
     let heap_before = core.heap.len();
     let memory_before = core.estimated_memory_bytes();
-    // Admit every opening token and the innermost primitive. The first
-    // parent attachment must still charge work instead of freely unwinding.
-    let budget = core.instructions_executed + depth as u64 + 1;
+    // Admit the lexical scan, every opening token and the innermost primitive.
+    // The first parent attachment must still charge work on the closing suffix.
+    let lexical_work = (units.len().saturating_sub(1) / 256) as u64;
+    let budget = core.instructions_executed + lexical_work + depth as u64 + 1;
     core.config.instruction_budget = budget;
     assert_eq!(
         core.json_parse_document(&units),

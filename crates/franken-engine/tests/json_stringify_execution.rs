@@ -31,12 +31,19 @@ fn lower(source: &str) -> Ir3Module {
 }
 
 fn cores() -> impl Iterator<Item = InterpreterCore> {
+    cores_with_budget(None)
+}
+
+fn cores_with_budget(instruction_budget: Option<u64>) -> impl Iterator<Item = InterpreterCore> {
     [
         InterpreterConfig::quickjs_defaults(),
         InterpreterConfig::v8_defaults(),
     ]
     .into_iter()
-    .map(|mut config| {
+    .map(move |mut config| {
+        if let Some(budget) = instruction_budget {
+            config.instruction_budget = budget;
+        }
         config.granted_capabilities = [
             RuntimeCapability::VmDispatch,
             RuntimeCapability::HeapAllocate,
@@ -50,8 +57,12 @@ fn cores() -> impl Iterator<Item = InterpreterCore> {
 }
 
 fn assert_output(source: &str, expected: &[&str]) {
+    assert_output_with_budget(source, expected, None);
+}
+
+fn assert_output_with_budget(source: &str, expected: &[&str], instruction_budget: Option<u64>) {
     let module = lower(source);
-    for mut core in cores() {
+    for mut core in cores_with_budget(instruction_budget) {
         let result = core
             .execute(&module)
             .expect("native JSON execution must succeed");
@@ -324,14 +335,16 @@ fn hook_results_are_not_reprocessed_as_a_second_to_json_call() {
 
 #[test]
 fn deep_finite_serialization_uses_a_heap_work_stack() {
-    assert_output(
+    assert_output_with_budget(
         r#"
         let root = 1;
-        for (let i = 0; i < 150; i++) root = [root];
+        for (let i = 0; i < 400; i++) root = [root];
         const text = JSON.stringify(root);
-        log(text.length, text[0] === '[', text[text.length - 1] === ']');
+        log(text === '['.repeat(400) + '1' + ']'.repeat(400));
+        log(JSON.stringify({ after: true }));
         "#,
-        &["301 true true"],
+        &["true", "{\"after\":true}"],
+        Some(2_000_000),
     );
 }
 
@@ -393,14 +406,84 @@ fn exponent_signs_stay_inside_numeric_tokens_but_not_identifiers_or_hex_literals
 }
 
 #[test]
-fn overdeep_input_hits_the_host_guard_without_leaking_traversal_scratch() {
+fn deep_mixed_containers_preserve_exact_utf16_keys_and_values() {
+    assert_output_with_budget(
+        r#"
+        let root = String.fromCharCode(0xd800);
+        const key = String.fromCharCode(0xd801);
+        let expected = '"\\ud800"';
+        for (let i = 0; i < 400; i++) {
+            if (i % 2 === 0) {
+                root = [root];
+                expected = '[' + expected + ']';
+            } else {
+                const parent = {}; parent[key] = root; root = parent;
+                expected = '{"\\ud801":' + expected + '}';
+            }
+        }
+        log(JSON.stringify(root) === expected);
+        "#,
+        &["true"],
+        Some(2_000_000),
+    );
+}
+
+#[test]
+fn deep_shared_subtrees_remain_valid_and_ancestor_cycles_are_catchable() {
+    assert_output_with_budget(
+        r#"
+        const leaf = { value: 1 };
+        let root = leaf;
+        let expected = '{"value":1}';
+        for (let i = 0; i < 240; i++) {
+            root = [root];
+            expected = '[' + expected + ']';
+        }
+        log(JSON.stringify([root, root]) === '[' + expected + ',' + expected + ']');
+        leaf.back = root;
+        try { JSON.stringify(root); } catch (error) { log(error instanceof TypeError); }
+        log(JSON.stringify(root, function(key, value) {
+            return key === 'back' ? undefined : value;
+        }) === expected);
+        log(JSON.stringify({ after: true }));
+        "#,
+        &["true", "true", "true", "{\"after\":true}"],
+        Some(4_000_000),
+    );
+}
+
+#[test]
+fn deep_getter_exceptions_stop_later_gets_and_release_all_frames() {
+    assert_output_with_budget(
+        r#"
+        const seen = [];
+        const leaf = {};
+        Object.defineProperty(leaf, 'a', {
+            enumerable: true, get: function() { seen.push('a'); throw 'deep stop'; }
+        });
+        Object.defineProperty(leaf, 'b', {
+            enumerable: true, get: function() { seen.push('b'); return 2; }
+        });
+        let root = leaf;
+        for (let i = 0; i < 240; i++) root = [root];
+        try { JSON.stringify(root); } catch (error) { log(error); }
+        log(seen.join('|'), JSON.stringify({ after: true }));
+        "#,
+        &["deep stop", "a {\"after\":true}"],
+        Some(2_000_000),
+    );
+}
+
+#[test]
+fn deep_serialization_obeys_output_budget_and_releases_traversal_scratch() {
     let module =
         lower("let root = 1; for (let i = 0; i < 400; i++) root = [root]; JSON.stringify(root);");
     for mut config in [
         InterpreterConfig::quickjs_defaults(),
         InterpreterConfig::v8_defaults(),
     ] {
-        config.instruction_budget = 500_000;
+        config.instruction_budget = 2_000_000;
+        config.max_string_size = 256;
         config.granted_capabilities = [
             RuntimeCapability::VmDispatch,
             RuntimeCapability::HeapAllocate,
@@ -409,9 +492,11 @@ fn overdeep_input_hits_the_host_guard_without_leaking_traversal_scratch() {
         ]
         .into_iter()
         .collect();
-        let mut core = InterpreterCore::new(config, "json-stringify-depth");
-        let result = core.execute(&module);
-        assert!(is_depth_refusal(&result, Some(200)), "{result:?}");
+        let mut core = InterpreterCore::new(config, "json-stringify-depth-limit");
+        assert!(matches!(
+            core.execute(&module),
+            Err(InterpreterError::StringLimitExceeded { .. })
+        ));
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
@@ -505,26 +590,5 @@ fn large_sparse_arrays_obey_the_instruction_budget_inside_serialization() {
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
         );
-    }
-}
-
-/// A call-depth refusal (bd-9vouw.72): the host StackOverflow (with `max` when
-/// given) or, since a stack overflow is a catchable RangeError, the uncaught
-/// RangeError it becomes after a handler boundary (an iterator close, a
-/// builtin's callback, a reviver) rethrew it. Anything else fails, including
-/// a SyntaxError and a native stack abort.
-fn is_depth_refusal<T>(result: &Result<T, InterpreterError>, max: Option<usize>) -> bool {
-    match result {
-        Err(InterpreterError::StackOverflow { max: limit, .. }) => {
-            max.is_none_or(|expected| *limit == expected)
-        }
-        // The same refusal, raised as a catchable RangeError that no handler
-        // caught; how the uncaught value renders depends on the path.
-        Err(InterpreterError::UncaughtException { value }) => matches!(
-            value.as_str(),
-            "[object]: Maximum call stack size exceeded"
-                | "RangeError: Maximum call stack size exceeded"
-        ),
-        _ => false,
     }
 }

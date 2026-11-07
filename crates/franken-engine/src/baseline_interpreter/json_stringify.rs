@@ -3,13 +3,12 @@
 //! The traversal is an explicit work stack. Property selection is snapshotted,
 //! but Get, toJSON and replacer calls stay live and ordered. Only ancestors
 //! participate in cycle detection, and no guest mutation is rolled back on an
-//! exception. Scratch remains charged across reentrant guest calls.
+//! exception. Scratch remains charged across reentrant guest calls. Nesting is
+//! bounded by the execution, memory and output budgets, not the native stack.
 
 use super::*;
 
 mod output;
-
-const MAX_STRINGIFY_DEPTH: usize = 200;
 
 #[derive(Default)]
 struct StringifyState {
@@ -39,8 +38,12 @@ enum StringifyChildren {
 
 impl StringifyState {
     fn reserve(&mut self, core: &mut InterpreterCore, bytes: u64) -> Result<(), InterpreterError> {
+        let charged = self
+            .charged
+            .checked_add(bytes)
+            .ok_or_else(|| core.memory_budget_error(u64::MAX, core.heap_object_count_u32()))?;
         core.json_reserve_temporary(bytes)?;
-        self.charged += bytes;
+        self.charged = charged;
         Ok(())
     }
 
@@ -263,14 +266,24 @@ impl StringifyState {
         frame: StringifyFrame,
     ) -> Result<(), InterpreterError> {
         if self.frames.len() == self.frames.capacity() {
-            let additional = self.frames.capacity().max(8);
-            self.reserve(
-                core,
-                (additional * std::mem::size_of::<StringifyFrame>()) as u64,
-            )?;
-            self.frames
-                .try_reserve_exact(additional)
-                .map_err(|_| core.memory_budget_error(u64::MAX, core.heap_object_count_u32()))?;
+            let capacity = self.frames.capacity();
+            let additional = capacity.max(8);
+            let frame_bytes = std::mem::size_of::<StringifyFrame>() as u64;
+            let bytes = (additional as u64)
+                .checked_mul(frame_bytes)
+                .ok_or_else(|| core.memory_budget_error(u64::MAX, core.heap_object_count_u32()))?;
+            self.reserve(core, bytes)?;
+            if self.frames.try_reserve_exact(additional).is_err() {
+                self.release(core, bytes);
+                return Err(core.memory_budget_error(u64::MAX, core.heap_object_count_u32()));
+            }
+            // Keep every reserved slot charged until the whole work stack is
+            // dropped, including any extra capacity supplied by the allocator.
+            let extra = self.frames.capacity() - capacity - additional;
+            let extra_bytes = (extra as u64)
+                .checked_mul(frame_bytes)
+                .ok_or_else(|| core.memory_budget_error(u64::MAX, core.heap_object_count_u32()))?;
+            self.reserve(core, extra_bytes)?;
         }
         self.frames.push(frame);
         Ok(())
@@ -663,12 +676,6 @@ impl InterpreterCore {
                                             got: "circular structure".into(),
                                         });
                                     }
-                                    if state.frames.len() >= MAX_STRINGIFY_DEPTH {
-                                        return Err(InterpreterError::StackOverflow {
-                                            depth: state.frames.len() + 1,
-                                            max: MAX_STRINGIFY_DEPTH,
-                                        });
-                                    }
                                     self.join_pending_hostcall_stream_label(object)?;
                                     let observed = self.json_parse_context_label()?;
                                     self.json_observe_label(observed)?;
@@ -933,6 +940,65 @@ mod tests {
         assert!(core.pending_exception.is_none());
         assert!(core.active_inline_callback_context_label.is_none());
         assert_accounted(&core);
+    }
+
+    fn deep_object_chain(core: &mut InterpreterCore) -> Value {
+        let mut value = Value::Int(1);
+        for _ in 0..400 {
+            let object = core.alloc_object_with_properties(&[("x", value)]).unwrap();
+            value = Value::Object(object);
+        }
+        value
+    }
+
+    #[test]
+    fn deep_serialization_releases_scratch_on_success_and_output_refusal() {
+        for output_limit in [None, Some(256)] {
+            let mut core = core();
+            core.config.instruction_budget = 2_000_000;
+            let value = deep_object_chain(&mut core);
+            core.seed_register(0, value).unwrap();
+            if let Some(limit) = output_limit {
+                core.config.max_string_size = limit;
+            }
+            let result = stringify(&mut core);
+            if output_limit.is_some() {
+                assert!(matches!(
+                    result,
+                    Err(InterpreterError::StringLimitExceeded { .. })
+                ));
+            } else {
+                assert_eq!(
+                    result.unwrap(),
+                    Value::str(format!("{}1{}", "{\"x\":".repeat(400), "}".repeat(400)))
+                );
+            }
+            assert_accounted(&core);
+        }
+    }
+
+    #[test]
+    fn deep_serialization_releases_scratch_when_its_last_work_checkpoint_refuses() {
+        let mut completed = core();
+        completed.config.instruction_budget = 2_000_000;
+        let value = deep_object_chain(&mut completed);
+        completed.seed_register(0, value).unwrap();
+        stringify(&mut completed).unwrap();
+        let work = completed.instructions_executed;
+        assert!(work > 0);
+        assert_accounted(&completed);
+
+        let mut refused = core();
+        let value = deep_object_chain(&mut refused);
+        refused.seed_register(0, value).unwrap();
+        refused.config.instruction_budget = work - 1;
+        assert!(matches!(
+            stringify(&mut refused),
+            Err(InterpreterError::BudgetExhausted { .. })
+        ));
+        assert!(refused.pending_exception.is_none());
+        assert!(refused.active_inline_callback_context_label.is_none());
+        assert_accounted(&refused);
     }
 
     #[test]

@@ -43,6 +43,8 @@ on:
       - 'crates/franken-engine/tests/reflect_*.rs'
       - 'crates/franken-engine/tests/querystring_os_builtin_bd_qmy52.rs'
       - 'crates/franken-engine/tests/js_string*.rs'
+      - 'crates/franken-engine/tests/json_parse_execution.rs'
+      - 'crates/franken-engine/tests/json_stringify_execution.rs'
       - 'crates/franken-engine/tests/fixtures/string_hotpaths/**'
       - 'crates/franken-engine/tests/environment_hostcalls.rs'
       - 'crates/franken-extension-host/src/host_io.rs'
@@ -360,6 +362,10 @@ jobs:
             cargo --version
             sha256sum Cargo.lock crates/franken-engine/Cargo.toml \
               crates/franken-engine/src/baseline_interpreter.rs \
+              crates/franken-engine/src/baseline_interpreter/json_parse.rs \
+              crates/franken-engine/src/baseline_interpreter/json_stringify.rs \
+              crates/franken-engine/tests/json_parse_execution.rs \
+              crates/franken-engine/tests/json_stringify_execution.rs \
               crates/franken-engine/src/lowering_pipeline/util_module.rs \
               crates/franken-engine/tests/buffer_value_bd_9vouw_104.rs \
               crates/franken-engine/src/lowering_pipeline/diagnostics_channel_module.js \
@@ -368,6 +374,20 @@ jobs:
               crates/franken-engine/tests/timers_module_objects.rs \
               crates/franken-engine/tests/runtime_module_resolver_execution.rs
           } | tee native-buffer-inputs.log
+      - name: Execute complete native JSON parse and stringify source regressions
+        if: always()
+        run: |
+          set -euo pipefail
+          cargo test --locked -j1 -p frankenengine-engine --no-fail-fast \
+            --test json_parse_execution --test json_stringify_execution \
+            -- --nocapture --test-threads=1 2>&1 | tee native-buffer-json-tests.log
+      - name: Execute native JSON parser and temporary accounting unit regressions
+        if: always()
+        run: |
+          set -euo pipefail
+          cargo test --locked -j1 -p frankenengine-engine --lib \
+            baseline_interpreter::json_ -- --nocapture --test-threads=1 \
+            2>&1 | tee -a native-buffer-json-tests.log
       - name: Require the actual parser and authority regression tests
         run: |
           set -euo pipefail
@@ -495,6 +515,7 @@ jobs:
           printf 'Native workflow log retention: %s days\n' "$GITHUB_RETENTION_DAYS"
           status=0
           for log in native-buffer-inputs.log native-buffer-test-list.log native-buffer-tests.log \
+            native-buffer-json-tests.log \
             native-buffer-http-test-list.log native-buffer-http-tests.log \
             native-buffer-regexp-source-tests.log native-buffer-regexp-tests.log \
             native-buffer-arguments-source-tests.log native-buffer-arguments-tests.log \

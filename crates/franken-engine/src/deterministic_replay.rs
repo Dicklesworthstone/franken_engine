@@ -189,6 +189,15 @@ impl DeterministicEventWitness {
     /// Odd, so each step is a bijection of the digest for a given word.
     const MULTIPLIER: u64 = 0x9e37_79b9_7f4a_7c15;
 
+    fn validate(&self) -> Result<(), ReplayError> {
+        if self.event_count == 0 && self.digest != Self::SEED {
+            return Err(ReplayError::InvalidEmptyDeterministicWitness {
+                digest: self.digest,
+            });
+        }
+        Ok(())
+    }
+
     /// One step: injective in `word` for a given digest and a bijection of
     /// `digest` for a given word, so two streams that differ in a single
     /// word always end in different digests.
@@ -306,7 +315,7 @@ impl NondeterminismTrace {
     /// start; has a `next_sequence` counter disagreeing with its event count; has
     /// a non-contiguous (duplicated/gapped/reordered) event sequence; has a
     /// virtual timestamp that regresses; or has an event outside the capture
-    /// window.
+    /// window; or has a noninitial witness digest without any folded decisions.
     pub fn validate_for_replay(&self) -> Result<(), ReplayError> {
         let Some(capture_ended_vts) = self.capture_ended_vts else {
             return Err(ReplayError::TraceNotFinalised);
@@ -323,6 +332,7 @@ impl NondeterminismTrace {
                 event_count: self.events.len() as u64,
             });
         }
+        self.deterministic_witness.validate()?;
         let mut previous_vts: Option<u64> = None;
         for (position, event) in self.events.iter().enumerate() {
             // Contiguity + uniqueness + order in one check: the declared sequence
@@ -384,9 +394,10 @@ impl NondeterminismTrace {
         for event in &self.events {
             push_len_prefixed(&mut buf, &event.canonical_bytes());
         }
-        // bd-9vouw.18: bind folded decisions. Omitted when nothing was folded,
-        // so traces without folded decisions keep their pre-witness ids.
-        if self.deterministic_witness.event_count > 0 {
+        // Omit only the canonical empty witness, preserving existing valid
+        // pre-witness IDs. Even a malformed zero-count digest must affect the
+        // identity, although validate_for_replay rejects it before consumption.
+        if self.deterministic_witness != DeterministicEventWitness::default() {
             push_len_prefixed(&mut buf, b"deterministic_witness");
             buf.extend_from_slice(&self.deterministic_witness.event_count.to_be_bytes());
             buf.extend_from_slice(&self.deterministic_witness.digest.to_be_bytes());
@@ -537,6 +548,8 @@ pub enum ReplayError {
         capture_started_vts: u64,
         capture_ended_vts: u64,
     },
+    /// No decisions were folded, but the digest differs from the initial seed.
+    InvalidEmptyDeterministicWitness { digest: u64 },
     /// bd-9vouw.18: the live run folded a different sequence of deterministic
     /// engine decisions (e.g. resolved a property along a different path).
     DeterministicWitnessMismatch {
@@ -607,6 +620,10 @@ impl std::fmt::Display for ReplayError {
             } => write!(
                 f,
                 "invalid finalisation bounds: capture ended at {capture_ended_vts} before it started at {capture_started_vts}"
+            ),
+            Self::InvalidEmptyDeterministicWitness { digest } => write!(
+                f,
+                "invalid empty deterministic witness: zero folded decisions with noninitial digest {digest:016x}"
             ),
             Self::DeterministicWitnessMismatch {
                 expected_count,
@@ -706,6 +723,10 @@ impl ReplayEngine {
         &mut self,
         live: &DeterministicEventWitness,
     ) -> Result<(), ReplayError> {
+        // Witness-only traces never call replay_next, so this is also a replay
+        // ingress: validate even when the two supplied witnesses are identical.
+        self.trace.validate_for_replay()?;
+        live.validate()?;
         let recorded = self.trace.deterministic_witness;
         if *live == recorded {
             return Ok(());
@@ -4953,6 +4974,75 @@ mod tests {
     }
 
     #[test]
+    fn empty_witness_digest_is_validated_and_bound_to_trace_identity() {
+        let mut trace = NondeterminismTrace::new("empty-witness");
+        trace.finalise(1);
+        trace
+            .validate_for_replay()
+            .expect("canonical empty witness");
+        let original_id = trace.derive_id();
+
+        trace.deterministic_witness.digest ^= 1;
+        let error = ReplayError::InvalidEmptyDeterministicWitness {
+            digest: trace.deterministic_witness.digest,
+        };
+        assert_eq!(trace.validate_for_replay(), Err(error.clone()));
+        assert_ne!(trace.derive_id(), original_id);
+
+        let witness = trace.deterministic_witness;
+        for mode in [
+            ReplayMode::Strict,
+            ReplayMode::BestEffort,
+            ReplayMode::Validate,
+        ] {
+            let mut engine = ReplayEngine::new(trace.clone(), mode);
+            assert_eq!(
+                engine.verify_deterministic_witness(&witness),
+                Err(error.clone()),
+                "equal malformed witnesses must never validate"
+            );
+            assert_eq!(engine.replayed_events, 0);
+        }
+    }
+
+    #[test]
+    fn witness_verification_rejects_invalid_live_witness_in_every_mode() {
+        let mut trace = NondeterminismTrace::new("live-witness");
+        trace.finalise(1);
+        let live = DeterministicEventWitness {
+            event_count: 0,
+            digest: 0,
+        };
+        for mode in [
+            ReplayMode::Strict,
+            ReplayMode::BestEffort,
+            ReplayMode::Validate,
+        ] {
+            let mut engine = ReplayEngine::new(trace.clone(), mode);
+            assert_eq!(
+                engine.verify_deterministic_witness(&live),
+                Err(ReplayError::InvalidEmptyDeterministicWitness { digest: 0 })
+            );
+            assert_eq!(
+                engine.divergence_count(),
+                0,
+                "malformation is not a value divergence"
+            );
+        }
+    }
+
+    #[test]
+    fn witness_only_replay_requires_a_finalized_trace() {
+        let trace = NondeterminismTrace::new("unfinished-witness");
+        let witness = trace.deterministic_witness;
+        let mut engine = ReplayEngine::new(trace, ReplayMode::Strict);
+        assert_eq!(
+            engine.verify_deterministic_witness(&witness),
+            Err(ReplayError::TraceNotFinalised)
+        );
+    }
+
+    #[test]
     fn trace_id_binds_witness_only_when_decisions_were_folded_bd_9vouw_18() {
         let mut plain = NondeterminismTrace::new("id");
         plain.capture(NondeterminismSource::TimerRead, vec![1], 1, "clk");
@@ -4995,10 +5085,12 @@ mod tests {
         );
         assert_eq!(strict.critical_divergences(), 1);
 
-        let mut best_effort = ReplayEngine::new(recorded, ReplayMode::BestEffort);
-        best_effort
-            .verify_deterministic_witness(&live.deterministic_witness)
-            .expect("best effort records instead of failing");
-        assert_eq!(best_effort.critical_divergences(), 1);
+        for mode in [ReplayMode::BestEffort, ReplayMode::Validate] {
+            let mut engine = ReplayEngine::new(recorded.clone(), mode);
+            engine
+                .verify_deterministic_witness(&live.deterministic_witness)
+                .expect("non-strict modes record instead of failing");
+            assert_eq!(engine.critical_divergences(), 1);
+        }
     }
 }

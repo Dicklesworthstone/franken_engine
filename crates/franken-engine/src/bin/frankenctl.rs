@@ -10021,6 +10021,7 @@ fn execute_replay(args: ReplayArgs) -> Result<i32, String> {
     compare_trace
         .validate_for_replay()
         .map_err(|error| format!("replay comparison failed before sequence 0: {error}"))?;
+    let replay_witness = compare_trace.deterministic_witness;
     let replay_events = compare_trace.events;
 
     let mut engine = ReplayEngine::new(trace, args.mode);
@@ -10035,6 +10036,9 @@ fn execute_replay(args: ReplayArgs) -> Result<i32, String> {
             engine.replayed_events, event_count
         ));
     }
+    engine
+        .verify_deterministic_witness(&replay_witness)
+        .map_err(|error| format!("replay comparison failed after captured events: {error}"))?;
 
     let output = ReplayCommandOutput {
         schema_version: FRANKENCTL_SCHEMA_VERSION.to_string(),

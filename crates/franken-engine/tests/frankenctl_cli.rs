@@ -4845,6 +4845,111 @@ fn frankenctl_replay_empty_trace_completes_immediately() {
     let _ = fs::remove_file(trace_path);
 }
 
+fn compare_replay_traces(
+    recorded: &NondeterminismTrace,
+    candidate: &NondeterminismTrace,
+    mode: &str,
+) -> (std::process::Output, bool) {
+    let directory = tempfile::tempdir().expect("trace comparison directory");
+    let trace_path = directory.path().join("recorded.json");
+    let candidate_path = directory.path().join("candidate.json");
+    let report_path = directory.path().join("report.json");
+    fs::write(&trace_path, serde_json::to_vec(recorded).unwrap()).expect("recorded trace");
+    fs::write(&candidate_path, serde_json::to_vec(candidate).unwrap()).expect("candidate trace");
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args(["replay", "run", "--trace"])
+        .arg(&trace_path)
+        .arg("--compare-trace")
+        .arg(&candidate_path)
+        .args(["--mode", mode, "--out"])
+        .arg(&report_path)
+        .output()
+        .expect("trace comparison executes");
+    (output, report_path.exists())
+}
+
+#[test]
+fn frankenctl_replay_compares_folded_decisions_even_without_retained_events() {
+    for retained_event in [false, true] {
+        let mut recorded = NondeterminismTrace::new("folded-decisions");
+        if retained_event {
+            recorded.capture(NondeterminismSource::TimerRead, vec![7], 1, "clock");
+        }
+        recorded.witness_deterministic(NondeterminismSource::PropertyResolution, b"own:x");
+        recorded.finalise(2);
+
+        let (identical, report_written) = compare_replay_traces(&recorded, &recorded, "strict");
+        assert!(
+            identical.status.success(),
+            "{}",
+            String::from_utf8_lossy(&identical.stderr)
+        );
+        assert!(report_written);
+        let report = parse_stdout_json(&identical);
+        assert_eq!(report["divergence_count"], 0);
+        assert_eq!(report["complete"], true);
+
+        // Retained events, counts and clocks agree; only a folded property
+        // decision differs. Comparing just the event vector accepted this.
+        let mut candidate = recorded.clone();
+        candidate.deterministic_witness = Default::default();
+        candidate.witness_deterministic(NondeterminismSource::PropertyResolution, b"prototype:x");
+        assert_eq!(candidate.events, recorded.events);
+        assert_eq!(
+            candidate.deterministic_witness.event_count,
+            recorded.deterministic_witness.event_count
+        );
+        for mode in ["strict", "best-effort", "validate"] {
+            let (output, report_written) = compare_replay_traces(&recorded, &candidate, mode);
+            if mode == "strict" {
+                assert_eq!(output.status.code(), Some(2));
+                assert!(
+                    String::from_utf8_lossy(&output.stderr)
+                        .contains("deterministic witness mismatch")
+                );
+                assert!(
+                    !report_written,
+                    "a failed comparison must not publish a success report"
+                );
+            } else {
+                assert!(
+                    output.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                let report = parse_stdout_json(&output);
+                assert_eq!(report["divergence_count"], 1);
+                assert_eq!(report["critical_divergences"], 1);
+                assert_eq!(report["complete"], true);
+            }
+        }
+    }
+}
+
+#[test]
+fn frankenctl_replay_rejects_missing_and_malformed_folded_decisions() {
+    let mut recorded = NondeterminismTrace::new("missing-decisions");
+    recorded.witness_deterministic(NondeterminismSource::ArrayCacheInvalidation, b"length:3");
+    recorded.finalise(1);
+    let mut missing = recorded.clone();
+    missing.deterministic_witness = Default::default();
+    let (output, report_written) = compare_replay_traces(&recorded, &missing, "strict");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("deterministic witness mismatch"));
+    assert!(!report_written);
+
+    let mut malformed = missing.clone();
+    malformed.deterministic_witness.digest ^= 1;
+    for (recorded, candidate) in [(&malformed, &missing), (&missing, &malformed)] {
+        let (output, report_written) = compare_replay_traces(recorded, candidate, "validate");
+        assert_eq!(output.status.code(), Some(2));
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("invalid empty deterministic witness")
+        );
+        assert!(!report_written);
+    }
+}
+
 #[test]
 fn frankenctl_replay_unfinished_trace_fails_closed() {
     let trace_path = temp_path("frankenctl_replay_unfinished", "json");

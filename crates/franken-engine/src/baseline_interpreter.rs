@@ -84344,10 +84344,6 @@ impl InterpreterCore {
 
     /// One invocation path for property-resolved and intrinsic call/apply.
     /// `args` starts at thisArg; the target itself is never an argument.
-    /// ES2020 23.1.3.5 Map.prototype.forEach / 23.2.3.6 Set.prototype.forEach
-    /// over the entries present when iteration starts (entries added or
-    /// deleted by the callback are not observed, unlike the spec's live
-    /// iteration).
     /// `Map.prototype.forEach` / `Set.prototype.forEach` (ES2020 23.1.3.5,
     /// 23.2.3.6) over the live entry list (bd-9vouw.131): an entry added by
     /// a callback is visited, a deleted one is not (it was a snapshot, so
@@ -84415,12 +84411,20 @@ impl InterpreterCore {
             ) {
                 break Err(error);
             }
-            if let Err(error) = self.invoke_inline_method_call_with_argument_label_preflighted(
-                Some(module),
-                callback.clone(),
-                this_arg.clone(),
-                vec![value, key, receiver.clone()],
-                Some(label.clone()),
+            // The live cursor keeps its storage in this Rust frame. Pin it
+            // and its owner while the callback allocates or changes entries;
+            // the inline call also pins the current value, key and thisArg.
+            if let Err(error) = self.with_gc_nested_request(
+                vec![receiver.clone(), Value::Object(storage_id)],
+                |core| {
+                    core.invoke_inline_method_call_with_argument_label_preflighted(
+                        Some(module),
+                        callback.clone(),
+                        this_arg.clone(),
+                        vec![value, key, receiver.clone()],
+                        Some(label.clone()),
+                    )
+                },
             ) {
                 break Err(error);
             }
@@ -84499,13 +84503,18 @@ impl InterpreterCore {
                 3,
                 Some(&label),
             )?;
-            self.invoke_inline_method_call_with_argument_label_preflighted(
-                Some(module),
-                callback.clone(),
-                this_arg.clone(),
-                vec![Value::str(value), Value::str(name), params.clone()],
-                Some(label),
-            )?;
+            // Keep the live params state (and its linked URL, if any) rooted
+            // while a callback allocates. Its argument strings and thisArg
+            // are pinned by the inline call itself.
+            self.with_gc_nested_request(vec![params.clone()], |core| {
+                core.invoke_inline_method_call_with_argument_label_preflighted(
+                    Some(module),
+                    callback.clone(),
+                    this_arg.clone(),
+                    vec![Value::str(value), Value::str(name), params.clone()],
+                    Some(label),
+                )
+            })?;
             index += 1;
         }
         Ok(Value::Undefined)

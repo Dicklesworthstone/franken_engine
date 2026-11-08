@@ -38,6 +38,7 @@ on:
       - 'crates/franken-engine/tests/promise_subclass_bd_9vouw_137.rs'
       - 'crates/franken-engine/tests/promise_reaction_label_conformance.rs'
       - 'crates/franken-engine/tests/gc_reclaim_bd_9vouw_57.rs'
+      - 'crates/franken-engine/tests/collection_for_each_gc_bd_9vouw_77.rs'
       - 'crates/franken-engine/tests/process_spawn_foundation_bd_x85a7.rs'
       - 'crates/franken-engine/tests/nested_callback_semantics.rs'
       - 'crates/franken-engine/tests/reflect_*.rs'
@@ -293,7 +294,7 @@ jobs:
             --test async_generator_execution --test generator_next_bd_v6cv1_regression \
             --test array_species_bd_9vouw_94 --test proxy_descriptor_traps_bd_9vouw_147 \
             --test promise_subclass_bd_9vouw_137 --test promise_reaction_label_conformance \
-            --test gc_reclaim_bd_9vouw_57 \
+            --test gc_reclaim_bd_9vouw_57 --test collection_for_each_gc_bd_9vouw_77 \
             --test process_spawn_foundation_bd_x85a7 \
             --test esm_function_exports \
             --test nested_callback_semantics \

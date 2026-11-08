@@ -88,9 +88,17 @@ impl InterpreterCore {
         // The active reduction context labels callback inputs. Preserve the
         // independently returned label too: captured cells need not appear
         // in the receiver/argument registers.
-        let (value, label) = self.invoke_inline_method_call_with_argument_label(
-            module, callee, receiver, arguments, None,
-        )?;
+        // The canonical call pins its callee, receiver and arguments, including
+        // the accumulator and source array. Permit collection in the callback
+        // just as the generic reducer does: a bounded live accumulator must
+        // not make every temporary allocation permanent until reduce returns.
+        // Carry any enclosing builtin's explicit roots through this request.
+        let held = self.gc_nested_request.take().unwrap_or_default();
+        let (value, label) = self.with_gc_nested_request(held, |core| {
+            core.invoke_inline_method_call_with_argument_label(
+                module, callee, receiver, arguments, None,
+            )
+        })?;
         self.join_pending_array_result_label(&label)?;
         self.observe_scoped_callback_result()?;
         Ok(value)
@@ -286,21 +294,14 @@ mod tests {
                         let array = if inherited {
                             let prototype =
                                 core.alloc_array_from_values(&[Value::Int(42)]).unwrap();
-                            core.set_own_property_label(prototype, "0", &label)
+                            core.set_own_property_label(prototype, "0", &label).unwrap();
+                            let array = core.alloc_array_with_prototype(Some(prototype)).unwrap();
+                            core.set_object_property(array, "length".to_string(), Value::Int(1))
                                 .unwrap();
-                            let array =
-                                core.alloc_array_with_prototype(Some(prototype)).unwrap();
-                            core.set_object_property(
-                                array,
-                                "length".to_string(),
-                                Value::Int(1),
-                            )
-                            .unwrap();
                             array
                         } else {
                             let array = core.alloc_array_from_values(&[Value::Int(42)]).unwrap();
-                            core.set_own_property_label(array, "0", &label)
-                                .unwrap();
+                            core.set_own_property_label(array, "0", &label).unwrap();
                             array
                         };
                         // No callback may run for one element with no initial
@@ -446,7 +447,10 @@ mod tests {
         core.config.instruction_budget = 10;
         core.instructions_executed = 9;
         let outcome = core.with_array_reduction_observation(
-            RegRange { start: 10, count: 1 },
+            RegRange {
+                start: 10,
+                count: 1,
+            },
             None,
             |core| {
                 core.invoke_simple_reduce_callback(
@@ -479,20 +483,16 @@ mod tests {
         // not reset and a stale Secret callback context cannot escape.
         core.config.instruction_budget = 12;
         let value = core
-            .with_array_reduction_observation(
-                RegRange { start: 9, count: 1 },
-                None,
-                |core| {
-                    core.invoke_simple_reduce_callback(
-                        Some(&module),
-                        &Value::Function(0),
-                        Value::Int(1),
-                        Value::Int(2),
-                        0,
-                        array,
-                    )
-                },
-            )
+            .with_array_reduction_observation(RegRange { start: 9, count: 1 }, None, |core| {
+                core.invoke_simple_reduce_callback(
+                    Some(&module),
+                    &Value::Function(0),
+                    Value::Int(1),
+                    Value::Int(2),
+                    0,
+                    array,
+                )
+            })
             .unwrap();
         assert_eq!(value, Value::Int(3));
         assert_eq!(core.instructions_executed, 12);
@@ -536,12 +536,8 @@ mod tests {
                 );
                 let mut core = core();
                 let array = core.alloc_array_from_values(&[]).unwrap();
-                core.set_object_property(
-                    array,
-                    "length".into(),
-                    Value::Int(i64::from(u32::MAX)),
-                )
-                .unwrap();
+                core.set_object_property(array, "length".into(), Value::Int(i64::from(u32::MAX)))
+                    .unwrap();
                 seed(&mut core, array, Label::Public);
                 core.config.instruction_budget = 32;
                 let outcome = core.array_reduce_receiver(
@@ -672,8 +668,7 @@ mod tests {
                             },
                             Ir3Instruction::Return { value: 4 },
                         ]);
-                        let mut module =
-                            reduction_module(reverse, legacy, true, callback);
+                        let mut module = reduction_module(reverse, legacy, true, callback);
                         module.constant_pool.push("coercions".into());
                         module.function_table.push(Ir3FunctionDesc {
                             entry: module.instructions.len() as u32,
@@ -712,12 +707,8 @@ mod tests {
                             ),
                         );
                         let array = core.alloc_array_from_values(&[Value::Int(1)]).unwrap();
-                        core.set_object_property(
-                            array,
-                            "valueOf".into(),
-                            Value::Function(1),
-                        )
-                        .unwrap();
+                        core.set_object_property(array, "valueOf".into(), Value::Function(1))
+                            .unwrap();
                         seed(&mut core, array, label.clone());
                         core.sync_estimated_memory_bytes().unwrap();
                         let result = core.execute(&module);
@@ -765,7 +756,9 @@ mod tests {
                     core.write_reg_with_label(8, callback, Label::Public)
                         .unwrap();
                     core.sync_estimated_memory_bytes().unwrap();
-                    let result = core.execute(&module).expect("callable reducer must execute");
+                    let result = core
+                        .execute(&module)
+                        .expect("callable reducer must execute");
                     assert_eq!(result.console_output.len(), 1);
                     let value = core.read_reg(4).unwrap();
                     match kind {
@@ -825,8 +818,14 @@ mod tests {
                     panic!("rest parameter must be an array, got {value:?}");
                 };
                 assert_eq!(core.array_like_length(rest).unwrap(), 3);
-                assert_eq!(core.array_index_value(rest, 0).unwrap(), Some(Value::Int(7)));
-                assert_eq!(core.array_index_value(rest, 1).unwrap(), Some(Value::Int(0)));
+                assert_eq!(
+                    core.array_index_value(rest, 0).unwrap(),
+                    Some(Value::Int(7))
+                );
+                assert_eq!(
+                    core.array_index_value(rest, 1).unwrap(),
+                    Some(Value::Int(0))
+                );
                 assert_eq!(
                     core.array_index_value(rest, 2).unwrap(),
                     Some(Value::Object(array))

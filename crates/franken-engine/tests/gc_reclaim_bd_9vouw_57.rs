@@ -669,6 +669,103 @@ fn callback_value_roots_survive_collection_with_a_bounded_heap() {
 }
 
 #[test]
+fn native_reduction_callbacks_collect_and_preserve_accumulator_roots() {
+    // Borrowed reductions on ordinary objects already arm collection. These
+    // receivers exercise the native Array and TypedArray callback paths.
+    for receiver in ["[1, 2, 3]", "new Uint8Array([1, 2, 3])"] {
+        for (method, previous_sum) in [("reduce", 3), ("reduceRight", 5)] {
+            for stress in [None, Some(1), Some(7)] {
+                // The normal run must reclaim within each callback to stay
+                // below 3,000 live objects. Short stress runs force collection
+                // at intervening instructions without quadratic test cost.
+                let count = if stress.is_some() { 48 } else { 6000 };
+                let source = format!(
+                    r#"
+                    const input = {receiver};
+                    const initial = {{ sum: 0, checksum: 0, previous: null }};
+                    const result = input.{method}((acc, value, index, array) => {{
+                        let checksum = 0;
+                        for (let i = 0; i < {count}; i++) {{
+                            const temporary = {{ i }};
+                            checksum += temporary.i & 1;
+                        }}
+                        return {{ sum: acc.sum + value,
+                            checksum: acc.checksum + checksum,
+                            previous: acc, owner: array, item: {{ value, index }} }};
+                    }}, initial);
+                    console.log(result.sum, result.checksum, result.previous.sum,
+                        result.owner === input,
+                        result.previous.previous.previous === initial);
+                    "#
+                );
+                let run = try_run_with_object_budget(&source, stress, Some(3000))
+                    .expect("native reduction regression lowers");
+                assert_eq!(
+                    console_lines(&run, &source),
+                    [format!("6 {} {previous_sum} true true", count * 3 / 2)],
+                    "receiver={receiver}, method={method}, stress={stress:?}"
+                );
+                assert!(run.gc.collections > 0, "{receiver}.{method}: {stress:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn native_reduction_throw_restores_collection_and_keeps_exception_identity() {
+    let source = r#"
+        const reason = { tag: 'reducer throw' };
+        const retained = { tag: 'caller' };
+        try {
+            [1, 2].reduce((acc, value) => {
+                let checksum = 0;
+                for (let i = 0; i < 6000; i++) {
+                    const temporary = { i };
+                    checksum += temporary.i & 1;
+                }
+                if (value === 2 && checksum === 3000) throw reason;
+                return { previous: acc, value };
+            }, { value: 0 });
+        } catch (error) { console.log(error === reason, error.tag); }
+        let checksum = 0;
+        for (let i = 0; i < 6000; i++) {
+            const temporary = { i };
+            checksum += temporary.i & 1;
+        }
+        console.log(retained.tag, checksum, [1, 2].reduce((a, b) => a + b, 0));
+    "#;
+    for stress in [None, Some(7)] {
+        let run = try_run_with_object_budget(source, stress, Some(3000))
+            .expect("throwing reducer regression lowers");
+        assert_eq!(
+            console_lines(&run, source),
+            ["true reducer throw", "caller 3000 3"]
+        );
+        assert!(run.gc.collections > 0);
+    }
+}
+
+#[test]
+fn native_reduction_live_accumulators_still_exceed_the_heap_limit() {
+    let source = r#"
+        [1].reduce((acc, value) => {
+            for (let i = 0; i < 6000; i++) { acc.push({ i, value }); }
+            return acc;
+        }, []);
+    "#;
+    let run = try_run_with_object_budget(source, None, Some(3000))
+        .expect("live accumulator negative lowers");
+    assert!(
+        matches!(&run.result, Err(InterpreterError::MemoryBudgetExceeded {
+            requested_heap_objects, max_heap_objects: 3000, ..
+        }) if *requested_heap_objects > 3000),
+        "live allocations must remain budgeted: {:?}",
+        run.result
+    );
+    assert!(run.gc.collections > 0);
+}
+
+#[test]
 fn flat_map_callbacks_collect_with_a_bounded_heap_and_preserve_roots() {
     let source = r#"
         class Result {

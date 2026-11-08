@@ -21,12 +21,12 @@
 //! - Nested run loops (callbacks, generator bodies, isolated calls) hold
 //!   caller state in Rust locals, so by default no collection runs while one
 //!   is active. A call site that knows what its Rust frames hold may arm the
-//!   nested loop it enters (bd-9vouw.77): async function calls, timer
-//!   callbacks, Promise reaction handlers and async resumption. The caller's
-//!   saved execution and the values the dispatching frames hold are pinned
-//!   on a stack for the duration. Builtins that call guest callbacks while
-//!   holding values only in Rust locals (map's result array, sort's element
-//!   vector) never arm, so no collection runs inside those callbacks.
+//!   nested loop it enters (bd-9vouw.77): async function calls, event-loop
+//!   callbacks and audited array/collection callback paths. The caller's saved
+//!   execution and the values the native frames retain (such as a partially
+//!   built result or reduction accumulator) are pinned for the duration.
+//!   Other paths, including sort's native element buffers, remain unarmed
+//!   until every value held across their callbacks has an explicit root.
 //! - Child processes, streams, loopback sockets, HTTP, URL and crypto state
 //!   are traced. Pending native lifecycles remain roots; dead host-object
 //!   records release their memory charge with their heap owner.

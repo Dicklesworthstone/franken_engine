@@ -60,7 +60,7 @@ use frankenengine_engine::execution_orchestrator::{
     OrchestratorResult, UncommittedEvidenceChainEvidence,
 };
 use frankenengine_engine::fleet_trace_total_order::{
-    FleetTraceNode, flatten_to_events, merge_fleet_traces, node_id_from_session,
+    FleetNodeProvenance, FleetTraceNode, assemble_fleet_trace, node_id_from_session,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ir_contract::{Ir0Module, Ir4Module};
@@ -1669,6 +1669,9 @@ struct ReplayCommandOutput {
     /// Re-executed decisions equal the reported ones (bd-mpu1z).
     #[serde(skip_serializing_if = "Option::is_none")]
     decisions_match: Option<bool>,
+    /// Original per-node trace identities and witnesses bound by fleet replay.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fleet_nodes: Option<Vec<FleetNodeProvenance>>,
     observability_mode: ObservabilityModeOutput,
 }
 
@@ -9978,6 +9981,7 @@ fn execute_replay(args: ReplayArgs) -> Result<i32, String> {
     // primary `--trace` is the anchor node; `--fleet-trace` may point at a
     // directory of per-node traces (one file == one node) or a single
     // additional per-node trace file. See bd-cixqu.30.4 (DD.4).
+    let mut fleet_nodes = None;
     if let Some(fleet_trace_path) = &args.fleet_trace {
         let mut nodes: Vec<FleetTraceNode> = Vec::new();
 
@@ -9987,7 +9991,8 @@ fn execute_replay(args: ReplayArgs) -> Result<i32, String> {
 
         if fleet_trace_path.is_dir() {
             // Directory of per-node traces: enumerate `*.json` files in a
-            // deterministic (filename-sorted) order; node id == file stem.
+            // deterministic order. An unreadable entry must not silently
+            // disappear from the set of participating nodes.
             let mut node_files: Vec<PathBuf> = std::fs::read_dir(fleet_trace_path)
                 .map_err(|error| {
                     format!(
@@ -9995,20 +10000,40 @@ fn execute_replay(args: ReplayArgs) -> Result<i32, String> {
                         fleet_trace_path.display()
                     )
                 })?
-                .filter_map(|entry| entry.ok().map(|e| e.path()))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| format!("fleet replay: cannot enumerate node traces: {error}"))?
+                .into_iter()
+                .map(|entry| entry.path())
                 .filter(|path| path.extension().and_then(|s| s.to_str()) == Some("json"))
                 .collect();
             node_files.sort();
 
+            let anchor_path = args.trace.canonicalize().map_err(|error| {
+                format!("fleet replay: cannot resolve anchor trace path: {error}")
+            })?;
             for path in node_files {
+                let source_path = path.canonicalize().map_err(|error| {
+                    format!(
+                        "fleet replay: cannot resolve node trace {}: {error}",
+                        path.display()
+                    )
+                })?;
+                // The anchor may live in the fleet directory. Include that
+                // same file once, while still rejecting distinct files that
+                // claim the same node identity in the checked assembler.
+                if source_path == anchor_path {
+                    continue;
+                }
                 nodes.push(load_fleet_node(&path)?);
             }
         } else {
             nodes.push(load_fleet_node(fleet_trace_path)?);
         }
 
-        let ordered = merge_fleet_traces(&nodes);
-        trace.events = flatten_to_events(ordered);
+        let assembled = assemble_fleet_trace(trace.session_id.clone(), &nodes)
+            .map_err(|error| format!("fleet replay assembly failed: {error}"))?;
+        trace = assembled.trace;
+        fleet_nodes = Some(assembled.nodes);
     }
     let (trace_id, decision_id, policy_id) = cli_replay_ids(&trace.session_id, args.mode);
     let session_id = trace.session_id.clone();
@@ -10060,6 +10085,7 @@ fn execute_replay(args: ReplayArgs) -> Result<i32, String> {
         unsigned_execution_content_match: None,
         randomness_transcript_match: None,
         decisions_match: None,
+        fleet_nodes,
         observability_mode: default_capture_observability_mode(),
     };
 
@@ -10225,6 +10251,7 @@ fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
         unsigned_execution_content_match: Some(unsigned_execution_content_match),
         randomness_transcript_match: Some(randomness_transcript_match),
         decisions_match: Some(decisions_match),
+        fleet_nodes: None,
         observability_mode: default_capture_observability_mode(),
     };
     if let Some(path) = args.out {
@@ -14058,10 +14085,13 @@ fn replay_run_usage() -> String {
         "  Trust flags cannot be combined with --compare-trace or --fleet-trace.",
         "  --compare-trace explicitly compares two nondeterminism trace files.",
         "  --fleet-trace stitches per-node traces into one globally-consistent",
-        "  replay order using a Lamport total-order merge (clock asc, node id,",
-        "  payload hash). Pass a directory of per-node traces (one file == one",
-        "  node) or a single additional per-node trace file; --trace is the",
-        "  anchor node.",
+        "  replay order (clock asc, node id, original local sequence), with",
+        "  contiguous global sequences. Pass a directory (one file per node)",
+        "  or a single additional trace file; --trace is the anchor",
+        "  node and may also be in the directory. Duplicate node IDs fail.",
+        "  Fleet comparison traces must come from assemble_fleet_trace; its",
+        "  witness binds per-node source hashes and folded-decision summaries.",
+        "  The fleet_nodes report preserves those original node commitments.",
     ]
     .join("\n")
 }

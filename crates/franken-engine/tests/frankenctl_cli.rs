@@ -4951,6 +4951,100 @@ fn frankenctl_replay_rejects_missing_and_malformed_folded_decisions() {
 }
 
 #[test]
+fn frankenctl_fleet_replay_consumes_validated_aggregate_and_preserves_node_commitments() {
+    use frankenengine_engine::fleet_trace_total_order::{
+        FleetTraceNode, assemble_fleet_trace, node_id_from_session,
+    };
+
+    let directory = tempfile::tempdir().expect("fleet replay directory");
+    let fleet_dir = directory.path().join("nodes");
+    fs::create_dir(&fleet_dir).expect("node directory");
+    let anchor_path = fleet_dir.join("anchor.json");
+    let peer_path = fleet_dir.join("peer.json");
+    let comparison_path = directory.path().join("comparison.json");
+
+    let mut anchor = NondeterminismTrace::new("alpha");
+    anchor.capture_started_vts = 5;
+    anchor.capture(NondeterminismSource::TimerRead, vec![1], 7, "a");
+    anchor.capture(NondeterminismSource::TimerRead, vec![2], 7, "a");
+    anchor.witness_deterministic(NondeterminismSource::PropertyResolution, b"a.x");
+    anchor.finalise(8);
+    let mut peer = NondeterminismTrace::new("beta");
+    peer.capture_started_vts = 2;
+    for (timestamp, value) in [(3, 3), (7, 4), (9, 5)] {
+        peer.capture(NondeterminismSource::TimerRead, vec![value], timestamp, "b");
+    }
+    peer.witness_deterministic(NondeterminismSource::ArrayCacheInvalidation, b"length:1");
+    peer.finalise(11);
+    let nodes = [anchor.clone(), peer.clone()].map(|trace| {
+        FleetTraceNode::new(
+            node_id_from_session(&trace.session_id, "unused").unwrap(),
+            trace,
+        )
+    });
+    let comparison = assemble_fleet_trace("alpha", &nodes).expect("valid fleet");
+    fs::write(&anchor_path, serde_json::to_vec(&anchor).unwrap()).unwrap();
+    fs::write(&peer_path, serde_json::to_vec(&peer).unwrap()).unwrap();
+    fs::write(
+        &comparison_path,
+        serde_json::to_vec(&comparison.trace).unwrap(),
+    )
+    .unwrap();
+    let run = || {
+        Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+            .args(["replay", "run", "--trace"])
+            .arg(&anchor_path)
+            .arg("--fleet-trace")
+            .arg(&fleet_dir)
+            .arg("--compare-trace")
+            .arg(&comparison_path)
+            .args(["--mode", "strict"])
+            .output()
+            .expect("fleet replay executes")
+    };
+
+    // The anchor is also in the directory. Its events must appear exactly
+    // once, equal local timestamps retain sequence order, and the peer's
+    // wider capture window must be admitted by the aggregate.
+    let output = run();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report = parse_stdout_json(&output);
+    assert_eq!(report["event_count"], 5);
+    assert_eq!(report["replayed_events"], 5);
+    assert_eq!(report["divergence_count"], 0);
+    assert_eq!(report["complete"], true);
+    assert_eq!(
+        report["fleet_nodes"],
+        serde_json::to_value(&comparison.nodes).unwrap()
+    );
+
+    // Keep retained events unchanged but change the peer's folded decisions.
+    peer.witness_deterministic(NondeterminismSource::PropertyResolution, b"changed");
+    fs::write(&peer_path, serde_json::to_vec(&peer).unwrap()).unwrap();
+    let output = run();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("deterministic witness mismatch"));
+
+    // A bad local sequence cannot be repaired by the global renumbering.
+    peer.events[0].sequence = 4;
+    fs::write(&peer_path, serde_json::to_vec(&peer).unwrap()).unwrap();
+    let output = run();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("non-contiguous trace"));
+
+    // A second file claiming the anchor identity is different from finding
+    // the actual anchor file in the directory and must be rejected.
+    fs::write(&peer_path, serde_json::to_vec(&anchor).unwrap()).unwrap();
+    let output = run();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("duplicate fleet trace node id"));
+}
+
+#[test]
 fn frankenctl_replay_unfinished_trace_fails_closed() {
     let trace_path = temp_path("frankenctl_replay_unfinished", "json");
 

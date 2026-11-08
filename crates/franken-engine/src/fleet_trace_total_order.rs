@@ -12,11 +12,10 @@
 // `TraceEvent.sequence` — a *per-node-local* ordinal. Every node emits
 // sequence 0, 1, 2, ...; sorting the union by that ordinal discards node
 // identity and is not a global order at all (two nodes' "sequence 3"
-// events are unrelated). That defeats Track DD's core promise:
-// Lamport-clock-anchored evidence stitching with deterministic
-// tie-breaking. DD.4 routes the merge through the DD.2 total-order key.
+// events are unrelated). Checked assembly validates every source before
+// assigning global sequence numbers, and keeps the original provenance.
 //
-// Ordering contract (inherited verbatim from DD.2's `MergeAtom`):
+// Checked replay ordering (`assemble_fleet_trace`):
 //
 //   1. `lamport_clock` (u64, ascending) — Lamport's primary key. We use
 //      each `TraceEvent.virtual_ts` as the node's logical clock for that
@@ -24,15 +23,17 @@
 //      i.e. a logical timestamp, which is exactly what a Lamport clock is.
 //   2. `node_id` (UTF-8 lex, ascending) — tie-break across nodes that
 //      share a logical clock.
-//   3. `payload_hash` (32-byte lex, ascending) — tie-break when an event
-//      shares BOTH clock and node id (operationally possible via
-//      backfills / recovery), so replay stays byte-identical.
+//   3. `local_sequence` (u64, ascending) — preserves a node's original
+//      decision order when its non-decreasing timestamps are equal.
 //
-// The merge is a pure function: the same set of per-node traces produces
-// the same global order on every run and every machine, regardless of
-// the order the nodes are presented in (node ids are unique per node, so
-// only genuine same-node duplicates can tie, and those preserve their
-// in-trace order via a stable sort).
+// The generic evidence APIs (`merge_fleet_traces`, `verify_global_order`)
+// retain DD.2's `(clock, node_id, payload_hash)` key. That ordering is useful
+// for evidence atoms, but can reorder same-node decisions sharing a timestamp
+// and does not construct a structurally valid aggregate replay trace.
+//
+// Assembly is a pure function: the same valid per-node traces produce the
+// same replay and node commitments regardless of input presentation order.
+// Duplicate node identities and malformed source traces fail before assembly.
 //
 // Anchoring beads:
 //   * bd-cixqu.30.1 (DD.1, CLOSED) — `EvidenceClock`/`NodeId`/`LamportClock`.
@@ -43,7 +44,9 @@
 // Reference: Lamport, "Time, Clocks, and the Ordering of Events in a
 // Distributed System" (CACM 21:7, 1978).
 
-use crate::deterministic_replay::{NondeterminismTrace, TraceEvent};
+use crate::deterministic_replay::{
+    DeterministicEventWitness, NondeterminismSource, NondeterminismTrace, ReplayError, TraceEvent,
+};
 use crate::hash_tiers::ContentHash;
 use crate::lamport_evidence_annotation::{EvidenceClock, LamportClock, LamportError, NodeId};
 use crate::lamport_total_order_merger::MergeAtom;
@@ -83,6 +86,35 @@ pub struct OrderedFleetEvent {
     pub event: TraceEvent,
 }
 
+/// The original capture boundary and folded witness of one source node.
+/// Entries in [`FleetReplayTrace::nodes`] are sorted by node id, including
+/// nodes that did not capture any events.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetNodeProvenance {
+    pub node_id: NodeId,
+    pub session_id: String,
+    /// SHA-256 of the full source trace's deterministic JSON encoding. This
+    /// commits event membership as well as the summarized source metadata.
+    pub trace_hash: ContentHash,
+    pub event_count: u64,
+    pub capture_started_vts: u64,
+    pub capture_ended_vts: u64,
+    pub deterministic_witness: DeterministicEventWitness,
+}
+
+/// A validated fleet assembly ready for [`crate::deterministic_replay::ReplayEngine`].
+///
+/// `trace.events[i]` and `ordered_events[i]` describe the same captured event.
+/// The replay trace has a global contiguous sequence; the ordered event keeps
+/// its source node and original local sequence so normalization cannot erase
+/// provenance. [`Self::nodes`] retains each source's capture bounds and witness.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetReplayTrace {
+    pub trace: NondeterminismTrace,
+    pub ordered_events: Vec<OrderedFleetEvent>,
+    pub nodes: Vec<FleetNodeProvenance>,
+}
+
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
@@ -91,6 +123,12 @@ pub struct OrderedFleetEvent {
 pub enum FleetMergeError {
     /// A node id could not be constructed (empty/too long).
     Node(LamportError),
+    /// A source trace is malformed. Validate before sorting or reindexing so
+    /// assembly never repairs forged sequence or timestamp metadata.
+    InvalidTrace { node_id: NodeId, error: ReplayError },
+    /// Two inputs claim the same node, so their local sequence provenance is
+    /// ambiguous. Callers must provide one complete trace per node.
+    DuplicateNodeId { node_id: NodeId },
     /// A merged sequence was not in non-decreasing global order; carries
     /// the index of the later element of the offending pair.
     OutOfOrder { index: usize },
@@ -100,6 +138,12 @@ impl fmt::Display for FleetMergeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Node(err) => write!(f, "fleet node id error: {err}"),
+            Self::InvalidTrace { node_id, error } => {
+                write!(f, "invalid fleet trace for node {node_id}: {error}")
+            }
+            Self::DuplicateNodeId { node_id } => {
+                write!(f, "duplicate fleet trace node id: {node_id}")
+            }
             Self::OutOfOrder { index } => {
                 write!(f, "fleet replay order violated at index {index}")
             }
@@ -172,6 +216,124 @@ pub fn node_id_from_session(session_id: &str, fallback: &str) -> Result<NodeId, 
 // The merge
 // ---------------------------------------------------------------------------
 
+/// Assemble validated per-node traces into one consumable replay trace.
+///
+/// Every source is validated before events are reordered or globally numbered.
+/// Replay order is `(virtual_ts, node_id, local_sequence)`: timestamps may be
+/// equal within a valid trace, so the local sequence must break that tie before
+/// a payload hash can reorder causally ordered decisions. This is stricter
+/// than the generic evidence ordering provided by [`merge_fleet_traces`].
+///
+/// The aggregate capture window is the union of all source windows. A single
+/// node keeps its ordinary deterministic witness. For multiple nodes, the
+/// witness folds one domain-separated source commitment per node in node-id
+/// order, including nodes with no folded decisions. Its `event_count` is the
+/// number of **node summaries**, not a count of reconstructed chronological
+/// decisions: source witnesses do not retain enough information to recover
+/// their global interleaving. Compare it with another assembly made by this
+/// API, and use `nodes` to inspect the original per-node witnesses.
+pub fn assemble_fleet_trace(
+    session_id: impl Into<String>,
+    nodes: &[FleetTraceNode],
+) -> Result<FleetReplayTrace, FleetMergeError> {
+    let mut sources: Vec<&FleetTraceNode> = nodes.iter().collect();
+    sources.sort_by(|lhs, rhs| lhs.node_id.cmp(&rhs.node_id));
+    for (index, source) in sources.iter().enumerate() {
+        NodeId::try_new(source.node_id.as_str()).map_err(FleetMergeError::Node)?;
+        if index > 0 && sources[index - 1].node_id == source.node_id {
+            return Err(FleetMergeError::DuplicateNodeId {
+                node_id: source.node_id.clone(),
+            });
+        }
+        source
+            .trace
+            .validate_for_replay()
+            .map_err(|error| FleetMergeError::InvalidTrace {
+                node_id: source.node_id.clone(),
+                error,
+            })?;
+    }
+
+    let mut trace = NondeterminismTrace::new(session_id);
+    let mut provenance = Vec::with_capacity(sources.len());
+    let mut ordered_events = Vec::new();
+    let mut capture_end = 0;
+    trace.capture_started_vts = sources
+        .iter()
+        .map(|source| source.trace.capture_started_vts)
+        .min()
+        .unwrap_or(0);
+    for source in sources {
+        let capture_ended_vts = source
+            .trace
+            .capture_ended_vts
+            .expect("source validation requires a finalized trace");
+        capture_end = capture_end.max(capture_ended_vts);
+        provenance.push(FleetNodeProvenance {
+            node_id: source.node_id.clone(),
+            session_id: source.trace.session_id.clone(),
+            trace_hash: ContentHash::compute(
+                &serde_json::to_vec(&source.trace)
+                    .expect("typed nondeterminism traces have a deterministic JSON encoding"),
+            ),
+            event_count: source.trace.next_sequence,
+            capture_started_vts: source.trace.capture_started_vts,
+            capture_ended_vts,
+            deterministic_witness: source.trace.deterministic_witness,
+        });
+        for event in &source.trace.events {
+            ordered_events.push(OrderedFleetEvent {
+                node_id: source.node_id.clone(),
+                lamport_clock: LamportClock::from_raw(event.virtual_ts),
+                event: event.clone(),
+            });
+        }
+    }
+    ordered_events.sort_by(|lhs, rhs| {
+        (lhs.lamport_clock, &lhs.node_id, lhs.event.sequence).cmp(&(
+            rhs.lamport_clock,
+            &rhs.node_id,
+            rhs.event.sequence,
+        ))
+    });
+    trace.events = ordered_events
+        .iter()
+        .enumerate()
+        .map(|(sequence, ordered)| TraceEvent {
+            sequence: sequence as u64,
+            ..ordered.event.clone()
+        })
+        .collect();
+    trace.next_sequence = trace.events.len() as u64;
+    trace.finalise(capture_end);
+    if let [source] = provenance.as_slice() {
+        trace.deterministic_witness = source.deterministic_witness;
+    } else {
+        for source in &provenance {
+            let mut commitment = Vec::new();
+            push_lp(
+                &mut commitment,
+                b"frankenengine.fleet-replay.node-witness.v1",
+            );
+            push_lp(&mut commitment, source.node_id.as_str().as_bytes());
+            push_lp(&mut commitment, source.session_id.as_bytes());
+            commitment.extend_from_slice(source.trace_hash.as_bytes());
+            commitment.extend_from_slice(&source.event_count.to_be_bytes());
+            commitment.extend_from_slice(&source.capture_started_vts.to_be_bytes());
+            commitment.extend_from_slice(&source.capture_ended_vts.to_be_bytes());
+            commitment.extend_from_slice(&source.deterministic_witness.event_count.to_be_bytes());
+            commitment.extend_from_slice(&source.deterministic_witness.digest.to_be_bytes());
+            trace.witness_deterministic(NondeterminismSource::ThreadSchedule, &commitment);
+        }
+    }
+
+    Ok(FleetReplayTrace {
+        trace,
+        ordered_events,
+        nodes: provenance,
+    })
+}
+
 /// Merge per-node traces into one globally-consistent replay order.
 ///
 /// Ordering uses the DD.2 total-order key via `MergeAtom`'s `Ord`
@@ -200,8 +362,9 @@ pub fn merge_fleet_traces(nodes: &[FleetTraceNode]) -> Vec<OrderedFleetEvent> {
     entries.into_iter().map(|(_, ordered)| ordered).collect()
 }
 
-/// Flatten a global order back into a plain replay event sequence (the
-/// shape `ReplayEngine` consumes).
+/// Extract original source events from a generic evidence order. Local
+/// sequences are preserved; this alone is not a consumable replay trace.
+/// Use [`assemble_fleet_trace`] to validate and construct a replay aggregate.
 pub fn flatten_to_events(ordered: Vec<OrderedFleetEvent>) -> Vec<TraceEvent> {
     ordered.into_iter().map(|o| o.event).collect()
 }

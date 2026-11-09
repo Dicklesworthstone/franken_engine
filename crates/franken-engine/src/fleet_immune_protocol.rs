@@ -6222,7 +6222,256 @@ pub struct AuthenticatedFleetProtocolStateV2 {
     pub(crate) pending_intent_bytes: usize,
 }
 
+/// Untrusted, crate-private recovery data. Only the separately anchored
+/// checkpoint recovery lifecycle may turn this DTO back into live authority.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FleetProtocolRecoverySnapshotV2 {
+    fleet_authority_id: FleetAuthorityId,
+    state: FleetProtocolState,
+    evidence_commitments: BTreeMap<String, BTreeMap<String, ContentHash>>,
+    pending_intent_commitments: BTreeMap<String, ContentHash>,
+    checkpoint_vote: Option<(SecurityEpoch, u64, ContentHash)>,
+    exact_evidence_totals: BTreeMap<String, i128>,
+    pending_intent_bytes: usize,
+}
+
 impl AuthenticatedFleetProtocolStateV2 {
+    pub(crate) fn recovery_snapshot(&self) -> FleetProtocolRecoverySnapshotV2 {
+        FleetProtocolRecoverySnapshotV2 {
+            fleet_authority_id: self.fleet_authority_id,
+            state: self.state.clone(),
+            evidence_commitments: self.evidence_commitments.clone(),
+            pending_intent_commitments: self.pending_intent_commitments.clone(),
+            checkpoint_vote: self.checkpoint_vote,
+            exact_evidence_totals: self.exact_evidence_totals.clone(),
+            pending_intent_bytes: self.pending_intent_bytes,
+        }
+    }
+
+    /// Conservative JSON growth from one admitted evidence packet. Work is
+    /// bounded by this packet, independent of the accumulated fleet history.
+    pub(crate) fn recovery_evidence_growth_bound(
+        packet: &EvidencePacket,
+    ) -> Result<usize, FleetIdentityError> {
+        packet.validate_fleet_ingress_limits()?;
+        packet.validate_fleet_structure()?;
+        // Extension keys appear in accumulated totals, counts, seen traces,
+        // provenance commitments, and exact totals. A trace appears in both
+        // deduplication and provenance; the node may extend the replay map.
+        // 512 bytes cover a worst-case 32-byte hash (129 JSON bytes), i128 and
+        // u64/i64 decimal growth, and all new container delimiters.
+        Ok(5 * Self::recovery_json_string_bytes(&packet.extension_id)
+            + 2 * Self::recovery_json_string_bytes(&packet.trace_id)
+            + Self::recovery_json_string_bytes(packet.node_id.as_str())
+            + 512)
+    }
+
+    /// Bound the normalized stored intent plus its derived admission indexes.
+    /// Only the bounded incoming message is cloned and serialized.
+    pub(crate) fn recovery_intent_growth_bound(
+        intent: &ContainmentIntent,
+    ) -> Result<usize, FleetIdentityError> {
+        intent.validate_fleet_ingress_limits()?;
+        intent.validate_fleet_structure()?;
+        let mut normalized = intent.clone();
+        normalized.signature = MessageSignature {
+            signer: intent.node_id.clone(),
+            hash: AuthenticityHash([0; 32]),
+        };
+        let body_bytes = serde_json::to_vec(&normalized)
+            .map_err(|error| FleetIdentityError::NonCanonicalMessage {
+                message_type: "checkpoint-recovery-intent".to_string(),
+                detail: format!("normalized intent cannot be encoded: {error}"),
+            })?
+            .len();
+        // Group key, global commitment key, and replay-map key are additional
+        // to the body. The fixed allowance covers commitment bytes, scalar
+        // growth (including pending_intent_bytes), and container punctuation.
+        Ok(body_bytes
+            + Self::recovery_json_string_bytes(&intent.extension_id)
+            + Self::recovery_json_string_bytes(&intent.intent_id)
+            + Self::recovery_json_string_bytes(intent.node_id.as_str())
+            + 512)
+    }
+
+    /// Heartbeat health details are not retained: only three scalar/hash maps
+    /// and the shared replay frontier grow when a previously unseen node arrives.
+    pub(crate) fn recovery_heartbeat_growth_bound(
+        heartbeat: &HeartbeatLiveness,
+    ) -> Result<usize, FleetIdentityError> {
+        heartbeat.validate_fleet_ingress_limits()?;
+        heartbeat.validate_fleet_structure()?;
+        Ok(4 * Self::recovery_json_string_bytes(heartbeat.node_id.as_str()) + 512)
+    }
+
+    // JSON escapes ASCII control bytes, quotes, and backslashes. UTF-8 bytes
+    // outside that set are emitted directly by serde_json. Include both quotes.
+    fn recovery_json_string_bytes(value: &str) -> usize {
+        2 + value
+            .bytes()
+            .map(|byte| match byte {
+                b'"' | b'\\' | b'\x08' | b'\t' | b'\n' | b'\x0c' | b'\r' => 2,
+                0..=0x1f => 6,
+                _ => 1,
+            })
+            .sum::<usize>()
+    }
+
+    /// Stage a private copy without exposing a public cloneable voting state.
+    pub(crate) fn stage_checkpoint_update(&self) -> Self {
+        Self::from_recovery_parts(self.recovery_snapshot())
+    }
+
+    fn from_recovery_parts(snapshot: FleetProtocolRecoverySnapshotV2) -> Self {
+        Self {
+            fleet_authority_id: snapshot.fleet_authority_id,
+            state: snapshot.state,
+            evidence_commitments: snapshot.evidence_commitments,
+            pending_intent_commitments: snapshot.pending_intent_commitments,
+            checkpoint_vote: snapshot.checkpoint_vote,
+            exact_evidence_totals: snapshot.exact_evidence_totals,
+            pending_intent_bytes: snapshot.pending_intent_bytes,
+        }
+    }
+
+    /// Validate all derived admission indexes after the recovery layer has
+    /// authenticated the exact snapshot bytes against its independent anchor.
+    pub(crate) fn restore_checkpoint_snapshot(
+        snapshot: FleetProtocolRecoverySnapshotV2,
+        expected_authority: FleetAuthorityId,
+        expected_node: &NodeId,
+        expected_config: &GossipConfig,
+    ) -> Result<Self, String> {
+        let restored = Self::from_recovery_parts(snapshot);
+        let state = &restored.state;
+        if restored.fleet_authority_id != expected_authority
+            || &state.local_node_id != expected_node
+            || &state.config != expected_config
+            || state.protocol_version != ProtocolVersion::V2
+            || state.local_sequence != 0
+        {
+            return Err("snapshot does not match the provisioned node and configuration".into());
+        }
+        validate_fleet_authority_id(expected_authority).map_err(|error| error.to_string())?;
+        validate_fleet_node_id(expected_node).map_err(|error| error.to_string())?;
+        let evidence = &state.evidence;
+        let same_keys = evidence
+            .accumulated
+            .keys()
+            .eq(evidence.evidence_count.keys())
+            && evidence
+                .accumulated
+                .keys()
+                .eq(evidence.seen_evidence.keys())
+            && evidence
+                .accumulated
+                .keys()
+                .eq(restored.evidence_commitments.keys())
+            && evidence
+                .accumulated
+                .keys()
+                .eq(restored.exact_evidence_totals.keys());
+        if !same_keys {
+            return Err("evidence indexes disagree about their extension set".into());
+        }
+        for (extension, total) in &restored.exact_evidence_totals {
+            let seen = &evidence.seen_evidence[extension];
+            let commitments = &restored.evidence_commitments[extension];
+            let count = evidence.evidence_count[extension];
+            if extension.len() > FLEET_V2_MAX_IDENTIFIER_BYTES
+                || seen.is_empty()
+                || count != seen.len() as u64
+                || !seen.iter().eq(commitments.keys())
+                || seen
+                    .iter()
+                    .any(|id| id.len() > FLEET_V2_MAX_IDENTIFIER_BYTES)
+                || evidence.accumulated[extension]
+                    != (*total).clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
+                || *total < i128::from(count) * i128::from(i64::MIN)
+                || *total > i128::from(count) * i128::from(i64::MAX)
+            {
+                return Err(
+                    "evidence counts, commitments, or exact totals are inconsistent".into(),
+                );
+            }
+        }
+        for (node, sequence) in &state.sequence_tracker.last_accepted {
+            validate_fleet_node_id(node).map_err(|error| error.to_string())?;
+            if *sequence == 0 {
+                return Err("a restored replay frontier must be nonzero".into());
+            }
+        }
+        if !state
+            .health
+            .last_heartbeat_ns
+            .keys()
+            .eq(state.health.last_policy_version.keys())
+            || !state
+                .health
+                .last_heartbeat_ns
+                .keys()
+                .eq(state.health.last_frontier_hash.keys())
+            || state
+                .health
+                .last_heartbeat_ns
+                .keys()
+                .any(|node| !state.sequence_tracker.last_accepted.contains_key(node))
+        {
+            return Err("heartbeat indexes disagree with admitted replay frontiers".into());
+        }
+        let mut intent_ids = BTreeSet::new();
+        let mut pending_bytes = 0usize;
+        for (extension, intents) in &state.pending_intents {
+            if intents.is_empty() {
+                return Err("pending intent groups must be nonempty".into());
+            }
+            pending_bytes = pending_bytes
+                .checked_add(extension.len())
+                .ok_or("pending intent byte count overflow")?;
+            for intent in intents {
+                intent
+                    .validate_fleet_ingress_limits()
+                    .map_err(|error| error.to_string())?;
+                intent
+                    .validate_fleet_structure()
+                    .map_err(|error| error.to_string())?;
+                if &intent.extension_id != extension
+                    || intent.epoch != state.current_epoch
+                    || intent.protocol_version != ProtocolVersion::V2
+                    || intent.signature.signer != intent.node_id
+                    || intent.signature.hash != AuthenticityHash([0; 32])
+                    || intent.sequence == 0
+                    || intent.sequence > state.sequence_tracker.last_sequence(&intent.node_id)
+                    || !intent_ids.insert(intent.intent_id.clone())
+                {
+                    return Err(
+                        "pending intent is inconsistent with authenticated admission".into(),
+                    );
+                }
+                pending_bytes = pending_bytes
+                    .checked_add(intent.intent_id.len())
+                    .ok_or("pending intent byte count overflow")?;
+            }
+        }
+        if !intent_ids
+            .iter()
+            .eq(restored.pending_intent_commitments.keys())
+            || intent_ids.len() > FLEET_V2_MAX_PENDING_INTENTS
+            || pending_bytes != restored.pending_intent_bytes
+            || pending_bytes > FLEET_V2_MAX_PENDING_INTENT_BYTES
+        {
+            return Err("pending intent commitment or capacity indexes disagree".into());
+        }
+        if let Some((epoch, sequence, _)) = restored.checkpoint_vote
+            && (epoch != state.current_epoch
+                || state.last_checkpoint_seq.checked_add(1) != Some(sequence))
+        {
+            return Err("reserved vote does not belong to the next checkpoint round".into());
+        }
+        Ok(restored)
+    }
+
     pub fn new(
         fleet_authority_id: FleetAuthorityId,
         node_id: NodeId,
@@ -8789,6 +9038,147 @@ mod tests {
             let mut message = test_heartbeat("node-a", 3, 9_000_000_000);
             message.protocol_version = ProtocolVersion::V2;
             message
+        }
+
+        #[test]
+        fn recovery_growth_bounds_cover_actual_escaped_admission() {
+            let node_text = format!("n{}", "\u{0001}".repeat(255));
+            let signer = v2_test_signer(&node_text, 1, 91);
+            let authority = RecoverableTestAnchorAuthority::new(false);
+            let context = EventContext::new("growth", "registration", "policy").unwrap();
+            let mut storage = crate::storage_adapter::InMemoryStorageAdapter::new();
+            let registry = FleetVerificationRegistryPersistence::new(&mut storage, &context)
+                .prepare_initial_registration(
+                    signer.identity().signer.clone(),
+                    1,
+                    signer.verification_key().clone(),
+                    SecurityEpoch::from_raw(1),
+                    &authority,
+                )
+                .unwrap()
+                .finalize_and_publish(&authority)
+                .unwrap();
+            let mut state = state();
+            let size = |state: &AuthenticatedFleetProtocolStateV2| {
+                serde_json::to_vec(&state.recovery_snapshot())
+                    .unwrap()
+                    .len()
+            };
+            let extension = format!("e{}", "\u{0001}".repeat(255));
+            for sequence in 1..=3 {
+                let mut packet = evidence();
+                packet.node_id = signer.identity().signer.clone();
+                packet.sequence = sequence;
+                packet.extension_id = extension.clone();
+                packet.trace_id = format!("{sequence:03}{}", "\u{0001}".repeat(253));
+                packet.posterior_delta_millionths = i64::MAX;
+                let growth =
+                    AuthenticatedFleetProtocolStateV2::recovery_evidence_growth_bound(&packet)
+                        .unwrap();
+                let before = size(&state);
+                state
+                    .process_evidence(
+                        &packet,
+                        &signer.sign_detached_message_v2(&packet).unwrap(),
+                        &registry,
+                        &authority,
+                    )
+                    .unwrap();
+                assert!(size(&state) <= before + growth);
+            }
+            assert_eq!(
+                state.exact_evidence_totals[&extension],
+                i128::from(i64::MAX) * 3
+            );
+
+            for sequence in 4..=5 {
+                let mut message = heartbeat();
+                message.node_id = signer.identity().signer.clone();
+                message.sequence = sequence;
+                message.policy_version = u64::MAX;
+                message.timestamp_ns = u64::MAX;
+                message.evidence_frontier_hash = ContentHash::from_bytes([255; 32]);
+                message
+                    .local_health
+                    .insert("ignored-detail".into(), "\\".repeat(4096));
+                let growth =
+                    AuthenticatedFleetProtocolStateV2::recovery_heartbeat_growth_bound(&message)
+                        .unwrap();
+                let before = size(&state);
+                state
+                    .process_heartbeat(
+                        &message,
+                        &signer.sign_detached_message_v2(&message).unwrap(),
+                        &registry,
+                        &authority,
+                    )
+                    .unwrap();
+                assert!(size(&state) <= before + growth);
+            }
+
+            for sequence in 6..=7 {
+                let mut message = intent();
+                message.node_id = signer.identity().signer.clone();
+                message.sequence = sequence;
+                message.intent_id = format!("{sequence:03}{}", "\u{0001}".repeat(253));
+                message.extension_id = extension.clone();
+                message.supporting_evidence_ids = (0..32)
+                    .map(|index| format!("{index:03}{}", "\u{0001}".repeat(253)))
+                    .collect();
+                message.extensions = BTreeMap::from([
+                    ("quotes".into(), "\"".repeat(4096)),
+                    ("controls".into(), "\u{0001}".repeat(4096)),
+                ]);
+                // Admission replaces this short, unauthenticated signer with
+                // the escaped 256-byte authenticated node in the stored body.
+                message.signature.signer = NodeId::new("x");
+                let growth =
+                    AuthenticatedFleetProtocolStateV2::recovery_intent_growth_bound(&message)
+                        .unwrap();
+                let before = size(&state);
+                state
+                    .process_intent(
+                        &message,
+                        &signer.sign_detached_message_v2(&message).unwrap(),
+                        &registry,
+                        &authority,
+                    )
+                    .unwrap();
+                assert!(size(&state) <= before + growth);
+            }
+        }
+
+        #[test]
+        fn recovery_growth_bounds_reject_unbounded_inputs_and_count_json_escapes() {
+            for text in [
+                "",
+                "ordinary",
+                "\"\\\n\r\t\u{0008}\u{000c}\u{0001}",
+                "é東京😀",
+            ] {
+                assert_eq!(
+                    AuthenticatedFleetProtocolStateV2::recovery_json_string_bytes(text),
+                    serde_json::to_vec(text).unwrap().len(),
+                );
+            }
+            let mut packet = evidence();
+            packet.trace_id = "x".repeat(FLEET_V2_MAX_IDENTIFIER_BYTES + 1);
+            assert!(
+                AuthenticatedFleetProtocolStateV2::recovery_evidence_growth_bound(&packet).is_err()
+            );
+            let mut message = intent();
+            message
+                .extensions
+                .insert("large".into(), "x".repeat(FLEET_V2_MAX_VALUE_BYTES + 1));
+            assert!(
+                AuthenticatedFleetProtocolStateV2::recovery_intent_growth_bound(&message).is_err()
+            );
+            let mut message = heartbeat();
+            message.node_id = NodeId::new("x".repeat(FLEET_V2_MAX_IDENTIFIER_BYTES + 1));
+            assert!(
+                AuthenticatedFleetProtocolStateV2::recovery_heartbeat_growth_bound(&message)
+                    .is_err()
+            );
         }
 
         #[test]

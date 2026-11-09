@@ -181,6 +181,13 @@ pub const FLEET_V2_MAX_MAP_ENTRIES: usize = 64;
 /// Maximum aggregate collection elements across a nested v2 message.
 pub const FLEET_V2_MAX_TOTAL_COLLECTION_ITEMS: usize = 1024;
 
+/// Maximum pending containment intents in one authenticated checkpoint batch.
+pub const FLEET_V2_MAX_PENDING_INTENTS: usize = FLEET_V2_MAX_COLLECTION_ITEMS;
+
+/// Checkpoint bytes reserved for unique extension IDs and all pending intent IDs.
+/// The remaining budget covers the electorate and signed checkpoint metadata.
+pub const FLEET_V2_MAX_PENDING_INTENT_BYTES: usize = FLEET_V2_MAX_DYNAMIC_BYTES / 2 - 1024;
+
 /// Maximum shards admitted into one authenticated v2 erasure set.
 ///
 /// Each shard is already charged against the 32 KiB per-message dynamic-byte
@@ -6017,6 +6024,14 @@ fn append_self_stabilization_string(buf: &mut Vec<u8>, value: &str) {
 pub enum ProtocolError {
     /// Protocol-v2 state requires the separately authenticated ingress API.
     AuthenticatedV2Required { message_type: String },
+    /// Pending work would exceed the bounded checkpoint's representable shape.
+    PendingIntentCapacityExceeded {
+        resource: String,
+        limit: usize,
+        actual: usize,
+    },
+    /// Exact evidence accumulation cannot be represented without order loss.
+    EvidenceTotalOverflow { extension_id: String },
     /// Message sequence number indicates replay or out-of-order delivery.
     ReplayDetected {
         node_id: NodeId,
@@ -6070,6 +6085,22 @@ impl fmt::Display for ProtocolError {
                 f,
                 "{message_type} requires authenticated protocol-v2 state and trusted signatures"
             ),
+            Self::PendingIntentCapacityExceeded {
+                resource,
+                limit,
+                actual,
+            } => {
+                write!(
+                    f,
+                    "pending intent capacity exceeded for {resource}: {actual} > {limit}"
+                )
+            }
+            Self::EvidenceTotalOverflow { extension_id } => {
+                write!(
+                    f,
+                    "exact evidence total overflow for extension {extension_id}"
+                )
+            }
             Self::ReplayDetected {
                 node_id,
                 received_seq,
@@ -6185,7 +6216,10 @@ pub struct AuthenticatedFleetProtocolStateV2 {
     fleet_authority_id: FleetAuthorityId,
     pub(crate) state: FleetProtocolState,
     pub(crate) evidence_commitments: BTreeMap<String, BTreeMap<String, ContentHash>>,
-    pub(crate) pending_intent_ids: BTreeSet<String>,
+    pub(crate) pending_intent_commitments: BTreeMap<String, ContentHash>,
+    pub(crate) checkpoint_vote: Option<(SecurityEpoch, u64, ContentHash)>,
+    exact_evidence_totals: BTreeMap<String, i128>,
+    pub(crate) pending_intent_bytes: usize,
 }
 
 impl AuthenticatedFleetProtocolStateV2 {
@@ -6204,7 +6238,10 @@ impl AuthenticatedFleetProtocolStateV2 {
             fleet_authority_id,
             state,
             evidence_commitments: BTreeMap::new(),
-            pending_intent_ids: BTreeSet::new(),
+            pending_intent_commitments: BTreeMap::new(),
+            checkpoint_vote: None,
+            exact_evidence_totals: BTreeMap::new(),
+            pending_intent_bytes: 0,
         })
     }
 
@@ -6229,7 +6266,9 @@ impl AuthenticatedFleetProtocolStateV2 {
         }
         if epoch > self.state.current_epoch {
             self.state.pending_intents.clear();
-            self.pending_intent_ids.clear();
+            self.pending_intent_commitments.clear();
+            self.checkpoint_vote = None;
+            self.pending_intent_bytes = 0;
             self.state.current_epoch = epoch;
         }
         Ok(())
@@ -6267,12 +6306,29 @@ impl AuthenticatedFleetProtocolStateV2 {
             .sequence_tracker
             .validate_sequence(&packet.node_id, packet.sequence)?;
         self.state.evidence.validate_packet(packet)?;
+        let exact_total = self
+            .exact_evidence_totals
+            .get(&packet.extension_id)
+            .copied()
+            .unwrap_or(0)
+            .checked_add(i128::from(packet.posterior_delta_millionths))
+            .ok_or_else(|| ProtocolError::EvidenceTotalOverflow {
+                extension_id: packet.extension_id.clone(),
+            })?;
         let commitment =
             ContentHash::compute(&packet.fleet_signature_preimage_v2(&signature.identity())?);
         // Verify freshness again immediately before publication. An authority
         // advance during signature verification must not authorize mutation.
         registry.ensure_current(authority)?;
         self.state.evidence.record_validated(packet);
+        // Saturate only the exposed i64 projection, never the running sum:
+        // clamping each addition would make MAX,+1,-1 arrival-order dependent.
+        self.state.evidence.accumulated.insert(
+            packet.extension_id.clone(),
+            exact_total.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64,
+        );
+        self.exact_evidence_totals
+            .insert(packet.extension_id.clone(), exact_total);
         self.evidence_commitments
             .entry(packet.extension_id.clone())
             .or_default()
@@ -6294,13 +6350,49 @@ impl AuthenticatedFleetProtocolStateV2 {
         self.state
             .sequence_tracker
             .validate_sequence(&intent.node_id, intent.sequence)?;
-        if self.pending_intent_ids.contains(&intent.intent_id) {
+        if self
+            .pending_intent_commitments
+            .contains_key(&intent.intent_id)
+        {
             return Err(ProtocolError::DuplicateIntentId {
                 intent_id: intent.intent_id.clone(),
                 extension_id: intent.extension_id.clone(),
             }
             .into());
         }
+        let next_count = self.pending_intent_commitments.len().saturating_add(1);
+        if next_count > FLEET_V2_MAX_PENDING_INTENTS {
+            return Err(ProtocolError::PendingIntentCapacityExceeded {
+                resource: "pending_intents".to_string(),
+                limit: FLEET_V2_MAX_PENDING_INTENTS,
+                actual: next_count,
+            }
+            .into());
+        }
+        let extension_bytes = if self
+            .state
+            .pending_intents
+            .contains_key(&intent.extension_id)
+        {
+            0
+        } else {
+            intent.extension_id.len()
+        };
+        let next_bytes = self
+            .pending_intent_bytes
+            .checked_add(intent.intent_id.len())
+            .and_then(|bytes| bytes.checked_add(extension_bytes))
+            .unwrap_or(usize::MAX);
+        if next_bytes > FLEET_V2_MAX_PENDING_INTENT_BYTES {
+            return Err(ProtocolError::PendingIntentCapacityExceeded {
+                resource: "checkpoint_intent_bytes".to_string(),
+                limit: FLEET_V2_MAX_PENDING_INTENT_BYTES,
+                actual: next_bytes,
+            }
+            .into());
+        }
+        let commitment =
+            ContentHash::compute(&intent.fleet_signature_preimage_v2(&signature.identity())?);
         let mut admitted = intent.clone();
         // The V2 signature covers the semantic projection, never this V1
         // carrier. Do not retain unauthenticated bytes as apparent authority.
@@ -6309,7 +6401,9 @@ impl AuthenticatedFleetProtocolStateV2 {
             hash: AuthenticityHash([0; 32]),
         };
         registry.ensure_current(authority)?;
-        self.pending_intent_ids.insert(admitted.intent_id.clone());
+        self.pending_intent_bytes = next_bytes;
+        self.pending_intent_commitments
+            .insert(admitted.intent_id.clone(), commitment);
         self.state
             .pending_intents
             .entry(admitted.extension_id.clone())
@@ -8627,7 +8721,13 @@ mod tests {
         }
 
         fn fixture() -> (FleetSigner, DurableFleetVerificationRegistry, IngressAnchor) {
-            let signer = v2_test_signer("node-a", 1, 91);
+            fixture_with_seed(91)
+        }
+
+        fn fixture_with_seed(
+            seed: u8,
+        ) -> (FleetSigner, DurableFleetVerificationRegistry, IngressAnchor) {
+            let signer = v2_test_signer("node-a", 1, seed);
             let context = EventContext::new("ingress", "registration", "policy")
                 .expect("valid persistence context");
             let authority = RecoverableTestAnchorAuthority::new(false);
@@ -8665,7 +8765,10 @@ mod tests {
             serde_json::to_vec(&(
                 state.state(),
                 &state.evidence_commitments,
-                &state.pending_intent_ids,
+                &state.pending_intent_commitments,
+                state.checkpoint_vote,
+                &state.exact_evidence_totals,
+                state.pending_intent_bytes,
             ))
             .expect("serialize observable protocol state and admission indexes")
         }
@@ -8752,6 +8855,163 @@ mod tests {
         }
 
         #[test]
+        fn identical_intent_payloads_commit_the_actual_admitted_key() {
+            let mut states = Vec::new();
+            for seed in [91, 92] {
+                let (signer, live, anchor) = fixture_with_seed(seed);
+                let mut state = state();
+                let message = intent();
+                state
+                    .process_intent(
+                        &message,
+                        &signer
+                            .sign_detached_message_v2(&message)
+                            .expect("sign with this registry's key"),
+                        &live,
+                        &anchor,
+                    )
+                    .expect("independently authenticated intent");
+                states.push(state);
+            }
+            assert_eq!(
+                serde_json::to_vec(states[0].state()).expect("state"),
+                serde_json::to_vec(states[1].state()).expect("state")
+            );
+            assert_ne!(
+                states[0].pending_intent_commitments,
+                states[1].pending_intent_commitments
+            );
+        }
+
+        #[test]
+        fn pending_count_and_byte_boundaries_apply_backpressure_without_consuming_sequences() {
+            let (signer, live, anchor) = fixture();
+            for byte_limit in [false, true] {
+                let mut state = state();
+                let mut accepted = 0usize;
+                let mut bytes = "ext".len();
+                loop {
+                    if (!byte_limit && accepted == FLEET_V2_MAX_PENDING_INTENTS)
+                        || (byte_limit && bytes == FLEET_V2_MAX_PENDING_INTENT_BYTES)
+                    {
+                        break;
+                    }
+                    let mut message = intent();
+                    message.sequence = accepted as u64 + 1;
+                    message.intent_id = if byte_limit {
+                        let len = (FLEET_V2_MAX_PENDING_INTENT_BYTES - bytes)
+                            .min(FLEET_V2_MAX_IDENTIFIER_BYTES);
+                        let prefix = format!("i{accepted:03}");
+                        format!("{prefix}{}", "x".repeat(len - prefix.len()))
+                    } else {
+                        format!("i{accepted:03}")
+                    };
+                    bytes += message.intent_id.len();
+                    state
+                        .process_intent(
+                            &message,
+                            &signer
+                                .sign_detached_message_v2(&message)
+                                .expect("sign within bound"),
+                            &live,
+                            &anchor,
+                        )
+                        .expect("exact pending boundary is admissible");
+                    accepted += 1;
+                }
+                assert_eq!(state.pending_intent_bytes, bytes);
+                assert_eq!(state.pending_intent_commitments.len(), accepted);
+                let mut overflow = intent();
+                overflow.sequence = accepted as u64 + 1;
+                overflow.intent_id = "z".to_string();
+                let before = snapshot(&state);
+                let error = state
+                    .process_intent(
+                        &overflow,
+                        &signer
+                            .sign_detached_message_v2(&overflow)
+                            .expect("sign one over pending bound"),
+                        &live,
+                        &anchor,
+                    )
+                    .expect_err("backpressure without state publication");
+                let (resource, limit, actual) = if byte_limit {
+                    (
+                        "checkpoint_intent_bytes",
+                        FLEET_V2_MAX_PENDING_INTENT_BYTES,
+                        FLEET_V2_MAX_PENDING_INTENT_BYTES + 1,
+                    )
+                } else {
+                    (
+                        "pending_intents",
+                        FLEET_V2_MAX_PENDING_INTENTS,
+                        FLEET_V2_MAX_PENDING_INTENTS + 1,
+                    )
+                };
+                assert_eq!(
+                    error,
+                    FleetIngressV2Error::Protocol(ProtocolError::PendingIntentCapacityExceeded {
+                        resource: resource.to_string(),
+                        limit,
+                        actual
+                    })
+                );
+                assert_eq!(snapshot(&state), before);
+                state
+                    .advance_epoch(SecurityEpoch::from_raw(2))
+                    .expect("expire prior-epoch batch");
+                assert_eq!(state.pending_intent_bytes, 0);
+                overflow.epoch = SecurityEpoch::from_raw(2);
+                state
+                    .process_intent(
+                        &overflow,
+                        &signer
+                            .sign_detached_message_v2(&overflow)
+                            .expect("sign for new epoch"),
+                        &live,
+                        &anchor,
+                    )
+                    .expect("same unused sequence succeeds after capacity is released");
+            }
+        }
+
+        #[test]
+        fn exact_evidence_overflow_rejects_without_publication() {
+            let (signer, live, anchor) = fixture();
+            let mut state = state();
+            state
+                .exact_evidence_totals
+                .insert("ext".to_string(), i128::MAX);
+            let mut message = evidence();
+            message.posterior_delta_millionths = 1;
+            let before = snapshot(&state);
+            assert!(matches!(
+                state.process_evidence(
+                    &message,
+                    &signer.sign_detached_message_v2(&message).expect("sign"),
+                    &live,
+                    &anchor
+                ),
+                Err(FleetIngressV2Error::Protocol(
+                    ProtocolError::EvidenceTotalOverflow { .. }
+                ))
+            ));
+            assert_eq!(snapshot(&state), before);
+            message.posterior_delta_millionths = -1;
+            state
+                .process_evidence(
+                    &message,
+                    &signer.sign_detached_message_v2(&message).expect("sign"),
+                    &live,
+                    &anchor,
+                )
+                .expect("rejected sequence was not consumed");
+            assert_eq!(state.exact_evidence_totals["ext"], i128::MAX - 1);
+            assert_eq!(state.state().evidence.posterior_delta("ext"), i64::MAX);
+            assert_eq!(state.state().evidence.evidence_count("ext"), 1);
+        }
+
+        #[test]
         fn epoch_advance_invalidates_pending_work_without_resetting_evidence_or_replay() {
             let (signer, live, anchor) = fixture();
             let mut state = state();
@@ -8785,7 +9045,7 @@ mod tests {
                 .advance_epoch(SecurityEpoch::from_raw(2))
                 .expect("next policy epoch");
             assert!(state.state().pending_intents.is_empty());
-            assert!(state.pending_intent_ids.is_empty());
+            assert!(state.pending_intent_commitments.is_empty());
             assert_eq!(state.state().evidence.posterior_delta("ext"), 125_000);
             assert_eq!(state.state().evidence.evidence_count("ext"), 1);
             assert_eq!(state.evidence_commitments, commitments);

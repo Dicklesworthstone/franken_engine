@@ -6015,6 +6015,8 @@ fn append_self_stabilization_string(buf: &mut Vec<u8>, value: &str) {
 /// Errors arising from fleet protocol operations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProtocolError {
+    /// Protocol-v2 state requires the separately authenticated ingress API.
+    AuthenticatedV2Required { message_type: String },
     /// Message sequence number indicates replay or out-of-order delivery.
     ReplayDetected {
         node_id: NodeId,
@@ -6026,7 +6028,7 @@ pub enum ProtocolError {
         trace_id: String,
         extension_id: String,
     },
-    /// Two pending intents for one extension reused the same intent ID.
+    /// Two pending intents reused the same intent ID.
     DuplicateIntentId {
         intent_id: String,
         extension_id: String,
@@ -6064,6 +6066,10 @@ pub enum ProtocolError {
 impl fmt::Display for ProtocolError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::AuthenticatedV2Required { message_type } => write!(
+                f,
+                "{message_type} requires authenticated protocol-v2 state and trusted signatures"
+            ),
             Self::ReplayDetected {
                 node_id,
                 received_seq,
@@ -6126,6 +6132,214 @@ impl fmt::Display for ProtocolError {
 }
 
 impl std::error::Error for ProtocolError {}
+
+/// Rejection from authenticated V2 ingress, before protocol state is changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FleetIngressV2Error {
+    Identity(FleetIdentityError),
+    Protocol(ProtocolError),
+}
+
+impl fmt::Display for FleetIngressV2Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Identity(error) => error.fmt(f),
+            Self::Protocol(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for FleetIngressV2Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Identity(error) => Some(error),
+            Self::Protocol(error) => Some(error),
+        }
+    }
+}
+
+impl From<FleetIdentityError> for FleetIngressV2Error {
+    fn from(error: FleetIdentityError) -> Self {
+        Self::Identity(error)
+    }
+}
+
+impl From<ProtocolError> for FleetIngressV2Error {
+    fn from(error: ProtocolError) -> Self {
+        Self::Protocol(error)
+    }
+}
+
+/// Explicitly opted-in V2 state whose incoming evidence, intent and liveness
+/// changes require externally anchored node signatures.
+///
+/// The authority domain is fixed at construction and the aggregate state is
+/// exposed read-only. There is deliberately no deserializer or mutable-state
+/// accessor: restoring arbitrary `FleetProtocolState` would bypass admission.
+/// This does not change [`ProtocolVersion::CURRENT`] or authenticate legacy
+/// wire carriers. Callers must bound raw frames before deserialization; these
+/// methods authenticate the existing bounded V2 semantic projections. Any V1
+/// tag retained by a pending intent is replaced by a non-authenticating marker.
+#[derive(Debug)]
+pub struct AuthenticatedFleetProtocolStateV2 {
+    fleet_authority_id: FleetAuthorityId,
+    pub(crate) state: FleetProtocolState,
+    pub(crate) evidence_commitments: BTreeMap<String, BTreeMap<String, ContentHash>>,
+    pub(crate) pending_intent_ids: BTreeSet<String>,
+}
+
+impl AuthenticatedFleetProtocolStateV2 {
+    pub fn new(
+        fleet_authority_id: FleetAuthorityId,
+        node_id: NodeId,
+        config: GossipConfig,
+        epoch: SecurityEpoch,
+    ) -> Result<Self, FleetIdentityError> {
+        validate_fleet_authority_id(fleet_authority_id)?;
+        validate_fleet_node_id(&node_id)?;
+        let mut state = FleetProtocolState::new(node_id, config);
+        state.protocol_version = ProtocolVersion::V2;
+        state.current_epoch = epoch;
+        Ok(Self {
+            fleet_authority_id,
+            state,
+            evidence_commitments: BTreeMap::new(),
+            pending_intent_ids: BTreeSet::new(),
+        })
+    }
+
+    pub fn fleet_authority_id(&self) -> FleetAuthorityId {
+        self.fleet_authority_id
+    }
+
+    pub fn state(&self) -> &FleetProtocolState {
+        &self.state
+    }
+
+    /// Advance the independently supplied policy epoch. Pending containment
+    /// intents belong to the previous policy epoch and are invalidated on a
+    /// strict advance; evidence commitments and replay frontiers are retained.
+    /// Reasserting the same epoch leaves pending work unchanged.
+    pub fn advance_epoch(&mut self, epoch: SecurityEpoch) -> Result<(), FleetIdentityError> {
+        if epoch < self.state.current_epoch {
+            return Err(FleetIdentityError::AuthorityEpochRegression {
+                current: self.state.current_epoch,
+                attempted: epoch,
+            });
+        }
+        if epoch > self.state.current_epoch {
+            self.state.pending_intents.clear();
+            self.pending_intent_ids.clear();
+            self.state.current_epoch = epoch;
+        }
+        Ok(())
+    }
+
+    fn verify_message<T: FleetSignaturePreimageV2, A: FleetRegistryAnchorAuthority>(
+        &self,
+        message: &T,
+        signature: &FleetSignatureV2,
+        registry: &DurableFleetVerificationRegistry,
+        authority: &A,
+    ) -> Result<(), FleetIdentityError> {
+        ensure_fleet_authority_matches(
+            "authenticated fleet state",
+            self.fleet_authority_id,
+            registry.fleet_authority_id(),
+        )?;
+        registry.verify_live_detached_message_v2(
+            message,
+            signature,
+            self.state.current_epoch,
+            authority,
+        )
+    }
+
+    pub fn process_evidence<A: FleetRegistryAnchorAuthority>(
+        &mut self,
+        packet: &EvidencePacket,
+        signature: &FleetSignatureV2,
+        registry: &DurableFleetVerificationRegistry,
+        authority: &A,
+    ) -> Result<(), FleetIngressV2Error> {
+        self.verify_message(packet, signature, registry, authority)?;
+        self.state
+            .sequence_tracker
+            .validate_sequence(&packet.node_id, packet.sequence)?;
+        self.state.evidence.validate_packet(packet)?;
+        let commitment =
+            ContentHash::compute(&packet.fleet_signature_preimage_v2(&signature.identity())?);
+        // Verify freshness again immediately before publication. An authority
+        // advance during signature verification must not authorize mutation.
+        registry.ensure_current(authority)?;
+        self.state.evidence.record_validated(packet);
+        self.evidence_commitments
+            .entry(packet.extension_id.clone())
+            .or_default()
+            .insert(packet.trace_id.clone(), commitment);
+        self.state
+            .sequence_tracker
+            .record_accepted(&packet.node_id, packet.sequence);
+        Ok(())
+    }
+
+    pub fn process_intent<A: FleetRegistryAnchorAuthority>(
+        &mut self,
+        intent: &ContainmentIntent,
+        signature: &FleetSignatureV2,
+        registry: &DurableFleetVerificationRegistry,
+        authority: &A,
+    ) -> Result<(), FleetIngressV2Error> {
+        self.verify_message(intent, signature, registry, authority)?;
+        self.state
+            .sequence_tracker
+            .validate_sequence(&intent.node_id, intent.sequence)?;
+        if self.pending_intent_ids.contains(&intent.intent_id) {
+            return Err(ProtocolError::DuplicateIntentId {
+                intent_id: intent.intent_id.clone(),
+                extension_id: intent.extension_id.clone(),
+            }
+            .into());
+        }
+        let mut admitted = intent.clone();
+        // The V2 signature covers the semantic projection, never this V1
+        // carrier. Do not retain unauthenticated bytes as apparent authority.
+        admitted.signature = MessageSignature {
+            signer: intent.node_id.clone(),
+            hash: AuthenticityHash([0; 32]),
+        };
+        registry.ensure_current(authority)?;
+        self.pending_intent_ids.insert(admitted.intent_id.clone());
+        self.state
+            .pending_intents
+            .entry(admitted.extension_id.clone())
+            .or_default()
+            .push(admitted);
+        self.state
+            .sequence_tracker
+            .record_accepted(&intent.node_id, intent.sequence);
+        Ok(())
+    }
+
+    pub fn process_heartbeat<A: FleetRegistryAnchorAuthority>(
+        &mut self,
+        heartbeat: &HeartbeatLiveness,
+        signature: &FleetSignatureV2,
+        registry: &DurableFleetVerificationRegistry,
+        authority: &A,
+    ) -> Result<(), FleetIngressV2Error> {
+        self.verify_message(heartbeat, signature, registry, authority)?;
+        self.state
+            .sequence_tracker
+            .validate_sequence(&heartbeat.node_id, heartbeat.sequence)?;
+        registry.ensure_current(authority)?;
+        self.state.health.record_heartbeat(heartbeat);
+        self.state
+            .sequence_tracker
+            .record_accepted(&heartbeat.node_id, heartbeat.sequence);
+        Ok(())
+    }
+}
 
 // ---------------------------------------------------------------------------
 // FleetProtocolState — aggregate protocol state
@@ -6196,6 +6410,7 @@ impl FleetProtocolState {
                 remote: packet.protocol_version,
             });
         }
+        self.require_legacy_ingress("evidence")?;
 
         // Preserve replay-before-duplicate error precedence, but complete both
         // read-only checks before publishing evidence or the replay frontier.
@@ -6253,6 +6468,7 @@ impl FleetProtocolState {
                 remote: intent.protocol_version,
             });
         }
+        self.require_legacy_ingress("containment-intent")?;
 
         // Replay protection.
         self.sequence_tracker
@@ -6282,6 +6498,7 @@ impl FleetProtocolState {
                 remote: heartbeat.protocol_version,
             });
         }
+        self.require_legacy_ingress("heartbeat")?;
 
         // Replay protection.
         self.sequence_tracker
@@ -6290,6 +6507,15 @@ impl FleetProtocolState {
         // Update health.
         self.health.record_heartbeat(heartbeat);
 
+        Ok(())
+    }
+
+    fn require_legacy_ingress(&self, message_type: &str) -> Result<(), ProtocolError> {
+        if self.protocol_version.major != ProtocolVersion::V1.major {
+            return Err(ProtocolError::AuthenticatedV2Required {
+                message_type: message_type.to_string(),
+            });
+        }
         Ok(())
     }
 
@@ -6303,13 +6529,14 @@ impl FleetProtocolState {
 
     /// Build a quorum checkpoint from current state.
     ///
-    /// Returns `Err` if insufficient healthy nodes for quorum or if a v2
-    /// checkpoint would contain colliding intent IDs.
+    /// Returns `Err` if insufficient healthy nodes for quorum. V2 callers
+    /// must use authenticated checkpoint drafting and finalization.
     pub fn build_checkpoint(
         &mut self,
         current_time_ns: u64,
         local_signature: MessageSignature,
     ) -> Result<QuorumCheckpoint, ProtocolError> {
+        self.require_legacy_ingress("checkpoint")?;
         let healthy = self
             .health
             .healthy_nodes(current_time_ns, self.config.partition_timeout_ns);
@@ -6334,22 +6561,10 @@ impl FleetProtocolState {
         let mut decisions = Vec::new();
         for (ext_id, intents) in &self.pending_intents {
             if let Some(winner) = DeterministicPrecedence::resolve_all(intents) {
-                let mut contributing_intent_ids = intents
+                let contributing_intent_ids = intents
                     .iter()
                     .map(|intent| intent.intent_id.clone())
                     .collect::<Vec<_>>();
-                if self.protocol_version == ProtocolVersion::V2 {
-                    contributing_intent_ids.sort();
-                    if let Some(duplicate) = contributing_intent_ids
-                        .windows(2)
-                        .find(|pair| pair[0] == pair[1])
-                    {
-                        return Err(ProtocolError::DuplicateIntentId {
-                            intent_id: duplicate[0].clone(),
-                            extension_id: ext_id.clone(),
-                        });
-                    }
-                }
                 decisions.push(ResolvedContainmentDecision {
                     extension_id: ext_id.clone(),
                     resolved_action: winner.proposed_action,
@@ -6359,8 +6574,6 @@ impl FleetProtocolState {
             }
         }
 
-        // All fallible V2 canonicalization is complete before protocol state
-        // advances or pending inputs are consumed.
         self.last_checkpoint_seq = self.last_checkpoint_seq.saturating_add(1);
 
         let mut quorum_sigs = BTreeMap::new();
@@ -7990,7 +8203,7 @@ mod tests {
     }
 
     #[test]
-    fn build_checkpoint_v2_rejects_colliding_intent_ids_atomically_without_changing_v1() {
+    fn legacy_checkpoint_rejects_v2_atomically_without_changing_v1() {
         let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
         let now = 10_000_000_000u64;
         state
@@ -8014,12 +8227,11 @@ mod tests {
         let checkpoint_seq_before = state.last_checkpoint_seq;
         let error = state
             .build_checkpoint(now, test_signature("local"))
-            .expect_err("v2 contributor collisions must fail closed");
+            .expect_err("legacy checkpoint API cannot emit V2");
         assert_eq!(
             error,
-            ProtocolError::DuplicateIntentId {
-                intent_id: "intent-a".to_string(),
-                extension_id: "ext-1".to_string(),
+            ProtocolError::AuthenticatedV2Required {
+                message_type: "checkpoint".to_string(),
             }
         );
         assert_eq!(state.last_checkpoint_seq, checkpoint_seq_before);
@@ -8046,13 +8258,19 @@ mod tests {
         state
             .pending_intents
             .insert("ext-1".to_string(), vec![unique_intent_z, unique_intent_a]);
-        let checkpoint = state
+        let pending_before = state.pending_intents.clone();
+        let checkpoint_seq_before = state.last_checkpoint_seq;
+        let error = state
             .build_checkpoint(now, test_signature("local"))
-            .expect("v2 sorts unique contributor IDs");
+            .expect_err("even structurally valid V2 checkpoints need trusted signatures");
         assert_eq!(
-            checkpoint.containment_decisions[0].contributing_intent_ids,
-            vec!["intent-a".to_string(), "intent-z".to_string()]
+            error,
+            ProtocolError::AuthenticatedV2Required {
+                message_type: "checkpoint".to_string(),
+            }
         );
+        assert_eq!(state.last_checkpoint_seq, checkpoint_seq_before);
+        assert_eq!(state.pending_intents, pending_before);
     }
 
     #[test]
@@ -8377,6 +8595,550 @@ mod tests {
         // Verify both accumulated
         assert_eq!(state.evidence.posterior_delta("ext-1"), 100_000);
         assert_eq!(state.pending_intents["ext-1"].len(), 1);
+    }
+
+    mod authenticated_ingress_v2 {
+        use super::*;
+
+        struct IngressAnchor {
+            claim: FleetRegistrySnapshotAnchorClaim,
+            calls: Cell<usize>,
+            successful_calls: Cell<usize>,
+        }
+
+        impl FleetRegistryAnchorAuthority for IngressAnchor {
+            fn fleet_authority_id(&self) -> FleetAuthorityId {
+                self.claim.fleet_authority_id
+            }
+
+            fn authenticate_current_registry_anchor(
+                &self,
+                claim: &FleetRegistrySnapshotAnchorClaim,
+            ) -> Result<String, FleetIdentityError> {
+                let calls = self.calls.get() + 1;
+                self.calls.set(calls);
+                if claim != &self.claim || calls > self.successful_calls.get() {
+                    return Err(FleetIdentityError::UnverifiedRegistryAnchor {
+                        detail: "test authority advanced before ingress commit".to_string(),
+                    });
+                }
+                Ok("test-current-ingress-anchor".to_string())
+            }
+        }
+
+        fn fixture() -> (FleetSigner, DurableFleetVerificationRegistry, IngressAnchor) {
+            let signer = v2_test_signer("node-a", 1, 91);
+            let context = EventContext::new("ingress", "registration", "policy")
+                .expect("valid persistence context");
+            let authority = RecoverableTestAnchorAuthority::new(false);
+            let mut storage = crate::storage_adapter::InMemoryStorageAdapter::new();
+            let live = FleetVerificationRegistryPersistence::new(&mut storage, &context)
+                .prepare_initial_registration(
+                    NodeId::new("node-a"),
+                    1,
+                    signer.verification_key().clone(),
+                    SecurityEpoch::from_raw(1),
+                    &authority,
+                )
+                .expect("prepare trusted registration")
+                .finalize_and_publish(&authority)
+                .expect("publish trusted registration");
+            let anchor = IngressAnchor {
+                claim: live.anchor_claim.clone(),
+                calls: Cell::new(0),
+                successful_calls: Cell::new(usize::MAX),
+            };
+            (signer, live, anchor)
+        }
+
+        fn state() -> AuthenticatedFleetProtocolStateV2 {
+            AuthenticatedFleetProtocolStateV2::new(
+                test_fleet_authority_id(),
+                NodeId::new("local"),
+                GossipConfig::default(),
+                SecurityEpoch::from_raw(1),
+            )
+            .expect("valid authenticated state")
+        }
+
+        fn snapshot(state: &AuthenticatedFleetProtocolStateV2) -> Vec<u8> {
+            serde_json::to_vec(&(
+                state.state(),
+                &state.evidence_commitments,
+                &state.pending_intent_ids,
+            ))
+            .expect("serialize observable protocol state and admission indexes")
+        }
+
+        fn evidence() -> EvidencePacket {
+            let mut message = test_evidence("node-a", "ext", 1, 125_000);
+            message.protocol_version = ProtocolVersion::V2;
+            message
+        }
+
+        fn intent() -> ContainmentIntent {
+            let mut message = test_intent("node-a", "ext", ContainmentAction::Quarantine, 2, 1);
+            message.protocol_version = ProtocolVersion::V2;
+            message
+        }
+
+        fn heartbeat() -> HeartbeatLiveness {
+            let mut message = test_heartbeat("node-a", 3, 9_000_000_000);
+            message.protocol_version = ProtocolVersion::V2;
+            message
+        }
+
+        #[test]
+        fn accepted_messages_apply_real_evidence_containment_and_liveness() {
+            let (signer, live, anchor) = fixture();
+            let mut state = state();
+            let evidence = evidence();
+            state
+                .process_evidence(
+                    &evidence,
+                    &signer
+                        .sign_detached_message_v2(&evidence)
+                        .expect("sign evidence"),
+                    &live,
+                    &anchor,
+                )
+                .expect("admit evidence");
+            let intent = intent();
+            state
+                .process_intent(
+                    &intent,
+                    &signer
+                        .sign_detached_message_v2(&intent)
+                        .expect("sign intent"),
+                    &live,
+                    &anchor,
+                )
+                .expect("admit containment intent");
+            let heartbeat = heartbeat();
+            state
+                .process_heartbeat(
+                    &heartbeat,
+                    &signer
+                        .sign_detached_message_v2(&heartbeat)
+                        .expect("sign heartbeat"),
+                    &live,
+                    &anchor,
+                )
+                .expect("admit heartbeat");
+            assert_eq!(state.state().evidence.posterior_delta("ext"), 125_000);
+            assert_eq!(state.state().evidence.evidence_count("ext"), 1);
+            let resolved = state
+                .state()
+                .resolve_intents("ext")
+                .expect("resolved intent");
+            assert_eq!(resolved.proposed_action, ContainmentAction::Quarantine);
+            assert_eq!(resolved.signature.hash, AuthenticityHash([0; 32]));
+            assert_eq!(resolved.signature.signer, NodeId::new("node-a"));
+            assert_eq!(
+                state
+                    .state()
+                    .health
+                    .last_heartbeat_ns(&NodeId::new("node-a")),
+                Some(9_000_000_000)
+            );
+            assert_eq!(
+                state
+                    .state()
+                    .sequence_tracker
+                    .last_sequence(&NodeId::new("node-a")),
+                3
+            );
+            assert_eq!(anchor.calls.get(), 6);
+        }
+
+        #[test]
+        fn epoch_advance_invalidates_pending_work_without_resetting_evidence_or_replay() {
+            let (signer, live, anchor) = fixture();
+            let mut state = state();
+            let evidence = evidence();
+            state
+                .process_evidence(
+                    &evidence,
+                    &signer.sign_detached_message_v2(&evidence).expect("sign"),
+                    &live,
+                    &anchor,
+                )
+                .expect("admit evidence");
+            let mut intent = intent();
+            state
+                .process_intent(
+                    &intent,
+                    &signer.sign_detached_message_v2(&intent).expect("sign"),
+                    &live,
+                    &anchor,
+                )
+                .expect("admit intent");
+            let before = snapshot(&state);
+            state
+                .advance_epoch(SecurityEpoch::from_raw(1))
+                .expect("same epoch");
+            assert_eq!(snapshot(&state), before);
+            assert!(state.advance_epoch(SecurityEpoch::GENESIS).is_err());
+            assert_eq!(snapshot(&state), before);
+            let commitments = state.evidence_commitments.clone();
+            state
+                .advance_epoch(SecurityEpoch::from_raw(2))
+                .expect("next policy epoch");
+            assert!(state.state().pending_intents.is_empty());
+            assert!(state.pending_intent_ids.is_empty());
+            assert_eq!(state.state().evidence.posterior_delta("ext"), 125_000);
+            assert_eq!(state.state().evidence.evidence_count("ext"), 1);
+            assert_eq!(state.evidence_commitments, commitments);
+            assert_eq!(
+                state
+                    .state()
+                    .sequence_tracker
+                    .last_sequence(&NodeId::new("node-a")),
+                2
+            );
+            intent.epoch = SecurityEpoch::from_raw(2);
+            let before = snapshot(&state);
+            assert!(matches!(
+                state.process_intent(
+                    &intent,
+                    &signer.sign_detached_message_v2(&intent).expect("sign"),
+                    &live,
+                    &anchor
+                ),
+                Err(FleetIngressV2Error::Protocol(
+                    ProtocolError::ReplayDetected { .. }
+                ))
+            ));
+            assert_eq!(snapshot(&state), before);
+            intent.sequence = 3;
+            state
+                .process_intent(
+                    &intent,
+                    &signer.sign_detached_message_v2(&intent).expect("sign"),
+                    &live,
+                    &anchor,
+                )
+                .expect("new-epoch intent can reuse expired id at a fresh sequence");
+            assert_eq!(
+                state
+                    .state()
+                    .resolve_intents("ext")
+                    .expect("new intent")
+                    .epoch,
+                SecurityEpoch::from_raw(2)
+            );
+        }
+
+        #[test]
+        fn tampering_each_semantic_field_fails_without_state_mutation() {
+            let (signer, live, anchor) = fixture();
+            let mut state = state();
+            let before = snapshot(&state);
+            let original = evidence();
+            let signature = signer
+                .sign_detached_message_v2(&original)
+                .expect("sign evidence");
+            let changes: &[fn(&mut EvidencePacket)] = &[
+                |m| m.trace_id.push('x'),
+                |m| m.extension_id.push('x'),
+                |m| m.evidence_hash = ContentHash::compute(b"changed"),
+                |m| m.posterior_delta_millionths += 1,
+                |m| m.policy_version += 1,
+                |m| m.epoch = SecurityEpoch::from_raw(2),
+                |m| m.node_id = NodeId::new("node-b"),
+                |m| m.sequence += 1,
+                |m| m.timestamp_ns += 1,
+                |m| m.protocol_version = ProtocolVersion::V1,
+                |m| {
+                    m.extensions
+                        .insert("changed".to_string(), "value".to_string());
+                },
+            ];
+            for (index, change) in changes.iter().enumerate() {
+                let mut tampered = original.clone();
+                change(&mut tampered);
+                assert!(
+                    state
+                        .process_evidence(&tampered, &signature, &live, &anchor)
+                        .is_err(),
+                    "evidence field {index}"
+                );
+                assert_eq!(snapshot(&state), before);
+            }
+
+            let original = intent();
+            let signature = signer
+                .sign_detached_message_v2(&original)
+                .expect("sign intent");
+            let changes: &[fn(&mut ContainmentIntent)] = &[
+                |m| m.intent_id.push('x'),
+                |m| m.extension_id.push('x'),
+                |m| m.proposed_action = ContainmentAction::Allow,
+                |m| m.confidence_millionths = 1,
+                |m| {
+                    m.supporting_evidence_ids
+                        .push("zzz-new-evidence".to_string())
+                },
+                |m| m.policy_version += 1,
+                |m| m.epoch = SecurityEpoch::from_raw(2),
+                |m| m.node_id = NodeId::new("node-b"),
+                |m| m.sequence += 1,
+                |m| m.timestamp_ns += 1,
+                |m| m.protocol_version = ProtocolVersion::V1,
+                |m| {
+                    m.extensions
+                        .insert("changed".to_string(), "value".to_string());
+                },
+            ];
+            for (index, change) in changes.iter().enumerate() {
+                let mut tampered = original.clone();
+                change(&mut tampered);
+                assert!(
+                    state
+                        .process_intent(&tampered, &signature, &live, &anchor)
+                        .is_err(),
+                    "intent field {index}"
+                );
+                assert_eq!(snapshot(&state), before);
+            }
+
+            let original = heartbeat();
+            let signature = signer
+                .sign_detached_message_v2(&original)
+                .expect("sign heartbeat");
+            let changes: &[fn(&mut HeartbeatLiveness)] = &[
+                |m| m.node_id = NodeId::new("node-b"),
+                |m| m.policy_version += 1,
+                |m| m.evidence_frontier_hash = ContentHash::compute(b"changed"),
+                |m| {
+                    m.local_health
+                        .insert("changed".to_string(), "value".to_string());
+                },
+                |m| m.epoch = SecurityEpoch::from_raw(2),
+                |m| m.sequence += 1,
+                |m| m.timestamp_ns += 1,
+                |m| m.protocol_version = ProtocolVersion::V1,
+                |m| {
+                    m.extensions
+                        .insert("changed".to_string(), "value".to_string());
+                },
+            ];
+            for (index, change) in changes.iter().enumerate() {
+                let mut tampered = original.clone();
+                change(&mut tampered);
+                assert!(
+                    state
+                        .process_heartbeat(&tampered, &signature, &live, &anchor)
+                        .is_err(),
+                    "heartbeat field {index}"
+                );
+                assert_eq!(snapshot(&state), before);
+            }
+        }
+
+        #[test]
+        fn duplicate_rejections_do_not_consume_sequence_or_replace_intent() {
+            let (signer, live, anchor) = fixture();
+            let mut state = state();
+            let evidence = evidence();
+            state
+                .process_evidence(
+                    &evidence,
+                    &signer.sign_detached_message_v2(&evidence).expect("sign"),
+                    &live,
+                    &anchor,
+                )
+                .expect("first evidence");
+            let mut duplicate = evidence.clone();
+            duplicate.sequence = 9;
+            let before = snapshot(&state);
+            assert!(matches!(
+                state.process_evidence(
+                    &duplicate,
+                    &signer
+                        .sign_detached_message_v2(&duplicate)
+                        .expect("sign duplicate"),
+                    &live,
+                    &anchor
+                ),
+                Err(FleetIngressV2Error::Protocol(
+                    ProtocolError::DuplicateEvidence { .. }
+                ))
+            ));
+            assert_eq!(snapshot(&state), before);
+            let intent = intent();
+            state
+                .process_intent(
+                    &intent,
+                    &signer.sign_detached_message_v2(&intent).expect("sign"),
+                    &live,
+                    &anchor,
+                )
+                .expect("lower unused sequence remains admissible");
+            let mut duplicate = intent.clone();
+            duplicate.sequence = 10;
+            duplicate.proposed_action = ContainmentAction::Allow;
+            let before = snapshot(&state);
+            assert!(matches!(
+                state.process_intent(
+                    &duplicate,
+                    &signer
+                        .sign_detached_message_v2(&duplicate)
+                        .expect("sign duplicate"),
+                    &live,
+                    &anchor
+                ),
+                Err(FleetIngressV2Error::Protocol(
+                    ProtocolError::DuplicateIntentId { .. }
+                ))
+            ));
+            assert_eq!(snapshot(&state), before);
+            let heartbeat = heartbeat();
+            state
+                .process_heartbeat(
+                    &heartbeat,
+                    &signer.sign_detached_message_v2(&heartbeat).expect("sign"),
+                    &live,
+                    &anchor,
+                )
+                .expect("rejected intent did not poison heartbeat sequence");
+        }
+
+        #[test]
+        fn stale_anchor_at_start_or_before_commit_rejects_every_family_atomically() {
+            let (signer, live, anchor) = fixture();
+            for successful_calls in [0, 1] {
+                for family in 0..3 {
+                    let mut state = state();
+                    let before = snapshot(&state);
+                    anchor.calls.set(0);
+                    anchor.successful_calls.set(successful_calls);
+                    let outcome = match family {
+                        0 => {
+                            let m = evidence();
+                            state.process_evidence(
+                                &m,
+                                &signer.sign_detached_message_v2(&m).expect("sign"),
+                                &live,
+                                &anchor,
+                            )
+                        }
+                        1 => {
+                            let m = intent();
+                            state.process_intent(
+                                &m,
+                                &signer.sign_detached_message_v2(&m).expect("sign"),
+                                &live,
+                                &anchor,
+                            )
+                        }
+                        _ => {
+                            let m = heartbeat();
+                            state.process_heartbeat(
+                                &m,
+                                &signer.sign_detached_message_v2(&m).expect("sign"),
+                                &live,
+                                &anchor,
+                            )
+                        }
+                    };
+                    assert!(matches!(
+                        outcome,
+                        Err(FleetIngressV2Error::Identity(
+                            FleetIdentityError::UnverifiedRegistryAnchor { .. }
+                        ))
+                    ));
+                    assert_eq!(anchor.calls.get(), successful_calls + 1);
+                    assert_eq!(snapshot(&state), before);
+                }
+            }
+        }
+
+        #[test]
+        fn domain_epoch_bounds_and_legacy_bypass_fail_without_mutation() {
+            let (signer, live, anchor) = fixture();
+            let mut state = state();
+            let original = evidence();
+            let signature = signer
+                .sign_detached_message_v2(&original)
+                .expect("sign evidence");
+            let before = snapshot(&state);
+            let mut oversized = original.clone();
+            oversized.trace_id = "x".repeat(FLEET_V2_MAX_IDENTIFIER_BYTES + 1);
+            assert!(matches!(
+                state.process_evidence(&oversized, &signature, &live, &anchor),
+                Err(FleetIngressV2Error::Identity(
+                    FleetIdentityError::NonCanonicalMessage { .. }
+                ))
+            ));
+            assert_eq!(snapshot(&state), before);
+
+            let mut foreign = AuthenticatedFleetProtocolStateV2::new(
+                alternate_test_fleet_authority_id(),
+                NodeId::new("local"),
+                GossipConfig::default(),
+                SecurityEpoch::from_raw(1),
+            )
+            .expect("other fleet state");
+            let before = snapshot(&foreign);
+            assert!(matches!(
+                foreign.process_evidence(&original, &signature, &live, &anchor),
+                Err(FleetIngressV2Error::Identity(
+                    FleetIdentityError::FleetAuthorityMismatch { .. }
+                ))
+            ));
+            assert_eq!(snapshot(&foreign), before);
+
+            state
+                .advance_epoch(SecurityEpoch::from_raw(2))
+                .expect("monotonic advance");
+            let before = snapshot(&state);
+            assert!(state.advance_epoch(SecurityEpoch::from_raw(1)).is_err());
+            assert!(matches!(
+                state.process_evidence(&original, &signature, &live, &anchor),
+                Err(FleetIngressV2Error::Identity(
+                    FleetIdentityError::UntrustedMessageEpoch { .. }
+                ))
+            ));
+            assert_eq!(snapshot(&state), before);
+            let mut fresh = original;
+            fresh.epoch = SecurityEpoch::from_raw(2);
+            fresh.trace_id = "x".repeat(FLEET_V2_MAX_IDENTIFIER_BYTES);
+            state
+                .process_evidence(
+                    &fresh,
+                    &signer
+                        .sign_detached_message_v2(&fresh)
+                        .expect("exact-boundary message signs"),
+                    &live,
+                    &anchor,
+                )
+                .expect("new epoch and exact identifier bound accepted");
+
+            let mut legacy = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+            legacy.protocol_version = ProtocolVersion::V2;
+            let before = serde_json::to_vec(&legacy).expect("serialize legacy state");
+            assert!(matches!(
+                legacy.process_evidence(&evidence()),
+                Err(ProtocolError::AuthenticatedV2Required { .. })
+            ));
+            assert!(matches!(
+                legacy.process_intent(&intent()),
+                Err(ProtocolError::AuthenticatedV2Required { .. })
+            ));
+            assert!(matches!(
+                legacy.process_heartbeat(&heartbeat()),
+                Err(ProtocolError::AuthenticatedV2Required { .. })
+            ));
+            assert!(matches!(
+                legacy.build_checkpoint(0, test_signature("local")),
+                Err(ProtocolError::AuthenticatedV2Required { .. })
+            ));
+            assert_eq!(
+                serde_json::to_vec(&legacy).expect("serialize rejected state"),
+                before
+            );
+        }
     }
 
     fn test_fleet_authority_id() -> FleetAuthorityId {

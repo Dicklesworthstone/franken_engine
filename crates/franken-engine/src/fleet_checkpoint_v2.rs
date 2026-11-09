@@ -98,6 +98,10 @@ impl FleetCheckpointQuorumV2 {
         self.required
     }
 
+    pub fn threshold_millionths(&self) -> u64 {
+        self.threshold_millionths
+    }
+
     fn extensions(&self) -> BTreeMap<String, String> {
         BTreeMap::from([
             (
@@ -111,7 +115,7 @@ impl FleetCheckpointQuorumV2 {
         ])
     }
 
-    fn validate_checkpoint(
+    pub(crate) fn validate_checkpoint(
         &self,
         checkpoint: &QuorumCheckpoint,
     ) -> Result<(), FleetCheckpointV2Error> {
@@ -253,6 +257,80 @@ impl AuthenticatedFleetProtocolStateV2 {
             intent_commitments: self.pending_intent_commitments.clone(),
             signatures: BTreeMap::new(),
         })
+    }
+
+    /// Reconstruct a peer's proposal using this node's authenticated state.
+    ///
+    /// A fresh proposal must match the entire local view. An exact previously
+    /// reserved vote may be resumed after more input arrives; only the intent
+    /// commitments named in that frozen proposal are captured in its draft.
+    pub fn import_checkpoint_proposal_v2(
+        &self,
+        checkpoint: &QuorumCheckpoint,
+        quorum: &FleetCheckpointQuorumV2,
+    ) -> Result<FleetCheckpointDraftV2, FleetCheckpointV2Error> {
+        quorum.validate_checkpoint(checkpoint)?;
+        if self.state.current_epoch != checkpoint.epoch
+            || self.state.last_checkpoint_seq.checked_add(1) != Some(checkpoint.checkpoint_seq)
+            || self.state.config.quorum_threshold_millionths != quorum.threshold_millionths
+            || !quorum.electorate.contains(&self.state.local_node_id)
+        {
+            return Err(FleetCheckpointV2Error::CheckpointMismatch);
+        }
+        let vote_hash = hash_serializable(&("frankenengine.fleet-checkpoint-vote.v2", checkpoint))?;
+        self.validate_checkpoint_vote_v2(checkpoint, vote_hash)?;
+        let already_reserved =
+            self.checkpoint_vote == Some((checkpoint.epoch, checkpoint.checkpoint_seq, vote_hash));
+        if !already_reserved
+            && self.checkpoint_payload_v2(checkpoint.timestamp_ns, quorum)? != *checkpoint
+        {
+            return Err(FleetCheckpointV2Error::CheckpointMismatch);
+        }
+        let mut intent_commitments = BTreeMap::new();
+        for decision in &checkpoint.containment_decisions {
+            for intent_id in &decision.contributing_intent_ids {
+                let commitment = self
+                    .pending_intent_commitments
+                    .get(intent_id)
+                    .ok_or(FleetCheckpointV2Error::StaleDraft)?;
+                if intent_commitments
+                    .insert(intent_id.clone(), *commitment)
+                    .is_some()
+                {
+                    return Err(FleetCheckpointV2Error::DuplicateIntent {
+                        intent_id: intent_id.clone(),
+                    });
+                }
+            }
+        }
+        Ok(FleetCheckpointDraftV2 {
+            fleet_authority_id: self.fleet_authority_id(),
+            quorum: quorum.clone(),
+            checkpoint: checkpoint.clone(),
+            intent_commitments,
+            signatures: BTreeMap::new(),
+        })
+    }
+
+    /// Apply a received quorum certificate to an agreeing local checkpoint.
+    /// Validation and the final registry freshness check precede all mutation.
+    pub fn accept_checkpoint_v2<A: FleetRegistryAnchorAuthority>(
+        &mut self,
+        signed: &SignedFleetCheckpointV2,
+        quorum: &FleetCheckpointQuorumV2,
+        current_time_ns: u64,
+        registry: &DurableFleetVerificationRegistry,
+        authority: &A,
+    ) -> Result<SignedFleetCheckpointV2, FleetCheckpointV2Error> {
+        // Authenticate bounded peer input before rebuilding the potentially
+        // larger local evidence view. Finalization rechecks trust after that work.
+        validate_authority(self.fleet_authority_id(), registry)?;
+        signed.verify(quorum, registry, self.state.current_epoch, authority)?;
+        let mut draft = self.import_checkpoint_proposal_v2(&signed.checkpoint, quorum)?;
+        // Keep map keys intact: final verification rejects any key that differs
+        // from its detached signature's signer instead of silently normalizing it.
+        draft.signatures = signed.signatures.clone();
+        self.finalize_checkpoint_v2(&draft, quorum, current_time_ns, registry, authority)
     }
 
     /// Co-sign only a payload that agrees with this node's authenticated view.

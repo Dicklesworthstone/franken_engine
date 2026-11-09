@@ -218,6 +218,7 @@ pub mod feature_parity_tracker;
 pub mod federated_posterior_aggregation;
 pub mod flamegraph_pipeline;
 pub mod fleet_checkpoint_v2;
+pub mod fleet_transport;
 pub mod fleet_convergence;
 pub mod fleet_convergence_harness;
 pub mod fleet_counterfactual_report;

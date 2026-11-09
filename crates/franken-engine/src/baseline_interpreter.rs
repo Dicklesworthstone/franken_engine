@@ -37363,11 +37363,16 @@ impl InterpreterCore {
             }
             "trace" => {
                 let message = self.console_format_arguments(module, args)?;
-                let text = if message.is_empty() {
+                let mut text = if message.is_empty() {
                     "Trace".to_string()
                 } else {
                     format!("Trace: {message}")
                 };
+                let frames = self.format_stack_trace();
+                if !frames.is_empty() {
+                    text.push('\n');
+                    text.push_str(&frames);
+                }
                 self.push_indented_console_output(ConsoleLevel::Error, text)?;
             }
             // Never throws. A falsy assertion warns its data: a leading
@@ -121341,126 +121346,135 @@ impl InterpreterCore {
 
     /// Capture and format call stack with custom configuration.
     fn format_stack_trace_with_config(&self, config: &StackTraceConfig) -> String {
-        let frames = self.capture_stack_frames(config);
-        self.format_captured_frames(&frames, config)
+        let (frames, omitted) = self.capture_stack_frames(config);
+        self.format_captured_frames(&frames, omitted)
     }
 
-    /// Capture current call stack frames.
-    fn capture_stack_frames(
-        &self,
-        config: &StackTraceConfig,
-    ) -> std::collections::BTreeSet<(usize, StackFrameInfo)> {
-        let mut frames = std::collections::BTreeSet::new();
+    /// The function table belongs to the executing program, which can differ
+    /// from the ordinary resolution owner for a generated Function body.
+    /// Looking it up here keeps stack capture cold and does not retain another
+    /// program or copy diagnostic names on every guest call (bd-9vouw.502).
+    fn stack_trace_module(&self) -> Option<&Ir3Module> {
+        if let Some(handle) = self.active_generated_function_artifact {
+            return self
+                .resolve_generated_function_artifact(handle.owner_program_id, handle.artifact_id)
+                .ok()
+                .map(|artifact| artifact.compiled_module.as_ref());
+        }
+        self.current_module_specifier
+            .as_ref()
+            .and_then(|specifier| self.module_state.modules.get(specifier))
+            .and_then(|record| record.compiled_module.as_deref())
+    }
 
-        // Add current frame based on IP
-        let current_frame = self.capture_current_frame();
-        frames.insert((0, current_frame));
-
-        // Add frames from call stack (in reverse order for correct stack ordering)
-        for (index, call_frame) in self.call_stack.iter().enumerate() {
-            if frames.len() >= config.max_frames {
-                break;
-            }
-
-            let frame_info = self.capture_call_frame_info(call_frame, index + 1);
-            frames.insert((index + 1, frame_info));
-
-            // Add async boundary if this is an async function frame
-            if config.include_async_frames && call_frame.async_function_id.is_some() {
-                if frames.len() < config.max_frames {
-                    let async_frame =
-                        StackFrameInfo::new("<async>".to_string()).into_async_boundary();
-                    frames.insert((index + 2, async_frame));
-                }
-            }
+    /// Capture the active frame followed by its callers, newest first.
+    /// A CallFrame stores the *callee's* function index and the *caller's*
+    /// return address. Pairing both fields as one frame used to duplicate the
+    /// innermost function and report the remaining callers in reverse order.
+    /// Isolated cross-program callbacks have their own stack; their synthetic
+    /// return trampoline is not a JavaScript caller and must not be printed.
+    fn capture_stack_frames(&self, config: &StackTraceConfig) -> (Vec<StackFrameInfo>, usize) {
+        let module = self.stack_trace_module();
+        let mut frames = Vec::new();
+        let mut omitted = 0;
+        if config.max_frames > 0 {
+            frames.push(self.capture_current_frame(module));
+        } else {
+            omitted += 1;
         }
 
-        frames
+        for (index, call_frame) in self.call_stack.iter().enumerate().rev() {
+            if module.is_some_and(|module| call_frame.return_ip >= module.instructions.len()) {
+                continue;
+            }
+            if config.include_async_frames && call_frame.async_function_id.is_some() {
+                if frames.len() < config.max_frames {
+                    frames.push(StackFrameInfo::new("<async>".to_string()).into_async_boundary());
+                } else {
+                    omitted += 1;
+                }
+            }
+            if frames.len() < config.max_frames {
+                frames.push(self.capture_call_frame_info(module, index));
+            } else {
+                omitted += 1;
+            }
+        }
+        (frames, omitted)
     }
 
     /// Capture information about the current executing frame.
-    fn capture_current_frame(&self) -> StackFrameInfo {
-        // Try to determine current function name from call stack
+    fn capture_current_frame(&self, module: Option<&Ir3Module>) -> StackFrameInfo {
         let function_name = self
-            .get_current_function_name()
+            .call_stack
+            .last()
+            .and_then(|frame| self.stack_trace_function_name(module, frame.function_index))
             .unwrap_or_else(|| "<anonymous>".to_string());
-
-        // Use current module specifier as source file
-        let source_file = self
-            .current_module_specifier
-            .as_ref()
-            .map(|spec| format!("{}.js", spec))
-            .unwrap_or_else(|| "<unknown>".to_string());
-
-        // Approximate line number based on instruction index
-        let line_number = (self.ip as u32).saturating_add(1);
-
-        StackFrameInfo::with_location(
-            function_name,
-            source_file,
-            line_number,
-            1, // Column 1 as default
-        )
+        self.stack_frame_with_program(function_name, module)
     }
 
-    /// Capture information about a call frame from the call stack.
+    /// Recover the caller of this callee edge from the preceding activation.
+    /// The first edge returns to top-level code, which has no function name.
     fn capture_call_frame_info(
         &self,
-        call_frame: &CallFrame,
+        module: Option<&Ir3Module>,
         frame_index: usize,
     ) -> StackFrameInfo {
-        // Extract function name from function index if available
-        let function_name = if let Some(func_idx) = call_frame.function_index {
-            format!("function_{}", func_idx)
-        } else {
-            format!("<frame-{}>", frame_index)
-        };
-
-        // Use current module specifier as source file
-        let source_file = self
-            .current_module_specifier
-            .as_ref()
-            .map(|spec| format!("{}.js", spec))
-            .unwrap_or_else(|| "<unknown>".to_string());
-
-        // Use return IP as approximate line number
-        let line_number = (call_frame.return_ip as u32).saturating_add(1);
-
-        StackFrameInfo::with_location(function_name, source_file, line_number, 1)
+        let function_name = frame_index
+            .checked_sub(1)
+            .and_then(|index| self.call_stack.get(index))
+            .and_then(|frame| self.stack_trace_function_name(module, frame.function_index))
+            .unwrap_or_else(|| "<anonymous>".to_string());
+        self.stack_frame_with_program(function_name, module)
     }
 
-    /// Get the name of the currently executing function.
-    fn get_current_function_name(&self) -> Option<String> {
-        // Look up function name from the current call frame
-        self.call_stack
-            .last()
-            .and_then(|frame| frame.function_index.map(|idx| format!("function_{}", idx)))
+    fn stack_trace_function_name(
+        &self,
+        module: Option<&Ir3Module>,
+        function_index: Option<u32>,
+    ) -> Option<String> {
+        module?
+            .function_table
+            .get(function_index? as usize)?
+            .name
+            .as_ref()
+            .filter(|name| !name.is_empty())
+            .cloned()
+    }
+
+    fn stack_frame_with_program(
+        &self,
+        function_name: String,
+        module: Option<&Ir3Module>,
+    ) -> StackFrameInfo {
+        let source_file = module
+            .map(|module| module.header.source_label.as_str())
+            .or(self.current_module_specifier.as_deref())
+            .filter(|specifier| !specifier.is_empty())
+            .unwrap_or("<unknown>")
+            .to_string();
+        // IR3 has no instruction-to-source table yet. An instruction index is
+        // not a source line, and adding `.js` corrupts real .js/.mjs/.cjs paths
+        // and opaque resolver identities. Preserve the exact program label and
+        // leave positions unknown until lowering supplies actual provenance.
+        StackFrameInfo::with_location(function_name, source_file, 0, 0)
     }
 
     /// Format captured frames into a complete stack trace string.
-    fn format_captured_frames(
-        &self,
-        frames: &std::collections::BTreeSet<(usize, StackFrameInfo)>,
-        config: &StackTraceConfig,
-    ) -> String {
+    fn format_captured_frames(&self, frames: &[StackFrameInfo], omitted: usize) -> String {
         let mut result = String::new();
-        for (frame_count, (_index, frame_info)) in frames.iter().enumerate() {
-            if frame_count >= config.max_frames {
-                break;
-            }
-
+        for frame_info in frames {
             if !result.is_empty() {
                 result.push('\n');
             }
             result.push_str(&frame_info.format());
         }
-
-        // Add truncation message if there are more frames
-        if frames.len() > config.max_frames {
-            let remaining = frames.len() - config.max_frames;
-            result.push_str(&format!("\n    ... {} more frames", remaining));
+        if omitted > 0 {
+            if !result.is_empty() {
+                result.push('\n');
+            }
+            result.push_str(&format!("    ... {omitted} more frames"));
         }
-
         result
     }
 }

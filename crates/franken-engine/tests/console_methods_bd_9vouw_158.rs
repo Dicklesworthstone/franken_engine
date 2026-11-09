@@ -15,8 +15,8 @@
 //! Maps and Sets. NODE_TABLE_STDOUT is Node's stdout for TABLE.
 //!
 //! No-claim: console.table does not preview Map or Set iterators (Node does);
-//! cell widths count code points, not East Asian display width; trace prints
-//! no stack frames; elapsed times come from the engine's deterministic
+//! cell widths count code points, not East Asian display width; trace omits
+//! source positions until IR3 carries source maps; elapsed times come from the engine's deterministic
 //! instruction-tick clock (performance.now()), not wall time; Node's
 //! process-warning prefix "(node:PID)" for unknown count/time labels is not
 //! reproduced.
@@ -25,7 +25,7 @@
 
 use frankenengine_engine::ast::ParseGoal;
 use frankenengine_engine::baseline_interpreter::{
-    ConsoleLevel, InterpreterConfig, InterpreterCore,
+    ConsoleLevel, ExecutionResult, InterpreterConfig, InterpreterCore, InterpreterError,
 };
 use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::ir_contract::Ir0Module;
@@ -185,8 +185,10 @@ grouped
 ├─────────┤
 └─────────┘"#;
 
-/// (stdout lines, stderr messages) of a program.
-fn run(source: &str) -> (String, Vec<String>) {
+fn execute_console(
+    source: &str,
+    mut config: InterpreterConfig,
+) -> Result<ExecutionResult, InterpreterError> {
     let tree = CanonicalEs2020Parser
         .parse_with_options(
             ParserSource {
@@ -203,7 +205,6 @@ fn run(source: &str) -> (String, Vec<String>) {
     )
     .expect("lower")
     .ir3;
-    let mut config = InterpreterConfig::quickjs_defaults();
     config.granted_capabilities = [
         RuntimeCapability::VmDispatch,
         RuntimeCapability::HeapAllocate,
@@ -213,7 +214,12 @@ fn run(source: &str) -> (String, Vec<String>) {
     .into_iter()
     .collect();
     let mut core = InterpreterCore::new(config, "console-methods");
-    let result = core.execute(&module).expect("the program runs");
+    core.execute(&module)
+}
+
+/// (stdout lines, stderr messages) of a program.
+fn run_with_config(source: &str, config: InterpreterConfig) -> (String, Vec<String>) {
+    let result = execute_console(source, config).expect("the program runs");
     let stdout = result
         .console_output
         .iter()
@@ -230,6 +236,10 @@ fn run(source: &str) -> (String, Vec<String>) {
     (stdout, stderr)
 }
 
+fn run(source: &str) -> (String, Vec<String>) {
+    run_with_config(source, InterpreterConfig::quickjs_defaults())
+}
+
 #[test]
 fn console_methods_write_what_node_writes() {
     let (stdout, stderr) = run(PROGRAM);
@@ -240,6 +250,81 @@ fn console_methods_write_what_node_writes() {
         .filter(|line| line.starts_with("Assertion failed") || line.starts_with("Trace:"))
         .collect::<Vec<_>>();
     assert_eq!(first_lines, NODE_STDERR_LINES);
+}
+
+#[test]
+fn console_trace_reports_the_call_chain_and_keeps_executing() {
+    let source = r#"
+function outer() { middle(); }
+function middle() { inner(); }
+function inner() { console.trace('where %d', 7); }
+outer();
+console.log('continued');
+"#;
+    for config in [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ] {
+        let (stdout, stderr) = run_with_config(source, config.clone());
+        assert_eq!(stdout, "continued");
+        assert_eq!(stderr.len(), 1, "{stderr:?}");
+        let lines: Vec<_> = stderr[0].lines().collect();
+        assert_eq!(lines[0], "Trace: where 7");
+        assert_eq!(lines[1], "    at inner (console-methods.js)");
+        assert_eq!(lines[2], "    at middle (console-methods.js)");
+        assert_eq!(lines[3], "    at outer (console-methods.js)");
+        assert!(lines.len() >= 5, "entry frame is retained: {lines:?}");
+        assert_eq!(
+            run_with_config(source, config),
+            (stdout, stderr),
+            "stack capture is deterministic"
+        );
+    }
+}
+
+#[test]
+fn console_trace_without_arguments_and_in_groups_keeps_every_frame() {
+    let source = r#"
+function traceHere() { console.trace(); }
+console.group('group');
+traceHere();
+console.groupEnd();
+"#;
+    for config in [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ] {
+        let (stdout, stderr) = run_with_config(source, config);
+        assert_eq!(stdout, "group");
+        assert_eq!(stderr.len(), 1, "{stderr:?}");
+        let lines: Vec<_> = stderr[0].lines().collect();
+        assert_eq!(lines[0], "  Trace");
+        assert_eq!(lines[1], "      at traceHere (console-methods.js)");
+        assert!(
+            lines[1..].iter().all(|line| line.starts_with("      at ")),
+            "group indentation applies to every stack frame: {lines:?}"
+        );
+    }
+}
+
+#[test]
+fn console_trace_frames_obey_the_console_byte_budget() {
+    for mut config in [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ] {
+        config.max_console_bytes = "Trace".len();
+        let error = execute_console("console.trace();", config)
+            .expect_err("the header alone fits, but its stack exceeds the byte budget");
+        assert!(
+            matches!(
+                error,
+                InterpreterError::ConsoleBudgetExceeded { entries: 1, bytes, max_bytes: 5, .. }
+                    if bytes > 5
+            ),
+            "the complete trace is charged before it can be retained: {error:?}"
+        );
+    }
 }
 
 #[test]

@@ -41,6 +41,9 @@ on:
       - 'crates/franken-engine/tests/collection_for_each_gc_bd_9vouw_77.rs'
       - 'crates/franken-engine/tests/process_spawn_foundation_bd_x85a7.rs'
       - 'crates/franken-engine/tests/nested_callback_semantics.rs'
+      - 'crates/franken-engine/tests/error_stack_trace_formatting.rs'
+      - 'crates/franken-engine/tests/console_methods_bd_9vouw_158.rs'
+      - 'crates/franken-engine/tests/bigint_arithmetic_bd_9vouw_54.rs'
       - 'crates/franken-engine/tests/reflect_*.rs'
       - 'crates/franken-engine/tests/querystring_os_builtin_bd_qmy52.rs'
       - 'crates/franken-engine/tests/js_string*.rs'
@@ -287,7 +290,7 @@ jobs:
           pathlib.Path('async-generator-validation/runtime-modules.txt').write_text('\n'.join(sorted(seen)))
           print('Focused runtime module count:', len(seen))
           PY
-      - name: Run generator, array, Proxy, and Promise source regressions
+      - name: Run native runtime source regressions
         run: |
           status=0
           cargo +nightly-2026-09-21 test --locked -p frankenengine-engine --no-default-features --no-fail-fast \
@@ -298,6 +301,9 @@ jobs:
             --test process_spawn_foundation_bd_x85a7 \
             --test esm_function_exports \
             --test nested_callback_semantics \
+            --test error_stack_trace_formatting \
+            --test console_methods_bd_9vouw_158 \
+            --test bigint_arithmetic_bd_9vouw_54 \
             -- --nocapture > async-generator-validation/tests.log 2>&1 || status=$?
           tail -n 220 async-generator-validation/tests.log
           exit "$status"
@@ -314,7 +320,10 @@ jobs:
             crates/franken-engine/tests/array_species_bd_9vouw_94.rs \
             crates/franken-engine/tests/proxy_descriptor_traps_bd_9vouw_147.rs \
             crates/franken-engine/tests/promise_subclass_bd_9vouw_137.rs \
-            crates/franken-engine/tests/gc_reclaim_bd_9vouw_57.rs
+            crates/franken-engine/tests/gc_reclaim_bd_9vouw_57.rs \
+            crates/franken-engine/tests/error_stack_trace_formatting.rs \
+            crates/franken-engine/tests/console_methods_bd_9vouw_158.rs \
+            crates/franken-engine/tests/bigint_arithmetic_bd_9vouw_54.rs
       - name: Retain exact revision and complete validation output
         if: always()
         uses: actions/upload-artifact@v4

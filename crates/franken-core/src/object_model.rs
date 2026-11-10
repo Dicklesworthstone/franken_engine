@@ -2197,6 +2197,10 @@ pub enum BuiltinFunctionKind {
     /// One half of a resolving pair with a shared already-resolved cell.
     PromiseResolveFunction,
     PromiseRejectFunction,
+    AsyncGeneratorPrototypeNext,
+    AsyncGeneratorPrototypeReturn,
+    AsyncGeneratorPrototypeThrow,
+    AsyncIteratorPrototypeAsyncIterator,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -2236,6 +2240,10 @@ impl BuiltinFunction {
             BuiltinFunctionKind::PromisePrototypeFinally => "finally",
             BuiltinFunctionKind::PromiseResolveFunction => "resolve",
             BuiltinFunctionKind::PromiseRejectFunction => "reject",
+            BuiltinFunctionKind::AsyncGeneratorPrototypeNext => "next",
+            BuiltinFunctionKind::AsyncGeneratorPrototypeReturn => "return",
+            BuiltinFunctionKind::AsyncGeneratorPrototypeThrow => "throw",
+            BuiltinFunctionKind::AsyncIteratorPrototypeAsyncIterator => "[Symbol.asyncIterator]",
         }
     }
 }

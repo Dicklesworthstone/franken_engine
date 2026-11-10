@@ -64,6 +64,12 @@ pub use crate::object_model::{BuiltinFunction, BuiltinFunctionKind};
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 use crate::runtime_config::ExecutionConfig;
 
+mod async_generator;
+use async_generator::{
+    AsyncGeneratorAwaitKind, AsyncGeneratorContinuation, AsyncGeneratorObject,
+    AsyncGeneratorResumeKind,
+};
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -2323,22 +2329,6 @@ struct GeneratorCallSetup {
     super_label: crate::ifc_artifacts::Label,
 }
 
-/// An async generator object combines generator suspension with promise wrapping.
-/// Each yield creates a promise-wrapped value, and can use await inside the body.
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-struct AsyncGeneratorObject {
-    /// Complete isolated activation captured after parameter initialization or
-    /// a yield. Values, labels, lexical state, and abrupt-completion carriers
-    /// move together.
-    execution: Option<ModuleExecutionSnapshot>,
-    /// Destination register that receives the argument to the next
-    /// `.next(value)` after a yield.
-    resume_dst: Option<u32>,
-    /// Current phase of the async generator.
-    phase: AsyncGeneratorPhase,
-}
-
 // ---------------------------------------------------------------------------
 // CallFrame — interpreter call stack frame
 // ---------------------------------------------------------------------------
@@ -3687,12 +3677,17 @@ enum RunLoopMode {
     Normal,
     Generator,
     Async,
+    AsyncGenerator,
 }
 
 #[derive(Debug)]
 enum RunLoopExit {
     Value(LabeledReturn),
     AsyncAwait,
+    AsyncGeneratorAwait {
+        completion: LabeledReturn,
+        kind: AsyncGeneratorAwaitKind,
+    },
     AsyncThrow {
         exception: LabeledException,
     },
@@ -3914,6 +3909,8 @@ pub struct InterpreterCore {
     /// Pending await continuations, keyed by the Promise returned from the
     /// internal await reaction registration.
     async_resumption_contexts: BTreeMap<u32, AsyncResumptionContext>,
+    /// Await continuations retaining the generator and front request identity.
+    async_generator_continuations: BTreeMap<u32, AsyncGeneratorContinuation>,
     /// Promise store for ES2020 Promise semantics.
     promise_store: crate::promise_model::PromiseStore,
     /// Pending executable reactions, removed when their selected job runs.
@@ -4036,6 +4033,7 @@ impl InterpreterCore {
             async_generators: Vec::new(),
             async_functions: Vec::new(),
             async_resumption_contexts: BTreeMap::new(),
+            async_generator_continuations: BTreeMap::new(),
             promise_store: crate::promise_model::PromiseStore::new(),
             promise_reactions: BTreeMap::new(),
             promise_resolving_functions: BTreeMap::new(),
@@ -4282,6 +4280,7 @@ impl InterpreterCore {
         self.next_timer_id = 0;
         self.async_resumption_contexts.clear();
         self.async_functions.clear();
+        self.reset_async_generator_requests();
         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
         Ok(())
     }
@@ -4414,6 +4413,7 @@ impl InterpreterCore {
         self.next_timer_id = 0;
         self.async_resumption_contexts.clear();
         self.async_functions.clear();
+        self.reset_async_generator_requests();
         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
         Ok(())
     }
@@ -5214,6 +5214,45 @@ impl InterpreterCore {
                 };
                 return self.generator_next(module, *generator_id, argument, argument_label);
             }
+            BuiltinFunctionKind::AsyncGeneratorPrototypeNext
+            | BuiltinFunctionKind::AsyncGeneratorPrototypeReturn
+            | BuiltinFunctionKind::AsyncGeneratorPrototypeThrow => {
+                let Some(Value::AsyncGeneratorObject(generator_id)) = receiver else {
+                    let promise = self.create_promise_accounted()?;
+                    let error = InterpreterError::TypeError {
+                        expected: "AsyncGenerator receiver".into(),
+                        got: receiver.map_or("undefined", Value::type_name).into(),
+                    };
+                    let reason = self.promise_error_value(&error)?;
+                    self.reject_promise(
+                        promise,
+                        Self::value_to_js_value(&reason),
+                        receiver_label.clone(),
+                    )?;
+                    return Ok((Value::Promise(promise.0), receiver_label));
+                };
+                let (argument, argument_label) = self.promise_hostcall_argument(args, 0)?;
+                let label = receiver_label.join(&argument_label);
+                let value = if builtin.kind == BuiltinFunctionKind::AsyncGeneratorPrototypeNext {
+                    self.async_generator_next(module, *generator_id, argument, label.clone())?
+                } else {
+                    let kind = if builtin.kind == BuiltinFunctionKind::AsyncGeneratorPrototypeReturn {
+                        AsyncGeneratorResumeKind::Return
+                    } else {
+                        AsyncGeneratorResumeKind::Throw
+                    };
+                    self.enqueue_async_generator_request(
+                        *generator_id,
+                        kind,
+                        argument,
+                        label.clone(),
+                    )?
+                };
+                return Ok((value, label));
+            }
+            BuiltinFunctionKind::AsyncIteratorPrototypeAsyncIterator => {
+                return Ok((receiver.cloned().unwrap_or(Value::Undefined), receiver_label));
+            }
             BuiltinFunctionKind::PromiseCapabilityResolve
             | BuiltinFunctionKind::PromiseCapabilityReject => {
                 let handle_id =
@@ -5320,7 +5359,11 @@ impl InterpreterCore {
                     | BuiltinFunctionKind::PromisePrototypeCatch
                     | BuiltinFunctionKind::PromisePrototypeFinally
                     | BuiltinFunctionKind::PromiseResolveFunction
-                    | BuiltinFunctionKind::PromiseRejectFunction => {
+                    | BuiltinFunctionKind::PromiseRejectFunction
+                    | BuiltinFunctionKind::AsyncGeneratorPrototypeNext
+                    | BuiltinFunctionKind::AsyncGeneratorPrototypeReturn
+                    | BuiltinFunctionKind::AsyncGeneratorPrototypeThrow
+                    | BuiltinFunctionKind::AsyncIteratorPrototypeAsyncIterator => {
                         unreachable!("handled above")
                     }
                 }
@@ -6538,7 +6581,7 @@ impl InterpreterCore {
         error: InterpreterError,
         mode: RunLoopMode,
     ) -> Result<Option<InterpreterError>, InterpreterError> {
-        let escaped_exception = (matches!(mode, RunLoopMode::Generator | RunLoopMode::Async)
+        let escaped_exception = (matches!(mode, RunLoopMode::Generator | RunLoopMode::Async | RunLoopMode::AsyncGenerator)
             && matches!(error, InterpreterError::UncaughtException { .. }))
         .then(|| self.pending_exception.clone())
         .flatten();
@@ -7522,6 +7565,7 @@ impl InterpreterCore {
                 RunLoopExit::GeneratorReturn { .. }
                 | RunLoopExit::GeneratorYield { .. }
                 | RunLoopExit::AsyncAwait
+                | RunLoopExit::AsyncGeneratorAwait { .. }
                 | RunLoopExit::AsyncThrow { .. }
                 | RunLoopExit::Value(_),
             ) => Err(InterpreterError::TypeError {
@@ -7799,6 +7843,7 @@ impl InterpreterCore {
             Ok(
                 RunLoopExit::GeneratorBodyStart
                 | RunLoopExit::AsyncAwait
+                | RunLoopExit::AsyncGeneratorAwait { .. }
                 | RunLoopExit::AsyncThrow { .. },
             ) => {
                 let generator = &mut self.generators[gen_id as usize];
@@ -7838,224 +7883,6 @@ impl InterpreterCore {
         }
     }
 
-    /// Execute .next() on an async generator.
-    /// Returns a Promise that resolves to {value, done}.
-    #[allow(dead_code)]
-    fn async_generator_next(
-        &mut self,
-        module: &Ir3Module,
-        gen_id: u32,
-        argument: Value,
-        argument_label: crate::ifc_artifacts::Label,
-    ) -> Result<Value, InterpreterError> {
-        let generator_index = gen_id as usize;
-        let phase = self
-            .async_generators
-            .get(generator_index)
-            .ok_or_else(|| InterpreterError::TypeError {
-                expected: "valid async generator".into(),
-                got: format!("async_generator#{gen_id} not found"),
-            })?
-            .phase;
-
-        match phase {
-            AsyncGeneratorPhase::Completed => {
-                let result_promise = self.create_promise_accounted()?.0;
-                let result = self.generator_result_object(Value::Undefined, true)?;
-                self.fulfill_promise(
-                    crate::promise_model::PromiseHandle(result_promise),
-                    Self::value_to_js_value(&result),
-                    crate::ifc_artifacts::Label::Public,
-                )?;
-                return Ok(Value::Promise(result_promise));
-            }
-            AsyncGeneratorPhase::Executing => {
-                return Err(InterpreterError::TypeError {
-                    expected: "suspended async generator".into(),
-                    got: "async generator already executing".into(),
-                });
-            }
-            AsyncGeneratorPhase::SuspendedStart
-            | AsyncGeneratorPhase::SuspendedYield
-            | AsyncGeneratorPhase::SuspendedAwait => {}
-        }
-
-        self.ensure_call_depth_available()?;
-        let (value_count, label_count) = {
-            let activation = self.async_generators[generator_index]
-                .execution
-                .as_ref()
-                .ok_or_else(|| InterpreterError::TypeError {
-                    expected: "suspended async generator activation".into(),
-                    got: "async generator has no saved execution context".into(),
-                })?;
-            (activation.registers.len(), activation.register_labels.len())
-        };
-        if value_count != label_count {
-            return Err(InterpreterError::TypeError {
-                expected: "async generator snapshot with one IFC label per register".into(),
-                got: format!("values={value_count}, labels={label_count}"),
-            });
-        }
-
-        let result_promise = self.create_promise_accounted()?.0;
-        let (activation, resume_dst) =
-            {
-                let async_generator = &mut self.async_generators[generator_index];
-                let activation = async_generator.execution.take().ok_or_else(|| {
-                    InterpreterError::TypeError {
-                        expected: "suspended async generator activation".into(),
-                        got: "async generator has no saved execution context".into(),
-                    }
-                })?;
-                let resume_dst = async_generator.resume_dst.take();
-                async_generator.phase = AsyncGeneratorPhase::Executing;
-                (activation, resume_dst)
-            };
-
-        let caller_execution = self.take_module_execution();
-        let caller_bytes = Self::estimate_module_execution_bytes(&caller_execution);
-        let previous_suspended_bytes = self.temporarily_suspended_execution_bytes;
-        let previous_suspended_call_depth = self.temporarily_suspended_call_depth;
-        self.temporarily_suspended_execution_bytes =
-            previous_suspended_bytes.saturating_add(caller_bytes);
-        self.temporarily_suspended_call_depth =
-            previous_suspended_call_depth.saturating_add(caller_execution.call_stack.len());
-        self.install_module_execution(activation);
-
-        let setup_result = if phase == AsyncGeneratorPhase::SuspendedYield
-            && let Some(resume_dst) = resume_dst
-        {
-            self.write_reg_with_label(resume_dst, argument, argument_label)
-        } else {
-            Ok(())
-        };
-        if let Err(error) = setup_result {
-            let activation = self.take_module_execution();
-            self.temporarily_suspended_execution_bytes = previous_suspended_bytes;
-            self.temporarily_suspended_call_depth = previous_suspended_call_depth;
-            self.restore_module_execution(caller_execution);
-            let async_generator = &mut self.async_generators[generator_index];
-            async_generator.execution = Some(activation);
-            async_generator.resume_dst = resume_dst;
-            async_generator.phase = phase;
-            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
-            self.reject_promise(
-                crate::promise_model::PromiseHandle(result_promise),
-                crate::object_model::JsValue::Str(JsString::from(format!("{error:?}"))),
-                crate::ifc_artifacts::Label::Public,
-            )?;
-            return Ok(Value::Promise(result_promise));
-        }
-
-        let outcome = self.run_loop_with_mode(module, RunLoopMode::Generator);
-        let mut activation = self.take_module_execution();
-        let escaped_exception = activation.pending_exception.take();
-        self.temporarily_suspended_execution_bytes = previous_suspended_bytes;
-        self.temporarily_suspended_call_depth = previous_suspended_call_depth;
-        self.restore_module_execution(caller_execution);
-
-        let promise_handle = crate::promise_model::PromiseHandle(result_promise);
-        match outcome {
-            Ok(RunLoopExit::GeneratorYield {
-                result,
-                label,
-                resume_dst,
-            }) => {
-                let async_generator = &mut self.async_generators[generator_index];
-                async_generator.execution = Some(activation);
-                async_generator.resume_dst = Some(resume_dst);
-                async_generator.phase = AsyncGeneratorPhase::SuspendedYield;
-                self.sync_estimated_memory_bytes()?;
-                self.fulfill_promise(promise_handle, Self::value_to_js_value(&result), label)?;
-            }
-            Ok(RunLoopExit::GeneratorReturn { value, label }) => {
-                let async_generator = &mut self.async_generators[generator_index];
-                async_generator.execution = None;
-                async_generator.resume_dst = None;
-                async_generator.phase = AsyncGeneratorPhase::Completed;
-                self.sync_estimated_memory_bytes()?;
-                let result = self.generator_result_object(value, true)?;
-                self.fulfill_promise(promise_handle, Self::value_to_js_value(&result), label)?;
-            }
-            Ok(RunLoopExit::GeneratorThrow { exception, .. }) => {
-                let async_generator = &mut self.async_generators[generator_index];
-                async_generator.execution = None;
-                async_generator.resume_dst = None;
-                async_generator.phase = AsyncGeneratorPhase::Completed;
-                self.sync_estimated_memory_bytes()?;
-                self.reject_promise(
-                    promise_handle,
-                    Self::value_to_js_value(&exception.value),
-                    exception.label,
-                )?;
-            }
-            Ok(
-                RunLoopExit::GeneratorBodyStart
-                | RunLoopExit::AsyncAwait
-                | RunLoopExit::AsyncThrow { .. },
-            ) => {
-                let async_generator = &mut self.async_generators[generator_index];
-                async_generator.execution = None;
-                async_generator.resume_dst = None;
-                async_generator.phase = AsyncGeneratorPhase::Completed;
-                self.sync_estimated_memory_bytes()?;
-                self.reject_promise(
-                    promise_handle,
-                    crate::object_model::JsValue::Str(JsString::from(
-                        "unexpected async generator body boundary",
-                    )),
-                    crate::ifc_artifacts::Label::Public,
-                )?;
-            }
-            Ok(RunLoopExit::Value(completion)) => {
-                let async_generator = &mut self.async_generators[generator_index];
-                async_generator.execution = None;
-                async_generator.resume_dst = None;
-                async_generator.phase = AsyncGeneratorPhase::Completed;
-                self.sync_estimated_memory_bytes()?;
-                let result = self.generator_result_object(completion.value, true)?;
-                self.fulfill_promise(
-                    promise_handle,
-                    Self::value_to_js_value(&result),
-                    completion.label,
-                )?;
-            }
-            Err(InterpreterError::Halted) => {
-                let async_generator = &mut self.async_generators[generator_index];
-                async_generator.execution = None;
-                async_generator.resume_dst = None;
-                async_generator.phase = AsyncGeneratorPhase::Completed;
-                self.sync_estimated_memory_bytes()?;
-                let result = self.generator_result_object(Value::Undefined, true)?;
-                self.fulfill_promise(
-                    promise_handle,
-                    Self::value_to_js_value(&result),
-                    crate::ifc_artifacts::Label::Public,
-                )?;
-            }
-            Err(error) => {
-                let async_generator = &mut self.async_generators[generator_index];
-                async_generator.execution = None;
-                async_generator.resume_dst = None;
-                async_generator.phase = AsyncGeneratorPhase::Completed;
-                self.sync_estimated_memory_bytes()?;
-                let (reason, label) = escaped_exception.map_or_else(
-                    || {
-                        (
-                            crate::object_model::JsValue::Str(JsString::from(format!("{error:?}"))),
-                            crate::ifc_artifacts::Label::Public,
-                        )
-                    },
-                    |exception| (Self::value_to_js_value(&exception.value), exception.label),
-                );
-                self.reject_promise(promise_handle, reason, label)?;
-            }
-        }
-
-        Ok(Value::Promise(result_promise))
-    }
-
     fn run_loop_labeled(&mut self, module: &Ir3Module) -> Result<LabeledReturn, InterpreterError> {
         match self.run_loop_with_mode(module, RunLoopMode::Normal)? {
             RunLoopExit::Value(completion) => Ok(completion),
@@ -8070,7 +7897,9 @@ impl InterpreterCore {
                 self.pending_exception = Some(exception);
                 Err(InterpreterError::UncaughtException { value: description })
             }
-            RunLoopExit::GeneratorBodyStart | RunLoopExit::AsyncAwait => Err(InterpreterError::TypeError {
+            RunLoopExit::GeneratorBodyStart
+            | RunLoopExit::AsyncAwait
+            | RunLoopExit::AsyncGeneratorAwait { .. } => Err(InterpreterError::TypeError {
                 expected: "generator activation".to_string(),
                 got: "generator body boundary outside generator invocation".to_string(),
             }),
@@ -8123,7 +7952,8 @@ impl InterpreterCore {
                 // Fell off the end of the instruction stream.
                 if !self.call_stack.is_empty() {
                     let generator_root =
-                        mode == RunLoopMode::Generator && self.call_stack.len() == 1;
+                        matches!(mode, RunLoopMode::Generator | RunLoopMode::AsyncGenerator)
+                                && self.call_stack.len() == 1;
                     if generator_root {
                         let _ = self.complete_return(
                             Value::Undefined,
@@ -8647,9 +8477,17 @@ impl InterpreterCore {
                             self.restore_call_setup(setup_snapshot);
                             return Err(error);
                         }
-                        let super_value =
-                            self.function_super_value(&callee_val, IR_SUPER_PROTOTYPE_PROPERTY)?;
-                        let generator = self.prepare_generator_activation_inner(
+                        let (super_value, super_label) = if let Some(binding) =
+                            self.concise_method_super_binding(&callee_val)?
+                        {
+                            binding
+                        } else {
+                            (
+                                self.function_super_value(&callee_val, IR_SUPER_PROTOTYPE_PROPERTY)?,
+                                callee_label.clone(),
+                            )
+                        };
+                        let generator = self.prepare_async_generator_activation(
                             module,
                             GeneratorCallSetup {
                                 function_index: func_idx,
@@ -8662,18 +8500,20 @@ impl InterpreterCore {
                                 this_value: Value::Undefined,
                                 this_label: crate::ifc_artifacts::Label::Public,
                                 super_value,
-                                super_label: callee_label.clone(),
+                                super_label,
                             },
                             Some(setup_snapshot),
-                        )?;
-                        self.publish_async_generator(
-                            dst,
-                            AsyncGeneratorObject {
-                                execution: generator.execution,
-                                resume_dst: None,
-                                phase: AsyncGeneratorPhase::SuspendedStart,
-                            },
-                        )?;
+                        );
+                        let generator = match generator {
+                            Ok(generator) => generator,
+                            Err(error) => {
+                                match self.route_run_loop_javascript_error(module, error, mode)? {
+                                    None => continue,
+                                    Some(error) => return Err(error),
+                                }
+                            }
+                        };
+                        self.publish_async_generator(dst, generator)?;
                         self.ip += 1;
                         continue;
                     }
@@ -9066,8 +8906,14 @@ impl InterpreterCore {
                             self.restore_call_setup(setup_snapshot);
                             return Err(error);
                         }
-                        let super_value = self.method_super_value(&callee_val, &receiver_val)?;
-                        let generator = self.prepare_generator_activation_inner(
+                        let (super_value, super_label) = if let Some(binding) =
+                            self.concise_method_super_binding(&callee_val)?
+                        {
+                            binding
+                        } else {
+                            (self.method_super_value(&callee_val, &receiver_val)?, callee_label.clone())
+                        };
+                        let generator = self.prepare_async_generator_activation(
                             module,
                             GeneratorCallSetup {
                                 function_index: func_idx,
@@ -9080,18 +8926,20 @@ impl InterpreterCore {
                                 this_value: receiver_val.clone(),
                                 this_label: receiver_label.clone(),
                                 super_value,
-                                super_label: callee_label.clone(),
+                                super_label,
                             },
                             Some(setup_snapshot),
-                        )?;
-                        self.publish_async_generator(
-                            dst,
-                            AsyncGeneratorObject {
-                                execution: generator.execution,
-                                resume_dst: None,
-                                phase: AsyncGeneratorPhase::SuspendedStart,
-                            },
-                        )?;
+                        );
+                        let generator = match generator {
+                            Ok(generator) => generator,
+                            Err(error) => {
+                                match self.route_run_loop_javascript_error(module, error, mode)? {
+                                    None => continue,
+                                    Some(error) => return Err(error),
+                                }
+                            }
+                        };
+                        self.publish_async_generator(dst, generator)?;
                         self.ip += 1;
                         continue;
                     }
@@ -9261,7 +9109,8 @@ impl InterpreterCore {
                     } else {
                         self.pending_return = None;
                         let generator_root =
-                            mode == RunLoopMode::Generator && self.call_stack.len() == 1;
+                            matches!(mode, RunLoopMode::Generator | RunLoopMode::AsyncGenerator)
+                                && self.call_stack.len() == 1;
                         if generator_root {
                             let completed_value = return_val.clone();
                             let completed_label = return_label.clone();
@@ -9518,6 +9367,29 @@ impl InterpreterCore {
                                 }
                             };
                             self.write_reg(dst, value)?;
+                            false
+                        }
+                        Value::AsyncGeneratorObject(_) => {
+                            self.preflight_legacy_property_key_for_hook(&property_key)?;
+                            let kind = match &property_key {
+                                RuntimePropertyKey::String(key) => match key.as_str() {
+                                    Some("next") => Some(BuiltinFunctionKind::AsyncGeneratorPrototypeNext),
+                                    Some("return") => Some(BuiltinFunctionKind::AsyncGeneratorPrototypeReturn),
+                                    Some("throw") => Some(BuiltinFunctionKind::AsyncGeneratorPrototypeThrow),
+                                    _ => None,
+                                },
+                                RuntimePropertyKey::Symbol(symbol)
+                                    if *symbol == WellKnownSymbol::AsyncIterator.id() =>
+                                {
+                                    Some(BuiltinFunctionKind::AsyncIteratorPrototypeAsyncIterator)
+                                }
+                                RuntimePropertyKey::Symbol(_) => None,
+                            };
+                            let value = kind.map_or(Value::Undefined, |kind| {
+                                Value::BuiltinFunction(BuiltinFunction::promise_method(kind))
+                            });
+                            let label = self.read_reg_label(obj)?.join(&self.read_reg_label(key)?);
+                            self.write_reg_with_label(dst, value, label)?;
                             false
                         }
                         Value::Promise(_) => {
@@ -10583,7 +10455,7 @@ impl InterpreterCore {
                         if mode == RunLoopMode::Async {
                             return Ok(RunLoopExit::AsyncThrow { exception });
                         }
-                        if mode == RunLoopMode::Generator {
+                        if matches!(mode, RunLoopMode::Generator | RunLoopMode::AsyncGenerator) {
                             return Ok(RunLoopExit::GeneratorThrow {
                                 exception,
                                 description: desc,
@@ -10660,7 +10532,7 @@ impl InterpreterCore {
                                 if mode == RunLoopMode::Async {
                                     return Ok(RunLoopExit::AsyncThrow { exception: thrown });
                                 }
-                                if mode == RunLoopMode::Generator {
+                                if matches!(mode, RunLoopMode::Generator | RunLoopMode::AsyncGenerator) {
                                     return Ok(RunLoopExit::GeneratorThrow {
                                         exception: thrown,
                                         description: desc,
@@ -10680,7 +10552,8 @@ impl InterpreterCore {
                                 self.ip = finally_target;
                             } else {
                                 let generator_root =
-                                    mode == RunLoopMode::Generator && self.call_stack.len() == 1;
+                                    matches!(mode, RunLoopMode::Generator | RunLoopMode::AsyncGenerator)
+                                && self.call_stack.len() == 1;
                                 if generator_root {
                                     let completed_value = pending_return.value.clone();
                                     let completed_label = pending_return.label.clone();
@@ -10940,6 +10813,21 @@ impl InterpreterCore {
                             got: format!("exceeded u32::MAX ({})", self.closures.len()),
                         }
                     })?;
+                    let mut self_capture_rollback = None;
+                    if let Some(frame) = captured_env.last() {
+                        for (name, binding) in &frame.bindings {
+                            if name.starts_with(FUNCTION_EXPRESSION_SELF_CAPTURE_PREFIX) {
+                                let previous = binding.snapshot_state()?;
+                                {
+                                    let mut state = binding.state_mut()?;
+                                    state.value = Value::AsyncGeneratorFunction(closure_id);
+                                    state.initialized = true;
+                                }
+                                self_capture_rollback = Some((binding.clone(), previous));
+                                break;
+                            }
+                        }
+                    }
                     self.closures.push(ClosureValue {
                         function_index,
                         module_specifier: self.current_module_specifier.clone()
@@ -10951,12 +10839,18 @@ impl InterpreterCore {
                     {
                         self.closures.pop();
                         self.release_unused_current_module_program();
+                        if let Some((binding, previous)) = self_capture_rollback {
+                            binding.restore_state(previous)?;
+                        }
                         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
                         return Err(err);
                     }
                     if let Err(error) = self.write_reg(dst, Value::AsyncGeneratorFunction(closure_id)) {
                         self.closures.pop();
                         self.release_unused_current_module_program();
+                        if let Some((binding, previous)) = self_capture_rollback {
+                            binding.restore_state(previous)?;
+                        }
                         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
                         return Err(error);
                     }
@@ -10971,11 +10865,27 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::Yield {
                     value,
-                    delegate: _,
+                    delegate,
                     resume_dst,
                 } => {
                     let yielded = self.read_reg(value)?;
                     let yielded_label = self.read_reg_label(value)?;
+                    if mode == RunLoopMode::AsyncGenerator {
+                        if delegate {
+                            return Err(InterpreterError::TypeError {
+                                expected: "supported async generator yield".into(),
+                                got: "async generator delegated iteration is not yet supported".into(),
+                            });
+                        }
+                        self.ip += 1;
+                        return Ok(RunLoopExit::AsyncGeneratorAwait {
+                            completion: LabeledReturn {
+                                value: yielded,
+                                label: yielded_label,
+                            },
+                            kind: AsyncGeneratorAwaitKind::Yield { resume_dst },
+                        });
+                    }
                     let result_id = self.alloc_object_with_prototype(None)?;
                     {
                         self.set_object_property(result_id, "value".to_string(), yielded)?;
@@ -11001,6 +10911,17 @@ impl InterpreterCore {
                     }));
                 }
                 Ir3Instruction::AwaitValue { promise_reg } => {
+                    if mode == RunLoopMode::AsyncGenerator {
+                        let completion = LabeledReturn {
+                            value: self.read_reg(promise_reg)?,
+                            label: self.read_reg_label(promise_reg)?,
+                        };
+                        self.ip += 1;
+                        return Ok(RunLoopExit::AsyncGeneratorAwait {
+                            completion,
+                            kind: AsyncGeneratorAwaitKind::Body { register: promise_reg },
+                        });
+                    }
                     if mode != RunLoopMode::Async
                         || self
                             .call_stack
@@ -11643,7 +11564,7 @@ impl InterpreterCore {
                 ))
             }
             function_like if Self::function_object_key(&function_like).is_some() => {
-                if let Value::Closure(closure_id) | Value::AsyncFunction(closure_id) = &function_like
+                if let Value::Closure(closure_id) | Value::AsyncFunction(closure_id) | Value::AsyncGeneratorFunction(closure_id) = &function_like
                     && self.closure_method_metadata.contains_key(closure_id)
                     && matches!(
                         &key,
@@ -13014,7 +12935,7 @@ impl InterpreterCore {
         }
 
         let method_name = if matches!(key, RuntimePropertyKey::String(key) if key.as_str() == Some("name"))
-            && let Value::Closure(closure_id) | Value::AsyncFunction(closure_id) = &receiver
+            && let Value::Closure(closure_id) | Value::AsyncFunction(closure_id) | Value::AsyncGeneratorFunction(closure_id) = &receiver
         {
             self.closure_method_metadata
                 .get(closure_id)
@@ -15115,6 +15036,20 @@ impl InterpreterCore {
                                 crate::object_model::JsValue::Undefined,
                                 task_label,
                             )?;
+                        } else if handler.is_none()
+                            && let Some(context) =
+                                self.take_async_generator_continuation(result_promise.0)
+                        {
+                            self.resume_async_generator_task(
+                                context,
+                                Ok(argument),
+                                task_label.clone(),
+                            )?;
+                            self.fulfill_promise(
+                                result_promise,
+                                crate::object_model::JsValue::Undefined,
+                                task_label,
+                            )?;
                         } else {
                             // The identity handler still invokes the derived
                             // Promise's resolve function, including assimilation.
@@ -15149,6 +15084,19 @@ impl InterpreterCore {
                             )?;
                             // The await handler returns undefined. Its internal
                             // continuation is separate from the async result Promise.
+                            self.fulfill_promise(
+                                result_promise,
+                                crate::object_model::JsValue::Undefined,
+                                task_label,
+                            )?;
+                        } else if let Some(context) =
+                            self.take_async_generator_continuation(result_promise.0)
+                        {
+                            self.resume_async_generator_task(
+                                context,
+                                Err(reason),
+                                task_label.clone(),
+                            )?;
                             self.fulfill_promise(
                                 result_promise,
                                 crate::object_model::JsValue::Undefined,
@@ -15371,6 +15319,8 @@ impl InterpreterCore {
             | (Value::Function(_), Value::Function(_))
             | (Value::Closure(_), Value::Closure(_))
             | (Value::AsyncFunction(_), Value::AsyncFunction(_))
+            | (Value::AsyncGeneratorFunction(_), Value::AsyncGeneratorFunction(_))
+            | (Value::AsyncGeneratorObject(_), Value::AsyncGeneratorObject(_))
             | (Value::Iterator(_), Value::Iterator(_))
             | (Value::GeneratorFunction(_), Value::GeneratorFunction(_))
             | (Value::Generator(_), Value::Generator(_))
@@ -16010,7 +15960,7 @@ impl InterpreterCore {
             }
             "builtin:ObjectGetOwnPropertyNames" => {
                 let this = self.required_arg(args, 0, "object")?;
-                if let Value::Closure(closure_id) | Value::AsyncFunction(closure_id) = &this
+                if let Value::Closure(closure_id) | Value::AsyncFunction(closure_id) | Value::AsyncGeneratorFunction(closure_id) = &this
                     && self.closure_method_metadata.contains_key(closure_id)
                 {
                     let mut values = vec![Value::str("name")];
@@ -16055,7 +16005,7 @@ impl InterpreterCore {
             }
             "builtin:ReflectOwnKeys" => {
                 let this = self.required_arg(args, 0, "object")?;
-                let has_virtual_name = if let Value::Closure(closure_id) | Value::AsyncFunction(closure_id) = &this
+                let has_virtual_name = if let Value::Closure(closure_id) | Value::AsyncFunction(closure_id) | Value::AsyncGeneratorFunction(closure_id) = &this
                     && self.closure_method_metadata.contains_key(closure_id)
                 {
                     true
@@ -18187,15 +18137,6 @@ impl InterpreterCore {
         )
     }
 
-    fn estimate_async_generator_bytes(generator: &AsyncGeneratorObject) -> u64 {
-        MEMORY_ESTIMATE_GENERATOR_BASE_BYTES.saturating_add(
-            generator
-                .execution
-                .as_ref()
-                .map(Self::estimate_module_execution_bytes)
-                .unwrap_or(0),
-        )
-    }
 
     fn heap_object_count_u32(&self) -> u32 {
         u32::try_from(self.heap.len()).unwrap_or(u32::MAX)
@@ -18325,6 +18266,10 @@ impl InterpreterCore {
             .saturating_add(
                 (self.async_resumption_contexts.len() as u64)
                     .saturating_mul(Self::async_resumption_context_entry_bytes()),
+            )
+            .saturating_add(
+                (self.async_generator_continuations.len() as u64)
+                    .saturating_mul(Self::async_generator_continuation_bytes()),
             )
             .saturating_add(self.promise_runtime_memory_bytes())
             .saturating_add(self.module_state.retained_program_bytes)
@@ -18800,7 +18745,7 @@ impl InterpreterCore {
     ) -> Result<(), InterpreterError> {
         self.validate_executable_property_key(&key)?;
         let closure_id = match &function {
-            Value::Closure(id) | Value::AsyncFunction(id) => *id,
+            Value::Closure(id) | Value::AsyncFunction(id) | Value::AsyncGeneratorFunction(id) => *id,
             _ => {
                 return Err(InterpreterError::TypeError {
                     expected: "fresh closure for concise method definition".to_string(),
@@ -19213,7 +19158,7 @@ impl InterpreterCore {
     fn function_object_key(value: &Value) -> Option<FunctionObjectKey> {
         match value {
             Value::Function(idx) => Some(FunctionObjectKey::Function(*idx)),
-            Value::Closure(closure_id) | Value::AsyncFunction(closure_id) => {
+            Value::Closure(closure_id) | Value::AsyncFunction(closure_id) | Value::AsyncGeneratorFunction(closure_id) => {
                 Some(FunctionObjectKey::Closure(*closure_id))
             }
             Value::BuiltinFunction(builtin) => Some(FunctionObjectKey::Builtin(builtin.kind)),
@@ -19421,7 +19366,7 @@ impl InterpreterCore {
         &self,
         callee: &Value,
     ) -> Result<Option<(Value, crate::ifc_artifacts::Label)>, InterpreterError> {
-        let (Value::Closure(closure_id) | Value::AsyncFunction(closure_id)) = callee else {
+        let (Value::Closure(closure_id) | Value::AsyncFunction(closure_id) | Value::AsyncGeneratorFunction(closure_id)) = callee else {
             return Ok(None);
         };
         let Some(metadata) = self.closure_method_metadata.get(closure_id) else {
@@ -36207,26 +36152,21 @@ mod tests {
             module: &Ir3Module,
             arguments: Vec<(Value, crate::ifc_artifacts::Label)>,
         ) -> AsyncGeneratorObject {
-            let generator = core
-                .prepare_generator_activation(
-                    module,
-                    GeneratorCallSetup {
-                        function_index: 0,
-                        function_entry: 0,
-                        captured_env: core.scope_chain.snapshot(),
-                        arguments,
-                        this_value: Value::Undefined,
-                        this_label: crate::ifc_artifacts::Label::Public,
-                        super_value: Value::Undefined,
-                        super_label: crate::ifc_artifacts::Label::Public,
-                    },
-                )
-                .expect("async generator activation should reach its body boundary");
-            AsyncGeneratorObject {
-                execution: generator.execution,
-                resume_dst: None,
-                phase: AsyncGeneratorPhase::SuspendedStart,
-            }
+            core.prepare_async_generator_activation(
+                module,
+                GeneratorCallSetup {
+                    function_index: 0,
+                    function_entry: 0,
+                    captured_env: core.scope_chain.snapshot(),
+                    arguments,
+                    this_value: Value::Undefined,
+                    this_label: crate::ifc_artifacts::Label::Public,
+                    super_value: Value::Undefined,
+                    super_label: crate::ifc_artifacts::Label::Public,
+                },
+                None,
+            )
+            .expect("async generator activation should reach its body boundary")
         }
 
         #[test]
@@ -37513,11 +37453,7 @@ mod tests {
 
             // Create async generator, call it to get object, then call .next()
             let async_gen_id = {
-                core.async_generators.push(AsyncGeneratorObject {
-                    execution: None,
-                    resume_dst: None,
-                    phase: AsyncGeneratorPhase::Completed,
-                });
+                core.async_generators.push(AsyncGeneratorObject::completed());
                 (core.async_generators.len() - 1) as u32
             };
 
@@ -37591,11 +37527,18 @@ mod tests {
                 "should return a promise"
             );
 
-            // Check that the async generator state was updated to SuspendedYield
-            assert!(matches!(
+            // Even a primitive yield resumes through a Promise job.
+            assert_eq!(
                 core.async_generators[async_gen_id as usize].phase,
-                AsyncGeneratorPhase::SuspendedYield
-            ));
+                AsyncGeneratorPhase::SuspendedAwait,
+            );
+            let Value::Promise(handle) = result else { unreachable!() };
+            assert!(!core.promise_store.get(crate::promise_model::PromiseHandle(handle)).unwrap().state.is_settled());
+            core.drain_microtasks(Some(&module)).expect("yield jobs should drain");
+            assert_eq!(
+                core.async_generators[async_gen_id as usize].phase,
+                AsyncGeneratorPhase::SuspendedYield,
+            );
         }
 
         #[test]
@@ -37660,11 +37603,11 @@ mod tests {
                 "should return a promise"
             );
 
-            // Check that the async generator state was updated to Completed
-            assert!(matches!(
+            core.drain_microtasks(Some(&module)).expect("queued yield and return requests should drain");
+            assert_eq!(
                 core.async_generators[async_gen_id as usize].phase,
-                AsyncGeneratorPhase::Completed
-            ));
+                AsyncGeneratorPhase::Completed,
+            );
         }
 
         #[test]
@@ -37737,6 +37680,7 @@ mod tests {
             else {
                 panic!("async generator next should return a Promise");
             };
+            core.drain_microtasks(Some(&value_module)).expect("async generator jobs should drain");
             assert_eq!(
                 core.promise_store
                     .get(crate::promise_model::PromiseHandle(yield_handle))
@@ -37756,6 +37700,7 @@ mod tests {
             else {
                 panic!("async generator next should return a Promise");
             };
+            core.drain_microtasks(Some(&value_module)).expect("async generator jobs should drain");
             assert_eq!(
                 core.promise_store
                     .get(crate::promise_model::PromiseHandle(return_handle))
@@ -37799,6 +37744,7 @@ mod tests {
             else {
                 panic!("async generator next should return a Promise");
             };
+            core.drain_microtasks(Some(&throw_module)).expect("async generator jobs should drain");
             assert_eq!(
                 core.promise_store
                     .get(crate::promise_model::PromiseHandle(finally_yield_handle))

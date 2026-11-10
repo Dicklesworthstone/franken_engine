@@ -4461,6 +4461,14 @@ fn lower_statement_to_ir1_with_flow(
                     scope_id,
                     label_counter,
                 )?;
+                // An async generator awaits an explicit return expression
+                // before creating its return completion, including before
+                // running a surrounding finally block.
+                if is_async_function_body(ops)
+                    && ops.iter().any(|op| matches!(op, Ir1Op::GeneratorBodyStart))
+                {
+                    ops.push(Ir1Op::Await);
+                }
             } else {
                 ops.push(Ir1Op::LoadLiteral {
                     value: Ir1Literal::Undefined,
@@ -5025,15 +5033,6 @@ fn lower_statement_to_ir1_with_flow(
             }
         }
         Statement::FunctionDeclaration(func) => {
-            if func.is_async && func.is_generator {
-                return Err(unsupported_frontier_expression_error(
-                    "async_generator",
-                    "FE-LOWER-ASYNC-GENERATOR-0001",
-                    "core.async_generator_source_runtime",
-                    "async generator source execution is not yet supported",
-                    Some(func.span.clone()),
-                ));
-            }
             let name = func.name.clone().unwrap_or_else(|| "anonymous".to_string());
             let bid = alloc_binding(
                 bindings,
@@ -7444,7 +7443,13 @@ pub fn lower_ir2_to_ir3(
                         arrow_lexical_context: ArrowLexicalContextUsage::default(),
                         rest_param_index: *rest_param_index,
                     });
-                    if *is_generator {
+                    if *is_generator && is_async_function_body(body_ops) {
+                        ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {
+                            dst,
+                            function_index,
+                            capture_count: free_vars.len() as u32,
+                        });
+                    } else if *is_generator {
                         ir3.instructions.push(Ir3Instruction::CreateGenerator {
                             dst,
                             function_index,
@@ -7564,7 +7569,13 @@ pub fn lower_ir2_to_ir3(
                     arrow_lexical_context,
                     false,
                 );
-                if *is_generator {
+                if *is_generator && is_async_function_body(body_ops) {
+                    ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {
+                        dst,
+                        function_index,
+                        capture_count: free_vars.len() as u32,
+                    });
+                } else if *is_generator {
                     ir3.instructions.push(Ir3Instruction::CreateGenerator {
                         dst,
                         function_index,
@@ -7998,15 +8009,6 @@ pub fn lower_ir2_to_ir3(
         deferred_idx += 1;
         validate_deferred_rest_parameter_abi(param_names.len(), fn_rest_param_index)?;
         let fn_is_async = is_async_function_body(&body_ops);
-        if fn_is_async && fn_is_generator {
-            return Err(unsupported_frontier_expression_error(
-                "async_generator",
-                "FE-LOWER-ASYNC-GENERATOR-0001",
-                "core.async_generator_source_runtime",
-                "async generator source execution is not yet supported",
-                None,
-            ));
-        }
         let (body_ops, param_names, fn_name, free_vars, free_var_ids) =
             (&body_ops, &param_names, &fn_name, &free_vars, &free_var_ids);
         let entry = u32::try_from(ir3.instructions.len()).map_err(|_| {
@@ -9026,7 +9028,13 @@ pub fn lower_ir2_to_ir3(
                         inner_fv_ids,
                         inner_fv_outer_ids,
                     )?;
-                    if *inner_gen {
+                    if *inner_gen && is_async_function_body(inner_body) {
+                        ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {
+                            dst,
+                            function_index,
+                            capture_count: inner_fv.len() as u32,
+                        });
+                    } else if *inner_gen {
                         ir3.instructions.push(Ir3Instruction::CreateGenerator {
                             dst,
                             function_index,
@@ -9130,7 +9138,13 @@ pub fn lower_ir2_to_ir3(
                         inner_arrow_lexical_context,
                         fn_is_arrow,
                     );
-                    if *inner_gen {
+                    if *inner_gen && is_async_function_body(inner_body) {
+                        ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {
+                            dst,
+                            function_index,
+                            capture_count: inner_fv.len() as u32,
+                        });
+                    } else if *inner_gen {
                         ir3.instructions.push(Ir3Instruction::CreateGenerator {
                             dst,
                             function_index,
@@ -10627,6 +10641,15 @@ fn lower_expression_to_ir1(
             ops.push(Ir1Op::Await);
         }
         Expression::Yield { argument, delegate } => {
+            if *delegate && is_async_function_body(ops) {
+                return Err(unsupported_frontier_expression_error(
+                    "async_generator_yield_star",
+                    "FE-LOWER-ASYNC-GENERATOR-DELEGATE-0001",
+                    "core.async_generator_delegation",
+                    "async generator delegated iteration is not yet supported",
+                    None,
+                ));
+            }
             if let Some(arg) = argument {
                 lower_expression_to_ir1(
                     arg,
@@ -12478,15 +12501,6 @@ fn lower_expression_to_ir1(
             is_generator,
             is_async,
         } => {
-            if *is_async && *is_generator {
-                return Err(unsupported_frontier_expression_error(
-                    "async_generator",
-                    "FE-LOWER-ASYNC-GENERATOR-0001",
-                    "core.async_generator_source_runtime",
-                    "async generator source execution is not yet supported",
-                    None,
-                ));
-            }
             // Same as ArrowFunction but with a BlockStatement body and optional name.
             // A named function expression owns a private outer cell. Install
             // the source spelling only while lowering its parameter/body

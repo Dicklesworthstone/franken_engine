@@ -236,7 +236,7 @@ jobs:
             --test global_value_bindings_bd_9vouw_296 --test module_callable_ownership \
             --test promise_reactions --test promise_combinators \
             --test source_timers --test timer_callbacks --test async_source \
-            --test object_literal_accessors \
+            --test object_literal_accessors --test async_generators \
             -- --nocapture --test-threads=1 2>&1 | tee native-runtime-source-execution.log
       - name: Publish complete native-core diagnostics
         if: always()

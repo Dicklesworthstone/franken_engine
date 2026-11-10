@@ -432,7 +432,7 @@ fn class_async_grammar_distinguishes_modifiers_and_rejects_invalid_parameters() 
 fn unsupported_async_contexts_fail_explicitly_instead_of_becoming_identity_moves() {
     for source in [
         "await Promise.resolve(1);",
-        "async function* values() { yield 1; }",
+        "async function* values() { yield* [1]; }",
     ] {
         let tree = CanonicalEs2020Parser
             .parse(source, ParseGoal::Module)

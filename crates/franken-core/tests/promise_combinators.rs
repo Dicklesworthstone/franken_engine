@@ -4,9 +4,11 @@
 use std::collections::BTreeSet;
 
 use frankenengine_core::ast::ParseGoal;
-use frankenengine_core::baseline_interpreter::{InterpreterConfig, InterpreterCore, InterpreterError};
-use frankenengine_core::checkpoint::CancellationToken;
+use frankenengine_core::baseline_interpreter::{
+    InterpreterConfig, InterpreterCore, InterpreterError,
+};
 use frankenengine_core::capability::RuntimeCapability;
+use frankenengine_core::checkpoint::CancellationToken;
 use frankenengine_core::ir_contract::Ir0Module;
 use frankenengine_core::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use frankenengine_core::parser::{CanonicalEs2020Parser, Es2020Parser};
@@ -217,8 +219,12 @@ fn non_iterables_reject_the_returned_promise_without_synchronous_throw() {
         console.log('sync');
         "#,
         &[
-            "sync", "missing:TypeError", "null:TypeError", "number:TypeError",
-            "object:TypeError", "override:TypeError",
+            "sync",
+            "missing:TypeError",
+            "null:TypeError",
+            "number:TypeError",
+            "object:TypeError",
+            "override:TypeError",
         ],
     );
 }
@@ -400,14 +406,18 @@ fn iterator_protocol_getter_errors_keep_the_original_thrown_value() {
 
 #[test]
 fn native_iterable_steps_obey_instruction_budgets_and_cancellation() {
-    let tree = CanonicalEs2020Parser.parse(
-        "const values = []; values.length = 10000; Promise.all(values);",
-        ParseGoal::Script,
-    ).expect("parse sparse-array budget source");
+    let tree = CanonicalEs2020Parser
+        .parse(
+            "const values = []; values.length = 10000; Promise.all(values);",
+            ParseGoal::Script,
+        )
+        .expect("parse sparse-array budget source");
     let module = lower_ir0_to_ir3(
         &Ir0Module::from_syntax_tree(tree, "iterable-budget.js"),
         &LoweringContext::new("budget", "budget", "budget"),
-    ).expect("lower sparse-array budget source").ir3;
+    )
+    .expect("lower sparse-array budget source")
+    .ir3;
     for throughput in [false, true] {
         let mut config = if throughput {
             InterpreterConfig::v8_defaults()
@@ -415,13 +425,21 @@ fn native_iterable_steps_obey_instruction_budgets_and_cancellation() {
             InterpreterConfig::quickjs_defaults()
         };
         config.granted_capabilities = BTreeSet::from([
-            RuntimeCapability::VmDispatch, RuntimeCapability::HeapAllocate,
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
         ]);
         config.instruction_budget = 128;
         let failure = InterpreterCore::new(config.clone(), "iterable-budget")
-            .execute(&module).expect_err("native iteration must consume the instruction budget");
+            .execute(&module)
+            .expect_err("native iteration must consume the instruction budget");
         assert!(
-            matches!(failure, InterpreterError::BudgetExhausted { executed: 128, budget: 128 }),
+            matches!(
+                failure,
+                InterpreterError::BudgetExhausted {
+                    executed: 128,
+                    budget: 128
+                }
+            ),
             "throughput={throughput}: {failure:?}",
         );
 
@@ -430,7 +448,8 @@ fn native_iterable_steps_obey_instruction_budgets_and_cancellation() {
         config.cancellation_token = Some(token);
         config.checkpoint_density = u64::MAX;
         let failure = InterpreterCore::new(config, "iterable-cancel")
-            .execute(&module).expect_err("native iteration must poll cancellation");
+            .execute(&module)
+            .expect_err("native iteration must poll cancellation");
         assert!(
             matches!(failure, InterpreterError::Cancelled),
             "throughput={throughput}: {failure:?}",

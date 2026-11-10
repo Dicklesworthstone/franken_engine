@@ -29,7 +29,11 @@ fn assert_output(source: &str, expected: &[&str]) {
     );
     let module = lower_ir0_to_ir3(
         &ir0,
-        &LoweringContext::new("async-generator-source", "async-generator-source", "async-generator-source"),
+        &LoweringContext::new(
+            "async-generator-source",
+            "async-generator-source",
+            "async-generator-source",
+        ),
     )
     .expect("lower async-generator source")
     .ir3;
@@ -48,7 +52,8 @@ fn assert_output(source: &str, expected: &[&str]) {
         let result = InterpreterCore::new(config, "async-generator-source")
             .execute(&module)
             .expect("execute async-generator source");
-        let output: Vec<_> = result.console_output
+        let output: Vec<_> = result
+            .console_output
             .into_iter()
             .map(|line| line.message)
             .collect();
@@ -74,7 +79,15 @@ fn queued_requests_unwrap_yields_and_resume_values() {
         iterator.next().then(result => console.log('c:' + result.value + ':' + result.done));
         console.log('sync');
         "#,
-        &["true", "start", "sync", "resume:8", "a:7:false", "b:9:false", "c:11:true"],
+        &[
+            "true",
+            "start",
+            "sync",
+            "resume:8",
+            "a:7:false",
+            "b:9:false",
+            "c:11:true",
+        ],
     );
 }
 
@@ -117,7 +130,14 @@ fn queued_return_waits_and_runs_yielding_finally() {
         iterator.next().then(result => console.log('c:' + result.value + ':' + result.done));
         console.log('sync');
         "#,
-        &["sync", "a:1:false", "cleanup", "after cleanup", "b:3:false", "c:9:true"],
+        &[
+            "sync",
+            "a:1:false",
+            "cleanup",
+            "after cleanup",
+            "b:3:false",
+            "c:9:true",
+        ],
     );
 }
 
@@ -192,7 +212,14 @@ fn completed_requests_and_wrong_receivers_return_promises() {
         detached().catch(error => console.log(error.name));
         console.log('sync');
         "#,
-        &["sync", "first:true", "next:undefined:true", "throw:true", "TypeError", "return:42:true"],
+        &[
+            "sync",
+            "first:true",
+            "next:undefined:true",
+            "throw:true",
+            "TypeError",
+            "return:42:true",
+        ],
     );
 }
 
@@ -292,7 +319,14 @@ fn rejected_return_arguments_reenter_catch_at_the_suspended_yield() {
         iterator.next().then(result => console.log('c:' + result.value + ':' + result.done));
         console.log('sync');
         "#,
-        &["sync", "a:1", "true", "b:2:false", "finally", "c:undefined:true"],
+        &[
+            "sync",
+            "a:1",
+            "true",
+            "b:2:false",
+            "finally",
+            "c:undefined:true",
+        ],
     );
 }
 

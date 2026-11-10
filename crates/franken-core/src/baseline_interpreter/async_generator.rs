@@ -86,9 +86,8 @@ impl InterpreterCore {
         } else {
             Self::retained_module_program_bytes(module)
         };
-        let register_storage_bytes = u64::from(self.config.max_registers).saturating_mul(
-            (std::mem::size_of::<Value>() + std::mem::size_of::<Label>()) as u64,
-        );
+        let register_storage_bytes = u64::from(self.config.max_registers)
+            .saturating_mul((std::mem::size_of::<Value>() + std::mem::size_of::<Label>()) as u64);
         let overhead = (std::mem::size_of::<AsyncGeneratorObject>() as u64)
             .saturating_add(retained_program_bytes)
             .saturating_add(register_storage_bytes);
@@ -101,8 +100,7 @@ impl InterpreterCore {
         // Reserve the fixed arena before the shared prologue helper allocates
         // it. The helper independently accounts the dynamic execution payload.
         let previous_bytes = self.temporarily_suspended_execution_bytes;
-        self.temporarily_suspended_execution_bytes =
-            previous_bytes.saturating_add(overhead);
+        self.temporarily_suspended_execution_bytes = previous_bytes.saturating_add(overhead);
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_add(overhead);
         let saved_cjs_context = self.active_cjs_context.take();
         let prepared = self.prepare_generator_activation_inner(module, setup, rollback);
@@ -163,12 +161,13 @@ impl InterpreterCore {
         argument: Value,
         label: Label,
     ) -> Result<Value, InterpreterError> {
-        let generator = self.async_generators.get(generator_id as usize).ok_or_else(|| {
-            InterpreterError::TypeError {
+        let generator = self
+            .async_generators
+            .get(generator_id as usize)
+            .ok_or_else(|| InterpreterError::TypeError {
                 expected: "valid async generator".into(),
                 got: format!("async generator #{generator_id} not found"),
-            }
-        })?;
+            })?;
         if let Some(execution) = &generator.execution
             && execution.registers.len() != execution.register_labels.len()
         {
@@ -205,7 +204,10 @@ impl InterpreterCore {
         Ok(Value::Promise(promise.0))
     }
 
-    fn drain_async_generator_requests(&mut self, generator_id: u32) -> Result<(), InterpreterError> {
+    fn drain_async_generator_requests(
+        &mut self,
+        generator_id: u32,
+    ) -> Result<(), InterpreterError> {
         loop {
             self.check_async_generator_cancellation()?;
             let generator = &self.async_generators[generator_id as usize];
@@ -217,11 +219,16 @@ impl InterpreterCore {
                 return Ok(());
             }
             let request = generator.requests.front().expect("nonempty request queue");
-            let clone_bytes = Self::async_generator_request_bytes(&request.argument, &request.label);
+            let clone_bytes =
+                Self::async_generator_request_bytes(&request.argument, &request.label);
             self.with_async_generator_temporary(clone_bytes, |core| {
                 let generator = &mut core.async_generators[generator_id as usize];
                 let phase = generator.phase;
-                let request = generator.requests.front().expect("nonempty request queue").clone();
+                let request = generator
+                    .requests
+                    .front()
+                    .expect("nonempty request queue")
+                    .clone();
                 // PromiseResolve can execute a getter which queues another
                 // request. Mark busy before any such call.
                 generator.phase = AsyncGeneratorPhase::Executing;
@@ -282,22 +289,34 @@ impl InterpreterCore {
         self.ensure_call_depth_available()?;
         let (owner, execution, resume_dst) = {
             let generator = &mut self.async_generators[generator_id as usize];
-            let owner = generator.owner_module.clone().ok_or_else(|| InterpreterError::TypeError {
-                expected: "retained async generator owner".into(),
-                got: "missing async generator owner".into(),
-            })?;
-            let execution = generator.execution.take().ok_or_else(|| InterpreterError::TypeError {
-                expected: "saved async generator activation".into(),
-                got: "missing async generator activation".into(),
-            })?;
+            let owner =
+                generator
+                    .owner_module
+                    .clone()
+                    .ok_or_else(|| InterpreterError::TypeError {
+                        expected: "retained async generator owner".into(),
+                        got: "missing async generator owner".into(),
+                    })?;
+            let execution =
+                generator
+                    .execution
+                    .take()
+                    .ok_or_else(|| InterpreterError::TypeError {
+                        expected: "saved async generator activation".into(),
+                        got: "missing async generator activation".into(),
+                    })?;
             generator.phase = AsyncGeneratorPhase::Executing;
-            (owner, execution, register_override.or(generator.resume_dst.take()))
+            (
+                owner,
+                execution,
+                register_override.or(generator.resume_dst.take()),
+            )
         };
         let caller = self.take_module_execution();
         let previous_bytes = self.temporarily_suspended_execution_bytes;
         let previous_depth = self.temporarily_suspended_call_depth;
-        self.temporarily_suspended_execution_bytes = previous_bytes
-            .saturating_add(Self::estimate_module_execution_bytes(&caller));
+        self.temporarily_suspended_execution_bytes =
+            previous_bytes.saturating_add(Self::estimate_module_execution_bytes(&caller));
         self.temporarily_suspended_call_depth =
             previous_depth.saturating_add(caller.call_stack.len());
         let saved_cjs_context = self.active_cjs_context.take();
@@ -311,7 +330,10 @@ impl InterpreterCore {
                     }
                 }
                 AsyncGeneratorResumeKind::Throw => {
-                    let exception = LabeledException { value: argument, label };
+                    let exception = LabeledException {
+                        value: argument,
+                        label,
+                    };
                     self.suspend_current_abrupt_completion();
                     self.pending_return = None;
                     self.pending_exception = Some(exception.clone());
@@ -324,7 +346,10 @@ impl InterpreterCore {
                         self.ip = frame.catch_target;
                     } else {
                         let description = format!("{:?}", exception.value);
-                        return Ok(RunLoopExit::GeneratorThrow { exception, description });
+                        return Ok(RunLoopExit::GeneratorThrow {
+                            exception,
+                            description,
+                        });
                     }
                 }
                 AsyncGeneratorResumeKind::Return => {
@@ -343,13 +368,19 @@ impl InterpreterCore {
                     } else {
                         self.pending_return = None;
                         let _ = self.complete_return(argument.clone(), label.clone())?;
-                        return Ok(RunLoopExit::GeneratorReturn { value: argument, label });
+                        return Ok(RunLoopExit::GeneratorReturn {
+                            value: argument,
+                            label,
+                        });
                     }
                 }
             }
             loop {
                 match self.run_loop_with_mode(&owner, RunLoopMode::AsyncGenerator) {
-                    Err(error) if Self::is_js_catchable_error(&error) && self.has_exception_target_frame() => {
+                    Err(error)
+                        if Self::is_js_catchable_error(&error)
+                            && self.has_exception_target_frame() =>
+                    {
                         match self.route_run_loop_javascript_error(
                             &owner,
                             error,
@@ -393,44 +424,70 @@ impl InterpreterCore {
         let context_label = self.async_generators[generator_id as usize].label.clone();
         self.complete_async_generator_activation(generator_id);
         let completion_bytes = match &outcome {
-            Ok(RunLoopExit::Value(completion)) => Self::async_generator_value_bytes(&completion.value)
-                .saturating_add(Self::estimate_label_bytes(&completion.label)),
-            Ok(RunLoopExit::GeneratorReturn { value, label }) => Self::async_generator_value_bytes(value)
-                .saturating_add(Self::estimate_label_bytes(label)),
-            Ok(RunLoopExit::GeneratorThrow { exception, .. }) => Self::async_generator_value_bytes(&exception.value)
-                .saturating_add(Self::estimate_label_bytes(&exception.label)),
+            Ok(RunLoopExit::Value(completion)) => {
+                Self::async_generator_value_bytes(&completion.value)
+                    .saturating_add(Self::estimate_label_bytes(&completion.label))
+            }
+            Ok(RunLoopExit::GeneratorReturn { value, label }) => {
+                Self::async_generator_value_bytes(value)
+                    .saturating_add(Self::estimate_label_bytes(label))
+            }
+            Ok(RunLoopExit::GeneratorThrow { exception, .. }) => {
+                Self::async_generator_value_bytes(&exception.value)
+                    .saturating_add(Self::estimate_label_bytes(&exception.label))
+            }
             _ => 0,
         }
         .saturating_add(Self::estimate_label_bytes(&context_label))
-        .saturating_add(escaped_exception.as_ref().map(Self::estimate_labeled_exception_bytes).unwrap_or(0));
-        self.with_async_generator_temporary(completion_bytes, |core| {
-            match outcome {
-                Ok(RunLoopExit::Value(completion)) => core.settle_async_generator_request(
-                    generator_id, Ok(completion.value), true, context_label.join(&completion.label),
+        .saturating_add(
+            escaped_exception
+                .as_ref()
+                .map(Self::estimate_labeled_exception_bytes)
+                .unwrap_or(0),
+        );
+        self.with_async_generator_temporary(completion_bytes, |core| match outcome {
+            Ok(RunLoopExit::Value(completion)) => core.settle_async_generator_request(
+                generator_id,
+                Ok(completion.value),
+                true,
+                context_label.join(&completion.label),
+            ),
+            Ok(RunLoopExit::GeneratorReturn { value, label }) => core
+                .settle_async_generator_request(
+                    generator_id,
+                    Ok(value),
+                    true,
+                    context_label.join(&label),
                 ),
-                Ok(RunLoopExit::GeneratorReturn { value, label }) => core.settle_async_generator_request(
-                    generator_id, Ok(value), true, context_label.join(&label),
+            Ok(RunLoopExit::GeneratorThrow { exception, .. }) => core
+                .settle_async_generator_request(
+                    generator_id,
+                    Err(exception.value),
+                    true,
+                    context_label.join(&exception.label),
                 ),
-                Ok(RunLoopExit::GeneratorThrow { exception, .. }) => core.settle_async_generator_request(
-                    generator_id, Err(exception.value), true, context_label.join(&exception.label),
-                ),
-                Err(InterpreterError::Halted) => core.settle_async_generator_request(
-                    generator_id, Ok(Value::Undefined), true, context_label,
-                ),
-                Err(error) if Self::is_js_catchable_error(&error) => {
-                    let (reason, label) = match escaped_exception {
-                        Some(exception) if matches!(error, InterpreterError::UncaughtException { .. }) =>
-                            (exception.value, context_label.join(&exception.label)),
-                        _ => (core.promise_error_value(&error)?, context_label),
-                    };
-                    core.settle_async_generator_request(generator_id, Err(reason), true, label)
-                }
-                Err(error) => Err(error),
-                Ok(_) => Err(InterpreterError::TypeError {
-                    expected: "async generator await, yield, return, or throw".into(),
-                    got: "unexpected async generator execution boundary".into(),
-                }),
+            Err(InterpreterError::Halted) => core.settle_async_generator_request(
+                generator_id,
+                Ok(Value::Undefined),
+                true,
+                context_label,
+            ),
+            Err(error) if Self::is_js_catchable_error(&error) => {
+                let (reason, label) = match escaped_exception {
+                    Some(exception)
+                        if matches!(error, InterpreterError::UncaughtException { .. }) =>
+                    {
+                        (exception.value, context_label.join(&exception.label))
+                    }
+                    _ => (core.promise_error_value(&error)?, context_label),
+                };
+                core.settle_async_generator_request(generator_id, Err(reason), true, label)
             }
+            Err(error) => Err(error),
+            Ok(_) => Err(InterpreterError::TypeError {
+                expected: "async generator await, yield, return, or throw".into(),
+                got: "unexpected async generator execution boundary".into(),
+            }),
         })
     }
 
@@ -442,7 +499,9 @@ impl InterpreterCore {
         label: Label,
     ) -> Result<(), InterpreterError> {
         self.async_generators[generator_id as usize].phase = AsyncGeneratorPhase::Executing;
-        let label = self.async_generators[generator_id as usize].label.join(&label);
+        let label = self.async_generators[generator_id as usize]
+            .label
+            .join(&label);
         let promise = if let Value::Promise(handle) = value {
             PromiseHandle(handle)
         } else {
@@ -453,14 +512,18 @@ impl InterpreterCore {
         self.check_async_generator_cancellation()?;
         let context_bytes = Self::async_generator_continuation_bytes();
         self.with_async_generator_temporary(context_bytes, |core| {
-            let rollback_bytes = core.promise_store.estimated_memory_bytes()
+            let rollback_bytes = core
+                .promise_store
+                .estimated_memory_bytes()
                 .saturating_add(core.event_loop.microtasks.estimated_memory_bytes());
             let continuation = core.with_async_generator_temporary(rollback_bytes, |core| {
                 let previous_runtime = core.promise_runtime_memory_bytes();
                 let store = core.promise_store.clone();
                 let queue = core.event_loop.microtasks.clone();
                 let registered = match core.promise_store.then_for_await(
-                    promise, label, &mut core.event_loop.microtasks,
+                    promise,
+                    label,
+                    &mut core.event_loop.microtasks,
                 ) {
                     Ok(continuation) => core
                         .apply_promise_runtime_memory_delta(previous_runtime)
@@ -480,7 +543,8 @@ impl InterpreterCore {
                 continuation.0,
                 AsyncGeneratorContinuation { generator_id, kind },
             );
-            core.async_generators[generator_id as usize].phase = AsyncGeneratorPhase::SuspendedAwait;
+            core.async_generators[generator_id as usize].phase =
+                AsyncGeneratorPhase::SuspendedAwait;
             Ok(())
         })
     }
@@ -490,7 +554,8 @@ impl InterpreterCore {
         promise: u32,
     ) -> Option<AsyncGeneratorContinuation> {
         let context = self.async_generator_continuations.remove(&promise)?;
-        self.estimated_memory_bytes = self.estimated_memory_bytes
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
             .saturating_sub(Self::async_generator_continuation_bytes());
         Some(context)
     }
@@ -504,10 +569,13 @@ impl InterpreterCore {
         let generator_id = context.generator_id;
         let outcome = (|| {
             self.check_async_generator_cancellation()?;
-            let generator = self.async_generators.get(generator_id as usize).ok_or_else(|| InterpreterError::TypeError {
-                expected: "valid async generator continuation".into(),
-                got: "missing async generator".into(),
-            })?;
+            let generator = self
+                .async_generators
+                .get(generator_id as usize)
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "valid async generator continuation".into(),
+                    got: "missing async generator".into(),
+                })?;
             if generator.phase != AsyncGeneratorPhase::SuspendedAwait {
                 return Err(InterpreterError::TypeError {
                     expected: "suspended async generator await".into(),
@@ -520,27 +588,45 @@ impl InterpreterCore {
             self.async_generators[generator_id as usize].phase = AsyncGeneratorPhase::Executing;
             self.sync_estimated_memory_bytes()?;
             match (context.kind, settlement) {
-                (AsyncGeneratorAwaitKind::Body { register }, Ok(value)) => self.step_async_generator(
-                    generator_id, AsyncGeneratorResumeKind::Next, Self::js_value_to_value(&value), joined, Some(register),
-                )?,
-                (AsyncGeneratorAwaitKind::Yield { .. }, Ok(value)) => self.settle_async_generator_request(
-                    generator_id, Ok(Self::js_value_to_value(&value)), false, joined,
-                )?,
+                (AsyncGeneratorAwaitKind::Body { register }, Ok(value)) => self
+                    .step_async_generator(
+                        generator_id,
+                        AsyncGeneratorResumeKind::Next,
+                        Self::js_value_to_value(&value),
+                        joined,
+                        Some(register),
+                    )?,
+                (AsyncGeneratorAwaitKind::Yield { .. }, Ok(value)) => self
+                    .settle_async_generator_request(
+                        generator_id,
+                        Ok(Self::js_value_to_value(&value)),
+                        false,
+                        joined,
+                    )?,
                 (AsyncGeneratorAwaitKind::ReturnArgument, Ok(value)) => self.step_async_generator(
-                    generator_id, AsyncGeneratorResumeKind::Return, Self::js_value_to_value(&value), joined, None,
+                    generator_id,
+                    AsyncGeneratorResumeKind::Return,
+                    Self::js_value_to_value(&value),
+                    joined,
+                    None,
                 )?,
                 (AsyncGeneratorAwaitKind::CompletedReturn, settlement) => {
                     self.complete_async_generator_activation(generator_id);
                     self.settle_async_generator_request(
                         generator_id,
-                        settlement.map(|value| Self::js_value_to_value(&value))
+                        settlement
+                            .map(|value| Self::js_value_to_value(&value))
                             .map_err(|reason| Self::js_value_to_value(&reason)),
                         true,
                         joined,
                     )?;
                 }
                 (_, Err(reason)) => self.step_async_generator(
-                    generator_id, AsyncGeneratorResumeKind::Throw, Self::js_value_to_value(&reason), joined, None,
+                    generator_id,
+                    AsyncGeneratorResumeKind::Throw,
+                    Self::js_value_to_value(&reason),
+                    joined,
+                    None,
                 )?,
             }
             self.drain_async_generator_requests(generator_id)
@@ -560,7 +646,9 @@ impl InterpreterCore {
     ) -> Result<(), InterpreterError> {
         self.check_async_generator_cancellation()?;
         let request = self.async_generators[generator_id as usize]
-            .requests.front().ok_or_else(|| InterpreterError::TypeError {
+            .requests
+            .front()
+            .ok_or_else(|| InterpreterError::TypeError {
                 expected: "active async generator request".into(),
                 got: "empty async generator request queue".into(),
             })?;
@@ -569,10 +657,24 @@ impl InterpreterCore {
         match result {
             Ok(value) => {
                 let object = self.generator_result_object(value, done)?;
-                let Value::Object(object_id) = object else { unreachable!("iterator result is an object") };
-                self.set_own_runtime_property_label(object_id, &RuntimePropertyKey::String("value".into()), &label)?;
-                self.set_own_runtime_property_label(object_id, &RuntimePropertyKey::String("done".into()), &label)?;
-                self.fulfill_promise(promise, Self::value_to_js_value(&Value::Object(object_id)), label)?;
+                let Value::Object(object_id) = object else {
+                    unreachable!("iterator result is an object")
+                };
+                self.set_own_runtime_property_label(
+                    object_id,
+                    &RuntimePropertyKey::String("value".into()),
+                    &label,
+                )?;
+                self.set_own_runtime_property_label(
+                    object_id,
+                    &RuntimePropertyKey::String("done".into()),
+                    &label,
+                )?;
+                self.fulfill_promise(
+                    promise,
+                    Self::value_to_js_value(&Value::Object(object_id)),
+                    label,
+                )?;
             }
             Err(reason) => self.reject_promise(promise, Self::value_to_js_value(&reason), label)?,
         }
@@ -606,7 +708,8 @@ impl InterpreterCore {
         if let Some(generator) = self.async_generators.get_mut(generator_id as usize) {
             generator.requests.clear();
         }
-        self.async_generator_continuations.retain(|_, context| context.generator_id != generator_id);
+        self.async_generator_continuations
+            .retain(|_, context| context.generator_id != generator_id);
         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
     }
 
@@ -655,10 +758,22 @@ impl InterpreterCore {
             .saturating_add(generator.retained_program_bytes)
             .saturating_add(generator.register_storage_bytes)
             .saturating_add(Self::estimate_label_bytes(&generator.label))
-            .saturating_add(generator.execution.as_ref().map(Self::estimate_module_execution_bytes).unwrap_or(0))
-            .saturating_add(generator.requests.iter().map(|request| {
-                Self::async_generator_request_bytes(&request.argument, &request.label)
-            }).fold(0u64, u64::saturating_add))
+            .saturating_add(
+                generator
+                    .execution
+                    .as_ref()
+                    .map(Self::estimate_module_execution_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(
+                generator
+                    .requests
+                    .iter()
+                    .map(|request| {
+                        Self::async_generator_request_bytes(&request.argument, &request.label)
+                    })
+                    .fold(0u64, u64::saturating_add),
+            )
     }
 }
 
@@ -678,7 +793,11 @@ mod tests {
             instructions: vec![
                 Ir3Instruction::GeneratorBodyStart,
                 Ir3Instruction::AwaitValue { promise_reg: 0 },
-                Ir3Instruction::Yield { value: 0, delegate: false, resume_dst: 1 },
+                Ir3Instruction::Yield {
+                    value: 0,
+                    delegate: false,
+                    resume_dst: 1,
+                },
                 Ir3Instruction::Return { value: 1 },
             ],
             constant_pool: Vec::new(),
@@ -698,20 +817,22 @@ mod tests {
     }
 
     fn prepare(core: &mut InterpreterCore, module: &Ir3Module, awaited: PromiseHandle) -> u32 {
-        let generator = core.prepare_async_generator_activation(
-            module,
-            GeneratorCallSetup {
-                function_index: 0,
-                function_entry: 0,
-                captured_env: core.scope_chain.snapshot(),
-                arguments: vec![(Value::Promise(awaited.0), Label::Confidential)],
-                this_value: Value::Undefined,
-                this_label: Label::Public,
-                super_value: Value::Undefined,
-                super_label: Label::Public,
-            },
-            None,
-        ).unwrap();
+        let generator = core
+            .prepare_async_generator_activation(
+                module,
+                GeneratorCallSetup {
+                    function_index: 0,
+                    function_entry: 0,
+                    captured_env: core.scope_chain.snapshot(),
+                    arguments: vec![(Value::Promise(awaited.0), Label::Confidential)],
+                    this_value: Value::Undefined,
+                    this_label: Label::Public,
+                    super_value: Value::Undefined,
+                    super_label: Label::Public,
+                },
+                None,
+            )
+            .unwrap();
         let id = core.async_generators.len() as u32;
         core.async_generators.push(generator);
         core.sync_estimated_memory_bytes().unwrap();
@@ -719,7 +840,9 @@ mod tests {
     }
 
     fn promise(value: Value) -> PromiseHandle {
-        let Value::Promise(handle) = value else { panic!("async request must return Promise") };
+        let Value::Promise(handle) = value else {
+            panic!("async request must return Promise")
+        };
         PromiseHandle(handle)
     }
 
@@ -729,14 +852,25 @@ mod tests {
         let mut core = core();
         let awaited = core.create_promise_accounted().unwrap();
         let id = prepare(&mut core, &module, awaited);
-        core.write_reg_with_label(5, Value::Int(81), Label::TopSecret).unwrap();
-        let first = promise(core.async_generator_next(&module, id, Value::Undefined, Label::Public).unwrap());
-        let second = promise(core.async_generator_next(&module, id, Value::Int(99), Label::Internal).unwrap());
+        core.write_reg_with_label(5, Value::Int(81), Label::TopSecret)
+            .unwrap();
+        let first = promise(
+            core.async_generator_next(&module, id, Value::Undefined, Label::Public)
+                .unwrap(),
+        );
+        let second = promise(
+            core.async_generator_next(&module, id, Value::Int(99), Label::Internal)
+                .unwrap(),
+        );
         assert!(!core.promise_store.get(first).unwrap().state.is_settled());
         assert!(!core.promise_store.get(second).unwrap().state.is_settled());
         assert_eq!(core.async_generators[id as usize].requests.len(), 2);
-        assert_eq!(core.async_generators[id as usize].phase, AsyncGeneratorPhase::SuspendedAwait);
-        core.fulfill_promise(awaited, JsValue::Int(7), Label::Secret).unwrap();
+        assert_eq!(
+            core.async_generators[id as usize].phase,
+            AsyncGeneratorPhase::SuspendedAwait
+        );
+        core.fulfill_promise(awaited, JsValue::Int(7), Label::Secret)
+            .unwrap();
         core.drain_microtasks(Some(&module)).unwrap();
         for (handle, expected_value, expected_done, expected_label) in [
             (first, 7, false, Label::Secret),
@@ -750,9 +884,18 @@ mod tests {
             let Value::Object(object_id) = InterpreterCore::js_value_to_value(payload) else {
                 panic!("iterator result should be an object");
             };
-            assert_eq!(core.prototype_chain_get(object_id, "value").unwrap(), Value::Int(expected_value));
-            assert_eq!(core.prototype_chain_get(object_id, "done").unwrap(), Value::Bool(expected_done));
-            assert_eq!(core.runtime_property_label(object_id, &RuntimePropertyKey::String("value".into())), expected_label);
+            assert_eq!(
+                core.prototype_chain_get(object_id, "value").unwrap(),
+                Value::Int(expected_value)
+            );
+            assert_eq!(
+                core.prototype_chain_get(object_id, "done").unwrap(),
+                Value::Bool(expected_done)
+            );
+            assert_eq!(
+                core.runtime_property_label(object_id, &RuntimePropertyKey::String("value".into())),
+                expected_label
+            );
         }
         assert_eq!(core.read_reg(5).unwrap(), Value::Int(81));
         assert_eq!(core.read_reg_label(5).unwrap(), Label::TopSecret);
@@ -761,7 +904,10 @@ mod tests {
         assert!(core.async_generators[id as usize].execution.is_none());
         assert_eq!(core.async_generators[id as usize].register_storage_bytes, 0);
         assert_eq!(core.promise_in_flight_task_bytes, 0);
-        assert_eq!(core.estimated_memory_bytes, core.recompute_estimated_memory_bytes());
+        assert_eq!(
+            core.estimated_memory_bytes,
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]
@@ -772,21 +918,26 @@ mod tests {
         let arena_bytes = u64::from(core.config.max_registers)
             * (std::mem::size_of::<Value>() + std::mem::size_of::<Label>()) as u64;
         core.config.max_total_memory_bytes = baseline + arena_bytes - 1;
-        let error = core.prepare_async_generator_activation(
-            &module,
-            GeneratorCallSetup {
-                function_index: 0,
-                function_entry: 0,
-                captured_env: core.scope_chain.snapshot(),
-                arguments: Vec::new(),
-                this_value: Value::Undefined,
-                this_label: Label::Public,
-                super_value: Value::Undefined,
-                super_label: Label::Public,
-            },
-            None,
-        ).unwrap_err();
-        assert!(matches!(error, InterpreterError::MemoryBudgetExceeded { .. }));
+        let error = core
+            .prepare_async_generator_activation(
+                &module,
+                GeneratorCallSetup {
+                    function_index: 0,
+                    function_entry: 0,
+                    captured_env: core.scope_chain.snapshot(),
+                    arguments: Vec::new(),
+                    this_value: Value::Undefined,
+                    this_label: Label::Public,
+                    super_value: Value::Undefined,
+                    super_label: Label::Public,
+                },
+                None,
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
         assert!(core.async_generators.is_empty());
         assert!(core.call_stack.is_empty());
         assert_eq!(core.promise_store.len(), 0);
@@ -801,13 +952,17 @@ mod tests {
         core.config.cancellation_token = Some(token.clone());
         let awaited = core.create_promise_accounted().unwrap();
         let id = prepare(&mut core, &module, awaited);
-        let first = promise(core.async_generator_next(&module, id, Value::Undefined, Label::Public).unwrap());
+        let first = promise(
+            core.async_generator_next(&module, id, Value::Undefined, Label::Public)
+                .unwrap(),
+        );
         core.enqueue_async_generator_request(
             id,
             AsyncGeneratorResumeKind::Return,
             Value::str("queued argument".repeat(32)),
             Label::Secret,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(core.async_generators[id as usize].requests.len(), 2);
         token.cancel();
         assert_eq!(
@@ -823,7 +978,10 @@ mod tests {
         assert!(core.async_generator_continuations.is_empty());
         assert!(!core.promise_store.get(first).unwrap().state.is_settled());
         assert_eq!(core.promise_in_flight_task_bytes, 0);
-        assert_eq!(core.estimated_memory_bytes, core.recompute_estimated_memory_bytes());
+        assert_eq!(
+            core.estimated_memory_bytes,
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]
@@ -832,9 +990,13 @@ mod tests {
         let mut core = core();
         let awaited = core.create_promise_accounted().unwrap();
         let id = prepare(&mut core, &module, awaited);
-        let first = promise(core.async_generator_next(&module, id, Value::Undefined, Label::Public).unwrap());
+        let first = promise(
+            core.async_generator_next(&module, id, Value::Undefined, Label::Public)
+                .unwrap(),
+        );
         core.config.instruction_budget = core.instructions_executed;
-        core.fulfill_promise(awaited, JsValue::Int(7), Label::Public).unwrap();
+        core.fulfill_promise(awaited, JsValue::Int(7), Label::Public)
+            .unwrap();
         assert!(matches!(
             core.drain_microtasks(Some(&module)),
             Err(InterpreterError::BudgetExhausted { .. }),
@@ -848,6 +1010,9 @@ mod tests {
         assert!(!core.promise_store.get(first).unwrap().state.is_settled());
         assert!(core.call_stack.is_empty());
         assert_eq!(core.promise_in_flight_task_bytes, 0);
-        assert_eq!(core.estimated_memory_bytes, core.recompute_estimated_memory_bytes());
+        assert_eq!(
+            core.estimated_memory_bytes,
+            core.recompute_estimated_memory_bytes()
+        );
     }
 }

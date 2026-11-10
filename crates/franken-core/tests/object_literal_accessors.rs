@@ -3,10 +3,15 @@
 use std::collections::BTreeSet;
 
 use frankenengine_core::ast::{ObjectPropertyKind, ParseGoal, Statement};
-use frankenengine_core::baseline_interpreter::{InterpreterConfig, InterpreterCore};
+use frankenengine_core::baseline_interpreter::{
+    ExecutionSeed, InterpreterConfig, InterpreterCore, Value,
+};
 use frankenengine_core::capability::RuntimeCapability;
+use frankenengine_core::hash_tiers::ContentHash;
+use frankenengine_core::ifc_artifacts::Label;
 use frankenengine_core::ir_contract::{
-    AccessorKind, Ir0Module, Ir3Instruction, IrSchemaVersion, verify_ir3_specialization,
+    AccessorKind, CapabilityTag, Ir0Module, Ir3FunctionDesc, Ir3Instruction, Ir3Module,
+    IrSchemaVersion, RegRange, verify_ir3_specialization,
 };
 use frankenengine_core::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use frankenengine_core::parser::{CanonicalEs2020Parser, Es2020Parser};
@@ -44,6 +49,199 @@ fn assert_output(source: &str, expected: &[&str]) {
             .map(|line| line.message)
             .collect();
         assert_eq!(output, expected, "throughput={throughput}: {source}");
+    }
+}
+
+fn inline_protocol_getter_module(promise_resolution: bool) -> Ir3Module {
+    use Ir3Instruction as Op;
+
+    let mut module = Ir3Module::new(
+        ContentHash::compute(b"inline-getter-receiver-label"),
+        "inline-getter-receiver-label",
+    );
+    module.constant_pool = ["then", "sink", "saved", "next", "done"]
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    let key = if promise_resolution {
+        Op::LoadStr {
+            dst: 1,
+            pool_index: 0,
+        }
+    } else {
+        Op::HostCall {
+            capability: CapabilityTag("builtin:SymbolIterator".into()),
+            args: RegRange { start: 0, count: 0 },
+            dst: 1,
+        }
+    };
+    let invoke = if promise_resolution {
+        Op::HostCall {
+            capability: CapabilityTag("promise:resolve".into()),
+            args: RegRange { start: 0, count: 1 },
+            dst: 3,
+        }
+    } else {
+        Op::ForOfInit { src: 0, dst: 3 }
+    };
+    module.instructions = vec![
+        key,
+        Op::CreateClosure {
+            function_index: 0,
+            capture_count: 0,
+            dst: 2,
+        },
+        Op::DefineAccessor {
+            obj: 0,
+            key: 1,
+            func: 2,
+            kind: AccessorKind::Get,
+        },
+        // Register 0 is Secret only while defining the descriptor. Restore
+        // the same receiver through its Public alias before protocol lookup.
+        Op::Move { dst: 0, src: 5 },
+        invoke,
+        Op::Return { value: 3 },
+    ];
+    let getter_result = if promise_resolution {
+        Op::LoadUndefined { dst: 4 }
+    } else {
+        Op::CreateClosure {
+            function_index: 1,
+            capture_count: 0,
+            dst: 4,
+        }
+    };
+    let mut functions = vec![vec![
+        Op::LoadThis { dst: 0 },
+        Op::LoadStr {
+            dst: 1,
+            pool_index: 1,
+        },
+        Op::GetProperty {
+            obj: 0,
+            key: 1,
+            dst: 2,
+        },
+        Op::LoadStr {
+            dst: 3,
+            pool_index: 2,
+        },
+        Op::SetProperty {
+            obj: 2,
+            key: 3,
+            val: 0,
+        },
+        getter_result,
+        Op::Return { value: 4 },
+    ]];
+    if !promise_resolution {
+        // The Symbol.iterator getter returns a method constructing an empty
+        // iterator, so the test exercises a successful GetIterator path.
+        functions.push(vec![
+            Op::NewObject { dst: 0 },
+            Op::CreateClosure {
+                function_index: 2,
+                capture_count: 0,
+                dst: 1,
+            },
+            Op::LoadStr {
+                dst: 2,
+                pool_index: 3,
+            },
+            Op::SetProperty {
+                obj: 0,
+                key: 2,
+                val: 1,
+            },
+            Op::Return { value: 0 },
+        ]);
+        functions.push(vec![
+            Op::NewObject { dst: 0 },
+            Op::LoadStr {
+                dst: 1,
+                pool_index: 4,
+            },
+            Op::LoadBool {
+                dst: 2,
+                value: true,
+            },
+            Op::SetProperty {
+                obj: 0,
+                key: 1,
+                val: 2,
+            },
+            Op::Return { value: 0 },
+        ]);
+    }
+    for (index, body) in functions.into_iter().enumerate() {
+        module.function_table.push(Ir3FunctionDesc {
+            entry: module.instructions.len() as u32,
+            arity: 0,
+            frame_size: 5,
+            name: Some(format!("protocol_getter_{index}")),
+            is_generator: false,
+            rest_param_index: None,
+        });
+        module.instructions.extend(body);
+    }
+    module
+}
+
+#[test]
+fn inline_protocol_getters_preserve_receiver_provenance_in_heap_writes() {
+    for throughput in [false, true] {
+        for promise_resolution in [false, true] {
+            let mut config = if throughput {
+                InterpreterConfig::v8_defaults()
+            } else {
+                InterpreterConfig::quickjs_defaults()
+            };
+            config.granted_capabilities = BTreeSet::from([
+                RuntimeCapability::VmDispatch,
+                RuntimeCapability::HeapAllocate,
+            ]);
+            let mut core = InterpreterCore::new(config, "inline-getter-receiver-label");
+            let setup = core
+                .execute(&lower(
+                    "const sink = {}; const receiver = { sink }; receiver;",
+                ))
+                .unwrap();
+            let Value::Object(receiver) = setup.value else {
+                panic!("setup must return its receiver");
+            };
+            let Some(Value::Object(sink)) =
+                core.get_heap()[receiver.0 as usize].properties.get("sink")
+            else {
+                panic!("receiver must retain its independent sink");
+            };
+            let sink = *sink;
+            core.write_register(0, Value::Object(receiver));
+            core.write_register(5, Value::Object(receiver));
+            let mut wire = serde_json::to_value(core.capture_execution_seed()).unwrap();
+            wire["register_labels"][0] = serde_json::to_value(Label::Secret).unwrap();
+            wire["register_labels"][5] = serde_json::to_value(Label::Public).unwrap();
+            let seed: ExecutionSeed = serde_json::from_value(wire).unwrap();
+            core.reset_execution_state_from_seed(&seed).unwrap();
+
+            let result = core
+                .execute(&inline_protocol_getter_module(promise_resolution))
+                .unwrap();
+            if promise_resolution {
+                assert!(matches!(result.value, Value::Promise(_)));
+            } else {
+                assert!(matches!(result.value, Value::Iterator(_)));
+            }
+            let sink = &core.get_heap()[sink.0 as usize];
+            assert_eq!(sink.properties.get("saved"), Some(&Value::Object(receiver)));
+            let wire = serde_json::to_value(sink).unwrap();
+            assert_eq!(
+                wire["property_labels"]["saved"],
+                serde_json::to_value(Label::Secret).unwrap(),
+                "throughput={throughput}, promise_resolution={promise_resolution}: \
+                 the getter's heap write must retain the selected receiver's provenance",
+            );
+        }
     }
 }
 

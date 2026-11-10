@@ -7256,6 +7256,26 @@ pub fn lower_ir2_to_ir3(
                 let dst = alloc_register(&mut register_cursor);
                 ir3.instructions.push(Ir3Instruction::NewArray { dst });
 
+                // ArrayCreate establishes an own length before defining its
+                // elements. Ordinary property reads and native methods must
+                // not infer this observable value from present index keys.
+                let length_key = alloc_register(&mut register_cursor);
+                let length_value = alloc_register(&mut register_cursor);
+                let length_pool = push_constant(&mut ir3.constant_pool, "length");
+                ir3.instructions.push(Ir3Instruction::LoadStr {
+                    dst: length_key,
+                    pool_index: length_pool,
+                });
+                ir3.instructions.push(Ir3Instruction::LoadInt {
+                    dst: length_value,
+                    value: i64::from(*count),
+                });
+                ir3.instructions.push(Ir3Instruction::SetProperty {
+                    obj: dst,
+                    key: length_key,
+                    val: length_value,
+                });
+
                 for (i, val_reg) in elements.into_iter().enumerate() {
                     let key_str = i.to_string();
                     let key_reg = alloc_register(&mut register_cursor);
@@ -8850,6 +8870,22 @@ pub fn lower_ir2_to_ir3(
                     elems.reverse();
                     let dst = alloc_register(&mut fn_reg);
                     ir3.instructions.push(Ir3Instruction::NewArray { dst });
+                    let length_key = alloc_register(&mut fn_reg);
+                    let length_value = alloc_register(&mut fn_reg);
+                    let length_pool = push_constant(&mut ir3.constant_pool, "length");
+                    ir3.instructions.push(Ir3Instruction::LoadStr {
+                        dst: length_key,
+                        pool_index: length_pool,
+                    });
+                    ir3.instructions.push(Ir3Instruction::LoadInt {
+                        dst: length_value,
+                        value: i64::from(*count),
+                    });
+                    ir3.instructions.push(Ir3Instruction::SetProperty {
+                        obj: dst,
+                        key: length_key,
+                        val: length_value,
+                    });
                     for (i, val_reg) in elems.into_iter().enumerate() {
                         let key_reg = alloc_register(&mut fn_reg);
                         let pool_index = push_constant(&mut ir3.constant_pool, i.to_string());

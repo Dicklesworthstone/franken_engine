@@ -2201,6 +2201,9 @@ pub enum BuiltinFunctionKind {
     AsyncGeneratorPrototypeReturn,
     AsyncGeneratorPrototypeThrow,
     AsyncIteratorPrototypeAsyncIterator,
+    ArrayPrototypePush,
+    ArrayPrototypePop,
+    ArrayPrototypeJoin,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -2244,6 +2247,9 @@ impl BuiltinFunction {
             BuiltinFunctionKind::AsyncGeneratorPrototypeReturn => "return",
             BuiltinFunctionKind::AsyncGeneratorPrototypeThrow => "throw",
             BuiltinFunctionKind::AsyncIteratorPrototypeAsyncIterator => "[Symbol.asyncIterator]",
+            BuiltinFunctionKind::ArrayPrototypePush => "push",
+            BuiltinFunctionKind::ArrayPrototypePop => "pop",
+            BuiltinFunctionKind::ArrayPrototypeJoin => "join",
         }
     }
 }

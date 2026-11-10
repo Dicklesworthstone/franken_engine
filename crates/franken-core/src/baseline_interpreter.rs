@@ -5086,13 +5086,13 @@ impl InterpreterCore {
                 error: error.to_string(),
             }
         })?;
+
         // Publish a cycle-visible record only when preparation has succeeded.
         // Read, parse, and lowering failures must not leave an `Evaluating`
         // record that a subsequent load mistakes for an active cyclic import.
         // Evaluation still publishes before executing any module code, so
         // CommonJS cycles can observe the same partially initialized exports.
         let namespace_object = self.ensure_module_record(module, resolved)?;
-
         let eval_result = if is_cjs {
             self.evaluate_cjs_ir3(&lowering_output.ir3, resolved)
         } else {
@@ -5175,7 +5175,16 @@ impl InterpreterCore {
         let result = match builtin.kind {
             BuiltinFunctionKind::ArrayPrototypePush
             | BuiltinFunctionKind::ArrayPrototypePop
-            | BuiltinFunctionKind::ArrayPrototypeJoin => {
+            | BuiltinFunctionKind::ArrayPrototypeJoin
+            | BuiltinFunctionKind::ArrayPrototypeMap
+            | BuiltinFunctionKind::ArrayPrototypeFilter
+            | BuiltinFunctionKind::ArrayPrototypeForEach
+            | BuiltinFunctionKind::ArrayPrototypeSome
+            | BuiltinFunctionKind::ArrayPrototypeEvery
+            | BuiltinFunctionKind::ArrayPrototypeFind
+            | BuiltinFunctionKind::ArrayPrototypeFindIndex
+            | BuiltinFunctionKind::ArrayPrototypeReduce
+            | BuiltinFunctionKind::ArrayPrototypeReduceRight => {
                 return self.dispatch_array_method(module, builtin.kind, receiver, args, receiver_label);
             }
             BuiltinFunctionKind::Require => {
@@ -5425,7 +5434,16 @@ impl InterpreterCore {
                     | BuiltinFunctionKind::AsyncIteratorPrototypeAsyncIterator
                     | BuiltinFunctionKind::ArrayPrototypePush
                     | BuiltinFunctionKind::ArrayPrototypePop
-                    | BuiltinFunctionKind::ArrayPrototypeJoin => {
+                    | BuiltinFunctionKind::ArrayPrototypeJoin
+                    | BuiltinFunctionKind::ArrayPrototypeMap
+                    | BuiltinFunctionKind::ArrayPrototypeFilter
+                    | BuiltinFunctionKind::ArrayPrototypeForEach
+                    | BuiltinFunctionKind::ArrayPrototypeSome
+                    | BuiltinFunctionKind::ArrayPrototypeEvery
+                    | BuiltinFunctionKind::ArrayPrototypeFind
+                    | BuiltinFunctionKind::ArrayPrototypeFindIndex
+                    | BuiltinFunctionKind::ArrayPrototypeReduce
+                    | BuiltinFunctionKind::ArrayPrototypeReduceRight => {
                         unreachable!("handled above")
                     }
                 }
@@ -12254,6 +12272,45 @@ impl InterpreterCore {
         receiver_label: crate::ifc_artifacts::Label,
         extra_args: &[(Value, crate::ifc_artifacts::Label)],
     ) -> Result<(InlineCallCompletion, crate::ifc_artifacts::Label), InterpreterError> {
+        self.invoke_inline_call(
+            module,
+            callee,
+            receiver,
+            receiver_label,
+            extra_args,
+            false,
+        )
+    }
+
+    /// Native algorithms such as ArraySpeciesCreate use the ordinary
+    /// constructor path with the same isolated activation and exact throw
+    /// restoration as inline callbacks.
+    fn invoke_inline_constructor_call(
+        &mut self,
+        module: &Ir3Module,
+        callee: Value,
+        callee_label: crate::ifc_artifacts::Label,
+        extra_args: &[(Value, crate::ifc_artifacts::Label)],
+    ) -> Result<(InlineCallCompletion, crate::ifc_artifacts::Label), InterpreterError> {
+        self.invoke_inline_call(
+            module,
+            callee,
+            Value::Undefined,
+            callee_label,
+            extra_args,
+            true,
+        )
+    }
+
+    fn invoke_inline_call(
+        &mut self,
+        module: &Ir3Module,
+        callee: Value,
+        receiver: Value,
+        receiver_label: crate::ifc_artifacts::Label,
+        extra_args: &[(Value, crate::ifc_artifacts::Label)],
+        construct: bool,
+    ) -> Result<(InlineCallCompletion, crate::ifc_artifacts::Label), InterpreterError> {
         self.ensure_call_depth_available()?;
         let owner_program = self.callable_module(&callee)?;
         let module = owner_program.as_deref().unwrap_or(module);
@@ -12288,14 +12345,11 @@ impl InterpreterCore {
                 count: extra_args.len(),
             }
         })?;
-        wrapper.instructions.push(Ir3Instruction::CallMethod {
-            receiver: 0,
-            callee: 1,
-            args: RegRange {
-                start: 3,
-                count: arg_count,
-            },
-            dst: 0,
+        let args = RegRange { start: 3, count: arg_count };
+        wrapper.instructions.push(if construct {
+            Ir3Instruction::Construct { callee: 1, args, dst: 0 }
+        } else {
+            Ir3Instruction::CallMethod { receiver: 0, callee: 1, args, dst: 0 }
         });
         wrapper.instructions.push(Ir3Instruction::EndTry);
         wrapper.instructions.push(Ir3Instruction::LoadBool {
@@ -12342,8 +12396,12 @@ impl InterpreterCore {
             self.scope_chain = snapshot.scope_chain.clone();
             self.current_module_specifier = Some(module.header.source_label.clone());
             self.sync_estimated_memory_bytes()?;
-            self.write_reg_with_label(0, receiver, receiver_label)?;
-            self.write_reg(1, callee)?;
+            self.write_reg_with_label(0, receiver, receiver_label.clone())?;
+            self.write_reg_with_label(1, callee, if construct {
+                receiver_label
+            } else {
+                crate::ifc_artifacts::Label::Public
+            })?;
             for (offset, (arg, label)) in extra_args.iter().enumerate() {
                 let reg = 3u32
                     .checked_add(u32::try_from(offset).unwrap_or(u32::MAX))
@@ -22824,7 +22882,8 @@ mod tests {
 
     #[test]
     fn module_preparation_failures_never_publish_cycle_visible_records() {
-        let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/modules");
+        let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/modules");
         let caller = test_module(vec![Ir3Instruction::Halt]);
         for is_cjs in [false, true] {
             for fixture in [

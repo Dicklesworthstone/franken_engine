@@ -2204,6 +2204,15 @@ pub enum BuiltinFunctionKind {
     ArrayPrototypePush,
     ArrayPrototypePop,
     ArrayPrototypeJoin,
+    ArrayPrototypeMap,
+    ArrayPrototypeFilter,
+    ArrayPrototypeForEach,
+    ArrayPrototypeSome,
+    ArrayPrototypeEvery,
+    ArrayPrototypeFind,
+    ArrayPrototypeFindIndex,
+    ArrayPrototypeReduce,
+    ArrayPrototypeReduceRight,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -2250,6 +2259,15 @@ impl BuiltinFunction {
             BuiltinFunctionKind::ArrayPrototypePush => "push",
             BuiltinFunctionKind::ArrayPrototypePop => "pop",
             BuiltinFunctionKind::ArrayPrototypeJoin => "join",
+            BuiltinFunctionKind::ArrayPrototypeMap => "map",
+            BuiltinFunctionKind::ArrayPrototypeFilter => "filter",
+            BuiltinFunctionKind::ArrayPrototypeForEach => "forEach",
+            BuiltinFunctionKind::ArrayPrototypeSome => "some",
+            BuiltinFunctionKind::ArrayPrototypeEvery => "every",
+            BuiltinFunctionKind::ArrayPrototypeFind => "find",
+            BuiltinFunctionKind::ArrayPrototypeFindIndex => "findIndex",
+            BuiltinFunctionKind::ArrayPrototypeReduce => "reduce",
+            BuiltinFunctionKind::ArrayPrototypeReduceRight => "reduceRight",
         }
     }
 }

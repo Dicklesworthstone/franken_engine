@@ -1341,8 +1341,8 @@ fn os_builtin_call_capability(
 /// `builtin:*` hostcall during lowering. Keep this list limited to executable
 /// arms in `baseline_interpreter.rs`; the numeric stdlib bridge advertises a
 /// wider aspirational surface that is not callable yet (bd-zql4d).
-const STATIC_BUILTIN_GLOBALS: [&str; 7] = [
-    "Object", "Array", "String", "Math", "JSON", "Symbol", "Reflect",
+const STATIC_BUILTIN_GLOBALS: [&str; 8] = [
+    "Object", "Array", "String", "Math", "JSON", "Symbol", "Reflect", "Promise",
 ];
 
 /// Intrinsics that exist only through call-lowering seams. Bare unshadowed
@@ -1431,6 +1431,12 @@ fn static_builtin_call_capability(
         ("Symbol", "for") => Some("builtin:SymbolFor"),
         ("Symbol", "keyFor") => Some("builtin:SymbolKeyFor"),
         ("Reflect", "ownKeys") => Some("builtin:ReflectOwnKeys"),
+        ("Promise", "resolve") => Some("promise:resolve"),
+        ("Promise", "reject") => Some("promise:reject"),
+        ("Promise", "all") => Some("promise:all"),
+        ("Promise", "race") => Some("promise:race"),
+        ("Promise", "allSettled") => Some("promise:allSettled"),
+        ("Promise", "any") => Some("promise:any"),
         _ => None,
     }
 }
@@ -13086,14 +13092,9 @@ mod tests {
         (ir1, module, value)
     }
 
-    // NOTE (bd-3ose7): core has no source-level `Promise` global and its
-    // generic `await` lowering is a value passthrough (Ir1Op::Await → Move) in
-    // this pipeline, so thenable assimilation cannot be driven end-to-end from
-    // core source here. The assimilation machinery is verified at the
-    // interpreter level instead (see baseline_interpreter tests:
-    // thenable detection/enqueue, resolve/reject capability settle + label +
-    // once-guard, and non-Public settlement), and end-to-end conformance is
-    // covered by the engine lane (bd-iio0f).
+    // Promise static calls and reaction methods now execute through the source
+    // pipeline (tests/promise_reactions.rs). Generic `await` lowering remains
+    // a separate limitation here: Ir1Op::Await is still a value passthrough.
 
     fn deferred_ir1_body_bd_6pvhn<'a>(ir1: &'a Ir1Module, name: &str) -> &'a [Ir1Op] {
         ir1.ops

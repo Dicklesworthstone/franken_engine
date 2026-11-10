@@ -946,6 +946,9 @@ pub enum BuiltinFunctionKind {
     PromiseCapabilityResolve,
     /// ES CreateResolvingFunctions reject capability (bd-3ose7).
     PromiseCapabilityReject,
+    PromisePrototypeThen,
+    PromisePrototypeCatch,
+    PromisePrototypeFinally,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -1019,6 +1022,14 @@ impl BuiltinFunction {
         }
     }
 
+    fn promise_method(kind: BuiltinFunctionKind) -> Self {
+        Self {
+            kind,
+            module_specifier: String::new(),
+            bound_object: None,
+        }
+    }
+
     fn display_name(&self) -> &'static str {
         match self.kind {
             BuiltinFunctionKind::Require => "require",
@@ -1036,6 +1047,9 @@ impl BuiltinFunction {
             BuiltinFunctionKind::GeneratorPrototypeNext => "next",
             BuiltinFunctionKind::PromiseCapabilityResolve => "resolve",
             BuiltinFunctionKind::PromiseCapabilityReject => "reject",
+            BuiltinFunctionKind::PromisePrototypeThen => "then",
+            BuiltinFunctionKind::PromisePrototypeCatch => "catch",
+            BuiltinFunctionKind::PromisePrototypeFinally => "finally",
         }
     }
 }
@@ -2024,17 +2038,23 @@ struct ModuleRuntimeRecord {
     namespace_object: ObjectId,
     exports: BTreeMap<JsString, Value>,
     cjs_module_object: Option<ObjectId>,
+    /// Immutable executable owner of functions that outlive module evaluation.
+    /// Retained once per module, shared by every closure created from it.
+    compiled_module: Option<Rc<Ir3Module>>,
+    retained_program_bytes: u64,
 }
 
 #[derive(Debug, Clone, Default)]
 struct ModuleState {
     modules: BTreeMap<String, ModuleRuntimeRecord>,
+    retained_program_bytes: u64,
 }
 
 impl ModuleState {
     fn new() -> Self {
         Self {
             modules: BTreeMap::new(),
+            retained_program_bytes: 0,
         }
     }
 }
@@ -2193,6 +2213,9 @@ struct CatchFrame {
     catch_target: usize,
     /// Instruction index of the finally block (if present).
     finally_target: Option<usize>,
+    /// Resolve the target's kind while its owning program is active. An
+    /// exception can unwind across programs before this frame is consumed.
+    catch_is_finally: bool,
     /// Call stack depth when the try block was entered.  Used to validate
     /// that the catch frame is still in scope during unwinding.
     call_depth: usize,
@@ -2452,6 +2475,8 @@ impl ScopeChain {
 #[derive(Debug, Clone)]
 struct ClosureValue {
     function_index: u32,
+    /// Function-table indices are local to the module that created the closure.
+    module_specifier: Option<String>,
     /// Captured scope chain snapshot at closure creation time.
     captured_env: Vec<ScopeFrame>,
 }
@@ -2524,6 +2549,8 @@ struct CallFrame {
     /// the chain with the captured environment. `None` for plain function
     /// calls where the chain is only extended, not replaced.
     saved_scope_chain: Option<Vec<ScopeFrame>>,
+    /// Restore code and relative-import identity together with lexical state.
+    saved_module_specifier: Option<String>,
     /// Async function ID if this frame is executing an async function.
     async_function_id: Option<u32>,
 }
@@ -3594,6 +3621,28 @@ enum PromiseSettlement {
     Rejected(crate::object_model::JsValue),
 }
 
+/// Executable reactions belong to a registration, not to the closure store:
+/// callbacks may also be ordinary function-table entries or native callables.
+/// The queue's handler handle selects the fulfillment (0) or rejection (1)
+/// side of the registration keyed by its derived promise.
+#[derive(Debug, Clone)]
+enum PromiseReactionAction {
+    Call(Value),
+    Finally(Value),
+    Forward(crate::promise_model::PromiseHandle),
+    Restore {
+        value: Value,
+        rejected: bool,
+        label: crate::ifc_artifacts::Label,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct PromiseReactionRegistration {
+    on_fulfilled: Option<PromiseReactionAction>,
+    on_rejected: Option<PromiseReactionAction>,
+}
+
 // ---------------------------------------------------------------------------
 // InterpreterCore — shared execution engine
 // ---------------------------------------------------------------------------
@@ -3693,6 +3742,8 @@ pub struct InterpreterCore {
     async_resumption_contexts: BTreeMap<u32, AsyncResumptionContext>,
     /// Promise store for ES2020 Promise semantics.
     promise_store: crate::promise_model::PromiseStore,
+    /// Pending executable reactions, removed when their selected job runs.
+    promise_reactions: BTreeMap<crate::promise_model::PromiseHandle, PromiseReactionRegistration>,
     /// Deterministic event loop state (microtasks + macrotasks + virtual clock).
     event_loop: crate::promise_model::EventLoop,
     /// Active promise combinator trackers keyed by combinator id.
@@ -3808,6 +3859,7 @@ impl InterpreterCore {
             async_functions: Vec::new(),
             async_resumption_contexts: BTreeMap::new(),
             promise_store: crate::promise_model::PromiseStore::new(),
+            promise_reactions: BTreeMap::new(),
             event_loop: crate::promise_model::EventLoop::new(),
             promise_combinators: BTreeMap::new(),
             promise_combinator_watchers: BTreeMap::new(),
@@ -4040,6 +4092,7 @@ impl InterpreterCore {
         self.active_cjs_context = None;
         self.current_module_specifier = None;
         self.promise_combinators.clear();
+        self.promise_reactions.clear();
         self.promise_combinator_watchers.clear();
         self.next_promise_combinator_id = 0;
         self.promise_in_flight_task_bytes = 0;
@@ -4166,6 +4219,7 @@ impl InterpreterCore {
         self.active_cjs_context = None;
         self.current_module_specifier = None;
         self.promise_combinators.clear();
+        self.promise_reactions.clear();
         self.promise_combinator_watchers.clear();
         self.next_promise_combinator_id = 0;
         self.promise_in_flight_task_bytes = 0;
@@ -4174,6 +4228,7 @@ impl InterpreterCore {
         Ok(())
     }
 
+    #[cfg(test)]
     fn snapshot_module_execution(&self) -> ModuleExecutionSnapshot {
         ModuleExecutionSnapshot {
             registers: self.registers.clone(),
@@ -4525,9 +4580,153 @@ impl InterpreterCore {
                 namespace_object,
                 exports: BTreeMap::new(),
                 cjs_module_object: None,
+                compiled_module: None,
+                retained_program_bytes: 0,
             },
         );
         Ok(namespace_object)
+    }
+
+    /// Resolve a closure's executable owner. Never interpret a module-local
+    /// function index using an importing module's unrelated function table.
+    fn callable_module(&self, callee: &Value) -> Result<Option<Rc<Ir3Module>>, InterpreterError> {
+        let closure_id = match callee {
+            Value::Closure(id)
+            | Value::GeneratorFunction(id)
+            | Value::AsyncFunction(id)
+            | Value::AsyncGeneratorFunction(id) => *id,
+            _ => return Ok(None),
+        };
+        let closure =
+            self.closures
+                .get(closure_id as usize)
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "valid closure".to_string(),
+                    got: format!("closure#{closure_id} not found"),
+                })?;
+        let Some(owner) = closure.module_specifier.as_deref() else {
+            // Public hand-built IR can supply module-local function values.
+            return Ok(None);
+        };
+        self.module_state
+            .modules
+            .get(owner)
+            .and_then(|record| record.compiled_module.clone())
+            .map(Some)
+            .ok_or_else(|| InterpreterError::ModuleEvaluationFailed {
+                specifier: owner.to_string(),
+                reason: "closure executable owner is not retained".to_string(),
+            })
+    }
+
+    fn retained_module_program_bytes(module: &Ir3Module) -> u64 {
+        let instructions = module.instructions.iter().fold(
+            (module.instructions.len() as u64)
+                .saturating_mul(std::mem::size_of::<Ir3Instruction>() as u64),
+            |bytes, instruction| {
+                bytes.saturating_add(match instruction {
+                    Ir3Instruction::HostCall { capability, .. } => {
+                        Self::estimate_string_bytes(&capability.0)
+                    }
+                    _ => 0,
+                })
+            },
+        );
+        let constants = module.constant_pool.iter().fold(
+            (module.constant_pool.len() as u64)
+                .saturating_mul(std::mem::size_of::<JsString>() as u64),
+            |bytes, value| bytes.saturating_add(Self::estimate_js_string_bytes(value)),
+        );
+        let functions = module.function_table.iter().fold(
+            (module.function_table.len() as u64)
+                .saturating_mul(std::mem::size_of::<crate::ir_contract::Ir3FunctionDesc>() as u64),
+            |bytes, function| {
+                bytes.saturating_add(
+                    function
+                        .name
+                        .as_deref()
+                        .map(Self::estimate_string_bytes)
+                        .unwrap_or(0),
+                )
+            },
+        );
+        let capabilities = module.required_capabilities.iter().fold(
+            (module.required_capabilities.len() as u64)
+                .saturating_mul(std::mem::size_of::<crate::ir_contract::CapabilityTag>() as u64),
+            |bytes, capability| bytes.saturating_add(Self::estimate_string_bytes(&capability.0)),
+        );
+        let specialization = module.specialization.as_ref().map_or(0, |linkage| {
+            linkage.proof_input_ids.iter().fold(
+                Self::estimate_string_bytes(&linkage.optimization_class).saturating_add(
+                    (linkage.proof_input_ids.len() as u64)
+                        .saturating_mul(std::mem::size_of::<String>() as u64),
+                ),
+                |bytes, proof| bytes.saturating_add(Self::estimate_string_bytes(proof)),
+            )
+        });
+        (std::mem::size_of::<Ir3Module>() as u64)
+            .saturating_add(std::mem::size_of::<[usize; 2]>() as u64)
+            .saturating_add(Self::estimate_string_bytes(&module.header.source_label))
+            .saturating_add(instructions)
+            .saturating_add(constants)
+            .saturating_add(functions)
+            .saturating_add(capabilities)
+            .saturating_add(specialization)
+    }
+
+    /// Retain code only when an executable closure needs it. This avoids
+    /// cloning a module for every function and leaves pure borrowed-IR runs
+    /// free of a redundant program copy. Admission precedes allocation.
+    fn retain_current_module_program(
+        &mut self,
+        module: &Ir3Module,
+    ) -> Result<(), InterpreterError> {
+        let Some(specifier) = self.current_module_specifier.as_deref() else {
+            return Ok(());
+        };
+        let Some(record) = self.module_state.modules.get(specifier) else {
+            return Ok(());
+        };
+        if record.compiled_module.is_some() {
+            return Ok(());
+        }
+        let bytes = Self::retained_module_program_bytes(module);
+        self.check_temporary_memory_budget(bytes)?;
+        let program = Rc::new(module.clone());
+        let record = self
+            .module_state
+            .modules
+            .get_mut(specifier)
+            .expect("validated module");
+        record.compiled_module = Some(program);
+        record.retained_program_bytes = bytes;
+        self.module_state.retained_program_bytes = self
+            .module_state
+            .retained_program_bytes
+            .saturating_add(bytes);
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_add(bytes);
+        Ok(())
+    }
+
+    /// A refused closure allocation must not leave newly retained code behind.
+    fn release_unused_current_module_program(&mut self) {
+        let Some(specifier) = self.current_module_specifier.as_deref() else {
+            return;
+        };
+        if self
+            .closures
+            .iter()
+            .any(|closure| closure.module_specifier.as_deref() == Some(specifier))
+        {
+            return;
+        }
+        if let Some(record) = self.module_state.modules.get_mut(specifier) {
+            record.compiled_module = None;
+            self.module_state.retained_program_bytes = self
+                .module_state
+                .retained_program_bytes
+                .saturating_sub(std::mem::take(&mut record.retained_program_bytes));
+        }
     }
 
     fn init_cjs_environment(
@@ -4734,6 +4933,7 @@ impl InterpreterCore {
         builtin: &BuiltinFunction,
         receiver: Option<&Value>,
         args: RegRange,
+        receiver_label: crate::ifc_artifacts::Label,
     ) -> Result<(Value, crate::ifc_artifacts::Label), InterpreterError> {
         let result = match builtin.kind {
             BuiltinFunctionKind::Require => {
@@ -4848,6 +5048,32 @@ impl InterpreterCore {
                 )?;
                 return Ok((value, crate::ifc_artifacts::Label::Public));
             }
+            BuiltinFunctionKind::PromisePrototypeThen
+            | BuiltinFunctionKind::PromisePrototypeCatch
+            | BuiltinFunctionKind::PromisePrototypeFinally => {
+                let Some(Value::Promise(handle)) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "Promise receiver".to_string(),
+                        got: receiver.map_or("undefined", Value::type_name).to_string(),
+                    });
+                };
+                let handle = crate::promise_model::PromiseHandle(*handle);
+                let source_label = self.promise_store.get(handle)
+                    .map_err(|error| InterpreterError::TypeError {
+                        expected: "valid Promise receiver".to_string(),
+                        got: error.to_string(),
+                    })?.label.clone();
+                let label = receiver_label.join(&source_label)
+                    .join(&self.promise_hostcall_registration_label(args)?);
+                let (first, _) = self.promise_hostcall_argument(args, 0)?;
+                let (second, _) = self.promise_hostcall_argument(args, 1)?;
+                let capability = match builtin.kind {
+                    BuiltinFunctionKind::PromisePrototypeThen => "promise:then",
+                    BuiltinFunctionKind::PromisePrototypeCatch => "promise:catch",
+                    _ => "promise:finally",
+                };
+                return self.register_promise_method(handle, capability, first, second, label);
+            }
             BuiltinFunctionKind::StringPrototypeCharAt
             | BuiltinFunctionKind::StringPrototypeCharCodeAt
             | BuiltinFunctionKind::StringPrototypeCodePointAt
@@ -4891,7 +5117,10 @@ impl InterpreterCore {
                     | BuiltinFunctionKind::SymbolPrototypeToString
                     | BuiltinFunctionKind::GeneratorPrototypeNext
                     | BuiltinFunctionKind::PromiseCapabilityResolve
-                    | BuiltinFunctionKind::PromiseCapabilityReject => {
+                    | BuiltinFunctionKind::PromiseCapabilityReject
+                    | BuiltinFunctionKind::PromisePrototypeThen
+                    | BuiltinFunctionKind::PromisePrototypeCatch
+                    | BuiltinFunctionKind::PromisePrototypeFinally => {
                         unreachable!("handled above")
                     }
                 }
@@ -5236,15 +5465,25 @@ impl InterpreterCore {
         module: &Ir3Module,
         specifier: &str,
     ) -> Result<(), InterpreterError> {
-        let snapshot = self.snapshot_module_execution();
+        let snapshot = self.take_module_execution();
+        let previous_suspended_bytes = self.temporarily_suspended_execution_bytes;
+        let previous_suspended_depth = self.temporarily_suspended_call_depth;
+        self.temporarily_suspended_execution_bytes = previous_suspended_bytes
+            .saturating_add(Self::estimate_module_execution_bytes(&snapshot));
+        self.temporarily_suspended_call_depth =
+            previous_suspended_depth.saturating_add(snapshot.call_stack.len());
         let previous_cjs_context = self.active_cjs_context.take();
         if let Err(err) = self.prepare_module_execution(specifier) {
             self.active_cjs_context = previous_cjs_context;
+            self.temporarily_suspended_execution_bytes = previous_suspended_bytes;
+            self.temporarily_suspended_call_depth = previous_suspended_depth;
             self.restore_module_execution(snapshot);
             return Err(err);
         }
         let result = self.run_loop(module);
         let microtask_result = self.drain_microtasks(Some(module));
+        self.temporarily_suspended_execution_bytes = previous_suspended_bytes;
+        self.temporarily_suspended_call_depth = previous_suspended_depth;
         self.restore_module_execution(snapshot);
         self.active_cjs_context = previous_cjs_context;
         match result {
@@ -5258,13 +5497,31 @@ impl InterpreterCore {
         module: &Ir3Module,
         specifier: &str,
     ) -> Result<(), InterpreterError> {
-        let snapshot = self.snapshot_module_execution();
+        let snapshot = self.take_module_execution();
+        let previous_suspended_bytes = self.temporarily_suspended_execution_bytes;
+        let previous_suspended_depth = self.temporarily_suspended_call_depth;
+        self.temporarily_suspended_execution_bytes = previous_suspended_bytes
+            .saturating_add(Self::estimate_module_execution_bytes(&snapshot));
+        self.temporarily_suspended_call_depth =
+            previous_suspended_depth.saturating_add(snapshot.call_stack.len());
         let previous_cjs_context = self.active_cjs_context.take();
-        let parent_module_object = previous_cjs_context
-            .as_ref()
-            .map(|context| context.module_object);
+        // A cached module can require a child long after its top-level
+        // evaluation has finished. The executing callable's owner remains
+        // the parent even when there is no active CommonJS evaluation.
+        let parent_module_object = snapshot
+            .current_module_specifier
+            .as_deref()
+            .and_then(|owner| self.module_state.modules.get(owner))
+            .and_then(|record| record.cjs_module_object)
+            .or_else(|| {
+                previous_cjs_context
+                    .as_ref()
+                    .map(|context| context.module_object)
+            });
         if let Err(err) = self.prepare_module_execution(specifier) {
             self.active_cjs_context = previous_cjs_context;
+            self.temporarily_suspended_execution_bytes = previous_suspended_bytes;
+            self.temporarily_suspended_call_depth = previous_suspended_depth;
             self.restore_module_execution(snapshot);
             return Err(err);
         }
@@ -5272,6 +5529,8 @@ impl InterpreterCore {
             Ok(context) => context,
             Err(err) => {
                 self.active_cjs_context = previous_cjs_context;
+                self.temporarily_suspended_execution_bytes = previous_suspended_bytes;
+                self.temporarily_suspended_call_depth = previous_suspended_depth;
                 self.restore_module_execution(snapshot);
                 return Err(err);
             }
@@ -5300,6 +5559,8 @@ impl InterpreterCore {
         } else {
             Ok(())
         };
+        self.temporarily_suspended_execution_bytes = previous_suspended_bytes;
+        self.temporarily_suspended_call_depth = previous_suspended_depth;
         self.restore_module_execution(snapshot);
         self.active_cjs_context = previous_cjs_context;
         eval_outcome.and(finalize_outcome).and(loaded_outcome)
@@ -5387,6 +5648,7 @@ impl InterpreterCore {
             self.call_stack.push(CallFrame {
                 return_ip: self.ip + 1,
                 return_reg: None,
+                saved_module_specifier: self.current_module_specifier.clone(),
                 register_base: self.register_base,
                 function_index: Some(function_index),
                 this_value,
@@ -5661,7 +5923,7 @@ impl InterpreterCore {
         async_function_id: u32,
         error_value: Value,
         label: crate::ifc_artifacts::Label,
-        module: Option<&Ir3Module>,
+        _module: Option<&Ir3Module>,
     ) -> Result<(), InterpreterError> {
         let async_depth = self
             .call_stack
@@ -5681,13 +5943,7 @@ impl InterpreterCore {
         });
 
         if let Some(frame) = self.pop_exception_target_frame_at_or_above(async_depth) {
-            self.pending_finally_entry = (frame.finally_target == Some(frame.catch_target)
-                || module.is_some_and(|module| {
-                    matches!(
-                        module.instructions.get(frame.catch_target),
-                        Some(Ir3Instruction::EnterFinally)
-                    )
-                }))
+            self.pending_finally_entry = frame.catch_is_finally
             .then_some(PendingFinallyEntry {
                 target: frame.catch_target,
                 mode: FinallyMode::Exception,
@@ -5820,6 +6076,7 @@ impl InterpreterCore {
     }
 
     fn restore_scope_chain_for_frame(&mut self, frame: &CallFrame) {
+        self.current_module_specifier = frame.saved_module_specifier.clone();
         // Closure and caller snapshots share lexical binding cells, so a
         // return restores only frame structure; no value merge is needed.
         if let Some(saved) = &frame.saved_scope_chain {
@@ -5906,7 +6163,7 @@ impl InterpreterCore {
     /// small ordinary error objects for catch bindings.
     fn route_javascript_error(
         &mut self,
-        module: &Ir3Module,
+        _module: &Ir3Module,
         error: InterpreterError,
     ) -> Result<Option<InterpreterError>, InterpreterError> {
         let thrown = if matches!(error, InterpreterError::UncaughtException { .. }) {
@@ -5941,11 +6198,7 @@ impl InterpreterCore {
         self.pending_finally_entry = None;
         self.pending_exception = Some(thrown);
         if let Some(frame) = self.pop_exception_target_frame() {
-            self.pending_finally_entry = (frame.finally_target == Some(frame.catch_target)
-                || matches!(
-                    module.instructions.get(frame.catch_target),
-                    Some(Ir3Instruction::EnterFinally)
-                ))
+            self.pending_finally_entry = frame.catch_is_finally
             .then_some(PendingFinallyEntry {
                 target: frame.catch_target,
                 mode: FinallyMode::Exception,
@@ -6128,7 +6381,12 @@ impl InterpreterCore {
         // runtime, so source_label is the deterministic provenance token
         // available at the hook boundary today.
         HookContext {
-            extension_id: module.header.source_label.clone(),
+            // Before a foreign call, `module` supplies the callee's function
+            // table while `ip` still identifies an instruction in the caller.
+            extension_id: self
+                .current_module_specifier
+                .clone()
+                .unwrap_or_else(|| module.header.source_label.clone()),
             instruction_count: self.instructions_executed,
             current_ip: self.ip,
         }
@@ -6423,6 +6681,8 @@ impl InterpreterCore {
         return_ip: usize,
         return_reg: Option<u32>,
     ) -> Result<(), InterpreterError> {
+        let owner_program = self.callable_module(&callee_val)?;
+        let module = owner_program.as_deref().unwrap_or(module);
         let (func_idx, captured_env) = match &callee_val {
             Value::Function(idx) => (*idx, None),
             Value::Closure(closure_id) => {
@@ -6489,6 +6749,7 @@ impl InterpreterCore {
                 return_reg,
                 register_base: self.register_base,
                 function_index: Some(func_idx),
+                saved_module_specifier: self.current_module_specifier.clone(),
                 this_value,
                 this_label: crate::ifc_artifacts::Label::Public,
                 new_target_value: Value::Undefined,
@@ -6531,7 +6792,9 @@ impl InterpreterCore {
                 }
             }
 
+            self.current_module_specifier = Some(module.header.source_label.clone());
             self.ip = func.entry as usize;
+            self.sync_estimated_memory_bytes()?;
             Ok(())
         })();
         if let Err(error) = setup_result {
@@ -6585,6 +6848,8 @@ impl InterpreterCore {
 
         let (derived_constructor, _, super_value, super_label) =
             self.derived_constructor_metadata(&active_callee)?;
+        let owner_program = self.callable_module(&active_callee)?;
+        let module = owner_program.as_deref().unwrap_or(module);
         let (function_index, captured_env) = match &active_callee {
             Value::Function(index) => (*index, None),
             Value::Closure(closure_id) => {
@@ -6680,6 +6945,7 @@ impl InterpreterCore {
                 return_reg,
                 register_base: self.register_base,
                 function_index: Some(function_index),
+                saved_module_specifier: self.current_module_specifier.clone(),
                 this_value,
                 this_label: active_callee_label.join(&new_target_label),
                 new_target_value,
@@ -6722,7 +6988,9 @@ impl InterpreterCore {
                     self.write_reg_with_label(register, value, label)?;
                 }
             }
+            self.current_module_specifier = Some(module.header.source_label.clone());
             self.ip = function.entry as usize;
+            self.sync_estimated_memory_bytes()?;
             Ok(())
         })();
         if let Err(error) = setup_result {
@@ -6832,13 +7100,14 @@ impl InterpreterCore {
             previous_suspended_bytes.saturating_add(caller_bytes);
         self.temporarily_suspended_call_depth =
             previous_suspended_call_depth.saturating_add(caller_execution.call_stack.len());
-        let module_specifier = caller_execution.current_module_specifier.clone();
+        let module_specifier = Some(module.header.source_label.clone());
         self.install_module_execution(ModuleExecutionSnapshot {
             registers,
             register_labels,
             call_stack: vec![CallFrame {
                 return_ip: module.instructions.len(),
                 return_reg: None,
+                saved_module_specifier: Some(module.header.source_label.clone()),
                 register_base: 0,
                 function_index: Some(setup.function_index),
                 this_value: setup.this_value,
@@ -7460,6 +7729,17 @@ impl InterpreterCore {
             None
         };
         loop {
+            // Calls, exception unwinds, and generator activation swaps move
+            // code identity with their execution context. Synthetic inline
+            // wrappers keep their appended trampoline when their owner is the
+            // active module; foreign frames use the retained original program.
+            let active_program = self
+                .current_module_specifier
+                .as_deref()
+                .filter(|specifier| *specifier != module.header.source_label)
+                .and_then(|specifier| self.module_state.modules.get(specifier))
+                .and_then(|record| record.compiled_module.clone());
+            let module = active_program.as_deref().unwrap_or(module);
             if self.ip >= module.instructions.len() {
                 // Fell off the end of the instruction stream.
                 if !self.call_stack.is_empty() {
@@ -7696,7 +7976,13 @@ impl InterpreterCore {
                     let callee_label = self.read_reg_label(callee)?;
 
                     if let Value::BuiltinFunction(builtin) = &callee_val {
-                        match self.dispatch_builtin_function(module, builtin, None, args) {
+                        match self.dispatch_builtin_function(
+                            module,
+                            builtin,
+                            None,
+                            args,
+                            crate::ifc_artifacts::Label::Public,
+                        ) {
                             Ok((result, result_label)) => {
                                 self.write_reg_with_label(dst, result, result_label)?;
                                 self.ip += 1;
@@ -7711,6 +7997,8 @@ impl InterpreterCore {
                         continue;
                     }
 
+                    let owner_program = self.callable_module(&callee_val)?;
+                    let module = owner_program.as_deref().unwrap_or(module);
                     // Resolve function index and optional captured environment.
                     let (func_idx, captured_env, closure_id) = match &callee_val {
                         Value::Function(idx) => (*idx, None, None),
@@ -7794,7 +8082,10 @@ impl InterpreterCore {
                                 super_value: Value::Undefined,
                                 super_label: callee_label,
                                 result_register: dst,
-                            })
+                            })?;
+                            self.current_module_specifier = Some(module.header.source_label.clone());
+                            self.sync_estimated_memory_bytes()?;
+                            Ok(())
                         })();
                         if let Err(error) = setup_result {
                             self.restore_call_setup(setup_snapshot);
@@ -8102,6 +8393,7 @@ impl InterpreterCore {
                                     register_base: self.register_base,
                                     function_index: Some(func_idx),
                                     this_value: call_this,
+                                    saved_module_specifier: self.current_module_specifier.clone(),
                                     this_label: call_this_label,
                                     new_target_value: Value::Undefined,
                                     new_target_label: crate::ifc_artifacts::Label::Public,
@@ -8156,6 +8448,8 @@ impl InterpreterCore {
                                 }
 
                                 self.ip = func.entry as usize;
+                                self.current_module_specifier = Some(module.header.source_label.clone());
+                                self.sync_estimated_memory_bytes()?;
                                 Ok(())
                             })();
                             if let Err(error) = setup_result {
@@ -8188,6 +8482,7 @@ impl InterpreterCore {
                             builtin,
                             Some(&receiver_val),
                             args,
+                            receiver_label.clone(),
                         ) {
                             Ok((result, result_label)) => {
                                 self.write_reg_with_label(dst, result, result_label)?;
@@ -8203,6 +8498,8 @@ impl InterpreterCore {
                         continue;
                     }
 
+                    let owner_program = self.callable_module(&callee_val)?;
+                    let module = owner_program.as_deref().unwrap_or(module);
                     let (func_idx, captured_env, closure_id) = match &callee_val {
                         Value::Function(idx) => (*idx, None, None),
                         Value::Closure(closure_id)
@@ -8446,6 +8743,8 @@ impl InterpreterCore {
                                 super_label,
                                 result_register: dst,
                             })?;
+                            self.current_module_specifier = Some(module.header.source_label.clone());
+                            self.sync_estimated_memory_bytes()?;
                             return Ok(true);
                         }
 
@@ -8468,6 +8767,7 @@ impl InterpreterCore {
                             register_base: self.register_base,
                             function_index: Some(func_idx),
                             this_value: receiver_val,
+                            saved_module_specifier: self.current_module_specifier.clone(),
                             this_label: receiver_label,
                             new_target_value: Value::Undefined,
                             new_target_label: crate::ifc_artifacts::Label::Public,
@@ -8510,6 +8810,8 @@ impl InterpreterCore {
                         }
 
                         self.ip = func.entry as usize;
+                        self.current_module_specifier = Some(module.header.source_label.clone());
+                        self.sync_estimated_memory_bytes()?;
                         Ok(false)
                     })();
                     match setup_result {
@@ -8785,6 +9087,24 @@ impl InterpreterCore {
                                 }
                             };
                             self.write_reg(dst, value)?;
+                            false
+                        }
+                        Value::Promise(_) => {
+                            self.preflight_legacy_property_key_for_hook(&property_key)?;
+                            let kind = match &property_key {
+                                RuntimePropertyKey::String(key) => match key.as_str() {
+                                    Some("then") => Some(BuiltinFunctionKind::PromisePrototypeThen),
+                                    Some("catch") => Some(BuiltinFunctionKind::PromisePrototypeCatch),
+                                    Some("finally") => Some(BuiltinFunctionKind::PromisePrototypeFinally),
+                                    _ => None,
+                                },
+                                RuntimePropertyKey::Symbol(_) => None,
+                            };
+                            let value = kind.map_or(Value::Undefined, |kind| {
+                                Value::BuiltinFunction(BuiltinFunction::promise_method(kind))
+                            });
+                            let label = self.read_reg_label(obj)?.join(&self.read_reg_label(key)?);
+                            self.write_reg_with_label(dst, value, label)?;
                             false
                         }
                         _ if Self::function_object_key(&obj_val).is_some() => self
@@ -9420,6 +9740,8 @@ impl InterpreterCore {
                 Ir3Instruction::Construct { callee, args, dst } => {
                     let callee_val = self.read_reg(callee)?;
                     let callee_label = self.read_reg_label(callee)?;
+                    let owner_program = self.callable_module(&callee_val)?;
+                    let module = owner_program.as_deref().unwrap_or(module);
 
                     let (is_derived, is_default_derived) =
                         if matches!(&callee_val, Value::Function(_) | Value::Closure(_)) {
@@ -9555,6 +9877,7 @@ impl InterpreterCore {
                                     register_base: self.register_base,
                                     function_index: Some(func_idx),
                                     this_value: this_val.clone(),
+                                    saved_module_specifier: self.current_module_specifier.clone(),
                                     this_label: callee_label.clone(),
                                     new_target_value: callee_val.clone(),
                                     new_target_label: callee_label.clone(),
@@ -9607,6 +9930,8 @@ impl InterpreterCore {
                                 }
 
                                 self.ip = func.entry as usize;
+                                self.current_module_specifier = Some(module.header.source_label.clone());
+                                self.sync_estimated_memory_bytes()?;
                                 Ok(())
                             })();
                             if let Err(error) = setup_result {
@@ -9722,6 +10047,9 @@ impl InterpreterCore {
                     self.catch_frames.push(CatchFrame {
                         catch_target: catch_target as usize,
                         finally_target: finally_target.map(|t| t as usize),
+                        catch_is_finally: finally_target == Some(catch_target)
+                            || matches!(module.instructions.get(catch_target as usize),
+                                Some(Ir3Instruction::EnterFinally)),
                         call_depth: self.call_stack.len(),
                         finally_frame_depth: self.finally_frames.len(),
                     });
@@ -9747,12 +10075,7 @@ impl InterpreterCore {
                     // then truncate to remove it and any frames above it — but
                     // NOT frames below it (which belong to outer try blocks).
                     if let Some(frame) = self.pop_exception_target_frame() {
-                        self.pending_finally_entry = (frame.finally_target
-                            == Some(frame.catch_target)
-                            || matches!(
-                                module.instructions.get(frame.catch_target),
-                                Some(Ir3Instruction::EnterFinally)
-                            ))
+                        self.pending_finally_entry = frame.catch_is_finally
                         .then_some(PendingFinallyEntry {
                             target: frame.catch_target,
                             mode: FinallyMode::Exception,
@@ -9835,12 +10158,7 @@ impl InterpreterCore {
                             };
                             // Look for another catch frame to propagate to.
                             if let Some(frame) = self.pop_exception_target_frame() {
-                                self.pending_finally_entry = (frame.finally_target
-                                    == Some(frame.catch_target)
-                                    || matches!(
-                                        module.instructions.get(frame.catch_target),
-                                        Some(Ir3Instruction::EnterFinally)
-                                    ))
+                                self.pending_finally_entry = frame.catch_is_finally
                                 .then_some(PendingFinallyEntry {
                                     target: frame.catch_target,
                                     mode: FinallyMode::Exception,
@@ -9964,10 +10282,15 @@ impl InterpreterCore {
                     }
                     self.closures.push(ClosureValue {
                         function_index,
+                        module_specifier: self.current_module_specifier.clone()
+                            .filter(|owner| self.module_state.modules.contains_key(owner)),
                         captured_env,
                     });
-                    if let Err(err) = self.sync_estimated_memory_bytes() {
+                    if let Err(err) = self.retain_current_module_program(module)
+                        .and_then(|()| self.sync_estimated_memory_bytes())
+                    {
                         self.closures.pop();
+                        self.release_unused_current_module_program();
                         if let Some((binding, previous)) = self_capture_rollback {
                             binding.restore_state(previous)?;
                         }
@@ -9978,6 +10301,7 @@ impl InterpreterCore {
                     // look up the correct closure instance.
                     if let Err(err) = self.write_reg(dst, Value::Closure(closure_id)) {
                         self.closures.pop();
+                        self.release_unused_current_module_program();
                         if let Some((binding, previous)) = self_capture_rollback {
                             binding.restore_state(previous)?;
                         }
@@ -10021,10 +10345,15 @@ impl InterpreterCore {
                     }
                     self.closures.push(ClosureValue {
                         function_index,
+                        module_specifier: self.current_module_specifier.clone()
+                            .filter(|owner| self.module_state.modules.contains_key(owner)),
                         captured_env,
                     });
-                    if let Err(err) = self.sync_estimated_memory_bytes() {
+                    if let Err(err) = self.retain_current_module_program(module)
+                        .and_then(|()| self.sync_estimated_memory_bytes())
+                    {
                         self.closures.pop();
+                        self.release_unused_current_module_program();
                         if let Some((binding, previous)) = self_capture_rollback {
                             binding.restore_state(previous)?;
                         }
@@ -10033,6 +10362,7 @@ impl InterpreterCore {
                     }
                     if let Err(err) = self.write_reg(dst, Value::GeneratorFunction(closure_id)) {
                         self.closures.pop();
+                        self.release_unused_current_module_program();
                         if let Some((binding, previous)) = self_capture_rollback {
                             binding.restore_state(previous)?;
                         }
@@ -10061,15 +10391,25 @@ impl InterpreterCore {
                     })?;
                     self.closures.push(ClosureValue {
                         function_index,
+                        module_specifier: self.current_module_specifier.clone()
+                            .filter(|owner| self.module_state.modules.contains_key(owner)),
                         captured_env,
                     });
-                    if let Err(err) = self.sync_estimated_memory_bytes() {
+                    if let Err(err) = self.retain_current_module_program(module)
+                        .and_then(|()| self.sync_estimated_memory_bytes())
+                    {
                         self.closures.pop();
+                        self.release_unused_current_module_program();
                         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
                         return Err(err);
                     }
+                    if let Err(error) = self.write_reg(dst, Value::AsyncFunction(closure_id)) {
+                        self.closures.pop();
+                        self.release_unused_current_module_program();
+                        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                        return Err(error);
+                    }
                     self.pending_captures.clear();
-                    self.write_reg(dst, Value::AsyncFunction(closure_id))?;
                     self.ip += 1;
                 }
                 Ir3Instruction::CreateAsyncGenerator {
@@ -10091,15 +10431,25 @@ impl InterpreterCore {
                     })?;
                     self.closures.push(ClosureValue {
                         function_index,
+                        module_specifier: self.current_module_specifier.clone()
+                            .filter(|owner| self.module_state.modules.contains_key(owner)),
                         captured_env,
                     });
-                    if let Err(err) = self.sync_estimated_memory_bytes() {
+                    if let Err(err) = self.retain_current_module_program(module)
+                        .and_then(|()| self.sync_estimated_memory_bytes())
+                    {
                         self.closures.pop();
+                        self.release_unused_current_module_program();
                         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
                         return Err(err);
                     }
+                    if let Err(error) = self.write_reg(dst, Value::AsyncGeneratorFunction(closure_id)) {
+                        self.closures.pop();
+                        self.release_unused_current_module_program();
+                        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                        return Err(error);
+                    }
                     self.pending_captures.clear();
-                    self.write_reg(dst, Value::AsyncGeneratorFunction(closure_id))?;
                     self.ip += 1;
                 }
                 Ir3Instruction::GeneratorBodyStart => {
@@ -11369,6 +11719,31 @@ impl InterpreterCore {
         receiver: Value,
         extra_args: &[Value],
     ) -> Result<InlineCallCompletion, InterpreterError> {
+        let arguments = extra_args
+            .iter()
+            .cloned()
+            .map(|value| (value, crate::ifc_artifacts::Label::Public))
+            .collect::<Vec<_>>();
+        self.invoke_inline_method_call_labeled(module, callee, receiver, &arguments)
+            .map(|(completion, _)| completion)
+    }
+
+    /// Run a guest callback without discarding argument or completion
+    /// provenance at the isolated activation boundary.
+    fn invoke_inline_method_call_labeled(
+        &mut self,
+        module: &Ir3Module,
+        callee: Value,
+        receiver: Value,
+        extra_args: &[(Value, crate::ifc_artifacts::Label)],
+    ) -> Result<(InlineCallCompletion, crate::ifc_artifacts::Label), InterpreterError> {
+        self.ensure_call_depth_available()?;
+        let owner_program = self.callable_module(&callee)?;
+        let module = owner_program.as_deref().unwrap_or(module);
+        let wrapper_bytes = Self::retained_module_program_bytes(module)
+            .saturating_mul(2)
+            .saturating_add(8 * std::mem::size_of::<Ir3Instruction>() as u64);
+        self.check_temporary_memory_budget(wrapper_bytes)?;
         let mut wrapper = module.clone();
         let wrapper_start = wrapper.instructions.len();
         let catch_target = u32::try_from(wrapper_start.saturating_add(6)).map_err(|_| {
@@ -11420,9 +11795,19 @@ impl InterpreterCore {
             .instructions
             .push(Ir3Instruction::Return { value: 0 });
 
-        let snapshot = self.snapshot_module_execution();
+        let snapshot = self.take_module_execution();
+        let saved_suspended_bytes = self.temporarily_suspended_execution_bytes;
+        let saved_suspended_depth = self.temporarily_suspended_call_depth;
+        self.temporarily_suspended_execution_bytes = saved_suspended_bytes
+            .saturating_add(Self::estimate_module_execution_bytes(&snapshot))
+            .saturating_add(wrapper_bytes);
+        self.temporarily_suspended_call_depth =
+            saved_suspended_depth.saturating_add(snapshot.call_stack.len());
         let saved_active_cjs_context = self.active_cjs_context.clone();
-        let result = (|| -> Result<InlineCallCompletion, InterpreterError> {
+        let result = (|| -> Result<
+            (InlineCallCompletion, crate::ifc_artifacts::Label),
+            InterpreterError,
+        > {
             self.registers.clear();
             self.register_labels.clear();
             self.clear_register_range(0, self.config.max_registers as usize);
@@ -11437,27 +11822,33 @@ impl InterpreterCore {
             self.pending_finally_entry = None;
             self.copy_data_properties_states.clear();
             self.pending_captures.clear();
+            self.scope_chain = snapshot.scope_chain.clone();
             self.current_module_specifier = Some(module.header.source_label.clone());
             self.sync_estimated_memory_bytes()?;
             self.write_reg(0, receiver)?;
             self.write_reg(1, callee)?;
-            for (offset, arg) in extra_args.iter().enumerate() {
+            for (offset, (arg, label)) in extra_args.iter().enumerate() {
                 let reg = 3u32
                     .checked_add(u32::try_from(offset).unwrap_or(u32::MAX))
                     .ok_or(InterpreterError::RegisterOutOfBounds {
                         register: 3,
                         max: self.config.max_registers,
                     })?;
-                self.write_reg(reg, arg.clone())?;
+                self.write_reg_with_label(reg, arg.clone(), label.clone())?;
             }
-            let value = self.run_loop(&wrapper)?;
-            let label = self.read_reg_label(0)?;
-            Ok(if matches!(self.read_reg(2)?, Value::Bool(true)) {
+            let LabeledReturn { value, label } = self.run_loop_labeled(&wrapper)?;
+            let completion = if matches!(self.read_reg(2)?, Value::Bool(true)) {
                 InlineCallCompletion::Value(value)
             } else {
-                InlineCallCompletion::Throw(LabeledException { value, label })
-            })
+                InlineCallCompletion::Throw(LabeledException {
+                    value,
+                    label: label.clone(),
+                })
+            };
+            Ok((completion, label))
         })();
+        self.temporarily_suspended_execution_bytes = saved_suspended_bytes;
+        self.temporarily_suspended_call_depth = saved_suspended_depth;
         self.restore_module_execution(snapshot);
         self.active_cjs_context = saved_active_cjs_context;
         result
@@ -12702,6 +13093,202 @@ impl InterpreterCore {
         Ok(result)
     }
 
+    /// Install executable callbacks together with their Promise reactions.
+    /// Reserve their retained state before mutating the store so a memory
+    /// refusal cannot leave a dangling callback or a partially registered pair.
+    fn register_executable_promise_reactions(
+        &mut self,
+        handle: crate::promise_model::PromiseHandle,
+        registration: PromiseReactionRegistration,
+        label: crate::ifc_artifacts::Label,
+    ) -> Result<crate::promise_model::PromiseHandle, InterpreterError> {
+        if registration.on_fulfilled.is_none() && registration.on_rejected.is_none() {
+            return self.register_promise_then_accounted(handle, None, None, label);
+        }
+        let retained_bytes = Self::estimate_promise_reaction_registration_bytes(&registration);
+        self.check_temporary_memory_budget(retained_bytes)?;
+        self.promise_in_flight_task_bytes = self
+            .promise_in_flight_task_bytes
+            .saturating_add(retained_bytes);
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_add(retained_bytes);
+        let result = self.register_promise_then_accounted(
+            handle,
+            registration
+                .on_fulfilled
+                .as_ref()
+                .map(|_| crate::closure_model::ClosureHandle(0)),
+            registration
+                .on_rejected
+                .as_ref()
+                .map(|_| crate::closure_model::ClosureHandle(1)),
+            label,
+        );
+        self.promise_in_flight_task_bytes = self
+            .promise_in_flight_task_bytes
+            .saturating_sub(retained_bytes);
+        match result {
+            Ok(result) => {
+                self.promise_reactions.insert(result, registration);
+                Ok(result)
+            }
+            Err(error) => {
+                self.estimated_memory_bytes =
+                    self.estimated_memory_bytes.saturating_sub(retained_bytes);
+                Err(error)
+            }
+        }
+    }
+
+    fn run_executable_promise_reaction(
+        &mut self,
+        module: Option<&Ir3Module>,
+        result_promise: crate::promise_model::PromiseHandle,
+        rejected: bool,
+        argument: crate::object_model::JsValue,
+        task_label: crate::ifc_artifacts::Label,
+    ) -> Result<(), InterpreterError> {
+        let registration = self
+            .promise_reactions
+            .remove(&result_promise)
+            .expect("reaction presence checked by the queue dispatcher");
+        let retained_bytes = Self::estimate_promise_reaction_registration_bytes(&registration);
+        // The moved callback, opposite handler, and saved finally completion
+        // remain resident while guest code runs and performs nested allocations.
+        self.promise_in_flight_task_bytes = self
+            .promise_in_flight_task_bytes
+            .saturating_add(retained_bytes);
+        let action = if rejected {
+            registration.on_rejected
+        } else {
+            registration.on_fulfilled
+        };
+        let outcome = self.execute_promise_reaction_action(
+            module,
+            action,
+            result_promise,
+            rejected,
+            argument,
+            task_label,
+        );
+        self.promise_in_flight_task_bytes = self
+            .promise_in_flight_task_bytes
+            .saturating_sub(retained_bytes);
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(retained_bytes);
+        outcome
+    }
+
+    fn execute_promise_reaction_action(
+        &mut self,
+        module: Option<&Ir3Module>,
+        action: Option<PromiseReactionAction>,
+        result_promise: crate::promise_model::PromiseHandle,
+        rejected: bool,
+        argument: crate::object_model::JsValue,
+        task_label: crate::ifc_artifacts::Label,
+    ) -> Result<(), InterpreterError> {
+        let Some(action) = action else {
+            return if rejected {
+                self.reject_promise(result_promise, argument, task_label)
+            } else {
+                self.fulfill_promise(result_promise, argument, task_label)
+            };
+        };
+        let is_finally = matches!(&action, PromiseReactionAction::Finally(_));
+        match action {
+            PromiseReactionAction::Forward(target) => {
+                if !self.promise_is_settled(target) {
+                    if rejected {
+                        self.reject_promise(target, argument, task_label.clone())?;
+                    } else {
+                        self.fulfill_promise(target, argument, task_label.clone())?;
+                    }
+                }
+                self.fulfill_promise(
+                    result_promise,
+                    crate::object_model::JsValue::Undefined,
+                    task_label,
+                )
+            }
+            PromiseReactionAction::Restore {
+                value,
+                rejected,
+                label,
+            } => {
+                let label = task_label.join(&label);
+                if rejected {
+                    self.reject_promise(result_promise, Self::value_to_js_value(&value), label)
+                } else {
+                    self.resolve_promise_with_value(result_promise, value, label)
+                }
+            }
+            PromiseReactionAction::Call(callee) | PromiseReactionAction::Finally(callee) => {
+                let module = module.ok_or_else(|| InterpreterError::TypeError {
+                    expected: "module context for Promise reaction".to_string(),
+                    got: "missing module context".to_string(),
+                })?;
+                let arguments = if is_finally {
+                    Vec::new()
+                } else {
+                    vec![(Self::js_value_to_value(&argument), task_label.clone())]
+                };
+                let completion = self.invoke_inline_method_call_labeled(
+                    module,
+                    callee,
+                    Value::Undefined,
+                    &arguments,
+                );
+                match completion {
+                    Ok((InlineCallCompletion::Value(value), return_label)) => {
+                        let label = task_label.join(&return_label);
+                        if !is_finally {
+                            return self.resolve_promise_with_value(result_promise, value, label);
+                        }
+                        // Finally's thunk runs only after the finalizer result
+                        // resolves. The outer reaction then adopts that thunk's
+                        // promise, retaining the ordinary Promise job ordering.
+                        let finalizer = if let Value::Promise(handle) = value {
+                            crate::promise_model::PromiseHandle(handle)
+                        } else {
+                            let handle = self.create_promise_accounted()?;
+                            self.resolve_promise_with_value(handle, value, label.clone())?;
+                            handle
+                        };
+                        let continuation = self.register_executable_promise_reactions(
+                            finalizer,
+                            PromiseReactionRegistration {
+                                on_fulfilled: Some(PromiseReactionAction::Restore {
+                                    value: Self::js_value_to_value(&argument),
+                                    rejected,
+                                    label: task_label,
+                                }),
+                                on_rejected: None,
+                            },
+                            label.clone(),
+                        )?;
+                        self.resolve_promise_with_value(
+                            result_promise,
+                            Value::Promise(continuation.0),
+                            label,
+                        )
+                    }
+                    Ok((InlineCallCompletion::Throw(thrown), _)) => self.reject_promise(
+                        result_promise,
+                        Self::value_to_js_value(&thrown.value),
+                        task_label.join(&thrown.label),
+                    ),
+                    Err(error) if Self::is_js_catchable_error(&error) => self.reject_promise(
+                        result_promise,
+                        Self::promise_rejection_from_error(&error),
+                        task_label,
+                    ),
+                    // Budgets, cancellation, and policy refusals remain engine
+                    // failures; guest catch handlers cannot turn them into work.
+                    Err(error) => Err(error),
+                }
+            }
+        }
+    }
+
     fn fulfill_promise(
         &mut self,
         handle: crate::promise_model::PromiseHandle,
@@ -12786,6 +13373,43 @@ impl InterpreterCore {
         value: Value,
         label: crate::ifc_artifacts::Label,
     ) -> Result<(), InterpreterError> {
+        if let Value::Promise(source) = value {
+            if source == promise.0 {
+                let error = self.alloc_object_with_properties(&[
+                    ("name", Value::str("TypeError")),
+                    ("message", Value::str("A promise cannot resolve to itself")),
+                ])?;
+                return self.reject_promise(
+                    promise,
+                    Self::value_to_js_value(&Value::Object(error)),
+                    label,
+                );
+            }
+            // Resolution adopts a Promise's eventual state, including a
+            // pending source; it must never fulfill with the handle itself.
+            // Registering the forwarding reactions is itself a queued job,
+            // matching PromiseResolveThenableJob ordering.
+            self.promise_store
+                .get(crate::promise_model::PromiseHandle(source))
+                .map_err(|error| InterpreterError::TypeError {
+                    expected: "valid promise resolution source".to_string(),
+                    got: error.to_string(),
+                })?;
+            let previous_bytes = self.promise_runtime_memory_bytes();
+            self.event_loop
+                .microtasks
+                .enqueue(crate::promise_model::Microtask::ResolveThenable {
+                    promise,
+                    then_handler: crate::closure_model::ClosureHandle(0),
+                    thenable: crate::object_model::JsValue::Promise(source),
+                    label,
+                });
+            if let Err(error) = self.apply_promise_runtime_memory_delta(previous_bytes) {
+                self.event_loop.microtasks.rollback_last_enqueued();
+                return Err(error);
+            }
+            return Ok(());
+        }
         if let Value::Object(object_id) = value {
             let then = self.prototype_chain_get(object_id, "then")?;
             if Self::is_sync_callable(&then) {
@@ -13232,6 +13856,35 @@ impl InterpreterCore {
         Ok((Value::Promise(result_promise.0), accumulated_label))
     }
 
+    fn register_promise_method(
+        &mut self,
+        handle: crate::promise_model::PromiseHandle,
+        method: &str,
+        first: Value,
+        second: Value,
+        label: crate::ifc_artifacts::Label,
+    ) -> Result<(Value, crate::ifc_artifacts::Label), InterpreterError> {
+        let first = Self::is_sync_callable(&first).then_some(first);
+        let registration = match method {
+            "promise:then" => PromiseReactionRegistration {
+                on_fulfilled: first.map(PromiseReactionAction::Call),
+                on_rejected: Self::is_sync_callable(&second)
+                    .then_some(PromiseReactionAction::Call(second)),
+            },
+            "promise:catch" => PromiseReactionRegistration {
+                on_fulfilled: None,
+                on_rejected: first.map(PromiseReactionAction::Call),
+            },
+            _ => PromiseReactionRegistration {
+                on_fulfilled: first.clone().map(PromiseReactionAction::Finally),
+                on_rejected: first.map(PromiseReactionAction::Finally),
+            },
+        };
+        let result =
+            self.register_executable_promise_reactions(handle, registration, label.clone())?;
+        Ok((Value::Promise(result.0), label))
+    }
+
     /// Dispatch a `promise:*` hostcall to the internal promise subsystem.
     ///
     /// Supported capabilities:
@@ -13293,9 +13946,9 @@ impl InterpreterCore {
                 self.reject_promise(handle, js_reason, arg0_label.clone())?;
                 Ok((Value::Promise(handle.0), arg0_label))
             }
-            "promise:then" => {
-                // arg0 = promise handle, arg1 = onFulfilled (optional),
-                // arg2 = onRejected (optional).
+            "promise:then" | "promise:catch" | "promise:finally" => {
+                // Non-callable arguments select the spec's identity/thrower
+                // reactions. Callable values are retained until their job runs.
                 let (arg0, _) = self.promise_hostcall_argument(args, 0)?;
                 let handle = match arg0 {
                     Value::Promise(h) => crate::promise_model::PromiseHandle(h),
@@ -13307,57 +13960,15 @@ impl InterpreterCore {
                     }
                 };
                 let registration_label = self.promise_hostcall_registration_label(args)?;
-                // In the baseline interpreter, .then() callbacks are simplified:
-                // we register reactions with no closure handlers (identity propagation).
-                let result = self.register_promise_then_accounted(
+                let (first, _) = self.promise_hostcall_argument(args, 1)?;
+                let (second, _) = self.promise_hostcall_argument(args, 2)?;
+                self.register_promise_method(
                     handle,
-                    None,
-                    None,
-                    registration_label.clone(),
-                )?;
-                Ok((Value::Promise(result.0), registration_label))
-            }
-            "promise:catch" => {
-                // Sugar for .then(undefined, onRejected).
-                let (arg0, _) = self.promise_hostcall_argument(args, 0)?;
-                let handle = match arg0 {
-                    Value::Promise(h) => crate::promise_model::PromiseHandle(h),
-                    _ => {
-                        return Err(InterpreterError::TypeError {
-                            expected: "promise".to_string(),
-                            got: arg0.type_name().to_string(),
-                        });
-                    }
-                };
-                let registration_label = self.promise_hostcall_registration_label(args)?;
-                let result = self.register_promise_then_accounted(
-                    handle,
-                    None,
-                    None,
-                    registration_label.clone(),
-                )?;
-                Ok((Value::Promise(result.0), registration_label))
-            }
-            "promise:finally" => {
-                // Similar to .then(handler, handler) for finally semantics.
-                let (arg0, _) = self.promise_hostcall_argument(args, 0)?;
-                let handle = match arg0 {
-                    Value::Promise(h) => crate::promise_model::PromiseHandle(h),
-                    _ => {
-                        return Err(InterpreterError::TypeError {
-                            expected: "promise".to_string(),
-                            got: arg0.type_name().to_string(),
-                        });
-                    }
-                };
-                let registration_label = self.promise_hostcall_registration_label(args)?;
-                let result = self.register_promise_then_accounted(
-                    handle,
-                    None,
-                    None,
-                    registration_label.clone(),
-                )?;
-                Ok((Value::Promise(result.0), registration_label))
+                    cap,
+                    first,
+                    second,
+                    registration_label,
+                )
             }
             "promise:all" => self.dispatch_promise_combinator(PromiseCombinatorKind::All, args),
             "promise:race" => self.dispatch_promise_combinator(PromiseCombinatorKind::Race, args),
@@ -13458,120 +14069,16 @@ impl InterpreterCore {
         module: &Ir3Module,
         closure_id: u32,
     ) -> Result<(), InterpreterError> {
-        let closure =
-            self.closures
-                .get(closure_id as usize)
-                .ok_or_else(|| InterpreterError::TypeError {
-                    expected: "valid closure".to_string(),
-                    got: format!("closure#{closure_id} not found"),
-                })?;
-        let func_idx = closure.function_index;
-        let func = module.function_table.get(func_idx as usize).ok_or(
-            InterpreterError::FunctionNotFound {
-                index: func_idx,
-                table_size: module.function_table.len() as u32,
-            },
+        // The same isolated call boundary serves accessors, Promise jobs, and
+        // timers. In particular a foreign callback must return to its own
+        // trampoline, never to an instruction offset in the importing module.
+        let completion = self.invoke_inline_method_call(
+            module,
+            Value::Closure(closure_id),
+            Value::Undefined,
+            &[],
         )?;
-        self.validate_function_rest_param(func)?;
-        let captured_env = self.clone_scope_frames_with_budget(&closure.captured_env)?;
-
-        self.ensure_call_depth_available()?;
-
-        let callee = Value::Closure(closure_id);
-        let mut arg_vals = Vec::new();
-        let mut arg_labels = Vec::new();
-        let empty_args = RegRange { start: 0, count: 0 };
-        let initial_call_depth = self.call_stack.len();
-        let saved_ip = self.ip;
-        let saved_return_reg = self.read_reg(0).unwrap_or(Value::Undefined);
-        let setup_snapshot = self.snapshot_call_setup(None, false);
-        let setup_result = (|| -> Result<(), InterpreterError> {
-            self.apply_rest_param(
-                module,
-                &mut arg_vals,
-                func.rest_param_index,
-                func.arity,
-                empty_args,
-            )?;
-            self.apply_rest_param_labels(
-                &mut arg_labels,
-                func.rest_param_index,
-                func.arity,
-                empty_args,
-            )?;
-            self.run_pre_call_hook(module, &callee, func_idx, &arg_vals)?;
-
-            let scope_depth = self.scope_chain.depth();
-            let captured_env_bytes = Self::estimate_scope_chain_bytes(&captured_env);
-            let saved_chain =
-                self.snapshot_scope_chain_with_temporary_budget(captured_env_bytes)?;
-
-            self.call_stack.push(CallFrame {
-                return_ip: module.instructions.len(),
-                return_reg: Some(0),
-                register_base: self.register_base,
-                function_index: Some(func_idx),
-                this_value: Value::Undefined,
-                this_label: crate::ifc_artifacts::Label::Public,
-                new_target_value: Value::Undefined,
-                new_target_label: crate::ifc_artifacts::Label::Public,
-                super_value: self.function_super_value(&callee, IR_SUPER_PROTOTYPE_PROPERTY)?,
-                super_label: crate::ifc_artifacts::Label::Public,
-                construct_this: None,
-                derived_constructor: false,
-                this_initialized: true,
-                initialize_derived_this_on_return: false,
-                saved_pending_exception: self.pending_exception.take(),
-                saved_pending_return: self.pending_return.take(),
-                saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
-                saved_finally_mode_depth: self.finally_frames.len(),
-                saved_scope_depth: scope_depth,
-                saved_scope_chain: Some(saved_chain),
-                async_function_id: None,
-            });
-
-            self.scope_chain.frames = captured_env;
-            if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
-                self.rollback_call_setup();
-                return Err(err);
-            }
-            if let Err(err) = self.sync_estimated_memory_bytes() {
-                self.rollback_call_setup();
-                return Err(err);
-            }
-
-            self.register_base += self.config.max_registers as usize;
-            let req_len = self.register_base + self.config.max_registers as usize;
-            self.clear_register_range(self.register_base, req_len);
-            for (index, (value, label)) in arg_vals.into_iter().zip(arg_labels).enumerate() {
-                let reg = index as u32;
-                if reg < self.config.max_registers {
-                    self.write_reg_with_label(reg, value, label)?;
-                }
-            }
-
-            self.ip = func.entry as usize;
-            Ok(())
-        })();
-        if let Err(error) = setup_result {
-            self.restore_call_setup(setup_snapshot);
-            return Err(error);
-        }
-
-        let result = self.run_loop(module);
-        if self.call_stack.len() > initial_call_depth {
-            let (restored_pending_exception, restored_pending_return) =
-                self.unwind_call_stack_to(initial_call_depth);
-            self.pending_exception = restored_pending_exception;
-            self.pending_return = restored_pending_return;
-        }
-        self.ip = saved_ip;
-        self.write_reg(0, saved_return_reg)?;
-
-        match result {
-            Ok(_) | Err(InterpreterError::Halted) => Ok(()),
-            Err(err) => Err(err),
-        }
+        self.complete_inline_call(completion).map(|_| ())
     }
 
     /// Drain all pending microtasks from the queue.
@@ -13603,7 +14110,15 @@ impl InterpreterCore {
                     result_promise,
                     label: task_label,
                 } => {
-                    if handler.is_none()
+                    if self.promise_reactions.contains_key(&result_promise) {
+                        self.run_executable_promise_reaction(
+                            module,
+                            result_promise,
+                            handler == Some(crate::closure_model::ClosureHandle(1)),
+                            argument,
+                            task_label,
+                        )?;
+                    } else if handler.is_none()
                         && let Some(resumption_context) =
                             self.take_async_resumption_context(result_promise.0)
                     {
@@ -13623,8 +14138,7 @@ impl InterpreterCore {
                             )?;
                         }
                     } else {
-                        // The core baseline does not execute user closure handles in
-                        // Promise jobs yet. Preserve its existing identity behavior.
+                        // No callable was registered: fulfillment identity.
                         self.fulfill_promise(result_promise, argument, task_label)?;
                     }
                 }
@@ -13633,7 +14147,15 @@ impl InterpreterCore {
                     result_promise,
                     label: task_label,
                 } => {
-                    if let Some(resumption_context) =
+                    if self.promise_reactions.contains_key(&result_promise) {
+                        self.run_executable_promise_reaction(
+                            module,
+                            result_promise,
+                            true,
+                            reason,
+                            task_label,
+                        )?;
+                    } else if let Some(resumption_context) =
                         self.take_async_resumption_context(result_promise.0)
                     {
                         if let Err(error) = self
@@ -13676,6 +14198,17 @@ impl InterpreterCore {
                         });
                     };
                     let thenable_value = Self::js_value_to_value(&thenable);
+                    if let Value::Promise(source) = thenable_value {
+                        self.register_executable_promise_reactions(
+                            crate::promise_model::PromiseHandle(source),
+                            PromiseReactionRegistration {
+                                on_fulfilled: Some(PromiseReactionAction::Forward(promise)),
+                                on_rejected: Some(PromiseReactionAction::Forward(promise)),
+                            },
+                            task_label,
+                        )?;
+                        continue;
+                    }
                     // Re-read `then` from the thenable (same callable for a
                     // data property); it may be a `Value::Function` or
                     // `Value::Closure`, both of which CallMethod invokes.
@@ -16120,6 +16653,8 @@ impl InterpreterCore {
                     .as_ref()
                     .map_or(0, |frames| Self::estimate_scope_chain_bytes(frames)),
             )
+            .saturating_add(frame.saved_module_specifier.as_deref()
+                .map(Self::estimate_string_bytes).unwrap_or(0))
     }
 
     fn estimate_ordered_label_map_bytes(
@@ -16466,6 +17001,35 @@ impl InterpreterCore {
             .fold(0u64, u64::saturating_add)
     }
 
+    fn estimate_promise_reaction_registration_bytes(
+        registration: &PromiseReactionRegistration,
+    ) -> u64 {
+        let actions = [&registration.on_fulfilled, &registration.on_rejected]
+            .into_iter()
+            .flatten()
+            .map(|action| {
+                let payload = match action {
+                    PromiseReactionAction::Call(callee)
+                    | PromiseReactionAction::Finally(callee) => Self::estimate_value_bytes(callee),
+                    PromiseReactionAction::Forward(_) => 0,
+                    PromiseReactionAction::Restore { value, label, .. } => {
+                        Self::estimate_value_bytes(value)
+                            .saturating_add(Self::estimate_label_bytes(label))
+                    }
+                };
+                (std::mem::size_of::<PromiseReactionAction>() as u64).saturating_add(payload)
+            })
+            .fold(0u64, u64::saturating_add);
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(actions)
+    }
+
+    fn promise_reactions_memory_bytes(&self) -> u64 {
+        self.promise_reactions
+            .values()
+            .map(Self::estimate_promise_reaction_registration_bytes)
+            .fold(0u64, u64::saturating_add)
+    }
+
     /// Resident bytes of the whole Promise runtime: store records/witness,
     /// event-loop queues and witness, combinator trackers with their
     /// accumulated labels, watcher vectors, and any in-flight macrotask
@@ -16476,6 +17040,7 @@ impl InterpreterCore {
             .saturating_add(self.event_loop.estimated_memory_bytes())
             .saturating_add(self.promise_combinators_memory_bytes())
             .saturating_add(self.promise_combinator_watchers_memory_bytes())
+            .saturating_add(self.promise_reactions_memory_bytes())
             .saturating_add(self.promise_in_flight_task_bytes)
     }
 
@@ -16638,6 +17203,8 @@ impl InterpreterCore {
                     .map(|closure| {
                         MEMORY_ESTIMATE_CLOSURE_BASE_BYTES
                             .saturating_add(Self::estimate_scope_chain_bytes(&closure.captured_env))
+                            .saturating_add(closure.module_specifier.as_deref()
+                                .map(Self::estimate_string_bytes).unwrap_or(0))
                     })
                     .sum::<u64>(),
             )
@@ -16718,6 +17285,7 @@ impl InterpreterCore {
                     .saturating_mul(Self::async_resumption_context_entry_bytes()),
             )
             .saturating_add(self.promise_runtime_memory_bytes())
+            .saturating_add(self.module_state.retained_program_bytes)
             .saturating_add(self.temporarily_suspended_execution_bytes)
     }
 
@@ -16885,6 +17453,7 @@ impl InterpreterCore {
 
     fn rollback_call_setup(&mut self) {
         if let Some(frame) = self.call_stack.pop() {
+            self.current_module_specifier = frame.saved_module_specifier;
             self.register_base = frame.register_base;
             self.pending_exception = frame.saved_pending_exception;
             self.pending_return = frame.saved_pending_return;
@@ -19652,6 +20221,97 @@ mod tests {
     }
 
     #[test]
+    fn promise_reaction_registration_refuses_without_retaining_partial_state() {
+        let mut core = quickjs_test_core();
+        let source = core.create_promise_accounted().unwrap();
+        let registration = PromiseReactionRegistration {
+            on_fulfilled: Some(PromiseReactionAction::Call(Value::BuiltinFunction(
+                BuiltinFunction::array_is_array(),
+            ))),
+            on_rejected: None,
+        };
+        let initial_memory = core.estimated_memory_bytes;
+        let initial_runtime = core.promise_runtime_memory_bytes();
+        let retained = InterpreterCore::estimate_promise_reaction_registration_bytes(&registration);
+        core.config.max_total_memory_bytes = initial_memory + retained - 1;
+        let error = core
+            .register_executable_promise_reactions(
+                source,
+                registration.clone(),
+                crate::ifc_artifacts::Label::Public,
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert!(core.promise_reactions.is_empty());
+        assert_eq!(core.promise_runtime_memory_bytes(), initial_runtime);
+        assert_eq!(core.estimated_memory_bytes, initial_memory);
+        assert_eq!(core.promise_in_flight_task_bytes, 0);
+
+        // Admit the callback but refuse the store/queue rollback snapshot.
+        // Releasing the temporary ownership must restore the exact estimate.
+        core.config.max_total_memory_bytes = initial_memory + retained;
+        assert!(matches!(
+            core.register_executable_promise_reactions(
+                source,
+                registration,
+                crate::ifc_artifacts::Label::Public,
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(core.promise_reactions.is_empty());
+        assert_eq!(core.promise_runtime_memory_bytes(), initial_runtime);
+        assert_eq!(core.estimated_memory_bytes, initial_memory);
+        assert_eq!(core.promise_in_flight_task_bytes, 0);
+    }
+
+    #[test]
+    fn native_promise_callback_releases_registration_and_keeps_exact_accounting() {
+        let mut core = quickjs_test_core();
+        let source = core.create_promise_accounted().unwrap();
+        let result = core
+            .register_executable_promise_reactions(
+                source,
+                PromiseReactionRegistration {
+                    on_fulfilled: Some(PromiseReactionAction::Call(Value::BuiltinFunction(
+                        BuiltinFunction::array_is_array(),
+                    ))),
+                    on_rejected: None,
+                },
+                crate::ifc_artifacts::Label::Secret,
+            )
+            .unwrap();
+        assert_eq!(
+            core.estimated_memory_bytes,
+            core.recompute_estimated_memory_bytes()
+        );
+        core.fulfill_promise(
+            source,
+            crate::object_model::JsValue::Int(42),
+            crate::ifc_artifacts::Label::Public,
+        )
+        .unwrap();
+        core.drain_microtasks(Some(&test_module(vec![Ir3Instruction::Halt])))
+            .unwrap();
+        let record = core.promise_store.get(result).unwrap();
+        assert_eq!(
+            record.state,
+            crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Bool(
+                false
+            ))
+        );
+        assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+        assert!(core.promise_reactions.is_empty());
+        assert_eq!(core.promise_in_flight_task_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes,
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
     fn bd_3ose7_resolve_detects_thenable_and_enqueues_job() {
         // An object with a callable `then` must be detected as a thenable:
         // resolve leaves the promise PENDING (a ResolveThenable job enqueued),
@@ -20043,6 +20703,7 @@ mod tests {
         core.closures.push(ClosureValue {
             function_index: 0,
             captured_env: vec![],
+            module_specifier: None,
         });
         let closure_id = (core.closures.len() - 1) as u32;
 
@@ -25241,6 +25902,7 @@ mod tests {
             core.closures.push(ClosureValue {
                 function_index: 0,
                 captured_env: core.scope_chain.snapshot(),
+                module_specifier: None,
             });
             core.registers[0] = Value::AsyncFunction(0);
         } else {
@@ -25403,6 +26065,7 @@ mod tests {
         core.closures.push(ClosureValue {
             function_index: 0,
             captured_env: core.scope_chain.snapshot(),
+            module_specifier: None,
         });
         let callee = if kind.is_async() {
             Value::AsyncGeneratorFunction(0)
@@ -25582,6 +26245,7 @@ mod tests {
         core.closures.push(ClosureValue {
             function_index: 0,
             captured_env: core.scope_chain.snapshot(),
+            module_specifier: None,
         });
         core.registers[0] = Value::AsyncFunction(0);
         core.registers[1] = Value::str("duplicated-argument".repeat(64));
@@ -25683,6 +26347,7 @@ mod tests {
             core.closures.push(ClosureValue {
                 function_index: 0,
                 captured_env: core.scope_chain.snapshot(),
+                module_specifier: None,
             });
             core.sync_estimated_memory_bytes()
                 .expect("seed timer callback state should fit");
@@ -28245,6 +28910,7 @@ mod tests {
                 &BuiltinFunction::require("/tmp/entry.cjs"),
                 None,
                 RegRange { start: 0, count: 0 },
+                crate::ifc_artifacts::Label::Public,
             )
             .expect_err("first-class require must not bypass ModuleLoad");
         assert_eq!(
@@ -29320,6 +29986,7 @@ mod tests {
         core.call_stack.push(CallFrame {
             return_ip: 0,
             return_reg: None,
+            saved_module_specifier: core.current_module_specifier.clone(),
             register_base: 0,
             function_index: Some(0),
             this_value: Value::Undefined,
@@ -29784,6 +30451,7 @@ mod tests {
         core.closures.push(ClosureValue {
             function_index: 0,
             captured_env: captured_env.clone(),
+            module_specifier: None,
         });
         core.ip = 3;
         core.write_reg(0, Value::Int(41)).unwrap();
@@ -30368,6 +31036,7 @@ mod tests {
         core.closures.push(ClosureValue {
             function_index: 0,
             captured_env,
+            module_specifier: None,
         });
 
         // Verify the closure ID is valid
@@ -32108,6 +32777,7 @@ mod tests {
         core.call_stack.push(CallFrame {
             return_ip: 1,
             return_reg: Some(0),
+            saved_module_specifier: core.current_module_specifier.clone(),
             register_base: 0,
             function_index: None,
             this_value: allocated_this.clone(),
@@ -33933,6 +34603,7 @@ mod tests {
             core.closures.push(ClosureValue {
                 function_index: 0,
                 captured_env,
+                module_specifier: None,
             });
             core.write_reg_with_label(
                 0,
@@ -34002,6 +34673,7 @@ mod tests {
             core.closures.push(ClosureValue {
                 function_index: 0,
                 captured_env,
+                module_specifier: None,
             });
             core.write_reg_with_label(
                 0,

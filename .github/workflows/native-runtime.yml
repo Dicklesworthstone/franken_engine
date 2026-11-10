@@ -221,7 +221,8 @@ jobs:
           set -o pipefail
           cargo test --locked --no-fail-fast -p frankenengine-core \
             --test global_value_bindings_bd_9vouw_296 --test module_callable_ownership \
-            --test promise_reactions --test promise_combinators --test source_timers \
+            --test promise_reactions --test promise_combinators \
+            --test source_timers --test timer_callbacks \
             -- --nocapture --test-threads=1 2>&1 | tee native-runtime-source-execution.log
       - name: Retain complete test output
         if: always()

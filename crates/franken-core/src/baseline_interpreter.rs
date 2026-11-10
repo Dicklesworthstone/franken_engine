@@ -369,6 +369,13 @@ pub struct ActiveTimer {
     pub registration_seq: Option<u64>,
 }
 
+/// Executable timer state is kept outside the public timer/queue schemas.
+/// Registration sequences distinguish repeated schedules of the same callable.
+struct TimerInvocation {
+    callee: Value,
+    arguments: Vec<(Value, crate::ifc_artifacts::Label)>,
+}
+
 /// Wrapper around f64 that provides Eq/Ord using total_cmp for determinism.
 /// NaN values are equal to each other and greater than all other values.
 /// -0.0 is less than +0.0 in the total ordering.
@@ -3790,6 +3797,8 @@ pub struct InterpreterCore {
     next_timer_id: u32,
     /// Active timers for clearTimeout/clearInterval tracking.
     active_timers: std::collections::BTreeMap<u32, ActiveTimer>,
+    /// Callable values and captured arguments for scheduled one-shot timers.
+    timer_invocations: BTreeMap<u64, TimerInvocation>,
     /// Containment state: whether execution is suspended due to guardplane action.
     #[allow(dead_code)]
     suspended: bool,
@@ -3891,6 +3900,7 @@ impl InterpreterCore {
             profiling_data: None,
             next_timer_id: 0,
             active_timers: BTreeMap::new(),
+            timer_invocations: BTreeMap::new(),
             suspended: false,
             sandboxed: false,
             quarantined: false,
@@ -4116,6 +4126,9 @@ impl InterpreterCore {
         self.promise_combinator_watchers.clear();
         self.next_promise_combinator_id = 0;
         self.promise_in_flight_task_bytes = 0;
+        self.active_timers.clear();
+        self.timer_invocations.clear();
+        self.next_timer_id = 0;
         self.async_resumption_contexts.clear();
         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
         Ok(())
@@ -4244,6 +4257,9 @@ impl InterpreterCore {
         self.promise_combinator_watchers.clear();
         self.next_promise_combinator_id = 0;
         self.promise_in_flight_task_bytes = 0;
+        self.active_timers.clear();
+        self.timer_invocations.clear();
+        self.next_timer_id = 0;
         self.async_resumption_contexts.clear();
         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
         Ok(())
@@ -14267,30 +14283,52 @@ impl InterpreterCore {
             return Ok(());
         }
 
-        let Some((timer_id, timer)) = self
+        let Some(timer_id) = self
             .active_timers
             .iter()
-            .find(|(_, timer)| timer.registration_seq == Some(macrotask.registration_seq))
-            .map(|(timer_id, timer)| (*timer_id, timer.clone()))
+            .find(|(_, timer)| {
+                timer.registration_seq == Some(macrotask.registration_seq)
+                    && timer.handler == Some(macrotask.handler.0)
+            })
+            .map(|(timer_id, _)| *timer_id)
         else {
             return Ok(());
         };
 
-        if timer.handler != Some(macrotask.handler.0) {
-            return Ok(());
-        }
-
-        if !timer.repeating {
-            self.active_timers.remove(&timer_id);
-        }
-
-        if let Some(handler) = timer.handler {
-            self.execute_timer_closure(module, handler)?;
-        }
-
-        Ok(())
+        let previous_bytes = self.promise_runtime_memory_bytes();
+        self.active_timers.remove(&timer_id);
+        let invocation = self.timer_invocations.remove(&macrotask.registration_seq);
+        // The removed callable/argument vector remains live throughout the
+        // callback. Transfer its charge rather than rebating the budget while
+        // guest code can allocate or schedule further work.
+        let retained_bytes = previous_bytes.saturating_sub(self.promise_runtime_memory_bytes());
+        self.promise_in_flight_task_bytes = self
+            .promise_in_flight_task_bytes
+            .saturating_add(retained_bytes);
+        let outcome = match invocation {
+            Some(invocation) => self
+                .invoke_inline_method_call_labeled(
+                    module,
+                    invocation.callee,
+                    Value::Undefined,
+                    &invocation.arguments,
+                )
+                .and_then(|(mut completion, _)| {
+                    if let InlineCallCompletion::Throw(thrown) = &mut completion {
+                        thrown.label = thrown.label.join(&macrotask.label);
+                    }
+                    self.complete_inline_call(completion).map(|_| ())
+                }),
+            None => Ok(()),
+        };
+        self.promise_in_flight_task_bytes = self
+            .promise_in_flight_task_bytes
+            .saturating_sub(retained_bytes);
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(retained_bytes);
+        outcome
     }
 
+    #[cfg(test)]
     fn execute_timer_closure(
         &mut self,
         module: &Ir3Module,
@@ -14784,7 +14822,8 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         match cap {
             "timer:setTimeout" => {
-                // args[0] = handler (function/closure), args[1] = delay_ms
+                // args[0] = callable, args[1] = delay_ms, args[2..] are
+                // captured now and forwarded when this registration fires.
                 if args.count < 2 {
                     return Ok(Value::Undefined);
                 }
@@ -14814,32 +14853,89 @@ impl InterpreterCore {
                     _ => 0,
                 };
 
-                // Store active timer
                 let timer_id = self.next_timer_id;
-                self.next_timer_id = self.next_timer_id.wrapping_add(1);
-
-                let handler_id = match handler_val {
-                    Value::Closure(id) => Some(id),
-                    _ => None,
+                let mut registration_label = crate::ifc_artifacts::Label::Public;
+                let invocation = if Self::is_sync_callable(&handler_val) {
+                    registration_label = self.promise_hostcall_registration_label(args)?;
+                    let mut invocation = TimerInvocation {
+                        callee: handler_val,
+                        arguments: Vec::new(),
+                    };
+                    let mut retained_bytes = Self::estimate_timer_invocation_bytes(&invocation)
+                        .saturating_add(Self::active_timer_entry_bytes());
+                    for index in 2..args.count {
+                        let (value, label) = self.promise_hostcall_argument(args, index)?;
+                        let label = label.join(&registration_label);
+                        retained_bytes = retained_bytes
+                            .saturating_add(Self::estimate_timer_argument_bytes(&value, &label));
+                        self.check_temporary_memory_budget(retained_bytes)?;
+                        invocation.arguments.push((value, label));
+                    }
+                    if invocation.arguments.is_empty()
+                        && matches!(
+                            &invocation.callee,
+                            Value::BuiltinFunction(BuiltinFunction {
+                                kind: BuiltinFunctionKind::PromiseResolveFunction
+                                    | BuiltinFunctionKind::PromiseRejectFunction
+                                    | BuiltinFunctionKind::PromiseCapabilityResolve
+                                    | BuiltinFunctionKind::PromiseCapabilityReject,
+                                ..
+                            })
+                        )
+                    {
+                        // Native resolving functions observe only their first
+                        // value, so an explicit undefined preserves behavior
+                        // while retaining scheduling provenance. Guest rest
+                        // parameters still receive the original zero arguments.
+                        self.check_temporary_memory_budget(retained_bytes.saturating_add(
+                            Self::estimate_timer_argument_bytes(&Value::Undefined, &registration_label),
+                        ))?;
+                        invocation
+                            .arguments
+                            .push((Value::Undefined, registration_label.clone()));
+                    }
+                    Some(invocation)
+                } else {
+                    None
                 };
+                self.check_temporary_memory_budget(
+                    Self::active_timer_entry_bytes().saturating_add(
+                        invocation
+                            .as_ref()
+                            .map(Self::estimate_timer_invocation_bytes)
+                            .unwrap_or(0),
+                    ),
+                )?;
+
+                // ClosureHandle remains the queue's opaque token. The private
+                // invocation selected by registration_seq carries the actual
+                // callable, including native Promise resolving functions.
+                let handler_id = invocation.as_ref().map(|invocation| match &invocation.callee {
+                    Value::Closure(id) => *id,
+                    _ => timer_id,
+                });
 
                 // Transactional macrotask schedule (bd-ur3tk.21): the heap
-                // slot is charged eagerly; a ceiling refusal removes both the
-                // timer record and the scheduled entry.
+                // slot and retained callback are charged eagerly. A refusal
+                // removes every registration component without consuming IDs.
                 let previous_promise_runtime_bytes = self.promise_runtime_memory_bytes();
+                let registration_seq = handler_id.map(|handler| {
+                    self.event_loop.set_timeout(
+                        crate::closure_model::ClosureHandle(handler),
+                        delay_ms,
+                        registration_label,
+                    )
+                });
+                if let (Some(sequence), Some(invocation)) = (registration_seq, invocation) {
+                    self.timer_invocations.insert(sequence, invocation);
+                }
                 self.active_timers.insert(
                     timer_id,
                     ActiveTimer {
                         handler: handler_id,
                         delay_ms,
                         repeating: false,
-                        registration_seq: handler_id.map(|handler| {
-                            self.event_loop.set_timeout(
-                                crate::closure_model::ClosureHandle(handler),
-                                delay_ms,
-                                crate::ifc_artifacts::Label::Public,
-                            )
-                        }),
+                        registration_seq,
                     },
                 );
                 if let Err(error) =
@@ -14849,9 +14945,11 @@ impl InterpreterCore {
                         && let Some(seq) = timer.registration_seq
                     {
                         self.event_loop.macrotasks.rollback_last_scheduled(seq);
+                        self.timer_invocations.remove(&seq);
                     }
                     return Err(error);
                 }
+                self.next_timer_id = self.next_timer_id.wrapping_add(1);
 
                 self.emit_witness(
                     WitnessEventKind::HostcallDispatched,
@@ -14891,13 +14989,13 @@ impl InterpreterCore {
                 };
 
                 let timer_id = self.next_timer_id;
-                self.next_timer_id = self.next_timer_id.wrapping_add(1);
-
                 let handler_id = match handler_val {
                     Value::Closure(id) => Some(id),
                     _ => None,
                 };
 
+                let previous_bytes = self.promise_runtime_memory_bytes();
+                self.check_temporary_memory_budget(Self::active_timer_entry_bytes())?;
                 self.active_timers.insert(
                     timer_id,
                     ActiveTimer {
@@ -14907,6 +15005,11 @@ impl InterpreterCore {
                         registration_seq: None,
                     },
                 );
+                if let Err(error) = self.apply_promise_runtime_memory_delta(previous_bytes) {
+                    self.active_timers.remove(&timer_id);
+                    return Err(error);
+                }
+                self.next_timer_id = self.next_timer_id.wrapping_add(1);
 
                 self.emit_witness(
                     WitnessEventKind::HostcallDispatched,
@@ -14927,7 +15030,13 @@ impl InterpreterCore {
                     _ => return Ok(Value::Undefined),
                 };
 
-                self.active_timers.remove(&timer_id);
+                let previous_bytes = self.promise_runtime_memory_bytes();
+                if let Some(timer) = self.active_timers.remove(&timer_id)
+                    && let Some(sequence) = timer.registration_seq
+                {
+                    self.timer_invocations.remove(&sequence);
+                }
+                self.apply_promise_runtime_memory_delta(previous_bytes)?;
 
                 self.emit_witness(
                     WitnessEventKind::HostcallDispatched,
@@ -17252,10 +17361,51 @@ impl InterpreterCore {
             .fold(0u64, u64::saturating_add)
     }
 
+    fn active_timer_entry_bytes() -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(std::mem::size_of::<ActiveTimer>() as u64)
+    }
+
+    fn estimate_timer_invocation_bytes(invocation: &TimerInvocation) -> u64 {
+        invocation.arguments.iter().fold(
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                .saturating_add(std::mem::size_of::<TimerInvocation>() as u64)
+                .saturating_add(Self::estimate_timer_value_bytes(&invocation.callee)),
+            |bytes, (value, label)| {
+                bytes.saturating_add(Self::estimate_timer_argument_bytes(value, label))
+            },
+        )
+    }
+
+    fn estimate_timer_argument_bytes(value: &Value, label: &crate::ifc_artifacts::Label) -> u64 {
+        (std::mem::size_of::<(Value, crate::ifc_artifacts::Label)>() as u64)
+            .saturating_add(Self::estimate_timer_value_bytes(value))
+            .saturating_add(Self::estimate_label_bytes(label))
+    }
+
+    fn estimate_timer_value_bytes(value: &Value) -> u64 {
+        match value {
+            // Capturing a first-class require clones its owned module path.
+            Value::BuiltinFunction(builtin) if !builtin.module_specifier.is_empty() => {
+                Self::estimate_string_bytes(&builtin.module_specifier)
+            }
+            _ => Self::estimate_value_bytes(value),
+        }
+    }
+
+    fn timers_memory_bytes(&self) -> u64 {
+        self.timer_invocations
+            .values()
+            .map(Self::estimate_timer_invocation_bytes)
+            .fold(
+                (self.active_timers.len() as u64).saturating_mul(Self::active_timer_entry_bytes()),
+                u64::saturating_add,
+            )
+    }
+
     /// Resident bytes of the whole Promise runtime: store records/witness,
     /// event-loop queues and witness, combinator trackers with their
-    /// accumulated labels, watcher vectors, and any in-flight macrotask
-    /// transfer (bd-ur3tk.21).
+    /// accumulated labels, watcher vectors, timers and captured arguments,
+    /// and any in-flight macrotask transfer (bd-ur3tk.21).
     fn promise_runtime_memory_bytes(&self) -> u64 {
         self.promise_store
             .estimated_memory_bytes()
@@ -17264,6 +17414,7 @@ impl InterpreterCore {
             .saturating_add(self.promise_combinator_watchers_memory_bytes())
             .saturating_add(self.promise_reactions_memory_bytes())
             .saturating_add(self.promise_resolving_functions_memory_bytes())
+            .saturating_add(self.timers_memory_bytes())
             .saturating_add(self.promise_in_flight_task_bytes)
     }
 
@@ -33725,6 +33876,292 @@ mod tests {
             vec![message.to_string()],
             vec![timer_callback_desc(callback_entry, "timer_callback")],
         )
+    }
+
+    #[test]
+    fn timer_raw_function_arguments_preserve_property_labels() {
+        use crate::ifc_artifacts::Label;
+
+        let module = test_module_with_pool_and_functions(
+            vec![
+                timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 4 }, 4),
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadStr {
+                    dst: 2,
+                    pool_index: 0,
+                },
+                Ir3Instruction::SetProperty {
+                    obj: 1,
+                    key: 2,
+                    val: 0,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec!["value".to_string()],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 2,
+                frame_size: 3,
+                name: Some("raw_timer_callback".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        for config in [test_quickjs_config(), test_v8_config()] {
+            let mut core = InterpreterCore::new(config, "timer-arguments");
+            let target = core.alloc_object_with_prototype(None).unwrap();
+            core.write_reg(0, Value::Function(0)).unwrap();
+            core.write_reg(1, Value::Int(0)).unwrap();
+            core.write_reg_with_label(2, Value::str("secret argument"), Label::Secret)
+                .unwrap();
+            core.write_reg(3, Value::Object(target)).unwrap();
+
+            core.execute(&module).unwrap();
+
+            assert_eq!(
+                core.prototype_chain_get(target, "value").unwrap(),
+                Value::str("secret argument")
+            );
+            assert_eq!(
+                core.own_stored_runtime_property_label(
+                    target,
+                    &RuntimePropertyKey::String(JsString::from("value")),
+                ),
+                Label::Secret,
+            );
+            assert!(core.timer_invocations.is_empty());
+            assert!(core.active_timers.is_empty());
+            assert_eq!(
+                core.estimated_memory_bytes,
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn timer_native_resolvers_preserve_scheduling_labels_without_arguments() {
+        use crate::ifc_artifacts::Label;
+        use crate::object_model::JsValue;
+        use crate::promise_model::PromiseState;
+
+        for config in [test_quickjs_config(), test_v8_config()] {
+            for reject in [false, true] {
+                let mut core = InterpreterCore::new(config.clone(), "timer-native-resolver");
+                let promise = core.create_promise_accounted().unwrap();
+                let (_, resolve, reject_function) = core
+                    .create_promise_resolving_functions(promise, Label::Public)
+                    .unwrap();
+                core.write_reg(0, if reject { reject_function } else { resolve })
+                    .unwrap();
+                core.write_reg_with_label(1, Value::Int(0), Label::Secret)
+                    .unwrap();
+                core.dispatch_timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 })
+                    .unwrap();
+                core.run_event_loop_until_idle(&test_module(vec![Ir3Instruction::Halt]))
+                    .unwrap();
+
+                let record = core.promise_store.get(promise).unwrap();
+                assert_eq!(
+                    record.state,
+                    if reject {
+                        PromiseState::Rejected(JsValue::Undefined)
+                    } else {
+                        PromiseState::Fulfilled(JsValue::Undefined)
+                    },
+                );
+                assert_eq!(record.label, Label::Secret);
+                assert!(core.timer_invocations.is_empty());
+                assert_eq!(core.promise_in_flight_task_bytes, 0);
+                assert_eq!(
+                    core.estimated_memory_bytes,
+                    core.recompute_estimated_memory_bytes()
+                );
+            }
+        }
+    }
+
+    fn core_with_timer_payload(config: InterpreterConfig) -> InterpreterCore {
+        let mut core = InterpreterCore::new(config, "timer-payload");
+        core.write_reg(0, Value::Function(0)).unwrap();
+        core.write_reg(1, Value::Int(0)).unwrap();
+        core.write_reg_with_label(
+            2,
+            Value::str("retained timer argument".repeat(512)),
+            crate::ifc_artifacts::Label::Custom {
+                name: "timer provenance".repeat(8),
+                level: 5,
+            },
+        )
+        .unwrap();
+        core
+    }
+
+    #[test]
+    fn timer_payload_admission_rolls_back_queue_maps_and_identity() {
+        let args = RegRange { start: 0, count: 3 };
+        for config in [test_quickjs_config(), test_v8_config()] {
+            let mut admitted = core_with_timer_payload(config.clone());
+            let baseline = admitted.estimated_memory_bytes;
+            assert_eq!(
+                admitted
+                    .dispatch_timer_hostcall("timer:setTimeout", args)
+                    .unwrap(),
+                Value::Int(0)
+            );
+            let charge = admitted.estimated_memory_bytes - baseline;
+            assert!(charge > InterpreterCore::active_timer_entry_bytes());
+
+            for ceiling in [baseline, baseline + charge - 1] {
+                let mut refused = core_with_timer_payload(config.clone());
+                refused.config.max_total_memory_bytes = ceiling;
+                assert!(matches!(
+                    refused.dispatch_timer_hostcall("timer:setTimeout", args),
+                    Err(InterpreterError::MemoryBudgetExceeded { .. }),
+                ));
+                assert!(refused.active_timers.is_empty());
+                assert!(refused.timer_invocations.is_empty());
+                assert!(refused.event_loop.macrotasks.is_empty());
+                assert_eq!(refused.next_timer_id, 0);
+                assert_eq!(refused.estimated_memory_bytes, baseline);
+                assert_eq!(
+                    refused.estimated_memory_bytes,
+                    refused.recompute_estimated_memory_bytes()
+                );
+
+                refused.config.max_total_memory_bytes = config.max_total_memory_bytes;
+                assert_eq!(
+                    refused
+                        .dispatch_timer_hostcall("timer:setTimeout", args)
+                        .unwrap(),
+                    Value::Int(0)
+                );
+                assert_eq!(refused.active_timers[&0].registration_seq, Some(0));
+            }
+        }
+    }
+
+    #[test]
+    fn timer_callbacks_account_for_owned_builtin_module_paths() {
+        let mut reference = quickjs_test_core();
+        reference
+            .write_reg(0, Value::BuiltinFunction(BuiltinFunction::array_is_array()))
+            .unwrap();
+        reference.write_reg(1, Value::Int(0)).unwrap();
+        let reference_baseline = reference.estimated_memory_bytes;
+        reference
+            .dispatch_timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 })
+            .unwrap();
+        let small_callback_charge = reference.estimated_memory_bytes - reference_baseline;
+
+        for capture_as_argument in [false, true] {
+            let mut core = quickjs_test_core();
+            let require =
+                Value::BuiltinFunction(BuiltinFunction::require("module/provenance/".repeat(1024)));
+            core.write_reg(1, Value::Int(0)).unwrap();
+            let count = if capture_as_argument {
+                core.write_reg(0, Value::BuiltinFunction(BuiltinFunction::array_is_array()))
+                    .unwrap();
+                core.write_reg(2, require).unwrap();
+                3
+            } else {
+                core.write_reg(0, require).unwrap();
+                2
+            };
+            let baseline = core.estimated_memory_bytes;
+            // There is room for the callback/queue metadata and another small
+            // argument, but not for a clone of the builtin's owned module path.
+            core.config.max_total_memory_bytes = baseline + small_callback_charge + 1024;
+            assert!(matches!(
+                core.dispatch_timer_hostcall("timer:setTimeout", RegRange { start: 0, count }),
+                Err(InterpreterError::MemoryBudgetExceeded { .. }),
+            ));
+            assert!(core.active_timers.is_empty());
+            assert!(core.timer_invocations.is_empty());
+            assert!(core.event_loop.macrotasks.is_empty());
+            assert_eq!(core.next_timer_id, 0);
+            assert_eq!(core.estimated_memory_bytes, baseline);
+            assert_eq!(
+                core.estimated_memory_bytes,
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn timer_payload_cancellation_and_both_seed_resets_release_callbacks() {
+        for eager in [false, true] {
+            let mut core = core_with_timer_payload(test_quickjs_config());
+            let args = RegRange { start: 0, count: 3 };
+            let id = core
+                .dispatch_timer_hostcall("timer:setTimeout", args)
+                .unwrap();
+            let timer_bytes = core.timers_memory_bytes();
+            let before_cancel = core.estimated_memory_bytes;
+            core.write_reg(3, id).unwrap();
+            core.dispatch_timer_hostcall("timer:clearTimeout", RegRange { start: 3, count: 1 })
+                .unwrap();
+            assert_eq!(core.estimated_memory_bytes, before_cancel - timer_bytes);
+            assert!(core.active_timers.is_empty());
+            assert!(core.timer_invocations.is_empty());
+
+            core.dispatch_timer_hostcall("timer:setTimeout", args)
+                .unwrap();
+            if eager {
+                let seed = core.capture_execution_seed_eager_for_test();
+                core.reset_execution_state_from_seed_eager_for_test(&seed)
+                    .unwrap();
+            } else {
+                let seed = core.capture_execution_seed();
+                core.reset_execution_state_from_seed(&seed).unwrap();
+            }
+            assert!(core.active_timers.is_empty());
+            assert!(core.timer_invocations.is_empty());
+            assert_eq!(core.next_timer_id, 0);
+            // Old queued tokens remain inert even though the new module has
+            // no function table in which their former callback could execute.
+            core.run_event_loop_until_idle(&test_module(vec![Ir3Instruction::Halt]))
+                .unwrap();
+            assert!(core.event_loop.macrotasks.is_empty());
+            assert_eq!(
+                core.estimated_memory_bytes,
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn timer_payload_stays_charged_until_callback_setup_finishes() {
+        let module = test_module_with_functions(
+            vec![Ir3Instruction::Return { value: 0 }],
+            vec![timer_callback_desc(0, "budget_timer")],
+        );
+        let mut core = core_with_timer_payload(test_quickjs_config());
+        core.dispatch_timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 3 })
+            .unwrap();
+        let task = core.event_loop.turn().macrotask.unwrap();
+        core.sync_estimated_memory_bytes().unwrap();
+        let before_callback = core.estimated_memory_bytes;
+        let timer_bytes = core.timers_memory_bytes();
+        let wrapper_bytes = InterpreterCore::retained_module_program_bytes(&module) * 2
+            + 8 * std::mem::size_of::<Ir3Instruction>() as u64;
+        assert!(timer_bytes > wrapper_bytes);
+        core.config.max_total_memory_bytes = before_callback;
+
+        let error = core.execute_macrotask_callback(&module, &task).unwrap_err();
+
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { requested_bytes, .. }
+                if requested_bytes == before_callback + wrapper_bytes,
+        ));
+        assert!(core.active_timers.is_empty());
+        assert!(core.timer_invocations.is_empty());
+        assert_eq!(core.promise_in_flight_task_bytes, 0);
+        assert_eq!(core.estimated_memory_bytes, before_callback - timer_bytes);
+        assert_eq!(
+            core.estimated_memory_bytes,
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]

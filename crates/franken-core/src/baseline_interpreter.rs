@@ -66,6 +66,7 @@ use crate::runtime_config::ExecutionConfig;
 
 mod array_methods;
 mod async_generator;
+mod function_methods;
 mod string_methods;
 use async_generator::{
     AsyncGeneratorAwaitKind, AsyncGeneratorContinuation, AsyncGeneratorObject,
@@ -3535,6 +3536,7 @@ pub struct ExecutionSeed {
     function_objects: BTreeMap<FunctionObjectKey, ObjectId>,
     symbol_state: RuntimeSymbolState,
     array_null_prototypes: BTreeSet<ObjectId>,
+    function_null_prototypes: BTreeSet<ObjectId>,
 }
 
 impl Serialize for ExecutionSeed {
@@ -3543,9 +3545,12 @@ impl Serialize for ExecutionSeed {
 
         let include_symbol_state = !self.symbol_state.is_default() || self.contains_symbol_values();
         let include_array_null_prototypes = !self.array_null_prototypes.is_empty();
+        let include_function_null_prototypes = !self.function_null_prototypes.is_empty();
         let mut seed = serializer.serialize_struct(
             "ExecutionSeed",
-            5 + usize::from(include_symbol_state) + usize::from(include_array_null_prototypes),
+            5 + usize::from(include_symbol_state)
+                + usize::from(include_array_null_prototypes)
+                + usize::from(include_function_null_prototypes),
         )?;
         seed.serialize_field("registers", &self.registers)?;
         seed.serialize_field("register_labels", &self.register_labels)?;
@@ -3572,6 +3577,9 @@ impl Serialize for ExecutionSeed {
         if include_array_null_prototypes {
             seed.serialize_field("array_null_prototypes", &self.array_null_prototypes)?;
         }
+        if include_function_null_prototypes {
+            seed.serialize_field("function_null_prototypes", &self.function_null_prototypes)?;
+        }
         seed.end()
     }
 }
@@ -3592,6 +3600,8 @@ impl<'de> Deserialize<'de> for ExecutionSeed {
             symbol_state: Option<PresentValue<RuntimeSymbolState>>,
             #[serde(default)]
             array_null_prototypes: BTreeSet<ObjectId>,
+            #[serde(default)]
+            function_null_prototypes: BTreeSet<ObjectId>,
         }
 
         let wire = ExecutionSeedWire::deserialize(deserializer)?;
@@ -3612,6 +3622,7 @@ impl<'de> Deserialize<'de> for ExecutionSeed {
             function_objects,
             symbol_state: wire.symbol_state.map(|state| state.0).unwrap_or_default(),
             array_null_prototypes: wire.array_null_prototypes,
+            function_null_prototypes: wire.function_null_prototypes,
         };
         if !symbol_state_was_present && seed.contains_symbol_values() {
             return Err(D::Error::custom(
@@ -3632,6 +3643,14 @@ impl ExecutionSeed {
                 .is_some_and(|object| object.is_array && object.prototype.is_none())
             {
                 return Err("execution seed null array prototype must reference an array with no prototype".into());
+            }
+        }
+        for object_id in &self.function_null_prototypes {
+            if !self.function_objects.values().any(|id| id == object_id)
+                || !self.heap.get(object_id.0 as usize)
+                    .is_some_and(|object| object.prototype.is_none())
+            {
+                return Err("execution seed null function prototype must reference a function with no prototype".into());
             }
         }
         Ok(())
@@ -3661,8 +3680,11 @@ impl ExecutionSeed {
 pub struct EagerExecutionSeed {
     pub registers: Vec<Value>,
     pub heap: Vec<HeapObject>,
+    function_prototypes: BTreeMap<FunctionObjectKey, ObjectId>,
+    function_objects: BTreeMap<FunctionObjectKey, ObjectId>,
     symbol_state: RuntimeSymbolState,
     array_null_prototypes: BTreeSet<ObjectId>,
+    function_null_prototypes: BTreeSet<ObjectId>,
 }
 
 impl EagerExecutionSeed {
@@ -3679,6 +3701,14 @@ impl EagerExecutionSeed {
                 .is_some_and(|object| object.is_array && object.prototype.is_none())
             {
                 return Err("eager seed null array prototype must reference an array with no prototype".into());
+            }
+        }
+        for object_id in &self.function_null_prototypes {
+            if !self.function_objects.values().any(|id| id == object_id)
+                || !self.heap.get(object_id.0 as usize)
+                .is_some_and(|object| object.prototype.is_none())
+            {
+                return Err("eager seed null function prototype must reference an object with no prototype".into());
             }
         }
         Ok(())
@@ -3862,9 +3892,11 @@ pub struct InterpreterCore {
     heap: Vec<HeapObject>,
     /// Arrays whose implicit intrinsic prototype was explicitly removed.
     array_null_prototypes: BTreeSet<ObjectId>,
+    /// Function backing objects whose implicit Function prototype was removed.
+    function_null_prototypes: BTreeSet<ObjectId>,
     /// Active joins prevent recursive array stringification from recursing forever.
     array_join_stack: Vec<ObjectId>,
-    /// Native array-method buffers held while getters or setters execute.
+    /// Native-method buffers held while getters, setters or callbacks execute.
     array_method_temporary_bytes: u64,
     /// Interpreter-owned Symbol identities, descriptions, and global registry.
     symbol_state: RuntimeSymbolState,
@@ -4040,6 +4072,7 @@ impl InterpreterCore {
             call_stack: Vec::new(),
             heap: Vec::new(),
             array_null_prototypes: BTreeSet::new(),
+            function_null_prototypes: BTreeSet::new(),
             array_join_stack: Vec::new(),
             array_method_temporary_bytes: 0,
             symbol_state: RuntimeSymbolState::default(),
@@ -4270,6 +4303,7 @@ impl InterpreterCore {
             function_objects: self.function_objects.clone(),
             symbol_state: self.symbol_state.clone(),
             array_null_prototypes: self.array_null_prototypes.clone(),
+            function_null_prototypes: self.function_null_prototypes.clone(),
         }
     }
 
@@ -4291,6 +4325,7 @@ impl InterpreterCore {
         self.call_stack.clear();
         self.heap = seed.heap.clone();
         self.array_null_prototypes = seed.array_null_prototypes.clone();
+        self.function_null_prototypes = seed.function_null_prototypes.clone();
         self.array_join_stack.clear();
         self.array_method_temporary_bytes = 0;
         self.symbol_state = seed.symbol_state.clone();
@@ -4408,8 +4443,11 @@ impl InterpreterCore {
         EagerExecutionSeed {
             registers: self.registers.clone(),
             heap: self.heap.clone(),
+            function_prototypes: self.function_prototypes.clone(),
+            function_objects: self.function_objects.clone(),
             symbol_state: self.symbol_state.clone(),
             array_null_prototypes: self.array_null_prototypes.clone(),
+            function_null_prototypes: self.function_null_prototypes.clone(),
         }
     }
 
@@ -4425,7 +4463,10 @@ impl InterpreterCore {
             })?;
         self.registers = seed.registers.clone();
         self.heap = seed.heap.clone();
+        self.function_prototypes = seed.function_prototypes.clone();
+        self.function_objects = seed.function_objects.clone();
         self.array_null_prototypes = seed.array_null_prototypes.clone();
+        self.function_null_prototypes = seed.function_null_prototypes.clone();
         self.array_join_stack.clear();
         self.array_method_temporary_bytes = 0;
         self.symbol_state = seed.symbol_state.clone();
@@ -5174,6 +5215,16 @@ impl InterpreterCore {
         receiver_label: crate::ifc_artifacts::Label,
     ) -> Result<(Value, crate::ifc_artifacts::Label), InterpreterError> {
         let result = match builtin.kind {
+            BuiltinFunctionKind::FunctionPrototypeCall
+            | BuiltinFunctionKind::FunctionPrototypeApply => {
+                return self.dispatch_function_method(
+                    module,
+                    builtin.kind,
+                    receiver,
+                    args,
+                    receiver_label,
+                );
+            }
             BuiltinFunctionKind::StringPrototypeIndexOf
             | BuiltinFunctionKind::StringPrototypeLastIndexOf
             | BuiltinFunctionKind::StringPrototypeIncludes
@@ -5460,7 +5511,9 @@ impl InterpreterCore {
                     | BuiltinFunctionKind::StringPrototypeStartsWith
                     | BuiltinFunctionKind::StringPrototypeEndsWith
                     | BuiltinFunctionKind::StringPrototypeSlice
-                    | BuiltinFunctionKind::StringPrototypeSubstring => {
+                    | BuiltinFunctionKind::StringPrototypeSubstring
+                    | BuiltinFunctionKind::FunctionPrototypeCall
+                    | BuiltinFunctionKind::FunctionPrototypeApply => {
                         unreachable!("handled above")
                     }
                 }
@@ -8336,7 +8389,7 @@ impl InterpreterCore {
                             builtin,
                             None,
                             args,
-                            crate::ifc_artifacts::Label::Public,
+                            callee_label.clone(),
                         ) {
                             Ok((result, result_label)) => {
                                 self.write_reg_with_label(dst, result, result_label)?;
@@ -8873,7 +8926,7 @@ impl InterpreterCore {
                             builtin,
                             Some(&receiver_val),
                             args,
-                            receiver_label.clone(),
+                            receiver_label.join(&callee_label),
                         ) {
                             Ok((result, result_label)) => {
                                 self.write_reg_with_label(dst, result, result_label)?;
@@ -11716,14 +11769,17 @@ impl InterpreterCore {
                 }
                 let Some(object_id) = self.function_object_id(&function_like) else {
                     self.preflight_legacy_property_key_for_hook(&key)?;
-                    return Ok(Value::Bool(false));
+                    return Ok(Value::Bool(
+                        self.intrinsic_function_property(&function_like, &key).is_some(),
+                    ));
                 };
                 self.heap
                     .get(object_id.0 as usize)
                     .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
                 self.run_pre_runtime_property_access_hook(module, object_id, &key)?;
                 Ok(Value::Bool(
-                    self.prototype_chain_has_runtime_key(object_id, &key)?,
+                    self.prototype_chain_has_runtime_key(object_id, &key)?
+                        || self.intrinsic_function_property(&function_like, &key).is_some(),
                 ))
             }
             other => Err(InterpreterError::TypeError {
@@ -12009,7 +12065,7 @@ impl InterpreterCore {
         let Some(backing) =
             self.iterator_carrier_backing_id(receiver, "iterator protocol object")?
         else {
-            return Ok(Value::Undefined);
+            return Ok(self.intrinsic_function_property(receiver, key).unwrap_or(Value::Undefined));
         };
         self.run_pre_runtime_property_access_hook(module, backing, key)?;
         *label = label.join(&self.runtime_property_label(backing, key));
@@ -12030,7 +12086,7 @@ impl InterpreterCore {
                 }
                 None => Ok(Value::Undefined),
             },
-            None => Ok(Value::Undefined),
+            None => Ok(self.intrinsic_function_property(receiver, key).unwrap_or(Value::Undefined)),
         }
     }
 
@@ -13071,6 +13127,7 @@ impl InterpreterCore {
                 }
             };
             self.set_array_prototype_metadata(object_id, prototype)?;
+            self.set_function_prototype_metadata(&receiver, object_id, prototype)?;
             self.heap
                 .get_mut(object_id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
@@ -13171,6 +13228,11 @@ impl InterpreterCore {
             && let Some(prototype) = self.function_prototype_for_value(&receiver)?
         {
             self.write_reg(dst, Value::Object(prototype))?;
+            return Ok(false);
+        }
+
+        if let Some(value) = self.intrinsic_function_property(&receiver, key) {
+            self.write_reg_with_label(dst, value, read_label)?;
             return Ok(false);
         }
 
@@ -18491,6 +18553,8 @@ impl InterpreterCore {
                 .saturating_mul(std::mem::size_of::<ObjectId>() as u64))
             .saturating_add((self.array_null_prototypes.len() as u64)
                 .saturating_mul(MEMORY_ESTIMATE_MAP_ENTRY_BYTES + std::mem::size_of::<ObjectId>() as u64))
+            .saturating_add((self.function_null_prototypes.len() as u64)
+                .saturating_mul(MEMORY_ESTIMATE_MAP_ENTRY_BYTES + std::mem::size_of::<ObjectId>() as u64))
     }
 
     fn sync_estimated_memory_bytes(&mut self) -> Result<u64, InterpreterError> {
@@ -18644,6 +18708,7 @@ impl InterpreterCore {
         self.async_functions.truncate(snapshot.async_functions_len);
         self.heap.truncate(snapshot.heap_len);
         self.array_null_prototypes.retain(|id| (id.0 as usize) < snapshot.heap_len);
+        self.function_null_prototypes.retain(|id| (id.0 as usize) < snapshot.heap_len);
         if let Some(function_prototypes) = snapshot.function_prototypes {
             self.function_prototypes = function_prototypes;
         }
@@ -19376,7 +19441,8 @@ impl InterpreterCore {
     fn function_object_key(value: &Value) -> Option<FunctionObjectKey> {
         match value {
             Value::Function(idx) => Some(FunctionObjectKey::Function(*idx)),
-            Value::Closure(closure_id) | Value::AsyncFunction(closure_id) | Value::AsyncGeneratorFunction(closure_id) => {
+            Value::Closure(closure_id) | Value::GeneratorFunction(closure_id)
+            | Value::AsyncFunction(closure_id) | Value::AsyncGeneratorFunction(closure_id) => {
                 Some(FunctionObjectKey::Closure(*closure_id))
             }
             Value::BuiltinFunction(builtin) => Some(FunctionObjectKey::Builtin(builtin.kind)),
@@ -19403,6 +19469,10 @@ impl InterpreterCore {
                     Ok(Some(FunctionObjectKey::Closure(*closure_id)))
                 }
             }
+            Value::BuiltinFunction(BuiltinFunction {
+                kind: BuiltinFunctionKind::FunctionPrototypeCall | BuiltinFunctionKind::FunctionPrototypeApply,
+                ..
+            }) => Ok(None),
             Value::BuiltinFunction(builtin) => Ok(Some(FunctionObjectKey::Builtin(builtin.kind))),
             _ => Ok(None),
         }
@@ -19861,6 +19931,7 @@ impl InterpreterCore {
     fn rollback_json_parse(&mut self, heap_len: usize, estimated_memory_bytes: u64) {
         self.heap.truncate(heap_len);
         self.array_null_prototypes.retain(|id| (id.0 as usize) < heap_len);
+        self.function_null_prototypes.retain(|id| (id.0 as usize) < heap_len);
         self.estimated_memory_bytes = estimated_memory_bytes;
     }
 

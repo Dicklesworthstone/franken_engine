@@ -2220,6 +2220,8 @@ pub enum BuiltinFunctionKind {
     StringPrototypeEndsWith,
     StringPrototypeSlice,
     StringPrototypeSubstring,
+    FunctionPrototypeCall,
+    FunctionPrototypeApply,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -2282,6 +2284,8 @@ impl BuiltinFunction {
             BuiltinFunctionKind::StringPrototypeEndsWith => "endsWith",
             BuiltinFunctionKind::StringPrototypeSlice => "slice",
             BuiltinFunctionKind::StringPrototypeSubstring => "substring",
+            BuiltinFunctionKind::FunctionPrototypeCall => "call",
+            BuiltinFunctionKind::FunctionPrototypeApply => "apply",
         }
     }
 }

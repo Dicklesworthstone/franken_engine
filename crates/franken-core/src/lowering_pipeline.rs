@@ -18,13 +18,13 @@ use crate::flow_lattice::{
 use crate::hash_tiers::ContentHash;
 use crate::ifc_artifacts::{Label, ProofMethod};
 use crate::ir_contract::{
-    BindingId, BindingKind, CapabilityTag, EffectBoundary, FlowAnnotation, IR_ACCESSOR_GET_PREFIX,
+    AccessorKind, BindingId, BindingKind, CapabilityTag, EffectBoundary, FlowAnnotation, IR_ACCESSOR_GET_PREFIX,
     IR_ACCESSOR_SET_PREFIX, IR_SUPER_PROTOTYPE_PROPERTY, Ir0Module, Ir1Literal, Ir1Module, Ir1Op,
     Ir1PropertyKey, Ir2Module, Ir2Op, Ir3FunctionDesc, Ir3Instruction, Ir3Module, IrError, IrLevel,
     IteratorCloseReason, Reg, RegRange, ResolvedBinding, ScopeId, ScopeKind, ScopeNode,
-    verify_ir1_derived_constructor_schema, verify_ir1_generator_boundaries,
+    verify_ir1_accessor_definition_schema, verify_ir1_derived_constructor_schema, verify_ir1_generator_boundaries,
     verify_ir1_method_definition_schema, verify_ir1_source, verify_ir2_derived_constructor_schema,
-    verify_ir2_generator_boundaries, verify_ir2_method_definition_schema,
+    verify_ir2_accessor_definition_schema, verify_ir2_generator_boundaries, verify_ir2_method_definition_schema,
     verify_ir3_specialization, verify_schema_version,
 };
 use crate::js_string::JsString;
@@ -5955,6 +5955,7 @@ pub fn lower_ir1_to_ir2(
     verify_schema_version(&ir1.header).map_err(lowering_error_from_ir_error)?;
     verify_ir1_derived_constructor_schema(ir1).map_err(lowering_error_from_ir_error)?;
     verify_ir1_method_definition_schema(ir1).map_err(lowering_error_from_ir_error)?;
+    verify_ir1_accessor_definition_schema(ir1).map_err(lowering_error_from_ir_error)?;
     verify_ir1_generator_boundaries(ir1).map_err(lowering_error_from_ir_error)?;
     let ir1_hash = ir1.content_hash();
     let mut ir2 = Ir2Module::new(ir1_hash, ir1.header.source_label.clone());
@@ -6295,6 +6296,7 @@ pub fn lower_ir2_to_ir3(
     verify_schema_version(&ir2.header).map_err(lowering_error_from_ir_error)?;
     verify_ir2_derived_constructor_schema(ir2).map_err(lowering_error_from_ir_error)?;
     verify_ir2_method_definition_schema(ir2).map_err(lowering_error_from_ir_error)?;
+    verify_ir2_accessor_definition_schema(ir2).map_err(lowering_error_from_ir_error)?;
     verify_ir2_generator_boundaries(ir2).map_err(lowering_error_from_ir_error)?;
     enum PendingJump {
         Unconditional {
@@ -7109,7 +7111,9 @@ pub fn lower_ir2_to_ir3(
                     label_id: *label_id,
                 });
             }
-            Ir1Op::GetProperty { key } => {
+            Ir1Op::GetProperty { key } | Ir1Op::GetPropertyWithReceiver { key } => {
+                let receiver = matches!(&op.inner, Ir1Op::GetPropertyWithReceiver { .. })
+                    .then(|| value_stack.pop().unwrap_or(0));
                 let (obj, key_reg) = match key {
                     Ir1PropertyKey::Static(key) => {
                         let obj = value_stack.pop().unwrap_or(0);
@@ -7128,14 +7132,15 @@ pub fn lower_ir2_to_ir3(
                     }
                 };
                 let dst = alloc_register(&mut register_cursor);
-                ir3.instructions.push(Ir3Instruction::GetProperty {
-                    obj,
-                    key: key_reg,
-                    dst,
+                ir3.instructions.push(match receiver {
+                    Some(receiver) => Ir3Instruction::GetPropertyWithReceiver { obj, key: key_reg, receiver, dst },
+                    None => Ir3Instruction::GetProperty { obj, key: key_reg, dst },
                 });
                 value_stack.push(dst);
             }
-            Ir1Op::SetProperty { key } => {
+            Ir1Op::SetProperty { key } | Ir1Op::SetPropertyWithReceiver { key } => {
+                let receiver = matches!(&op.inner, Ir1Op::SetPropertyWithReceiver { .. })
+                    .then(|| value_stack.pop().unwrap_or(0));
                 let val = value_stack.pop().unwrap_or(0);
                 let (obj, key_reg) = match key {
                     Ir1PropertyKey::Static(key) => {
@@ -7154,14 +7159,13 @@ pub fn lower_ir2_to_ir3(
                         (obj, key_reg)
                     }
                 };
-                ir3.instructions.push(Ir3Instruction::SetProperty {
-                    obj,
-                    key: key_reg,
-                    val,
+                ir3.instructions.push(match receiver {
+                    Some(receiver) => Ir3Instruction::SetPropertyWithReceiver { obj, key: key_reg, receiver, val },
+                    None => Ir3Instruction::SetProperty { obj, key: key_reg, val },
                 });
                 value_stack.push(val);
             }
-            Ir1Op::DefineMethod { key } => {
+            Ir1Op::DefineMethod { key } | Ir1Op::DefineAccessor { key, .. } => {
                 let func = value_stack.pop().unwrap_or(0);
                 let (obj, key_reg) = match key {
                     Ir1PropertyKey::Static(key) => {
@@ -7180,10 +7184,14 @@ pub fn lower_ir2_to_ir3(
                         (obj, key_reg)
                     }
                 };
-                ir3.instructions.push(Ir3Instruction::DefineMethod {
-                    obj,
-                    key: key_reg,
-                    func,
+                ir3.instructions.push(match &op.inner {
+                    Ir1Op::DefineAccessor { kind, .. } => Ir3Instruction::DefineAccessor {
+                        obj,
+                        key: key_reg,
+                        func,
+                        kind: *kind,
+                    },
+                    _ => Ir3Instruction::DefineMethod { obj, key: key_reg, func },
                 });
                 value_stack.push(obj);
             }
@@ -8629,7 +8637,9 @@ pub fn lower_ir2_to_ir3(
                     }
                     fn_value_stack.push(dst);
                 }
-                Ir1Op::GetProperty { key } => {
+                Ir1Op::GetProperty { key } | Ir1Op::GetPropertyWithReceiver { key } => {
+                    let receiver = matches!(&ir2_op.inner, Ir1Op::GetPropertyWithReceiver { .. })
+                        .then(|| fn_value_stack.pop().unwrap_or(0));
                     let (obj, key_reg) = match key {
                         Ir1PropertyKey::Static(k) => {
                             let obj = fn_value_stack.pop().unwrap_or(0);
@@ -8648,14 +8658,15 @@ pub fn lower_ir2_to_ir3(
                         }
                     };
                     let dst = alloc_register(&mut fn_reg);
-                    ir3.instructions.push(Ir3Instruction::GetProperty {
-                        obj,
-                        key: key_reg,
-                        dst,
+                    ir3.instructions.push(match receiver {
+                        Some(receiver) => Ir3Instruction::GetPropertyWithReceiver { obj, key: key_reg, receiver, dst },
+                        None => Ir3Instruction::GetProperty { obj, key: key_reg, dst },
                     });
                     fn_value_stack.push(dst);
                 }
-                Ir1Op::SetProperty { key } => {
+                Ir1Op::SetProperty { key } | Ir1Op::SetPropertyWithReceiver { key } => {
+                    let receiver = matches!(&ir2_op.inner, Ir1Op::SetPropertyWithReceiver { .. })
+                        .then(|| fn_value_stack.pop().unwrap_or(0));
                     let value = fn_value_stack.pop().unwrap_or(0);
                     let (obj, key_reg) = match key {
                         Ir1PropertyKey::Static(k) => {
@@ -8674,14 +8685,13 @@ pub fn lower_ir2_to_ir3(
                             (obj, kr)
                         }
                     };
-                    ir3.instructions.push(Ir3Instruction::SetProperty {
-                        obj,
-                        key: key_reg,
-                        val: value,
+                    ir3.instructions.push(match receiver {
+                        Some(receiver) => Ir3Instruction::SetPropertyWithReceiver { obj, key: key_reg, receiver, val: value },
+                        None => Ir3Instruction::SetProperty { obj, key: key_reg, val: value },
                     });
                     fn_value_stack.push(value);
                 }
-                Ir1Op::DefineMethod { key } => {
+                Ir1Op::DefineMethod { key } | Ir1Op::DefineAccessor { key, .. } => {
                     let func = fn_value_stack.pop().unwrap_or(0);
                     let (obj, key_reg) = match key {
                         Ir1PropertyKey::Static(key) => {
@@ -8700,10 +8710,14 @@ pub fn lower_ir2_to_ir3(
                             (obj, key_reg)
                         }
                     };
-                    ir3.instructions.push(Ir3Instruction::DefineMethod {
-                        obj,
-                        key: key_reg,
-                        func,
+                    ir3.instructions.push(match &ir2_op.inner {
+                        Ir1Op::DefineAccessor { kind, .. } => Ir3Instruction::DefineAccessor {
+                            obj,
+                            key: key_reg,
+                            func,
+                            kind: *kind,
+                        },
+                        _ => Ir3Instruction::DefineMethod { obj, key: key_reg, func },
                     });
                     fn_value_stack.push(obj);
                 }
@@ -10490,6 +10504,24 @@ fn exact_prefixed_property_key(prefix: &str, key: &JsString) -> JsString {
     JsString::from(prefix).concat(key)
 }
 
+fn push_member_get(ops: &mut Vec<Ir1Op>, object: &Expression, key: Ir1PropertyKey) {
+    if matches!(object, Expression::Super) {
+        ops.push(Ir1Op::LoadThis);
+        ops.push(Ir1Op::GetPropertyWithReceiver { key });
+    } else {
+        ops.push(Ir1Op::GetProperty { key });
+    }
+}
+
+fn push_member_set(ops: &mut Vec<Ir1Op>, object: &Expression, key: Ir1PropertyKey) {
+    if matches!(object, Expression::Super) {
+        ops.push(Ir1Op::LoadThis);
+        ops.push(Ir1Op::SetPropertyWithReceiver { key });
+    } else {
+        ops.push(Ir1Op::SetProperty { key });
+    }
+}
+
 fn lower_expression_to_ir1(
     expression: &Expression,
     ops: &mut Vec<Ir1Op>,
@@ -10981,7 +11013,7 @@ fn lower_expression_to_ir1(
                             binding_id: key_binding,
                         });
                     }
-                    ops.push(Ir1Op::GetProperty { key: key.clone() });
+                    push_member_get(ops, object, key.clone());
                     ops.push(Ir1Op::UnaryOp {
                         operator: UnaryOperator::UnaryPlus,
                     });
@@ -11035,7 +11067,7 @@ fn lower_expression_to_ir1(
                     });
                     // SetProperty leaves the new value on the stack (the prefix
                     // result). For a postfix update, drop it and reload the prior.
-                    ops.push(Ir1Op::SetProperty { key });
+                    push_member_set(ops, object, key);
                     if let Some(tmp) = prior_binding {
                         ops.push(Ir1Op::Pop);
                         ops.push(Ir1Op::LoadBinding { binding_id: tmp });
@@ -11247,7 +11279,7 @@ fn lower_expression_to_ir1(
                             binding_id: key_binding,
                         });
                     }
-                    ops.push(Ir1Op::GetProperty { key: key.clone() });
+                    push_member_get(ops, object, key.clone());
 
                     let current_binding = alloc_internal_binding(
                         bindings,
@@ -11324,7 +11356,7 @@ fn lower_expression_to_ir1(
                     ops.push(Ir1Op::LoadBinding {
                         binding_id: current_binding,
                     });
-                    ops.push(Ir1Op::SetProperty { key });
+                    push_member_set(ops, object, key);
                     ops.push(Ir1Op::Pop);
                     ops.push(Ir1Op::Label { id: end_label });
                     ops.push(Ir1Op::LoadBinding {
@@ -11411,7 +11443,7 @@ fn lower_expression_to_ir1(
                             binding_id: key_binding,
                         });
                     }
-                    ops.push(Ir1Op::GetProperty { key: key.clone() });
+                    push_member_get(ops, object, key.clone());
 
                     // combined = current <op> rhs (current is the deeper stack
                     // slot / lhs; BinaryOp pops rhs then lhs).
@@ -11454,7 +11486,7 @@ fn lower_expression_to_ir1(
                     });
                     // SetProperty leaves the assigned value on the stack, so the
                     // compound assignment yields the combined value (as ES requires).
-                    ops.push(Ir1Op::SetProperty { key });
+                    push_member_set(ops, object, key);
                     return Ok(());
                 }
 
@@ -11486,7 +11518,7 @@ fn lower_expression_to_ir1(
                     root_scope_id,
                     label_counter,
                 )?;
-                ops.push(Ir1Op::SetProperty { key });
+                push_member_set(ops, object, key);
             } else {
                 return Err(unsupported_frontier_expression_error(
                     "assignment_target",
@@ -11600,7 +11632,7 @@ fn lower_expression_to_ir1(
                     root_scope_id,
                     label_counter,
                 )?;
-                ops.push(Ir1Op::GetProperty { key });
+                push_member_get(ops, object, key);
                 ops.push(Ir1Op::LoadThis);
                 for arg in arguments {
                     lower_expression_to_ir1(
@@ -11791,7 +11823,7 @@ fn lower_expression_to_ir1(
                         root_scope_id,
                         label_counter,
                     )?;
-                    ops.push(Ir1Op::GetProperty { key });
+                    push_member_get(ops, object, key);
                     // Now stack has: [... receiver_binding_val, method_val]
                     // Push receiver again for CallMethod
                     ops.push(Ir1Op::LoadBinding {
@@ -11919,7 +11951,7 @@ fn lower_expression_to_ir1(
                 root_scope_id,
                 label_counter,
             )?;
-            ops.push(Ir1Op::GetProperty { key });
+            push_member_get(ops, object, key);
         }
         Expression::OptionalMember {
             object,
@@ -12185,13 +12217,13 @@ fn lower_expression_to_ir1(
         }
         Expression::ObjectLiteral(properties) => {
             // Data-only literals retain the compact batch path. Spreads and
-            // concise methods require an incrementally retained target object.
+            // methods/accessors require an incrementally retained target object.
             let has_spread = properties
                 .iter()
                 .any(|prop| matches!(&prop.value, Expression::SpreadElement(_)));
             let has_method = properties
                 .iter()
-                .any(|prop| prop.kind == ObjectPropertyKind::Method);
+                .any(|prop| prop.kind != ObjectPropertyKind::Data);
 
             if has_spread || has_method {
                 // With spreads/methods, use incremental construction:
@@ -12211,7 +12243,7 @@ fn lower_expression_to_ir1(
                             label_counter,
                         )?;
                         ops.push(Ir1Op::SpreadIntoObject);
-                    } else if prop.kind == ObjectPropertyKind::Method {
+                    } else if prop.kind != ObjectPropertyKind::Data {
                         // Computed keys are evaluated exactly once, before the
                         // function value is created, matching PropertyDefinitionEvaluation.
                         let key = if prop.computed {
@@ -12237,7 +12269,18 @@ fn lower_expression_to_ir1(
                             root_scope_id,
                             label_counter,
                         )?;
-                        ops.push(Ir1Op::DefineMethod { key });
+                        ops.push(match prop.kind {
+                            ObjectPropertyKind::Get => Ir1Op::DefineAccessor {
+                                key,
+                                kind: AccessorKind::Get,
+                            },
+                            ObjectPropertyKind::Set => Ir1Op::DefineAccessor {
+                                key,
+                                kind: AccessorKind::Set,
+                            },
+                            ObjectPropertyKind::Method => Ir1Op::DefineMethod { key },
+                            ObjectPropertyKind::Data => unreachable!("data property handled below"),
+                        });
                     } else {
                         // Data property - emit key and value, then merge a
                         // one-property temporary object into the target.
@@ -12798,7 +12841,10 @@ fn classify_ir1_op(
         ),
         Ir1Op::GetProperty { .. }
         | Ir1Op::SetProperty { .. }
+        | Ir1Op::GetPropertyWithReceiver { .. }
+        | Ir1Op::SetPropertyWithReceiver { .. }
         | Ir1Op::DefineMethod { .. }
+        | Ir1Op::DefineAccessor { .. }
         | Ir1Op::DeleteProperty { .. }
         | Ir1Op::CopyDataProperties { .. } => (EffectBoundary::ReadEffect, None, None),
         Ir1Op::ForInInit

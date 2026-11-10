@@ -47,7 +47,7 @@ use crate::checkpoint::{
 };
 use crate::hash_tiers::ContentHash;
 use crate::ir_contract::{
-    HostcallDecisionRecord, IR_ACCESSOR_GET_PREFIX, IR_ACCESSOR_SET_PREFIX,
+    AccessorKind, HostcallDecisionRecord, IR_ACCESSOR_GET_PREFIX, IR_ACCESSOR_SET_PREFIX,
     IR_SUPER_CONSTRUCTOR_PROPERTY, IR_SUPER_PROTOTYPE_PROPERTY, Ir0Module, Ir3FunctionDesc,
     Ir3Instruction, Ir3Module, IteratorCloseReason, RegRange, WitnessEvent, WitnessEventKind,
 };
@@ -111,7 +111,8 @@ const MEMORY_ESTIMATE_LABEL_BASE_BYTES: u64 = 32;
 /// Approximate per-closure base footprint.
 const MEMORY_ESTIMATE_CLOSURE_BASE_BYTES: u64 = 32;
 /// Approximate per-call-frame base footprint.
-const MEMORY_ESTIMATE_CALL_FRAME_BASE_BYTES: u64 = 64;
+const MEMORY_ESTIMATE_CALL_FRAME_BASE_BYTES: u64 =
+    64 + std::mem::size_of::<crate::ifc_artifacts::Label>() as u64;
 /// Approximate per-iterator base footprint.
 const MEMORY_ESTIMATE_ITERATOR_BASE_BYTES: u64 = 32;
 /// Approximate per-generator base footprint.
@@ -2061,11 +2062,6 @@ enum RuntimePropertyKey {
     Symbol(SymbolId),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AccessorKind {
-    Get,
-    Set,
-}
 
 /// Resumable state for the object-rest CopyDataProperties operation.
 ///
@@ -2691,6 +2687,9 @@ struct CallFrame {
     saved_module_specifier: Option<String>,
     /// Async function ID if this frame is executing an async function.
     async_function_id: Option<u32>,
+    /// Provenance of the property read/write that selected an accessor. Kept
+    /// on the activation so nested calls, returns, and throws cannot erase it.
+    accessor_context_label: crate::ifc_artifacts::Label,
 }
 
 // ---------------------------------------------------------------------------
@@ -5864,6 +5863,7 @@ impl InterpreterCore {
                 saved_scope_depth,
                 saved_scope_chain: None,
                 async_function_id: Some(async_id),
+                accessor_context_label: crate::ifc_artifacts::Label::Public,
             }],
             ip: setup.function_entry as usize,
             register_base: 0,
@@ -6991,6 +6991,7 @@ impl InterpreterCore {
         mut arg_vals: Vec<Value>,
         return_ip: usize,
         return_reg: Option<u32>,
+        context_label: crate::ifc_artifacts::Label,
     ) -> Result<(), InterpreterError> {
         let owner_program = self.callable_module(&callee_val)?;
         let module = owner_program.as_deref().unwrap_or(module);
@@ -7062,7 +7063,7 @@ impl InterpreterCore {
                 function_index: Some(func_idx),
                 saved_module_specifier: self.current_module_specifier.clone(),
                 this_value,
-                this_label: crate::ifc_artifacts::Label::Public,
+                this_label: context_label.clone(),
                 new_target_value: Value::Undefined,
                 new_target_label: crate::ifc_artifacts::Label::Public,
                 super_value,
@@ -7078,6 +7079,7 @@ impl InterpreterCore {
                 saved_scope_depth: scope_depth,
                 saved_scope_chain: saved_chain,
                 async_function_id: None,
+                accessor_context_label: context_label.clone(),
             });
 
             if let Some(env) = captured_env {
@@ -7099,7 +7101,7 @@ impl InterpreterCore {
             for (i, val) in arg_vals.into_iter().enumerate() {
                 let reg = i as u32;
                 if reg < self.config.max_registers {
-                    self.write_reg(reg, val)?;
+                    self.write_reg_with_label(reg, val, context_label.clone())?;
                 }
             }
 
@@ -7274,6 +7276,7 @@ impl InterpreterCore {
                 saved_scope_depth: scope_depth,
                 saved_scope_chain,
                 async_function_id: None,
+                accessor_context_label: crate::ifc_artifacts::Label::Public,
             });
 
             if let Some(environment) = captured_env {
@@ -7438,6 +7441,7 @@ impl InterpreterCore {
                 saved_scope_depth,
                 saved_scope_chain: None,
                 async_function_id: None,
+                accessor_context_label: crate::ifc_artifacts::Label::Public,
             }],
             ip: setup.function_entry as usize,
             register_base: 0,
@@ -8765,6 +8769,7 @@ impl InterpreterCore {
                                     saved_scope_depth: scope_depth,
                                     saved_scope_chain: saved_chain,
                                     async_function_id: None,
+                                    accessor_context_label: crate::ifc_artifacts::Label::Public,
                                 });
 
                                 // If calling a closure, restore its captured environment.
@@ -9137,6 +9142,7 @@ impl InterpreterCore {
                             saved_scope_depth: scope_depth,
                             saved_scope_chain: saved_chain,
                             async_function_id: None,
+                            accessor_context_label: crate::ifc_artifacts::Label::Public,
                         });
 
                         if let Some(env) = captured_env {
@@ -9393,6 +9399,7 @@ impl InterpreterCore {
                 Ir3Instruction::GetProperty { obj, key, dst } => {
                     let obj_val = self.read_reg(obj)?;
                     let key_val = self.read_reg(key)?;
+                    let read_label = self.read_reg_label(obj)?.join(&self.read_reg_label(key)?);
                     let property_key = Self::executable_property_key(&key_val);
                     self.validate_executable_property_key(&property_key)?;
 
@@ -9403,6 +9410,7 @@ impl InterpreterCore {
                             *oid,
                             &property_key,
                             dst,
+                            read_label.clone(),
                         )?,
                         // String receivers expose `length` (UTF-16 code-unit
                         // count) and the String.prototype methods wired for
@@ -9483,6 +9491,7 @@ impl InterpreterCore {
                                 obj_val.clone(),
                                 &property_key,
                                 dst,
+                                read_label.clone(),
                             )?,
                         _ => {
                             return Err(InterpreterError::TypeError {
@@ -9491,27 +9500,8 @@ impl InterpreterCore {
                             });
                         }
                     };
-                    // bd-ojvo1 (core parity): a value read from an own string
-                    // property carries the IFC provenance it was written with,
-                    // AND the reading of a property of a labeled object is at
-                    // least as sensitive as that object (bd-0zybl-class object
-                    // join, previously absent in the core twin's property read).
-                    // Raise dst's label by (own/inherited property label) JOIN
-                    // (object register label) JOIN (key register label) when the
-                    // join is non-Public (no-op otherwise), so neither a Secret
-                    // value written to a lower-labeled object nor a read off a
-                    // Secret object launders back out as Public.
-                    if let Value::Object(oid) = &obj_val {
-                        let prop_label = self.runtime_property_label(*oid, &property_key);
-                        let raise = prop_label
-                            .join(&self.read_reg_label(obj)?)
-                            .join(&self.read_reg_label(key)?);
-                        if !matches!(raise, crate::ifc_artifacts::Label::Public) {
-                            let current = self.read_reg_label(dst)?;
-                            let value = self.read_reg(dst)?;
-                            self.write_reg_with_label(dst, value, current.join(&raise))?;
-                        }
-                    }
+                    // Object reads apply their labels before entering a getter;
+                    // caller register numbers are no longer valid in that frame.
                     if !called_accessor {
                         self.ip += 1;
                     }
@@ -9520,7 +9510,9 @@ impl InterpreterCore {
                     let obj_val = self.read_reg(obj)?;
                     let key_val = self.read_reg(key)?;
                     let set_val = self.read_reg(val)?;
-                    let value_label = self.read_reg_label(val)?;
+                    let value_label = self.read_reg_label(val)?
+                        .join(&self.read_reg_label(obj)?)
+                        .join(&self.read_reg_label(key)?);
                     let property_key = Self::executable_property_key(&key_val);
                     self.validate_executable_property_key(&property_key)?;
 
@@ -9552,7 +9544,63 @@ impl InterpreterCore {
                         self.ip += 1;
                     }
                 }
-                Ir3Instruction::DefineMethod { obj, key, func } => {
+                Ir3Instruction::GetPropertyWithReceiver { obj, key, receiver, dst } => {
+                    let base = self.read_reg(obj)?;
+                    let receiver_value = self.read_reg(receiver)?;
+                    let property_key = Self::executable_property_key(&self.read_reg(key)?);
+                    self.validate_executable_property_key(&property_key)?;
+                    let object_id = match base {
+                        Value::Object(id) => Some(id),
+                        ref function if Self::function_object_key(function).is_some() => {
+                            self.function_object_id(function)
+                        }
+                        other => return Err(InterpreterError::TypeError {
+                            expected: "object super base".into(),
+                            got: other.type_name().into(),
+                        }),
+                    };
+                    let mut label = self.read_reg_label(obj)?
+                        .join(&self.read_reg_label(key)?)
+                        .join(&self.read_reg_label(receiver)?);
+                    let property = if let Some(id) = object_id {
+                        self.run_pre_runtime_property_access_hook(module, id, &property_key)?;
+                        label = label.join(&self.runtime_property_label(id, &property_key));
+                        self.prototype_chain_lookup_runtime_property(id, &property_key)?
+                    } else {
+                        None
+                    };
+                    if !self.load_runtime_property(module, receiver_value, property, dst, label)? {
+                        self.ip += 1;
+                    }
+                }
+                Ir3Instruction::SetPropertyWithReceiver { obj, key, receiver, val } => {
+                    let base = self.read_reg(obj)?;
+                    let receiver_value = self.read_reg(receiver)?;
+                    let property_key = Self::executable_property_key(&self.read_reg(key)?);
+                    self.validate_executable_property_key(&property_key)?;
+                    let object_id = match base {
+                        Value::Object(id) => id,
+                        ref function if Self::function_object_key(function).is_some() => {
+                            self.ensure_function_object(function)?.expect("function object")
+                        }
+                        other => return Err(InterpreterError::TypeError {
+                            expected: "object super base".into(),
+                            got: other.type_name().into(),
+                        }),
+                    };
+                    let label = self.read_reg_label(obj)?
+                        .join(&self.read_reg_label(key)?)
+                        .join(&self.read_reg_label(receiver)?)
+                        .join(&self.read_reg_label(val)?);
+                    let value = self.read_reg(val)?;
+                    if !self.set_object_property_or_call_accessor(
+                        module, receiver_value, object_id, property_key, value, label,
+                    )? {
+                        self.ip += 1;
+                    }
+                }
+                Ir3Instruction::DefineMethod { obj, key, func }
+                | Ir3Instruction::DefineAccessor { obj, key, func, .. } => {
                     let obj_val = self.read_reg(obj)?;
                     let key_val = self.read_reg(key)?;
                     let func_val = self.read_reg(func)?;
@@ -9570,12 +9618,23 @@ impl InterpreterCore {
                                 object_id,
                                 &property_key,
                             )?;
-                            self.define_method_property(
-                                object_id,
-                                property_key,
-                                func_val,
-                                definition_label,
-                            )?;
+                            match instr {
+                                Ir3Instruction::DefineAccessor { kind, .. } => {
+                                    self.define_accessor_property(
+                                        object_id,
+                                        property_key,
+                                        func_val,
+                                        kind,
+                                        definition_label,
+                                    )?;
+                                }
+                                _ => self.define_method_property(
+                                    object_id,
+                                    property_key,
+                                    func_val,
+                                    definition_label,
+                                )?,
+                            }
                         }
                         other => {
                             return Err(InterpreterError::TypeError {
@@ -10266,6 +10325,7 @@ impl InterpreterCore {
                                     saved_scope_depth: scope_depth,
                                     saved_scope_chain: saved_chain,
                                     async_function_id: None,
+                                    accessor_context_label: crate::ifc_artifacts::Label::Public,
                                 });
 
                                 // If calling a closure, restore its captured environment.
@@ -12406,6 +12466,7 @@ impl InterpreterCore {
                     vec![value],
                     self.ip,
                     None,
+                    self.runtime_property_label(target_id, &key),
                 )?;
                 Ok(true)
             }
@@ -12582,6 +12643,10 @@ impl InterpreterCore {
                             }
                         }
                     };
+                    let getter_label = match &source_value {
+                        Value::Object(source_id) => self.runtime_property_label(*source_id, &key),
+                        _ => crate::ifc_artifacts::Label::Public,
+                    };
                     self.copy_data_properties_states[state_index].awaiting =
                         Some(CopyDataPropertiesAwaiting::Getter(key));
                     if let Err(err) = self.sync_estimated_memory_bytes() {
@@ -12595,6 +12660,7 @@ impl InterpreterCore {
                         Vec::new(),
                         self.ip,
                         Some(value_dst),
+                        getter_label,
                     ) {
                         self.discard_copy_data_properties_state(state_index);
                         return Err(err);
@@ -12619,10 +12685,11 @@ impl InterpreterCore {
         receiver: Value,
         property: Option<RuntimeProperty>,
         dst: u32,
+        read_label: crate::ifc_artifacts::Label,
     ) -> Result<bool, InterpreterError> {
         match property {
             Some(RuntimeProperty::Data(value)) => {
-                self.write_reg(dst, value)?;
+                self.write_reg_with_label(dst, value, read_label)?;
                 Ok(false)
             }
             Some(RuntimeProperty::Accessor(accessor)) => {
@@ -12634,15 +12701,16 @@ impl InterpreterCore {
                         Vec::new(),
                         self.ip + 1,
                         Some(dst),
+                        read_label,
                     )?;
                     Ok(true)
                 } else {
-                    self.write_reg(dst, Value::Undefined)?;
+                    self.write_reg_with_label(dst, Value::Undefined, read_label)?;
                     Ok(false)
                 }
             }
             None => {
-                self.write_reg(dst, Value::Undefined)?;
+                self.write_reg_with_label(dst, Value::Undefined, read_label)?;
                 Ok(false)
             }
         }
@@ -12655,10 +12723,12 @@ impl InterpreterCore {
         object_id: ObjectId,
         key: &RuntimePropertyKey,
         dst: u32,
+        read_label: crate::ifc_artifacts::Label,
     ) -> Result<bool, InterpreterError> {
         self.run_pre_runtime_property_access_hook(module, object_id, key)?;
         let property = self.prototype_chain_lookup_runtime_property(object_id, key)?;
-        self.load_runtime_property(module, receiver, property, dst)
+        let read_label = read_label.join(&self.runtime_property_label(object_id, key));
+        self.load_runtime_property(module, receiver, property, dst, read_label)
     }
 
     fn set_object_property_or_call_accessor(
@@ -12671,7 +12741,10 @@ impl InterpreterCore {
         value_label: crate::ifc_artifacts::Label,
     ) -> Result<bool, InterpreterError> {
         self.run_pre_runtime_property_access_hook(module, object_id, &key)?;
-        if matches!(&key, RuntimePropertyKey::String(key) if key.as_str() == Some("__proto__")) {
+        let property = self.prototype_chain_lookup_runtime_property(object_id, &key)?;
+        if !matches!(&property, Some(RuntimeProperty::Accessor(_)))
+            && matches!(&key, RuntimePropertyKey::String(key) if key.as_str() == Some("__proto__"))
+        {
             let prototype = match value {
                 Value::Object(id) => Some(id),
                 Value::Null => None,
@@ -12686,7 +12759,7 @@ impl InterpreterCore {
             self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
             return Ok(false);
         }
-        match self.prototype_chain_lookup_runtime_property(object_id, &key)? {
+        match property {
             Some(RuntimeProperty::Accessor(accessor)) => {
                 if let Some(setter) = accessor.set {
                     self.enter_function_call(
@@ -12696,6 +12769,7 @@ impl InterpreterCore {
                         vec![value],
                         self.ip + 1,
                         None,
+                        value_label.join(&self.runtime_property_label(object_id, &key)),
                     )?;
                     Ok(true)
                 } else {
@@ -12703,6 +12777,18 @@ impl InterpreterCore {
                 }
             }
             _ => {
+                // A super assignment looks up the descriptor on its base but
+                // creates or updates a data property on the actual receiver.
+                let object_id = match &receiver {
+                    Value::Object(id) => *id,
+                    function if Self::function_object_key(function).is_some() => {
+                        self.ensure_function_object(function)?.expect("function receiver")
+                    }
+                    other => return Err(InterpreterError::TypeError {
+                        expected: "object property receiver".into(),
+                        got: other.type_name().into(),
+                    }),
+                };
                 let previous_label = self.own_stored_runtime_property_label(object_id, &key);
                 self.set_own_runtime_property_label(object_id, &key, &value_label)?;
                 if let Err(error) = self.set_object_runtime_property(object_id, key.clone(), value)
@@ -12721,6 +12807,7 @@ impl InterpreterCore {
         receiver: Value,
         key: &RuntimePropertyKey,
         dst: u32,
+        read_label: crate::ifc_artifacts::Label,
     ) -> Result<bool, InterpreterError> {
         if let (
             Value::BuiltinFunction(BuiltinFunction {
@@ -12746,14 +12833,15 @@ impl InterpreterCore {
             None
         };
         if let Some((name, label)) = method_name {
-            self.write_reg_with_label(dst, Value::Str(name), label)?;
+            self.write_reg_with_label(dst, Value::Str(name), label.join(&read_label))?;
             return Ok(false);
         }
 
         if let Some(object_id) = self.function_object_id(&receiver) {
             self.run_pre_runtime_property_access_hook(module, object_id, key)?;
             if let Some(property) = self.prototype_chain_lookup_runtime_property(object_id, key)? {
-                return self.load_runtime_property(module, receiver, Some(property), dst);
+                let read_label = read_label.join(&self.runtime_property_label(object_id, key));
+                return self.load_runtime_property(module, receiver, Some(property), dst, read_label);
             }
         } else {
             self.preflight_legacy_property_key_for_hook(key)?;
@@ -17103,11 +17191,14 @@ impl InterpreterCore {
             });
         }
         let actual_reg = self.register_base + reg as usize;
-        Ok(self
+        let label = self
             .register_labels
             .get(actual_reg)
             .cloned()
-            .unwrap_or(crate::ifc_artifacts::Label::Public))
+            .unwrap_or(crate::ifc_artifacts::Label::Public);
+        Ok(self.call_stack.iter().fold(label, |label, frame| {
+            label.join(&frame.accessor_context_label)
+        }))
     }
 
     fn clear_register_range(&mut self, start: usize, end: usize) {
@@ -17281,6 +17372,7 @@ impl InterpreterCore {
             .saturating_add(Self::estimate_label_bytes(&frame.new_target_label))
             .saturating_add(Self::estimate_value_bytes(&frame.super_value))
             .saturating_add(Self::estimate_label_bytes(&frame.super_label))
+            .saturating_add(Self::estimate_label_bytes(&frame.accessor_context_label))
             .saturating_add(
                 frame
                     .construct_this
@@ -18439,6 +18531,34 @@ impl InterpreterCore {
         function: Value,
         definition_label: crate::ifc_artifacts::Label,
     ) -> Result<(), InterpreterError> {
+        self.define_method_or_accessor_property(object_id, key, function, None, definition_label)
+    }
+
+    fn define_accessor_property(
+        &mut self,
+        object_id: ObjectId,
+        key: RuntimePropertyKey,
+        function: Value,
+        kind: AccessorKind,
+        definition_label: crate::ifc_artifacts::Label,
+    ) -> Result<(), InterpreterError> {
+        self.define_method_or_accessor_property(
+            object_id,
+            key,
+            function,
+            Some(kind),
+            definition_label,
+        )
+    }
+
+    fn define_method_or_accessor_property(
+        &mut self,
+        object_id: ObjectId,
+        key: RuntimePropertyKey,
+        function: Value,
+        accessor_kind: Option<AccessorKind>,
+        definition_label: crate::ifc_artifacts::Label,
+    ) -> Result<(), InterpreterError> {
         self.validate_executable_property_key(&key)?;
         let closure_id = match &function {
             Value::Closure(id) | Value::AsyncFunction(id) => *id,
@@ -18463,11 +18583,21 @@ impl InterpreterCore {
         }
 
         let name = self.inferred_method_name(&key);
+        let name = match accessor_kind {
+            Some(AccessorKind::Get) => JsString::from("get ").concat(&name),
+            Some(AccessorKind::Set) => JsString::from("set ").concat(&name),
+            None => name,
+        };
         // Capture the exact string/Symbol key and definition label before the
         // property write moves them, so the property carrier gets the same IFC
         // provenance as closure_method_metadata.
         let method_key = key.clone();
-        let method_label = definition_label.clone();
+        let previous_label = self.own_stored_runtime_property_label(object_id, &method_key);
+        let method_label = if accessor_kind.is_some() {
+            definition_label.join(&previous_label)
+        } else {
+            definition_label.clone()
+        };
         self.closure_method_metadata.insert(
             closure_id,
             ClosureMethodMetadata {
@@ -18476,18 +18606,81 @@ impl InterpreterCore {
                 definition_label,
             },
         );
-        let previous_label = self.own_stored_runtime_property_label(object_id, &method_key);
+
         if let Err(error) =
             self.set_own_runtime_property_label(object_id, &method_key, &method_label)
         {
             self.closure_method_metadata.remove(&closure_id);
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
             return Err(error);
         }
-        if let Err(error) =
-            self.set_object_runtime_property(object_id, key, function)
-        {
+        let definition = match accessor_kind {
+            Some(kind) => self.set_object_accessor_property(object_id, key, function, kind),
+            None => self.set_plain_data_runtime_property(object_id, key, function),
+        };
+        if let Err(error) = definition {
             self.set_own_runtime_property_label(object_id, &method_key, &previous_label)?;
             self.closure_method_metadata.remove(&closure_id);
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Define one own accessor half without converting exact UTF-16 or Symbol
+    /// keys to an encoded string. Descriptor replacement keeps creation order.
+    fn set_object_accessor_property(
+        &mut self,
+        object_id: ObjectId,
+        key: RuntimePropertyKey,
+        function: Value,
+        kind: AccessorKind,
+    ) -> Result<(), InterpreterError> {
+        self.validate_executable_property_key(&key)?;
+        if let RuntimePropertyKey::Symbol(symbol) = key {
+            let object = self.heap.get(object_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+            let (get, set) = match object.properties.baseline_symbol_property(symbol) {
+                Some(BaselineSymbolProperty::Accessor { get, set }) => (get.clone(), set.clone()),
+                _ => (None, None),
+            };
+            let property = match kind {
+                AccessorKind::Get => BaselineSymbolProperty::Accessor { get: Some(function), set },
+                AccessorKind::Set => BaselineSymbolProperty::Accessor { get, set: Some(function) },
+            };
+            return self.set_symbol_property(object_id, symbol, property);
+        }
+        let RuntimePropertyKey::String(key) = key else { unreachable!() };
+        let (previous_data, previous_data_position, previous_accessor, order_rollback) = {
+            let object = self.heap.get_mut(object_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+            let existed = object.contains_own_runtime_property(&RuntimePropertyKey::String(key.clone()));
+            let order_rollback = object.record_property_definition(&key, existed);
+            let previous_data_position = object.properties.exact_string_insertion_position(&key);
+            let previous_data = object.properties.remove_exact_preserving_baseline_order(&key);
+            let previous_accessor = object.exact_accessor(&key);
+            let mut accessor = previous_accessor.clone().unwrap_or_default();
+            match kind {
+                AccessorKind::Get => accessor.get = Some(function),
+                AccessorKind::Set => accessor.set = Some(function),
+            }
+            object.insert_exact_accessor(key.clone(), accessor);
+            (previous_data, previous_data_position, previous_accessor, order_rollback)
+        };
+        if let Err(error) = self.sync_estimated_memory_bytes() {
+            let object = self.heap.get_mut(object_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+            if let Some(previous) = previous_data {
+                object.properties.insert_exact_at_string_position(
+                    key.clone(), previous, previous_data_position.unwrap_or(0),
+                );
+            }
+            if let Some(previous) = previous_accessor {
+                object.insert_exact_accessor(key.clone(), previous);
+            } else {
+                object.remove_exact_accessor(&key);
+            }
+            object.rollback_property_definition_order(&key, order_rollback);
             self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
             return Err(error);
         }
@@ -23977,6 +24170,7 @@ mod tests {
                 object,
                 &RuntimePropertyKey::String(d800.clone()),
                 0,
+                crate::ifc_artifacts::Label::Public,
             ),
             Err(InterpreterError::TypeError { .. })
         ));
@@ -30923,6 +31117,7 @@ mod tests {
             saved_scope_depth: core.scope_chain.depth(),
             saved_scope_chain: None,
             async_function_id: Some(0),
+            accessor_context_label: crate::ifc_artifacts::Label::Public,
         });
         let baseline = core
             .sync_estimated_memory_bytes()
@@ -32626,6 +32821,139 @@ mod tests {
         assert_eq!(result.completion_label, crate::ifc_artifacts::Label::Secret);
     }
 
+    #[test]
+    fn object_accessor_getter_and_setter_preserve_property_provenance() {
+        for config in [test_quickjs_config(), test_v8_config()] {
+            let mut core = InterpreterCore::new(config.clone(), "getter-label");
+            let object = core.alloc_object_with_prototype(None).unwrap();
+            core.write_reg_with_label(
+                0, Value::Object(object), crate::ifc_artifacts::Label::Secret,
+            ).unwrap();
+            let module = test_module_with_pool_and_functions(
+                vec![
+                    Ir3Instruction::LoadStr { dst: 1, pool_index: 0 },
+                    Ir3Instruction::CreateClosure { function_index: 0, capture_count: 0, dst: 2 },
+                    Ir3Instruction::DefineAccessor { obj: 0, key: 1, func: 2, kind: AccessorKind::Get },
+                    Ir3Instruction::GetProperty { obj: 0, key: 1, dst: 3 },
+                    Ir3Instruction::Return { value: 3 },
+                    Ir3Instruction::LoadInt { dst: 0, value: 42 },
+                    Ir3Instruction::Return { value: 0 },
+                ],
+                vec!["value".into()],
+                vec![Ir3FunctionDesc {
+                    entry: 5, arity: 0, frame_size: 1, name: None,
+                    is_generator: false, rest_param_index: None,
+                }],
+            );
+            let result = core.execute(&module).unwrap();
+            assert_eq!(result.value, Value::Int(42));
+            assert_eq!(result.completion_label, crate::ifc_artifacts::Label::Secret);
+
+            let mut core = InterpreterCore::new(config, "setter-label");
+            let object = core.alloc_object_with_prototype(None).unwrap();
+            core.write_reg(0, Value::Object(object)).unwrap();
+            core.write_reg_with_label(
+                4, Value::Int(42), crate::ifc_artifacts::Label::Secret,
+            ).unwrap();
+            let module = test_module_with_pool_and_functions(
+                vec![
+                    Ir3Instruction::LoadStr { dst: 1, pool_index: 0 },
+                    Ir3Instruction::CreateClosure { function_index: 0, capture_count: 0, dst: 2 },
+                    Ir3Instruction::DefineAccessor { obj: 0, key: 1, func: 2, kind: AccessorKind::Set },
+                    Ir3Instruction::SetProperty { obj: 0, key: 1, val: 4 },
+                    Ir3Instruction::LoadStr { dst: 1, pool_index: 1 },
+                    Ir3Instruction::GetProperty { obj: 0, key: 1, dst: 3 },
+                    Ir3Instruction::Return { value: 3 },
+                    Ir3Instruction::LoadThis { dst: 1 },
+                    Ir3Instruction::LoadStr { dst: 2, pool_index: 1 },
+                    Ir3Instruction::SetProperty { obj: 1, key: 2, val: 0 },
+                    Ir3Instruction::Return { value: 0 },
+                ],
+                vec!["value".into(), "saved".into()],
+                vec![Ir3FunctionDesc {
+                    entry: 7, arity: 1, frame_size: 3, name: None,
+                    is_generator: false, rest_param_index: None,
+                }],
+            );
+            let result = core.execute(&module).unwrap();
+            assert_eq!(result.value, Value::Int(42));
+            assert_eq!(result.completion_label, crate::ifc_artifacts::Label::Secret);
+            assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        }
+    }
+
+    #[test]
+    fn accessor_definition_rolls_back_heap_order_labels_and_home_object_on_refusal() {
+        for symbol_key in [false, true] {
+            let mut core = quickjs_test_core();
+            let object = core.alloc_object_with_properties(&[("before", Value::Int(1))]).unwrap();
+            let key = if symbol_key {
+                RuntimePropertyKey::Symbol(core.allocate_private_symbol(Some("slot".into())).unwrap())
+            } else {
+                RuntimePropertyKey::String("slot".into())
+            };
+            core.set_plain_data_runtime_property(object, key.clone(), Value::Int(3)).unwrap();
+            core.set_plain_data_property(object, "after".into(), Value::Int(2)).unwrap();
+            core.closures.push(ClosureValue {
+                function_index: 0, captured_env: vec![], module_specifier: None,
+            });
+            core.sync_estimated_memory_bytes().unwrap();
+            let original = core.heap[object.0 as usize].clone();
+            let original_memory = core.estimated_memory_bytes();
+            core.define_accessor_property(
+                object, key.clone(), Value::Closure(0), AccessorKind::Get,
+                crate::ifc_artifacts::Label::Secret,
+            ).unwrap();
+            let admitted_memory = core.estimated_memory_bytes();
+            core.heap[object.0 as usize] = original.clone();
+            core.closure_method_metadata.remove(&0);
+            core.sync_estimated_memory_bytes().unwrap();
+            assert_eq!(core.estimated_memory_bytes(), original_memory);
+            core.config.max_total_memory_bytes = admitted_memory - 1;
+            let error = core.define_accessor_property(
+                object, key.clone(), Value::Closure(0), AccessorKind::Get,
+                crate::ifc_artifacts::Label::Secret,
+            ).unwrap_err();
+            assert!(matches!(error, InterpreterError::MemoryBudgetExceeded { .. }));
+            assert_eq!(core.heap[object.0 as usize], original);
+            assert!(core.closure_method_metadata.is_empty());
+            assert_eq!(core.estimated_memory_bytes(), original_memory);
+            assert_eq!(core.runtime_property_label(object, &key), crate::ifc_artifacts::Label::Public);
+        }
+    }
+
+    #[test]
+    fn accessor_halves_keep_names_nonconstructibility_and_joined_labels() {
+        let mut core = quickjs_test_core();
+        let object = core.alloc_object_with_prototype(None).unwrap();
+        let symbol = core.allocate_private_symbol(Some("slot".into())).unwrap();
+        let key = RuntimePropertyKey::Symbol(symbol);
+        for function_index in 0..2 {
+            core.closures.push(ClosureValue {
+                function_index, captured_env: vec![], module_specifier: None,
+            });
+        }
+        core.define_accessor_property(
+            object, key.clone(), Value::Closure(0), AccessorKind::Get,
+            crate::ifc_artifacts::Label::Secret,
+        ).unwrap();
+        core.define_accessor_property(
+            object, key.clone(), Value::Closure(1), AccessorKind::Set,
+            crate::ifc_artifacts::Label::Public,
+        ).unwrap();
+        assert_eq!(core.closure_method_metadata[&0].name, JsString::from("get [slot]"));
+        assert_eq!(core.closure_method_metadata[&1].name, JsString::from("set [slot]"));
+        assert_eq!(core.function_prototype_key_for_value(&Value::Closure(0)).unwrap(), None);
+        assert_eq!(core.function_prototype_key_for_value(&Value::Closure(1)).unwrap(), None);
+        assert_eq!(core.runtime_property_label(object, &key), crate::ifc_artifacts::Label::Secret);
+        assert_eq!(
+            core.prototype_chain_lookup_runtime_property(object, &key).unwrap(),
+            Some(RuntimeProperty::Accessor(AccessorProperty {
+                get: Some(Value::Closure(0)), set: Some(Value::Closure(1)),
+            })),
+        );
+    }
+
     // -- ES2015 Class Semantics Tests (bd-6a61n.1.3) --
 
     #[test]
@@ -33690,6 +34018,7 @@ mod tests {
             saved_scope_depth: core.scope_chain.depth(),
             saved_scope_chain: None,
             async_function_id: None,
+            accessor_context_label: crate::ifc_artifacts::Label::Public,
         });
         core.complete_return(return_value, crate::ifc_artifacts::Label::Public)
             .expect("constructor return should complete");

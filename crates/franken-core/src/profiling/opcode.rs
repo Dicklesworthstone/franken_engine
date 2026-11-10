@@ -114,6 +114,9 @@ profiling_opcodes! {
         AsyncReturn,
         AsyncThrow,
         CreateAsyncGenerator,
+        DefineAccessor,
+        GetPropertyWithReceiver,
+        SetPropertyWithReceiver,
     ],
     unit: [
         Halt,

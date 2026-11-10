@@ -1744,6 +1744,8 @@ pub enum ObjectPropertyKind {
     #[default]
     Data,
     Method,
+    Get,
+    Set,
 }
 
 impl ObjectPropertyKind {
@@ -1751,6 +1753,8 @@ impl ObjectPropertyKind {
         match self {
             Self::Data => "data",
             Self::Method => "method",
+            Self::Get => "get",
+            Self::Set => "set",
         }
     }
 }

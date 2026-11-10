@@ -11311,7 +11311,7 @@ fn parse_object_literal(
                 shorthand: false,
                 kind: ObjectPropertyKind::Data,
             });
-        } else if let Some((key, value, computed)) =
+        } else if let Some((key, value, computed, kind)) =
             try_parse_object_method(p, span, context, recursion_depth)?
         {
             // Preserve the concise-method distinction even though the body
@@ -11321,7 +11321,7 @@ fn parse_object_literal(
                 value,
                 computed,
                 shorthand: false,
-                kind: ObjectPropertyKind::Method,
+                kind,
             });
         } else {
             // Shorthand property: { x } means { x: x }
@@ -11355,22 +11355,35 @@ fn parse_object_literal(
     Ok(Expression::ObjectLiteral(properties))
 }
 
-/// Parse the ordinary object-literal method subset: `name(params) { body }`
-/// and `[expression](params) { body }`.
+/// Parse concise object methods and accessor definitions, including computed
+/// names. A method named `get`, `set`, or `async` remains an ordinary method.
 ///
 /// The function payload remains an anonymous ordinary-function-shaped body, but
-/// the enclosing [`ObjectPropertyKind::Method`] carrier preserves the semantic
-/// distinction needed by later lowering/runtime slices. Async, generator, and
-/// accessor forms remain outside this bounded subset.
+/// the enclosing property kind preserves its descriptor and [[HomeObject]]
+/// semantics. Generator methods remain outside this bounded subset.
 fn try_parse_object_method(
     part: &str,
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
     recursion_depth: u64,
-) -> ParseResult<Option<(Expression, Expression, bool)>> {
+) -> ParseResult<Option<(Expression, Expression, bool, ObjectPropertyKind)>> {
     let grammar_context = ScanGrammarContext::from_execution_context(context).expression();
     let part = trim_directive_trivia(part).0;
-    let (is_async, part) = if let Some(after_async) = strip_contextual_keyword(part, "async") {
+    let (kind, part) = [
+        ("get", ObjectPropertyKind::Get),
+        ("set", ObjectPropertyKind::Set),
+    ]
+    .into_iter()
+    .find_map(|(keyword, kind)| {
+        let after_keyword = strip_contextual_keyword(part, keyword)?;
+        let after_trivia = trim_directive_trivia(after_keyword).0;
+        (!after_trivia.starts_with('(') && !after_trivia.is_empty())
+            .then_some((kind, after_trivia))
+    })
+    .unwrap_or((ObjectPropertyKind::Method, part));
+    let (is_async, part) = if kind == ObjectPropertyKind::Method
+        && let Some(after_async) = strip_contextual_keyword(part, "async")
+    {
         let (after_trivia, saw_line_terminator) = trim_directive_trivia(after_async);
         if after_trivia.starts_with('(') {
             (false, part)
@@ -11427,7 +11440,8 @@ fn try_parse_object_method(
         let value =
             parse_function_expression(function_source, is_async, span, context, recursion_depth + 1)?;
         validate_object_method_parameter_names(&value, span, context)?;
-        return Ok(Some((key, value, true)));
+        validate_object_accessor_parameters(kind, &value, span, context)?;
+        return Ok(Some((key, value, true, kind)));
     }
 
     let mut parameter_list_index = None;
@@ -11460,7 +11474,36 @@ fn try_parse_object_method(
     let value =
         parse_function_expression(function_source, is_async, span, context, recursion_depth + 1)?;
     validate_object_method_parameter_names(&value, span, context)?;
-    Ok(Some((key, value, false)))
+    validate_object_accessor_parameters(kind, &value, span, context)?;
+    Ok(Some((key, value, false, kind)))
+}
+
+fn validate_object_accessor_parameters(
+    kind: ObjectPropertyKind,
+    value: &Expression,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<()> {
+    let Expression::Function { params, .. } = value else {
+        return Ok(());
+    };
+    let invalid = match kind {
+        ObjectPropertyKind::Get => !params.is_empty(),
+        ObjectPropertyKind::Set => {
+            params.len() != 1
+                || matches!(&params[0].pattern, BindingPattern::Rest(_))
+        }
+        ObjectPropertyKind::Data | ObjectPropertyKind::Method => false,
+    };
+    if invalid {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "a getter takes no parameters; a setter takes exactly one non-rest parameter",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_object_method_source_consumed(

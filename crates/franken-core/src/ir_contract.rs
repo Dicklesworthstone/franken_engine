@@ -37,6 +37,9 @@ pub struct IrSchemaVersion {
 }
 
 impl IrSchemaVersion {
+    /// `0.19.0` adds typed object-literal accessor definition operations to
+    /// IR1, IR2, and IR3. Core minors `0.16.0` through `0.18.0` are skipped
+    /// because they identify incompatible `franken-engine` IR wires.
     /// `0.15.0` adds the explicit `Contained` execution outcome to serialized
     /// IR4 witnesses. Core minor `0.14.0` is intentionally skipped because it
     /// identifies an incompatible `franken-engine` IR wire.
@@ -65,7 +68,7 @@ impl IrSchemaVersion {
     /// lone-surrogate values use `$wtf16`.
     pub const CURRENT: Self = Self {
         major: 0,
-        minor: 15,
+        minor: 19,
         patch: 0,
     };
 
@@ -402,6 +405,22 @@ pub enum Ir1PropertyKey {
     Dynamic,
 }
 
+/// Accessor half installed by a typed property definition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AccessorKind {
+    Get,
+    Set,
+}
+
+impl AccessorKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Get => "get",
+            Self::Set => "set",
+        }
+    }
+}
+
 /// Private IR1/IR3 static-key prefix used by class lowering to define accessor
 /// descriptors without extending the register-machine instruction set.
 pub const IR_ACCESSOR_GET_PREFIX: &str = "__franken_ir_accessor_get__:";
@@ -680,6 +699,18 @@ pub enum Ir1Op {
     /// the mode inside `body_ops` preserves the public function-variant fields
     /// and every synchronous artifact's existing wire/canonical shape.
     AsyncFunctionStart,
+    /// Define one accessor half, retaining the target object. Uses the same
+    /// static/dynamic stack shape as `DefineMethod` and preserves Symbol keys.
+    DefineAccessor {
+        key: Ir1PropertyKey,
+        kind: AccessorKind,
+    },
+    /// Property read with a distinct receiver (for `super`). The receiver is
+    /// above the ordinary GetProperty operands on the value stack.
+    GetPropertyWithReceiver { key: Ir1PropertyKey },
+    /// Property write with a distinct receiver (for `super`). The receiver is
+    /// above the ordinary SetProperty operands, including the assigned value.
+    SetPropertyWithReceiver { key: Ir1PropertyKey },
 }
 
 impl Ir1Op {
@@ -891,6 +922,27 @@ impl Ir1Op {
                 map.insert(
                     "op".to_string(),
                     CanonicalValue::String("define_method".to_string()),
+                );
+                map.insert("key".to_string(), key.canonical_value());
+            }
+            Self::DefineAccessor { key, kind } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("define_accessor".to_string()),
+                );
+                map.insert("key".to_string(), key.canonical_value());
+                map.insert(
+                    "kind".to_string(),
+                    CanonicalValue::String(kind.as_str().to_string()),
+                );
+            }
+            Self::GetPropertyWithReceiver { key } | Self::SetPropertyWithReceiver { key } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String(match self {
+                        Self::GetPropertyWithReceiver { .. } => "get_property_with_receiver",
+                        _ => "set_property_with_receiver",
+                    }.to_string()),
                 );
                 map.insert("key".to_string(), key.canonical_value());
             }
@@ -1902,6 +1954,18 @@ pub enum Ir3Instruction {
         function_index: u32,
         capture_count: u32,
     },
+    /// Install a getter/setter with its lexical [[HomeObject]], preserving the
+    /// other accessor half when the existing own descriptor is an accessor.
+    DefineAccessor {
+        obj: Reg,
+        key: Reg,
+        func: Reg,
+        kind: AccessorKind,
+    },
+    /// Read through `obj`'s prototype chain while invoking accessors on `receiver`.
+    GetPropertyWithReceiver { obj: Reg, key: Reg, receiver: Reg, dst: Reg },
+    /// Look up a setter through `obj`; call it or create a data property on `receiver`.
+    SetPropertyWithReceiver { obj: Reg, key: Reg, receiver: Reg, val: Reg },
 }
 
 impl Ir3Instruction {
@@ -2165,6 +2229,33 @@ impl Ir3Instruction {
                 map.insert("func".to_string(), CanonicalValue::U64(u64::from(*func)));
                 map.insert("key".to_string(), CanonicalValue::U64(u64::from(*key)));
                 map.insert("obj".to_string(), CanonicalValue::U64(u64::from(*obj)));
+            }
+            Self::DefineAccessor { obj, key, func, kind } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("define_accessor".to_string()),
+                );
+                map.insert("func".to_string(), CanonicalValue::U64(u64::from(*func)));
+                map.insert("key".to_string(), CanonicalValue::U64(u64::from(*key)));
+                map.insert("obj".to_string(), CanonicalValue::U64(u64::from(*obj)));
+                map.insert(
+                    "kind".to_string(),
+                    CanonicalValue::String(kind.as_str().to_string()),
+                );
+            }
+            Self::GetPropertyWithReceiver { obj, key, receiver, dst } => {
+                map.insert("op".to_string(), CanonicalValue::String("get_property_with_receiver".to_string()));
+                map.insert("obj".to_string(), CanonicalValue::U64(u64::from(*obj)));
+                map.insert("key".to_string(), CanonicalValue::U64(u64::from(*key)));
+                map.insert("receiver".to_string(), CanonicalValue::U64(u64::from(*receiver)));
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+            }
+            Self::SetPropertyWithReceiver { obj, key, receiver, val } => {
+                map.insert("op".to_string(), CanonicalValue::String("set_property_with_receiver".to_string()));
+                map.insert("obj".to_string(), CanonicalValue::U64(u64::from(*obj)));
+                map.insert("key".to_string(), CanonicalValue::U64(u64::from(*key)));
+                map.insert("receiver".to_string(), CanonicalValue::U64(u64::from(*receiver)));
+                map.insert("val".to_string(), CanonicalValue::U64(u64::from(*val)));
             }
             Self::DeleteProperty { obj, key, dst } => {
                 map.insert(
@@ -3342,6 +3433,7 @@ pub fn verify_ir1_source(module: &Ir1Module, ir0_hash: &ContentHash) -> Result<(
     verify_schema_version(&module.header)?;
     verify_ir1_derived_constructor_schema(module)?;
     verify_ir1_method_definition_schema(module)?;
+    verify_ir1_accessor_definition_schema(module)?;
     verify_ir1_generator_boundaries(module)?;
     match &module.header.source_hash {
         Some(source_hash) if source_hash == ir0_hash => Ok(()),
@@ -3367,6 +3459,7 @@ pub fn verify_ir3_specialization(module: &Ir3Module) -> Result<(), IrError> {
     verify_schema_version(&module.header)?;
     verify_ir3_derived_constructor_schema(module)?;
     verify_ir3_method_definition_schema(module)?;
+    verify_ir3_accessor_definition_schema(module)?;
     verify_ir3_generator_boundaries(module)?;
     if let Some(spec) = &module.specialization {
         if spec.proof_input_ids.is_empty() {
@@ -3470,11 +3563,12 @@ pub fn verify_schema_version(header: &IrHeader) -> Result<(), IrError> {
         ));
     }
 
-    // Core 0.6.0, 0.7.0, 0.12.0, and 0.14.0 never existed. Those numeric versions
+    // Core 0.6.0, 0.7.0, 0.12.0, 0.14.0, and 0.16.0 through 0.18.0 never existed.
+    // Those numeric versions
     // identify incompatible franken-engine IR shapes. Accepting them as
     // historical core artifacts would make the schema gate ambiguous for the
     // overlapping enum variants.
-    if provided.major == 0 && matches!(provided.minor, 6 | 7 | 12 | 14) {
+    if provided.major == 0 && matches!(provided.minor, 6 | 7 | 12 | 14 | 16..=18) {
         return Err(IrError::new(
             IrErrorCode::SchemaVersionMismatch,
             format!(
@@ -3648,6 +3742,66 @@ fn verify_ir3_method_definition_schema(module: &Ir3Module) -> Result<(), IrError
                 "method-definition IR3 instructions require schema {}, provided {}",
                 METHOD_DEFINITION_SCHEMA_VERSION, module.header.schema_version
             ),
+            IrLevel::Ir3,
+        ));
+    }
+    Ok(())
+}
+
+const ACCESSOR_DEFINITION_SCHEMA_VERSION: IrSchemaVersion = IrSchemaVersion {
+    major: 0,
+    minor: 19,
+    patch: 0,
+};
+
+fn ir1_op_uses_accessor_definition_schema(op: &Ir1Op) -> bool {
+    match op {
+        Ir1Op::DefineAccessor { .. }
+        | Ir1Op::GetPropertyWithReceiver { .. }
+        | Ir1Op::SetPropertyWithReceiver { .. } => true,
+        Ir1Op::DeclareFunction { body_ops, .. } | Ir1Op::CreateFunction { body_ops, .. } => {
+            body_ops.iter().any(ir1_op_uses_accessor_definition_schema)
+        }
+        _ => false,
+    }
+}
+
+pub(crate) fn verify_ir1_accessor_definition_schema(module: &Ir1Module) -> Result<(), IrError> {
+    if module.ops.iter().any(ir1_op_uses_accessor_definition_schema)
+        && module.header.schema_version < ACCESSOR_DEFINITION_SCHEMA_VERSION
+    {
+        return Err(IrError::new(
+            IrErrorCode::SchemaVersionMismatch,
+            "accessor-definition IR1 operations require schema 0.19.0",
+            IrLevel::Ir1,
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn verify_ir2_accessor_definition_schema(module: &Ir2Module) -> Result<(), IrError> {
+    if module.ops.iter().any(|op| ir1_op_uses_accessor_definition_schema(&op.inner))
+        && module.header.schema_version < ACCESSOR_DEFINITION_SCHEMA_VERSION
+    {
+        return Err(IrError::new(
+            IrErrorCode::SchemaVersionMismatch,
+            "accessor-definition IR2 operations require schema 0.19.0",
+            IrLevel::Ir2,
+        ));
+    }
+    Ok(())
+}
+
+fn verify_ir3_accessor_definition_schema(module: &Ir3Module) -> Result<(), IrError> {
+    if module.instructions.iter().any(|instruction| {
+        matches!(instruction, Ir3Instruction::DefineAccessor { .. }
+            | Ir3Instruction::GetPropertyWithReceiver { .. }
+            | Ir3Instruction::SetPropertyWithReceiver { .. })
+    }) && module.header.schema_version < ACCESSOR_DEFINITION_SCHEMA_VERSION
+    {
+        return Err(IrError::new(
+            IrErrorCode::SchemaVersionMismatch,
+            "accessor-definition IR3 instructions require schema 0.19.0",
             IrLevel::Ir3,
         ));
     }
@@ -4141,7 +4295,7 @@ mod tests {
 
     #[test]
     fn schema_version_display() {
-        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.15.0");
+        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.19.0");
     }
 
     #[test]

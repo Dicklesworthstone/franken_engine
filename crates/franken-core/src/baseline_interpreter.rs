@@ -5057,8 +5057,6 @@ impl InterpreterCore {
             };
         }
 
-        let namespace_object = self.ensure_module_record(module, resolved)?;
-
         let source =
             fs::read_to_string(resolved).map_err(|error| InterpreterError::ModuleReadFailed {
                 specifier: resolved.to_string(),
@@ -5088,6 +5086,13 @@ impl InterpreterCore {
                 error: error.to_string(),
             }
         })?;
+        // Publish a cycle-visible record only when preparation has succeeded.
+        // Read, parse, and lowering failures must not leave an `Evaluating`
+        // record that a subsequent load mistakes for an active cyclic import.
+        // Evaluation still publishes before executing any module code, so
+        // CommonJS cycles can observe the same partially initialized exports.
+        let namespace_object = self.ensure_module_record(module, resolved)?;
+
         let eval_result = if is_cjs {
             self.evaluate_cjs_ir3(&lowering_output.ir3, resolved)
         } else {
@@ -22815,6 +22820,45 @@ mod tests {
             node_qs_escape_js(&d800),
             Err(InterpreterError::TypeError { .. })
         ));
+    }
+
+    #[test]
+    fn module_preparation_failures_never_publish_cycle_visible_records() {
+        let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/modules");
+        let caller = test_module(vec![Ir3Instruction::Halt]);
+        for is_cjs in [false, true] {
+            for fixture in [
+                "missing-module.mjs",
+                "parse_failure.cjs",
+                "lowering_failure.cjs",
+            ] {
+                let path = fixtures.join(fixture).display().to_string();
+                let mut core = quickjs_test_core();
+                let initial_heap_len = core.heap.len();
+                let initial_memory = core.recompute_estimated_memory_bytes();
+                let first = core.load_module_resolved(&caller, &path, is_cjs).unwrap_err();
+                match fixture {
+                    "missing-module.mjs" => {
+                        assert!(matches!(&first, InterpreterError::ModuleReadFailed { .. }));
+                    }
+                    "parse_failure.cjs" => {
+                        assert!(matches!(&first, InterpreterError::ModuleParseFailed { .. }));
+                    }
+                    "lowering_failure.cjs" => {
+                        assert!(matches!(&first, InterpreterError::ModuleLoweringFailed { .. }));
+                    }
+                    _ => unreachable!(),
+                }
+                assert!(!core.module_state.modules.contains_key(&path));
+                assert_eq!(core.heap.len(), initial_heap_len);
+                assert_eq!(core.recompute_estimated_memory_bytes(), initial_memory);
+                let second = core.load_module_resolved(&caller, &path, is_cjs).unwrap_err();
+                assert_eq!(second, first, "a repeated load must fail in the same phase");
+                assert!(!core.module_state.modules.contains_key(&path));
+                assert_eq!(core.heap.len(), initial_heap_len);
+                assert_eq!(core.recompute_estimated_memory_bytes(), initial_memory);
+            }
+        }
     }
 
     #[test]

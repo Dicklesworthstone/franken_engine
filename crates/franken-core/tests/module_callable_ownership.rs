@@ -247,6 +247,26 @@ fn lazy_cjs_requires_preserve_the_exporting_modules_parent_identity() {
 }
 
 #[test]
+fn commonjs_cycles_observe_partial_exports_and_evaluate_each_module_once() {
+    let module = lower_source(
+        "const first = require('./cycle_a.cjs'); \
+         const second = require('./cycle_b.cjs'); \
+         const again = require('./cycle_a.cjs'); \
+         first === again && first.ready && first.seen === false && second.seen === false;",
+    );
+    for throughput in [false, true] {
+        let result = execute_module(&module, throughput).unwrap();
+        assert_eq!(result.value, Value::Bool(true));
+        let output: Vec<_> = result
+            .console_output
+            .into_iter()
+            .map(|entry| entry.message)
+            .collect();
+        assert_eq!(output, ["cycle-b", "cycle-a"]);
+    }
+}
+
+#[test]
 fn foreign_accessor_throws_preserve_object_identity_and_restore_caller_code() {
     assert_both(
         "import { explosive, token } from './accessors.mjs'; import { add } from './operations.mjs'; function unrelated() { return -900; } let caught = false; try { explosive.value; } catch (error) { caught = error === token; } caught && add(2) === 42;",
